@@ -7,8 +7,8 @@ export default function ExchangeSettings() {
   const [connections, setConnections] = useState<any[]>([]);
 
   const [isAdding, setIsAdding] = useState(false);
-  const [exchange, setExchange] = useState("Gate.io");
-  const [environment, setEnvironment] = useState("Live Trading (Production)");
+  const [exchange, setExchange] = useState("gateio");
+  const [environment, setEnvironment] = useState("live");
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
