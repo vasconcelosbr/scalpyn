@@ -69,3 +69,50 @@ async def add_exchange(payload: Dict[str, Any], db: AsyncSession = Depends(get_d
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to save connection: {str(e)}")
+
+@router.get("/{exchange_id}/test")
+async def test_exchange_connection(exchange_id: str, db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
+    query = select(ExchangeConnection).where(
+        ExchangeConnection.id == exchange_id,
+        ExchangeConnection.user_id == user_id
+    )
+    result = await db.execute(query)
+    conn = result.scalars().first()
+    
+    if not conn:
+        raise HTTPException(status_code=404, detail="Exchange connection not found")
+        
+    try:
+        from ..utils.encryption import decrypt
+        
+        # Only Gate.io logic implemented for now as requested
+        if conn.exchange_name.lower() == "gate.io":
+            import gate_api
+            from gate_api.exceptions import GateApiException
+            
+            api_key = decrypt(conn.api_key_encrypted)
+            api_secret = decrypt(conn.api_secret_encrypted)
+            
+            configuration = gate_api.Configuration(key=api_key, secret=api_secret)
+            api_client = gate_api.ApiClient(configuration)
+            spot_api = gate_api.SpotApi(api_client)
+            
+            # This is a synchronous call but it's fast enough for a quick test route
+            accounts = spot_api.list_spot_accounts()
+            
+            balances = []
+            for acc in accounts:
+                if float(acc.available) > 0 or float(acc.locked) > 0:
+                    balances.append({
+                        "currency": acc.currency,
+                        "available": acc.available,
+                        "locked": acc.locked
+                    })
+            
+            return {"status": "success", "exchange": conn.exchange_name, "balances": balances}
+            
+        return {"status": "success", "message": f"Test not implemented for {conn.exchange_name} yet, but connection exists."}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to connect to Exchange API: {str(e)}")
+

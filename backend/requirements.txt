@@ -17,3 +17,4 @@ httpx>=0.27.0
 python-dateutil>=2.9.0
 pandas>=2.2.2
 numpy>=2.0.0
+gate-api>=3.5.2
