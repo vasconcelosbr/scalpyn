@@ -90,16 +90,30 @@ export function Sidebar() {
         </div>
       </nav>
       
-      <div className="border-t border-[var(--border-subtle)] p-4 flex items-center gap-3">
-        <div className="w-[32px] h-[32px] shrink-0 rounded-full bg-[var(--bg-hover)] border border-[var(--border-default)] flex items-center justify-center overflow-hidden">
-          <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Scalpyn" alt="User Avatar" className="w-full h-full object-cover" />
-        </div>
-        {!collapsed && (
-          <div className="flex-1 min-w-0">
-            <div className="text-[13px] font-semibold text-[var(--text-primary)] truncate">Ricardo T.</div>
-            <div className="text-[11px] text-[var(--text-secondary)] bg-[var(--bg-active)] px-2 py-0.5 rounded-full inline-block mt-0.5">Admin</div>
+      <div className="border-t border-[var(--border-subtle)] p-4 flex flex-col gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-[32px] h-[32px] shrink-0 rounded-full bg-[var(--bg-hover)] border border-[var(--border-default)] flex items-center justify-center overflow-hidden">
+            <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Scalpyn" alt="User Avatar" className="w-full h-full object-cover" />
           </div>
-        )}
+          {!collapsed && (
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-semibold text-[var(--text-primary)] truncate">Ricardo T.</div>
+              <div className="text-[11px] text-[var(--text-secondary)] bg-[var(--bg-active)] px-2 py-0.5 rounded-full inline-block mt-0.5">Admin</div>
+            </div>
+          )}
+        </div>
+        
+        <button 
+          onClick={() => {
+            localStorage.removeItem('token');
+            window.location.href = '/login';
+          }}
+          className={`flex items-center justify-center gap-2 w-full py-2 rounded-md text-[var(--color-loss)] hover:bg-[var(--color-loss-muted)] hover:border-[var(--color-loss-border)] border border-transparent transition-colors ${collapsed ? '' : 'px-3'}`}
+          title="Log Out"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+          {!collapsed && <span className="text-[13px] font-medium tracking-wide">Log Out</span>}
+        </button>
       </div>
     </aside>
   );
