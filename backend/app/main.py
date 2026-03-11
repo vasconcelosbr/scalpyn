@@ -1,13 +1,27 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
+from .init_db import init_db
 
 from .api import auth, config as config_api, pools, exchanges
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        import logging
+        logging.info("Checando e inicializando as tabelas do banco de dados...")
+        await init_db()
+    except Exception as e:
+        import logging
+        logging.error(f"Erro ao inicializar o banco de dados: {e}")
+    yield
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description="Scalpyn API - ZERO HARDCODE Quant Platform",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
