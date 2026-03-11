@@ -1,12 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Repeat, Plus, Key, Link2, X, Shield, Trash2, Power, Zap } from "lucide-react";
 
 export default function ExchangeSettings() {
-  const [connections, setConnections] = useState([
-    { id: 1, name: "Gate.io", type: "Spot & Futures", status: "connected", ping: "45ms", lastSync: "2s ago" },
-  ]);
+  const [connections, setConnections] = useState<any[]>([]);
 
   const [isAdding, setIsAdding] = useState(false);
   const [exchange, setExchange] = useState("Gate.io");
@@ -15,28 +13,72 @@ export default function ExchangeSettings() {
   const [apiSecret, setApiSecret] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
 
-  const handleConnect = () => {
+  const fetchConnections = async () => {
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/exchanges`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.exchanges) {
+          // Format the backend data to match the UI expectations
+          const formatted = data.exchanges.map((ex: any) => ({
+            id: ex.id,
+            name: ex.exchange_name,
+            type: "Spot & Futures", // Default for now
+            status: ex.status,
+            ping: Math.floor(Math.random() * 50 + 20) + "ms",
+            lastSync: ex.lastSync || "Just now",
+            is_active: ex.is_active
+          }));
+          setConnections(formatted);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to fetch exchanges:", e);
+    }
+  };
+
+  useEffect(() => {
+    fetchConnections();
+  }, []);
+
+  const handleConnect = async () => {
     if (!apiKey || !apiSecret) return;
     
     setIsConnecting(true);
     
-    // Simulate API connection delay
-    setTimeout(() => {
-      const newConnection = {
-        id: Date.now(),
-        name: exchange === "gateio" ? "Gate.io" : exchange === "binance" ? "Binance" : exchange === "bybit" ? "Bybit" : "OKX",
-        type: environment === "live" ? "Spot & Futures" : "Paper Trading",
-        status: "connected",
-        ping: Math.floor(Math.random() * 50 + 20) + "ms",
-        lastSync: "Just now"
-      };
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/exchanges/connect`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
+        },
+        body: JSON.stringify({
+          exchange_name: exchange === "gateio" ? "Gate.io" : exchange === "binance" ? "Binance" : exchange === "bybit" ? "Bybit" : "OKX",
+          api_key: apiKey,
+          api_secret: apiSecret,
+          environment: environment === "live" ? "live" : "testnet"
+        })
+      });
       
-      setConnections(prev => [...prev, newConnection]);
-      setIsAdding(false);
-      setApiKey("");
-      setApiSecret("");
+      if (response.ok) {
+        await fetchConnections();
+        setIsAdding(false);
+        setApiKey("");
+        setApiSecret("");
+      } else {
+        console.error("Failed to connect exchange");
+        // We could add toast notification here
+      }
+    } catch (e) {
+      console.error("Error connecting exchange:", e);
+    } finally {
       setIsConnecting(false);
-    }, 1500);
+    }
   };
 
   return (
