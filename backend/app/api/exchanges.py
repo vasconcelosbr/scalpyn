@@ -49,16 +49,16 @@ async def add_exchange(payload: Dict[str, Any], db: AsyncSession = Depends(get_d
         existing_conn = result.scalars().first()
         
         if existing_conn:
-            existing_conn.api_key_encrypted = encrypt(api_key)
-            existing_conn.api_secret_encrypted = encrypt(api_secret)
+            existing_conn.api_key_encrypted = encrypt(api_key.strip())
+            existing_conn.api_secret_encrypted = encrypt(api_secret.strip())
             existing_conn.connection_status = "connected"
             existing_conn.is_active = True
         else:
             new_conn = ExchangeConnection(
                 user_id=user_id,
                 exchange_name=exchange_name,
-                api_key_encrypted=encrypt(api_key),
-                api_secret_encrypted=encrypt(api_secret),
+                api_key_encrypted=encrypt(api_key.strip()),
+                api_secret_encrypted=encrypt(api_secret.strip()),
                 connection_status="connected",
                 is_active=True
             )
@@ -90,8 +90,8 @@ async def test_exchange_connection(exchange_id: str, db: AsyncSession = Depends(
             import gate_api
             from gate_api.exceptions import GateApiException
             
-            api_key = decrypt(conn.api_key_encrypted)
-            api_secret = decrypt(conn.api_secret_encrypted)
+            api_key = decrypt(conn.api_key_encrypted).strip()
+            api_secret = decrypt(conn.api_secret_encrypted).strip()
             
             configuration = gate_api.Configuration(key=api_key, secret=api_secret)
             api_client = gate_api.ApiClient(configuration)
