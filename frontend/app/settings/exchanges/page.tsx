@@ -15,7 +15,9 @@ export default function ExchangeSettings() {
 
   const fetchConnections = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/exchanges`, {
+      // API_URL might have /v1 at the end, so we clean it to match backend /api/exchanges route
+      const baseUrl = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/v1\/?$/, '');
+      const response = await fetch(`${baseUrl}/exchanges`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
         }
@@ -51,7 +53,8 @@ export default function ExchangeSettings() {
     setIsConnecting(true);
     
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/exchanges/connect`, {
+      const baseUrl = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/v1\/?$/, '');
+      const response = await fetch(`${baseUrl}/exchanges/connect`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -71,11 +74,13 @@ export default function ExchangeSettings() {
         setApiKey("");
         setApiSecret("");
       } else {
-        console.error("Failed to connect exchange");
-        // We could add toast notification here
+        const errorData = await response.json();
+        console.error("Failed to connect exchange", errorData);
+        alert(`Failed to save: ${errorData.detail || 'Unknown error'}`);
       }
     } catch (e) {
       console.error("Error connecting exchange:", e);
+      alert(`Connection error: ${e}`);
     } finally {
       setIsConnecting(false);
     }

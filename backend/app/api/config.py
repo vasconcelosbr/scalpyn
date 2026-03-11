@@ -7,10 +7,23 @@ from ..database import get_db
 from ..services.config_service import config_service
 
 # Assuming we have a get_current_user dependency, mocked for now
-async def get_current_user_id() -> UUID:
+async def get_current_user_id(db: AsyncSession = Depends(get_db)) -> UUID:
     # This is a mocked standard user ID for scaffolding
     import uuid
-    return uuid.UUID("00000000-0000-0000-0000-000000000001")
+    from sqlalchemy import select
+    from ..models.user import User
+    
+    user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    
+    # Ensure user exists for foreign keys
+    query = select(User).where(User.id == user_id)
+    result = await db.execute(query)
+    if not result.scalars().first():
+        new_user = User(id=user_id, email="admin@scalpyn.com", hashed_password="mock", is_active=True)
+        db.add(new_user)
+        await db.commit()
+        
+    return user_id
 
 router = APIRouter(prefix="/api/config", tags=["Configuration"])
 
