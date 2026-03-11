@@ -94,7 +94,7 @@ async def test_exchange_connection(exchange_id: str, db: AsyncSession = Depends(
             api_secret = decrypt(conn.api_secret_encrypted).strip()
             
             configuration = gate_api.Configuration(key=api_key, secret=api_secret)
-            configuration.host = "https://api.gateio.ws/api/v4"
+            configuration.host = "https://api.gateio.ws"
             
             api_client = gate_api.ApiClient(configuration)
             spot_api = gate_api.SpotApi(api_client)
