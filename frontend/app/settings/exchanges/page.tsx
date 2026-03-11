@@ -294,7 +294,7 @@ export default function ExchangeSettings() {
                     <button 
                       className="btn-icon w-9 h-9 flex items-center justify-center transition-colors hover:bg-[var(--color-loss-muted)] hover:text-[var(--color-loss)] hover:border-[var(--color-loss-border)]" 
                       title="Delete"
-                      onClick={() => setConnections(prev => prev.filter(c => c.id !== conn.id))}
+                      onClick={() => handleDeleteConnection(conn.id)}
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
