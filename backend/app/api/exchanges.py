@@ -116,3 +116,23 @@ async def test_exchange_connection(exchange_id: str, db: AsyncSession = Depends(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to connect to Exchange API: {str(e)}")
 
+@router.delete("/{exchange_id}")
+async def delete_exchange(exchange_id: str, db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
+    query = select(ExchangeConnection).where(
+        ExchangeConnection.id == exchange_id,
+        ExchangeConnection.user_id == user_id
+    )
+    result = await db.execute(query)
+    conn = result.scalars().first()
+    
+    if not conn:
+        raise HTTPException(status_code=404, detail="Exchange connection not found")
+        
+    try:
+        await db.delete(conn)
+        await db.commit()
+        return {"status": "success", "message": "Connection deleted successfully"}
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete connection: {str(e)}")
+

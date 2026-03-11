@@ -70,6 +70,28 @@ export default function ExchangeSettings() {
     }
   };
 
+  const handleDeleteConnection = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this exchange connection?')) return;
+    try {
+      const baseUrl = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/v1\/?$/, '');
+      const response = await fetch(`${baseUrl}/exchanges/${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
+        }
+      });
+      
+      if (response.ok) {
+        setConnections(prev => prev.filter(c => c.id !== id));
+      } else {
+        alert('Failed to delete connection on the server.');
+      }
+    } catch (error) {
+      console.error('Error deleting connection:', error);
+      alert('Network error while deleting.');
+    }
+  };
+
   useEffect(() => {
     fetchConnections();
   }, []);
