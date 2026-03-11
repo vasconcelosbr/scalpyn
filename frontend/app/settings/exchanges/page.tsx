@@ -17,7 +17,7 @@ export default function ExchangeSettings() {
     try {
       // API_URL might have /v1 at the end, so we clean it to match backend /api/exchanges route
       const baseUrl = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/v1\/?$/, '');
-      const response = await fetch(`${baseUrl}/exchanges`, {
+      const response = await fetch(`${baseUrl}/exchanges/`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
         }
