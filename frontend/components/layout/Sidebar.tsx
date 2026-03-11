@@ -106,7 +106,7 @@ export function Sidebar() {
         <button 
           onClick={() => {
             localStorage.removeItem('token');
-            window.location.href = '/login';
+            window.location.href = '/';
           }}
           className={`flex items-center justify-center gap-2 w-full py-2 rounded-md text-[var(--color-loss)] hover:bg-[var(--color-loss-muted)] hover:border-[var(--color-loss-border)] border border-transparent transition-colors ${collapsed ? '' : 'px-3'}`}
           title="Log Out"
