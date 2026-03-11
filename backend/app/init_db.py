@@ -1,0 +1,115 @@
+import asyncio
+import logging
+from .database import engine, Base
+from .models import *  # This ensures all models are registered
+from sqlalchemy import text
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+async def init_db():
+    logger.info("Initializing database schema...")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        
+        # Create TimescaleDB hypertables if they don't exist
+        # OHLCV
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS ohlcv (
+              time TIMESTAMPTZ NOT NULL,
+              symbol VARCHAR(20) NOT NULL,
+              exchange VARCHAR(50) NOT NULL,
+              timeframe VARCHAR(10) NOT NULL,
+              open DECIMAL(20,8),
+              high DECIMAL(20,8),
+              low DECIMAL(20,8),
+              close DECIMAL(20,8),
+              volume DECIMAL(20,4)
+            );
+        """))
+        # Using a PL/pgSQL block to ignore the error if hypertable already exists
+        await conn.execute(text("""
+            DO $$
+            BEGIN
+              IF NOT EXISTS (SELECT 1 FROM _timescaledb_catalog.hypertable WHERE table_name = 'ohlcv') THEN
+                PERFORM create_hypertable('ohlcv', 'time');
+              END IF;
+            END $$;
+        """))
+
+        # Indicators
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS indicators (
+              time TIMESTAMPTZ NOT NULL,
+              symbol VARCHAR(20) NOT NULL,
+              timeframe VARCHAR(10) NOT NULL,
+              indicators_json JSONB NOT NULL
+            );
+        """))
+        await conn.execute(text("""
+            DO $$
+            BEGIN
+              IF NOT EXISTS (SELECT 1 FROM _timescaledb_catalog.hypertable WHERE table_name = 'indicators') THEN
+                PERFORM create_hypertable('indicators', 'time');
+              END IF;
+            END $$;
+        """))
+
+        # Alpha Scores
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS alpha_scores (
+              time TIMESTAMPTZ NOT NULL,
+              symbol VARCHAR(20) NOT NULL,
+              score DECIMAL(5,2) NOT NULL,
+              liquidity_score DECIMAL(5,2),
+              market_structure_score DECIMAL(5,2),
+              momentum_score DECIMAL(5,2),
+              signal_score DECIMAL(5,2),
+              components_json JSONB
+            );
+        """))
+        await conn.execute(text("""
+            DO $$
+            BEGIN
+              IF NOT EXISTS (SELECT 1 FROM _timescaledb_catalog.hypertable WHERE table_name = 'alpha_scores') THEN
+                PERFORM create_hypertable('alpha_scores', 'time');
+              END IF;
+            END $$;
+        """))
+
+        # Funding Rates
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS funding_rates (
+              time TIMESTAMPTZ NOT NULL,
+              symbol VARCHAR(20) NOT NULL,
+              exchange VARCHAR(50) NOT NULL,
+              rate DECIMAL(10,6)
+            );
+        """))
+        await conn.execute(text("""
+            DO $$
+            BEGIN
+              IF NOT EXISTS (SELECT 1 FROM _timescaledb_catalog.hypertable WHERE table_name = 'funding_rates') THEN
+                PERFORM create_hypertable('funding_rates', 'time');
+              END IF;
+            END $$;
+        """))
+
+        # Market Metadata (key-value approach, not hypertable)
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS market_metadata (
+              symbol VARCHAR(20) PRIMARY KEY,
+              name VARCHAR(255),
+              market_cap DECIMAL(20,2),
+              volume_24h DECIMAL(20,2),
+              price DECIMAL(20,8),
+              price_change_24h DECIMAL(10,4),
+              ranking INTEGER,
+              last_updated TIMESTAMPTZ
+            );
+        """))
+
+    logger.info("Database schema initialized successfully.")
+
+if __name__ == "__main__":
+    asyncio.run(init_db())
