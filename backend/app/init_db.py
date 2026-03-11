@@ -27,16 +27,6 @@ async def init_db():
               volume DECIMAL(20,4)
             );
         """))
-        # Using a PL/pgSQL block to ignore the error if hypertable already exists
-        await conn.execute(text("""
-            DO $$
-            BEGIN
-              IF NOT EXISTS (SELECT 1 FROM _timescaledb_catalog.hypertable WHERE table_name = 'ohlcv') THEN
-                PERFORM create_hypertable('ohlcv', 'time');
-              END IF;
-            END $$;
-        """))
-
         # Indicators
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS indicators (
@@ -46,15 +36,6 @@ async def init_db():
               indicators_json JSONB NOT NULL
             );
         """))
-        await conn.execute(text("""
-            DO $$
-            BEGIN
-              IF NOT EXISTS (SELECT 1 FROM _timescaledb_catalog.hypertable WHERE table_name = 'indicators') THEN
-                PERFORM create_hypertable('indicators', 'time');
-              END IF;
-            END $$;
-        """))
-
         # Alpha Scores
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS alpha_scores (
@@ -68,15 +49,6 @@ async def init_db():
               components_json JSONB
             );
         """))
-        await conn.execute(text("""
-            DO $$
-            BEGIN
-              IF NOT EXISTS (SELECT 1 FROM _timescaledb_catalog.hypertable WHERE table_name = 'alpha_scores') THEN
-                PERFORM create_hypertable('alpha_scores', 'time');
-              END IF;
-            END $$;
-        """))
-
         # Funding Rates
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS funding_rates (
@@ -86,15 +58,6 @@ async def init_db():
               rate DECIMAL(10,6)
             );
         """))
-        await conn.execute(text("""
-            DO $$
-            BEGIN
-              IF NOT EXISTS (SELECT 1 FROM _timescaledb_catalog.hypertable WHERE table_name = 'funding_rates') THEN
-                PERFORM create_hypertable('funding_rates', 'time');
-              END IF;
-            END $$;
-        """))
-
         # Market Metadata (key-value approach, not hypertable)
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS market_metadata (
@@ -108,6 +71,14 @@ async def init_db():
               last_updated TIMESTAMPTZ
             );
         """))
+    # Attempt to create hypertables in separate transactions so failures don't abort the connection
+    tables_to_hyper = ['ohlcv', 'indicators', 'alpha_scores', 'funding_rates']
+    for table in tables_to_hyper:
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(f"SELECT create_hypertable('{table}', 'time', if_not_exists => TRUE);"))
+        except Exception as e:
+            logger.warning(f"TimescaleDB hypertable for {table} skipped or unavailable: {e}")
 
     logger.info("Database schema initialized successfully.")
 
