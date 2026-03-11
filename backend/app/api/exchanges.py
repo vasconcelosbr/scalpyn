@@ -87,34 +87,60 @@ async def test_exchange_connection(exchange_id: str, db: AsyncSession = Depends(
         
         # Only Gate.io logic implemented for now as requested
         if conn.exchange_name.lower() == "gate.io":
-            import gate_api
-            from gate_api.exceptions import GateApiException
+            import time
+            import hashlib
+            import hmac
+            import httpx
             
             api_key = decrypt(conn.api_key_encrypted).strip()
             api_secret = decrypt(conn.api_secret_encrypted).strip()
             
-            configuration = gate_api.Configuration(key=api_key, secret=api_secret)
-            configuration.host = "https://api.gateio.ws"
+            host = "api.gateio.ws"
+            prefix = "/api/v4"
+            url = "/spot/accounts"
+            query_param = ""
             
-            api_client = gate_api.ApiClient(configuration)
-            spot_api = gate_api.SpotApi(api_client)
+            # Formating the V4 signature string
+            # Method \n URL \n Query String \n Hexlified Payload Hash \n Timestamp
+            t = str(int(time.time()))
+            m = hashlib.sha512()
+            m.update(b"") # Empty body for GET requests
+            hashed_payload = m.hexdigest()
             
-            # This is a synchronous call but it's fast enough for a quick test route
-            accounts = spot_api.list_spot_accounts()
+            sign_string = f"GET\n{prefix}{url}\n{query_param}\n{hashed_payload}\n{t}"
+            sign = hmac.new(api_secret.encode('utf-8'), sign_string.encode('utf-8'), hashlib.sha512).hexdigest()
+            
+            headers = {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'KEY': api_key,
+                'Timestamp': t,
+                'SIGN': sign
+            }
+            
+            async with httpx.AsyncClient() as client:
+                r = await client.get(f"https://{host}{prefix}{url}", headers=headers)
+                
+                if r.status_code != 200:
+                    raise HTTPException(status_code=r.status_code, detail=f"Gate.io API Error: {r.text}")
+                    
+                accounts = r.json()
             
             balances = []
             for acc in accounts:
-                if float(acc.available) > 0 or float(acc.locked) > 0:
+                if float(acc.get("available", 0)) > 0 or float(acc.get("locked", 0)) > 0:
                     balances.append({
-                        "currency": acc.currency,
-                        "available": acc.available,
-                        "locked": acc.locked
+                        "currency": acc.get("currency"),
+                        "available": acc.get("available"),
+                        "locked": acc.get("locked")
                     })
             
             return {"status": "success", "exchange": conn.exchange_name, "balances": balances}
             
         return {"status": "success", "message": f"Test not implemented for {conn.exchange_name} yet, but connection exists."}
         
+    except HTTPException as he:
+        raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to connect to Exchange API: {str(e)}")
 
