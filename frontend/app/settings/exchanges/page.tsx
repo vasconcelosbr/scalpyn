@@ -43,6 +43,33 @@ export default function ExchangeSettings() {
     }
   };
 
+  const handleTestConnection = async (id: string) => {
+    try {
+      const baseUrl = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/v1\/?$/, '');
+      const response = await fetch(`${baseUrl}/exchanges/${id}/test`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
+        }
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok && data.status === 'success') {
+        if (data.balances) {
+          const balanceStr = data.balances.map((b: any) => `${b.currency}: ${b.available}`).join('\n');
+          alert(`✅ Conexão Gate.io verificada com sucesso!\n\nSaldos da Conta Spot:\n${balanceStr}`);
+        } else {
+          alert(`✅ Conexão com ${data.exchange || 'Corretora'} ativa, mas sem saldos (zerada).`);
+        }
+      } else {
+        alert(`❌ Erro no teste:\n${data.detail || data.message || 'Falha desconhecida.'}`);
+      }
+    } catch (error) {
+      console.error('Error testing connection:', error);
+      alert('❌ Falha ao contactar a API. O Backend na GCP ainda está sendo atualizado. Tente novamente em alguns instantes.');
+    }
+  };
+
   useEffect(() => {
     fetchConnections();
   }, []);
@@ -232,7 +259,11 @@ export default function ExchangeSettings() {
                  </div>
                  
                  <div className="flex items-center gap-2 pl-4 border-l border-[var(--border-subtle)]">
-                    <button className="btn-icon w-9 h-9 flex items-center justify-center transition-colors hover:border-[var(--accent-primary)] hover:text-[var(--accent-primary)]" title="Test Connection">
+                    <button 
+                      className="btn-icon w-9 h-9 flex items-center justify-center transition-colors hover:border-[var(--accent-primary)] hover:text-[var(--accent-primary)]" 
+                      title="Test Connection"
+                      onClick={() => handleTestConnection(conn.id)}
+                    >
                       <Repeat className="w-4 h-4" />
                     </button>
                     <button className="btn-icon w-9 h-9 flex items-center justify-center transition-colors hover:border-[var(--color-warning)] hover:text-[var(--color-warning)]" title="Pause Connection">
