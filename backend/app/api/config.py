@@ -19,7 +19,7 @@ async def get_current_user_id(db: AsyncSession = Depends(get_db)) -> UUID:
     query = select(User).where(User.id == user_id)
     result = await db.execute(query)
     if not result.scalars().first():
-        new_user = User(id=user_id, email="admin@scalpyn.com", hashed_password="mock", is_active=True)
+        new_user = User(id=user_id, name="Admin", email="admin@scalpyn.com", password_hash="mock", is_active=True)
         db.add(new_user)
         await db.commit()
         
