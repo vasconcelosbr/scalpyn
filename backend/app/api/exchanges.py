@@ -92,23 +92,28 @@ async def test_exchange_connection(exchange_id: str, db: AsyncSession = Depends(
             import hmac
             import httpx
             
-            api_key = decrypt(conn.api_key_encrypted).strip()
-            api_secret = decrypt(conn.api_secret_encrypted).strip()
+            # Fix: convert memoryview to bytes before decrypting (asyncpg BYTEA columns)
+            api_key = decrypt(bytes(conn.api_key_encrypted)).strip()
+            api_secret = decrypt(bytes(conn.api_secret_encrypted)).strip()
             
             host = "api.gateio.ws"
             prefix = "/api/v4"
             url = "/spot/accounts"
             query_param = ""
             
-            # Formating the V4 signature string
-            # Method \n URL \n Query String \n Hexlified Payload Hash \n Timestamp
+            # Gate.io V4 API signature format:
+            # METHOD\nURL_PATH\nQUERY_STRING\nHEX(SHA512(BODY))\nTIMESTAMP
             t = str(int(time.time()))
-            m = hashlib.sha512()
-            m.update(b"") # Empty body for GET requests
-            hashed_payload = m.hexdigest()
+            
+            # SHA512 hash of empty body for GET requests
+            hashed_payload = hashlib.sha512(b"").hexdigest()
             
             sign_string = f"GET\n{prefix}{url}\n{query_param}\n{hashed_payload}\n{t}"
-            sign = hmac.new(api_secret.encode('utf-8'), sign_string.encode('utf-8'), hashlib.sha512).hexdigest()
+            sign = hmac.new(
+                api_secret.encode('utf-8'),
+                sign_string.encode('utf-8'),
+                hashlib.sha512
+            ).hexdigest()
             
             headers = {
                 'Accept': 'application/json',
@@ -163,4 +168,3 @@ async def delete_exchange(exchange_id: str, db: AsyncSession = Depends(get_db), 
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to delete connection: {str(e)}")
-
