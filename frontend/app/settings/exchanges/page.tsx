@@ -66,7 +66,7 @@ export default function ExchangeSettings() {
       }
     } catch (error) {
       console.error('Error testing connection:', error);
-      alert('❌ Falha ao contactar a API. O Backend na GCP ainda está sendo atualizado. Tente novamente em alguns instantes.');
+      alert('❌ Falha ao contactar a API. Verifique sua conexão e tente novamente.');
     }
   };
 
