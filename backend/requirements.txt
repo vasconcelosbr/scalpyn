@@ -19,4 +19,4 @@ python-dateutil>=2.9.0
 pandas>=2.2.2
 numpy>=2.0.0
 gate-api>=3.5.2
-pandas-ta>=0.3.14b
+pandas-ta>=0.4.67b0
