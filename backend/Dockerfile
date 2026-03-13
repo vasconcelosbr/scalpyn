@@ -5,7 +5,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     PORT=8080 \
-    WEB_CONCURRENCY=1
+    WEB_CONCURRENCY=1 \
+    DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app
 
@@ -26,13 +27,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     PORT=8000 \
-    WEB_CONCURRENCY=2
+    WEB_CONCURRENCY=2 \
+    DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && addgroup --system appgroup \
+    && adduser --system --ingroup appgroup appuser
 
 COPY --from=builder /install /usr/local
 
