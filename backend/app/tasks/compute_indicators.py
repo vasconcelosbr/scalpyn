@@ -1,15 +1,97 @@
-from ..tasks.celery_app import celery_app
+"""Celery Task — compute indicators using Feature Engine."""
+
+import asyncio
+import json
 import logging
+from datetime import datetime, timezone
+
+import pandas as pd
+from sqlalchemy import text
+
+from ..tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
+
+def _run_async(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+async def _compute_async():
+    from ..database import AsyncSessionLocal
+    from ..services.feature_engine import FeatureEngine
+    from ..services.seed_service import DEFAULT_INDICATORS
+
+    logger.info("Starting indicator computation...")
+
+    indicators_config = DEFAULT_INDICATORS  # System defaults for centralized computation
+
+    engine = FeatureEngine(indicators_config)
+    computed = 0
+
+    async with AsyncSessionLocal() as db:
+        # Get all symbols with recent OHLCV data
+        symbols_result = await db.execute(text("""
+            SELECT DISTINCT symbol FROM ohlcv
+            WHERE time > now() - interval '7 days'
+        """))
+        symbols = [row.symbol for row in symbols_result.fetchall()]
+
+        for symbol in symbols:
+            try:
+                # Fetch OHLCV data for this symbol
+                ohlcv_result = await db.execute(text("""
+                    SELECT time, open, high, low, close, volume
+                    FROM ohlcv
+                    WHERE symbol = :symbol AND timeframe = '1h'
+                    ORDER BY time ASC
+                    LIMIT 200
+                """), {"symbol": symbol})
+                rows = ohlcv_result.fetchall()
+
+                if len(rows) < 20:
+                    continue
+
+                df = pd.DataFrame([{
+                    "time": r.time, "open": float(r.open), "high": float(r.high),
+                    "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
+                } for r in rows])
+
+                # Calculate indicators
+                results = engine.calculate(df)
+                if not results:
+                    continue
+
+                # Store in TimescaleDB
+                now = datetime.now(timezone.utc)
+                await db.execute(text("""
+                    INSERT INTO indicators (time, symbol, timeframe, indicators_json)
+                    VALUES (:time, :symbol, :timeframe, :indicators)
+                """), {
+                    "time": now,
+                    "symbol": symbol,
+                    "timeframe": "1h",
+                    "indicators": json.dumps(results),
+                })
+
+                computed += 1
+
+            except Exception as e:
+                logger.warning(f"Failed to compute indicators for {symbol}: {e}")
+                continue
+
+        await db.commit()
+
+    logger.info(f"Indicator computation complete: {computed} symbols")
+    return computed
+
+
 @celery_app.task(name="app.tasks.compute_indicators.compute")
 def compute():
-    logger.info("Executing compute_indicators task...")
-    # 1. Read OHLCV from TimescaleDB
-    # 2. Read 'indicators' config from config_service
-    # 3. Calculate metrics using feature_engine
-    # 4. Save to TimescaleDB 'indicators' hypertable
-    # 5. Trigger compute_scores
+    count = _run_async(_compute_async())
     celery_app.send_task("app.tasks.compute_scores.score")
-    return "Indicators computation initiated"
+    return f"Computed indicators for {count} symbols"

@@ -1,3 +1,5 @@
+"""Celery application configuration for Scalpyn."""
+
 from celery import Celery
 from ..config import settings
 
@@ -9,7 +11,8 @@ celery_app = Celery(
         "app.tasks.collect_market_data",
         "app.tasks.compute_indicators",
         "app.tasks.compute_scores",
-        "app.tasks.evaluate_signals"
+        "app.tasks.evaluate_signals",
+        "app.tasks.daily_summary",
     ]
 )
 
@@ -21,10 +24,19 @@ celery_app.conf.update(
     enable_utc=True,
 )
 
-# Setup Periodic Tasks
+# Periodic task schedule
 celery_app.conf.beat_schedule = {
+    # Full pipeline every 60 seconds
     "collect_market_data_every_minute": {
         "task": "app.tasks.collect_market_data.collect_all",
         "schedule": 60.0,
+    },
+    # Daily summary at 20:00 UTC
+    "daily_summary": {
+        "task": "app.tasks.daily_summary.send",
+        "schedule": {
+            "hour": 20,
+            "minute": 0,
+        },
     },
 }
