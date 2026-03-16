@@ -19,8 +19,11 @@ def encrypt(data: str) -> bytes:
     f = get_fernet()
     return f.encrypt(data.encode('utf-8'))
 
-def decrypt(token: bytes) -> str:
+def decrypt(token) -> str:
     if not token:
         return ""
+    # Fix: asyncpg returns memoryview for BYTEA columns — convert to bytes before decrypting
+    if isinstance(token, memoryview):
+        token = bytes(token)
     f = get_fernet()
     return f.decrypt(token).decode('utf-8')

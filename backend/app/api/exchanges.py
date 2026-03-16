@@ -3,11 +3,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Dict, Any
 from uuid import UUID
+import logging
 
 from ..database import get_db
 from ..models.exchange_connection import ExchangeConnection
 from .config import get_current_user_id
 from ..utils.encryption import encrypt
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/exchanges", tags=["Exchanges"])
 
@@ -40,7 +43,6 @@ async def add_exchange(payload: Dict[str, Any], db: AsyncSession = Depends(get_d
         raise HTTPException(status_code=400, detail="Missing required parameters")
 
     try:
-        # Check if connection already exists
         query = select(ExchangeConnection).where(
             ExchangeConnection.user_id == user_id, 
             ExchangeConnection.exchange_name == exchange_name
@@ -84,49 +86,65 @@ async def test_exchange_connection(exchange_id: str, db: AsyncSession = Depends(
         
     try:
         from ..utils.encryption import decrypt
-        
-        # Only Gate.io logic implemented for now as requested
+        import time
+        import hashlib
+        import hmac
+        import httpx
+
         if conn.exchange_name.lower() == "gate.io":
-            import time
-            import hashlib
-            import hmac
-            import httpx
-            
-            api_key = decrypt(conn.api_key_encrypted).strip()
-            api_secret = decrypt(conn.api_secret_encrypted).strip()
-            
+            # Safely convert BYTEA / memoryview to bytes before decrypting
+            raw_key = conn.api_key_encrypted
+            raw_secret = conn.api_secret_encrypted
+            if isinstance(raw_key, memoryview):
+                raw_key = bytes(raw_key)
+            if isinstance(raw_secret, memoryview):
+                raw_secret = bytes(raw_secret)
+
+            api_key = decrypt(raw_key).strip()
+            api_secret = decrypt(raw_secret).strip()
+
+            logger.info(f"[Gate.io] api_key length: {len(api_key)}, api_secret length: {len(api_secret)}")
+            logger.info(f"[Gate.io] api_key starts with: {api_key[:6]}...")
+
             host = "api.gateio.ws"
             prefix = "/api/v4"
-            url = "/spot/accounts"
+            endpoint = "/spot/accounts"
             query_param = ""
-            
-            # Formating the V4 signature string
-            # Method \n URL \n Query String \n Hexlified Payload Hash \n Timestamp
+            body = "";
+
+            # Gate.io V4 official signature format:
+            # METHOD\nPATH\nQUERY_STRING\nHEX(SHA512(BODY))\nTIMESTAMP
             t = str(int(time.time()))
-            m = hashlib.sha512()
-            m.update(b"") # Empty body for GET requests
-            hashed_payload = m.hexdigest()
-            
-            sign_string = f"GET\n{prefix}{url}\n{query_param}\n{hashed_payload}\n{t}"
-            sign = hmac.new(api_secret.encode('utf-8'), sign_string.encode('utf-8'), hashlib.sha512).hexdigest()
-            
+            hashed_body = hashlib.sha512(body.encode('utf-8')).hexdigest()
+            sign_string = f"GET\n{prefix}{endpoint}\n{query_param}\n{hashed_body}\n{t}"
+
+            logger.info(f"[Gate.io] sign_string repr: {repr(sign_string)}")
+
+            sign = hmac.new(
+                api_secret.encode('utf-8'),
+                sign_string.encode('utf-8'),
+                hashlib.sha512
+            ).hexdigest()
+
             headers = {
                 'Accept': 'application/json',
                 'Content-Type': 'application/json',
                 'KEY': api_key,
                 'Timestamp': t,
-                'SIGN': sign
+                'SIGN': sign,
             }
-            
+
             async with httpx.AsyncClient() as client:
-                r = await client.get(f"https://{host}{prefix}{url}", headers=headers)
-                
+                r = await client.get(f"https://{host}{prefix}{endpoint}", headers=headers)
+
+                logger.info(f"[Gate.io] Response status: {r.status_code}, body: {r.text[:300]}")
+
                 if r.status_code != 200:
                     raise HTTPException(status_code=r.status_code, detail=f"Gate.io API Error: {r.text}")
-                    
+
                 accounts = r.json()
-            
-            balances = []
+
+            balances = [];
             for acc in accounts:
                 if float(acc.get("available", 0)) > 0 or float(acc.get("locked", 0)) > 0:
                     balances.append({
@@ -134,14 +152,15 @@ async def test_exchange_connection(exchange_id: str, db: AsyncSession = Depends(
                         "available": acc.get("available"),
                         "locked": acc.get("locked")
                     })
-            
+
             return {"status": "success", "exchange": conn.exchange_name, "balances": balances}
-            
+
         return {"status": "success", "message": f"Test not implemented for {conn.exchange_name} yet, but connection exists."}
-        
+
     except HTTPException as he:
         raise he
     except Exception as e:
+        logger.exception(f"[Gate.io] Unexpected error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to connect to Exchange API: {str(e)}")
 
 @router.delete("/{exchange_id}")
@@ -163,4 +182,3 @@ async def delete_exchange(exchange_id: str, db: AsyncSession = Depends(get_db), 
     except Exception as e:
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to delete connection: {str(e)}")
-

@@ -22,39 +22,28 @@ class ConfigService:
 
     async def get_config(self, db: AsyncSession, config_type: str, user_id: UUID, pool_id: Optional[UUID] = None) -> Dict[str, Any]:
         cache_key = self._get_cache_key(config_type, user_id, pool_id)
-        cached_config = await self.redis.get(cache_key)
-        
-        if cached_config:
-            return json.loads(cached_config)
+        try:
+            cached_config = await self.redis.get(cache_key)
+            if cached_config:
+                return json.loads(cached_config)
+        except Exception as e:
+            logger.warning(f"Redis cache read failed (skipping cache): {e}")
 
-        # DB Fallback: Pool specific first, then global
-        if pool_id:
-            query = select(ConfigProfile).where(
-                ConfigProfile.user_id == user_id,
-                ConfigProfile.pool_id == pool_id,
-                ConfigProfile.config_type == config_type,
-                ConfigProfile.is_active == True
-            )
-            result = await db.execute(query)
-            profile = result.scalars().first()
-            if profile:
-                await self.redis.set(cache_key, json.dumps(profile.config_json), ex=3600)
-                return profile.config_json
-
-        # Global
         query = select(ConfigProfile).where(
             ConfigProfile.user_id == user_id,
-            ConfigProfile.pool_id == None,
-            ConfigProfile.config_type == config_type,
-            ConfigProfile.is_active == True
+            ConfigProfile.pool_id == pool_id,
+            ConfigProfile.config_type == config_type
         )
         result = await db.execute(query)
         profile = result.scalars().first()
-        
+
         if profile:
-            await self.redis.set(cache_key, json.dumps(profile.config_json), ex=3600)
+            try:
+                await self.redis.set(cache_key, json.dumps(profile.config_json), ex=3600)
+            except Exception as e:
+                logger.warning(f"Redis cache write failed (skipping cache): {e}")
             return profile.config_json
-        
+
         return {}
 
     async def update_config(self, db: AsyncSession, config_type: str, user_id: UUID, new_json: Dict[str, Any], changed_by: UUID, pool_id: Optional[UUID] = None, change_description: str = "") -> Dict[str, Any]:
@@ -79,7 +68,7 @@ class ConfigService:
                 config_json=new_json
             )
             db.add(profile)
-            await db.flush()
+        await db.flush()
 
         # Create Audit Log
         audit_log = ConfigAuditLog(
@@ -90,13 +79,16 @@ class ConfigService:
             change_description=change_description
         )
         db.add(audit_log)
-        
+
         await db.commit()
 
         # Invalidate Cache
         cache_key = self._get_cache_key(config_type, user_id, pool_id)
-        await self.redis.delete(cache_key)
-        
+        try:
+            await self.redis.delete(cache_key)
+        except Exception as e:
+            logger.warning(f"Redis cache invalidation failed (skipping): {e}")
+
         return new_json
 
 config_service = ConfigService()

@@ -1,29 +1,30 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, Any, Optional
 from uuid import UUID
 
+import jwt as pyjwt
+
+from ..config import settings
 from ..database import get_db
 from ..services.config_service import config_service
 
-# Assuming we have a get_current_user dependency, mocked for now
-async def get_current_user_id(db: AsyncSession = Depends(get_db)) -> UUID:
-    # This is a mocked standard user ID for scaffolding
-    import uuid
-    from sqlalchemy import select
-    from ..models.user import User
-    
-    user_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
-    
-    # Ensure user exists for foreign keys
-    query = select(User).where(User.id == user_id)
-    result = await db.execute(query)
-    if not result.scalars().first():
-        new_user = User(id=user_id, name="Admin", email="admin@scalpyn.com", password_hash="mock", is_active=True)
-        db.add(new_user)
-        await db.commit()
-        
-    return user_id
+security = HTTPBearer()
+
+async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(security)) -> UUID:
+    token = credentials.credentials
+    try:
+        payload = pyjwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
+        if payload.get("type") != "access":
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
+        return UUID(payload["sub"])
+    except pyjwt.ExpiredSignatureError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
 router = APIRouter(prefix="/api/config", tags=["Configuration"])
 
