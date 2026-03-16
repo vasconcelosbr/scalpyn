@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .init_db import init_db
 
-from .api import auth, config as config_api, pools, exchanges
+from .api import auth, config as config_api, pools, exchanges, market
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -41,6 +41,7 @@ app.include_router(auth.router)
 app.include_router(config_api.router)
 app.include_router(pools.router)
 app.include_router(exchanges.router)
+app.include_router(market.router)
 
 @app.get("/api/health")
 async def health_check():
