@@ -87,7 +87,7 @@ export default function AnalyticsPage() {
                 <CartesianGrid strokeDasharray="4 4" stroke="rgba(255,255,255,0.04)" vertical={false} />
                 <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: "#555B6E", fontSize: 11, fontFamily: "JetBrains Mono" }} tickFormatter={(v) => v ? new Date(v).toLocaleDateString("en", { month: "short", day: "numeric" }) : ""} />
                 <YAxis axisLine={false} tickLine={false} tick={{ fill: "#555B6E", fontSize: 11, fontFamily: "JetBrains Mono" }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
-                <Tooltip contentStyle={{ backgroundColor: "#1A1B25", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", fontFamily: "JetBrains Mono", color: "#8B92A5" }} formatter={(v: number) => [fmtC(v), "Capital"]} />
+                <Tooltip contentStyle={{ backgroundColor: "#1A1B25", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", fontFamily: "JetBrains Mono", color: "#8B92A5" }} formatter={(v) => [fmtC(v as number), "Capital"]} />
                 <Area type="monotone" dataKey="value" stroke="#34D399" strokeWidth={2} fill="url(#gradCap)" />
               </AreaChart>
             </ResponsiveContainer>
@@ -107,7 +107,7 @@ export default function AnalyticsPage() {
                 <CartesianGrid strokeDasharray="4 4" stroke="rgba(255,255,255,0.04)" vertical={false} />
                 <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: "#555B6E", fontSize: 10, fontFamily: "JetBrains Mono" }} />
                 <YAxis axisLine={false} tickLine={false} tick={{ fill: "#555B6E", fontSize: 11, fontFamily: "JetBrains Mono" }} tickFormatter={(v) => `$${v}`} />
-                <Tooltip contentStyle={{ backgroundColor: "#1A1B25", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", fontFamily: "JetBrains Mono", color: "#8B92A5" }} formatter={(v: number) => [fmtC(v), "P&L"]} labelFormatter={(l) => l} />
+                <Tooltip contentStyle={{ backgroundColor: "#1A1B25", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "8px", fontFamily: "JetBrains Mono", color: "#8B92A5" }} formatter={(v) => [fmtC(v as number), "P&L"]} labelFormatter={(l) => l} />
                 <Bar dataKey="pnl" radius={[3, 3, 0, 0]} fill="#34D399" />
               </BarChart>
             </ResponsiveContainer>
