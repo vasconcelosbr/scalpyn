@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? '/api';
+const API_URL = '/api'; // Always use Next.js rewrite proxy to avoid CORS
 
 export default function RegisterPage() {
   const router = useRouter();

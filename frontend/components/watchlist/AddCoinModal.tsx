@@ -48,10 +48,9 @@ export function AddCoinModal({ onClose, onAdd, existingSymbols }: AddCoinModalPr
       }
 
       try {
-        const baseUrl = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/v1\/?$/, "");
         const endpoint =
           marketType === "futures" ? "/market/futures-currencies" : "/market/spot-currencies";
-        const response = await fetch(`${baseUrl}${endpoint}`);
+        const response = await fetch(`/api${endpoint}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         const list: SpotCurrency[] = data.currencies || [];

@@ -2,7 +2,9 @@
  * API client with JWT interceptor for Scalpyn backend.
  */
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? '/api';
+// Always use relative /api path so Next.js rewrites proxy the request server-side.
+// This avoids CORS issues — the browser never calls Cloud Run directly.
+const API_URL = '/api';
 
 function getToken(): string | null {
   if (typeof window === 'undefined') return null;

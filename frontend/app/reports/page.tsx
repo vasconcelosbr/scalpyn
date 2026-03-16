@@ -29,7 +29,7 @@ export default function ReportsPage() {
   const handleExport = () => {
     const token = typeof window !== "undefined" ? localStorage.getItem("token") : "";
     const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api";
-    window.open(`${API_URL}/reports/trades/export`, "_blank");
+    window.open(`/api/reports/trades/export`, "_blank");
   };
 
   return (

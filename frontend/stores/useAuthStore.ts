@@ -16,7 +16,7 @@ interface AuthState {
   setUser: (user: AuthUser, token: string) => void;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? '/api';
+const API_URL = '/api'; // Always use Next.js rewrite proxy to avoid CORS
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,

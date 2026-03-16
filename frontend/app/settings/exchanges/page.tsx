@@ -15,9 +15,7 @@ export default function ExchangeSettings() {
 
   const fetchConnections = async () => {
     try {
-      // API_URL might have /v1 at the end, so we clean it to match backend /api/exchanges route
-      const baseUrl = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/v1\/?$/, '');
-      const response = await fetch(`${baseUrl}/exchanges/`, {
+      const response = await fetch(`/api/exchanges/`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
         }
@@ -45,8 +43,7 @@ export default function ExchangeSettings() {
 
   const handleTestConnection = async (id: string) => {
     try {
-      const baseUrl = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/v1\/?$/, '');
-      const response = await fetch(`${baseUrl}/exchanges/${id}/test`, {
+      const response = await fetch(`/api/exchanges/${id}/test`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
         }
@@ -73,8 +70,7 @@ export default function ExchangeSettings() {
   const handleDeleteConnection = async (id: string) => {
     if (!confirm('Are you sure you want to delete this exchange connection?')) return;
     try {
-      const baseUrl = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/v1\/?$/, '');
-      const response = await fetch(`${baseUrl}/exchanges/${id}`, {
+      const response = await fetch(`/api/exchanges/${id}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token') || ''}`
@@ -102,8 +98,7 @@ export default function ExchangeSettings() {
     setIsConnecting(true);
     
     try {
-      const baseUrl = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/v1\/?$/, '');
-      const response = await fetch(`${baseUrl}/exchanges/connect`, {
+      const response = await fetch(`/api/exchanges/connect`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
