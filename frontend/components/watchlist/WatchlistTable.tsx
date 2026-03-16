@@ -81,6 +81,7 @@ export function WatchlistTable() {
   const nameRef = useRef<HTMLInputElement>(null);
   const newNameRef = useRef<HTMLInputElement>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [scoreSort, setScoreSort] = useState<"asc" | "desc" | null>("desc");
 
   // Load from localStorage after hydration
   useEffect(() => {
@@ -105,7 +106,17 @@ export function WatchlistTable() {
   }, [activeId, hydrated]);
 
   const activeWatchlist = watchlists.find((w) => w.id === activeId) ?? watchlists[0];
-  const watchlist = activeWatchlist?.items ?? [];
+  const rawWatchlist = activeWatchlist?.items ?? [];
+
+  const watchlist = scoreSort
+    ? [...rawWatchlist].sort((a, b) =>
+        scoreSort === "desc" ? b.score - a.score : a.score - b.score
+      )
+    : rawWatchlist;
+
+  const cycleScoreSort = () => {
+    setScoreSort((prev) => (prev === "desc" ? "asc" : "desc"));
+  };
 
   const updateActive = (updater: (items: WatchlistItem[]) => WatchlistItem[]) => {
     setWatchlists((prev) =>
@@ -331,7 +342,17 @@ export function WatchlistTable() {
                 <th className="text-right">Market Cap</th>
                 <th className="text-right">Volume</th>
                 <th>Trend</th>
-                <th>Alpha Score</th>
+                <th>
+                  <button
+                    onClick={cycleScoreSort}
+                    className="flex items-center gap-1 font-semibold hover:text-[var(--accent-primary)] transition-colors"
+                  >
+                    Alpha Score
+                    <span className="text-[10px] opacity-70">
+                      {scoreSort === "desc" ? "▼" : "▲"}
+                    </span>
+                  </button>
+                </th>
                 <th className="w-10"></th>
               </tr>
             </thead>
