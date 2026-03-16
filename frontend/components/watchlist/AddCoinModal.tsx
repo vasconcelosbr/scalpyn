@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
-import { X, Search, Plus, TrendingUp, TrendingDown } from "lucide-react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { X, Search, Plus, TrendingUp, TrendingDown, CheckSquare, Square } from "lucide-react";
 
 export interface SpotCurrency {
   rank: number;
@@ -11,11 +11,16 @@ export interface SpotCurrency {
   change_24h: number;
   volume_24h: number;
   volume_24h_formatted: string;
+  market_cap?: number | null;
+  market_cap_formatted?: string | null;
+  is_futures?: boolean;
 }
+
+type MarketType = "spot" | "futures" | "tradfi";
 
 interface AddCoinModalProps {
   onClose: () => void;
-  onAdd: (coin: SpotCurrency) => void;
+  onAdd: (coins: SpotCurrency[]) => void;
   existingSymbols: string[];
 }
 
@@ -25,13 +30,28 @@ export function AddCoinModal({ onClose, onAdd, existingSymbols }: AddCoinModalPr
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [marketType, setMarketType] = useState<MarketType>("spot");
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const fetchCurrencies = async () => {
+      setLoading(true);
+      setError(null);
+      setCurrencies([]);
+      setFiltered([]);
+      setSelected(new Set());
+
+      if (marketType === "tradfi") {
+        setLoading(false);
+        return;
+      }
+
       try {
         const baseUrl = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/v1\/?$/, "");
-        const response = await fetch(`${baseUrl}/market/spot-currencies`);
+        const endpoint =
+          marketType === "futures" ? "/market/futures-currencies" : "/market/spot-currencies";
+        const response = await fetch(`${baseUrl}${endpoint}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         const list: SpotCurrency[] = data.currencies || [];
@@ -39,7 +59,7 @@ export function AddCoinModal({ onClose, onAdd, existingSymbols }: AddCoinModalPr
         setFiltered(list.slice(0, 100));
       } catch (err) {
         setError("Falha ao carregar criptomoedas. Tente novamente.");
-        console.error("Failed to fetch spot currencies:", err);
+        console.error("Failed to fetch currencies:", err);
       } finally {
         setLoading(false);
       }
@@ -47,7 +67,7 @@ export function AddCoinModal({ onClose, onAdd, existingSymbols }: AddCoinModalPr
 
     fetchCurrencies();
     setTimeout(() => searchRef.current?.focus(), 100);
-  }, []);
+  }, [marketType]);
 
   useEffect(() => {
     const q = search.trim().toUpperCase();
@@ -67,12 +87,45 @@ export function AddCoinModal({ onClose, onAdd, existingSymbols }: AddCoinModalPr
     if (e.target === e.currentTarget) onClose();
   };
 
+  const toggleSelect = (symbol: string, alreadyAdded: boolean) => {
+    if (alreadyAdded) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(symbol)) {
+        next.delete(symbol);
+      } else {
+        next.add(symbol);
+      }
+      return next;
+    });
+  };
+
+  const handleConfirm = () => {
+    const toAdd = currencies.filter((c) => selected.has(c.symbol));
+    if (toAdd.length > 0) onAdd(toAdd);
+    else onClose();
+  };
+
+  const selectableInView = useMemo(
+    () => filtered.filter((c) => !existingSymbols.includes(c.symbol)),
+    [filtered, existingSymbols]
+  );
+
+  const allVisibleSelected =
+    selectableInView.length > 0 && selectableInView.every((c) => selected.has(c.symbol));
+
+  const marketTabs: { id: MarketType; label: string }[] = [
+    { id: "spot", label: "Spot" },
+    { id: "futures", label: "Futuros" },
+    { id: "tradfi", label: "TradFi" },
+  ];
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={handleBackdropClick}
     >
-      <div className="relative w-full max-w-2xl max-h-[85vh] flex flex-col bg-[var(--bg-card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] shadow-2xl overflow-hidden">
+      <div className="relative w-full max-w-2xl max-h-[90vh] flex flex-col bg-[var(--bg-card)] border border-[var(--border-default)] rounded-[var(--radius-lg)] shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-subtle)]">
           <div>
@@ -80,7 +133,9 @@ export function AddCoinModal({ onClose, onAdd, existingSymbols }: AddCoinModalPr
               Adicionar Criptomoeda
             </h2>
             <p className="text-[12px] text-[var(--text-secondary)] mt-0.5">
-              Spot USDT — Gate.io · Ordenado por volume 24h
+              {marketType === "spot" && "Spot USDT — Gate.io · Ordenado por volume 24h"}
+              {marketType === "futures" && "Futuros USDT Perpétuos — Gate.io · Ordenado por volume 24h"}
+              {marketType === "tradfi" && "Ativos Tradicionais — Em breve"}
             </p>
           </div>
           <button
@@ -89,6 +144,23 @@ export function AddCoinModal({ onClose, onAdd, existingSymbols }: AddCoinModalPr
           >
             <X className="w-4 h-4" />
           </button>
+        </div>
+
+        {/* Market Type Filter Tabs */}
+        <div className="flex gap-1 px-5 pt-3 pb-2 border-b border-[var(--border-subtle)]">
+          {marketTabs.map((tab) => (
+            <button
+              key={tab.id}
+              className={`px-4 py-1.5 text-[12px] font-medium rounded-[var(--radius-sm)] transition-colors ${
+                marketType === tab.id
+                  ? "bg-[var(--accent-primary)] text-white"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+              }`}
+              onClick={() => setMarketType(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
         {/* Search */}
@@ -102,6 +174,7 @@ export function AddCoinModal({ onClose, onAdd, existingSymbols }: AddCoinModalPr
               placeholder="Buscar por símbolo (BTC, ETH, SOL…)"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              disabled={marketType === "tradfi"}
             />
           </div>
         </div>
@@ -110,7 +183,7 @@ export function AddCoinModal({ onClose, onAdd, existingSymbols }: AddCoinModalPr
         <div className="flex-1 overflow-y-auto">
           {loading && (
             <div className="flex items-center justify-center py-16 text-[var(--text-secondary)] text-[14px]">
-              <span className="animate-pulse">Carregando pares spot…</span>
+              <span className="animate-pulse">Carregando pares{marketType === "futures" ? " futuros" : " spot"}…</span>
             </div>
           )}
 
@@ -120,30 +193,80 @@ export function AddCoinModal({ onClose, onAdd, existingSymbols }: AddCoinModalPr
             </div>
           )}
 
-          {!loading && !error && (
+          {!loading && !error && marketType === "tradfi" && (
+            <div className="flex flex-col items-center justify-center py-16 text-[var(--text-secondary)] text-[14px] gap-2">
+              <span className="text-3xl">🏦</span>
+              <span>Ativos TradFi em breve</span>
+              <span className="text-[12px] text-[var(--text-tertiary)]">Ações, ETFs e outros ativos tradicionais serão adicionados em futuras versões.</span>
+            </div>
+          )}
+
+          {!loading && !error && marketType !== "tradfi" && (
             <table className="data-table w-full">
               <thead className="sticky top-0 bg-[var(--bg-card)] z-10">
                 <tr>
-                  <th className="w-12 text-center">#</th>
+                  <th className="w-10 text-center">
+                    <button
+                      className="btn-icon w-6 h-6 flex items-center justify-center mx-auto"
+                      title="Selecionar todos visíveis"
+                      onClick={() => {
+                        const selectableSymbols = selectableInView.map((c) => c.symbol);
+                        if (allVisibleSelected) {
+                          setSelected((prev) => {
+                            const next = new Set(prev);
+                            selectableSymbols.forEach((s) => next.delete(s));
+                            return next;
+                          });
+                        } else {
+                          setSelected((prev) => new Set([...prev, ...selectableSymbols]));
+                        }
+                      }}
+                    >
+                      {allVisibleSelected ? (
+                        <CheckSquare className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                      ) : (
+                        <Square className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </th>
+                  <th className="w-10 text-center">#</th>
                   <th>Símbolo</th>
                   <th className="text-right">Preço</th>
                   <th className="text-right">24h %</th>
+                  <th className="text-right">Mkt Cap</th>
                   <th className="text-right">Volume 24h</th>
-                  <th className="w-16"></th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="text-center py-10 text-[var(--text-tertiary)] text-[13px]">
+                    <td colSpan={7} className="text-center py-10 text-[var(--text-tertiary)] text-[13px]">
                       Nenhuma criptomoeda encontrada
                     </td>
                   </tr>
                 )}
                 {filtered.map((coin) => {
                   const alreadyAdded = existingSymbols.includes(coin.symbol);
+                  const isSelected = selected.has(coin.symbol);
                   return (
-                    <tr key={coin.symbol} className={alreadyAdded ? "opacity-40" : ""}>
+                    <tr
+                      key={coin.symbol}
+                      className={`cursor-pointer ${alreadyAdded ? "opacity-40" : isSelected ? "bg-[var(--accent-primary)]/10" : "hover:bg-[var(--bg-hover)]"}`}
+                      onClick={() => toggleSelect(coin.symbol, alreadyAdded)}
+                    >
+                      <td className="text-center" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          disabled={alreadyAdded}
+                          className="btn-icon w-6 h-6 flex items-center justify-center mx-auto"
+                          onClick={() => toggleSelect(coin.symbol, alreadyAdded)}
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                          ) : (
+                            <Square className="w-3.5 h-3.5 text-[var(--text-tertiary)]" />
+                          )}
+                        </button>
+                      </td>
                       <td className="text-center text-[var(--text-tertiary)] text-[12px] font-mono">
                         {coin.rank}
                       </td>
@@ -152,7 +275,9 @@ export function AddCoinModal({ onClose, onAdd, existingSymbols }: AddCoinModalPr
                           <span className="font-semibold text-[var(--text-primary)]">
                             {coin.base}
                           </span>
-                          <span className="text-[11px] text-[var(--text-tertiary)]">/USDT</span>
+                          <span className="text-[11px] text-[var(--text-tertiary)]">
+                            {coin.is_futures ? "/USDT Perp" : "/USDT"}
+                          </span>
                         </div>
                       </td>
                       <td className="numeric price text-right">
@@ -176,21 +301,10 @@ export function AddCoinModal({ onClose, onAdd, existingSymbols }: AddCoinModalPr
                         </span>
                       </td>
                       <td className="numeric text-right text-[var(--text-secondary)] text-[12px]">
-                        {coin.volume_24h_formatted}
+                        {coin.market_cap_formatted ?? "—"}
                       </td>
-                      <td className="text-center">
-                        <button
-                          disabled={alreadyAdded}
-                          className={`btn-icon w-7 h-7 flex items-center justify-center transition-colors ${
-                            alreadyAdded
-                              ? "cursor-default"
-                              : "hover:bg-[var(--accent-primary)] hover:text-white hover:border-[var(--accent-primary)]"
-                          }`}
-                          title={alreadyAdded ? "Já adicionado" : "Adicionar à Watchlist"}
-                          onClick={() => !alreadyAdded && onAdd(coin)}
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                        </button>
+                      <td className="numeric text-right text-[var(--text-secondary)] text-[12px]">
+                        {coin.volume_24h_formatted}
                       </td>
                     </tr>
                   );
@@ -201,12 +315,28 @@ export function AddCoinModal({ onClose, onAdd, existingSymbols }: AddCoinModalPr
         </div>
 
         {/* Footer */}
-        {!loading && !error && (
-          <div className="px-5 py-3 border-t border-[var(--border-subtle)] text-[11px] text-[var(--text-tertiary)]">
-            {filtered.length !== 1
-              ? `${filtered.length} pares exibidos`
-              : `${filtered.length} par exibido`}
-            {currencies.length > 100 && !search && ` (top 100 de ${currencies.length})`}
+        {!loading && !error && marketType !== "tradfi" && (
+          <div className="px-5 py-3 border-t border-[var(--border-subtle)] flex items-center justify-between gap-3">
+            <span className="text-[11px] text-[var(--text-tertiary)]">
+              {filtered.length !== 1
+                ? `${filtered.length} pares exibidos`
+                : `${filtered.length} par exibido`}
+              {currencies.length > 100 && !search && ` (top 100 de ${currencies.length})`}
+              {selected.size > 0 && ` · ${selected.size} selecionado${selected.size !== 1 ? "s" : ""}`}
+            </span>
+            <div className="flex gap-2">
+              <button className="btn text-[13px] px-4 py-1.5" onClick={onClose}>
+                Cancelar
+              </button>
+              <button
+                className="btn btn-primary text-[13px] px-4 py-1.5"
+                disabled={selected.size === 0}
+                onClick={handleConfirm}
+              >
+                <Plus className="w-3.5 h-3.5 mr-1" />
+                Adicionar{selected.size > 0 ? ` (${selected.size})` : ""}
+              </button>
+            </div>
           </div>
         )}
       </div>
