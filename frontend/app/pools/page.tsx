@@ -15,7 +15,7 @@ export default function PoolsPage() {
   const fetchPools = async () => {
     setLoading(true);
     try {
-      const data = await apiGet("/pools");
+      const data = await apiGet("/pools/");
       setPools(data.pools || []);
     } catch (e) {
       console.error(e);
@@ -28,7 +28,7 @@ export default function PoolsPage() {
   const handleCreate = async () => {
     if (!newName.trim()) return;
     try {
-      await apiPost("/pools", { name: newName, description: newDesc, mode: newMode, is_active: true });
+      await apiPost("/pools/", { name: newName, description: newDesc, mode: newMode, is_active: true });
       setShowCreate(false);
       setNewName("");
       setNewDesc("");
