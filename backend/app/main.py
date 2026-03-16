@@ -39,6 +39,7 @@ app = FastAPI(
     description="Scalpyn API — Institutional-Grade Quant Crypto Trading Platform",
     version="0.2.0",
     lifespan=lifespan,
+    redirect_slashes=False,
 )
 
 app.add_middleware(
