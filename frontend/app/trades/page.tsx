@@ -1,20 +1,113 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { formatCurrency, formatPercent } from "@/lib/utils";
+import { getAuthHeaders } from "@/lib/auth";
 
-const MOCK_OPEN = [
-  { id: "t1", symbol: "BTCUSDT", type: "Spot", side: "Long", entry: 64100.5, current: 64250.0, target: 65062.0, pl: 149.50, plPct: 0.23 },
-  { id: "t2", symbol: "ETHUSDT", type: "Futures", side: "Short", entry: 3500.0, current: 3450.5, target: 3400.0, pl: 49.50, plPct: 1.41 },
-];
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "/api";
 
-const MOCK_HISTORY = [
-  { id: "h1", date: "2026-03-10 14:30", symbol: "SOLUSDT", side: "Long", entry: 135.0, exit: 142.5, pl: 7.5, plPct: 5.55, time: "2h" },
-  { id: "h2", date: "2026-03-09 10:15", symbol: "ADAUSDT", side: "Long", entry: 0.48, exit: 0.45, pl: -0.03, plPct: -6.25, time: "1d 4h" },
+type MarketFilter = "all" | "spot" | "futures" | "tradfi";
+
+interface Position {
+  id: string;
+  symbol: string;
+  side: string;
+  market_type: string;
+  exchange: string;
+  entry_price: number;
+  quantity: number;
+  invested_value: number;
+  take_profit_price: number | null;
+  stop_loss_price: number | null;
+  alpha_score_at_entry: number | null;
+  entry_at: string | null;
+}
+
+interface TradeRecord {
+  id: string;
+  symbol: string;
+  side: string;
+  market_type: string;
+  exchange: string;
+  entry_price: number;
+  exit_price: number | null;
+  quantity: number;
+  invested_value: number;
+  profit_loss: number | null;
+  profit_loss_pct: number | null;
+  holding_seconds: number | null;
+  alpha_score_at_entry: number | null;
+  entry_at: string | null;
+  exit_at: string | null;
+}
+
+function formatHolding(seconds: number | null): string {
+  if (!seconds) return "—";
+  const h = Math.floor(seconds / 3600);
+  const d = Math.floor(h / 24);
+  if (d > 0) return `${d}d ${h % 24}h`;
+  if (h > 0) return `${h}h`;
+  return `${Math.floor(seconds / 60)}m`;
+}
+
+const FILTER_OPTIONS: { label: string; value: MarketFilter }[] = [
+  { label: "All", value: "all" },
+  { label: "Spot", value: "spot" },
+  { label: "Futures", value: "futures" },
+  { label: "TradFi", value: "tradfi" },
 ];
 
 export default function TradesPage() {
-  const [activeTab, setActiveTab] = useState("open");
+  const [activeTab, setActiveTab] = useState<"open" | "history">("open");
+  const [marketFilter, setMarketFilter] = useState<MarketFilter>("all");
+  const [positions, setPositions] = useState<Position[]>([]);
+  const [history, setHistory] = useState<TradeRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchPositions = useCallback(async (filter: MarketFilter) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const qs = filter !== "all" ? `?market_type=${filter}` : "";
+      const res = await fetch(`${API_URL}/trades/positions${qs}`, {
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) throw new Error("Failed to load positions");
+      const data = await res.json();
+      setPositions(data.positions ?? []);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Error loading positions");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const fetchHistory = useCallback(async (filter: MarketFilter) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const qs = filter !== "all" ? `?market_type=${filter}` : "";
+      const res = await fetch(`${API_URL}/trades/${qs}`, {
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) throw new Error("Failed to load trade history");
+      const data = await res.json();
+      setHistory(data.trades ?? []);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Error loading history");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "open") {
+      fetchPositions(marketFilter);
+    } else {
+      fetchHistory(marketFilter);
+    }
+  }, [activeTab, marketFilter, fetchPositions, fetchHistory]);
 
   return (
     <div className="space-y-6 flex flex-col h-full w-full">
@@ -22,80 +115,119 @@ export default function TradesPage() {
         <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">Trades Review</h1>
       </div>
 
+      {/* Tabs */}
       <div className="flex gap-4 border-b border-[var(--border-subtle)] pb-px relative">
-        <button 
+        <button
           onClick={() => setActiveTab("history")}
           className={`pb-3 text-[13px] font-semibold tracking-wide px-1 transition-colors relative ${activeTab === "history" ? "text-[var(--accent-primary)]" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"}`}
         >
           Trade History
           {activeTab === "history" && <span className="absolute bottom-[-1px] left-0 right-0 h-[2px] bg-[var(--accent-primary)]" />}
         </button>
-        <button 
+        <button
           onClick={() => setActiveTab("open")}
           className={`pb-3 text-[13px] font-semibold tracking-wide px-1 transition-colors relative flex gap-2 items-center ${activeTab === "open" ? "text-[var(--accent-primary)]" : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"}`}
         >
           Active Positions
-          <span className="bg-[var(--bg-elevated)] border border-[var(--border-default)] text-[var(--text-primary)] py-0.5 px-2 rounded-full text-[11px] font-mono leading-none">2</span>
+          <span className="bg-[var(--bg-elevated)] border border-[var(--border-default)] text-[var(--text-primary)] py-0.5 px-2 rounded-full text-[11px] font-mono leading-none">
+            {positions.length}
+          </span>
           {activeTab === "open" && <span className="absolute bottom-[-1px] left-0 right-0 h-[2px] bg-[var(--accent-primary)]" />}
         </button>
       </div>
 
+      {/* Market Type Filter */}
+      <div className="flex items-center gap-2">
+        {FILTER_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            onClick={() => setMarketFilter(opt.value)}
+            className={`px-3 py-1.5 rounded-full text-[12px] font-semibold transition-colors border ${
+              marketFilter === opt.value
+                ? "bg-[var(--accent-primary)] text-white border-[var(--accent-primary)]"
+                : "bg-transparent text-[var(--text-secondary)] border-[var(--border-default)] hover:text-[var(--text-primary)]"
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
       <div className="card w-full">
-        {activeTab === "open" && (
+        {loading && (
+          <div className="flex items-center justify-center py-16 text-[var(--text-tertiary)] text-[13px]">
+            Loading…
+          </div>
+        )}
+
+        {!loading && error && (
+          <div className="flex items-center justify-center py-16 text-[var(--color-loss)] text-[13px]">
+            {error}
+          </div>
+        )}
+
+        {!loading && !error && activeTab === "open" && (
           <div className="overflow-x-auto">
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Symbol/Side</th>
+                  <th>Symbol / Side</th>
+                  <th>Type</th>
                   <th className="text-right">Entry Price</th>
-                  <th className="text-right">Current Price</th>
-                  <th className="text-right">Target (TP)</th>
-                  <th className="text-right">Unrealized P&L</th>
-                  <th className="text-center w-[100px]">Actions</th>
+                  <th className="text-right">Invested</th>
+                  <th className="text-right">Take Profit</th>
+                  <th className="text-right">Stop Loss</th>
+                  <th className="text-right">α Score</th>
                 </tr>
               </thead>
               <tbody>
-                {MOCK_OPEN.map((pos) => (
+                {positions.map((pos) => (
                   <tr key={pos.id}>
                     <td>
                       <div className="font-semibold">{pos.symbol}</div>
                       <div className="flex items-center gap-2 mt-1">
-                        <span className={`badge ${pos.side === 'Long' ? 'bullish' : 'bearish'}`}>
+                        <span className={`badge ${pos.side.toLowerCase() === "buy" || pos.side.toLowerCase() === "long" ? "bullish" : "bearish"}`}>
                           {pos.side}
                         </span>
-                        <span className="caption">{pos.type}</span>
+                        <span className="caption text-[11px] text-[var(--text-tertiary)]">{pos.exchange}</span>
                       </div>
                     </td>
-                    <td className="numeric text-[var(--text-secondary)]">{formatCurrency(pos.entry)}</td>
-                    <td className={`numeric ${pos.pl >= 0 ? 'price-up' : 'price-down'} text-[var(--text-primary)]`}>{formatCurrency(pos.current)}</td>
-                    <td className="numeric text-[var(--accent-primary)]">{formatCurrency(pos.target)}</td>
-                    <td className="text-right">
-                      <div className={`data-value ${pos.pl >= 0 ? 'profit' : 'loss'}`}>
-                        {formatCurrency(pos.pl)}
-                      </div>
-                      <div className={`percentage text-[12px] mt-0.5 ${pos.plPct >= 0 ? 'profit' : 'loss'}`}>
-                        {formatPercent(pos.plPct)}
-                      </div>
+                    <td>
+                      <span className="caption capitalize">{pos.market_type}</span>
                     </td>
-                    <td className="text-center">
-                      <button className="btn btn-danger py-1.5 px-3">
-                        Close
-                      </button>
+                    <td className="numeric text-[var(--text-secondary)]">{formatCurrency(pos.entry_price)}</td>
+                    <td className="numeric text-[var(--text-primary)]">{formatCurrency(pos.invested_value)}</td>
+                    <td className="numeric text-[var(--accent-primary)]">
+                      {pos.take_profit_price ? formatCurrency(pos.take_profit_price) : "—"}
+                    </td>
+                    <td className="numeric text-[var(--color-loss)]">
+                      {pos.stop_loss_price ? formatCurrency(pos.stop_loss_price) : "—"}
+                    </td>
+                    <td className="numeric text-[var(--text-secondary)]">
+                      {pos.alpha_score_at_entry != null ? pos.alpha_score_at_entry.toFixed(1) : "—"}
                     </td>
                   </tr>
                 ))}
+                {positions.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="text-center py-12 text-[var(--text-tertiary)] text-[13px]">
+                      No open positions with balance &gt; $1.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
         )}
 
-        {activeTab === "history" && (
+        {!loading && !error && activeTab === "history" && (
           <div className="overflow-x-auto">
             <table className="data-table">
               <thead>
                 <tr>
-                  <th className="sorted desc">Date</th>
+                  <th className="sorted desc">Exit Date</th>
                   <th>Symbol & Side</th>
+                  <th>Type</th>
                   <th className="text-right">Entry</th>
                   <th className="text-right">Exit</th>
                   <th className="text-right">Time Held</th>
@@ -103,28 +235,54 @@ export default function TradesPage() {
                 </tr>
               </thead>
               <tbody>
-                {MOCK_HISTORY.map((trade) => (
+                {history.map((trade) => (
                   <tr key={trade.id}>
-                    <td className="data-value text-[13px] text-[var(--text-secondary)]">{trade.date}</td>
+                    <td className="data-value text-[13px] text-[var(--text-secondary)]">
+                      {trade.exit_at ? new Date(trade.exit_at).toLocaleString() : "—"}
+                    </td>
                     <td>
                       <div className="font-semibold">{trade.symbol}</div>
                       <div className="flex items-center gap-1 mt-1">
-                        <span className={`badge ${trade.side === 'Long' ? 'bullish' : 'bearish'}`}>{trade.side}</span>
+                        <span className={`badge ${trade.side.toLowerCase() === "buy" || trade.side.toLowerCase() === "long" ? "bullish" : "bearish"}`}>
+                          {trade.side}
+                        </span>
                       </div>
                     </td>
-                    <td className="numeric text-[var(--text-secondary)]">{formatCurrency(trade.entry)}</td>
-                    <td className="numeric text-[var(--text-primary)]">{formatCurrency(trade.exit)}</td>
-                    <td className="numeric text-[var(--text-secondary)] text-[12px]">{trade.time}</td>
+                    <td>
+                      <span className="caption capitalize">{trade.market_type}</span>
+                    </td>
+                    <td className="numeric text-[var(--text-secondary)]">{formatCurrency(trade.entry_price)}</td>
+                    <td className="numeric text-[var(--text-primary)]">
+                      {trade.exit_price ? formatCurrency(trade.exit_price) : "—"}
+                    </td>
+                    <td className="numeric text-[var(--text-secondary)] text-[12px]">
+                      {formatHolding(trade.holding_seconds)}
+                    </td>
                     <td className="text-right">
-                      <div className={`data-value ${trade.pl >= 0 ? 'profit' : 'loss'}`}>
-                        {trade.pl > 0 ? '+' : ''}{formatCurrency(trade.pl)}
-                      </div>
-                      <div className={`percentage text-[12px] mt-0.5 ${trade.plPct >= 0 ? 'profit' : 'loss'}`}>
-                        {formatPercent(trade.plPct)}
-                      </div>
+                      {trade.profit_loss != null ? (
+                        <>
+                          <div className={`data-value ${trade.profit_loss >= 0 ? "profit" : "loss"}`}>
+                            {trade.profit_loss > 0 ? "+" : ""}{formatCurrency(trade.profit_loss)}
+                          </div>
+                          {trade.profit_loss_pct != null && (
+                            <div className={`percentage text-[12px] mt-0.5 ${trade.profit_loss_pct >= 0 ? "profit" : "loss"}`}>
+                              {formatPercent(trade.profit_loss_pct)}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-[var(--text-tertiary)]">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}
+                {history.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="text-center py-12 text-[var(--text-tertiary)] text-[13px]">
+                      No trade history found.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -133,3 +291,4 @@ export default function TradesPage() {
     </div>
   );
 }
+
