@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ArrowLeft, Plus, Trash2, Save, Play, HelpCircle, Link } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Save, Play, HelpCircle, Link, RefreshCw } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 import { ConditionBuilder } from "./ConditionBuilder";
 import { WeightSliders } from "./WeightSliders";
@@ -20,11 +20,11 @@ interface Condition {
   required?: boolean;
 }
 
-interface Watchlist {
-  symbol: string;
+interface CustomWatchlist {
+  id: string;
   name: string;
-  price: number;
-  score: number;
+  symbol_count: number;
+  symbols: string[];
 }
 
 const DEFAULT_CONFIG = {
@@ -53,15 +53,14 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   const [activeTab, setActiveTab] = useState<"filters" | "scoring" | "signals">("filters");
   const [testResult, setTestResult] = useState<any>(null);
   const [testing, setTesting] = useState(false);
-  const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
-  const [selectedWatchlist, setSelectedWatchlist] = useState<string>("");
+  const [customWatchlists, setCustomWatchlists] = useState<CustomWatchlist[]>([]);
+  const [selectedWatchlistId, setSelectedWatchlistId] = useState<string>("");
   const [assignedWatchlist, setAssignedWatchlist] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
-    // Load available watchlists (symbols from market data)
-    apiGet("/watchlist").then((data) => {
-      setWatchlists(data.watchlist || []);
-    }).catch(() => {});
+    // Load custom watchlists from backend
+    loadCustomWatchlists();
 
     // If editing, check if profile has an assigned watchlist
     if (profile?.id) {
@@ -73,18 +72,57 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     }
   }, [profile]);
 
+  const loadCustomWatchlists = async () => {
+    try {
+      const data = await apiGet("/custom-watchlists");
+      setCustomWatchlists(data.watchlists || []);
+    } catch (e) {
+      console.error("Failed to load watchlists:", e);
+    }
+  };
+
+  const syncFromLocalStorage = async () => {
+    setSyncing(true);
+    try {
+      // Read watchlists from localStorage
+      const raw = localStorage.getItem("scalpyn_watchlists");
+      if (raw) {
+        const localWatchlists = JSON.parse(raw);
+        
+        // Transform to API format
+        const toSync = localWatchlists.map((wl: any) => ({
+          id: wl.id,
+          name: wl.name,
+          symbols: wl.items?.map((i: any) => i.symbol) || []
+        }));
+        
+        // Sync to backend
+        await apiPost("/custom-watchlists/sync", { watchlists: toSync });
+        
+        // Reload
+        await loadCustomWatchlists();
+        alert("Watchlists sincronizadas com sucesso!");
+      } else {
+        alert("Nenhuma watchlist encontrada no localStorage");
+      }
+    } catch (e: any) {
+      alert(`Erro ao sincronizar: ${e.message}`);
+    }
+    setSyncing(false);
+  };
+
   const handleSave = async () => {
     if (!name.trim()) {
       alert("Profile name is required");
       return;
     }
     
-    // Save profile first
     const profileData = {
       name,
       description,
       config,
       is_active: true,
+      watchlist_id: selectedWatchlistId || null,
     };
     
     onSave(profileData);
@@ -97,10 +135,11 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     }
     
     try {
-      await apiPost(`/profiles/watchlist/${selectedWatchlist || "default"}/assign`, {
+      const watchlistId = selectedWatchlistId || "default";
+      await apiPost(`/profiles/watchlist/${watchlistId}/assign`, {
         profile_id: profile.id
       });
-      setAssignedWatchlist(selectedWatchlist || "default");
+      setAssignedWatchlist(watchlistId);
       alert("Watchlist assigned successfully!");
     } catch (e: any) {
       alert(`Failed to assign: ${e.message}`);
@@ -138,6 +177,8 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
       scoring: { ...config.scoring, weights },
     });
   };
+
+  const selectedWatchlist = customWatchlists.find(w => w.id === selectedWatchlistId);
 
   return (
     <div className="space-y-6">
@@ -196,14 +237,26 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
               <div className="flex gap-2">
                 <select
                   className="input flex-1"
-                  value={selectedWatchlist}
-                  onChange={(e) => setSelectedWatchlist(e.target.value)}
+                  value={selectedWatchlistId}
+                  onChange={(e) => setSelectedWatchlistId(e.target.value)}
                   data-testid="watchlist-select"
                 >
-                  <option value="">Default Watchlist ({watchlists.length} assets)</option>
-                  {/* Future: custom watchlists */}
+                  <option value="">-- Select a Watchlist --</option>
+                  {customWatchlists.map((wl) => (
+                    <option key={wl.id} value={wl.id}>
+                      {wl.name} ({wl.symbol_count} assets)
+                    </option>
+                  ))}
                 </select>
-                {profile?.id && (
+                <button
+                  className="btn btn-secondary px-3"
+                  onClick={syncFromLocalStorage}
+                  disabled={syncing}
+                  title="Sync watchlists from Market Watchlist page"
+                >
+                  <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+                </button>
+                {profile?.id && selectedWatchlistId && (
                   <button
                     className="btn btn-secondary px-3"
                     onClick={handleAssignWatchlist}
@@ -213,9 +266,14 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                   </button>
                 )}
               </div>
+              {customWatchlists.length === 0 && (
+                <p className="text-[11px] text-[var(--text-tertiary)]">
+                  No watchlists found. Create one in Market Watchlist page and click sync.
+                </p>
+              )}
               {assignedWatchlist && (
                 <p className="text-[11px] text-[var(--color-profit)]">
-                  ✓ Currently assigned to: {assignedWatchlist === "default" ? "Default Watchlist" : assignedWatchlist}
+                  ✓ Currently assigned to: {assignedWatchlist === "default" ? "Default" : customWatchlists.find(w => w.id === assignedWatchlist)?.name || assignedWatchlist}
                 </p>
               )}
             </div>
@@ -232,28 +290,25 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
           </div>
           
           {/* Watchlist Preview */}
-          {watchlists.length > 0 && (
+          {selectedWatchlist && selectedWatchlist.symbols.length > 0 && (
             <div className="mt-4 p-3 bg-[var(--bg-secondary)] rounded-lg">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[12px] text-[var(--text-tertiary)]">
-                  Watchlist Preview ({watchlists.length} assets)
+                  {selectedWatchlist.name} - {selectedWatchlist.symbols.length} assets
                 </span>
               </div>
               <div className="flex flex-wrap gap-1.5 max-h-[100px] overflow-y-auto">
-                {watchlists.slice(0, 30).map((w) => (
+                {selectedWatchlist.symbols.slice(0, 30).map((symbol) => (
                   <span
-                    key={w.symbol}
-                    className="px-2 py-0.5 rounded bg-[var(--bg-card)] text-[var(--text-secondary)] text-[11px] flex items-center gap-1"
+                    key={symbol}
+                    className="px-2 py-0.5 rounded bg-[var(--bg-card)] text-[var(--text-secondary)] text-[11px]"
                   >
-                    {w.symbol}
-                    <span className={`text-[10px] ${w.score >= 60 ? 'text-[var(--color-profit)]' : w.score >= 40 ? 'text-[var(--text-tertiary)]' : 'text-[var(--color-loss)]'}`}>
-                      {w.score?.toFixed(0) || 0}
-                    </span>
+                    {symbol}
                   </span>
                 ))}
-                {watchlists.length > 30 && (
+                {selectedWatchlist.symbols.length > 30 && (
                   <span className="px-2 py-0.5 text-[var(--text-tertiary)] text-[11px]">
-                    +{watchlists.length - 30} more
+                    +{selectedWatchlist.symbols.length - 30} more
                   </span>
                 )}
               </div>

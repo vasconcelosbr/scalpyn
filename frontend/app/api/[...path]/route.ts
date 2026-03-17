@@ -16,7 +16,7 @@ const BACKEND_ROOT = (process.env.BACKEND_URL ?? 'https://scalpyn-330575088921.u
 type RouteContext = { params: Promise<{ path: string[] }> };
 
 // Routes that require trailing slash for FastAPI
-const COLLECTION_ROUTES = ['/api/pools', '/api/trades', '/api/orders', '/api/exchanges', '/api/watchlist', '/api/profiles'];
+const COLLECTION_ROUTES = ['/api/pools', '/api/trades', '/api/orders', '/api/exchanges', '/api/watchlist', '/api/profiles', '/api/custom-watchlists'];
 
 async function proxyRequest(req: NextRequest, context: RouteContext): Promise<NextResponse> {
     // Await params (required in Next.js 15+)
