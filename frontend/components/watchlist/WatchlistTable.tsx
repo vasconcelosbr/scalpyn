@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Plus, Trash2, Edit2, Check, X, ChevronDown, RefreshCw } from "lucide-react";
+import { Plus, Trash2, Edit2, Check, X, ChevronDown, RefreshCw, TrendingUp, Zap, List, Sliders } from "lucide-react";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import { AddCoinModal, SpotCurrency } from "./AddCoinModal";
 import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
@@ -17,11 +17,45 @@ interface WatchlistItem {
   scoreLevel: string;
 }
 
+interface RankedAsset {
+  symbol: string;
+  name: string;
+  price: number;
+  change_24h: number;
+  score: number;
+  rating: string;
+  score_breakdown: {
+    liquidity: number;
+    market_structure: number;
+    momentum: number;
+    signal: number;
+  };
+}
+
+interface Signal {
+  symbol: string;
+  name: string;
+  price: number;
+  change_24h: number;
+  action: string;
+  score: number;
+  confidence: number;
+  rating: string;
+  matched_conditions: string[];
+}
+
 interface Watchlist {
   id: string;
   name: string;
   symbols: string[];
   symbol_count: number;
+}
+
+interface Profile {
+  id: string;
+  name: string;
+  description?: string;
+  config?: any;
 }
 
 function deriveTrend(change24h: number): string {
@@ -52,6 +86,18 @@ export function WatchlistTable() {
   const [scoreSort, setScoreSort] = useState<"asc" | "desc" | null>("desc");
   const nameRef = useRef<HTMLInputElement>(null);
   const newNameRef = useRef<HTMLInputElement>(null);
+  
+  // L1/L2/L3 Tabs
+  const [activeTab, setActiveTab] = useState<"L1" | "L2" | "L3">("L1");
+  const [rankedAssets, setRankedAssets] = useState<RankedAsset[]>([]);
+  const [signals, setSignals] = useState<Signal[]>([]);
+  const [rankingLoading, setRankingLoading] = useState(false);
+  const [signalsLoading, setSignalsLoading] = useState(false);
+  
+  // Profile assignment
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [assignedProfile, setAssignedProfile] = useState<Profile | null>(null);
+  const [showProfileSelector, setShowProfileSelector] = useState(false);
 
   // Load watchlists from backend on mount
   useEffect(() => {
@@ -193,6 +239,82 @@ export function WatchlistTable() {
       console.error("Failed to remove symbol:", e);
     }
   };
+
+  // L2/L3 Functions
+  const loadProfiles = async () => {
+    try {
+      const data = await apiGet("/profiles");
+      setProfiles(data.profiles || []);
+    } catch (e) {
+      console.error("Failed to load profiles:", e);
+    }
+  };
+
+  const loadAssignedProfile = async (watchlistId: string) => {
+    try {
+      const data = await apiGet(`/custom-watchlists/${watchlistId}/profile`);
+      setAssignedProfile(data.profile || null);
+    } catch (e) {
+      setAssignedProfile(null);
+    }
+  };
+
+  const assignProfile = async (profileId: string | null) => {
+    if (!activeId) return;
+    try {
+      await apiPut(`/custom-watchlists/${activeId}/profile`, { profile_id: profileId });
+      await loadAssignedProfile(activeId);
+      setShowProfileSelector(false);
+      // Reload L2/L3 data
+      if (activeTab === "L2") loadRanking();
+      if (activeTab === "L3") loadSignals();
+    } catch (e) {
+      console.error("Failed to assign profile:", e);
+    }
+  };
+
+  const loadRanking = async () => {
+    if (!activeId) return;
+    setRankingLoading(true);
+    try {
+      const data = await apiGet(`/custom-watchlists/${activeId}/ranking?top_n=50`);
+      setRankedAssets(data.assets || []);
+    } catch (e) {
+      console.error("Failed to load ranking:", e);
+      setRankedAssets([]);
+    }
+    setRankingLoading(false);
+  };
+
+  const loadSignals = async () => {
+    if (!activeId) return;
+    setSignalsLoading(true);
+    try {
+      const data = await apiGet(`/custom-watchlists/${activeId}/signals`);
+      setSignals(data.signals || []);
+    } catch (e) {
+      console.error("Failed to load signals:", e);
+      setSignals([]);
+    }
+    setSignalsLoading(false);
+  };
+
+  // Load profiles and assigned profile when activeId changes
+  useEffect(() => {
+    if (activeId) {
+      loadProfiles();
+      loadAssignedProfile(activeId);
+    }
+  }, [activeId]);
+
+  // Load L2/L3 data when tab changes
+  useEffect(() => {
+    if (activeTab === "L2" && activeId) {
+      loadRanking();
+    } else if (activeTab === "L3" && activeId) {
+      loadSignals();
+    }
+  }, [activeTab, activeId]);
 
   const activeWatchlist = watchlists.find(w => w.id === activeId);
   
@@ -377,15 +499,90 @@ export function WatchlistTable() {
             </span>
           </div>
 
+          <div className="flex items-center gap-2">
+            {/* Profile Selector */}
+            <div className="relative">
+              <button
+                className="btn btn-secondary text-[12px] px-3 py-1.5 flex items-center gap-1"
+                onClick={() => setShowProfileSelector(!showProfileSelector)}
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                {assignedProfile ? assignedProfile.name : "Select Profile"}
+              </button>
+              
+              {showProfileSelector && (
+                <div className="absolute right-0 top-full mt-1 w-56 bg-[var(--bg-card)] border border-[var(--border-default)] rounded-[var(--radius-md)] shadow-2xl z-50 py-1">
+                  <div
+                    className={`px-3 py-2 cursor-pointer hover:bg-[var(--bg-hover)] text-[13px] ${!assignedProfile ? "text-[var(--accent-primary)]" : "text-[var(--text-primary)]"}`}
+                    onClick={() => assignProfile(null)}
+                  >
+                    No Profile (Default)
+                  </div>
+                  {profiles.map(p => (
+                    <div
+                      key={p.id}
+                      className={`px-3 py-2 cursor-pointer hover:bg-[var(--bg-hover)] text-[13px] ${assignedProfile?.id === p.id ? "text-[var(--accent-primary)]" : "text-[var(--text-primary)]"}`}
+                      onClick={() => assignProfile(p.id)}
+                    >
+                      {p.name}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            
+            <button
+              className="btn btn-primary text-[13px] px-4 py-2 shrink-0"
+              onClick={() => setShowModal(true)}
+            >
+              <Plus className="w-4 h-4 mr-1.5" />
+              Adicionar Cripto
+            </button>
+          </div>
+        </div>
+
+        {/* L1/L2/L3 Tabs */}
+        <div className="flex border-b border-[var(--border-subtle)] px-4">
           <button
-            className="btn btn-primary text-[13px] px-4 py-2 shrink-0"
-            onClick={() => setShowModal(true)}
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium transition-colors ${
+              activeTab === "L1"
+                ? "text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)]"
+                : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            }`}
+            onClick={() => setActiveTab("L1")}
           >
-            <Plus className="w-4 h-4 mr-1.5" />
-            Adicionar Cripto
+            <List className="w-3.5 h-3.5" />
+            L1 Assets
+            <span className="text-[10px] opacity-70">({sortedItems.length})</span>
+          </button>
+          <button
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium transition-colors ${
+              activeTab === "L2"
+                ? "text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)]"
+                : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            }`}
+            onClick={() => setActiveTab("L2")}
+          >
+            <TrendingUp className="w-3.5 h-3.5" />
+            L2 Ranking
+            <span className="text-[10px] opacity-70">({rankedAssets.length})</span>
+          </button>
+          <button
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium transition-colors ${
+              activeTab === "L3"
+                ? "text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)]"
+                : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            }`}
+            onClick={() => setActiveTab("L3")}
+          >
+            <Zap className="w-3.5 h-3.5" />
+            L3 Signals
+            <span className="text-[10px] opacity-70">({signals.length})</span>
           </button>
         </div>
 
+        {/* L1 - Raw Assets */}
+        {activeTab === "L1" && (
         <div className="overflow-x-auto">
           <table className="data-table">
             <thead>
@@ -486,6 +683,181 @@ export function WatchlistTable() {
             </tbody>
           </table>
         </div>
+        )}
+
+        {/* L2 - Ranking */}
+        {activeTab === "L2" && (
+          <div className="overflow-x-auto">
+            {rankingLoading ? (
+              <div className="p-8 text-center">
+                <RefreshCw className="w-6 h-6 animate-spin mx-auto text-[var(--text-tertiary)]" />
+                <p className="mt-2 text-[var(--text-secondary)] text-[13px]">Computing ranking...</p>
+              </div>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th className="w-12">#</th>
+                    <th>Symbol</th>
+                    <th className="text-right">Price</th>
+                    <th className="text-right">24h %</th>
+                    <th>
+                      <span className="flex items-center gap-1">
+                        Alpha Score
+                        <span className="text-[10px] opacity-70">▼</span>
+                      </span>
+                    </th>
+                    <th>Rating</th>
+                    <th>Score Breakdown</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rankedAssets.map((asset, idx) => (
+                    <tr key={asset.symbol}>
+                      <td className="text-[var(--text-tertiary)] font-mono">{idx + 1}</td>
+                      <td className="font-semibold">{asset.symbol}</td>
+                      <td className="numeric price">{formatCurrency(asset.price)}</td>
+                      <td className={`numeric percentage ${asset.change_24h >= 0 ? "profit" : "loss"}`}>
+                        {formatPercent(asset.change_24h)}
+                      </td>
+                      <td>
+                        <div className="score-bar" data-level={deriveScoreLevel(asset.score)}>
+                          <span className="score-label">{asset.score.toFixed(1)}</span>
+                          <div className="bar-track">
+                            <div className="bar-fill" style={{ width: `${asset.score}%` }} />
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <span className={`badge ${
+                          asset.rating === "STRONG_BUY" ? "bullish" :
+                          asset.rating === "BUY" ? "bullish" :
+                          asset.rating === "NEUTRAL" ? "range" : "bearish"
+                        }`}>
+                          {asset.rating}
+                        </span>
+                      </td>
+                      <td>
+                        <div className="flex gap-1 text-[10px]">
+                          <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">
+                            L:{asset.score_breakdown.liquidity.toFixed(0)}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400">
+                            MS:{asset.score_breakdown.market_structure.toFixed(0)}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-green-500/20 text-green-400">
+                            Mo:{asset.score_breakdown.momentum.toFixed(0)}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400">
+                            S:{asset.score_breakdown.signal.toFixed(0)}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {rankedAssets.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="text-center py-12 text-[var(--text-tertiary)] text-[13px]">
+                        {assignedProfile 
+                          ? "No assets passed the L1 filters. Try adjusting your profile."
+                          : "Select a profile to generate ranking."}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+
+        {/* L3 - Signals */}
+        {activeTab === "L3" && (
+          <div className="overflow-x-auto">
+            {signalsLoading ? (
+              <div className="p-8 text-center">
+                <RefreshCw className="w-6 h-6 animate-spin mx-auto text-[var(--text-tertiary)]" />
+                <p className="mt-2 text-[var(--text-secondary)] text-[13px]">Evaluating signals...</p>
+              </div>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th className="text-right">Price</th>
+                    <th className="text-right">24h %</th>
+                    <th>Action</th>
+                    <th>Score</th>
+                    <th>Confidence</th>
+                    <th>Matched Conditions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {signals.map(signal => (
+                    <tr key={signal.symbol}>
+                      <td className="font-semibold">{signal.symbol}</td>
+                      <td className="numeric price">{formatCurrency(signal.price)}</td>
+                      <td className={`numeric percentage ${signal.change_24h >= 0 ? "profit" : "loss"}`}>
+                        {formatPercent(signal.change_24h)}
+                      </td>
+                      <td>
+                        <span className={`badge ${
+                          signal.action === "LONG" ? "bullish" :
+                          signal.action === "SHORT" ? "bearish" : "range"
+                        }`}>
+                          {signal.action}
+                        </span>
+                      </td>
+                      <td>
+                        <div className="score-bar" data-level={deriveScoreLevel(signal.score)}>
+                          <span className="score-label">{signal.score.toFixed(1)}</span>
+                          <div className="bar-track">
+                            <div className="bar-fill" style={{ width: `${signal.score}%` }} />
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="flex items-center gap-1">
+                          <div className="w-16 h-1.5 rounded-full bg-[var(--bg-secondary)] overflow-hidden">
+                            <div 
+                              className="h-full bg-[var(--accent-primary)] rounded-full"
+                              style={{ width: `${signal.confidence * 100}%` }}
+                            />
+                          </div>
+                          <span className="text-[11px] text-[var(--text-secondary)]">
+                            {(signal.confidence * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="flex flex-wrap gap-1">
+                          {signal.matched_conditions.slice(0, 3).map((cond, i) => (
+                            <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--accent-primary)]/20 text-[var(--accent-primary)]">
+                              {cond}
+                            </span>
+                          ))}
+                          {signal.matched_conditions.length > 3 && (
+                            <span className="text-[10px] text-[var(--text-tertiary)]">
+                              +{signal.matched_conditions.length - 3}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {signals.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="text-center py-12 text-[var(--text-tertiary)] text-[13px]">
+                        {assignedProfile 
+                          ? "No signals triggered. Conditions not met or no assets passed filters."
+                          : "Select a profile to generate signals."}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
       </div>
     </>
   );
