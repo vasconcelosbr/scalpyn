@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Plus, Settings2, Trash2, Play, Copy, Layers } from "lucide-react";
-import { apiGet, apiPost, apiDelete } from "@/lib/api";
+import { apiGet, apiPost, apiDelete, apiPut } from "@/lib/api";
 import { ProfileBuilder } from "@/components/profiles/ProfileBuilder";
 import { ProfileCard } from "@/components/profiles/ProfileCard";
 
@@ -96,7 +96,7 @@ export default function ProfilesPage() {
   const handleSave = async (profileData: any) => {
     try {
       if (editingProfile) {
-        await apiPost(`/profiles/${editingProfile.id}`, profileData);
+        await apiPut(`/profiles/${editingProfile.id}`, profileData);
       } else {
         await apiPost("/profiles", profileData);
       }
