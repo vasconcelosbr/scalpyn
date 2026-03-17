@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ArrowLeft, Plus, Trash2, Save, Play, HelpCircle, Link, RefreshCw } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Save, Play, HelpCircle, Link } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 import { ConditionBuilder } from "./ConditionBuilder";
 import { WeightSliders } from "./WeightSliders";
@@ -56,7 +56,6 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   const [customWatchlists, setCustomWatchlists] = useState<CustomWatchlist[]>([]);
   const [selectedWatchlistId, setSelectedWatchlistId] = useState<string>("");
   const [assignedWatchlist, setAssignedWatchlist] = useState<string | null>(null);
-  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
     // Load custom watchlists from backend
@@ -79,36 +78,6 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     } catch (e) {
       console.error("Failed to load watchlists:", e);
     }
-  };
-
-  const syncFromLocalStorage = async () => {
-    setSyncing(true);
-    try {
-      // Read watchlists from localStorage
-      const raw = localStorage.getItem("scalpyn_watchlists");
-      if (raw) {
-        const localWatchlists = JSON.parse(raw);
-        
-        // Transform to API format
-        const toSync = localWatchlists.map((wl: any) => ({
-          id: wl.id,
-          name: wl.name,
-          symbols: wl.items?.map((i: any) => i.symbol) || []
-        }));
-        
-        // Sync to backend
-        await apiPost("/custom-watchlists/sync", { watchlists: toSync });
-        
-        // Reload
-        await loadCustomWatchlists();
-        alert("Watchlists sincronizadas com sucesso!");
-      } else {
-        alert("Nenhuma watchlist encontrada no localStorage");
-      }
-    } catch (e: any) {
-      alert(`Erro ao sincronizar: ${e.message}`);
-    }
-    setSyncing(false);
   };
 
   const handleSave = async () => {
@@ -248,14 +217,6 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                     </option>
                   ))}
                 </select>
-                <button
-                  className="btn btn-secondary px-3"
-                  onClick={syncFromLocalStorage}
-                  disabled={syncing}
-                  title="Sync watchlists from Market Watchlist page"
-                >
-                  <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-                </button>
                 {profile?.id && selectedWatchlistId && (
                   <button
                     className="btn btn-secondary px-3"
@@ -268,7 +229,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
               </div>
               {customWatchlists.length === 0 && (
                 <p className="text-[11px] text-[var(--text-tertiary)]">
-                  No watchlists found. Create one in Market Watchlist page and click sync.
+                  No watchlists found. Create one in Market Watchlist page first.
                 </p>
               )}
               {assignedWatchlist && (

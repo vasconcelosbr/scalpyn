@@ -1,9 +1,10 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { Plus, Trash2, Edit2, Check, X, ChevronDown } from "lucide-react";
+import { Plus, Trash2, Edit2, Check, X, ChevronDown, RefreshCw } from "lucide-react";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import { AddCoinModal, SpotCurrency } from "./AddCoinModal";
+import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
 
 interface WatchlistItem {
   symbol: string;
@@ -19,22 +20,9 @@ interface WatchlistItem {
 interface Watchlist {
   id: string;
   name: string;
-  items: WatchlistItem[];
+  symbols: string[];
+  symbol_count: number;
 }
-
-const STORAGE_KEY = "scalpyn_watchlists";
-const ACTIVE_KEY = "scalpyn_active_watchlist";
-
-const DEFAULT_WATCHLIST: Watchlist = {
-  id: "default",
-  name: "Minha Watchlist",
-  items: [
-    { symbol: "BTCUSDT", price: 64250.0, change24h: 2.4, mcap: "1.2T", vol: "35B", trend: "Bullish", score: 85, scoreLevel: "excellent" },
-    { symbol: "ETHUSDT", price: 3450.5, change24h: -1.2, mcap: "400B", vol: "15B", trend: "Range", score: 65, scoreLevel: "good" },
-    { symbol: "SOLUSDT", price: 142.5, change24h: 5.6, mcap: "65B", vol: "5B", trend: "Bullish", score: 92, scoreLevel: "excellent" },
-    { symbol: "ADAUSDT", price: 0.45, change24h: -3.4, mcap: "15B", vol: "800M", trend: "Bearish", score: 35, scoreLevel: "low" },
-  ],
-};
 
 function deriveTrend(change24h: number): string {
   if (change24h >= 2) return "Bullish";
@@ -49,28 +37,10 @@ function deriveScoreLevel(score: number): string {
   return "low";
 }
 
-function loadWatchlists(): Watchlist[] {
-  if (typeof window === "undefined") return [DEFAULT_WATCHLIST];
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Watchlist[];
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch {
-    // ignore parse errors
-  }
-  return [DEFAULT_WATCHLIST];
-}
-
-function saveWatchlists(lists: Watchlist[]) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(lists));
-}
-
 export function WatchlistTable() {
-  const [watchlists, setWatchlists] = useState<Watchlist[]>([DEFAULT_WATCHLIST]);
-  const [activeId, setActiveId] = useState<string>("default");
+  const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
+  const [activeId, setActiveId] = useState<string>("");
+  const [watchlistItems, setWatchlistItems] = useState<WatchlistItem[]>([]);
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [editingName, setEditingName] = useState(false);
@@ -78,86 +48,172 @@ export function WatchlistTable() {
   const [showListDropdown, setShowListDropdown] = useState(false);
   const [creatingNew, setCreatingNew] = useState(false);
   const [newListName, setNewListName] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [scoreSort, setScoreSort] = useState<"asc" | "desc" | null>("desc");
   const nameRef = useRef<HTMLInputElement>(null);
   const newNameRef = useRef<HTMLInputElement>(null);
-  const [hydrated, setHydrated] = useState(false);
-  const [scoreSort, setScoreSort] = useState<"asc" | "desc" | null>("desc");
 
-  // Load from localStorage after hydration
+  // Load watchlists from backend on mount
   useEffect(() => {
-    const lists = loadWatchlists();
-    const rawActive = localStorage.getItem(ACTIVE_KEY) || lists[0].id;
-    const savedActive = lists.some((w) => w.id === rawActive) ? rawActive : lists[0].id;
-    setWatchlists(lists);
-    setActiveId(savedActive);
-    setHydrated(true);
+    loadWatchlists();
   }, []);
 
-  // Persist to localStorage whenever watchlists change (after hydration)
+  // Load watchlist items when activeId changes
   useEffect(() => {
-    if (!hydrated) return;
-    saveWatchlists(watchlists);
-  }, [watchlists, hydrated]);
+    if (activeId) {
+      loadWatchlistItems(activeId);
+    }
+  }, [activeId]);
 
-  // Persist active watchlist id
-  useEffect(() => {
-    if (!hydrated) return;
-    localStorage.setItem(ACTIVE_KEY, activeId);
-  }, [activeId, hydrated]);
-
-  const activeWatchlist = watchlists.find((w) => w.id === activeId) ?? watchlists[0];
-  const rawWatchlist = activeWatchlist?.items ?? [];
-
-  const watchlist = scoreSort
-    ? [...rawWatchlist].sort((a, b) =>
-        scoreSort === "desc" ? b.score - a.score : a.score - b.score
-      )
-    : rawWatchlist;
-
-  const cycleScoreSort = () => {
-    setScoreSort((prev) => (prev === "desc" ? "asc" : "desc"));
+  const loadWatchlists = async () => {
+    setLoading(true);
+    try {
+      const data = await apiGet("/custom-watchlists");
+      const lists = data.watchlists || [];
+      setWatchlists(lists);
+      
+      // Set active to first watchlist if available
+      if (lists.length > 0 && !activeId) {
+        setActiveId(lists[0].id);
+      } else if (lists.length === 0) {
+        // Create default watchlist if none exist
+        await createWatchlist("Minha Watchlist");
+      }
+    } catch (e) {
+      console.error("Failed to load watchlists:", e);
+    }
+    setLoading(false);
   };
 
-  const updateActive = (updater: (items: WatchlistItem[]) => WatchlistItem[]) => {
-    setWatchlists((prev) =>
-      prev.map((wl) =>
-        wl.id === activeWatchlist.id ? { ...wl, items: updater(wl.items) } : wl
+  const loadWatchlistItems = async (watchlistId: string) => {
+    try {
+      const watchlist = watchlists.find(w => w.id === watchlistId);
+      if (!watchlist) return;
+
+      // Get market data for symbols
+      const marketData = await apiGet("/watchlist");
+      const marketMap = new Map(
+        (marketData.watchlist || []).map((m: any) => [m.symbol, m])
+      );
+
+      // Build items from watchlist symbols + market data
+      const items: WatchlistItem[] = watchlist.symbols.map(symbol => {
+        const market = marketMap.get(symbol) as any;
+        if (market) {
+          const change = market.change_24h || 0;
+          return {
+            symbol,
+            price: market.price || 0,
+            change24h: change,
+            mcap: market.market_cap_formatted || formatLargeNumber(market.market_cap),
+            vol: market.volume_24h_formatted || formatLargeNumber(market.volume_24h),
+            trend: deriveTrend(change),
+            score: market.score || 50,
+            scoreLevel: deriveScoreLevel(market.score || 50),
+          };
+        }
+        return {
+          symbol,
+          price: 0,
+          change24h: 0,
+          mcap: "-",
+          vol: "-",
+          trend: "Range",
+          score: 50,
+          scoreLevel: "neutral",
+        };
+      });
+
+      setWatchlistItems(items);
+    } catch (e) {
+      console.error("Failed to load watchlist items:", e);
+    }
+  };
+
+  const createWatchlist = async (name: string) => {
+    try {
+      const data = await apiPost("/custom-watchlists", { name, symbols: [] });
+      setWatchlists(prev => [...prev, data]);
+      setActiveId(data.id);
+      return data;
+    } catch (e) {
+      console.error("Failed to create watchlist:", e);
+    }
+  };
+
+  const updateWatchlistName = async (id: string, name: string) => {
+    try {
+      await apiPut(`/custom-watchlists/${id}`, { name });
+      setWatchlists(prev => prev.map(w => w.id === id ? { ...w, name } : w));
+    } catch (e) {
+      console.error("Failed to update watchlist:", e);
+    }
+  };
+
+  const deleteWatchlist = async (id: string) => {
+    if (watchlists.length <= 1) return;
+    try {
+      await apiDelete(`/custom-watchlists/${id}`);
+      setWatchlists(prev => {
+        const updated = prev.filter(w => w.id !== id);
+        if (id === activeId && updated.length > 0) {
+          setActiveId(updated[0].id);
+        }
+        return updated;
+      });
+    } catch (e) {
+      console.error("Failed to delete watchlist:", e);
+    }
+  };
+
+  const addSymbolsToWatchlist = async (symbols: string[]) => {
+    if (!activeId) return;
+    try {
+      const data = await apiPost(`/custom-watchlists/${activeId}/symbols`, { symbols });
+      setWatchlists(prev => prev.map(w => w.id === activeId ? { ...w, symbols: data.symbols, symbol_count: data.symbol_count } : w));
+      await loadWatchlistItems(activeId);
+    } catch (e) {
+      console.error("Failed to add symbols:", e);
+    }
+  };
+
+  const removeSymbolFromWatchlist = async (symbol: string) => {
+    if (!activeId) return;
+    try {
+      await apiDelete(`/custom-watchlists/${activeId}/symbols/${symbol}`);
+      setWatchlists(prev => prev.map(w => {
+        if (w.id === activeId) {
+          const newSymbols = w.symbols.filter(s => s !== symbol);
+          return { ...w, symbols: newSymbols, symbol_count: newSymbols.length };
+        }
+        return w;
+      }));
+      setWatchlistItems(prev => prev.filter(item => item.symbol !== symbol));
+    } catch (e) {
+      console.error("Failed to remove symbol:", e);
+    }
+  };
+
+  const activeWatchlist = watchlists.find(w => w.id === activeId);
+  
+  const sortedItems = scoreSort
+    ? [...watchlistItems].sort((a, b) =>
+        scoreSort === "desc" ? b.score - a.score : a.score - b.score
       )
-    );
+    : watchlistItems;
+
+  const cycleScoreSort = () => {
+    setScoreSort(prev => (prev === "desc" ? "asc" : "desc"));
   };
 
   const handleAddCoins = (coins: SpotCurrency[]) => {
-    updateActive((items) => {
-      const existingSymbols = new Set(items.map((i) => i.symbol));
-      const newItems: WatchlistItem[] = coins
-        .filter((c) => !existingSymbols.has(c.symbol))
-        .map((coin) => {
-          const change = coin.change_24h;
-          const BASE_SCORE = 50;
-          const CHANGE_MULTIPLIER = 3;
-          const score = Math.max(0, Math.min(100, Math.round(BASE_SCORE + change * CHANGE_MULTIPLIER)));
-          return {
-            symbol: coin.symbol,
-            price: coin.last_price,
-            change24h: change,
-            mcap: coin.market_cap_formatted ?? coin.volume_24h_formatted,
-            vol: coin.volume_24h_formatted,
-            trend: deriveTrend(change),
-            score,
-            scoreLevel: deriveScoreLevel(score),
-          };
-        });
-      return [...items, ...newItems];
-    });
+    const symbols = coins.map(c => c.symbol);
+    addSymbolsToWatchlist(symbols);
     setShowModal(false);
   };
 
-  const handleRemoveCoin = (symbol: string) => {
-    updateActive((items) => items.filter((w) => w.symbol !== symbol));
-    if (expandedRow === symbol) setExpandedRow(null);
-  };
-
   const startEditName = () => {
+    if (!activeWatchlist) return;
     setNameInput(activeWatchlist.name);
     setEditingName(true);
     setTimeout(() => nameRef.current?.focus(), 50);
@@ -165,10 +221,8 @@ export function WatchlistTable() {
 
   const confirmEditName = () => {
     const trimmed = nameInput.trim();
-    if (trimmed) {
-      setWatchlists((prev) =>
-        prev.map((wl) => (wl.id === activeWatchlist.id ? { ...wl, name: trimmed } : wl))
-      );
+    if (trimmed && activeId) {
+      updateWatchlistName(activeId, trimmed);
     }
     setEditingName(false);
   };
@@ -180,23 +234,11 @@ export function WatchlistTable() {
     setTimeout(() => newNameRef.current?.focus(), 50);
   };
 
-  const confirmCreateNew = () => {
+  const confirmCreateNew = async () => {
     const trimmed = newListName.trim();
     if (!trimmed) return;
-    const newId = crypto.randomUUID();
-    const newList: Watchlist = { id: newId, name: trimmed, items: [] };
-    setWatchlists((prev) => [...prev, newList]);
-    setActiveId(newId);
+    await createWatchlist(trimmed);
     setCreatingNew(false);
-  };
-
-  const handleDeleteWatchlist = (id: string) => {
-    if (watchlists.length <= 1) return;
-    setWatchlists((prev) => {
-      const updated = prev.filter((wl) => wl.id !== id);
-      if (id === activeId) setActiveId(updated[0].id);
-      return updated;
-    });
   };
 
   const getTrendBadge = (trend: string) => {
@@ -207,13 +249,24 @@ export function WatchlistTable() {
     }
   };
 
+  if (loading) {
+    return (
+      <div className="card">
+        <div className="card-body p-8 text-center">
+          <RefreshCw className="w-6 h-6 animate-spin mx-auto text-[var(--text-tertiary)]" />
+          <p className="mt-2 text-[var(--text-secondary)]">Loading watchlists...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       {showModal && (
         <AddCoinModal
           onClose={() => setShowModal(false)}
           onAdd={handleAddCoins}
-          existingSymbols={watchlist.map((w) => w.symbol)}
+          existingSymbols={watchlistItems.map(w => w.symbol)}
         />
       )}
 
@@ -246,7 +299,7 @@ export function WatchlistTable() {
               <div className="relative flex items-center gap-1">
                 <button
                   className="flex items-center gap-1 text-[13px] font-semibold text-[var(--text-primary)] hover:text-[var(--accent-primary)] transition-colors"
-                  onClick={() => setShowListDropdown((v) => !v)}
+                  onClick={() => setShowListDropdown(v => !v)}
                 >
                   {activeWatchlist?.name ?? "Watchlist"}
                   <ChevronDown className="w-3.5 h-3.5 text-[var(--text-tertiary)]" />
@@ -262,17 +315,18 @@ export function WatchlistTable() {
                 {/* Dropdown */}
                 {showListDropdown && (
                   <div className="absolute top-full left-0 mt-1 w-56 bg-[var(--bg-card)] border border-[var(--border-default)] rounded-[var(--radius-md)] shadow-2xl z-50 py-1">
-                    {watchlists.map((wl) => (
+                    {watchlists.map(wl => (
                       <div
                         key={wl.id}
                         className={`flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-[var(--bg-hover)] ${wl.id === activeId ? "text-[var(--accent-primary)]" : "text-[var(--text-primary)]"}`}
                         onClick={() => { setActiveId(wl.id); setShowListDropdown(false); }}
                       >
                         <span className="text-[13px] truncate flex-1">{wl.name}</span>
+                        <span className="text-[11px] text-[var(--text-tertiary)] mr-2">{wl.symbol_count}</span>
                         {watchlists.length > 1 && (
                           <button
                             className="btn-icon w-5 h-5 flex items-center justify-center ml-1 opacity-50 hover:opacity-100 hover:text-[var(--color-loss)]"
-                            onClick={(e) => { e.stopPropagation(); handleDeleteWatchlist(wl.id); }}
+                            onClick={(e) => { e.stopPropagation(); deleteWatchlist(wl.id); }}
                             title="Excluir watchlist"
                           >
                             <Trash2 className="w-3 h-3" />
@@ -319,7 +373,7 @@ export function WatchlistTable() {
             )}
 
             <span className="text-[12px] text-[var(--text-tertiary)]">
-              {watchlist.length} ativo{watchlist.length !== 1 ? "s" : ""}
+              {sortedItems.length} ativo{sortedItems.length !== 1 ? "s" : ""}
             </span>
           </div>
 
@@ -357,7 +411,7 @@ export function WatchlistTable() {
               </tr>
             </thead>
             <tbody>
-              {watchlist.map((coin) => (
+              {sortedItems.map(coin => (
                 <React.Fragment key={coin.symbol}>
                   <tr
                     className={`expandable ${expandedRow === coin.symbol ? "bg-[var(--bg-active)]" : ""}`}
@@ -383,7 +437,7 @@ export function WatchlistTable() {
                       <button
                         className="btn-icon w-7 h-7 flex items-center justify-center hover:bg-[var(--color-loss-muted)] hover:text-[var(--color-loss)] hover:border-[var(--color-loss-border)]"
                         title="Remover da Watchlist"
-                        onClick={() => handleRemoveCoin(coin.symbol)}
+                        onClick={() => removeSymbolFromWatchlist(coin.symbol)}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -422,7 +476,7 @@ export function WatchlistTable() {
                 </React.Fragment>
               ))}
 
-              {watchlist.length === 0 && (
+              {sortedItems.length === 0 && (
                 <tr>
                   <td colSpan={8} className="text-center py-12 text-[var(--text-tertiary)] text-[13px]">
                     Sua watchlist está vazia. Clique em <strong>Adicionar Cripto</strong> para começar.
@@ -435,4 +489,13 @@ export function WatchlistTable() {
       </div>
     </>
   );
+}
+
+function formatLargeNumber(num: number | null | undefined): string {
+  if (!num) return "-";
+  if (num >= 1e12) return `${(num / 1e12).toFixed(1)}T`;
+  if (num >= 1e9) return `${(num / 1e9).toFixed(1)}B`;
+  if (num >= 1e6) return `${(num / 1e6).toFixed(1)}M`;
+  if (num >= 1e3) return `${(num / 1e3).toFixed(1)}K`;
+  return num.toFixed(0);
 }
