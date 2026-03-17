@@ -93,11 +93,14 @@ export function WatchlistTable() {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [rankingLoading, setRankingLoading] = useState(false);
   const [signalsLoading, setSignalsLoading] = useState(false);
+  const [l1Loading, setL1Loading] = useState(false);
   
-  // Profile assignment - separate for L2 and L3
+  // Profile assignment - separate for L1, L2 and L3
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [l1Profile, setL1Profile] = useState<Profile | null>(null);
   const [l2Profile, setL2Profile] = useState<Profile | null>(null);
   const [l3Profile, setL3Profile] = useState<Profile | null>(null);
+  const [showL1ProfileSelector, setShowL1ProfileSelector] = useState(false);
   const [showL2ProfileSelector, setShowL2ProfileSelector] = useState(false);
   const [showL3ProfileSelector, setShowL3ProfileSelector] = useState(false);
 
@@ -242,7 +245,7 @@ export function WatchlistTable() {
     }
   };
 
-  // L2/L3 Functions
+  // L1/L2/L3 Functions
   const loadProfiles = async () => {
     try {
       const data = await apiGet("/profiles");
@@ -256,6 +259,12 @@ export function WatchlistTable() {
     try {
       const data = await apiGet(`/custom-watchlists/${watchlistId}/profiles`);
       // Find profile details from profiles list
+      if (data.L1) {
+        const l1 = profiles.find(p => p.id === data.L1.id) || { id: data.L1.id, name: data.L1.name };
+        setL1Profile(l1);
+      } else {
+        setL1Profile(null);
+      }
       if (data.L2) {
         const l2 = profiles.find(p => p.id === data.L2.id) || { id: data.L2.id, name: data.L2.name };
         setL2Profile(l2);
@@ -269,8 +278,26 @@ export function WatchlistTable() {
         setL3Profile(null);
       }
     } catch (e) {
+      setL1Profile(null);
       setL2Profile(null);
       setL3Profile(null);
+    }
+  };
+
+  const assignL1Profile = async (profileId: string | null) => {
+    if (!activeId) return;
+    try {
+      await apiPut(`/custom-watchlists/${activeId}/profile/L1`, { profile_id: profileId });
+      if (profileId) {
+        const profile = profiles.find(p => p.id === profileId);
+        setL1Profile(profile || null);
+      } else {
+        setL1Profile(null);
+      }
+      setShowL1ProfileSelector(false);
+      loadL1Filtered();
+    } catch (e) {
+      console.error("Failed to assign L1 profile:", e);
     }
   };
 
@@ -344,6 +371,34 @@ export function WatchlistTable() {
     setSignalsLoading(false);
   };
 
+  const loadL1Filtered = async () => {
+    if (!activeId) return;
+    setL1Loading(true);
+    try {
+      const data = await apiGet(`/custom-watchlists/${activeId}/filtered`);
+      // Transform to WatchlistItem format
+      const items: WatchlistItem[] = (data.assets || []).map((a: any) => ({
+        symbol: a.symbol,
+        price: a.price || 0,
+        change24h: a.change_24h || 0,
+        mcap: formatLargeNumber(a.market_cap),
+        vol: formatLargeNumber(a.volume_24h),
+        trend: a.trend || "Range",
+        score: a.score || 0,
+        scoreLevel: a.score_level || "neutral"
+      }));
+      setWatchlistItems(items);
+      // Update L1 profile from response
+      if (data.profile_id) {
+        const profile = profiles.find(p => p.id === data.profile_id);
+        if (profile) setL1Profile(profile);
+      }
+    } catch (e) {
+      console.error("Failed to load L1 filtered:", e);
+    }
+    setL1Loading(false);
+  };
+
   // Load profiles and assigned profiles when activeId changes
   useEffect(() => {
     if (activeId) {
@@ -353,14 +408,22 @@ export function WatchlistTable() {
     }
   }, [activeId]);
 
-  // Load L2/L3 data when tab changes
+  // Load data when tab or activeId changes
   useEffect(() => {
-    if (activeTab === "L2" && activeId) {
+    if (!activeId) return;
+    if (activeTab === "L1") {
+      // Load L1 filtered if profile is assigned, otherwise load raw
+      if (l1Profile) {
+        loadL1Filtered();
+      } else {
+        loadWatchlistItems(activeId);
+      }
+    } else if (activeTab === "L2") {
       loadRanking();
-    } else if (activeTab === "L3" && activeId) {
+    } else if (activeTab === "L3") {
       loadSignals();
     }
-  }, [activeTab, activeId]);
+  }, [activeTab, activeId, l1Profile?.id]);
 
   const activeWatchlist = watchlists.find(w => w.id === activeId);
   
@@ -569,7 +632,7 @@ export function WatchlistTable() {
             >
               <List className="w-3.5 h-3.5" />
               L1 Assets
-              <span className="text-[10px] opacity-70">({sortedItems.length})</span>
+              {l1Profile && <span className="text-[10px] opacity-70">• {l1Profile.name}</span>}
             </button>
             <button
               className={`flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium transition-colors ${
@@ -598,6 +661,38 @@ export function WatchlistTable() {
           </div>
           
           {/* Profile selector for current tab */}
+          {activeTab === "L1" && (
+            <div className="relative">
+              <button
+                className="btn btn-secondary text-[12px] px-3 py-1.5 flex items-center gap-1"
+                onClick={() => setShowL1ProfileSelector(!showL1ProfileSelector)}
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                {l1Profile ? l1Profile.name : "Select L1 Profile"}
+              </button>
+              
+              {showL1ProfileSelector && (
+                <div className="absolute right-0 top-full mt-1 w-56 bg-[var(--bg-card)] border border-[var(--border-default)] rounded-[var(--radius-md)] shadow-2xl z-50 py-1">
+                  <div
+                    className={`px-3 py-2 cursor-pointer hover:bg-[var(--bg-hover)] text-[13px] ${!l1Profile ? "text-[var(--accent-primary)]" : "text-[var(--text-primary)]"}`}
+                    onClick={() => assignL1Profile(null)}
+                  >
+                    No Profile (All Assets)
+                  </div>
+                  {profiles.map(p => (
+                    <div
+                      key={p.id}
+                      className={`px-3 py-2 cursor-pointer hover:bg-[var(--bg-hover)] text-[13px] ${l1Profile?.id === p.id ? "text-[var(--accent-primary)]" : "text-[var(--text-primary)]"}`}
+                      onClick={() => assignL1Profile(p.id)}
+                    >
+                      {p.name}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          
           {activeTab === "L2" && (
             <div className="relative">
               <button

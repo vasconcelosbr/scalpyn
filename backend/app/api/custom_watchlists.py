@@ -234,8 +234,131 @@ async def remove_symbol_from_watchlist(
 
 
 # ============================================================================
-# EXECUTION PIPELINE — L2 RANKING & L3 SIGNALS
+# EXECUTION PIPELINE — L1 FILTERED, L2 RANKING & L3 SIGNALS
 # ============================================================================
+
+@router.get("/{watchlist_id}/filtered")
+async def get_watchlist_filtered(
+    watchlist_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id)
+):
+    """
+    L1 FILTERED — Apply L1 profile filters to watchlist assets.
+    
+    Pipeline:
+    1. Load watchlist assets
+    2. Load assigned L1 profile
+    3. Apply L1 filters
+    4. Return filtered assets with scores
+    """
+    from sqlalchemy import text
+    from ..models.profile import Profile, WatchlistProfile
+    from ..services.profile_engine import ProfileEngine
+    
+    # Get watchlist
+    wl_query = select(CustomWatchlist).where(
+        CustomWatchlist.id == watchlist_id,
+        CustomWatchlist.user_id == user_id
+    )
+    wl_result = await db.execute(wl_query)
+    watchlist = wl_result.scalars().first()
+    
+    if not watchlist:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    
+    # Get assigned L1 profile
+    profile_assignment = await db.execute(
+        select(WatchlistProfile).where(
+            WatchlistProfile.user_id == user_id,
+            WatchlistProfile.watchlist_id == str(watchlist_id),
+            WatchlistProfile.profile_type == "L1"
+        )
+    )
+    assignment = profile_assignment.scalars().first()
+    
+    profile_config = None
+    profile_name = "Default"
+    profile_id = None
+    
+    if assignment and assignment.profile_id and assignment.is_enabled:
+        profile_result = await db.execute(
+            select(Profile).where(Profile.id == assignment.profile_id)
+        )
+        profile = profile_result.scalars().first()
+        if profile:
+            profile_config = profile.config
+            profile_name = profile.name
+            profile_id = str(profile.id)
+    
+    # Get market data for watchlist symbols
+    assets = await _get_assets_with_indicators(db, watchlist.symbols)
+    
+    if not assets:
+        return {
+            "watchlist": watchlist.name,
+            "watchlist_id": str(watchlist_id),
+            "profile": profile_name,
+            "profile_id": profile_id,
+            "total_assets": 0,
+            "filtered_assets": 0,
+            "assets": []
+        }
+    
+    total_before = len(assets)
+    
+    # Process through profile engine (apply filters only)
+    engine = ProfileEngine(profile_config)
+    filtered_assets = engine._apply_filters(assets)
+    
+    # Build response with basic scoring
+    result_assets = []
+    for asset in filtered_assets:
+        processed = engine._process_single_asset(asset, include_details=False)
+        result_assets.append({
+            "symbol": asset.get("symbol"),
+            "name": asset.get("name"),
+            "price": asset.get("price", 0),
+            "change_24h": asset.get("change_24h", 0),
+            "volume_24h": asset.get("volume_24h", 0),
+            "market_cap": asset.get("market_cap", 0),
+            "score": processed.get("score", {}).get("total_score", 0),
+            "trend": _derive_trend(asset.get("change_24h", 0)),
+            "score_level": _derive_score_level(processed.get("score", {}).get("total_score", 0))
+        })
+    
+    # Sort by score descending
+    result_assets.sort(key=lambda x: x["score"], reverse=True)
+    
+    return {
+        "watchlist": watchlist.name,
+        "watchlist_id": str(watchlist_id),
+        "profile": profile_name,
+        "profile_id": profile_id,
+        "total_assets": total_before,
+        "filtered_assets": len(result_assets),
+        "filter_conditions": len(profile_config.get("filters", {}).get("conditions", [])) if profile_config else 0,
+        "assets": result_assets
+    }
+
+
+def _derive_trend(change_24h: float) -> str:
+    if change_24h >= 2:
+        return "Bullish"
+    elif change_24h <= -2:
+        return "Bearish"
+    return "Range"
+
+
+def _derive_score_level(score: float) -> str:
+    if score >= 80:
+        return "excellent"
+    elif score >= 60:
+        return "good"
+    elif score >= 40:
+        return "neutral"
+    return "low"
+
 
 @router.get("/{watchlist_id}/ranking")
 async def get_watchlist_ranking(
@@ -470,8 +593,8 @@ async def assign_profile_to_watchlist(
     """
     from ..models.profile import Profile, WatchlistProfile
     
-    if profile_type not in ["L2", "L3"]:
-        raise HTTPException(status_code=400, detail="profile_type must be 'L2' or 'L3'")
+    if profile_type not in ["L1", "L2", "L3"]:
+        raise HTTPException(status_code=400, detail="profile_type must be 'L1', 'L2' or 'L3'")
     
     # Verify watchlist exists
     wl_query = select(CustomWatchlist).where(
@@ -538,8 +661,8 @@ async def get_watchlist_assigned_profile(
     """Get the profile assigned to a watchlist for L2 or L3."""
     from ..models.profile import Profile, WatchlistProfile
     
-    if profile_type not in ["L2", "L3"]:
-        raise HTTPException(status_code=400, detail="profile_type must be 'L2' or 'L3'")
+    if profile_type not in ["L1", "L2", "L3"]:
+        raise HTTPException(status_code=400, detail="profile_type must be 'L1', 'L2' or 'L3'")
     
     assignment_query = select(WatchlistProfile).where(
         WatchlistProfile.user_id == user_id,
@@ -588,8 +711,17 @@ async def get_watchlist_all_profiles(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id)
 ):
-    """Get all profiles (L2 and L3) assigned to a watchlist."""
+    """Get all profiles (L1, L2 and L3) assigned to a watchlist."""
     from ..models.profile import Profile, WatchlistProfile
+    
+    # Get L1 profile
+    l1_query = select(WatchlistProfile).where(
+        WatchlistProfile.user_id == user_id,
+        WatchlistProfile.watchlist_id == str(watchlist_id),
+        WatchlistProfile.profile_type == "L1"
+    )
+    l1_result = await db.execute(l1_query)
+    l1_assignment = l1_result.scalars().first()
     
     # Get L2 profile
     l2_query = select(WatchlistProfile).where(
@@ -611,9 +743,17 @@ async def get_watchlist_all_profiles(
     
     result = {
         "watchlist_id": str(watchlist_id),
+        "L1": None,
         "L2": None,
         "L3": None
     }
+    
+    # Get L1 profile details
+    if l1_assignment and l1_assignment.profile_id:
+        profile = await db.execute(select(Profile).where(Profile.id == l1_assignment.profile_id))
+        p = profile.scalars().first()
+        if p:
+            result["L1"] = {"id": str(p.id), "name": p.name}
     
     # Get L2 profile details
     if l2_assignment and l2_assignment.profile_id:
