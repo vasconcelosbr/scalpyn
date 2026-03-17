@@ -12,6 +12,15 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         
+        # Add missing columns to existing tables (migrations)
+        try:
+            await conn.execute(text("""
+                ALTER TABLE pools ADD COLUMN IF NOT EXISTS overrides JSONB DEFAULT '{}';
+            """))
+            logger.info("Added 'overrides' column to pools table (or already exists)")
+        except Exception as e:
+            logger.warning(f"Could not add 'overrides' column: {e}")
+        
         # Create TimescaleDB hypertables if they don't exist
         # OHLCV
         await conn.execute(text("""
