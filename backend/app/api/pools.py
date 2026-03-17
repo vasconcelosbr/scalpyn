@@ -58,6 +58,19 @@ async def create_pool(payload: Dict[str, Any], db: AsyncSession = Depends(get_db
     return _pool_to_dict(pool)
 
 
+@router.delete("/{pool_id}")
+async def delete_pool(pool_id: UUID, db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
+    query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id)
+    result = await db.execute(query)
+    pool = result.scalars().first()
+    if not pool:
+        raise HTTPException(status_code=404, detail="Pool not found")
+
+    await db.delete(pool)
+    await db.commit()
+    return {"status": "success", "message": "Pool deleted"}
+
+
 @router.patch("/{pool_id}")
 async def update_pool(pool_id: UUID, payload: Dict[str, Any], db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
     query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id)
