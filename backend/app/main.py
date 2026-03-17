@@ -19,6 +19,7 @@ from .api import (
     notifications,
     watchlist,
     websocket,
+    profiles,
 )
 
 
@@ -68,6 +69,9 @@ app.include_router(trades.router)
 app.include_router(orders.router)
 app.include_router(pools.router)
 app.include_router(exchanges.router)
+
+# Strategy Profiles
+app.include_router(profiles.router)
 
 # Analytics & Reports
 app.include_router(analytics.router)

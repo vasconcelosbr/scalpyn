@@ -21,6 +21,35 @@ async def init_db():
         except Exception as e:
             logger.warning(f"Could not add 'overrides' column: {e}")
         
+        # Ensure profiles and watchlist_profiles tables exist with all columns
+        try:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS profiles (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    name VARCHAR(255) NOT NULL,
+                    description TEXT,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    config JSONB DEFAULT '{}',
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            """))
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS watchlist_profiles (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    watchlist_id VARCHAR(100) NOT NULL,
+                    profile_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
+                    is_enabled BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(user_id, watchlist_id)
+                );
+            """))
+            logger.info("Profiles tables created or already exist")
+        except Exception as e:
+            logger.warning(f"Could not create profiles tables: {e}")
+        
         # Create TimescaleDB hypertables if they don't exist
         # OHLCV
         await conn.execute(text("""
