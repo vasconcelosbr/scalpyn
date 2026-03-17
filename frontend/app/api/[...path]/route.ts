@@ -6,8 +6,12 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 
-// BACKEND_URL must include /api prefix, e.g. https://...run.app/api
-const BACKEND_URL = (process.env.BACKEND_URL ?? 'http://localhost:8000/api').replace(/\/$/, '');
+// BACKEND_URL is the base URL of the backend service.
+// It may or may not include a trailing /api — both forms are handled correctly.
+// Example: https://scalpyn-api-xxx.a.run.app  OR  https://scalpyn-api-xxx.a.run.app/api
+const BACKEND_ROOT = (process.env.BACKEND_URL ?? 'http://localhost:8000')
+  .replace(/\/$/, '')    // strip trailing slash
+  .replace(/\/api$/, ''); // strip /api suffix if present so we never double it
 
 type RouteContext = { params: Promise<{ path: string[] }> };
 
@@ -15,10 +19,10 @@ async function proxyRequest(req: NextRequest, context: RouteContext): Promise<Ne
     // Await params (required in Next.js 15+)
   await context.params;
 
-  // Reconstruct the path from the request URL
-  const rawPath = req.nextUrl.pathname.replace(/^\/api/, '') || '/';
+  // Forward the full /api/... path as-is — no stripping required
+  const rawPath = req.nextUrl.pathname;
     const search = req.nextUrl.search ?? '';
-    const targetUrl = `${BACKEND_URL}${rawPath}${search}`;
+    const targetUrl = `${BACKEND_ROOT}${rawPath}${search}`;
 
   // Forward all headers except host (which would confuse the backend)
   const forwardHeaders: Record<string, string> = {};

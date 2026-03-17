@@ -38,6 +38,16 @@ export default function PoolsPage() {
     }
   };
 
+  const handleDelete = async (poolId: string) => {
+    if (!confirm("Are you sure you want to delete this pool?")) return;
+    try {
+      await apiDelete(`/pools/${poolId}`);
+      fetchPools();
+    } catch (e: any) {
+      alert(`Failed to delete: ${e.message}`);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -121,7 +131,10 @@ export default function PoolsPage() {
                   Created {pool.created_at ? new Date(pool.created_at).toLocaleDateString() : "—"}
                 </div>
               </div>
-              <div className="border-t border-[var(--border-default)] p-3 flex justify-end">
+              <div className="border-t border-[var(--border-default)] p-3 flex justify-between">
+                <button className="btn btn-secondary text-[12px] px-3 py-1.5 text-red-500 hover:bg-red-500/10" aria-label="Delete pool" onClick={() => handleDelete(pool.id)}>
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
                 <button className="btn btn-secondary text-[12px] px-3 py-1.5">Configure</button>
               </div>
             </div>
