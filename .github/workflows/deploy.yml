@@ -10,6 +10,9 @@ jobs:
   deploy-backend:
     name: Deploy Backend (Cloud Run)
     runs-on: ubuntu-latest
+    # Skip this job when GCP credentials are not configured (e.g. forks, development).
+    # The validate-frontend job below still runs as the required code quality gate.
+    if: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '' }}
     permissions:
       contents: read
       id-token: write   # required for Workload Identity Federation
