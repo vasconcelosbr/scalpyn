@@ -59,13 +59,14 @@ class Profile(Base):
 class WatchlistProfile(Base):
     """
     Junction table linking watchlists to profiles.
-    Allows a watchlist to have an active profile for filtering/scoring.
+    Allows a watchlist to have separate profiles for L2 (Ranking) and L3 (Signals).
     """
     __tablename__ = 'watchlist_profiles'
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
-    watchlist_id = Column(String(100), nullable=False)  # Can be "default" or custom watchlist ID
+    watchlist_id = Column(String(100), nullable=False)  # Custom watchlist ID
+    profile_type = Column(String(10), nullable=False, default="L2")  # "L2" or "L3"
     profile_id = Column(UUID(as_uuid=True), ForeignKey('profiles.id', ondelete='CASCADE'), nullable=True)
     is_enabled = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

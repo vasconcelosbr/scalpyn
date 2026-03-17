@@ -40,12 +40,25 @@ async def init_db():
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     watchlist_id VARCHAR(100) NOT NULL,
+                    profile_type VARCHAR(10) NOT NULL DEFAULT 'L2',
                     profile_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
                     is_enabled BOOLEAN DEFAULT TRUE,
                     created_at TIMESTAMPTZ DEFAULT NOW(),
-                    UNIQUE(user_id, watchlist_id)
+                    UNIQUE(user_id, watchlist_id, profile_type)
                 );
             """))
+            # Add profile_type column if missing (migration)
+            await conn.execute(text("""
+                ALTER TABLE watchlist_profiles 
+                ADD COLUMN IF NOT EXISTS profile_type VARCHAR(10) DEFAULT 'L2';
+            """))
+            # Drop old unique constraint and add new one
+            try:
+                await conn.execute(text("""
+                    ALTER TABLE watchlist_profiles DROP CONSTRAINT IF EXISTS watchlist_profiles_user_id_watchlist_id_key;
+                """))
+            except Exception:
+                pass
             logger.info("Profiles tables created or already exist")
         except Exception as e:
             logger.warning(f"Could not create profiles tables: {e}")

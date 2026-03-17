@@ -269,17 +269,19 @@ async def get_watchlist_ranking(
     if not watchlist:
         raise HTTPException(status_code=404, detail="Watchlist not found")
     
-    # Get assigned profile
+    # Get assigned L2 profile
     profile_assignment = await db.execute(
         select(WatchlistProfile).where(
             WatchlistProfile.user_id == user_id,
-            WatchlistProfile.watchlist_id == str(watchlist_id)
+            WatchlistProfile.watchlist_id == str(watchlist_id),
+            WatchlistProfile.profile_type == "L2"
         )
     )
     assignment = profile_assignment.scalars().first()
     
     profile_config = None
     profile_name = "Default"
+    profile_id = None
     
     if assignment and assignment.profile_id and assignment.is_enabled:
         profile_result = await db.execute(
@@ -289,6 +291,7 @@ async def get_watchlist_ranking(
         if profile:
             profile_config = profile.config
             profile_name = profile.name
+            profile_id = str(profile.id)
     
     # Get market data for watchlist symbols
     assets = await _get_assets_with_indicators(db, watchlist.symbols)
@@ -337,6 +340,7 @@ async def get_watchlist_ranking(
         "watchlist": watchlist.name,
         "watchlist_id": str(watchlist_id),
         "profile": profile_name,
+        "profile_id": profile_id,
         "total_assets": len(assets),
         "filtered_assets": len(filtered),
         "top_n": top_n,
@@ -376,17 +380,19 @@ async def get_watchlist_signals(
     if not watchlist:
         raise HTTPException(status_code=404, detail="Watchlist not found")
     
-    # Get assigned profile
+    # Get assigned L3 profile
     profile_assignment = await db.execute(
         select(WatchlistProfile).where(
             WatchlistProfile.user_id == user_id,
-            WatchlistProfile.watchlist_id == str(watchlist_id)
+            WatchlistProfile.watchlist_id == str(watchlist_id),
+            WatchlistProfile.profile_type == "L3"
         )
     )
     assignment = profile_assignment.scalars().first()
     
     profile_config = None
     profile_name = "Default"
+    profile_id = None
     signal_conditions_count = 0
     
     if assignment and assignment.profile_id and assignment.is_enabled:
@@ -397,6 +403,7 @@ async def get_watchlist_signals(
         if profile:
             profile_config = profile.config
             profile_name = profile.name
+            profile_id = str(profile.id)
             signal_conditions_count = len(profile_config.get("signals", {}).get("conditions", []))
     
     # Get market data for watchlist symbols
@@ -439,6 +446,7 @@ async def get_watchlist_signals(
         "watchlist": watchlist.name,
         "watchlist_id": str(watchlist_id),
         "profile": profile_name,
+        "profile_id": profile_id,
         "signal_conditions": signal_conditions_count,
         "total_assets": result["total_before_filter"],
         "filtered_assets": result["total_after_filter"],
@@ -447,15 +455,23 @@ async def get_watchlist_signals(
     }
 
 
-@router.put("/{watchlist_id}/profile")
+@router.put("/{watchlist_id}/profile/{profile_type}")
 async def assign_profile_to_watchlist(
     watchlist_id: UUID,
+    profile_type: str,
     payload: Dict[str, Any],
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id)
 ):
-    """Assign a profile to a watchlist for L2/L3 processing."""
+    """
+    Assign a profile to a watchlist for L2 or L3 processing.
+    
+    profile_type: "L2" (Ranking) or "L3" (Signals)
+    """
     from ..models.profile import Profile, WatchlistProfile
+    
+    if profile_type not in ["L2", "L3"]:
+        raise HTTPException(status_code=400, detail="profile_type must be 'L2' or 'L3'")
     
     # Verify watchlist exists
     wl_query = select(CustomWatchlist).where(
@@ -480,10 +496,11 @@ async def assign_profile_to_watchlist(
         if not profile_result.scalars().first():
             raise HTTPException(status_code=404, detail="Profile not found")
     
-    # Check existing assignment
+    # Check existing assignment for this type
     assignment_query = select(WatchlistProfile).where(
         WatchlistProfile.user_id == user_id,
-        WatchlistProfile.watchlist_id == str(watchlist_id)
+        WatchlistProfile.watchlist_id == str(watchlist_id),
+        WatchlistProfile.profile_type == profile_type
     )
     assignment_result = await db.execute(assignment_query)
     existing = assignment_result.scalars().first()
@@ -495,6 +512,7 @@ async def assign_profile_to_watchlist(
         new_assignment = WatchlistProfile(
             user_id=user_id,
             watchlist_id=str(watchlist_id),
+            profile_type=profile_type,
             profile_id=profile_id,
             is_enabled=True
         )
@@ -505,22 +523,28 @@ async def assign_profile_to_watchlist(
     return {
         "status": "success",
         "watchlist_id": str(watchlist_id),
+        "profile_type": profile_type,
         "profile_id": str(profile_id) if profile_id else None
     }
 
 
-@router.get("/{watchlist_id}/profile")
+@router.get("/{watchlist_id}/profile/{profile_type}")
 async def get_watchlist_assigned_profile(
     watchlist_id: UUID,
+    profile_type: str,
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id)
 ):
-    """Get the profile assigned to a watchlist."""
+    """Get the profile assigned to a watchlist for L2 or L3."""
     from ..models.profile import Profile, WatchlistProfile
+    
+    if profile_type not in ["L2", "L3"]:
+        raise HTTPException(status_code=400, detail="profile_type must be 'L2' or 'L3'")
     
     assignment_query = select(WatchlistProfile).where(
         WatchlistProfile.user_id == user_id,
-        WatchlistProfile.watchlist_id == str(watchlist_id)
+        WatchlistProfile.watchlist_id == str(watchlist_id),
+        WatchlistProfile.profile_type == profile_type
     )
     assignment_result = await db.execute(assignment_query)
     assignment = assignment_result.scalars().first()
@@ -528,6 +552,7 @@ async def get_watchlist_assigned_profile(
     if not assignment or not assignment.profile_id:
         return {
             "watchlist_id": str(watchlist_id),
+            "profile_type": profile_type,
             "profile": None,
             "is_enabled": False
         }
@@ -539,12 +564,14 @@ async def get_watchlist_assigned_profile(
     if not profile:
         return {
             "watchlist_id": str(watchlist_id),
+            "profile_type": profile_type,
             "profile": None,
             "is_enabled": False
         }
     
     return {
         "watchlist_id": str(watchlist_id),
+        "profile_type": profile_type,
         "profile": {
             "id": str(profile.id),
             "name": profile.name,
@@ -553,6 +580,56 @@ async def get_watchlist_assigned_profile(
         },
         "is_enabled": assignment.is_enabled
     }
+
+
+@router.get("/{watchlist_id}/profiles")
+async def get_watchlist_all_profiles(
+    watchlist_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id)
+):
+    """Get all profiles (L2 and L3) assigned to a watchlist."""
+    from ..models.profile import Profile, WatchlistProfile
+    
+    # Get L2 profile
+    l2_query = select(WatchlistProfile).where(
+        WatchlistProfile.user_id == user_id,
+        WatchlistProfile.watchlist_id == str(watchlist_id),
+        WatchlistProfile.profile_type == "L2"
+    )
+    l2_result = await db.execute(l2_query)
+    l2_assignment = l2_result.scalars().first()
+    
+    # Get L3 profile
+    l3_query = select(WatchlistProfile).where(
+        WatchlistProfile.user_id == user_id,
+        WatchlistProfile.watchlist_id == str(watchlist_id),
+        WatchlistProfile.profile_type == "L3"
+    )
+    l3_result = await db.execute(l3_query)
+    l3_assignment = l3_result.scalars().first()
+    
+    result = {
+        "watchlist_id": str(watchlist_id),
+        "L2": None,
+        "L3": None
+    }
+    
+    # Get L2 profile details
+    if l2_assignment and l2_assignment.profile_id:
+        profile = await db.execute(select(Profile).where(Profile.id == l2_assignment.profile_id))
+        p = profile.scalars().first()
+        if p:
+            result["L2"] = {"id": str(p.id), "name": p.name}
+    
+    # Get L3 profile details
+    if l3_assignment and l3_assignment.profile_id:
+        profile = await db.execute(select(Profile).where(Profile.id == l3_assignment.profile_id))
+        p = profile.scalars().first()
+        if p:
+            result["L3"] = {"id": str(p.id), "name": p.name}
+    
+    return result
 
 
 # ============================================================================

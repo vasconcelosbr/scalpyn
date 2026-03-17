@@ -94,10 +94,12 @@ export function WatchlistTable() {
   const [rankingLoading, setRankingLoading] = useState(false);
   const [signalsLoading, setSignalsLoading] = useState(false);
   
-  // Profile assignment
+  // Profile assignment - separate for L2 and L3
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [assignedProfile, setAssignedProfile] = useState<Profile | null>(null);
-  const [showProfileSelector, setShowProfileSelector] = useState(false);
+  const [l2Profile, setL2Profile] = useState<Profile | null>(null);
+  const [l3Profile, setL3Profile] = useState<Profile | null>(null);
+  const [showL2ProfileSelector, setShowL2ProfileSelector] = useState(false);
+  const [showL3ProfileSelector, setShowL3ProfileSelector] = useState(false);
 
   // Load watchlists from backend on mount
   useEffect(() => {
@@ -250,26 +252,59 @@ export function WatchlistTable() {
     }
   };
 
-  const loadAssignedProfile = async (watchlistId: string) => {
+  const loadAssignedProfiles = async (watchlistId: string) => {
     try {
-      const data = await apiGet(`/custom-watchlists/${watchlistId}/profile`);
-      setAssignedProfile(data.profile || null);
+      const data = await apiGet(`/custom-watchlists/${watchlistId}/profiles`);
+      // Find profile details from profiles list
+      if (data.L2) {
+        const l2 = profiles.find(p => p.id === data.L2.id) || { id: data.L2.id, name: data.L2.name };
+        setL2Profile(l2);
+      } else {
+        setL2Profile(null);
+      }
+      if (data.L3) {
+        const l3 = profiles.find(p => p.id === data.L3.id) || { id: data.L3.id, name: data.L3.name };
+        setL3Profile(l3);
+      } else {
+        setL3Profile(null);
+      }
     } catch (e) {
-      setAssignedProfile(null);
+      setL2Profile(null);
+      setL3Profile(null);
     }
   };
 
-  const assignProfile = async (profileId: string | null) => {
+  const assignL2Profile = async (profileId: string | null) => {
     if (!activeId) return;
     try {
-      await apiPut(`/custom-watchlists/${activeId}/profile`, { profile_id: profileId });
-      await loadAssignedProfile(activeId);
-      setShowProfileSelector(false);
-      // Reload L2/L3 data
-      if (activeTab === "L2") loadRanking();
-      if (activeTab === "L3") loadSignals();
+      await apiPut(`/custom-watchlists/${activeId}/profile/L2`, { profile_id: profileId });
+      if (profileId) {
+        const profile = profiles.find(p => p.id === profileId);
+        setL2Profile(profile || null);
+      } else {
+        setL2Profile(null);
+      }
+      setShowL2ProfileSelector(false);
+      loadRanking();
     } catch (e) {
-      console.error("Failed to assign profile:", e);
+      console.error("Failed to assign L2 profile:", e);
+    }
+  };
+
+  const assignL3Profile = async (profileId: string | null) => {
+    if (!activeId) return;
+    try {
+      await apiPut(`/custom-watchlists/${activeId}/profile/L3`, { profile_id: profileId });
+      if (profileId) {
+        const profile = profiles.find(p => p.id === profileId);
+        setL3Profile(profile || null);
+      } else {
+        setL3Profile(null);
+      }
+      setShowL3ProfileSelector(false);
+      loadSignals();
+    } catch (e) {
+      console.error("Failed to assign L3 profile:", e);
     }
   };
 
@@ -279,6 +314,11 @@ export function WatchlistTable() {
     try {
       const data = await apiGet(`/custom-watchlists/${activeId}/ranking?top_n=50`);
       setRankedAssets(data.assets || []);
+      // Update L2 profile from response
+      if (data.profile_id) {
+        const profile = profiles.find(p => p.id === data.profile_id);
+        if (profile) setL2Profile(profile);
+      }
     } catch (e) {
       console.error("Failed to load ranking:", e);
       setRankedAssets([]);
@@ -292,6 +332,11 @@ export function WatchlistTable() {
     try {
       const data = await apiGet(`/custom-watchlists/${activeId}/signals`);
       setSignals(data.signals || []);
+      // Update L3 profile from response
+      if (data.profile_id) {
+        const profile = profiles.find(p => p.id === data.profile_id);
+        if (profile) setL3Profile(profile);
+      }
     } catch (e) {
       console.error("Failed to load signals:", e);
       setSignals([]);
@@ -299,11 +344,12 @@ export function WatchlistTable() {
     setSignalsLoading(false);
   };
 
-  // Load profiles and assigned profile when activeId changes
+  // Load profiles and assigned profiles when activeId changes
   useEffect(() => {
     if (activeId) {
-      loadProfiles();
-      loadAssignedProfile(activeId);
+      loadProfiles().then(() => {
+        loadAssignedProfiles(activeId);
+      });
     }
   }, [activeId]);
 
@@ -500,37 +546,6 @@ export function WatchlistTable() {
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Profile Selector */}
-            <div className="relative">
-              <button
-                className="btn btn-secondary text-[12px] px-3 py-1.5 flex items-center gap-1"
-                onClick={() => setShowProfileSelector(!showProfileSelector)}
-              >
-                <Sliders className="w-3.5 h-3.5" />
-                {assignedProfile ? assignedProfile.name : "Select Profile"}
-              </button>
-              
-              {showProfileSelector && (
-                <div className="absolute right-0 top-full mt-1 w-56 bg-[var(--bg-card)] border border-[var(--border-default)] rounded-[var(--radius-md)] shadow-2xl z-50 py-1">
-                  <div
-                    className={`px-3 py-2 cursor-pointer hover:bg-[var(--bg-hover)] text-[13px] ${!assignedProfile ? "text-[var(--accent-primary)]" : "text-[var(--text-primary)]"}`}
-                    onClick={() => assignProfile(null)}
-                  >
-                    No Profile (Default)
-                  </div>
-                  {profiles.map(p => (
-                    <div
-                      key={p.id}
-                      className={`px-3 py-2 cursor-pointer hover:bg-[var(--bg-hover)] text-[13px] ${assignedProfile?.id === p.id ? "text-[var(--accent-primary)]" : "text-[var(--text-primary)]"}`}
-                      onClick={() => assignProfile(p.id)}
-                    >
-                      {p.name}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            
             <button
               className="btn btn-primary text-[13px] px-4 py-2 shrink-0"
               onClick={() => setShowModal(true)}
@@ -542,43 +557,110 @@ export function WatchlistTable() {
         </div>
 
         {/* L1/L2/L3 Tabs */}
-        <div className="flex border-b border-[var(--border-subtle)] px-4">
-          <button
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium transition-colors ${
-              activeTab === "L1"
-                ? "text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)]"
-                : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-            }`}
-            onClick={() => setActiveTab("L1")}
-          >
-            <List className="w-3.5 h-3.5" />
-            L1 Assets
-            <span className="text-[10px] opacity-70">({sortedItems.length})</span>
-          </button>
-          <button
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium transition-colors ${
-              activeTab === "L2"
-                ? "text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)]"
-                : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-            }`}
-            onClick={() => setActiveTab("L2")}
-          >
-            <TrendingUp className="w-3.5 h-3.5" />
-            L2 Ranking
-            <span className="text-[10px] opacity-70">({rankedAssets.length})</span>
-          </button>
-          <button
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium transition-colors ${
-              activeTab === "L3"
-                ? "text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)]"
-                : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-            }`}
-            onClick={() => setActiveTab("L3")}
-          >
-            <Zap className="w-3.5 h-3.5" />
-            L3 Signals
-            <span className="text-[10px] opacity-70">({signals.length})</span>
-          </button>
+        <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4">
+          <div className="flex">
+            <button
+              className={`flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium transition-colors ${
+                activeTab === "L1"
+                  ? "text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)]"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              }`}
+              onClick={() => setActiveTab("L1")}
+            >
+              <List className="w-3.5 h-3.5" />
+              L1 Assets
+              <span className="text-[10px] opacity-70">({sortedItems.length})</span>
+            </button>
+            <button
+              className={`flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium transition-colors ${
+                activeTab === "L2"
+                  ? "text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)]"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              }`}
+              onClick={() => setActiveTab("L2")}
+            >
+              <TrendingUp className="w-3.5 h-3.5" />
+              L2 Ranking
+              {l2Profile && <span className="text-[10px] opacity-70">• {l2Profile.name}</span>}
+            </button>
+            <button
+              className={`flex items-center gap-1.5 px-4 py-2.5 text-[13px] font-medium transition-colors ${
+                activeTab === "L3"
+                  ? "text-[var(--accent-primary)] border-b-2 border-[var(--accent-primary)]"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              }`}
+              onClick={() => setActiveTab("L3")}
+            >
+              <Zap className="w-3.5 h-3.5" />
+              L3 Signals
+              {l3Profile && <span className="text-[10px] opacity-70">• {l3Profile.name}</span>}
+            </button>
+          </div>
+          
+          {/* Profile selector for current tab */}
+          {activeTab === "L2" && (
+            <div className="relative">
+              <button
+                className="btn btn-secondary text-[12px] px-3 py-1.5 flex items-center gap-1"
+                onClick={() => setShowL2ProfileSelector(!showL2ProfileSelector)}
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                {l2Profile ? l2Profile.name : "Select L2 Profile"}
+              </button>
+              
+              {showL2ProfileSelector && (
+                <div className="absolute right-0 top-full mt-1 w-56 bg-[var(--bg-card)] border border-[var(--border-default)] rounded-[var(--radius-md)] shadow-2xl z-50 py-1">
+                  <div
+                    className={`px-3 py-2 cursor-pointer hover:bg-[var(--bg-hover)] text-[13px] ${!l2Profile ? "text-[var(--accent-primary)]" : "text-[var(--text-primary)]"}`}
+                    onClick={() => assignL2Profile(null)}
+                  >
+                    No Profile (Default)
+                  </div>
+                  {profiles.map(p => (
+                    <div
+                      key={p.id}
+                      className={`px-3 py-2 cursor-pointer hover:bg-[var(--bg-hover)] text-[13px] ${l2Profile?.id === p.id ? "text-[var(--accent-primary)]" : "text-[var(--text-primary)]"}`}
+                      onClick={() => assignL2Profile(p.id)}
+                    >
+                      {p.name}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          
+          {activeTab === "L3" && (
+            <div className="relative">
+              <button
+                className="btn btn-secondary text-[12px] px-3 py-1.5 flex items-center gap-1"
+                onClick={() => setShowL3ProfileSelector(!showL3ProfileSelector)}
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                {l3Profile ? l3Profile.name : "Select L3 Profile"}
+              </button>
+              
+              {showL3ProfileSelector && (
+                <div className="absolute right-0 top-full mt-1 w-56 bg-[var(--bg-card)] border border-[var(--border-default)] rounded-[var(--radius-md)] shadow-2xl z-50 py-1">
+                  <div
+                    className={`px-3 py-2 cursor-pointer hover:bg-[var(--bg-hover)] text-[13px] ${!l3Profile ? "text-[var(--accent-primary)]" : "text-[var(--text-primary)]"}`}
+                    onClick={() => assignL3Profile(null)}
+                  >
+                    No Profile (Default)
+                  </div>
+                  {profiles.map(p => (
+                    <div
+                      key={p.id}
+                      className={`px-3 py-2 cursor-pointer hover:bg-[var(--bg-hover)] text-[13px] ${l3Profile?.id === p.id ? "text-[var(--accent-primary)]" : "text-[var(--text-primary)]"}`}
+                      onClick={() => assignL3Profile(p.id)}
+                    >
+                      {p.name}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* L1 - Raw Assets */}
@@ -758,9 +840,9 @@ export function WatchlistTable() {
                   {rankedAssets.length === 0 && (
                     <tr>
                       <td colSpan={7} className="text-center py-12 text-[var(--text-tertiary)] text-[13px]">
-                        {assignedProfile 
+                        {l2Profile 
                           ? "No assets passed the L1 filters. Try adjusting your profile."
-                          : "Select a profile to generate ranking."}
+                          : "Select a L2 profile to generate ranking."}
                       </td>
                     </tr>
                   )}
@@ -847,9 +929,9 @@ export function WatchlistTable() {
                   {signals.length === 0 && (
                     <tr>
                       <td colSpan={7} className="text-center py-12 text-[var(--text-tertiary)] text-[13px]">
-                        {assignedProfile 
+                        {l3Profile 
                           ? "No signals triggered. Conditions not met or no assets passed filters."
-                          : "Select a profile to generate signals."}
+                          : "Select a L3 profile to generate signals."}
                       </td>
                     </tr>
                   )}
