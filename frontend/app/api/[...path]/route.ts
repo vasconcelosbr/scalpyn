@@ -9,7 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 // BACKEND_URL is the base URL of the backend service.
 // It may or may not include a trailing /api — both forms are handled correctly.
 // Example: https://scalpyn-api-xxx.a.run.app  OR  https://scalpyn-api-xxx.a.run.app/api
-const BACKEND_ROOT = (process.env.BACKEND_URL ?? 'http://localhost:8000')
+const BACKEND_ROOT = (process.env.BACKEND_URL ?? 'https://scalpyn-330575088921.us-central1.run.app')
   .replace(/\/$/, '')    // strip trailing slash
   .replace(/\/api$/, ''); // strip /api suffix if present so we never double it
 
