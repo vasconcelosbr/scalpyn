@@ -21,6 +21,24 @@ async def init_db():
         except Exception as e:
             logger.warning(f"Could not add 'overrides' column: {e}")
         
+        # Add market_type column to pools
+        try:
+            await conn.execute(text("""
+                ALTER TABLE pools ADD COLUMN IF NOT EXISTS market_type VARCHAR(20) DEFAULT 'spot';
+            """))
+            logger.info("Added 'market_type' column to pools table (or already exists)")
+        except Exception as e:
+            logger.warning(f"Could not add 'market_type' column: {e}")
+        
+        # Add profile_id column to pools
+        try:
+            await conn.execute(text("""
+                ALTER TABLE pools ADD COLUMN IF NOT EXISTS profile_id UUID REFERENCES profiles(id) ON DELETE SET NULL;
+            """))
+            logger.info("Added 'profile_id' column to pools table (or already exists)")
+        except Exception as e:
+            logger.warning(f"Could not add 'profile_id' column: {e}")
+        
         # Ensure profiles and watchlist_profiles tables exist with all columns
         try:
             await conn.execute(text("""
