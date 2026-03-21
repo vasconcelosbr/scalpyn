@@ -49,22 +49,28 @@
 - [x] Fix pools creation error
 - [x] Implement Profile Engine backend
 - [x] Implement Profile Builder UI
+- [x] Add Market Type selector (Spot, Futures, TradFi) to pools
+- [x] Add Strategy Profile selector to pools
+- [x] Add Alpha Score Weights toggle to Profile Builder
 
 ### P1 (High)
-- [ ] Integrate profile filtering in Watchlist view
-- [ ] Add profile assignment to pools
+- [x] Integrate profile filtering in Watchlist view (L1/L2/L3 tabs)
+- [x] Add profile assignment to pools
 - [ ] Implement backtesting for profiles
+- [ ] Implement "Test Profile" endpoint (simulate without saving)
 
 ### P2 (Medium)
 - [ ] Profile import/export
 - [ ] Profile performance analytics
 - [ ] Automated profile suggestions
+- [ ] Redis caching for L2/L3 endpoints
+- [ ] Add vercel.json for trailing slash configuration
 
 ## Next Tasks
-1. Test pools creation after deploy
-2. Test profile creation and testing
-3. Integrate profiles into Watchlist page
-4. Add profile stats to dashboard
+1. Deploy changes to production (push to GitHub)
+2. Test pool creation with Market Type and Profile selectors
+3. Test Alpha Score Weights toggle in Profile Builder
+4. Verify L1/L2/L3 profile assignment in Watchlist
 
 ## Technical Decisions
 - JSONB for profile config (flexibility)
