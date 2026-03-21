@@ -504,7 +504,7 @@ export default function PositionsPage() {
             )}
 
             {/* Underwater summary panel */}
-            {underwaterCount > 0 && profileFilter !== 'futures' && (
+            {underwaterCount > 0 && (
               <div
                 style={{
                   margin: '0 16px 16px',

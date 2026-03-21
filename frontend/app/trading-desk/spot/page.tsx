@@ -2,10 +2,10 @@
 
 import { useTradingConfig } from '@/hooks/useTradingConfig';
 import { useEngineStatus } from '@/hooks/useEngineStatus';
-import EngineStatusBar from '@/components/trading-desk/shared/EngineStatusBar';
-import ConfigSection from '@/components/trading-desk/shared/ConfigSection';
-import SliderWithValue from '@/components/trading-desk/shared/SliderWithValue';
-import SaveConfigBar from '@/components/trading-desk/shared/SaveConfigBar';
+import { EngineStatusBar } from '@/components/trading-desk/shared/EngineStatusBar';
+import { ConfigSection } from '@/components/trading-desk/shared/ConfigSection';
+import { SliderWithValue } from '@/components/trading-desk/shared/SliderWithValue';
+import { SaveConfigBar } from '@/components/trading-desk/shared/SaveConfigBar';
 
 // ─── Inline Toggle ────────────────────────────────────────────────────────────
 

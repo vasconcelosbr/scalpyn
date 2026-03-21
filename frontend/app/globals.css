@@ -585,7 +585,14 @@
     border-radius: 50%;
     animation: pulse 2s ease-in-out infinite;
   }
-}
+
+  /* ── Breadcrumb link ───────────────────────────────────────────────────────── */
+  .breadcrumb-link {
+    color: var(--text-tertiary);
+    transition: color var(--transition-fast);
+    text-decoration: none;
+  }
+  .breadcrumb-link:hover { color: var(--text-secondary); }
 
   /* ── Custom Scrollbar ─────────────────────────────────────────────────────── */
   .custom-scrollbar::-webkit-scrollbar { width: 4px; height: 4px; }

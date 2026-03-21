@@ -13,10 +13,7 @@ export default function TradingDeskLayout({ children }: TradingDeskLayoutProps) 
       <div className="flex items-center gap-2">
         <Link
           href="/"
-          className="text-xs font-medium tracking-widest uppercase transition-colors duration-[var(--transition-fast)]"
-          style={{ color: 'var(--text-tertiary)' }}
-          onMouseOver={(e) => (e.currentTarget.style.color = 'var(--text-secondary)')}
-          onMouseOut={(e) => (e.currentTarget.style.color = 'var(--text-tertiary)')}
+          className="breadcrumb-link text-xs font-medium tracking-widest uppercase"
         >
           Home
         </Link>
