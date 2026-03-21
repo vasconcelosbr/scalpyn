@@ -24,6 +24,7 @@ from .api import (
     spot_engine,
     futures_engine,
 )
+from .websocket.scalpyn_ws_server import router as ws_extended_router
 
 
 @asynccontextmanager
@@ -90,8 +91,11 @@ app.include_router(spot_engine.router)
 # Futures Engine
 app.include_router(futures_engine.router)
 
-# WebSocket
+# WebSocket — core channels (market, signals, trades)
 app.include_router(websocket.router)
+
+# WebSocket — extended Trading Desk channels (positions, alerts, engine, macro)
+app.include_router(ws_extended_router)
 
 
 @app.get("/api/health")

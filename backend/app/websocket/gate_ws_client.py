@@ -1,0 +1,431 @@
+"""Gate.io WebSocket client — maintains authenticated connections to Gate.io WS APIs.
+
+Futures WS: wss://fx-ws.gateio.ws/v4/ws/usdt
+Spot WS:    wss://api.gateio.ws/ws/v4/
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import hmac
+import json
+import logging
+import time
+from collections import defaultdict
+from typing import Callable, Optional
+
+import websockets
+from websockets.exceptions import ConnectionClosed, WebSocketException
+
+logger = logging.getLogger(__name__)
+
+# ── Gate.io endpoints ─────────────────────────────────────────────────────────
+FUTURES_WS_URL = "wss://fx-ws.gateio.ws/v4/ws/usdt"
+SPOT_WS_URL = "wss://api.gateio.ws/ws/v4/"
+
+# ── Reconnect policy ──────────────────────────────────────────────────────────
+RECONNECT_BASE_DELAY = 1.0   # seconds
+RECONNECT_MAX_DELAY = 60.0   # seconds
+RECONNECT_MAX_RETRIES = 20
+
+# Ping interval Gate.io expects to keep the connection alive
+PING_INTERVAL_SECONDS = 20
+
+
+# ── Futures channels and their initial payload builders ───────────────────────
+def _futures_channel_payloads(contracts: list[str]) -> list[tuple[str, list]]:
+    """Return (channel, payload) pairs for all futures subscriptions."""
+    return [
+        ("futures.tickers", contracts),
+        ("futures.candlesticks", [f"1m,{c}" for c in contracts]),
+        ("futures.positions", contracts),
+        ("futures.orders", ["-1"]),           # -1 = all contracts
+        ("futures.autoorders", ["-1"]),
+        ("futures.liquidates", contracts),
+    ]
+
+
+def _spot_channel_payloads(spot_pairs: list[str]) -> list[tuple[str, list]]:
+    """Return (channel, payload) pairs for all spot subscriptions."""
+    return [
+        ("spot.tickers", spot_pairs),
+        ("spot.orders", spot_pairs),
+    ]
+
+
+class GateWSClient:
+    """Maintains authenticated WebSocket connections to Gate.io for both futures
+    and spot markets.
+
+    Channels subscribed (futures): tickers, candlesticks (1m), positions,
+        orders, autoorders, liquidates.
+    Channels subscribed (spot): tickers, orders.
+
+    Message dispatch:
+        Each channel → one or more registered async handler coroutines,
+        registered via ``register_handler(channel, coro)``.
+
+    Reconnect policy:
+        Exponential backoff starting at 1 s, doubling each attempt, capped at
+        60 s.  After 20 consecutive failures the connection gives up and logs
+        CRITICAL.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        api_secret: str,
+        contracts: list[str],
+        spot_pairs: list[str],
+    ) -> None:
+        self._api_key = api_key
+        self._api_secret = api_secret
+        self._contracts = contracts
+        self._spot_pairs = spot_pairs
+
+        # channel → list of async handler coroutines
+        self._handlers: dict[str, list[Callable]] = defaultdict(list)
+
+        self._running = False
+        self._futures_task: Optional[asyncio.Task] = None
+        self._spot_task: Optional[asyncio.Task] = None
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    async def start(self) -> None:
+        """Start both futures and spot WS connections as concurrent tasks."""
+        if self._running:
+            logger.warning("GateWSClient.start() called but client is already running")
+            return
+
+        self._running = True
+        logger.info("GateWSClient starting futures and spot connections")
+
+        self._futures_task = asyncio.create_task(
+            self._run_with_backoff("futures", self._run_futures_ws),
+            name="gate_ws_futures",
+        )
+        self._spot_task = asyncio.create_task(
+            self._run_with_backoff("spot", self._run_spot_ws),
+            name="gate_ws_spot",
+        )
+
+    async def stop(self) -> None:
+        """Gracefully stop all WS connections."""
+        logger.info("GateWSClient stopping")
+        self._running = False
+
+        tasks = [t for t in (self._futures_task, self._spot_task) if t is not None]
+        for task in tasks:
+            task.cancel()
+
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        self._futures_task = None
+        self._spot_task = None
+        logger.info("GateWSClient stopped")
+
+    def register_handler(self, channel: str, handler: Callable) -> None:
+        """Register an async handler coroutine for a channel.
+
+        Multiple handlers per channel are supported; they are all called
+        concurrently when a message arrives on that channel.
+        """
+        self._handlers[channel].append(handler)
+        logger.debug("Registered handler %s for channel '%s'", handler.__name__, channel)
+
+    # ── Internal: backoff wrapper ─────────────────────────────────────────────
+
+    async def _run_with_backoff(self, market: str, coro_factory: Callable) -> None:
+        """Run *coro_factory* with exponential backoff on failure."""
+        attempt = 0
+        delay = RECONNECT_BASE_DELAY
+
+        while self._running:
+            try:
+                await coro_factory()
+                # If coro returns normally (e.g. stop() was called), exit.
+                if not self._running:
+                    break
+                # Unexpected clean exit — treat as a failure and reconnect.
+                logger.warning("[%s] WS loop exited cleanly but client is still running; reconnecting", market)
+            except asyncio.CancelledError:
+                logger.info("[%s] WS task cancelled", market)
+                return
+            except Exception as exc:
+                attempt += 1
+                if attempt >= RECONNECT_MAX_RETRIES:
+                    logger.critical(
+                        "[%s] WS connection failed after %d retries — giving up. Last error: %s",
+                        market, attempt, exc,
+                    )
+                    return
+
+                logger.warning(
+                    "[%s] WS connection lost (attempt %d/%d): %s — retrying in %.1fs",
+                    market, attempt, RECONNECT_MAX_RETRIES, exc, delay,
+                )
+
+            if not self._running:
+                break
+
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, RECONNECT_MAX_DELAY)
+
+        logger.info("[%s] WS backoff loop exited", market)
+
+    # ── Internal: connection loops ────────────────────────────────────────────
+
+    async def _run_futures_ws(self) -> None:
+        """Connect, authenticate, subscribe futures channels, and dispatch messages."""
+        logger.info("Connecting to Gate.io Futures WS: %s", FUTURES_WS_URL)
+
+        async with websockets.connect(
+            FUTURES_WS_URL,
+            ping_interval=None,   # We handle pings manually
+            ping_timeout=None,
+            close_timeout=10,
+        ) as ws:
+            logger.info("Futures WS connected")
+
+            await self._send_auth(ws, "futures")
+
+            for channel, payload in _futures_channel_payloads(self._contracts):
+                await self._subscribe(ws, channel, payload)
+
+            ping_task = asyncio.create_task(
+                self._ping_loop(ws, "futures"),
+                name="gate_ws_futures_ping",
+            )
+            try:
+                await self._receive_loop(ws)
+            finally:
+                ping_task.cancel()
+                await asyncio.gather(ping_task, return_exceptions=True)
+
+    async def _run_spot_ws(self) -> None:
+        """Connect, authenticate, subscribe spot channels, and dispatch messages."""
+        logger.info("Connecting to Gate.io Spot WS: %s", SPOT_WS_URL)
+
+        async with websockets.connect(
+            SPOT_WS_URL,
+            ping_interval=None,
+            ping_timeout=None,
+            close_timeout=10,
+        ) as ws:
+            logger.info("Spot WS connected")
+
+            await self._send_auth(ws, "spot")
+
+            for channel, payload in _spot_channel_payloads(self._spot_pairs):
+                await self._subscribe(ws, channel, payload)
+
+            ping_task = asyncio.create_task(
+                self._ping_loop(ws, "spot"),
+                name="gate_ws_spot_ping",
+            )
+            try:
+                await self._receive_loop(ws)
+            finally:
+                ping_task.cancel()
+                await asyncio.gather(ping_task, return_exceptions=True)
+
+    # ── Internal: receive loop ────────────────────────────────────────────────
+
+    async def _receive_loop(self, ws) -> None:
+        """Read messages from the WS and dispatch them to registered handlers."""
+        async for raw in ws:
+            if not self._running:
+                break
+            try:
+                message = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                logger.warning("WS received non-JSON frame: %s — %s", raw[:120], exc)
+                continue
+
+            await self._dispatch(message)
+
+    # ── Internal: ping loop ───────────────────────────────────────────────────
+
+    async def _ping_loop(self, ws, market: str) -> None:
+        """Send a ping every PING_INTERVAL_SECONDS to keep the connection alive."""
+        channel = f"{market}.ping"
+        try:
+            while True:
+                await asyncio.sleep(PING_INTERVAL_SECONDS)
+                if not self._running:
+                    break
+                ping_msg = {"time": int(time.time()), "channel": channel}
+                try:
+                    await ws.send(json.dumps(ping_msg))
+                    logger.debug("[%s] Ping sent", market)
+                except (ConnectionClosed, WebSocketException) as exc:
+                    logger.warning("[%s] Ping failed (connection closed): %s", market, exc)
+                    break
+        except asyncio.CancelledError:
+            pass
+
+    # ── Internal: auth & subscribe ────────────────────────────────────────────
+
+    async def _send_auth(self, ws, market: str) -> None:
+        """Send Gate.io WS authentication message."""
+        ts = int(time.time())
+        channel = f"{market}.login"
+        event = "api"
+
+        sign_body = f"channel={channel}&event={event}&time={ts}"
+        signature = hmac.new(
+            self._api_secret.encode("utf-8"),
+            sign_body.encode("utf-8"),
+            hashlib.sha512,
+        ).hexdigest()
+
+        auth_msg = {
+            "time": ts,
+            "channel": channel,
+            "event": event,
+            "payload": {
+                "api_key": self._api_key,
+                "timestamp": str(ts),
+                "signature": signature,
+            },
+        }
+
+        await ws.send(json.dumps(auth_msg))
+        logger.debug("[%s] Auth message sent (ts=%d)", market, ts)
+
+        # Wait briefly for the auth response
+        try:
+            raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
+            resp = json.loads(raw)
+            result = resp.get("result", {})
+            if isinstance(result, dict) and result.get("status") == "success":
+                logger.info("[%s] WS authentication successful", market)
+            else:
+                logger.warning("[%s] WS authentication response: %s", market, resp)
+        except asyncio.TimeoutError:
+            logger.warning("[%s] No auth response within 10s — continuing anyway", market)
+        except Exception as exc:
+            logger.warning("[%s] Error reading auth response: %s", market, exc)
+
+    async def _subscribe(self, ws, channel: str, payload: list) -> None:
+        """Send a subscribe message for the given channel and payload."""
+        sub_msg = {
+            "time": int(time.time()),
+            "channel": channel,
+            "event": "subscribe",
+            "payload": payload,
+        }
+        try:
+            await ws.send(json.dumps(sub_msg))
+            logger.debug("Subscribed to channel '%s' with payload %s", channel, payload)
+        except Exception as exc:
+            logger.error("Failed to subscribe to channel '%s': %s", channel, exc)
+            raise
+
+    # ── Internal: dispatch ────────────────────────────────────────────────────
+
+    async def _dispatch(self, message: dict) -> None:
+        """Route an incoming WS message to registered handlers."""
+        channel: str = message.get("channel", "")
+        event: str = message.get("event", "")
+        result = message.get("result")
+
+        # Subscription confirmation
+        if event == "subscribe":
+            if isinstance(result, dict):
+                if result.get("status") == "success":
+                    logger.info("Subscription confirmed: channel='%s'", channel)
+                else:
+                    logger.warning("Subscription failed: channel='%s', result=%s", channel, result)
+            return
+
+        # Pong response
+        if event == "pong" or channel.endswith(".pong"):
+            logger.debug("Pong received on channel '%s'", channel)
+            return
+
+        # Auth confirmation
+        if channel.endswith(".login"):
+            return
+
+        # Error frame
+        if "error" in message and message["error"] is not None:
+            logger.error("WS error on channel '%s': %s", channel, message["error"])
+            return
+
+        # Data update — dispatch to registered handlers
+        if event == "update" and result is not None:
+            handlers = self._handlers.get(channel, [])
+            if not handlers:
+                logger.debug("No handlers registered for channel '%s'", channel)
+                return
+
+            # Normalise: some channels return a single dict, wrap it
+            if isinstance(result, dict):
+                result = [result]
+
+            coros = [h(result) for h in handlers]
+            results = await asyncio.gather(*coros, return_exceptions=True)
+            for i, res in enumerate(results):
+                if isinstance(res, Exception):
+                    logger.error(
+                        "Handler %s for channel '%s' raised: %s",
+                        handlers[i].__name__, channel, res,
+                    )
+            return
+
+        logger.debug("Unhandled WS frame: channel='%s' event='%s'", channel, event)
+
+
+# ── Module-level singleton ────────────────────────────────────────────────────
+
+_global_client: Optional[GateWSClient] = None
+
+
+async def start_gate_ws(
+    api_key: str,
+    api_secret: str,
+    contracts: list[str],
+    spot_pairs: list[str],
+) -> GateWSClient:
+    """Create and start the global GateWSClient singleton.
+
+    If a client is already running it is returned unchanged.
+    """
+    global _global_client
+
+    if _global_client is not None:
+        logger.warning("start_gate_ws() called but a client is already running — returning existing client")
+        return _global_client
+
+    client = GateWSClient(
+        api_key=api_key,
+        api_secret=api_secret,
+        contracts=contracts,
+        spot_pairs=spot_pairs,
+    )
+    await client.start()
+    _global_client = client
+    logger.info("Global GateWSClient started")
+    return client
+
+
+async def stop_gate_ws() -> None:
+    """Stop and discard the global GateWSClient singleton."""
+    global _global_client
+
+    if _global_client is None:
+        logger.warning("stop_gate_ws() called but no client is running")
+        return
+
+    await _global_client.stop()
+    _global_client = None
+    logger.info("Global GateWSClient stopped and cleared")
+
+
+def get_gate_ws() -> Optional[GateWSClient]:
+    """Return the running global GateWSClient, or None if not started."""
+    return _global_client

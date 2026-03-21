@@ -13,6 +13,8 @@ celery_app = Celery(
         "app.tasks.compute_scores",
         "app.tasks.evaluate_signals",
         "app.tasks.daily_summary",
+        "app.tasks.anti_liq_monitor",
+        "app.tasks.macro_regime_update",
     ]
 )
 
@@ -38,5 +40,15 @@ celery_app.conf.beat_schedule = {
             "hour": 20,
             "minute": 0,
         },
+    },
+    # Anti-liquidation monitor every 30 seconds
+    "anti_liq_monitor": {
+        "task": "app.tasks.anti_liq_monitor.monitor",
+        "schedule": 30.0,
+    },
+    # Macro regime update every 30 minutes
+    "macro_regime_update": {
+        "task": "app.tasks.macro_regime_update.update",
+        "schedule": 1800.0,
     },
 }
