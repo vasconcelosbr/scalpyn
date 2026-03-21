@@ -20,6 +20,8 @@ import {
   Brain,
   Repeat,
   Bell,
+  Layers,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -39,6 +41,12 @@ const TRADING_DESK_ITEMS: NavItem[] = [
   { name: 'Futures Trading', href: '/trading-desk/futures',   icon: TrendingUp  },
   { name: 'Positions',       href: '/trading-desk/positions', icon: BarChart3   },
   { name: 'Trade History',   href: '/trading-desk/history',   icon: History     },
+];
+
+const TRADING_ITEMS: NavItem[] = [
+  { name: 'Trades & P&L', href: '/trades',   icon: TrendingUp         },
+  { name: 'Pools',        href: '/pools',    icon: Layers             },
+  { name: 'Profiles',     href: '/profiles', icon: SlidersHorizontal  },
 ];
 
 const ANALYTICS_ITEMS: NavItem[] = [
@@ -123,6 +131,15 @@ export function Sidebar() {
         {!collapsed && <div className="nav-group-label mt-2">Trading Desk</div>}
         <div className="flex flex-col">
           {TRADING_DESK_ITEMS.map((item) => (
+            <NavItemLink key={item.href} item={item} collapsed={collapsed} />
+          ))}
+        </div>
+
+        {/* TRADING */}
+        <SectionDivider collapsed={collapsed} />
+        {!collapsed && <div className="nav-group-label mt-2">Trading</div>}
+        <div className="flex flex-col">
+          {TRADING_ITEMS.map((item) => (
             <NavItemLink key={item.href} item={item} collapsed={collapsed} />
           ))}
         </div>
