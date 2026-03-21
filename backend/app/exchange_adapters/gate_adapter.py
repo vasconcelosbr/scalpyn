@@ -1,11 +1,12 @@
-"""Gate.io Exchange Adapter — implements BaseExchangeAdapter for Gate.io."""
+"""Gate.io Exchange Adapter — Gate.io v4 REST API implementation."""
 
-import logging
-import time
+import asyncio
 import hashlib
 import hmac
 import json
-from typing import List, Dict, Any
+import logging
+import time
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -14,38 +15,154 @@ from .base_adapter import BaseExchangeAdapter
 logger = logging.getLogger(__name__)
 
 
-class GateAdapter(BaseExchangeAdapter):
-    """Gate.io V4 API adapter."""
+# ── Scalpyn-specific exceptions ───────────────────────────────────────────────
 
-    BASE_URL = "https://api.gateio.ws"
-    PREFIX = "/api/v4"
+class GateAPIError(Exception):
+    """Raised when Gate.io returns a non-2xx response."""
+    def __init__(self, status_code: int, label: str, message: str):
+        self.status_code = status_code
+        self.label = label
+        self.message = message
+        super().__init__(f"[{label}] {message} (HTTP {status_code})")
+
+
+class InsufficientBalanceError(GateAPIError):
+    pass
+
+
+class PositionNotFoundError(GateAPIError):
+    pass
+
+
+class OrderNotFoundError(GateAPIError):
+    pass
+
+
+class LeverageTooHighError(GateAPIError):
+    pass
+
+
+class OrderSizeError(GateAPIError):
+    pass
+
+
+class RiskLimitExceededError(GateAPIError):
+    pass
+
+
+# ── Gate error label → exception class ───────────────────────────────────────
+
+_GATE_ERROR_MAP: Dict[str, type] = {
+    "BALANCE_NOT_ENOUGH":        InsufficientBalanceError,
+    "POSITION_NOT_FOUND":        PositionNotFoundError,
+    "ORDER_NOT_FOUND":           OrderNotFoundError,
+    "LEVERAGE_TOO_HIGH":         LeverageTooHighError,
+    "ORDER_SIZE_TOO_SMALL":      OrderSizeError,
+    "ORDER_SIZE_TOO_LARGE":      OrderSizeError,
+    "RISK_LIMIT_EXCEEDED":       RiskLimitExceededError,
+}
+
+
+# ── Simple async token-bucket rate limiter ────────────────────────────────────
+
+class _RateLimiter:
+    """Leaky-bucket limiter. max_rate = requests per second."""
+
+    def __init__(self, max_rate: float):
+        self._interval = 1.0 / max_rate
+        self._last_call = 0.0
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        async with self._lock:
+            now = time.monotonic()
+            wait = self._interval - (now - self._last_call)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_call = time.monotonic()
+
+
+# ── Adapter ───────────────────────────────────────────────────────────────────
+
+class GateAdapter(BaseExchangeAdapter):
+    """
+    Gate.io v4 REST adapter for the Scalpyn trading engine.
+
+    Auth: HMAC-SHA512 per Gate.io v4 spec.
+    Rate limits:  reads  → 400 req/s (spot) / 200 req/s (futures)
+                  orders → 200 req/s
+    settle:       always "usdt" (USDT-margined perpetuals).
+    """
+
+    SPOT_BASE    = "https://api.gateio.ws/api/v4"
+    FUTURES_BASE = "https://fx-api.gateio.ws/api/v4"
+    PREFIX       = "/api/v4"
+    SETTLE       = "usdt"
 
     def __init__(self, api_key: str, api_secret: str):
-        self.api_key = api_key.strip()
+        self.api_key    = api_key.strip()
         self.api_secret = api_secret.strip()
+        # separate limiters for read vs write traffic
+        self._read_limiter  = _RateLimiter(max_rate=200)   # conservative safe floor
+        self._write_limiter = _RateLimiter(max_rate=100)   # price_orders ceiling
 
-    def _sign(self, method: str, endpoint: str, query: str = "", body: str = "") -> Dict[str, str]:
-        t = str(int(time.time()))
-        hashed_body = hashlib.sha512(body.encode("utf-8")).hexdigest()
-        sign_string = f"{method}\n{self.PREFIX}{endpoint}\n{query}\n{hashed_body}\n{t}"
-        sign = hmac.new(
-            self.api_secret.encode("utf-8"),
-            sign_string.encode("utf-8"),
+    # ── Auth ──────────────────────────────────────────────────────────────────
+
+    def _sign(
+        self, method: str, endpoint: str,
+        query: str = "", body: str = "",
+    ) -> Dict[str, str]:
+        t            = str(int(time.time()))
+        hashed_body  = hashlib.sha512(body.encode()).hexdigest()
+        sign_string  = f"{method}\n{self.PREFIX}{endpoint}\n{query}\n{hashed_body}\n{t}"
+        signature    = hmac.new(
+            self.api_secret.encode(),
+            sign_string.encode(),
             hashlib.sha512,
         ).hexdigest()
         return {
-            "Accept": "application/json",
+            "Accept":       "application/json",
             "Content-Type": "application/json",
-            "KEY": self.api_key,
-            "Timestamp": t,
-            "SIGN": sign,
+            "KEY":          self.api_key,
+            "Timestamp":    t,
+            "SIGN":         signature,
         }
 
-    async def _request(self, method: str, endpoint: str, params: dict = None, body: dict = None) -> Any:
-        query = "&".join(f"{k}={v}" for k, v in (params or {}).items())
+    # ── HTTP transport ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _normalize_symbol(symbol: str) -> str:
+        """'SOLUSDT' → 'SOL_USDT'; 'SOL_USDT' passes through."""
+        if "_" not in symbol and symbol.endswith("USDT"):
+            return symbol[:-4] + "_USDT"
+        return symbol
+
+    async def _request(
+        self,
+        method:   str,
+        endpoint: str,
+        params:   Optional[Dict] = None,
+        body:     Optional[Dict] = None,
+        base_url: Optional[str]  = None,
+        write:    bool           = False,
+    ) -> Any:
+        """
+        Execute a signed Gate.io API call.
+
+        Args:
+            write: if True, use write-rate-limiter; else read-rate-limiter.
+        """
+        if write:
+            await self._write_limiter.acquire()
+        else:
+            await self._read_limiter.acquire()
+
+        query    = "&".join(f"{k}={v}" for k, v in (params or {}).items())
         body_str = json.dumps(body) if body else ""
-        headers = self._sign(method, endpoint, query, body_str)
-        url = f"{self.BASE_URL}{self.PREFIX}{endpoint}"
+        headers  = self._sign(method, endpoint, query, body_str)
+
+        root = base_url or self.SPOT_BASE
+        url  = f"{root}{endpoint}"
         if query:
             url += f"?{query}"
 
@@ -54,72 +171,460 @@ class GateAdapter(BaseExchangeAdapter):
                 r = await client.get(url, headers=headers)
             elif method == "POST":
                 r = await client.post(url, headers=headers, content=body_str)
+            elif method == "PUT":
+                r = await client.put(url, headers=headers, content=body_str)
             elif method == "DELETE":
                 r = await client.delete(url, headers=headers)
             else:
-                raise ValueError(f"Unsupported method: {method}")
+                raise ValueError(f"Unsupported HTTP method: {method}")
 
         if r.status_code not in (200, 201):
-            raise Exception(f"Gate.io API error {r.status_code}: {r.text}")
+            self._raise_gate_error(r)
+
         return r.json()
 
-    async def fetch_ohlcv(self, symbol: str, timeframe: str) -> List[Dict[str, Any]]:
-        pair = symbol.replace("USDT", "_USDT") if "_" not in symbol else symbol
-        data = await self._request("GET", "/spot/candlesticks", params={
-            "currency_pair": pair,
-            "interval": timeframe,
-            "limit": "200",
-        })
+    @staticmethod
+    def _raise_gate_error(r: httpx.Response) -> None:
+        try:
+            data  = r.json()
+            label = data.get("label", "UNKNOWN_ERROR")
+            msg   = data.get("message", r.text)
+        except Exception:
+            label = "PARSE_ERROR"
+            msg   = r.text
+
+        exc_cls = _GATE_ERROR_MAP.get(label, GateAPIError)
+        raise exc_cls(r.status_code, label, msg)
+
+    def _futures_url(self) -> str:
+        return self.FUTURES_BASE
+
+    # =========================================================================
+    # ACCOUNT
+    # =========================================================================
+
+    async def get_spot_balance(self) -> Dict[str, Any]:
+        """GET /spot/accounts → list of {currency, available, locked}."""
+        return await self._request("GET", "/spot/accounts")
+
+    async def get_futures_balance(self) -> Dict[str, Any]:
+        """GET /futures/usdt/accounts → {available, equity, unrealised_pnl, ...}."""
+        return await self._request(
+            "GET", f"/futures/{self.SETTLE}/accounts",
+            base_url=self._futures_url(),
+        )
+
+    async def get_balances(self) -> Dict[str, float]:
+        """Legacy: flat {currency: total} dict from spot accounts."""
+        accounts = await self.get_spot_balance()
+        result   = {}
+        for acc in accounts:
+            avail  = float(acc.get("available", 0))
+            locked = float(acc.get("locked", 0))
+            if avail > 0 or locked > 0:
+                result[acc.get("currency", "")] = avail + locked
+        return result
+
+    async def transfer_between_accounts(
+        self,
+        currency:     str,
+        from_account: str,
+        to_account:   str,
+        amount:       str,
+    ) -> Dict[str, Any]:
+        """POST /wallet/transfers — from_account/to_account: 'spot' | 'futures'."""
+        return await self._request(
+            "POST", "/wallet/transfers",
+            body={"currency": currency, "from": from_account, "to": to_account, "amount": amount},
+            write=True,
+        )
+
+    # =========================================================================
+    # MARKET DATA
+    # =========================================================================
+
+    async def get_tickers(
+        self,
+        symbols: Optional[List[str]] = None,
+        market:  str = "spot",
+    ) -> List[Dict[str, Any]]:
+        """
+        GET /spot/tickers or /futures/{settle}/tickers.
+        Pass symbols=None for full universe.
+        """
+        if market == "futures":
+            params = {}
+            if symbols:
+                params["contract"] = symbols[0]
+            return await self._request(
+                "GET", f"/futures/{self.SETTLE}/tickers",
+                params=params, base_url=self._futures_url(),
+            )
+        # spot: optionally filter by currency_pair
+        params = {}
+        if symbols and len(symbols) == 1:
+            params["currency_pair"] = self._normalize_symbol(symbols[0])
+        return await self._request("GET", "/spot/tickers", params=params)
+
+    async def get_orderbook(
+        self,
+        symbol: str,
+        market: str = "spot",
+        depth:  int = 20,
+    ) -> Dict[str, Any]:
+        """GET order book (asks, bids) for L1 liquidity scoring."""
+        pair = self._normalize_symbol(symbol)
+        if market == "futures":
+            return await self._request(
+                "GET", f"/futures/{self.SETTLE}/order_book",
+                params={"contract": pair, "limit": str(depth)},
+                base_url=self._futures_url(),
+            )
+        return await self._request(
+            "GET", "/spot/order_book",
+            params={"currency_pair": pair, "limit": str(depth)},
+        )
+
+    async def get_klines(
+        self,
+        symbol:   str,
+        interval: str = "1h",
+        limit:    int = 200,
+        market:   str = "spot",
+    ) -> List[Dict[str, Any]]:
+        """
+        Candlestick data. Returns normalized list:
+        [{time, open, high, low, close, volume}, ...]
+        """
+        pair = self._normalize_symbol(symbol)
+        if market == "futures":
+            raw = await self._request(
+                "GET", f"/futures/{self.SETTLE}/candlesticks",
+                params={"contract": pair, "interval": interval, "limit": str(limit)},
+                base_url=self._futures_url(),
+            )
+            return [
+                {
+                    "time":   int(c["t"]),
+                    "open":   float(c["o"]),
+                    "high":   float(c["h"]),
+                    "low":    float(c["l"]),
+                    "close":  float(c["c"]),
+                    "volume": float(c["v"]),
+                }
+                for c in raw
+            ]
+        # spot candles: [t, vol, close, high, low, open, ...]
+        raw = await self._request(
+            "GET", "/spot/candlesticks",
+            params={"currency_pair": pair, "interval": interval, "limit": str(limit)},
+        )
         return [
             {
-                "time": int(c[0]),
-                "open": float(c[5]),
-                "high": float(c[3]),
-                "low": float(c[4]),
-                "close": float(c[2]),
+                "time":   int(c[0]),
+                "open":   float(c[5]),
+                "high":   float(c[3]),
+                "low":    float(c[4]),
+                "close":  float(c[2]),
                 "volume": float(c[1]),
             }
-            for c in data
+            for c in raw
         ]
 
+    # Legacy alias
+    async def fetch_ohlcv(self, symbol: str, timeframe: str) -> List[Dict[str, Any]]:
+        return await self.get_klines(symbol, interval=timeframe, market="spot")
+
+    async def get_contract_info(self, contract: str) -> Dict[str, Any]:
+        """
+        GET /futures/usdt/contracts/{contract}.
+        Returns leverage_min/max, fees, mark_price, funding_rate, etc.
+        """
+        pair = self._normalize_symbol(contract)
+        return await self._request(
+            "GET", f"/futures/{self.SETTLE}/contracts/{pair}",
+            base_url=self._futures_url(),
+        )
+
+    async def get_contract_stats(
+        self,
+        contract: str,
+        interval: str = "5m",
+        limit:    int = 1,
+    ) -> List[Dict[str, Any]]:
+        """
+        GET /futures/usdt/contract_stats → OI, long/short ratio, top-trader data.
+        Used by L5 Order Flow scoring.
+        """
+        pair = self._normalize_symbol(contract)
+        return await self._request(
+            "GET", f"/futures/{self.SETTLE}/contract_stats",
+            params={"contract": pair, "interval": interval, "limit": str(limit)},
+            base_url=self._futures_url(),
+        )
+
     async def fetch_funding_rate(self, symbol: str) -> float:
-        pair = symbol.replace("USDT", "_USDT") if "_" not in symbol else symbol
+        """Legacy: return current funding_rate for a contract."""
         try:
-            data = await self._request("GET", f"/futures/usdt/contracts/{pair}")
-            return float(data.get("funding_rate", 0))
+            info = await self.get_contract_info(symbol)
+            return float(info.get("funding_rate", 0))
         except Exception:
             return 0.0
 
-    async def create_order(
-        self, symbol: str, side: str, order_type: str, quantity: float, price: float = None
+    # =========================================================================
+    # SPOT TRADING
+    # =========================================================================
+
+    async def place_spot_order(
+        self,
+        currency_pair: str,
+        side:          str,
+        order_type:    str,
+        amount:        str,
+        price:         Optional[str] = None,
+        time_in_force: str           = "gtc",
+        text:          str           = "t-scalpyn",
     ) -> Dict[str, Any]:
-        pair = symbol.replace("USDT", "_USDT") if "_" not in symbol else symbol
-        body = {
+        """
+        POST /spot/orders.
+        order_type: 'market' | 'limit'
+        side: 'buy' | 'sell'
+        amount: in USDT for market-buy, in base coin for market-sell / limit.
+        """
+        pair = self._normalize_symbol(currency_pair)
+        body: Dict[str, Any] = {
             "currency_pair": pair,
-            "side": side,
-            "type": order_type,
-            "amount": str(quantity),
+            "side":          side,
+            "type":          order_type,
+            "amount":        amount,
+            "time_in_force": "ioc" if order_type == "market" else time_in_force,
+            "text":          text,
         }
         if order_type == "limit" and price:
-            body["price"] = str(price)
-            body["time_in_force"] = "gtc"
+            body["price"] = price
+        return await self._request("POST", "/spot/orders", body=body, write=True)
 
-        return await self._request("POST", "/spot/orders", body=body)
+    # Legacy alias
+    async def create_order(
+        self,
+        symbol:     str,
+        side:       str,
+        order_type: str,
+        quantity:   float,
+        price:      Optional[float] = None,
+    ) -> Dict[str, Any]:
+        return await self.place_spot_order(
+            currency_pair=symbol,
+            side=side,
+            order_type=order_type,
+            amount=str(quantity),
+            price=str(price) if price else None,
+        )
 
-    async def cancel_order(self, order_id: str, symbol: str) -> bool:
-        pair = symbol.replace("USDT", "_USDT") if "_" not in symbol else symbol
+    async def cancel_spot_order(self, order_id: str, currency_pair: str) -> bool:
+        pair = self._normalize_symbol(currency_pair)
         try:
-            await self._request("DELETE", f"/spot/orders/{order_id}", params={"currency_pair": pair})
+            await self._request(
+                "DELETE", f"/spot/orders/{order_id}",
+                params={"currency_pair": pair}, write=True,
+            )
             return True
         except Exception:
             return False
 
-    async def get_balances(self) -> Dict[str, float]:
-        accounts = await self._request("GET", "/spot/accounts")
-        balances = {}
-        for acc in accounts:
-            avail = float(acc.get("available", 0))
-            locked = float(acc.get("locked", 0))
-            if avail > 0 or locked > 0:
-                balances[acc.get("currency", "")] = avail + locked
-        return balances
+    # Legacy alias
+    async def cancel_order(self, order_id: str, symbol: str) -> bool:
+        return await self.cancel_spot_order(order_id, symbol)
+
+    async def create_spot_price_trigger(
+        self,
+        currency_pair: str,
+        trigger_price: str,
+        trigger_rule:  str,
+        order_side:    str,
+        order_amount:  str,
+        expiration:    int = 2592000,
+        text:          str = "t-scalpyn-tp",
+    ) -> Dict[str, Any]:
+        """
+        POST /spot/price_orders → automated TP for spot positions.
+        trigger_rule: '>=' | '<='
+        """
+        pair = self._normalize_symbol(currency_pair)
+        body = {
+            "market":  pair,
+            "trigger": {
+                "price":      trigger_price,
+                "rule":       trigger_rule,
+                "expiration": expiration,
+            },
+            "put": {
+                "side":          order_side,
+                "type":          "market",
+                "amount":        order_amount,
+                "time_in_force": "ioc",
+                "text":          text,
+            },
+        }
+        return await self._request("POST", "/spot/price_orders", body=body, write=True)
+
+    # =========================================================================
+    # FUTURES TRADING
+    # =========================================================================
+
+    async def get_futures_position(self, contract: str) -> Dict[str, Any]:
+        """
+        GET /futures/usdt/positions/{contract}.
+        Returns: size, entry_price, mark_price, liq_price, unrealised_pnl, leverage, ...
+        """
+        pair = self._normalize_symbol(contract)
+        return await self._request(
+            "GET", f"/futures/{self.SETTLE}/positions/{pair}",
+            base_url=self._futures_url(),
+        )
+
+    async def place_futures_order(
+        self,
+        contract:      str,
+        size:          int,
+        price:         str  = "0",
+        tif:           str  = "ioc",
+        is_reduce_only: bool = False,
+        is_close:      bool  = False,
+        text:          str   = "t-scalpyn",
+    ) -> Dict[str, Any]:
+        """
+        POST /futures/usdt/orders.
+        size > 0 → LONG (buy)
+        size < 0 → SHORT (sell)
+        size = 0 + is_close=True → close entire position
+        """
+        pair = self._normalize_symbol(contract)
+        body: Dict[str, Any] = {
+            "contract":      pair,
+            "size":          size,
+            "price":         price,
+            "tif":           tif,
+            "is_reduce_only": is_reduce_only,
+            "is_close":      is_close,
+            "text":          text,
+        }
+        return await self._request(
+            "POST", f"/futures/{self.SETTLE}/orders",
+            body=body, base_url=self._futures_url(), write=True,
+        )
+
+    async def set_leverage(
+        self,
+        contract:             str,
+        leverage:             int,
+        cross_leverage_limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        POST /futures/usdt/positions/{contract}/leverage?leverage={n}
+        leverage=0 → cross margin; cross_leverage_limit sets the cross cap.
+        """
+        pair   = self._normalize_symbol(contract)
+        params = {"leverage": str(leverage)}
+        if cross_leverage_limit is not None:
+            params["cross_leverage_limit"] = str(cross_leverage_limit)
+        return await self._request(
+            "POST", f"/futures/{self.SETTLE}/positions/{pair}/leverage",
+            params=params, base_url=self._futures_url(), write=True,
+        )
+
+    async def close_position(
+        self,
+        contract: str,
+        text:     str = "t-scalpyn-close",
+    ) -> Dict[str, Any]:
+        """Market-close the entire futures position (size=0, is_close=True)."""
+        return await self.place_futures_order(
+            contract=contract,
+            size=0,
+            price="0",
+            tif="ioc",
+            is_close=True,
+            text=text,
+        )
+
+    async def create_price_trigger(
+        self,
+        contract:       str,
+        trigger_price:  str,
+        trigger_rule:   int,
+        size:           int,
+        is_close:       bool = False,
+        is_reduce_only: bool = False,
+        price_type:     int  = 1,
+        expiration:     int  = 604800,
+        text:           str  = "t-scalpyn-sl",
+    ) -> Dict[str, Any]:
+        """
+        POST /futures/usdt/price_orders → create SL or TP trigger.
+
+        trigger_rule:  1 = price >= trigger (TP for LONG / SL for SHORT)
+                       2 = price <= trigger (SL for LONG / TP for SHORT)
+        price_type:    0 = last price  |  1 = mark price (recommended for SL)
+        size:          0 + is_close=True  → close full position
+                       negative int      → partial close of LONG
+        """
+        pair = self._normalize_symbol(contract)
+        body = {
+            "initial": {
+                "contract":      pair,
+                "size":          size,
+                "price":         "0",
+                "tif":           "ioc",
+                "is_close":      is_close,
+                "is_reduce_only": is_reduce_only,
+                "text":          text,
+            },
+            "trigger": {
+                "strategy_type": 0,
+                "price_type":    price_type,
+                "price":         trigger_price,
+                "rule":          trigger_rule,
+                "expiration":    expiration,
+            },
+        }
+        return await self._request(
+            "POST", f"/futures/{self.SETTLE}/price_orders",
+            body=body, base_url=self._futures_url(), write=True,
+        )
+
+    async def modify_price_trigger(
+        self,
+        order_id:      int,
+        trigger_price: str,
+    ) -> Dict[str, Any]:
+        """
+        PUT /futures/usdt/price_orders/amend/{order_id}.
+        Used to move SL to breakeven after TP1 is hit.
+        """
+        body = {
+            "order_id":     order_id,
+            "trigger_price": trigger_price,
+            "price":         "0",
+            "size":          0,
+        }
+        return await self._request(
+            "PUT", f"/futures/{self.SETTLE}/price_orders/amend/{order_id}",
+            body=body, base_url=self._futures_url(), write=True,
+        )
+
+    async def cancel_price_trigger(self, order_id: int) -> Dict[str, Any]:
+        """DELETE /futures/usdt/price_orders/{order_id}."""
+        return await self._request(
+            "DELETE", f"/futures/{self.SETTLE}/price_orders/{order_id}",
+            base_url=self._futures_url(), write=True,
+        )
+
+    async def cancel_all_price_triggers(self, contract: str) -> List[Dict[str, Any]]:
+        """DELETE /futures/usdt/price_orders?contract={contract} — cleanup after position closes."""
+        pair = self._normalize_symbol(contract)
+        return await self._request(
+            "DELETE", f"/futures/{self.SETTLE}/price_orders",
+            params={"contract": pair},
+            base_url=self._futures_url(), write=True,
+        )
