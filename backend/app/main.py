@@ -23,6 +23,8 @@ from .api import (
     custom_watchlists,
     spot_engine,
     futures_engine,
+    positions,
+    macro,
 )
 from .websocket.scalpyn_ws_server import router as ws_extended_router
 
@@ -90,6 +92,12 @@ app.include_router(spot_engine.router)
 
 # Futures Engine
 app.include_router(futures_engine.router)
+
+# Positions
+app.include_router(positions.router)
+
+# Macro
+app.include_router(macro.router)
 
 # WebSocket — core channels (market, signals, trades)
 app.include_router(websocket.router)
