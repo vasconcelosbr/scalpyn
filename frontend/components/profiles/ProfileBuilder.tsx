@@ -33,6 +33,7 @@ const DEFAULT_CONFIG = {
     conditions: [],
   },
   scoring: {
+    enabled: true,
     weights: {
       liquidity: 25,
       market_structure: 25,
@@ -56,6 +57,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   const [customWatchlists, setCustomWatchlists] = useState<CustomWatchlist[]>([]);
   const [selectedWatchlistId, setSelectedWatchlistId] = useState<string>("");
   const [assignedWatchlist, setAssignedWatchlist] = useState<string | null>(null);
+  const [scoringEnabled, setScoringEnabled] = useState(profile?.config?.scoring?.enabled !== false);
 
   useEffect(() => {
     // Load custom watchlists from backend
@@ -144,6 +146,14 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     setConfig({
       ...config,
       scoring: { ...config.scoring, weights },
+    });
+  };
+
+  const toggleScoringEnabled = (enabled: boolean) => {
+    setScoringEnabled(enabled);
+    setConfig({
+      ...config,
+      scoring: { ...config.scoring, enabled },
     });
   };
 
@@ -336,18 +346,45 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
 
           {activeTab === "scoring" && (
             <div className="space-y-4">
-              <div>
-                <h3 className="font-semibold text-[var(--text-primary)]">
-                  Alpha Score Weights
-                </h3>
-                <p className="text-[12px] text-[var(--text-secondary)]">
-                  Customize how the Alpha Score is calculated
-                </p>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-semibold text-[var(--text-primary)]">
+                    Alpha Score Weights
+                  </h3>
+                  <p className="text-[12px] text-[var(--text-secondary)]">
+                    Customize how the Alpha Score is calculated
+                  </p>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <span className="text-[12px] text-[var(--text-secondary)]">
+                    {scoringEnabled ? "Enabled" : "Disabled"}
+                  </span>
+                  <div 
+                    className={`relative w-10 h-5 rounded-full transition-colors ${
+                      scoringEnabled ? "bg-[var(--accent-primary)]" : "bg-[var(--bg-secondary)]"
+                    }`}
+                    onClick={() => toggleScoringEnabled(!scoringEnabled)}
+                  >
+                    <div 
+                      className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                        scoringEnabled ? "translate-x-5" : "translate-x-0.5"
+                      }`}
+                    />
+                  </div>
+                </label>
               </div>
-              <WeightSliders
-                weights={config.scoring.weights}
-                onChange={updateWeights}
-              />
+              {scoringEnabled ? (
+                <WeightSliders
+                  weights={config.scoring.weights}
+                  onChange={updateWeights}
+                />
+              ) : (
+                <div className="p-8 text-center bg-[var(--bg-secondary)] rounded-lg">
+                  <p className="text-[var(--text-tertiary)] text-[13px]">
+                    Alpha Score Weights are disabled. Default weights will be used.
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
