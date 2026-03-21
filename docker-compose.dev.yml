@@ -1,0 +1,32 @@
+# ============================================================
+# Scalpyn — Development overrides
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#
+# What this changes vs docker-compose.yml:
+#   - backend: single uvicorn worker with --reload
+#   - celery_worker: --loglevel=debug
+#   - frontend: uses "dev" build stage (next dev with hot-reload)
+# ============================================================
+
+services:
+
+  backend:
+    build:
+      context: ./backend
+      target: runtime
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app
+    environment:
+      WEB_CONCURRENCY: "1"
+
+  celery_worker:
+    command: celery -A app.tasks.celery_app worker --loglevel=debug --concurrency=1 -Q celery
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: dev
+    environment:
+      NODE_ENV: development

@@ -1,62 +1,158 @@
-version: "3.9"
+# ============================================================
+# Scalpyn — Local Development Docker Compose
+# Usage:
+#   cp .env.example .env        # fill in your values
+#   docker compose up --build   # start all services
+#   ./setup.sh                  # first-time: run migrations + seed
+# ============================================================
 
 services:
-  backend:
-    build: ./backend
-    ports:
-      - "8000:8000"
-    environment:
-      - PORT=8000
-      - WEB_CONCURRENCY=1
-      - DATABASE_URL=postgresql+asyncpg://scalpyn:scalpyn@db:5432/scalpyn
-      - REDIS_URL=redis://redis:6379/0
-      - JWT_SECRET=${JWT_SECRET:-supersecretjwtkey}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef}
-    depends_on:
-      - db
-      - redis
-    volumes:
-      - ./backend:/app
 
-  celery_worker:
-    build: ./backend
-    command: celery -A app.tasks worker -l info
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://scalpyn:scalpyn@db:5432/scalpyn
-      - REDIS_URL=redis://redis:6379/0
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef}
-    depends_on:
-      - db
-      - redis
-    volumes:
-      - ./backend:/app
-
-  celery_beat:
-    build: ./backend
-    command: celery -A app.tasks beat -l info
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://scalpyn:scalpyn@db:5432/scalpyn
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-    volumes:
-      - ./backend:/app
-
+  # ── PostgreSQL 16 + TimescaleDB ──────────────────────────────────────────────
   db:
     image: timescale/timescaledb:latest-pg16
+    container_name: scalpyn_db
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: scalpyn
-      POSTGRES_PASSWORD: scalpyn
-      POSTGRES_DB: scalpyn
+      POSTGRES_USER: ${POSTGRES_USER:-scalpyn}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scalpyn}
+      POSTGRES_DB: ${POSTGRES_DB:-scalpyn}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-scalpyn} -d ${POSTGRES_DB:-scalpyn}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
+  # ── Redis ─────────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
+    container_name: scalpyn_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── FastAPI Backend ───────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      target: runtime
+    container_name: scalpyn_backend
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    environment:
+      PORT: 8000
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-scalpyn}:${POSTGRES_PASSWORD:-scalpyn}@db:5432/${POSTGRES_DB:-scalpyn}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-change-me-use-openssl-rand-hex-32}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef}
+      # Gate.io API credentials (leave empty for paper/testing mode)
+      GATE_API_KEY: ${GATE_API_KEY:-}
+      GATE_API_SECRET: ${GATE_API_SECRET:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── Celery Worker ─────────────────────────────────────────────────────────────
+  celery_worker:
+    build:
+      context: ./backend
+      target: runtime
+    container_name: scalpyn_celery_worker
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2 -Q celery
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-scalpyn}:${POSTGRES_PASSWORD:-scalpyn}@db:5432/${POSTGRES_DB:-scalpyn}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-change-me-use-openssl-rand-hex-32}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef}
+      GATE_API_KEY: ${GATE_API_KEY:-}
+      GATE_API_SECRET: ${GATE_API_SECRET:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping -d celery@$$HOSTNAME"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── Celery Beat (scheduler) ───────────────────────────────────────────────────
+  celery_beat:
+    build:
+      context: ./backend
+      target: runtime
+    container_name: scalpyn_celery_beat
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app beat --loglevel=info --scheduler celery.beat:PersistentScheduler
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-scalpyn}:${POSTGRES_PASSWORD:-scalpyn}@db:5432/${POSTGRES_DB:-scalpyn}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-change-me-use-openssl-rand-hex-32}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - beatdata:/app/celerybeat-schedule
+
+  # ── Next.js Frontend ──────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: scalpyn_frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      BACKEND_URL: http://backend:8000
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
 
 volumes:
   pgdata:
+    driver: local
+  redisdata:
+    driver: local
+  beatdata:
+    driver: local
