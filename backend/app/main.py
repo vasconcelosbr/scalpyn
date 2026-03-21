@@ -21,6 +21,7 @@ from .api import (
     websocket,
     profiles,
     custom_watchlists,
+    spot_engine,
 )
 
 
@@ -81,6 +82,9 @@ app.include_router(reports.router)
 
 # Notifications
 app.include_router(notifications.router)
+
+# Spot Engine
+app.include_router(spot_engine.router)
 
 # WebSocket
 app.include_router(websocket.router)
