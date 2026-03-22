@@ -7,6 +7,10 @@ Create Date: 2026-03-22
 Adds:
   - origin         VARCHAR(20)  DEFAULT 'manual'  — 'manual' or 'discovered'
   - discovered_at  TIMESTAMPTZ  nullable           — when auto-discovery added this coin
+
+NOTE: Uses raw SQL with IF NOT EXISTS so this migration is safe to run
+against a database that was bootstrapped via create_all (which would have
+already created these columns from the current model definition).
 """
 
 from alembic import op
@@ -19,14 +23,12 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "pool_coins",
-        sa.Column("origin", sa.String(20), nullable=True, server_default="manual"),
-    )
-    op.add_column(
-        "pool_coins",
-        sa.Column("discovered_at", sa.DateTime(timezone=True), nullable=True),
-    )
+    op.execute(sa.text(
+        "ALTER TABLE pool_coins ADD COLUMN IF NOT EXISTS origin VARCHAR(20) DEFAULT 'manual';"
+    ))
+    op.execute(sa.text(
+        "ALTER TABLE pool_coins ADD COLUMN IF NOT EXISTS discovered_at TIMESTAMPTZ;"
+    ))
 
 
 def downgrade() -> None:

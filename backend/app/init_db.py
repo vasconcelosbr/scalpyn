@@ -38,6 +38,34 @@ async def init_db():
             logger.info("Added 'profile_id' column to pools table (or already exists)")
         except Exception as e:
             logger.warning(f"Could not add 'profile_id' column: {e}")
+
+        # Add description column to pools (if missing from early schema)
+        try:
+            await conn.execute(text(
+                "ALTER TABLE pools ADD COLUMN IF NOT EXISTS description TEXT;"
+            ))
+        except Exception as e:
+            logger.warning(f"Could not add 'description' column to pools: {e}")
+
+        # Add updated_at column to pools (if missing from early schema)
+        try:
+            await conn.execute(text(
+                "ALTER TABLE pools ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();"
+            ))
+        except Exception as e:
+            logger.warning(f"Could not add 'updated_at' column to pools: {e}")
+
+        # Add discovery fields to pool_coins
+        try:
+            await conn.execute(text(
+                "ALTER TABLE pool_coins ADD COLUMN IF NOT EXISTS origin VARCHAR(20) DEFAULT 'manual';"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE pool_coins ADD COLUMN IF NOT EXISTS discovered_at TIMESTAMPTZ;"
+            ))
+            logger.info("Added discovery fields to pool_coins (or already exist)")
+        except Exception as e:
+            logger.warning(f"Could not add discovery fields to pool_coins: {e}")
         
         # Ensure profiles and watchlist_profiles tables exist with all columns
         try:

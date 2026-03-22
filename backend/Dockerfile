@@ -42,11 +42,13 @@ COPY --from=builder /install /usr/local
 
 COPY . .
 
-RUN chown -R appuser:appgroup /app
+RUN chown -R appuser:appgroup /app \
+    && chmod +x /app/start.sh
 
 USER appuser
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD python -c "import os, urllib.request; urllib.request.urlopen('http://localhost:' + os.environ.get('PORT', '8080') + '/api/health')"
 
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --workers ${WEB_CONCURRENCY}"]
+# start.sh runs: alembic upgrade head → uvicorn
+CMD ["/app/start.sh"]
