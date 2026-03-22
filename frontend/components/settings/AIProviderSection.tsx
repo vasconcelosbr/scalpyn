@@ -26,6 +26,24 @@ interface ProviderStatus {
   docs_url: string
 }
 
+const MAX_TOKEN_LIMIT = 100_000_000
+
+/** Formata tokens: 5000000 → "5.0M" · 500000 → "500k" · 999 → "999" */
+function fmtTokens(n: number | null | undefined): string {
+  if (n == null) return '0'
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000)     return `${(n / 1_000).toFixed(0)}k`
+  return String(n)
+}
+
+/** Converte string de input em número de tokens, retorna null se inválido */
+function parseTokenLimit(s: string): number | null {
+  if (!s.trim()) return null
+  const n = parseInt(s.replace(/\D/g, ''), 10)
+  if (isNaN(n) || n < 1_000) return null
+  return Math.min(n, MAX_TOKEN_LIMIT)
+}
+
 const PMETA: Record<string, {
   icon: string; color: string; bg: string; border: string
   desc: string; usedBy: string[]; placeholder: string
@@ -92,6 +110,11 @@ function ProviderCard({ status, onRefresh }: { status: ProviderStatus; onRefresh
 
   const handleSave = async () => {
     if (!apiKey.trim()) { setError('Insira a API key.'); return }
+    const tokenLimit = parseTokenLimit(limit)
+    if (limit.trim() && tokenLimit === null) {
+      setError('Limite de tokens inválido. Mínimo: 1.000. Máximo: 100.000.000.')
+      return
+    }
     setSaving(true); setError(null); setTestResult(null)
     try {
       const res = await fetch(`/api/ai-keys/${status.provider}`, {
@@ -100,7 +123,7 @@ function ProviderCard({ status, onRefresh }: { status: ProviderStatus; onRefresh
         body: JSON.stringify({
           api_key: apiKey.trim(),
           label: label || null,
-          monthly_token_limit: limit ? parseInt(limit) : null,
+          monthly_token_limit: tokenLimit,
         }),
       })
       if (!res.ok) {
@@ -123,8 +146,9 @@ function ProviderCard({ status, onRefresh }: { status: ProviderStatus; onRefresh
         headers: authHeaders(),
       })
       const data = await res.json()
+      const msg = data.message || (data.success ? 'Conectado.' : 'Erro desconhecido. Veja os logs do Cloud Run.')
       setTesting(false)
-      setTestResult({ success: data.success, message: data.message })
+      setTestResult({ success: data.success, message: msg })
       if (data.success) onRefresh()
     } catch {
       setTesting(false)
@@ -187,14 +211,13 @@ function ProviderCard({ status, onRefresh }: { status: ProviderStatus; onRefresh
                 </span>
               )}
             </div>
-            {status.tokens_used_month != null && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Zap size={12} color="var(--text-tertiary)" />
-                <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
-                  {(status.tokens_used_month / 1000).toFixed(0)}k tokens este mês{status.monthly_token_limit ? ` / ${(status.monthly_token_limit / 1_000_000).toFixed(1)}M limite` : ''}
-                </span>
-              </div>
-            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Zap size={12} color="var(--text-tertiary)" />
+              <span style={{ fontSize: 11, color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
+                {fmtTokens(status.tokens_used_month)} tokens este mês
+                {status.monthly_token_limit != null && ` / ${fmtTokens(status.monthly_token_limit)} limite`}
+              </span>
+            </div>
             <button onClick={handleTest} disabled={testing} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, padding: '6px 12px', borderRadius: 6, background: 'transparent', border: '1px solid var(--border-default)', cursor: testing ? 'wait' : 'pointer', color: 'var(--text-secondary)' }}>
               <RefreshCw size={11} style={testing ? { animation: 'spin 1s linear infinite' } : {}} />
               {testing ? 'Testando...' : 'Testar conexão'}
@@ -238,7 +261,12 @@ function ProviderCard({ status, onRefresh }: { status: ProviderStatus; onRefresh
             </div>
             <div>
               <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: 'var(--text-tertiary)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Limite mensal (tokens)</label>
-              <input type="number" value={limit} onChange={e => setLimit(e.target.value)} placeholder="Ex: 5000000" style={{ ...inputStyle, padding: '9px 12px' }} />
+              <input type="number" value={limit} onChange={e => setLimit(e.target.value)} placeholder="Ex: 5000000 (= 5M)" min={1000} max={MAX_TOKEN_LIMIT} style={{ ...inputStyle, padding: '9px 12px' }} />
+              {limit && parseTokenLimit(limit) != null && (
+                <p style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '4px 0 0' }}>
+                  = {fmtTokens(parseTokenLimit(limit))} tokens/mês
+                </p>
+              )}
             </div>
           </div>
           {error && (
@@ -311,6 +339,7 @@ export default function AIProviderSection() {
           -webkit-box-shadow: 0 0 0 1000px var(--bg-input) inset;
           -webkit-text-fill-color: var(--text-primary);
         }
+        input[type=number]::-webkit-inner-spin-button { opacity: 0.4 }
       `}</style>
     </section>
   )

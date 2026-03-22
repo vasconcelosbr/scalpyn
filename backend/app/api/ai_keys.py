@@ -59,11 +59,14 @@ async def get_current_user_id(
 router = APIRouter(prefix="/api/ai-keys", tags=["AI Provider Keys"])
 
 
+_MAX_TOKEN_LIMIT = 100_000_000  # 100M tokens
+
+
 class SaveKeyRequest(BaseModel):
     api_key: str = Field(..., min_length=20)
     api_secret: Optional[str] = None
     label: Optional[str] = Field(None, max_length=100)
-    monthly_token_limit: Optional[int] = Field(None, ge=1_000)
+    monthly_token_limit: Optional[int] = Field(None, ge=1_000, le=_MAX_TOKEN_LIMIT)
 
 
 @router.get("")
@@ -155,4 +158,6 @@ async def test_key(
     from ..services.ai_keys_service import test_anthropic_key
 
     success, message = await test_anthropic_key(db, user_id, provider)
+    if not message:
+        message = "Erro desconhecido. Verifique os logs do Cloud Run."
     return {"provider": provider, "success": success, "message": message}

@@ -8,6 +8,7 @@ The key is NEVER returned in plain text by the API — only key_hint.
 
 import os
 import logging
+import traceback
 from datetime import datetime, timezone
 from typing import Optional, Tuple
 from uuid import UUID
@@ -35,7 +36,14 @@ def encrypt_value(plain: str) -> bytes:
 
 
 def decrypt_value(enc: bytes) -> str:
-    return _fernet().decrypt(enc).decode()
+    try:
+        return _fernet().decrypt(enc).decode()
+    except Exception as e:
+        raise ValueError(
+            "Falha ao descriptografar a chave. "
+            "Verifique se AI_KEYS_ENCRYPTION_KEY está configurada corretamente no Cloud Run. "
+            f"Detalhe: {type(e).__name__}: {e}"
+        ) from e
 
 
 def make_hint(key: str) -> str:
@@ -74,6 +82,9 @@ async def _get_record(db: AsyncSession, user_id: UUID, provider: str):
     return result.scalars().first()
 
 
+_MAX_TOKEN_LIMIT = 100_000_000  # 100M tokens
+
+
 async def save_ai_key(
     db: AsyncSession,
     user_id: UUID,
@@ -101,7 +112,7 @@ async def save_ai_key(
         is_active=True,
         is_validated=False,
         test_status="pending",
-        monthly_token_limit=monthly_token_limit,
+        monthly_token_limit=min(monthly_token_limit, _MAX_TOKEN_LIMIT) if monthly_token_limit else None,
         tokens_used_month=0,
     )
     db.add(rec)
@@ -158,40 +169,73 @@ async def get_anthropic_client(db: AsyncSession, user_id: UUID):
     )
 
 
+async def _save_test_result(db: AsyncSession, r, success: bool, msg: str) -> None:
+    r.is_validated = success
+    r.test_status = "ok" if success else "error"
+    r.test_error = None if success else msg
+    r.last_tested_at = datetime.now(timezone.utc)
+    await db.commit()
+
+
 async def test_anthropic_key(db: AsyncSession, user_id: UUID, provider: str = "anthropic") -> Tuple[bool, str]:
     r = await _get_record(db, user_id, provider)
     if not r:
-        return False, "No key configured."
+        return False, "Nenhuma chave configurada para este provider."
 
     try:
         import anthropic
     except ImportError:
-        return False, "anthropic package not installed. Run: pip install anthropic"
+        msg = "Pacote 'anthropic' não instalado. Execute: pip install anthropic"
+        logger.error(f"[AIKeys] {msg}")
+        return False, msg
 
     try:
-        client = anthropic.Anthropic(api_key=decrypt_value(r.api_key_encrypted))
+        api_key = decrypt_value(r.api_key_encrypted)
+    except ValueError as e:
+        msg = str(e)
+        logger.error(f"[AIKeys] Decrypt failed user={user_id}: {msg}")
+        await _save_test_result(db, r, False, msg)
+        return False, msg
+
+    msg = ""
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
         client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=10,
             messages=[{"role": "user", "content": "Hi"}],
         )
-        r.is_validated = True
-        r.test_status = "ok"
-        r.test_error = None
-        r.last_tested_at = datetime.now(timezone.utc)
-        await db.commit()
-        return True, "Anthropic API connection established successfully."
+        await _save_test_result(db, r, True, "")
+        logger.info(f"[AIKeys] Anthropic test OK user={user_id}")
+        return True, "Conexão com a API Anthropic estabelecida com sucesso."
 
-    except anthropic.AuthenticationError:
-        msg = "Invalid key. Please check your API key."
-    except anthropic.PermissionDeniedError:
-        msg = "Permission denied. Check the key's scopes."
+    except anthropic.AuthenticationError as e:
+        msg = f"Chave inválida. Verifique se copiou a API key corretamente. (AuthenticationError: {e.message})"
+        logger.error(f"[AIKeys] AuthenticationError user={user_id}: {e.message}")
+
+    except anthropic.PermissionDeniedError as e:
+        msg = f"Permissão negada. Verifique os escopos da chave. (PermissionDeniedError: {e.message})"
+        logger.error(f"[AIKeys] PermissionDeniedError user={user_id}: {e.message}")
+
+    except anthropic.RateLimitError as e:
+        msg = f"Rate limit atingido. Aguarde alguns instantes e tente novamente. (RateLimitError: {e.message})"
+        logger.warning(f"[AIKeys] RateLimitError user={user_id}: {e.message}")
+
+    except anthropic.APIConnectionError as e:
+        msg = f"Erro de conexão com a API Anthropic. Verifique sua rede. (APIConnectionError: {e})"
+        logger.error(f"[AIKeys] APIConnectionError user={user_id}: {e}")
+
+    except anthropic.APIStatusError as e:
+        msg = f"Erro da API Anthropic (HTTP {e.status_code}): {e.message}"
+        logger.error(f"[AIKeys] APIStatusError {e.status_code} user={user_id}: {e.message}")
+
     except Exception as e:
-        msg = f"Unexpected error: {str(e)[:200]}"
+        tb = traceback.format_exc()
+        msg = f"{type(e).__name__}: {str(e) or 'sem mensagem'}"
+        logger.error(f"[AIKeys] Erro inesperado user={user_id}:\n{tb}")
 
-    r.is_validated = False
-    r.test_status = "error"
-    r.test_error = msg
-    r.last_tested_at = datetime.now(timezone.utc)
-    await db.commit()
+    if not msg:
+        msg = "Erro desconhecido. Verifique os logs do Cloud Run."
+
+    await _save_test_result(db, r, False, msg)
     return False, msg
