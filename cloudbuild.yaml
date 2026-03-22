@@ -31,12 +31,12 @@ steps:
       - 'managed'
       - '--allow-unauthenticated'
       - '--port'
-      - '8000'
+      - '8080'
 
 substitutions:
   _REGION: southamerica-east1
   _REPO: scalpyn
-  _SERVICE: scalpyn-backend
+  _SERVICE: scalpyn
 
 images:
   - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
