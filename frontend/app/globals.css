@@ -586,6 +586,70 @@
     animation: pulse 2s ease-in-out infinite;
   }
 
+  /* ── Watchlist level transitions ──────────────────────────────────────────── */
+  .row-level-up {
+    animation: level-up-pulse 3s ease-out;
+    position: relative;
+  }
+  .row-level-up td:first-child::before {
+    content: '▲';
+    color: var(--color-profit);
+    margin-right: 6px;
+    font-size: 10px;
+  }
+  .row-level-down {
+    animation: level-down-pulse 3s ease-out;
+    position: relative;
+  }
+  .row-level-down td:first-child::before {
+    content: '▼';
+    color: var(--color-loss);
+    margin-right: 6px;
+    font-size: 10px;
+  }
+
+  /* ── Page tabs ─────────────────────────────────────────────────────────────── */
+  .page-tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 20px;
+  }
+  .page-tab {
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color var(--transition-fast), border-color var(--transition-fast);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+  }
+  .page-tab:hover { color: var(--text-primary); }
+  .page-tab.active {
+    color: var(--accent-primary);
+    border-bottom-color: var(--accent-primary);
+  }
+  .page-tab .tab-count {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: var(--bg-hover);
+    color: var(--text-tertiary);
+  }
+  .page-tab.active .tab-count {
+    background: var(--accent-primary-muted);
+    color: var(--accent-primary);
+  }
+
   /* ── Breadcrumb link ───────────────────────────────────────────────────────── */
   .breadcrumb-link {
     color: var(--text-tertiary);
@@ -831,6 +895,16 @@
 @keyframes shimmer {
   0% { background-position: -400px 0; }
   100% { background-position: 400px 0; }
+}
+@keyframes level-up-pulse {
+  0%   { background: rgba(52, 211, 153, 0.20); }
+  50%  { background: rgba(52, 211, 153, 0.08); }
+  100% { background: transparent; }
+}
+@keyframes level-down-pulse {
+  0%   { background: rgba(248, 113, 113, 0.20); }
+  50%  { background: rgba(248, 113, 113, 0.08); }
+  100% { background: transparent; }
 }
 @keyframes slideInRight {
   from { opacity: 0; transform: translateX(24px); }
