@@ -61,12 +61,33 @@ _DEFAULT_FILTERS = """{
 
 
 def upgrade() -> None:
+    # Ensure pgcrypto is available for gen_random_uuid() in INSERTs
+    op.execute(sa.text("CREATE EXTENSION IF NOT EXISTS pgcrypto;"))
+
+    # Ensure config_profiles.id has a server-side DEFAULT so INSERTs without
+    # explicit id don't fail with NotNullViolationError.
+    op.execute(sa.text("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name  = 'config_profiles'
+                  AND column_name = 'id'
+                  AND column_default IS NOT NULL
+            ) THEN
+                ALTER TABLE config_profiles
+                    ALTER COLUMN id SET DEFAULT gen_random_uuid();
+            END IF;
+        END $$;
+    """))
+
     # ------------------------------------------------------------------
     # 1. Insert default filters config for each user that has a signal config
     # ------------------------------------------------------------------
     op.execute(sa.text(f"""
-        INSERT INTO config_profiles (user_id, config_type, config_json, pool_id)
+        INSERT INTO config_profiles (id, user_id, config_type, config_json, pool_id)
         SELECT
+            gen_random_uuid(),
             user_id,
             'filters',
             '{_DEFAULT_FILTERS}'::jsonb,
