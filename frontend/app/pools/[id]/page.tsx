@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ChevronLeft, Plus, Trash2, Save, Loader2 } from "lucide-react";
+import { ChevronLeft, Plus, Trash2, Save, Loader2, Search } from "lucide-react";
 import { apiFetch, apiGet, apiPost, apiDelete } from "@/lib/api";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -14,6 +14,7 @@ interface Pool {
   market_type: string;
   is_active: boolean;
   profile_id: string | null;
+  overrides: Record<string, any>;
   created_at: string | null;
 }
 
@@ -22,11 +23,27 @@ interface Coin {
   symbol: string;
   market_type: string;
   is_active: boolean;
+  origin?: string;
+  discovered_at?: string | null;
 }
 
 interface Profile {
   id: string;
   name: string;
+}
+
+interface SearchResult {
+  symbol: string;
+  base: string;
+  quote: string;
+  market_type: string;
+}
+
+interface DiscoverResult {
+  found: number;
+  added: number;
+  removed: number;
+  kept_manual: number;
 }
 
 // ── Page ───────────────────────────────────────────────────────────────────────
@@ -49,9 +66,26 @@ export default function PoolConfigPage() {
   const [isActive, setIsActive] = useState(true);
   const [profileId, setProfileId] = useState("");
 
+  // Auto-refresh settings (stored in pool.overrides)
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [autoAdd, setAutoAdd] = useState(true);
+  const [autoRemove, setAutoRemove] = useState(false);
+  const [notifyChanges, setNotifyChanges] = useState(false);
+
   // Add coin form
   const [newCoin, setNewCoin] = useState("");
   const [addingCoin, setAddingCoin] = useState(false);
+
+  // Autocomplete
+  const [suggestions, setSuggestions] = useState<SearchResult[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Discover
+  const [discovering, setDiscovering] = useState(false);
+  const [discoverResult, setDiscoverResult] = useState<DiscoverResult | null>(null);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -81,6 +115,13 @@ export default function PoolConfigPage() {
       setProfileId(found.profile_id ?? "");
       setCoins(coinsData.coins ?? []);
       setProfiles(profilesData.profiles ?? []);
+
+      // Load auto-refresh settings from overrides
+      const ov = found.overrides ?? {};
+      setAutoRefresh(Boolean(ov.auto_refresh));
+      setAutoAdd(ov.auto_add !== false);
+      setAutoRemove(Boolean(ov.auto_remove));
+      setNotifyChanges(Boolean(ov.notify_on_changes));
     } catch (e: any) {
       setError(e.message ?? "Failed to load pool.");
     }
@@ -89,12 +130,13 @@ export default function PoolConfigPage() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  // ── Save pool metadata ─────────────────────────────────────────────────────
+  // ── Save pool metadata (includes auto-refresh overrides) ──────────────────
   const handleSave = async () => {
     if (!name.trim()) return;
     setSaving(true);
     setError(null);
     try {
+      const currentOverrides = pool?.overrides ?? {};
       await apiFetch(`/pools/${id}`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -104,6 +146,13 @@ export default function PoolConfigPage() {
           market_type: marketType,
           is_active: isActive,
           profile_id: profileId || null,
+          overrides: {
+            ...currentOverrides,
+            auto_refresh: autoRefresh,
+            auto_add: autoAdd,
+            auto_remove: autoRemove,
+            notify_on_changes: notifyChanges,
+          },
         }),
       });
       await fetchAll();
@@ -113,11 +162,49 @@ export default function PoolConfigPage() {
     setSaving(false);
   };
 
+  // ── Autocomplete ───────────────────────────────────────────────────────────
+  const handleSearchInput = (value: string) => {
+    setNewCoin(value);
+    setDiscoverResult(null);
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+
+    if (value.trim().length < 2) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    debounceRef.current = setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        const data = await apiGet(
+          `/exchange/search?q=${encodeURIComponent(value.trim())}&market=${marketType}`
+        );
+        setSuggestions(data.results ?? []);
+        setShowSuggestions(true);
+      } catch {
+        setSuggestions([]);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 300);
+  };
+
+  const handleSelectSuggestion = (sym: string) => {
+    setNewCoin(sym);
+    setSuggestions([]);
+    setShowSuggestions(false);
+    inputRef.current?.focus();
+  };
+
   // ── Add coin ───────────────────────────────────────────────────────────────
   const handleAddCoin = async () => {
     const sym = newCoin.trim().toUpperCase();
     if (!sym) return;
     setAddingCoin(true);
+    setSuggestions([]);
+    setShowSuggestions(false);
     try {
       await apiPost(`/pools/${id}/coins`, {
         symbol: sym,
@@ -139,6 +226,23 @@ export default function PoolConfigPage() {
     } catch (e: any) {
       setError(e.message ?? "Failed to remove coin.");
     }
+  };
+
+  // ── Discover assets ────────────────────────────────────────────────────────
+  const handleDiscover = async () => {
+    setDiscovering(true);
+    setDiscoverResult(null);
+    setError(null);
+    try {
+      const result = await apiFetch<DiscoverResult>(`/pools/${id}/discover`, {
+        method: "POST",
+      });
+      setDiscoverResult(result);
+      await fetchAll();
+    } catch (e: any) {
+      setError(e.message ?? "Discovery failed.");
+    }
+    setDiscovering(false);
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -301,6 +405,78 @@ export default function PoolConfigPage() {
         </div>
       </div>
 
+      {/* ── Auto-Refresh Settings ── */}
+      <div className="card">
+        <div className="card-header">
+          <h3>Auto-Refresh</h3>
+          <span style={{ fontSize: "12px", color: "var(--text-tertiary)" }}>
+            Discover assets automatically every 1 hour
+          </span>
+        </div>
+        <div className="card-body space-y-3">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoRefresh}
+              onClick={() => setAutoRefresh((v) => !v)}
+              className={`toggle ${autoRefresh ? "active" : ""}`}
+            >
+              <span className="knob" />
+            </button>
+            <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+              Auto-refresh every 1 hour
+            </span>
+          </div>
+
+          {autoRefresh && (
+            <div
+              style={{
+                paddingLeft: "8px",
+                borderLeft: "2px solid var(--border-subtle)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "10px",
+              }}
+            >
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={autoAdd}
+                  onChange={(e) => setAutoAdd(e.target.checked)}
+                  style={{ accentColor: "var(--accent-primary)" }}
+                />
+                <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+                  Auto-add new assets matching criteria
+                </span>
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={autoRemove}
+                  onChange={(e) => setAutoRemove(e.target.checked)}
+                  style={{ accentColor: "var(--accent-primary)" }}
+                />
+                <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+                  Auto-remove assets below criteria
+                </span>
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={notifyChanges}
+                  onChange={(e) => setNotifyChanges(e.target.checked)}
+                  style={{ accentColor: "var(--accent-primary)" }}
+                />
+                <span style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+                  Notify on changes
+                </span>
+              </label>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* ── Asset List ── */}
       <div className="card">
         <div className="card-header">
@@ -316,35 +492,143 @@ export default function PoolConfigPage() {
           </span>
         </div>
 
-        {/* Add coin row */}
+        {/* Add coin row + Discover button */}
         <div
           style={{
             padding: "12px 20px",
             borderBottom: "1px solid var(--border-subtle)",
             display: "flex",
-            gap: "8px",
+            flexDirection: "column",
+            gap: "10px",
           }}
         >
-          <input
-            className="input"
-            style={{ maxWidth: "200px" }}
-            placeholder="e.g. BTC_USDT"
-            value={newCoin}
-            onChange={(e) => setNewCoin(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleAddCoin()}
-          />
-          <button
-            className="btn btn-primary"
-            onClick={handleAddCoin}
-            disabled={addingCoin || !newCoin.trim()}
-          >
-            {addingCoin ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Plus className="w-4 h-4" />
+          {/* Input row */}
+          <div style={{ display: "flex", gap: "8px", position: "relative" }}>
+            <div style={{ position: "relative", maxWidth: "260px", flex: 1 }}>
+              <input
+                ref={inputRef}
+                className="input"
+                style={{ width: "100%", paddingRight: searchLoading ? "32px" : undefined }}
+                placeholder="e.g. BTC_USDT"
+                value={newCoin}
+                onChange={(e) => handleSearchInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleAddCoin();
+                  if (e.key === "Escape") setShowSuggestions(false);
+                }}
+                onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
+                autoComplete="off"
+              />
+              {searchLoading && (
+                <Loader2
+                  className="w-3.5 h-3.5 animate-spin"
+                  style={{
+                    position: "absolute",
+                    right: "10px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    color: "var(--text-tertiary)",
+                  }}
+                />
+              )}
+              {/* Autocomplete dropdown */}
+              {showSuggestions && suggestions.length > 0 && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: "calc(100% + 4px)",
+                    left: 0,
+                    right: 0,
+                    background: "var(--bg-elevated)",
+                    border: "1px solid var(--border-default)",
+                    borderRadius: "var(--radius-md)",
+                    boxShadow: "var(--shadow-lg)",
+                    zIndex: 50,
+                    overflow: "hidden",
+                  }}
+                >
+                  {suggestions.map((s) => (
+                    <button
+                      key={s.symbol}
+                      type="button"
+                      onMouseDown={() => handleSelectSuggestion(s.symbol)}
+                      style={{
+                        display: "block",
+                        width: "100%",
+                        textAlign: "left",
+                        padding: "8px 12px",
+                        fontSize: "13px",
+                        color: "var(--text-primary)",
+                        background: "transparent",
+                        border: "none",
+                        cursor: "pointer",
+                        borderBottom: "1px solid var(--border-subtle)",
+                        fontFamily: "var(--font-mono)",
+                      }}
+                      onMouseEnter={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.background = "var(--bg-hover)";
+                      }}
+                      onMouseLeave={(e) => {
+                        (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+                      }}
+                    >
+                      {s.symbol}
+                      <span style={{ color: "var(--text-tertiary)", fontSize: "11px", marginLeft: "8px" }}>
+                        {s.market_type}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button
+              className="btn btn-primary"
+              onClick={handleAddCoin}
+              disabled={addingCoin || !newCoin.trim()}
+            >
+              {addingCoin ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Plus className="w-4 h-4" />
+              )}
+              Add
+            </button>
+          </div>
+
+          {/* Discover button */}
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <button
+              className="btn btn-primary"
+              onClick={handleDiscover}
+              disabled={discovering}
+              style={{ gap: "6px" }}
+            >
+              {discovering ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Search className="w-4 h-4" />
+              )}
+              {discovering ? "Discovering…" : "Discover Assets"}
+            </button>
+
+            {discoverResult && (
+              <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                Found{" "}
+                <strong style={{ color: "var(--text-primary)" }}>{discoverResult.found}</strong>{" "}
+                assets. Added{" "}
+                <strong style={{ color: "var(--color-profit)" }}>{discoverResult.added}</strong>{" "}
+                new
+                {discoverResult.removed > 0 && (
+                  <>
+                    {", removed "}
+                    <strong style={{ color: "var(--color-loss)" }}>{discoverResult.removed}</strong>
+                  </>
+                )}
+                {"."}
+              </span>
             )}
-            Add
-          </button>
+          </div>
         </div>
 
         {coins.length === 0 ? (
@@ -361,7 +645,7 @@ export default function PoolConfigPage() {
               <line x1="12" y1="8" x2="12" y2="12" />
               <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
-            <p>No assets added yet.<br />Type a symbol above and press Add.</p>
+            <p>No assets added yet.<br />Type a symbol above and press Add, or use Discover Assets.</p>
           </div>
         ) : (
           <table className="data-table">
@@ -370,6 +654,7 @@ export default function PoolConfigPage() {
                 <th>Symbol</th>
                 <th>Market</th>
                 <th>Status</th>
+                <th>Origin</th>
                 <th style={{ width: 48 }} />
               </tr>
             </thead>
@@ -393,6 +678,18 @@ export default function PoolConfigPage() {
                       className={`badge ${coin.is_active ? "bullish" : "range"}`}
                     >
                       {coin.is_active ? "Active" : "Paused"}
+                    </span>
+                  </td>
+                  <td>
+                    <span
+                      className={`badge ${coin.origin === "discovered" ? "bullish" : "range"}`}
+                      style={
+                        coin.origin === "discovered"
+                          ? { background: "var(--color-profit-muted)", color: "var(--color-profit)", borderColor: "var(--color-profit-border)" }
+                          : { background: "var(--accent-primary-muted)", color: "var(--accent-primary)", borderColor: "var(--accent-primary)" }
+                      }
+                    >
+                      {coin.origin === "discovered" ? "Discovered" : "Manual"}
                     </span>
                   </td>
                   <td>

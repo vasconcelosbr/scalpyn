@@ -79,7 +79,116 @@ async def _score_async():
         await db.commit()
 
     logger.info(f"Alpha Score computation complete: {scored} symbols")
+
+    # ── Level transition detection ────────────────────────────────────────────
+    # Compare fresh scores against pipeline_watchlist_assets to detect
+    # assets entering / leaving L3 criteria (score >= 75 as default threshold).
+    try:
+        await _detect_level_transitions(db, rows)
+    except Exception as e:
+        logger.warning(f"Level transition detection failed: {e}")
+
     return scored
+
+
+async def _detect_level_transitions(db, scored_rows) -> None:
+    """
+    For each symbol that just got a new score, check if its position in the
+    pipeline has changed.  We look at pipeline_watchlist_assets rows and compare
+    the new score against the watchlist's min_score filter.
+
+    When a transition is detected:
+      - Update level_direction + level_change_at in pipeline_watchlist_assets
+      - Broadcast a WebSocket 'level_change' event via the alerts channel
+    """
+    from ..models.pipeline_watchlist import PipelineWatchlistAsset, PipelineWatchlist
+
+    now = datetime.now(timezone.utc)
+
+    # Build a quick symbol → new_score map from the rows we just scored
+    new_scores: dict = {}
+    for row in scored_rows:
+        try:
+            indicators = row.indicators_json or {}
+            from ..services.score_engine import ScoreEngine
+            from ..services.seed_service import DEFAULT_SCORE
+            result = ScoreEngine(DEFAULT_SCORE).compute_alpha_score(indicators)
+            new_scores[row.symbol] = result.get("total_score", 0)
+        except Exception:
+            continue
+
+    if not new_scores:
+        return
+
+    # Fetch all pipeline_watchlist_assets for symbols with new scores
+    result = await db.execute(
+        text("""
+            SELECT pwa.id, pwa.watchlist_id, pwa.symbol,
+                   pwa.alpha_score, pwa.level_direction,
+                   pw.filters_json, pw.level, pw.user_id
+            FROM pipeline_watchlist_assets pwa
+            JOIN pipeline_watchlists pw ON pw.id = pwa.watchlist_id
+            WHERE pwa.symbol = ANY(:symbols)
+        """),
+        {"symbols": list(new_scores.keys())},
+    )
+    asset_rows = result.fetchall()
+
+    changed: list = []
+
+    for ar in asset_rows:
+        symbol = ar.symbol
+        new_score = new_scores.get(symbol, 0)
+        old_score = float(ar.alpha_score or 0)
+        filters = ar.filters_json or {}
+        min_score = float(filters.get("min_score", 0))
+
+        # Determine if asset currently meets watchlist criteria
+        was_qualifying = old_score >= min_score if min_score > 0 else True
+        now_qualifying = new_score >= min_score if min_score > 0 else True
+
+        if was_qualifying == now_qualifying:
+            continue  # No change
+
+        direction = "up" if now_qualifying else "down"
+
+        # Update the asset row
+        await db.execute(
+            text("""
+                UPDATE pipeline_watchlist_assets
+                SET alpha_score = :score,
+                    level_direction = :direction,
+                    level_change_at = :now
+                WHERE id = :id
+            """),
+            {"score": new_score, "direction": direction, "now": now, "id": str(ar.id)},
+        )
+
+        changed.append({
+            "user_id": str(ar.user_id),
+            "symbol": symbol,
+            "direction": direction,
+            "level": ar.level,
+        })
+
+    if changed:
+        await db.commit()
+
+    # Broadcast WebSocket events
+    for ch in changed:
+        try:
+            from ..websocket.scalpyn_ws_server import broadcast_alert
+            await broadcast_alert(
+                ch["user_id"],
+                "level_change",
+                {
+                    "symbol": ch["symbol"],
+                    "direction": ch["direction"],
+                    "level": ch["level"],
+                },
+            )
+        except Exception:
+            pass  # WS not critical path
 
 
 @celery_app.task(name="app.tasks.compute_scores.score")

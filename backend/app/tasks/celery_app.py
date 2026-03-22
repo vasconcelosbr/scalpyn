@@ -15,6 +15,7 @@ celery_app = Celery(
         "app.tasks.daily_summary",
         "app.tasks.anti_liq_monitor",
         "app.tasks.macro_regime_update",
+        "app.tasks.auto_discover_assets",
     ]
 )
 
@@ -50,5 +51,10 @@ celery_app.conf.beat_schedule = {
     "macro_regime_update": {
         "task": "app.tasks.macro_regime_update.update",
         "schedule": 1800.0,
+    },
+    # Auto-discover assets for pools with auto_refresh=true every 1 hour
+    "auto_discover_assets_hourly": {
+        "task": "app.tasks.auto_discover_assets.discover",
+        "schedule": 3600.0,
     },
 }

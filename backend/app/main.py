@@ -11,6 +11,7 @@ from .api import (
     config as config_api,
     pools,
     exchanges,
+    exchange_search,
     market,
     trades,
     orders,
@@ -78,6 +79,7 @@ app.include_router(trades.router)
 app.include_router(orders.router)
 app.include_router(pools.router)
 app.include_router(exchanges.router)
+app.include_router(exchange_search.router)
 
 # Strategy Profiles
 app.include_router(profiles.router)

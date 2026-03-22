@@ -628,3 +628,89 @@ class GateAdapter(BaseExchangeAdapter):
             params={"contract": pair},
             base_url=self._futures_url(), write=True,
         )
+
+    # =========================================================================
+    # UNIVERSE DISCOVERY  (public endpoints — no auth required)
+    # =========================================================================
+
+    @staticmethod
+    async def _public_get(url: str, params: Optional[Dict] = None) -> Any:
+        """Unsigned GET for Gate.io public endpoints."""
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(
+                url,
+                params=params,
+                headers={"Accept": "application/json"},
+            )
+        if r.status_code != 200:
+            raise GateAPIError(r.status_code, "PUBLIC_ERROR", r.text[:300])
+        return r.json()
+
+    async def list_spot_pairs(self) -> List[Dict[str, Any]]:
+        """
+        GET /spot/currency_pairs (public) → all spot trading pairs.
+
+        Returns a list of dicts with keys:
+            id, base, quote, fee, min_base_amount, min_quote_amount,
+            amount_precision, precision, trade_status, sell_start, buy_start.
+        """
+        raw = await self._public_get(f"{self.SPOT_BASE}/spot/currency_pairs")
+        return raw  # list already
+
+    async def list_futures_contracts(self) -> List[Dict[str, Any]]:
+        """
+        GET /futures/usdt/contracts (public) → all USDT-margined perpetual contracts.
+
+        Returns a list of dicts with keys:
+            name, type, quanto_multiplier, leverage_min, leverage_max,
+            mark_price, index_price, funding_rate, order_price_deviate, etc.
+        """
+        raw = await self._public_get(
+            f"{self.FUTURES_BASE}/futures/{self.SETTLE}/contracts"
+        )
+        return raw  # list already
+
+    async def search_pairs(
+        self,
+        query: str,
+        market_type: str = "spot",
+    ) -> List[Dict[str, Any]]:
+        """
+        Filter spot pairs or futures contracts by a search query (case-insensitive
+        prefix / substring match on the pair id / contract name).
+
+        Returns up to 10 matches sorted by relevance (prefix match first).
+        Each result: { symbol, base, quote, market_type }
+        """
+        q = query.upper().strip()
+        if not q:
+            return []
+
+        if market_type == "futures":
+            pairs = await self.list_futures_contracts()
+            results = [
+                {
+                    "symbol": p["name"],
+                    "base": p["name"].replace(f"_{self.SETTLE.upper()}", ""),
+                    "quote": self.SETTLE.upper(),
+                    "market_type": "futures",
+                }
+                for p in pairs
+                if q in p["name"].upper()
+            ]
+        else:
+            pairs = await self.list_spot_pairs()
+            results = [
+                {
+                    "symbol": p["id"],
+                    "base": p.get("base", ""),
+                    "quote": p.get("quote", ""),
+                    "market_type": "spot",
+                }
+                for p in pairs
+                if p.get("trade_status") == "tradable" and q in p["id"].upper()
+            ]
+
+        # Sort: exact prefix match first, then alphabetical
+        results.sort(key=lambda x: (not x["symbol"].startswith(q), x["symbol"]))
+        return results[:10]

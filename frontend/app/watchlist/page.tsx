@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { WatchlistTable } from '@/components/watchlist/WatchlistTable';
 import { apiFetch } from '@/lib/api';
+import { useWebSocket, getCurrentUserId } from '@/hooks/useWebSocket';
 import {
   Plus,
   RefreshCw,
@@ -256,9 +257,10 @@ interface WatchlistRowProps {
   onEdit: (wl: PipelineWatchlist) => void;
   onDelete: (id: string) => void;
   onRefreshed: () => void;
+  liveDirections?: Record<string, string>;  // symbol → "up" | "down" (transient, 3s)
 }
 
-function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed }: WatchlistRowProps) {
+function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed, liveDirections = {} }: WatchlistRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [assets, setAssets] = useState<PipelineAsset[]>([]);
   const [loadingAssets, setLoadingAssets] = useState(false);
@@ -391,9 +393,10 @@ function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed 
                 </thead>
                 <tbody>
                   {assets.map((asset) => {
-                    const rowCls = asset.level_direction === 'up'
+                    const effectiveDirection = liveDirections[asset.symbol] ?? asset.level_direction;
+                    const rowCls = effectiveDirection === 'up'
                       ? 'row-level-up'
-                      : asset.level_direction === 'down'
+                      : effectiveDirection === 'down'
                       ? 'row-level-down'
                       : '';
                     const changePos = (asset.price_change_24h ?? 0) >= 0;
@@ -445,6 +448,39 @@ function PipelineTab() {
   const [loading, setLoading] = useState(true);
   const [modalWl, setModalWl] = useState<Partial<PipelineWatchlist> | null>(null);
   const [showModal, setShowModal] = useState(false);
+
+  // ── Live level-change highlights (transient, 3s per symbol) ──────────────
+  const [liveDirections, setLiveDirections] = useState<Record<string, string>>({});
+  const clearTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  const userId = typeof window !== 'undefined' ? getCurrentUserId() : undefined;
+  const { lastMessage } = useWebSocket('alerts', userId);
+
+  useEffect(() => {
+    if (!lastMessage || lastMessage.type !== 'level_change') return;
+    const { symbol, direction } = lastMessage as { type: string; symbol: string; direction: string };
+    if (!symbol || !direction) return;
+
+    // Apply highlight
+    setLiveDirections((prev) => ({ ...prev, [symbol]: direction }));
+
+    // Clear after 3 seconds
+    if (clearTimers.current[symbol]) clearTimeout(clearTimers.current[symbol]);
+    clearTimers.current[symbol] = setTimeout(() => {
+      setLiveDirections((prev) => {
+        const next = { ...prev };
+        delete next[symbol];
+        return next;
+      });
+    }, 3000);
+  }, [lastMessage]);
+
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      Object.values(clearTimers.current).forEach(clearTimeout);
+    };
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -548,6 +584,7 @@ function PipelineTab() {
                       onEdit={openEdit}
                       onDelete={handleDelete}
                       onRefreshed={load}
+                      liveDirections={liveDirections}
                     />
                   ))}
                 </div>
