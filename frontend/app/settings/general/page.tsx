@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { Save, RefreshCw, Settings } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
+import AIProviderSection from "@/components/settings/AIProviderSection";
 
 export default function GeneralSettings() {
   const { config, updateConfig, isLoading } = useConfig("universe");
@@ -88,6 +89,13 @@ export default function GeneralSettings() {
               <input type="text" className="input text-[13px]" value={local.accepted_exchanges.join(", ")} onChange={(e) => setLocal({ ...local, accepted_exchanges: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} />
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* AI Provider Keys */}
+      <div className="card">
+        <div className="card-body">
+          <AIProviderSection />
         </div>
       </div>
     </div>

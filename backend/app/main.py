@@ -27,6 +27,7 @@ from .api import (
     futures_engine,
     positions,
     macro,
+    ai_keys,
 )
 from .websocket.scalpyn_ws_server import router as ws_extended_router
 
@@ -102,6 +103,9 @@ app.include_router(positions.router)
 
 # Macro
 app.include_router(macro.router)
+
+# AI Provider Keys
+app.include_router(ai_keys.router)
 
 # WebSocket — core channels (market, signals, trades)
 app.include_router(websocket.router)
