@@ -28,6 +28,22 @@ async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depend
 
 router = APIRouter(prefix="/api/config", tags=["Configuration"])
 
+_GONE_DETAIL = (
+    "The 'signal' config_type has been retired. "
+    "Entry conditions are now managed under 'block' (entry_triggers). "
+    "Use GET/PUT /api/config/block instead."
+)
+
+
+@router.get("/signal")
+@router.put("/signal")
+async def signal_config_gone():
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=_GONE_DETAIL,
+    )
+
+
 @router.get("/{config_type}")
 async def get_config(
     config_type: str,

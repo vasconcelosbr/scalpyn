@@ -1,9 +1,18 @@
-"""Block Engine — evaluates blocking conditions that prevent trade execution."""
+"""Block Engine — evaluates blocking conditions that prevent trade execution.
+
+Also evaluates entry_triggers (conditions absorbed from the former Signal Rules)
+that must pass for a trade to be considered.
+"""
 
 import logging
+import operator as _op
 from typing import Dict, Any, List
 
 logger = logging.getLogger(__name__)
+
+_CMP = {
+    "<=": _op.le, ">=": _op.ge, "<": _op.lt, ">": _op.gt, "=": _op.eq, "!=": _op.ne,
+}
 
 
 class BlockEngine:
@@ -97,3 +106,84 @@ class BlockEngine:
         elif condition == "ema9>ema50":
             return bool(indicators.get("ema9_gt_ema50", False))
         return False
+
+    # ── Entry Triggers (absorbed from Signal Rules) ───────────────────────────
+
+    def evaluate_entry(self, indicators: Dict[str, Any], alpha_score: float = 0.0) -> Dict[str, Any]:
+        """Evaluate entry trigger conditions (absorbed from former Signal Rules).
+
+        Entry triggers must ALL pass (required) or satisfy the configured logic
+        (optional) for the trade to be allowed. This is the positive gate, in
+        contrast to `evaluate()` which is the negative (blocking) gate.
+
+        Returns:
+            {
+                "allowed": bool,
+                "matched": list[str],
+                "failed_required": list[str],
+            }
+        """
+        entry_triggers = self.config.get("entry_triggers", [])
+        if not entry_triggers:
+            # No entry triggers configured → allow by default
+            return {"allowed": True, "matched": [], "failed_required": []}
+
+        logic = self.config.get("entry_logic", "AND")
+        eval_data = {**indicators, "alpha_score": alpha_score}
+
+        enabled = [t for t in entry_triggers if t.get("enabled", True)]
+        required = [t for t in enabled if t.get("required", False)]
+        optional = [t for t in enabled if not t.get("required", False)]
+
+        matched: list = []
+        failed_required: list = []
+
+        for cond in required:
+            if self._eval_trigger(cond, eval_data):
+                matched.append(cond.get("id", "?"))
+            else:
+                failed_required.append(cond.get("id", "?"))
+
+        if failed_required:
+            return {"allowed": False, "matched": matched, "failed_required": failed_required}
+
+        optional_matched: list = []
+        for cond in optional:
+            if self._eval_trigger(cond, eval_data):
+                optional_matched.append(cond.get("id", "?"))
+
+        matched.extend(optional_matched)
+
+        if not optional:
+            allowed = True
+        elif logic == "OR":
+            allowed = len(optional_matched) > 0
+        else:
+            allowed = len(optional_matched) > 0  # AND: at least one optional
+
+        return {"allowed": allowed, "matched": matched, "failed_required": []}
+
+    def _eval_trigger(self, cond: Dict[str, Any], data: Dict[str, Any]) -> bool:
+        indicator = cond.get("indicator", "")
+        operator_str = cond.get("operator", "")
+        target = cond.get("value")
+
+        actual = data.get(indicator)
+        if actual is None:
+            return False
+
+        if isinstance(target, str):
+            if operator_str == "=":
+                return str(actual) == target
+            if operator_str == "!=":
+                return str(actual) != target
+            return False
+
+        try:
+            actual_f = float(actual)
+            target_f = float(target) if target is not None else 0.0
+        except (ValueError, TypeError):
+            return False
+
+        op_func = _CMP.get(operator_str)
+        return op_func(actual_f, target_f) if op_func else False
