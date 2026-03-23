@@ -1,5 +1,5 @@
 // Strategy Profiles components
-export { default as ProfileCard } from './ProfileCard'
+export { ProfileCard } from './ProfileCard'
 export { default as PresetIAButton } from './PresetIAButton'
 export { default as AutoPilotToggle } from './AutoPilotToggle'
 export { default as ProfileRoleSelector } from './ProfileRoleSelector'
