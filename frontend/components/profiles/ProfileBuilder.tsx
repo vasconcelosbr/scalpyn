@@ -65,11 +65,12 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     // Load custom watchlists from backend
     loadCustomWatchlists();
 
-    // If editing, check if profile has an assigned watchlist
+    // If editing, load the profile details to get watchlist_id
     if (profile?.id) {
-      apiGet(`/profiles/watchlist/default/profile`).then((data) => {
-        if (data.profile?.id === profile.id) {
-          setAssignedWatchlist("default");
+      apiGet(`/profiles/${profile.id}`).then((data) => {
+        if (data.watchlist_id) {
+          setSelectedWatchlistId(data.watchlist_id);
+          setAssignedWatchlist(data.watchlist_id);
         }
       }).catch(() => {});
     }

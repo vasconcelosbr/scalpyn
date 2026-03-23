@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
+from sqlalchemy import select, text, delete
 from typing import Dict, Any, List, Optional
 from uuid import UUID
 from datetime import datetime, timezone
@@ -60,7 +60,9 @@ async def get_profile(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id)
 ):
-    """Get a single profile by ID."""
+    """Get a single profile by ID, including assigned watchlist."""
+    from ..models.profile import WatchlistProfile
+    
     query = select(Profile).where(Profile.id == profile_id, Profile.user_id == user_id)
     result = await db.execute(query)
     profile = result.scalars().first()
@@ -68,7 +70,24 @@ async def get_profile(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
     
-    return _profile_to_dict(profile)
+    profile_dict = _profile_to_dict(profile)
+    
+    # Get assigned watchlist
+    wl_query = select(WatchlistProfile).where(
+        WatchlistProfile.profile_id == profile_id,
+        WatchlistProfile.user_id == user_id
+    )
+    wl_result = await db.execute(wl_query)
+    wl_assignment = wl_result.scalars().first()
+    
+    if wl_assignment:
+        profile_dict["watchlist_id"] = wl_assignment.watchlist_id
+        profile_dict["watchlist_profile_type"] = wl_assignment.profile_type
+    else:
+        profile_dict["watchlist_id"] = None
+        profile_dict["watchlist_profile_type"] = None
+    
+    return profile_dict
 
 
 @router.post("/")
@@ -112,12 +131,38 @@ async def create_profile(
         name=name,
         description=payload.get("description", ""),
         is_active=payload.get("is_active", True),
-        config=validated_config
+        config=validated_config,
+        profile_role=payload.get("profile_role"),
+        pipeline_order=str(payload.get("pipeline_order", 99)),
+        pipeline_label=payload.get("pipeline_label"),
     )
     
     db.add(profile)
     await db.commit()
     await db.refresh(profile)
+    
+    # If watchlist_id provided, create association
+    watchlist_id = payload.get("watchlist_id")
+    if watchlist_id:
+        from ..models.profile import WatchlistProfile
+        # Check if association exists
+        existing = await db.execute(
+            select(WatchlistProfile).where(
+                WatchlistProfile.user_id == user_id,
+                WatchlistProfile.watchlist_id == watchlist_id,
+                WatchlistProfile.profile_id == profile.id
+            )
+        )
+        if not existing.scalars().first():
+            association = WatchlistProfile(
+                user_id=user_id,
+                watchlist_id=watchlist_id,
+                profile_id=profile.id,
+                profile_type="L1",  # Default to L1
+                is_enabled=True
+            )
+            db.add(association)
+            await db.commit()
     
     return _profile_to_dict(profile)
 
@@ -130,6 +175,8 @@ async def update_profile(
     user_id: UUID = Depends(get_current_user_id)
 ):
     """Update an existing profile."""
+    from ..models.profile import WatchlistProfile
+    
     query = select(Profile).where(Profile.id == profile_id, Profile.user_id == user_id)
     result = await db.execute(query)
     profile = result.scalars().first()
@@ -155,6 +202,27 @@ async def update_profile(
         profile.auto_pilot_enabled = payload["auto_pilot_enabled"]
     if "auto_pilot_config" in payload:
         profile.auto_pilot_config = payload["auto_pilot_config"]
+    
+    # Handle watchlist association
+    if "watchlist_id" in payload:
+        watchlist_id = payload["watchlist_id"]
+        # Remove existing association
+        await db.execute(
+            delete(WatchlistProfile).where(
+                WatchlistProfile.profile_id == profile_id,
+                WatchlistProfile.user_id == user_id
+            )
+        )
+        # Create new association if watchlist_id is provided
+        if watchlist_id:
+            association = WatchlistProfile(
+                user_id=user_id,
+                watchlist_id=watchlist_id,
+                profile_id=profile_id,
+                profile_type="L1",  # Default to L1
+                is_enabled=True
+            )
+            db.add(association)
     
     await db.commit()
     await db.refresh(profile)
