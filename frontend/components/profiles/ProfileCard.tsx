@@ -1,6 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import { Settings2, Trash2, Play, Copy } from "lucide-react";
+import PresetIAButton from "./PresetIAButton";
+import AutoPilotToggle from "./AutoPilotToggle";
+import { RoleBadge, type ProfileRole } from "./ProfileRoleSelector";
 
 interface ProfileCardProps {
   profile: {
@@ -11,11 +15,17 @@ interface ProfileCardProps {
     config: any;
     created_at: string;
     updated_at: string;
+    // Preset IA + Auto-Pilot fields (optional for backwards compat)
+    profile_role?:       ProfileRole | null;
+    pipeline_label?:     string | null;
+    auto_pilot_enabled?: boolean;
+    preset_ia_last_run?: string | null;
   };
   onEdit: () => void;
   onDelete: () => void;
   onTest: () => void;
   onDuplicate: () => void;
+  onRefresh?: () => void;
 }
 
 export function ProfileCard({
@@ -24,7 +34,9 @@ export function ProfileCard({
   onDelete,
   onTest,
   onDuplicate,
+  onRefresh,
 }: ProfileCardProps) {
+  const [showPreset, setShowPreset] = useState(false);
   const filterCount = profile.config?.filters?.conditions?.length || 0;
   const signalCount = profile.config?.signals?.conditions?.length || 0;
   const weights = profile.config?.scoring?.weights || {};
@@ -37,12 +49,18 @@ export function ProfileCard({
             <h3 className="text-lg font-bold text-[var(--text-primary)] tracking-tight">
               {profile.name}
             </h3>
-            <div className="flex items-center gap-2 mt-2">
+            <div className="flex items-center gap-2 mt-2 flex-wrap">
               <span
                 className={`badge ${profile.is_active ? "bullish" : "range"}`}
               >
                 {profile.is_active ? "ACTIVE" : "INACTIVE"}
               </span>
+              {profile.profile_role && <RoleBadge role={profile.profile_role} />}
+              {profile.pipeline_label && (
+                <span style={{ fontSize: 10, color: "var(--text-tertiary)", fontStyle: "italic" }}>
+                  {profile.pipeline_label}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -91,6 +109,50 @@ export function ProfileCard({
           {profile.updated_at
             ? new Date(profile.updated_at).toLocaleDateString()
             : "—"}
+        </div>
+
+        {/* Preset IA */}
+        <div style={{ marginTop: 12 }}>
+          {!showPreset ? (
+            <button
+              onClick={() => profile.profile_role && setShowPreset(true)}
+              style={{
+                width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                padding: "7px", fontSize: 11, fontWeight: 700, borderRadius: 7,
+                background: profile.profile_role ? "linear-gradient(135deg,rgba(139,92,246,0.12),rgba(79,123,247,0.08))" : "rgba(255,255,255,0.03)",
+                border: `1px solid ${profile.profile_role ? "rgba(139,92,246,0.25)" : "var(--border-subtle)"}`,
+                cursor: profile.profile_role ? "pointer" : "not-allowed",
+                color: profile.profile_role ? "#A78BFA" : "var(--text-tertiary)",
+              }}
+              title={!profile.profile_role ? "Configure o papel do profile em Configure" : ""}
+            >
+              ✨ Preset IA
+              {!profile.profile_role && <span style={{ fontSize: 10, opacity: 0.7 }}>(configure o role primeiro)</span>}
+            </button>
+          ) : (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>Preset IA</span>
+                <button onClick={() => setShowPreset(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "var(--text-tertiary)" }}>fechar</button>
+              </div>
+              <PresetIAButton
+                profileId={profile.id}
+                profileRole={profile.profile_role}
+                size="sm"
+                onSuccess={() => { onRefresh?.(); setTimeout(() => setShowPreset(false), 3000); }}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Auto-Pilot */}
+        <div style={{ marginTop: 8 }}>
+          <AutoPilotToggle
+            profileId={profile.id}
+            enabled={profile.auto_pilot_enabled ?? false}
+            lastRun={profile.preset_ia_last_run}
+            onToggle={() => onRefresh?.()}
+          />
         </div>
       </div>
 
