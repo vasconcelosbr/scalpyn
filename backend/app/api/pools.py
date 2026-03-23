@@ -219,14 +219,15 @@ async def discover_pool_assets(
     """
     Auto-discover assets for a pool from Gate.io universe.
 
-    1. Load pool + profile config (min_volume_24h, min_market_cap from overrides)
+    1. Load pool + profile config (min_volume_24h, min_market_cap from overrides or profile)
     2. Fetch all tradable pairs from Gate.io public API
-    3. Optionally fetch tickers to apply volume filter
+    3. Apply filters from profile config (if profile assigned)
     4. Compare with existing pool_coins
     5. Insert new coins with origin='discovered', remove stale discovered ones
-    6. Return { found, added, removed, kept_manual }
+    6. Return { found, added, removed, kept_manual, profile_applied }
     """
     from ..exchange_adapters.gate_adapter import GateAdapter
+    from ..models.profile import Profile
 
     # ── 1. Load pool ──────────────────────────────────────────────────────────
     pool_query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id)
@@ -241,6 +242,38 @@ async def discover_pool_assets(
     # Criteria from pool overrides (set via frontend auto-refresh settings)
     min_volume = float(overrides.get("min_volume_24h", 0))
     min_market_cap = float(overrides.get("min_market_cap", 0))
+    
+    # Load profile filters if profile is assigned
+    profile_config = {}
+    profile_applied = False
+    if pool.profile_id:
+        profile_query = select(Profile).where(Profile.id == pool.profile_id)
+        profile_result = await db.execute(profile_query)
+        profile = profile_result.scalars().first()
+        if profile and profile.config:
+            profile_config = profile.config
+            logger.info(f"[Discovery] Using profile {profile.id} ({profile.name}) filters for pool {pool_id}")
+            
+            # Extract filter conditions from profile
+            filters = profile_config.get("filters", {})
+            conditions = filters.get("conditions", [])
+            
+            for cond in conditions:
+                field = cond.get("field", "")
+                operator = cond.get("operator", ">")
+                value = cond.get("value", 0)
+                
+                # Map profile filter fields to discovery criteria
+                if field in ["volume_24h", "volume_24h_usd"]:
+                    if operator in [">", ">="]:
+                        min_volume = max(min_volume, float(value))
+                        profile_applied = True
+                elif field in ["market_cap", "market_cap_usd"]:
+                    if operator in [">", ">="]:
+                        min_market_cap = max(min_market_cap, float(value))
+                        profile_applied = True
+            
+            logger.info(f"[Discovery] Filters applied: min_volume={min_volume}, min_market_cap={min_market_cap}")
 
     # ── 2. Fetch universe from Gate.io (public endpoints) ─────────────────────
     adapter = GateAdapter(api_key="", api_secret="")
@@ -326,4 +359,9 @@ async def discover_pool_assets(
         "added": len(to_add),
         "removed": len(to_remove),
         "kept_manual": len(existing_manual),
+        "profile_applied": profile_applied,
+        "filters_used": {
+            "min_volume_24h": min_volume,
+            "min_market_cap": min_market_cap,
+        }
     }
