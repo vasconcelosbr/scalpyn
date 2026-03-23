@@ -244,6 +244,7 @@ export default function ProfilesPage() {
               onDelete={() => handleDelete(profile.id)}
               onTest={() => handleTest(profile.id)}
               onDuplicate={() => handleDuplicate(profile)}
+              onRefresh={() => fetchProfiles()}
             />
           ))}
         </div>
