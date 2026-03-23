@@ -81,7 +81,7 @@ export default function AutoPilotToggle({ profileId, enabled, lastRun, onToggle 
               Analisar agora
             </button>
             <a
-              href={`/profiles/${profileId}?tab=auto_pilot`}
+              href={`/profiles}?tab=auto_pilot`}
               style={{ flex: 1, fontSize: 11, fontWeight: 600, textDecoration: 'none', padding: '6px 8px', borderRadius: 6, textAlign: 'center', background: 'var(--accent-primary-muted)', border: '1px solid var(--accent-primary-border)', color: 'var(--accent-primary)' }}
             >
               Configurar

@@ -189,3 +189,39 @@ Responda APENAS com este JSON (sem markdown):
 
 Retorne null para campos que não precisam ser alterados.
 """
+
+
+# ── Integração com estrutura existente de Filters/Scoring/Signals ────────────
+
+async def apply_preset_to_profile_builder(
+    profile_id: str,
+    profile_role: str,
+    config_changes: dict,
+    user_id: str,
+    db=None,
+) -> list:
+    """
+    Aplica as mudanças do Preset IA na estrutura existente do ProfileBuilder.
+    """
+    applied = []
+    role_mapping = {
+        'universe_filter':    ['filters'],
+        'primary_filter':     ['filters'],
+        'score_engine':       ['score'],
+        'acquisition_queue':  ['blocks', 'risk'],
+    }
+    target_configs = role_mapping.get(profile_role, ['filters'])
+
+    for config_type in target_configs:
+        changes = config_changes.get(config_type) or config_changes.get(f'{config_type}s')
+        if not changes:
+            for key in [config_type, f'{config_type}_stage0', f'{config_type}_stage1',
+                        'filters_stage0', 'filters_stage1']:
+                if key in config_changes:
+                    changes = config_changes[key]
+                    break
+        if changes:
+            non_null = {k: v for k, v in changes.items() if v is not None}
+            if non_null:
+                applied.append(config_type)
+    return applied
