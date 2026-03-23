@@ -24,16 +24,19 @@ logger = logging.getLogger(__name__)
 
 ROLE_SYSTEM_PROMPTS = {
     "universe_filter": """
-Você é o Preset IA do Scalpyn para FILTRO DE UNIVERSO (Stage 0).
+Você é o Preset IA do Scalpyn para FILTRO DE UNIVERSO (Stage 0 - POOL).
 
 Seu papel: configurar os filtros básicos que determinam quais ativos
-do exchange entram no universo analisado. São critérios mínimos de
-existência e liquidez básica.
+do exchange entram no universo analisado.
 
-Você configura APENAS: filters_stage0
-  - volume_24h_usd mínimo
-  - accepted_quote_currencies
-  - listing_age_days mínimo
+Você deve retornar "config_changes.filters.conditions" como array de objetos:
+  [
+    { "field": "volume_24h", "operator": ">", "value": 10000000 },
+    { "field": "listing_age_days", "operator": ">", "value": 30 },
+    { "field": "quote_currency", "operator": "in", "value": ["USDT", "USDC"] }
+  ]
+
+Campos disponíveis: volume_24h, listing_age_days, quote_currency, market_cap
 
 Princípios:
   - Em BULL: relaxar volume mínimo (mais ativos entram)
@@ -48,11 +51,20 @@ Você é o Preset IA do Scalpyn para FILTRO PRIMÁRIO L1.
 Seu papel: configurar os filtros de qualidade que eliminam ativos
 sem condições adequadas de trading ANTES de calcular o score.
 
-Você configura APENAS: filters (conditions array)
-  - spread_pct máximo
-  - atr_pct mínimo
-  - volume relativo mínimo
-  - adx mínimo
+Você deve retornar "config_changes.filters.conditions" como array de objetos:
+  [
+    { "field": "spread_pct", "operator": "<", "value": 0.5 },
+    { "field": "atr_pct", "operator": ">", "value": 0.5 },
+    { "field": "volume_24h", "operator": ">", "value": 5000 },
+    { "field": "adx", "operator": ">", "value": 20 }
+  ]
+
+E "config_changes.signals.conditions" para sinais:
+  [
+    { "field": "rsi", "operator": "<", "value": 70 }
+  ]
+
+Campos disponíveis: spread_pct, atr_pct, volume_24h, adx, rsi, macd, bollinger_width, change_24h
 
 Princípios:
   - Em BULL: ATR mínimo pode baixar (mais ativos em tendência)
@@ -65,12 +77,21 @@ Responda APENAS com JSON válido. Sem markdown, sem explicação.
 Você é o Preset IA do Scalpyn para o SCORE ENGINE L2.
 
 Seu papel: configurar o motor de pontuação que ranqueia as oportunidades
-de 0 a 100. Você define os pesos de cada layer e as regras de scoring.
+de 0 a 100. Você define os pesos de cada layer.
 
-Você configura:
-  scoring.weights     — pesos: liquidity, market_structure, momentum, signal (somam 100)
-  scoring.thresholds  — strong_buy, buy, neutral
-  scoring.rules       — regras de pontuação por indicador
+Você deve retornar "config_changes.scoring.weights" como objeto:
+  {
+    "liquidity": 25,
+    "market_structure": 30,
+    "momentum": 30,
+    "signal": 15
+  }
+  (os valores DEVEM somar 100)
+
+E "config_changes.filters.conditions" para critérios de seleção:
+  [
+    { "field": "volume_24h", "operator": ">", "value": 5000 }
+  ]
 
 Princípios por regime:
   BULL:            momentum↑ liquidity normal
@@ -83,12 +104,19 @@ Responda APENAS com JSON válido. Sem markdown, sem explicação.
     "acquisition_queue": """
 Você é o Preset IA do Scalpyn para a FILA DE EXECUÇÃO L3.
 
-Seu papel: configurar os blocos de veto e entry triggers que determinam
+Seu papel: configurar os entry triggers que determinam
 quais ativos com score alto são REALMENTE elegíveis para compra.
 
-Você configura:
-  signals.conditions  — entry triggers (timing de entrada)
-  signals.logic       — AND | OR
+Você deve retornar "config_changes.signals.conditions" como array de objetos:
+  [
+    { "field": "rsi", "operator": "<", "value": 30 },
+    { "field": "macd_histogram", "operator": ">", "value": 0 },
+    { "field": "price_vs_ema20", "operator": "<", "value": 0.02 }
+  ]
+
+Campos disponíveis: rsi, macd, macd_histogram, price_vs_ema20, price_vs_vwap, volume_ratio
+
+E "config_changes.signals.logic" como "AND" ou "OR"
 
 Risk parameters por regime:
   BULL:    condições mais relaxadas, mais entradas
@@ -166,6 +194,67 @@ async def run_preset_ia(
 
 
 def _build_user_prompt(profile_role: str, current_config: dict) -> str:
+    # Define expected output structure based on role
+    if profile_role in ["universe_filter", "primary_filter"]:
+        expected_output = """{
+  "regime":           "BULL|BEAR|SIDEWAYS|HIGH_VOLATILITY",
+  "macro_risk":       "LOW|MEDIUM|HIGH|EXTREME",
+  "analysis_summary": "2-3 frases em português explicando o raciocínio",
+  "config_changes":   {
+    "filters": {
+      "logic": "AND",
+      "conditions": [
+        { "field": "volume_24h", "operator": ">", "value": 5000 },
+        { "field": "atr_pct", "operator": ">", "value": 0.5 }
+      ]
+    },
+    "signals": {
+      "logic": "AND",
+      "conditions": [
+        { "field": "rsi", "operator": "<", "value": 70 }
+      ]
+    }
+  }
+}"""
+    elif profile_role == "score_engine":
+        expected_output = """{
+  "regime":           "BULL|BEAR|SIDEWAYS|HIGH_VOLATILITY",
+  "macro_risk":       "LOW|MEDIUM|HIGH|EXTREME",
+  "analysis_summary": "2-3 frases em português explicando o raciocínio",
+  "config_changes":   {
+    "scoring": {
+      "enabled": true,
+      "weights": {
+        "liquidity": 25,
+        "market_structure": 30,
+        "momentum": 30,
+        "signal": 15
+      }
+    },
+    "filters": {
+      "logic": "AND",
+      "conditions": [
+        { "field": "volume_24h", "operator": ">", "value": 5000 }
+      ]
+    }
+  }
+}"""
+    else:  # acquisition_queue / L3
+        expected_output = """{
+  "regime":           "BULL|BEAR|SIDEWAYS|HIGH_VOLATILITY",
+  "macro_risk":       "LOW|MEDIUM|HIGH|EXTREME",
+  "analysis_summary": "2-3 frases em português explicando o raciocínio",
+  "config_changes":   {
+    "signals": {
+      "logic": "AND",
+      "conditions": [
+        { "field": "rsi", "operator": "<", "value": 30 },
+        { "field": "macd_histogram", "operator": ">", "value": 0 }
+      ]
+    }
+  }
+}"""
+
     return f"""
 CONFIGURAÇÃO ATUAL DO PROFILE
 ==============================
@@ -177,17 +266,11 @@ INSTRUÇÃO
 Com base no regime de mercado atual (analise os indicadores que você conhece),
 gere a configuração otimizada para este profile.
 
-Responda APENAS com este JSON (sem markdown):
-{{
-  "regime":           "BULL|BEAR|SIDEWAYS|HIGH_VOLATILITY",
-  "macro_risk":       "LOW|MEDIUM|HIGH|EXTREME",
-  "analysis_summary": "2-3 frases em português explicando o raciocínio",
-  "config_changes":   {{
-    "<config_section>": {{ "<campo>": <valor> }}
-  }}
-}}
+IMPORTANTE: Retorne config_changes EXATAMENTE neste formato:
+{expected_output}
 
-Retorne null para campos que não precisam ser alterados.
+Adapte os valores baseado no regime de mercado detectado.
+Retorne null para seções que não precisam ser alteradas.
 """
 
 

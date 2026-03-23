@@ -226,19 +226,40 @@ async def run_preset_ia(
         logger.error(f"[PresetIA] Unexpected error profile={profile_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Erro ao executar Preset IA: {e}")
 
-    # Apply config changes returned by Claude
+    # Apply config changes returned by Claude - merge properly into profile.config
     config_changes = ia_result.get("config_changes", {})
     if config_changes:
         merged = dict(profile.config or {})
-        for section, changes in config_changes.items():
-            if changes:
-                non_null = {k: v for k, v in changes.items() if v is not None}
-                if non_null:
-                    if section in merged and isinstance(merged[section], dict):
-                        merged[section].update(non_null)
-                    else:
-                        merged[section] = non_null
+        
+        # Merge filters
+        if "filters" in config_changes and config_changes["filters"]:
+            if "filters" not in merged:
+                merged["filters"] = {"logic": "AND", "conditions": []}
+            if "conditions" in config_changes["filters"]:
+                merged["filters"]["conditions"] = config_changes["filters"]["conditions"]
+            if "logic" in config_changes["filters"]:
+                merged["filters"]["logic"] = config_changes["filters"]["logic"]
+        
+        # Merge scoring
+        if "scoring" in config_changes and config_changes["scoring"]:
+            if "scoring" not in merged:
+                merged["scoring"] = {"enabled": True, "weights": {}}
+            if "weights" in config_changes["scoring"]:
+                merged["scoring"]["weights"] = config_changes["scoring"]["weights"]
+            if "enabled" in config_changes["scoring"]:
+                merged["scoring"]["enabled"] = config_changes["scoring"]["enabled"]
+        
+        # Merge signals
+        if "signals" in config_changes and config_changes["signals"]:
+            if "signals" not in merged:
+                merged["signals"] = {"logic": "AND", "conditions": []}
+            if "conditions" in config_changes["signals"]:
+                merged["signals"]["conditions"] = config_changes["signals"]["conditions"]
+            if "logic" in config_changes["signals"]:
+                merged["signals"]["logic"] = config_changes["signals"]["logic"]
+        
         profile.config = merged
+        logger.info(f"[PresetIA] Config merged for profile={profile_id}: {list(config_changes.keys())}")
 
     profile.preset_ia_last_run = datetime.now(timezone.utc)
     profile.preset_ia_config = ia_result
