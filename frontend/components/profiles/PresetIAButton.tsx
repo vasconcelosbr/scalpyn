@@ -39,6 +39,13 @@ const RISK_COLOR: Record<string, string> = {
   EXTREME: '#F87171',
 }
 
+function getAuthHeaders(): HeadersInit {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
+  return token
+    ? { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
+    : { 'Content-Type': 'application/json' }
+}
+
 export default function PresetIAButton({ profileId, profileRole, size = 'md', onSuccess }: Props) {
   const [loading,    setLoading]    = useState(false)
   const [result,     setResult]     = useState<PresetIAResult | null>(null)
@@ -48,7 +55,10 @@ export default function PresetIAButton({ profileId, profileRole, size = 'md', on
     if (!profileRole) { setError('Configure o papel (role) do profile antes de usar o Preset IA.'); return }
     setLoading(true); setError(null); setResult(null)
     try {
-      const res  = await fetch(`/api/profiles/${profileId}/preset-ia`, { method: 'POST' })
+      const res  = await fetch(`/api/profiles/${profileId}/preset-ia`, { 
+        method: 'POST',
+        headers: getAuthHeaders(),
+      })
       const data = await res.json()
       if (!res.ok) { setError(data.detail || 'Erro ao executar Preset IA.'); return }
       setResult(data)

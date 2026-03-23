@@ -10,6 +10,13 @@ interface Props {
   onToggle?: (enabled: boolean) => void
 }
 
+function getAuthHeaders(): HeadersInit {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
+  return token
+    ? { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
+    : { 'Content-Type': 'application/json' }
+}
+
 export default function AutoPilotToggle({ profileId, enabled, lastRun, onToggle }: Props) {
   const [loading,   setLoading]   = useState(false)
   const [isEnabled, setIsEnabled] = useState(enabled)
@@ -20,7 +27,7 @@ export default function AutoPilotToggle({ profileId, enabled, lastRun, onToggle 
     try {
       const res = await fetch(`/api/profiles/${profileId}/auto-pilot`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ enabled: value }),
       })
       if (res.ok) { setIsEnabled(value); onToggle?.(value) }
@@ -32,7 +39,10 @@ export default function AutoPilotToggle({ profileId, enabled, lastRun, onToggle 
   const handleTrigger = async () => {
     setLoading(true)
     try {
-      await fetch(`/api/profiles/${profileId}/auto-pilot/trigger`, { method: 'POST' })
+      await fetch(`/api/profiles/${profileId}/auto-pilot/trigger`, { 
+        method: 'POST',
+        headers: getAuthHeaders(),
+      })
     } finally {
       setLoading(false)
     }
@@ -81,7 +91,7 @@ export default function AutoPilotToggle({ profileId, enabled, lastRun, onToggle 
               Analisar agora
             </button>
             <a
-              href={`/profiles}?tab=auto_pilot`}
+              href={`/profiles/${profileId}?tab=auto_pilot`}
               style={{ flex: 1, fontSize: 11, fontWeight: 600, textDecoration: 'none', padding: '6px 8px', borderRadius: 6, textAlign: 'center', background: 'var(--accent-primary-muted)', border: '1px solid var(--accent-primary-border)', color: 'var(--accent-primary)' }}
             >
               Configurar
