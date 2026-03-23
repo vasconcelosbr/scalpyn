@@ -179,7 +179,10 @@ async def run_preset_ia(
     try:
         clean = raw.replace("```json", "").replace("```", "").strip()
         result = json.loads(clean)
+        logger.info(f"[PresetIA] Parsed JSON successfully | role={profile_role} | config_changes keys={list(result.get('config_changes', {}).keys())}")
+        logger.info(f"[PresetIA] Full config_changes: {json.dumps(result.get('config_changes', {}), indent=2)}")
     except json.JSONDecodeError as e:
+        logger.error(f"[PresetIA] JSON decode failed | raw[:500]={raw[:500]}")
         raise ValueError(f"Claude retornou JSON inválido: {e}\nRaw: {raw[:500]}")
 
     return {

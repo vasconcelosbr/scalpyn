@@ -296,11 +296,14 @@ async def run_preset_ia(
 
     # Apply config changes returned by Claude - merge properly into profile.config
     config_changes = ia_result.get("config_changes", {})
+    logger.info(f"[PresetIA] Applying config_changes to profile={profile_id} | keys={list(config_changes.keys())}")
+    
     if config_changes:
         merged = dict(profile.config or {})
         
         # Merge filters
         if "filters" in config_changes and config_changes["filters"]:
+            logger.info(f"[PresetIA] Merging filters: {config_changes['filters']}")
             if "filters" not in merged:
                 merged["filters"] = {"logic": "AND", "conditions": []}
             if "conditions" in config_changes["filters"]:
@@ -310,6 +313,7 @@ async def run_preset_ia(
         
         # Merge scoring
         if "scoring" in config_changes and config_changes["scoring"]:
+            logger.info(f"[PresetIA] Merging scoring: {config_changes['scoring']}")
             if "scoring" not in merged:
                 merged["scoring"] = {"enabled": True, "weights": {}}
             if "weights" in config_changes["scoring"]:
@@ -319,6 +323,7 @@ async def run_preset_ia(
         
         # Merge signals
         if "signals" in config_changes and config_changes["signals"]:
+            logger.info(f"[PresetIA] Merging signals: {config_changes['signals']}")
             if "signals" not in merged:
                 merged["signals"] = {"logic": "AND", "conditions": []}
             if "conditions" in config_changes["signals"]:
@@ -326,6 +331,7 @@ async def run_preset_ia(
             if "logic" in config_changes["signals"]:
                 merged["signals"]["logic"] = config_changes["signals"]["logic"]
         
+        logger.info(f"[PresetIA] Final merged config keys: {list(merged.keys())}")
         profile.config = merged
         logger.info(f"[PresetIA] Config merged for profile={profile_id}: {list(config_changes.keys())}")
 
