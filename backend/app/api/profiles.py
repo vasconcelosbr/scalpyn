@@ -606,3 +606,73 @@ async def get_example_profiles(
     ]
     
     return {"examples": examples}
+
+
+# ============================================================================
+# PRESET IA
+# ============================================================================
+
+@router.post("/{profile_id}/preset-ia")
+async def run_preset_ia(
+    profile_id: str,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """
+    Executa o Preset IA para o profile.
+    1. Carrega config atual do profile
+    2. Coleta snapshot de mercado
+    3. Chama Claude com system prompt do role
+    4. Valida o retorno
+    5. Salva em profile.config
+    6. Retorna resultado para o frontend atualizar a UI
+    """
+    from datetime import datetime, timezone
+    from ..services.preset_ia_service import run_preset_ia as svc_preset
+
+    # Buscar profile
+    query = select(Profile).where(Profile.id == profile_id, Profile.user_id == user_id)
+    result = await db.execute(query)
+    profile = result.scalar_one_or_none()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile não encontrado")
+
+    if not profile.profile_role:
+        raise HTTPException(
+            status_code=400,
+            detail="Profile sem role definido. Selecione o papel do profile antes de usar o Preset IA.",
+        )
+
+    current_config = profile.config or {}
+
+    # Executar Preset IA
+    ia_result = await svc_preset(
+        profile_id=profile_id,
+        profile_role=profile.profile_role,
+        user_id=str(user_id),
+        current_profile_config=current_config,
+        db=db,
+    )
+
+    # Salvar resultado no profile
+    profile.config = ia_result["config"]
+    profile.preset_ia_last_run = datetime.now(timezone.utc)
+    profile.preset_ia_config = {
+        "regime":           ia_result["regime"],
+        "macro_risk":       ia_result["macro_risk"],
+        "analysis_summary": ia_result["analysis_summary"],
+        "executed_at":      ia_result["executed_at"],
+    }
+    profile.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(profile)
+
+    return {
+        "status":           "success",
+        "regime":           ia_result["regime"],
+        "macro_risk":       ia_result["macro_risk"],
+        "analysis_summary": ia_result["analysis_summary"],
+        "config":           ia_result["config"],
+        "profile":          _profile_to_dict(profile),
+        "executed_at":      ia_result["executed_at"],
+    }

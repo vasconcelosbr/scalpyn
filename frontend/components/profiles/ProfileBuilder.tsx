@@ -5,6 +5,7 @@ import { ArrowLeft, Plus, Trash2, Save, Play, HelpCircle, Link } from "lucide-re
 import { apiGet, apiPost } from "@/lib/api";
 import { ConditionBuilder } from "./ConditionBuilder";
 import { WeightSliders } from "./WeightSliders";
+import PresetIAButton from "./PresetIAButton";
 
 interface ProfileBuilderProps {
   profile?: any;
@@ -157,6 +158,15 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     });
   };
 
+  const handlePresetIASuccess = (result: any) => {
+    if (result?.config) {
+      setConfig(result.config);
+      if (result.config.scoring?.enabled !== undefined) {
+        setScoringEnabled(result.config.scoring.enabled !== false);
+      }
+    }
+  };
+
   const selectedWatchlist = customWatchlists.find(w => w.id === selectedWatchlistId);
 
   return (
@@ -178,6 +188,14 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
             Define your strategy configuration
           </p>
         </div>
+        {profile?.id && (
+          <PresetIAButton
+            profileId={profile.id}
+            profileRole={profile.profile_role}
+            size="sm"
+            onSuccess={handlePresetIASuccess}
+          />
+        )}
         <button
           className="btn btn-secondary"
           onClick={handleTest}

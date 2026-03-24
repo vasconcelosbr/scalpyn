@@ -1,313 +1,416 @@
 """
 preset_ia_service.py
 --------------------
-Preset IA: calls Claude with role-specific system prompts to configure
-strategy layers automatically based on current market conditions.
+Preset IA — configura automaticamente um Strategy Profile.
 
-Roles:
-  universe_filter  → configures filters (basic universe gate)
-  primary_filter   → configures filters (quality L1 gate)
-  score_engine     → configures score weights + scoring rules
-  acquisition_queue → configures blocks + entry triggers + risk
+Fluxo:
+  1. Recebe profile_id + profile_role
+  2. Carrega config atual do profile
+  3. Coleta snapshot de mercado
+  4. Chama Claude com system prompt específico por role
+  5. Claude retorna condições no formato exato do ProfileBuilder
+  6. Salva via PUT /api/profiles/{id} (mesmo endpoint do Save Profile)
+
+Formato de saída do Claude (obrigatório):
+  {
+    "regime":           "BULL|BEAR|SIDEWAYS|HIGH_VOLATILITY",
+    "macro_risk":       "LOW|MEDIUM|HIGH|EXTREME",
+    "analysis_summary": "resumo em português",
+    "config": {
+      "filters": {
+        "logic": "AND",
+        "conditions": [
+          { "id": "cond_1", "field": "volume_24h", "operator": ">", "value": 1000000 }
+        ]
+      },
+      "scoring": {
+        "enabled": true,
+        "weights": {
+          "liquidity": 25,
+          "market_structure": 25,
+          "momentum": 25,
+          "signal": 25
+        }
+      },
+      "signals": {
+        "logic": "AND",
+        "conditions": [
+          { "id": "sig_1", "field": "rsi", "operator": "<", "value": 45, "required": true }
+        ]
+      }
+    }
+  }
+
+Campos de condition disponíveis (field):
+  Price & Volume: volume_24h, market_cap, price, change_24h_pct
+  Momentum:       rsi, macd, macd_histogram, stochastic_k, stochastic_d, z_score
+  Trend:          adx, bollinger_width, atr, atr_pct, di_plus, di_minus
+  EMA:            ema_full_alignment (is_true/is_false)
+  Funding:        funding_rate
+
+Operadores disponíveis:
+  >, >=, <, <=, ==, !=, between (usa min+max), in, not_in, is_true, is_false
 """
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
-from uuid import UUID
-
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# ── System prompts per role ───────────────────────────────────────────────────
+# ── System prompts por role ───────────────────────────────────────────────────
 
-ROLE_SYSTEM_PROMPTS = {
-    "universe_filter": """
-Você é o Preset IA do Scalpyn para FILTRO DE UNIVERSO (Stage 0 - POOL).
+_BASE_RULES = """
+REGRAS OBRIGATÓRIAS:
+1. Responda APENAS com JSON válido. Sem markdown, sem texto antes ou depois.
+2. Todos os "id" de conditions devem ser únicos: use "cond_1", "cond_2", etc para filters; "sig_1", "sig_2" para signals.
+3. Weights em scoring devem somar EXATAMENTE 100.
+4. Use APENAS os campos (field) e operadores listados abaixo.
 
-Seu papel: configurar os filtros básicos que determinam quais ativos
-do exchange entram no universo analisado.
+CAMPOS DISPONÍVEIS (field):
+  volume_24h, market_cap, price, change_24h_pct,
+  rsi, macd, macd_histogram, stochastic_k, stochastic_d, z_score,
+  adx, bollinger_width, atr, atr_pct, di_plus, di_minus,
+  ema_full_alignment, funding_rate
 
-Você deve retornar "config_changes.filters.conditions" como array de objetos:
-  [
-    { "field": "volume_24h", "operator": ">", "value": 10000000 },
-    { "field": "listing_age_days", "operator": ">", "value": 30 },
-    { "field": "quote_currency", "operator": "in", "value": ["USDT", "USDC"] }
-  ]
+OPERADORES: >, >=, <, <=, ==, !=, between, in, not_in, is_true, is_false
+  (para "between": use "min" e "max" no lugar de "value")
+  (para "is_true"/"is_false": não use "value")
+"""
 
-Campos disponíveis: volume_24h, listing_age_days, quote_currency, market_cap
+ROLE_PROMPTS = {
 
-Princípios:
-  - Em BULL: relaxar volume mínimo (mais ativos entram)
-  - Em BEAR: elevar volume mínimo (apenas blue chips)
-  - Em EXTREME: apenas top ativos por volume
+    'universe_filter': f"""
+Você é o Preset IA do Scalpyn configurando um FILTRO DE UNIVERSO (POOL — Stage 0).
 
-Responda APENAS com JSON válido. Sem markdown, sem explicação.
+Seu papel: definir filtros básicos que determinam quais ativos da corretora
+entram no universo analisado. São critérios mínimos de liquidez e existência.
+
+Configure FILTERS com:
+  - volume_24h mínimo (liquidez básica para operar)
+  - market_cap mínimo (evitar micro-caps manipuláveis)
+  - change_24h_pct para excluir ativos em colapso extremo
+
+NÃO configure signals para este role.
+Scoring: deixe weights em 25/25/25/25 (neutro).
+
+Regime BULL:   volume_24h > 500k, market_cap > 10M
+Regime BEAR:   volume_24h > 2M,   market_cap > 50M (apenas blue chips)
+Regime SIDEWAYS: volume_24h > 1M, market_cap > 20M
+Regime EXTREME: volume_24h > 5M,  market_cap > 100M (apenas top assets)
+
+{_BASE_RULES}
 """,
-    "primary_filter": """
-Você é o Preset IA do Scalpyn para FILTRO PRIMÁRIO L1.
 
-Seu papel: configurar os filtros de qualidade que eliminam ativos
-sem condições adequadas de trading ANTES de calcular o score.
+    'primary_filter': f"""
+Você é o Preset IA do Scalpyn configurando um FILTRO PRIMÁRIO L1 (Stage 1).
 
-Você deve retornar "config_changes.filters.conditions" como array de objetos:
-  [
-    { "field": "spread_pct", "operator": "<", "value": 0.5 },
-    { "field": "atr_pct", "operator": ">", "value": 0.5 },
-    { "field": "volume_24h", "operator": ">", "value": 5000 },
-    { "field": "adx", "operator": ">", "value": 20 }
-  ]
+Seu papel: filtrar ativos com qualidade técnica inadequada para trading.
+Estes filtros eliminam ativos antes de calcular o score.
 
-E "config_changes.signals.conditions" para sinais:
-  [
-    { "field": "rsi", "operator": "<", "value": 70 }
-  ]
+Configure FILTERS com:
+  - atr_pct mínimo (volatilidade suficiente para o trade se desenvolver)
+  - adx mínimo (tendência detectável — evitar mercado sem direção)
+  - volume_24h relativo (liquidez operacional)
+  - rsi para excluir extremos absolutos (crashes ou pumps absurdos)
 
-Campos disponíveis: spread_pct, atr_pct, volume_24h, adx, rsi, macd, bollinger_width, change_24h
+Configure SIGNALS (condições de entrada adicionais):
+  - ema_full_alignment para confirmar direção (is_true em BULL)
+  - di_plus > di_minus para confirmar força direcional
 
-Princípios:
-  - Em BULL: ATR mínimo pode baixar (mais ativos em tendência)
-  - Em BEAR: spread máximo menor (apenas ativos muito líquidos)
-  - Em HIGH_VOLATILITY: ATR mínimo sobe
+Regime BULL:           atr_pct > 1.5, adx > 18, rsi entre 25-70
+Regime BEAR:           atr_pct > 2.0, adx > 22, rsi entre 20-60
+Regime SIDEWAYS:       atr_pct > 1.0, adx > 15
+Regime HIGH_VOLATILITY: atr_pct > 3.0, adx > 25
 
-Responda APENAS com JSON válido. Sem markdown, sem explicação.
+{_BASE_RULES}
 """,
-    "score_engine": """
-Você é o Preset IA do Scalpyn para o SCORE ENGINE L2.
 
-Seu papel: configurar o motor de pontuação que ranqueia as oportunidades
-de 0 a 100. Você define os pesos de cada layer.
+    'score_engine': f"""
+Você é o Preset IA do Scalpyn configurando o SCORE ENGINE L2 (Stage 2).
 
-Você deve retornar "config_changes.scoring.weights" como objeto:
-  {
-    "liquidity": 25,
-    "market_structure": 30,
-    "momentum": 30,
-    "signal": 15
-  }
-  (os valores DEVEM somar 100)
+Seu papel: definir os PESOS que ranqueiam as oportunidades de 0-100.
+Os weights determinam quanto cada dimensão vale no score final.
 
-E "config_changes.filters.conditions" para critérios de seleção:
-  [
-    { "field": "volume_24h", "operator": ">", "value": 5000 }
-  ]
+Dimensões disponíveis (devem somar 100):
+  liquidity        → volume, spread, profundidade
+  market_structure → tendência, EMAs, suporte/resistência
+  momentum         → RSI, MACD, ADX, força do movimento
+  signal           → condições específicas de entrada
 
-Princípios por regime:
-  BULL:            momentum↑ liquidity normal
-  BEAR:            market_structure↑ momentum↓
-  SIDEWAYS:        market_structure↑ momentum↓
-  HIGH_VOLATILITY: liquidity↑ momentum normal
+Configure SCORING com weights adequados ao regime.
+Configure FILTERS com condições mínimas de score (ex: rsi < 60 para não entrar em overbought).
+Configure SIGNALS com condições obrigatórias de entrada.
 
-Responda APENAS com JSON válido. Sem markdown, sem explicação.
+Regime BULL:
+  momentum: 35, market_structure: 30, signal: 20, liquidity: 15
+  signals: rsi < 60 required, adx > 20
+
+Regime BEAR:
+  market_structure: 35, momentum: 30, liquidity: 20, signal: 15
+  signals: rsi < 50 required, adx > 25, ema_full_alignment is_false
+
+Regime SIDEWAYS:
+  market_structure: 35, momentum: 25, signal: 25, liquidity: 15
+  signals: bollinger_width < 0.1 (range-bound), rsi between 30-70
+
+Regime HIGH_VOLATILITY:
+  momentum: 40, liquidity: 30, market_structure: 20, signal: 10
+  signals: volume_24h > threshold, atr_pct > 3
+
+{_BASE_RULES}
 """,
-    "acquisition_queue": """
-Você é o Preset IA do Scalpyn para a FILA DE EXECUÇÃO L3.
 
-Seu papel: configurar os entry triggers que determinam
-quais ativos com score alto são REALMENTE elegíveis para compra.
+    'acquisition_queue': f"""
+Você é o Preset IA do Scalpyn configurando a FILA DE EXECUÇÃO L3 (Stage 3).
 
-Você deve retornar "config_changes.signals.conditions" como array de objetos:
-  [
-    { "field": "rsi", "operator": "<", "value": 30 },
-    { "field": "macd_histogram", "operator": ">", "value": 0 },
-    { "field": "price_vs_ema20", "operator": "<", "value": 0.02 }
-  ]
+Seu papel: definir as condições FINAIS de veto e entrada.
+Apenas ativos que passaram L1 e L2 chegam aqui.
+Estas são as últimas condições antes da execução real.
 
-Campos disponíveis: rsi, macd, macd_histogram, price_vs_ema20, price_vs_vwap, volume_ratio
+Configure FILTERS (hard blocks — veto absoluto):
+  - rsi máximo de entrada (nunca comprar em overbought)
+  - adx mínimo de força (garantir tendência real)
+  - ema_full_alignment is_true (estrutura bullish obrigatória em BULL)
 
-E "config_changes.signals.logic" como "AND" ou "OR"
+Configure SIGNALS (entry triggers — timing preciso):
+  - rsi na zona ideal de entrada
+  - macd positivo ou em cruzamento
+  - volume_24h como confirmação de interesse
 
-Risk parameters por regime:
-  BULL:    condições mais relaxadas, mais entradas
-  BEAR:    condições mais restritivas, menos entradas
-  EXTREME: apenas os sinais mais fortes
+Regime BULL:
+  filters: rsi < 65, adx > 20, ema_full_alignment is_true
+  signals: rsi < 55, macd > 0, volume_24h > 1000000
 
-Responda APENAS com JSON válido. Sem markdown, sem explicação.
+Regime BEAR:
+  filters: rsi < 50, adx > 25
+  signals: rsi < 40, adx > 30 (apenas setups muito seletivos)
+
+Regime SIDEWAYS:
+  filters: rsi between 30-65, adx > 15
+  signals: rsi < 45, z_score < -1 (mean reversion)
+
+Regime EXTREME:
+  filters: rsi < 35 (apenas oversold extremo)
+  signals: volume_24h > 5000000 (apenas muito líquido)
+
+{_BASE_RULES}
 """,
 }
 
-# ── Async service function ────────────────────────────────────────────────────
+# ── Snapshot de mercado ───────────────────────────────────────────────────────
 
-async def run_preset_ia(
-    profile_id: str,
-    profile_role: str,
-    user_id: UUID,
-    current_config: dict,
-    db: AsyncSession,
-) -> dict:
-    """
-    Executes Preset IA for a profile.
-
-    Returns:
-        {
-          "regime":           str,
-          "macro_risk":       str,
-          "analysis_summary": str,
-          "config_changes":   dict,
-          "applied_configs":  list[str],
-          "executed_at":      str,
+async def _get_market_snapshot() -> dict:
+    """Coleta snapshot de mercado. Retorna dict vazio se falhar."""
+    try:
+        from services.market_snapshot import build_market_snapshot
+        snap = await build_market_snapshot(depth='full')
+        return {
+            'collected_at': snap.collected_at,
+            'crypto':       snap.crypto,
+            'macro':        snap.macro,
+            'sentiment':    snap.sentiment,
+            'news':         snap.news[:5],
         }
-    """
-    from .ai_keys_service import get_anthropic_client
-
-    try:
-        client = await get_anthropic_client(db, user_id)
-    except (ValueError, ImportError) as e:
-        raise ValueError(f"Anthropic não configurado: {e}")
-
-    system_prompt = ROLE_SYSTEM_PROMPTS.get(profile_role, ROLE_SYSTEM_PROMPTS["primary_filter"])
-    user_prompt = _build_user_prompt(profile_role, current_config)
-
-    try:
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=2048,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        raw = message.content[0].text.strip()
-        logger.info(
-            f"[PresetIA] Response received | profile={profile_id} role={profile_role} "
-            f"tokens={message.usage.input_tokens + message.usage.output_tokens}"
-        )
     except Exception as e:
-        logger.error(f"[PresetIA] Claude call failed: {e}")
-        raise
-
-    # Parse JSON — strip markdown fences if present
-    try:
-        clean = raw.replace("```json", "").replace("```", "").strip()
-        result = json.loads(clean)
-        logger.info(f"[PresetIA] Parsed JSON successfully | role={profile_role} | config_changes keys={list(result.get('config_changes', {}).keys())}")
-        logger.info(f"[PresetIA] Full config_changes: {json.dumps(result.get('config_changes', {}), indent=2)}")
-    except json.JSONDecodeError as e:
-        logger.error(f"[PresetIA] JSON decode failed | raw[:500]={raw[:500]}")
-        raise ValueError(f"Claude retornou JSON inválido: {e}\nRaw: {raw[:500]}")
-
-    return {
-        "regime":           result.get("regime", "UNKNOWN"),
-        "macro_risk":       result.get("macro_risk", "MEDIUM"),
-        "analysis_summary": result.get("analysis_summary", ""),
-        "config_changes":   result.get("config_changes", {}),
-        "applied_configs":  list(result.get("config_changes", {}).keys()),
-        "profile_role":     profile_role,
-        "executed_at":      datetime.now(timezone.utc).isoformat(),
-    }
+        logger.warning(f'[PresetIA] Falha ao coletar mercado: {e}')
+        return {}
 
 
-def _build_user_prompt(profile_role: str, current_config: dict) -> str:
-    # Define expected output structure based on role
-    if profile_role in ["universe_filter", "primary_filter"]:
-        expected_output = """{
-  "regime":           "BULL|BEAR|SIDEWAYS|HIGH_VOLATILITY",
-  "macro_risk":       "LOW|MEDIUM|HIGH|EXTREME",
-  "analysis_summary": "2-3 frases em português explicando o raciocínio",
-  "config_changes":   {
-    "filters": {
-      "logic": "AND",
-      "conditions": [
-        { "field": "volume_24h", "operator": ">", "value": 5000 },
-        { "field": "atr_pct", "operator": ">", "value": 0.5 }
-      ]
-    },
-    "signals": {
-      "logic": "AND",
-      "conditions": [
-        { "field": "rsi", "operator": "<", "value": 70 }
-      ]
-    }
-  }
-}"""
-    elif profile_role == "score_engine":
-        expected_output = """{
-  "regime":           "BULL|BEAR|SIDEWAYS|HIGH_VOLATILITY",
-  "macro_risk":       "LOW|MEDIUM|HIGH|EXTREME",
-  "analysis_summary": "2-3 frases em português explicando o raciocínio",
-  "config_changes":   {
-    "scoring": {
-      "enabled": true,
-      "weights": {
-        "liquidity": 25,
-        "market_structure": 30,
-        "momentum": 30,
-        "signal": 15
-      }
-    },
-    "filters": {
-      "logic": "AND",
-      "conditions": [
-        { "field": "volume_24h", "operator": ">", "value": 5000 }
-      ]
-    }
-  }
-}"""
-    else:  # acquisition_queue / L3
-        expected_output = """{
-  "regime":           "BULL|BEAR|SIDEWAYS|HIGH_VOLATILITY",
-  "macro_risk":       "LOW|MEDIUM|HIGH|EXTREME",
-  "analysis_summary": "2-3 frases em português explicando o raciocínio",
-  "config_changes":   {
-    "signals": {
-      "logic": "AND",
-      "conditions": [
-        { "field": "rsi", "operator": "<", "value": 30 },
-        { "field": "macd_histogram", "operator": ">", "value": 0 }
-      ]
-    }
-  }
-}"""
+def _build_prompt(profile_role: str, current_config: dict, snapshot: dict) -> str:
+    crypto    = snapshot.get('crypto', {})
+    macro     = snapshot.get('macro', {})
+    sentiment = snapshot.get('sentiment', {})
+    news      = snapshot.get('news', [])
+    btc       = crypto.get('blue_chips', {}).get('BTC', {})
+    eth       = crypto.get('blue_chips', {}).get('ETH', {})
 
     return f"""
+CONDIÇÕES DE MERCADO ATUAIS
+============================
+BTC:  ${btc.get('price', 'N/A')} | 24h: {btc.get('change_24h', 'N/A')}%
+ETH:  ${eth.get('price', 'N/A')} | 24h: {eth.get('change_24h', 'N/A')}%
+BTC Dominance:   {crypto.get('btc_dominance', 'N/A')}%
+Fear & Greed:    {sentiment.get('fear_greed_value', 'N/A')} ({sentiment.get('fear_greed_label', 'N/A')})
+Fear & Greed Δ:  {sentiment.get('fear_greed_delta', 'N/A')} pts
+DXY:    {macro.get('DXY', {}).get('value', 'N/A')} | Δ: {macro.get('DXY', {}).get('change_pct', 'N/A')}%
+S&P500: {macro.get('SP500', {}).get('value', 'N/A')} | Δ: {macro.get('SP500', {}).get('change_pct', 'N/A')}%
+VIX:    {macro.get('VIX', {}).get('value', 'N/A')}
+{chr(10).join([f"- {n.get('title','')}" for n in news]) or '- Sem notícias'}
+
 CONFIGURAÇÃO ATUAL DO PROFILE
 ==============================
-Role: {profile_role}
 {json.dumps(current_config, indent=2, ensure_ascii=False)}
 
 INSTRUÇÃO
 =========
-Com base no regime de mercado atual (analise os indicadores que você conhece),
-gere a configuração otimizada para este profile.
+Analise as condições de mercado e gere a configuração ideal para este profile.
+Responda APENAS com o JSON no formato abaixo, sem nenhum texto adicional:
 
-IMPORTANTE: Retorne config_changes EXATAMENTE neste formato:
-{expected_output}
-
-Adapte os valores baseado no regime de mercado detectado.
-Retorne null para seções que não precisam ser alteradas.
+{{
+  "regime":           "BULL|BEAR|SIDEWAYS|HIGH_VOLATILITY",
+  "macro_risk":       "LOW|MEDIUM|HIGH|EXTREME",
+  "analysis_summary": "2-3 frases em português explicando o raciocínio",
+  "config": {{
+    "filters": {{
+      "logic": "AND",
+      "conditions": [
+        {{ "id": "cond_1", "field": "FIELD", "operator": "OPERATOR", "value": VALUE }}
+      ]
+    }},
+    "scoring": {{
+      "enabled": true,
+      "weights": {{
+        "liquidity": 25,
+        "market_structure": 25,
+        "momentum": 25,
+        "signal": 25
+      }}
+    }},
+    "signals": {{
+      "logic": "AND",
+      "conditions": [
+        {{ "id": "sig_1", "field": "FIELD", "operator": "OPERATOR", "value": VALUE, "required": true }}
+      ]
+    }}
+  }}
+}}
 """
 
 
-# ── Integração com estrutura existente de Filters/Scoring/Signals ────────────
+def _validate_config(config: dict, profile_role: str) -> dict:
+    """
+    Valida e corrige o config retornado pelo Claude.
+    Garante que está no formato exato do ProfileBuilder.
+    """
+    ts = int(time.time() * 1000)
 
-async def apply_preset_to_profile_builder(
+    # Garantir estrutura base
+    if 'filters' not in config:
+        config['filters'] = {'logic': 'AND', 'conditions': []}
+    if 'scoring' not in config:
+        config['scoring'] = {'enabled': True, 'weights': {'liquidity': 25, 'market_structure': 25, 'momentum': 25, 'signal': 25}}
+    if 'signals' not in config:
+        config['signals'] = {'logic': 'AND', 'conditions': []}
+
+    # Garantir IDs únicos nas conditions
+    for i, cond in enumerate(config['filters'].get('conditions', [])):
+        if not cond.get('id'):
+            cond['id'] = f'cond_{ts}_{i}'
+        # Garantir campos obrigatórios
+        cond.setdefault('field', 'volume_24h')
+        cond.setdefault('operator', '>')
+        cond.setdefault('value', 0)
+
+    for i, cond in enumerate(config['signals'].get('conditions', [])):
+        if not cond.get('id'):
+            cond['id'] = f'sig_{ts}_{i}'
+        cond.setdefault('field', 'rsi')
+        cond.setdefault('operator', '<')
+        cond.setdefault('value', 50)
+        cond.setdefault('required', False)
+
+    # Validar weights somam 100
+    weights = config['scoring'].get('weights', {})
+    total   = sum(weights.values())
+    if total != 100 and total > 0:
+        # Normalizar para somar 100
+        factor = 100 / total
+        config['scoring']['weights'] = {
+            k: round(v * factor) for k, v in weights.items()
+        }
+        # Ajustar arredondamento
+        diff = 100 - sum(config['scoring']['weights'].values())
+        if diff != 0:
+            first_key = next(iter(config['scoring']['weights']))
+            config['scoring']['weights'][first_key] += diff
+
+    config['scoring']['enabled'] = True
+    return config
+
+
+# ── Main function ─────────────────────────────────────────────────────────────
+
+async def run_preset_ia(
     profile_id: str,
     profile_role: str,
-    config_changes: dict,
     user_id: str,
+    current_profile_config: dict,
     db=None,
-) -> list:
+) -> dict:
     """
-    Aplica as mudanças do Preset IA na estrutura existente do ProfileBuilder.
-    """
-    applied = []
-    role_mapping = {
-        'universe_filter':    ['filters'],
-        'primary_filter':     ['filters'],
-        'score_engine':       ['score'],
-        'acquisition_queue':  ['blocks', 'risk'],
-    }
-    target_configs = role_mapping.get(profile_role, ['filters'])
+    Executa o Preset IA para um profile.
 
-    for config_type in target_configs:
-        changes = config_changes.get(config_type) or config_changes.get(f'{config_type}s')
-        if not changes:
-            for key in [config_type, f'{config_type}_stage0', f'{config_type}_stage1',
-                        'filters_stage0', 'filters_stage1']:
-                if key in config_changes:
-                    changes = config_changes[key]
-                    break
-        if changes:
-            non_null = {k: v for k, v in changes.items() if v is not None}
-            if non_null:
-                applied.append(config_type)
-    return applied
+    Args:
+        profile_id:             ID do profile
+        profile_role:           role do profile (universe_filter, primary_filter, etc.)
+        user_id:                ID do usuário
+        current_profile_config: config atual do profile (campo config do profile)
+        db:                     sessão de banco
+
+    Returns:
+        {
+            'regime':           str,
+            'macro_risk':       str,
+            'analysis_summary': str,
+            'config':           dict,  ← pronto para PUT /api/profiles/{id}
+            'executed_at':      str,
+        }
+    """
+    from .ai_keys_service import get_anthropic_client
+
+    client = await get_anthropic_client(db=db, user_id=user_id)
+
+    system_prompt = ROLE_PROMPTS.get(
+        profile_role,
+        ROLE_PROMPTS['primary_filter']
+    )
+
+    # Coletar mercado
+    snapshot = await _get_market_snapshot()
+
+    # Montar prompt
+    user_prompt = _build_prompt(
+        profile_role=profile_role,
+        current_config=current_profile_config,
+        snapshot=snapshot,
+    )
+
+    # Chamar Claude
+    logger.info(f'[PresetIA] Chamando Claude | profile={profile_id} role={profile_role}')
+    try:
+        message = client.messages.create(
+            model='claude-sonnet-4-5',
+            max_tokens=4096,
+            system=system_prompt,
+            messages=[{'role': 'user', 'content': user_prompt}],
+        )
+        raw = message.content[0].text.strip()
+        logger.info(
+            f'[PresetIA] Resposta recebida | tokens={message.usage.input_tokens + message.usage.output_tokens}'
+        )
+    except Exception as e:
+        logger.error(f'[PresetIA] Erro na chamada Claude: {e}')
+        raise
+
+    # Parse JSON
+    try:
+        clean  = raw.replace('```json', '').replace('```', '').strip()
+        result = json.loads(clean)
+    except json.JSONDecodeError as e:
+        logger.error(f'[PresetIA] JSON inválido: {e}\nRaw: {raw[:500]}')
+        raise ValueError(f'Claude retornou JSON inválido: {e}')
+
+    # Validar e corrigir o config
+    raw_config = result.get('config', {})
+    validated_config = _validate_config(raw_config, profile_role)
+
+    return {
+        'regime':           result.get('regime', 'UNKNOWN'),
+        'macro_risk':       result.get('macro_risk', 'MEDIUM'),
+        'analysis_summary': result.get('analysis_summary', ''),
+        'config':           validated_config,
+        'executed_at':      datetime.now(timezone.utc).isoformat(),
+    }

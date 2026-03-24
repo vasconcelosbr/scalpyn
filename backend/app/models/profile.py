@@ -51,7 +51,16 @@ class Profile(Base):
     #   }
     # }
     config = Column(JSONB, nullable=False, default=dict)
-    
+
+    # ── Preset IA + Auto-Pilot fields ─────────────────────────────────────────
+    profile_role    = Column(String(50),  nullable=True)   # universe_filter | primary_filter | score_engine | acquisition_queue
+    pipeline_order  = Column(String(3),   nullable=False, default="99")  # "0","1","2","3"
+    pipeline_label  = Column(String(100), nullable=True)
+    auto_pilot_enabled = Column(Boolean,  default=False)
+    auto_pilot_config  = Column(JSONB,    nullable=False, default=dict)
+    preset_ia_last_run = Column(DateTime(timezone=True), nullable=True)
+    preset_ia_config   = Column(JSONB,    nullable=True)
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
