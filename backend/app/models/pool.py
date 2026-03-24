@@ -12,7 +12,9 @@ class Pool(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True)
-    mode = Column(String(20), default='paper')
+    mode = Column(String(20), default='paper')  # paper, live
+    market_type = Column(String(20), default='spot')  # spot, futures, tradfi
+    profile_id = Column(UUID(as_uuid=True), ForeignKey('profiles.id', ondelete='SET NULL'), nullable=True)
     overrides = Column(JSONB, nullable=True, default=dict)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

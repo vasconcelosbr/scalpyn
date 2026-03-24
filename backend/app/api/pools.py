@@ -18,6 +18,8 @@ def _pool_to_dict(pool: Pool) -> Dict[str, Any]:
         "description": pool.description,
         "is_active": pool.is_active,
         "mode": pool.mode,
+        "market_type": pool.market_type,
+        "profile_id": str(pool.profile_id) if pool.profile_id else None,
         "overrides": pool.overrides if pool.overrides else {},
         "created_at": pool.created_at.isoformat() if pool.created_at else None,
         "updated_at": pool.updated_at.isoformat() if pool.updated_at else None,
@@ -45,17 +47,42 @@ async def get_pools(db: AsyncSession = Depends(get_db), user_id: UUID = Depends(
 
 @router.post("/")
 async def create_pool(payload: Dict[str, Any], db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
+    # Parse profile_id if provided
+    profile_id = payload.get("profile_id")
+    if profile_id and isinstance(profile_id, str):
+        from uuid import UUID as UUIDType
+        try:
+            profile_id = UUIDType(profile_id)
+        except ValueError:
+            profile_id = None
+    
     pool = Pool(
         user_id=user_id,
         name=payload.get("name"),
         description=payload.get("description", ""),
         is_active=payload.get("is_active", True),
         mode=payload.get("mode", "paper"),
+        market_type=payload.get("market_type", "spot"),
+        profile_id=profile_id,
+        overrides=payload.get("overrides", {}),
     )
     db.add(pool)
     await db.commit()
     await db.refresh(pool)
     return _pool_to_dict(pool)
+
+
+@router.delete("/{pool_id}")
+async def delete_pool(pool_id: UUID, db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
+    query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id)
+    result = await db.execute(query)
+    pool = result.scalars().first()
+    if not pool:
+        raise HTTPException(status_code=404, detail="Pool not found")
+
+    await db.delete(pool)
+    await db.commit()
+    return {"status": "success", "message": "Pool deleted"}
 
 
 @router.patch("/{pool_id}")
@@ -74,6 +101,18 @@ async def update_pool(pool_id: UUID, payload: Dict[str, Any], db: AsyncSession =
         pool.is_active = payload["is_active"]
     if "mode" in payload:
         pool.mode = payload["mode"]
+    if "market_type" in payload:
+        pool.market_type = payload["market_type"]
+    if "profile_id" in payload:
+        profile_id = payload["profile_id"]
+        if profile_id and isinstance(profile_id, str):
+            from uuid import UUID as UUIDType
+            try:
+                pool.profile_id = UUIDType(profile_id)
+            except ValueError:
+                pool.profile_id = None
+        else:
+            pool.profile_id = profile_id
     if "overrides" in payload:
         pool.overrides = payload["overrides"]
 

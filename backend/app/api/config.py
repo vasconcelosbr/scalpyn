@@ -36,8 +36,6 @@ async def get_config(
     user_id: UUID = Depends(get_current_user_id)
 ):
     config = await config_service.get_config(db, config_type, user_id, pool_id)
-    if not config:
-        raise HTTPException(status_code=404, detail="Configuration not found or user inactive")
     return {"config_type": config_type, "pool_id": pool_id, "data": config}
 
 @router.put("/{config_type}")

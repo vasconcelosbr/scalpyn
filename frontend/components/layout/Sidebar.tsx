@@ -20,7 +20,8 @@ import {
   Repeat,
   Bell,
   Eye,
-  LayoutDashboard
+  LayoutDashboard,
+  Sliders
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -33,6 +34,7 @@ const TRADING_ITEMS = [
   { name: 'Trades & P&L', href: '/trades', icon: TrendingUp },
   { name: 'Reports', href: '/reports', icon: FileText },
   { name: 'Pools', href: '/pools', icon: Layers },
+  { name: 'Profiles', href: '/profiles', icon: Sliders },
 ];
 
 const CONFIG_ITEMS = [

@@ -5,6 +5,8 @@ from .pool import Pool, PoolCoin
 from .trade import Trade
 from .order import Order
 from .notification import NotificationSetting
+from .profile import Profile, WatchlistProfile
+from .custom_watchlist import CustomWatchlist
 
 __all__ = [
     "User",
@@ -15,5 +17,8 @@ __all__ = [
     "PoolCoin",
     "Trade",
     "Order",
-    "NotificationSetting"
+    "NotificationSetting",
+    "Profile",
+    "WatchlistProfile",
+    "CustomWatchlist"
 ]

@@ -12,6 +12,57 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         
+        # Add missing columns to existing tables (migrations)
+        try:
+            await conn.execute(text("""
+                ALTER TABLE pools ADD COLUMN IF NOT EXISTS overrides JSONB DEFAULT '{}';
+            """))
+            logger.info("Added 'overrides' column to pools table (or already exists)")
+        except Exception as e:
+            logger.warning(f"Could not add 'overrides' column: {e}")
+        
+        # Ensure profiles and watchlist_profiles tables exist with all columns
+        try:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS profiles (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    name VARCHAR(255) NOT NULL,
+                    description TEXT,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    config JSONB DEFAULT '{}',
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            """))
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS watchlist_profiles (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    watchlist_id VARCHAR(100) NOT NULL,
+                    profile_type VARCHAR(10) NOT NULL DEFAULT 'L2',
+                    profile_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
+                    is_enabled BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE(user_id, watchlist_id, profile_type)
+                );
+            """))
+            # Add profile_type column if missing (migration)
+            await conn.execute(text("""
+                ALTER TABLE watchlist_profiles 
+                ADD COLUMN IF NOT EXISTS profile_type VARCHAR(10) DEFAULT 'L2';
+            """))
+            # Drop old unique constraint and add new one
+            try:
+                await conn.execute(text("""
+                    ALTER TABLE watchlist_profiles DROP CONSTRAINT IF EXISTS watchlist_profiles_user_id_watchlist_id_key;
+                """))
+            except Exception:
+                pass
+            logger.info("Profiles tables created or already exist")
+        except Exception as e:
+            logger.warning(f"Could not create profiles tables: {e}")
+        
         # Create TimescaleDB hypertables if they don't exist
         # OHLCV
         await conn.execute(text("""

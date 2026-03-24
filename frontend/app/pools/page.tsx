@@ -1,21 +1,30 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, Layers, Trash2 } from "lucide-react";
+import { Plus, Layers, Trash2, Briefcase } from "lucide-react";
 import { apiGet, apiPost, apiDelete } from "@/lib/api";
+
+interface Profile {
+  id: string;
+  name: string;
+  description?: string;
+}
 
 export default function PoolsPage() {
   const [pools, setPools] = useState<any[]>([]);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [newMode, setNewMode] = useState("paper");
+  const [newMarketType, setNewMarketType] = useState("spot");
+  const [newProfileId, setNewProfileId] = useState("");
 
   const fetchPools = async () => {
     setLoading(true);
     try {
-      const data = await apiGet("/pools/");
+      const data = await apiGet("/pools");
       setPools(data.pools || []);
     } catch (e) {
       console.error(e);
@@ -23,18 +32,65 @@ export default function PoolsPage() {
     setLoading(false);
   };
 
-  useEffect(() => { fetchPools(); }, []);
+  const fetchProfiles = async () => {
+    try {
+      const data = await apiGet("/profiles");
+      setProfiles(data.profiles || []);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => { 
+    fetchPools(); 
+    fetchProfiles();
+  }, []);
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
     try {
-      await apiPost("/pools/", { name: newName, description: newDesc, mode: newMode, is_active: true });
+      await apiPost("/pools", { 
+        name: newName, 
+        description: newDesc, 
+        mode: newMode, 
+        market_type: newMarketType,
+        profile_id: newProfileId || null,
+        is_active: true 
+      });
       setShowCreate(false);
       setNewName("");
       setNewDesc("");
+      setNewMode("paper");
+      setNewMarketType("spot");
+      setNewProfileId("");
       fetchPools();
     } catch (e: any) {
       alert(`Failed: ${e.message}`);
+    }
+  };
+
+  const handleDelete = async (poolId: string) => {
+    if (!confirm("Are you sure you want to delete this pool?")) return;
+    try {
+      await apiDelete(`/pools/${poolId}`);
+      fetchPools();
+    } catch (e: any) {
+      alert(`Failed to delete: ${e.message}`);
+    }
+  };
+
+  const getProfileName = (profileId: string | null) => {
+    if (!profileId) return null;
+    const profile = profiles.find(p => p.id === profileId);
+    return profile?.name || null;
+  };
+
+  const getMarketTypeLabel = (marketType: string) => {
+    switch (marketType) {
+      case 'spot': return 'Spot';
+      case 'futures': return 'Futures';
+      case 'tradfi': return 'TradFi';
+      default: return marketType?.toUpperCase() || 'SPOT';
     }
   };
 
@@ -60,10 +116,31 @@ export default function PoolsPage() {
                 <input className="input" placeholder="e.g. Scalping Core" value={newName} onChange={(e) => setNewName(e.target.value)} />
               </div>
               <div className="space-y-2">
-                <label className="label">Mode</label>
+                <label className="label">Trading Mode</label>
                 <select className="input" value={newMode} onChange={(e) => setNewMode(e.target.value)}>
                   <option value="paper">Paper Trading</option>
                   <option value="live">Live Trading</option>
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="label">Market Type</label>
+                <select className="input" value={newMarketType} onChange={(e) => setNewMarketType(e.target.value)}>
+                  <option value="spot">Spot</option>
+                  <option value="futures">Futures</option>
+                  <option value="tradfi">TradFi</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <label className="label">Strategy Profile</label>
+                <select className="input" value={newProfileId} onChange={(e) => setNewProfileId(e.target.value)}>
+                  <option value="">No Profile</option>
+                  {profiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -105,8 +182,11 @@ export default function PoolsPage() {
                 <div className="flex justify-between items-start mb-4">
                   <div>
                     <h3 className="text-lg font-bold text-[var(--text-primary)] tracking-tight">{pool.name}</h3>
-                    <div className="flex items-center gap-2 mt-2">
+                    <div className="flex flex-wrap items-center gap-2 mt-2">
                       <span className={`badge ${pool.mode === "live" ? "bullish" : "range"}`}>{pool.mode?.toUpperCase()}</span>
+                      <span className="badge bg-[var(--surface-elevated)] text-[var(--text-secondary)]">
+                        {getMarketTypeLabel(pool.market_type)}
+                      </span>
                       <span className="caption flex items-center gap-1.5">
                         <span className={`w-1.5 h-1.5 rounded-full ${pool.is_active ? "bg-[var(--color-profit)]" : "bg-[var(--color-neutral)]"}`}></span>
                         {pool.is_active ? "Active" : "Paused"}
@@ -117,11 +197,20 @@ export default function PoolsPage() {
                 {pool.description && (
                   <p className="text-[13px] text-[var(--text-secondary)] mb-3">{pool.description}</p>
                 )}
+                {getProfileName(pool.profile_id) && (
+                  <div className="flex items-center gap-2 text-[12px] text-[var(--accent-primary)] mb-2">
+                    <Briefcase className="w-3.5 h-3.5" />
+                    <span>{getProfileName(pool.profile_id)}</span>
+                  </div>
+                )}
                 <div className="text-[12px] text-[var(--text-tertiary)]">
                   Created {pool.created_at ? new Date(pool.created_at).toLocaleDateString() : "—"}
                 </div>
               </div>
-              <div className="border-t border-[var(--border-default)] p-3 flex justify-end">
+              <div className="border-t border-[var(--border-default)] p-3 flex justify-between">
+                <button className="btn btn-secondary text-[12px] px-3 py-1.5 text-red-500 hover:bg-red-500/10" aria-label="Delete pool" onClick={() => handleDelete(pool.id)}>
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
                 <button className="btn btn-secondary text-[12px] px-3 py-1.5">Configure</button>
               </div>
             </div>

@@ -16,6 +16,8 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Skip this job when GCP credentials are not configured (e.g. forks, development).
+    if: ${{ secrets.GCP_SA_KEY != '' }}
     permissions:
       contents: read
     steps:
