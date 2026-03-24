@@ -5,7 +5,6 @@ import { ArrowLeft, Plus, Trash2, Save, Play, HelpCircle, Link } from "lucide-re
 import { apiGet, apiPost } from "@/lib/api";
 import { ConditionBuilder } from "./ConditionBuilder";
 import { WeightSliders } from "./WeightSliders";
-import ProfileRoleSelector, { type ProfileRole } from './ProfileRoleSelector'
 
 interface ProfileBuilderProps {
   profile?: any;
@@ -59,18 +58,16 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   const [selectedWatchlistId, setSelectedWatchlistId] = useState<string>("");
   const [assignedWatchlist, setAssignedWatchlist] = useState<string | null>(null);
   const [scoringEnabled, setScoringEnabled] = useState(profile?.config?.scoring?.enabled !== false);
-  const [profileRole, setProfileRole] = useState<ProfileRole | null>(profile?.profile_role || null)
 
   useEffect(() => {
     // Load custom watchlists from backend
     loadCustomWatchlists();
 
-    // If editing, load the profile details to get watchlist_id
+    // If editing, check if profile has an assigned watchlist
     if (profile?.id) {
-      apiGet(`/profiles/${profile.id}`).then((data) => {
-        if (data.watchlist_id) {
-          setSelectedWatchlistId(data.watchlist_id);
-          setAssignedWatchlist(data.watchlist_id);
+      apiGet(`/profiles/watchlist/default/profile`).then((data) => {
+        if (data.profile?.id === profile.id) {
+          setAssignedWatchlist("default");
         }
       }).catch(() => {});
     }
@@ -97,7 +94,6 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
       config,
       is_active: true,
       watchlist_id: selectedWatchlistId || null,
-      profile_role: profileRole,
     };
     
     onSave(profileData);
@@ -261,14 +257,6 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               data-testid="profile-description-input"
-            />
-          </div>
-
-          {/* Profile Role Selector */}
-          <div className="mt-4">
-            <ProfileRoleSelector
-              value={profileRole}
-              onChange={setProfileRole}
             />
           </div>
           

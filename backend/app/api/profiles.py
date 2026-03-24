@@ -2,10 +2,9 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text, delete
+from sqlalchemy import select, text
 from typing import Dict, Any, List, Optional
 from uuid import UUID
-from datetime import datetime, timezone
 import logging
 
 from ..database import get_db
@@ -26,13 +25,6 @@ def _profile_to_dict(profile: Profile) -> Dict[str, Any]:
         "description": profile.description,
         "is_active": profile.is_active,
         "config": profile.config or {},
-        "profile_role":        getattr(profile, "profile_role", None),
-        "pipeline_order":      getattr(profile, "pipeline_order", "99"),
-        "pipeline_label":      getattr(profile, "pipeline_label", None),
-        "auto_pilot_enabled":  getattr(profile, "auto_pilot_enabled", False),
-        "auto_pilot_config":   getattr(profile, "auto_pilot_config", {}),
-        "preset_ia_last_run":  profile.preset_ia_last_run.isoformat() if getattr(profile, "preset_ia_last_run", None) else None,
-        "preset_ia_config":    getattr(profile, "preset_ia_config", None),
         "created_at": profile.created_at.isoformat() if profile.created_at else None,
         "updated_at": profile.updated_at.isoformat() if profile.updated_at else None,
     }
@@ -60,9 +52,7 @@ async def get_profile(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id)
 ):
-    """Get a single profile by ID, including assigned watchlist."""
-    from ..models.profile import WatchlistProfile
-    
+    """Get a single profile by ID."""
     query = select(Profile).where(Profile.id == profile_id, Profile.user_id == user_id)
     result = await db.execute(query)
     profile = result.scalars().first()
@@ -70,24 +60,7 @@ async def get_profile(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
     
-    profile_dict = _profile_to_dict(profile)
-    
-    # Get assigned watchlist
-    wl_query = select(WatchlistProfile).where(
-        WatchlistProfile.profile_id == profile_id,
-        WatchlistProfile.user_id == user_id
-    )
-    wl_result = await db.execute(wl_query)
-    wl_assignment = wl_result.scalars().first()
-    
-    if wl_assignment:
-        profile_dict["watchlist_id"] = wl_assignment.watchlist_id
-        profile_dict["watchlist_profile_type"] = wl_assignment.profile_type
-    else:
-        profile_dict["watchlist_id"] = None
-        profile_dict["watchlist_profile_type"] = None
-    
-    return profile_dict
+    return _profile_to_dict(profile)
 
 
 @router.post("/")
@@ -131,38 +104,12 @@ async def create_profile(
         name=name,
         description=payload.get("description", ""),
         is_active=payload.get("is_active", True),
-        config=validated_config,
-        profile_role=payload.get("profile_role"),
-        pipeline_order=str(payload.get("pipeline_order", 99)),
-        pipeline_label=payload.get("pipeline_label"),
+        config=validated_config
     )
     
     db.add(profile)
     await db.commit()
     await db.refresh(profile)
-    
-    # If watchlist_id provided, create association
-    watchlist_id = payload.get("watchlist_id")
-    if watchlist_id:
-        from ..models.profile import WatchlistProfile
-        # Check if association exists
-        existing = await db.execute(
-            select(WatchlistProfile).where(
-                WatchlistProfile.user_id == user_id,
-                WatchlistProfile.watchlist_id == watchlist_id,
-                WatchlistProfile.profile_id == profile.id
-            )
-        )
-        if not existing.scalars().first():
-            association = WatchlistProfile(
-                user_id=user_id,
-                watchlist_id=watchlist_id,
-                profile_id=profile.id,
-                profile_type="L1",  # Default to L1
-                is_enabled=True
-            )
-            db.add(association)
-            await db.commit()
     
     return _profile_to_dict(profile)
 
@@ -175,8 +122,6 @@ async def update_profile(
     user_id: UUID = Depends(get_current_user_id)
 ):
     """Update an existing profile."""
-    from ..models.profile import WatchlistProfile
-    
     query = select(Profile).where(Profile.id == profile_id, Profile.user_id == user_id)
     result = await db.execute(query)
     profile = result.scalars().first()
@@ -192,37 +137,6 @@ async def update_profile(
         profile.is_active = payload["is_active"]
     if "config" in payload:
         profile.config = _validate_profile_config(payload["config"])
-    if "profile_role" in payload:
-        profile.profile_role = payload["profile_role"]
-    if "pipeline_order" in payload:
-        profile.pipeline_order = str(payload["pipeline_order"])
-    if "pipeline_label" in payload:
-        profile.pipeline_label = payload["pipeline_label"]
-    if "auto_pilot_enabled" in payload:
-        profile.auto_pilot_enabled = payload["auto_pilot_enabled"]
-    if "auto_pilot_config" in payload:
-        profile.auto_pilot_config = payload["auto_pilot_config"]
-    
-    # Handle watchlist association
-    if "watchlist_id" in payload:
-        watchlist_id = payload["watchlist_id"]
-        # Remove existing association
-        await db.execute(
-            delete(WatchlistProfile).where(
-                WatchlistProfile.profile_id == profile_id,
-                WatchlistProfile.user_id == user_id
-            )
-        )
-        # Create new association if watchlist_id is provided
-        if watchlist_id:
-            association = WatchlistProfile(
-                user_id=user_id,
-                watchlist_id=watchlist_id,
-                profile_id=profile_id,
-                profile_type="L1",  # Default to L1
-                is_enabled=True
-            )
-            db.add(association)
     
     await db.commit()
     await db.refresh(profile)
@@ -254,166 +168,6 @@ async def delete_profile(
     await db.commit()
     
     return {"status": "success", "message": "Profile deleted"}
-
-
-# ============================================================================
-# PRESET IA + AUTO-PILOT
-# ============================================================================
-
-@router.post("/{profile_id}/preset-ia")
-async def run_preset_ia(
-    profile_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    user_id: UUID = Depends(get_current_user_id),
-):
-    """Execute Preset IA: calls Claude and applies optimized config to the profile."""
-    result = await db.execute(select(Profile).where(Profile.id == profile_id, Profile.user_id == user_id))
-    profile = result.scalars().first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Profile not found")
-
-    if not getattr(profile, "profile_role", None):
-        raise HTTPException(
-            status_code=400,
-            detail="Profile sem role definido. Configure o papel do profile antes de usar o Preset IA.",
-        )
-
-    from ..services.preset_ia_service import run_preset_ia as svc_preset
-
-    try:
-        ia_result = await svc_preset(
-            profile_id=str(profile_id),
-            profile_role=profile.profile_role,
-            user_id=user_id,
-            current_config=profile.config or {},
-            db=db,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"[PresetIA] Unexpected error profile={profile_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Erro ao executar Preset IA: {e}")
-
-    # Apply config changes returned by Claude - merge properly into profile.config
-    config_changes = ia_result.get("config_changes", {})
-    logger.info(f"[PresetIA] Applying config_changes to profile={profile_id} | keys={list(config_changes.keys())}")
-    
-    if config_changes:
-        merged = dict(profile.config or {})
-        
-        # Merge filters
-        if "filters" in config_changes and config_changes["filters"]:
-            logger.info(f"[PresetIA] Merging filters: {config_changes['filters']}")
-            if "filters" not in merged:
-                merged["filters"] = {"logic": "AND", "conditions": []}
-            if "conditions" in config_changes["filters"]:
-                merged["filters"]["conditions"] = config_changes["filters"]["conditions"]
-            if "logic" in config_changes["filters"]:
-                merged["filters"]["logic"] = config_changes["filters"]["logic"]
-        
-        # Merge scoring
-        if "scoring" in config_changes and config_changes["scoring"]:
-            logger.info(f"[PresetIA] Merging scoring: {config_changes['scoring']}")
-            if "scoring" not in merged:
-                merged["scoring"] = {"enabled": True, "weights": {}}
-            if "weights" in config_changes["scoring"]:
-                merged["scoring"]["weights"] = config_changes["scoring"]["weights"]
-            if "enabled" in config_changes["scoring"]:
-                merged["scoring"]["enabled"] = config_changes["scoring"]["enabled"]
-        
-        # Merge signals
-        if "signals" in config_changes and config_changes["signals"]:
-            logger.info(f"[PresetIA] Merging signals: {config_changes['signals']}")
-            if "signals" not in merged:
-                merged["signals"] = {"logic": "AND", "conditions": []}
-            if "conditions" in config_changes["signals"]:
-                merged["signals"]["conditions"] = config_changes["signals"]["conditions"]
-            if "logic" in config_changes["signals"]:
-                merged["signals"]["logic"] = config_changes["signals"]["logic"]
-        
-        logger.info(f"[PresetIA] Final merged config keys: {list(merged.keys())}")
-        profile.config = merged
-        logger.info(f"[PresetIA] Config merged for profile={profile_id}: {list(config_changes.keys())}")
-
-    profile.preset_ia_last_run = datetime.now(timezone.utc)
-    profile.preset_ia_config = ia_result
-    await db.commit()
-
-    return {
-        "status":           "success",
-        "regime":           ia_result["regime"],
-        "macro_risk":       ia_result["macro_risk"],
-        "analysis_summary": ia_result["analysis_summary"],
-        "applied_configs":  ia_result["applied_configs"],
-        "executed_at":      ia_result["executed_at"],
-    }
-
-
-@router.put("/{profile_id}/auto-pilot")
-async def update_auto_pilot(
-    profile_id: UUID,
-    payload: Dict[str, Any],
-    db: AsyncSession = Depends(get_db),
-    user_id: UUID = Depends(get_current_user_id),
-):
-    """Save Auto-Pilot configuration for a profile."""
-    result = await db.execute(select(Profile).where(Profile.id == profile_id, Profile.user_id == user_id))
-    profile = result.scalars().first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Profile not found")
-
-    profile.auto_pilot_enabled = payload.get("enabled", False)
-    profile.auto_pilot_config = payload
-    await db.commit()
-    return {"status": "saved", "enabled": profile.auto_pilot_enabled}
-
-
-@router.post("/{profile_id}/auto-pilot/trigger")
-async def trigger_auto_pilot(
-    profile_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    user_id: UUID = Depends(get_current_user_id),
-):
-    """Force an immediate Auto-Pilot analysis for this profile."""
-    result = await db.execute(select(Profile).where(Profile.id == profile_id, Profile.user_id == user_id))
-    profile = result.scalars().first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Profile not found")
-
-    if not getattr(profile, "auto_pilot_enabled", False):
-        raise HTTPException(status_code=400, detail="Auto-Pilot não está ativado para este profile.")
-
-    # Run preset IA immediately (same logic as /preset-ia)
-    from ..services.preset_ia_service import run_preset_ia as svc_preset
-    try:
-        ia_result = await svc_preset(
-            profile_id=str(profile_id),
-            profile_role=getattr(profile, "profile_role", None) or "primary_filter",
-            user_id=user_id,
-            current_config=profile.config or {},
-            db=db,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    config_changes = ia_result.get("config_changes", {})
-    if config_changes:
-        merged = dict(profile.config or {})
-        for section, changes in config_changes.items():
-            if changes:
-                non_null = {k: v for k, v in changes.items() if v is not None}
-                if non_null:
-                    if section in merged and isinstance(merged[section], dict):
-                        merged[section].update(non_null)
-                    else:
-                        merged[section] = non_null
-        profile.config = merged
-
-    profile.preset_ia_last_run = datetime.now(timezone.utc)
-    profile.preset_ia_config = ia_result
-    await db.commit()
-
-    return {"status": "triggered", "regime": ia_result["regime"], "executed_at": ia_result["executed_at"]}
 
 
 # ============================================================================

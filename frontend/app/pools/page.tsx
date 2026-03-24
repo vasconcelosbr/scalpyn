@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Plus, Layers, Trash2, Briefcase } from "lucide-react";
 import { apiGet, apiPost, apiDelete } from "@/lib/api";
 
@@ -12,7 +11,6 @@ interface Profile {
 }
 
 export default function PoolsPage() {
-  const router = useRouter();
   const [pools, setPools] = useState<any[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -213,12 +211,7 @@ export default function PoolsPage() {
                 <button className="btn btn-secondary text-[12px] px-3 py-1.5 text-red-500 hover:bg-red-500/10" aria-label="Delete pool" onClick={() => handleDelete(pool.id)}>
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
-                <button
-                  className="btn btn-secondary text-[12px] px-3 py-1.5"
-                  onClick={() => router.push(`/pools/${pool.id}`)}
-                >
-                  Configure
-                </button>
+                <button className="btn btn-secondary text-[12px] px-3 py-1.5">Configure</button>
               </div>
             </div>
           ))}

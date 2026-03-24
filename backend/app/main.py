@@ -11,7 +11,6 @@ from .api import (
     config as config_api,
     pools,
     exchanges,
-    exchange_search,
     market,
     trades,
     orders,
@@ -19,17 +18,10 @@ from .api import (
     reports,
     notifications,
     watchlist,
-    watchlists,
     websocket,
     profiles,
     custom_watchlists,
-    spot_engine,
-    futures_engine,
-    positions,
-    macro,
-    ai_keys,
 )
-from .websocket.scalpyn_ws_server import router as ws_extended_router
 
 
 @asynccontextmanager
@@ -73,14 +65,12 @@ app.include_router(config_api.router)
 app.include_router(market.router)
 app.include_router(watchlist.router)
 app.include_router(custom_watchlists.router)
-app.include_router(watchlists.router)
 
 # Trading
 app.include_router(trades.router)
 app.include_router(orders.router)
 app.include_router(pools.router)
 app.include_router(exchanges.router)
-app.include_router(exchange_search.router)
 
 # Strategy Profiles
 app.include_router(profiles.router)
@@ -92,26 +82,8 @@ app.include_router(reports.router)
 # Notifications
 app.include_router(notifications.router)
 
-# Spot Engine
-app.include_router(spot_engine.router)
-
-# Futures Engine
-app.include_router(futures_engine.router)
-
-# Positions
-app.include_router(positions.router)
-
-# Macro
-app.include_router(macro.router)
-
-# AI Provider Keys
-app.include_router(ai_keys.router)
-
-# WebSocket — core channels (market, signals, trades)
+# WebSocket
 app.include_router(websocket.router)
-
-# WebSocket — extended Trading Desk channels (positions, alerts, engine, macro)
-app.include_router(ws_extended_router)
 
 
 @app.get("/api/health")
