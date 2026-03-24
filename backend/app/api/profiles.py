@@ -25,6 +25,14 @@ def _profile_to_dict(profile: Profile) -> Dict[str, Any]:
         "description": profile.description,
         "is_active": profile.is_active,
         "config": profile.config or {},
+        # Campos necessários para Preset IA e pipeline
+        "profile_role":   getattr(profile, 'profile_role', None),
+        "pipeline_order": getattr(profile, 'pipeline_order', None),
+        "preset_ia_last_run": (
+            profile.preset_ia_last_run.isoformat()
+            if getattr(profile, 'preset_ia_last_run', None) else None
+        ),
+        "preset_ia_config": getattr(profile, 'preset_ia_config', None),
         "created_at": profile.created_at.isoformat() if profile.created_at else None,
         "updated_at": profile.updated_at.isoformat() if profile.updated_at else None,
     }
@@ -606,6 +614,64 @@ async def get_example_profiles(
     ]
     
     return {"examples": examples}
+
+
+# ============================================================================
+# FILTERED ASSETS (para Watchlist)
+# ============================================================================
+
+@router.get("/{profile_id}/filtered-assets")
+async def get_filtered_assets(
+    profile_id: str,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """
+    Executa o ProfileEngine com os filtros e scoring do profile e retorna
+    os assets que passaram, ordenados por score descendente.
+    Usado pela Watchlist para exibir criptos filtradas pelo profile associado.
+    """
+    query = select(Profile).where(Profile.id == profile_id, Profile.user_id == user_id)
+    result = await db.execute(query)
+    profile = result.scalar_one_or_none()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile não encontrado")
+
+    assets = await _get_watchlist_assets(db)
+    if not assets:
+        return {
+            "profile_id": profile_id,
+            "profile_name": profile.name,
+            "profile_role": getattr(profile, 'profile_role', None),
+            "total_universe": 0,
+            "after_filter": 0,
+            "assets": [],
+            "error": "Sem dados de mercado disponíveis. Execute a descoberta de ativos primeiro.",
+        }
+
+    engine = ProfileEngine(profile.config or {})
+    test_result = engine.test_profile(assets)
+
+    # Enriquecer assets com dados de mercado
+    filtered = test_result.get("filtered_assets", []) or []
+    # Limitar e ordenar por score
+    filtered_sorted = sorted(
+        filtered,
+        key=lambda a: (a.get("score", {}) or {}).get("total_score", 0),
+        reverse=True
+    )[:limit]
+
+    return {
+        "profile_id": profile_id,
+        "profile_name": profile.name,
+        "profile_role": getattr(profile, 'profile_role', None),
+        "total_universe": test_result.get("summary", {}).get("total_assets", len(assets)),
+        "after_filter": test_result.get("summary", {}).get("after_filter", len(filtered)),
+        "filter_rate": test_result.get("summary", {}).get("filter_rate", "0%"),
+        "signals_triggered": test_result.get("summary", {}).get("signals_triggered", 0),
+        "assets": filtered_sorted,
+    }
 
 
 # ============================================================================

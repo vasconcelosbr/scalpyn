@@ -7,7 +7,8 @@ interface PresetIAResult {
   regime:           string
   macro_risk:       string
   analysis_summary: string
-  applied_configs:  string[]
+  config:           any        // ← config completo retornado pelo backend (filters/scoring/signals)
+  applied_configs?: string[]  // ← opcional: backend pode não retornar
   executed_at:      string
 }
 
@@ -123,10 +124,10 @@ export default function PresetIAButton({ profileId, profileRole, size = 'md', on
           </div>
           <div style={{ padding: '10px 12px' }}>
             <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: 0, lineHeight: 1.6 }}>{result.analysis_summary}</p>
-            {result.applied_configs?.length > 0 && (
+            {(result.applied_configs?.length ?? 0) > 0 && (
               <div style={{ display: 'flex', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>Configurado:</span>
-                {result.applied_configs.map(cfg => (
+                {result.applied_configs!.map(cfg => (
                   <span key={cfg} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 20, fontWeight: 600, background: 'rgba(139,92,246,0.1)', border: '1px solid rgba(139,92,246,0.2)', color: '#A78BFA' }}>{cfg}</span>
                 ))}
               </div>

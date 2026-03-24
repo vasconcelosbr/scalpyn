@@ -302,7 +302,8 @@ export default function AIProviderSection() {
 
   useEffect(() => { load() }, [])
 
-  const anthropicOk = providers.find(p => p.provider === 'anthropic')?.is_validated
+  const anthropicStatus = providers.find(p => p.provider === 'anthropic')
+  const anthropicOk = anthropicStatus?.is_validated
 
   if (loading)
     return (
@@ -318,13 +319,26 @@ export default function AIProviderSection() {
         <h2 style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>Integrações de IA</h2>
       </div>
 
-      {!anthropicOk && (
+      {/* Alerta: não configurada */}
+      {!anthropicStatus?.is_configured && (
         <div style={{ display: 'flex', gap: 10, padding: '12px 16px', marginBottom: 16, background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)', borderRadius: 8 }}>
           <AlertCircle size={15} color="var(--color-warning)" style={{ flexShrink: 0, marginTop: 1 }} />
           <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0, lineHeight: 1.6 }}>
             API Anthropic não configurada.{' '}
             <strong style={{ color: 'var(--text-primary)' }}>Auto-Pilot IA e Preset IA ficam desativados</strong>{' '}
             até que uma chave válida seja adicionada.
+          </p>
+        </div>
+      )}
+
+      {/* Alerta: configurada mas não testada / inválida */}
+      {anthropicStatus?.is_configured && !anthropicOk && (
+        <div style={{ display: 'flex', gap: 10, padding: '12px 16px', marginBottom: 16, background: 'rgba(79,123,247,0.06)', border: '1px solid rgba(79,123,247,0.2)', borderRadius: 8 }}>
+          <AlertCircle size={15} color="var(--accent-primary)" style={{ flexShrink: 0, marginTop: 1 }} />
+          <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0, lineHeight: 1.6 }}>
+            Chave Anthropic configurada mas ainda não validada.{' '}
+            <strong style={{ color: 'var(--text-primary)' }}>Clique em "Testar conexão"</strong>{' '}
+            para ativar Auto-Pilot IA e Preset IA.
           </p>
         </div>
       )}
