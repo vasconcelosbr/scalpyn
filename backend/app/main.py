@@ -21,6 +21,7 @@ from .api import (
     websocket,
     profiles,
     custom_watchlists,
+    ai_keys,
 )
 
 
@@ -81,6 +82,9 @@ app.include_router(reports.router)
 
 # Notifications
 app.include_router(notifications.router)
+
+# AI Provider Keys
+app.include_router(ai_keys.router)
 
 # WebSocket
 app.include_router(websocket.router)
