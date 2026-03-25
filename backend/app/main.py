@@ -49,10 +49,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "http://localhost:5000",
         "https://scalpyn.vercel.app",
         "https://www.scalpyn.vercel.app",
     ],
-    allow_origin_regex=r"https://scalpyn.*\.vercel\.app",
+    allow_origin_regex=r"https://.*\.(replit\.app|replit\.dev|repl\.co|vercel\.app)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
