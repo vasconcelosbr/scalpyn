@@ -165,7 +165,7 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
           </div>
 
           <div>
-            <label className="block text-xs text-[#64748B] mb-1">Source Pool (optional)</label>
+            <label className="block text-xs text-[#64748B] mb-1">Source Pool <span className="text-[#4B5563]">(para L1)</span></label>
             <select
               className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
               value={sourcePoolId}
@@ -178,21 +178,23 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
             </select>
           </div>
 
-          {!sourcePoolId && (
-            <div>
-              <label className="block text-xs text-[#64748B] mb-1">Source Watchlist (optional)</label>
-              <select
-                className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
-                value={sourceWatchlistId}
-                onChange={(e) => setSourceWatchlistId(e.target.value)}
-              >
-                <option value="">— None —</option>
-                {otherWatchlists.map((w) => (
-                  <option key={w.id} value={w.id}>{w.name} ({w.level})</option>
-                ))}
-              </select>
-            </div>
-          )}
+          <div>
+            <label className="block text-xs text-[#64748B] mb-1">Source Watchlist <span className="text-[#4B5563]">(para L2 / L3)</span></label>
+            <select
+              className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
+              value={sourceWatchlistId}
+              onChange={(e) => { setSourceWatchlistId(e.target.value); if (e.target.value) setSourcePoolId(''); }}
+              disabled={!!sourcePoolId}
+            >
+              <option value="">— None —</option>
+              {otherWatchlists.map((w) => (
+                <option key={w.id} value={w.id}>[{w.level}] {w.name}</option>
+              ))}
+            </select>
+            {sourcePoolId && (
+              <p className="text-xs text-[#4B5563] mt-1">Limpe o Source Pool acima para usar uma watchlist como fonte.</p>
+            )}
+          </div>
 
           <div>
             <label className="block text-xs text-[#64748B] mb-1">Min Alpha Score (0–100)</label>
