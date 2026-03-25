@@ -8,6 +8,7 @@ from .notification import NotificationSetting
 from .profile import Profile, WatchlistProfile
 from .custom_watchlist import CustomWatchlist
 from .pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
+from .ai_provider_key import AIProviderKey
 
 __all__ = [
     "User",
@@ -24,4 +25,5 @@ __all__ = [
     "CustomWatchlist",
     "PipelineWatchlist",
     "PipelineWatchlistAsset",
+    "AIProviderKey",
 ]
