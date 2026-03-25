@@ -22,11 +22,12 @@ interface Condition {
   required?: boolean;
 }
 
-interface CustomWatchlist {
+interface PipelineWatchlist {
   id: string;
   name: string;
-  symbol_count: number;
-  symbols: string[];
+  level: string;
+  profile_id: string | null;
+  source_pool_id: string | null;
 }
 
 const DEFAULT_CONFIG = {
@@ -52,7 +53,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   const [testResult, setTestResult]         = useState<any>(null);
   const [testing, setTesting]               = useState(false);
   const [saving, setSaving]                 = useState(false);
-  const [customWatchlists, setCustomWatchlists] = useState<CustomWatchlist[]>([]);
+  const [pipelineWatchlists, setPipelineWatchlists] = useState<PipelineWatchlist[]>([]);
   const [selectedWatchlistId, setSelectedWatchlistId] = useState<string>("");
   const [assignedWatchlistId, setAssignedWatchlistId] = useState<string>("");
   const [assigning, setAssigning]           = useState(false);
@@ -60,44 +61,27 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     profile?.config?.scoring?.enabled !== false
   );
 
-  // ── Carregar watchlists e a association atual do profile ─────────────────
+  // ── Carregar pipeline watchlists ─────────────────────────────────────────
   useEffect(() => {
-    loadCustomWatchlists();
+    loadPipelineWatchlists();
   }, []);
 
-  // Quando as watchlists carregam, buscar qual está associada a este profile
+  // Quando as watchlists carregam, encontrar a associada a este profile
   useEffect(() => {
-    if (!profile?.id || customWatchlists.length === 0) return;
-    loadCurrentWatchlistAssociation();
-  }, [profile?.id, customWatchlists]);
-
-  const loadCustomWatchlists = async () => {
-    try {
-      const data = await apiGet("/custom-watchlists");
-      setCustomWatchlists(data.watchlists || []);
-    } catch (e) {
-      console.error("Failed to load watchlists:", e);
+    if (!profile?.id || pipelineWatchlists.length === 0) return;
+    const assigned = pipelineWatchlists.find(w => w.profile_id === profile.id);
+    if (assigned) {
+      setAssignedWatchlistId(assigned.id);
+      setSelectedWatchlistId(assigned.id);
     }
-  };
+  }, [profile?.id, pipelineWatchlists]);
 
-  /**
-   * Percorre todas as watchlists e verifica qual tem este profile associado
-   * como L1/L2/L3 via GET /custom-watchlists/{id}/profiles
-   */
-  const loadCurrentWatchlistAssociation = async () => {
-    if (!profile?.id) return;
-    for (const wl of customWatchlists) {
-      try {
-        const data = await apiGet(`/custom-watchlists/${wl.id}/profiles`);
-        const assigned = [data.L1, data.L2, data.L3].find(
-          (p: any) => p?.id === profile.id
-        );
-        if (assigned) {
-          setAssignedWatchlistId(wl.id);
-          setSelectedWatchlistId(wl.id);
-          return;
-        }
-      } catch { /* skip */ }
+  const loadPipelineWatchlists = async () => {
+    try {
+      const data = await apiGet("/watchlists");
+      setPipelineWatchlists(data.watchlists || []);
+    } catch (e) {
+      console.error("Failed to load pipeline watchlists:", e);
     }
   };
 
@@ -119,28 +103,23 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     setSaving(false);
   };
 
-  // ── Associar watchlist ao profile ─────────────────────────────────────
+  // ── Associar pipeline watchlist ao profile ──────────────────────────────
   const handleAssignWatchlist = async () => {
     if (!profile?.id) { alert("Salve o profile primeiro antes de associar uma watchlist."); return; }
     if (!selectedWatchlistId) { alert("Selecione uma watchlist."); return; }
 
-    const profileType = profileRole ? (ROLE_TO_TYPE[profileRole] ?? "L1") : "L1";
-
     setAssigning(true);
     try {
-      // Se havia outra watchlist associada, desassociar
+      // Se havia outra watchlist associada, limpar o profile_id dela
       if (assignedWatchlistId && assignedWatchlistId !== selectedWatchlistId) {
-        await apiPut(`/custom-watchlists/${assignedWatchlistId}/profile/${profileType}`, {
-          profile_id: null,
-        });
+        await apiPut(`/watchlists/${assignedWatchlistId}`, { profile_id: null });
       }
 
-      // Associar à nova watchlist
-      await apiPut(`/custom-watchlists/${selectedWatchlistId}/profile/${profileType}`, {
-        profile_id: profile.id,
-      });
+      // Associar este profile à watchlist selecionada
+      await apiPut(`/watchlists/${selectedWatchlistId}`, { profile_id: profile.id });
 
       setAssignedWatchlistId(selectedWatchlistId);
+      await loadPipelineWatchlists();
     } catch (e: any) {
       alert(`Falha ao associar watchlist: ${e.message}`);
     }
@@ -183,8 +162,8 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     }
   };
 
-  const selectedWatchlist  = customWatchlists.find(w => w.id === selectedWatchlistId);
-  const assignedWatchlist  = customWatchlists.find(w => w.id === assignedWatchlistId);
+  const selectedWatchlist  = pipelineWatchlists.find(w => w.id === selectedWatchlistId);
+  const assignedWatchlist  = pipelineWatchlists.find(w => w.id === assignedWatchlistId);
   const isWatchlistChanged = selectedWatchlistId && selectedWatchlistId !== assignedWatchlistId;
 
   return (
@@ -244,9 +223,9 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
               />
             </div>
 
-            {/* Watchlist */}
+            {/* Pipeline Watchlist */}
             <div className="space-y-2">
-              <label className="label">Watchlist</label>
+              <label className="label">Pipeline Watchlist</label>
               <div className="flex gap-2">
                 <select
                   className="input flex-1"
@@ -254,10 +233,10 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                   onChange={(e) => setSelectedWatchlistId(e.target.value)}
                   data-testid="watchlist-select"
                 >
-                  <option value="">-- Selecione uma Watchlist --</option>
-                  {customWatchlists.map((wl) => (
+                  <option value="">-- Selecione uma Pipeline Watchlist --</option>
+                  {pipelineWatchlists.map((wl) => (
                     <option key={wl.id} value={wl.id}>
-                      {wl.name} ({wl.symbol_count} assets)
+                      [{wl.level.toUpperCase()}] {wl.name}
                     </option>
                   ))}
                 </select>
