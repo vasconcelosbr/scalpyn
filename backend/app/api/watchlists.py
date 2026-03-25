@@ -17,17 +17,70 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+import httpx
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select, text, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..database import get_db
+from ..database import get_db, AsyncSessionLocal
 from ..api.config import get_current_user_id
 from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
 
 logger = logging.getLogger(__name__)
 
+GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/spot/tickers"
+
 router = APIRouter(prefix="/api/watchlists", tags=["Pipeline Watchlists"])
+
+
+async def _seed_market_metadata_bg(symbols: List[str]) -> None:
+    """Background task: fetch Gate.io tickers and upsert into market_metadata.
+
+    Runs after the HTTP response is sent — does not block the request.
+    Opens its own DB session so it is independent of the request session.
+    """
+    symbol_set = set(symbols)
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(GATE_TICKERS_URL)
+            resp.raise_for_status()
+            tickers = resp.json()
+
+        now = datetime.now(timezone.utc)
+        rows = []
+        for ticker in tickers:
+            pair = ticker.get("currency_pair", "")
+            if pair not in symbol_set:
+                continue
+            price = float(ticker.get("last", 0) or 0)
+            change = float(ticker.get("change_percentage", 0) or 0)
+            volume = float(ticker.get("quote_volume", 0) or 0)
+            if price <= 0:
+                continue
+            rows.append({"symbol": pair, "price": price, "change": change, "volume": volume, "updated": now})
+
+        if not rows:
+            return
+
+        async with AsyncSessionLocal() as db:
+            for row in rows:
+                try:
+                    await db.execute(
+                        text("""
+                            INSERT INTO market_metadata (symbol, price, price_change_24h, volume_24h, last_updated)
+                            VALUES (:symbol, :price, :change, :volume, :updated)
+                            ON CONFLICT (symbol) DO UPDATE SET
+                                price = :price, price_change_24h = :change,
+                                volume_24h = :volume, last_updated = :updated
+                        """),
+                        row,
+                    )
+                except Exception:
+                    pass
+            await db.commit()
+        logger.info("[Pipeline] Background seed: upserted market data for %d symbols", len(rows))
+    except Exception as e:
+        logger.warning("[Pipeline] Background market seed failed: %s", e)
 
 
 # ── Serializers ────────────────────────────────────────────────────────────────
@@ -347,14 +400,13 @@ async def _resolve_and_persist(
         alpha = scores.get("score", 0.0)
         signal = scores.get("signal_score", 0.0)
 
-        # Apply score filters only when scoring data is available.
-        # When neither alpha_scores nor market_metadata exist, skip filtering
-        # to avoid blocking all assets and allow the pipeline to still propagate.
-        if scoring_data_available:
-            if min_score and alpha < min_score:
-                continue
-            if require_signal and signal < 50:
-                continue
+        # Apply score filters (derived scores make them meaningful when market data exists).
+        # When no scoring data is available, symbols score 0 and will fail min_score filters —
+        # L1 watchlists typically have no filters so they still propagate all base symbols.
+        if min_score and alpha < min_score:
+            continue
+        if require_signal and signal < 50:
+            continue
 
         meta = meta_map.get(symbol, {})
         assets_out.append({
@@ -488,6 +540,7 @@ async def _cascade_refresh(wl_id: UUID, user_id: UUID, db: AsyncSession, depth: 
 @router.post("/{watchlist_id}/refresh")
 async def refresh_watchlist(
     watchlist_id: UUID,
+    background_tasks: BackgroundTasks,
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -501,6 +554,15 @@ async def refresh_watchlist(
     wl = result.scalars().first()
     if not wl:
         raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    # Get base symbols first so we can seed market data if needed
+    base_symbols = await _get_base_symbols(wl, user_id, db)
+
+    # Schedule background market-data seed when the source is a pool.
+    # This runs after the response is sent, so it never blocks the request.
+    # On the next refresh the fresh scores will be used for filtering.
+    if wl.source_pool_id and base_symbols:
+        background_tasks.add_task(_seed_market_metadata_bg, base_symbols)
 
     assets = await _resolve_and_persist(wl, user_id, db)
 
