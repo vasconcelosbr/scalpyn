@@ -292,6 +292,10 @@ async def _resolve_and_persist(
     except Exception:
         score_map = {}
 
+    # If no scoring data is available at all, skip score-based filters
+    # (prevents L2/L3 from being permanently empty in environments without market data)
+    scoring_data_available = len(score_map) > 0
+
     now = datetime.now(timezone.utc)
     assets_out: List[Dict[str, Any]] = []
 
@@ -300,11 +304,12 @@ async def _resolve_and_persist(
         alpha = scores.get("score", 0.0)
         signal = scores.get("signal_score", 0.0)
 
-        # Apply filters
-        if min_score and alpha < min_score:
-            continue
-        if require_signal and signal < 50:
-            continue
+        # Apply score filters only when scoring data is actually available
+        if scoring_data_available:
+            if min_score and alpha < min_score:
+                continue
+            if require_signal and signal < 50:
+                continue
 
         meta = meta_map.get(symbol, {})
         assets_out.append({
@@ -370,7 +375,11 @@ async def get_watchlist_assets(
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return resolved and filtered assets for this watchlist level."""
+    """Return resolved and filtered assets for this watchlist level.
+
+    Auto-resolves the pipeline on first access when auto_refresh=True and
+    no assets have been persisted yet — this propagates L1→L2→L3 automatically.
+    """
     result = await db.execute(
         select(PipelineWatchlist).where(
             PipelineWatchlist.id == watchlist_id,
@@ -381,14 +390,48 @@ async def get_watchlist_assets(
     if not wl:
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
-    # Return saved assets with their level direction data
+    # Check saved assets
     assets_result = await db.execute(
         select(PipelineWatchlistAsset)
         .where(PipelineWatchlistAsset.watchlist_id == watchlist_id)
         .order_by(PipelineWatchlistAsset.alpha_score.desc().nullslast())
     )
     assets = assets_result.scalars().all()
+
+    # Auto-resolve on first open when there are no saved assets
+    if not assets and wl.auto_refresh:
+        try:
+            await _resolve_and_persist(wl, user_id, db)
+            assets_result2 = await db.execute(
+                select(PipelineWatchlistAsset)
+                .where(PipelineWatchlistAsset.watchlist_id == watchlist_id)
+                .order_by(PipelineWatchlistAsset.alpha_score.desc().nullslast())
+            )
+            assets = assets_result2.scalars().all()
+        except Exception as e:
+            logger.warning("[Pipeline] Auto-resolve failed for %s: %s", watchlist_id, e)
+
     return {"assets": [_asset_to_dict(a) for a in assets], "total": len(assets)}
+
+
+async def _cascade_refresh(wl_id: UUID, user_id: UUID, db: AsyncSession, depth: int = 0) -> None:
+    """Cascade refresh to all watchlists that use this one as their source."""
+    if depth > 3:
+        return
+    children_result = await db.execute(
+        select(PipelineWatchlist).where(
+            PipelineWatchlist.source_watchlist_id == wl_id,
+            PipelineWatchlist.user_id == user_id,
+            PipelineWatchlist.auto_refresh == True,
+        )
+    )
+    children = children_result.scalars().all()
+    for child in children:
+        try:
+            await _resolve_and_persist(child, user_id, db)
+            await _cascade_refresh(child.id, user_id, db, depth + 1)
+        except Exception as e:
+            logger.warning("[Pipeline] Cascade refresh failed for child %s: %s", child.id, e)
 
 
 @router.post("/{watchlist_id}/refresh")
@@ -397,7 +440,7 @@ async def refresh_watchlist(
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Force re-resolve the pipeline and update assets for this watchlist."""
+    """Force re-resolve the pipeline and cascade to all downstream watchlists."""
     result = await db.execute(
         select(PipelineWatchlist).where(
             PipelineWatchlist.id == watchlist_id,
@@ -409,6 +452,10 @@ async def refresh_watchlist(
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
     assets = await _resolve_and_persist(wl, user_id, db)
+
+    # Cascade refresh to downstream watchlists (L1 → L2 → L3)
+    await _cascade_refresh(watchlist_id, user_id, db)
+
     return {"refreshed": True, "asset_count": len(assets)}
 
 
