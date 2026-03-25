@@ -488,8 +488,8 @@ function PipelineTab() {
     };
   }, []);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [wlData, poolData] = await Promise.all([
         apiFetch<{ watchlists: PipelineWatchlist[] }>('/watchlists'),
@@ -500,9 +500,11 @@ function PipelineTab() {
     } catch {
       // ignore
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
+
+  const loadSilent = useCallback(() => load(true), [load]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -525,6 +527,7 @@ function PipelineTab() {
       setWatchlists((prev) => [...prev, created]);
     }
     closeModal();
+    await load(true);
   }
 
   function handleDelete(id: string) {
@@ -595,7 +598,7 @@ function PipelineTab() {
                       allWatchlists={watchlists}
                       onEdit={openEdit}
                       onDelete={handleDelete}
-                      onRefreshed={load}
+                      onRefreshed={loadSilent}
                       liveDirections={liveDirections}
                     />
                   ))}
@@ -618,7 +621,7 @@ function PipelineTab() {
                     allWatchlists={watchlists}
                     onEdit={openEdit}
                     onDelete={handleDelete}
-                    onRefreshed={load}
+                    onRefreshed={loadSilent}
                   />
                 ))}
               </div>
