@@ -288,6 +288,33 @@ function ProviderCard({ status, onRefresh }: { status: ProviderStatus; onRefresh
   )
 }
 
+const DEFAULT_PROVIDERS: ProviderStatus[] = [
+  {
+    provider: 'anthropic', name: 'Anthropic',
+    key_hint: null, label: null,
+    is_configured: false, is_validated: false,
+    test_status: null, test_error: null, last_tested_at: null,
+    tokens_used_month: null, monthly_token_limit: null,
+    docs_url: 'https://console.anthropic.com/settings/keys',
+  },
+  {
+    provider: 'openai', name: 'OpenAI',
+    key_hint: null, label: null,
+    is_configured: false, is_validated: false,
+    test_status: null, test_error: null, last_tested_at: null,
+    tokens_used_month: null, monthly_token_limit: null,
+    docs_url: 'https://platform.openai.com/api-keys',
+  },
+  {
+    provider: 'gemini', name: 'Gemini',
+    key_hint: null, label: null,
+    is_configured: false, is_validated: false,
+    test_status: null, test_error: null, last_tested_at: null,
+    tokens_used_month: null, monthly_token_limit: null,
+    docs_url: 'https://aistudio.google.com/apikey',
+  },
+]
+
 export default function AIProviderSection() {
   const [providers, setProviders] = useState<ProviderStatus[]>([])
   const [loading, setLoading] = useState(true)
@@ -295,9 +322,22 @@ export default function AIProviderSection() {
   const load = async () => {
     try {
       const res = await fetch('/api/ai-keys', { headers: authHeaders() })
-      if (res.ok) setProviders(await res.json())
-    } catch { /* silent */ }
-    finally { setLoading(false) }
+      if (res.ok) {
+        const data: ProviderStatus[] = await res.json()
+        // Garantir que sempre temos os 3 providers — mesclar com defaults
+        const byProvider = new Map(data.map((p) => [p.provider, p]))
+        const merged = DEFAULT_PROVIDERS.map(def => byProvider.get(def.provider) ?? def)
+        setProviders(merged)
+      } else {
+        // Resposta não-ok: mostrar providers padrão para o usuário conseguir cadastrar
+        setProviders(DEFAULT_PROVIDERS)
+      }
+    } catch {
+      // Erro de rede: mostrar providers padrão
+      setProviders(DEFAULT_PROVIDERS)
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => { load() }, [])

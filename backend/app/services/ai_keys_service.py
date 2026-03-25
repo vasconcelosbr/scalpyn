@@ -122,8 +122,17 @@ async def save_ai_key(
 
 
 async def get_ai_key_info(db: AsyncSession, user_id: UUID, provider: str) -> Optional[dict]:
-    r = await _get_record(db, user_id, provider)
-    return _safe(r) if r else None
+    """
+    Retorna info da chave armazenada sem expor o valor.
+    Captura exceções silenciosamente para não quebrar o endpoint /api/ai-keys
+    caso a tabela não exista ou AI_KEYS_ENCRYPTION_KEY esteja errada.
+    """
+    try:
+        r = await _get_record(db, user_id, provider)
+        return _safe(r) if r else None
+    except Exception as exc:
+        logger.warning("[AIKeys] get_ai_key_info(%s) failed: %s", provider, exc)
+        return None
 
 
 async def get_decrypted_api_key(db: AsyncSession, user_id: UUID, provider: str) -> Optional[str]:
