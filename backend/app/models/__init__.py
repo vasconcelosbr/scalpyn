@@ -7,6 +7,7 @@ from .order import Order
 from .notification import NotificationSetting
 from .profile import Profile, WatchlistProfile
 from .custom_watchlist import CustomWatchlist
+from .pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
 
 __all__ = [
     "User",
@@ -20,5 +21,7 @@ __all__ = [
     "NotificationSetting",
     "Profile",
     "WatchlistProfile",
-    "CustomWatchlist"
+    "CustomWatchlist",
+    "PipelineWatchlist",
+    "PipelineWatchlistAsset",
 ]
