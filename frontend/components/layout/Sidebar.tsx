@@ -21,7 +21,8 @@ import {
   Bell,
   Eye,
   LayoutDashboard,
-  Sliders
+  Sliders,
+  Sparkles,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -45,6 +46,7 @@ const CONFIG_ITEMS = [
   { name: 'Block Rules', href: '/settings/block', icon: ShieldOff },
   { name: 'Risk Management', href: '/settings/risk', icon: Shield },
   { name: 'Strategies', href: '/settings/strategies', icon: Brain },
+  { name: 'AI Skills', href: '/settings/skills', icon: Sparkles },
   { name: 'Exchanges', href: '/settings/exchanges', icon: Repeat },
   { name: 'Notifications', href: '/settings/notifications', icon: Bell },
 ];

@@ -9,6 +9,7 @@ from .profile import Profile, WatchlistProfile
 from .custom_watchlist import CustomWatchlist
 from .pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
 from .ai_provider_key import AIProviderKey
+from .ai_skill import AiSkill
 
 __all__ = [
     "User",
@@ -26,4 +27,5 @@ __all__ = [
     "PipelineWatchlist",
     "PipelineWatchlistAsset",
     "AIProviderKey",
+    "AiSkill",
 ]

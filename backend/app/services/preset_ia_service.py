@@ -360,13 +360,39 @@ async def run_preset_ia(
         }
     """
     from .ai_keys_service import get_anthropic_client
+    from ..models.ai_skill import AiSkill
+    from sqlalchemy import select, and_
+    import uuid as _uuid
 
     client = await get_anthropic_client(db=db, user_id=user_id)
 
-    system_prompt = ROLE_PROMPTS.get(
-        profile_role,
-        ROLE_PROMPTS['primary_filter']
-    )
+    # Tentar buscar Skill ativa do usuário para este role_key
+    system_prompt = None
+    if db is not None:
+        try:
+            uid = _uuid.UUID(str(user_id))
+            result = await db.execute(
+                select(AiSkill).where(
+                    and_(
+                        AiSkill.user_id == uid,
+                        AiSkill.role_key == profile_role,
+                        AiSkill.is_active == True,
+                    )
+                ).order_by(AiSkill.updated_at.desc()).limit(1)
+            )
+            skill = result.scalar_one_or_none()
+            if skill:
+                system_prompt = skill.prompt_text
+                logger.info(f'[PresetIA] Usando Skill personalizada "{skill.name}" para role={profile_role}')
+        except Exception as e:
+            logger.warning(f'[PresetIA] Falha ao buscar Skill do DB: {e}')
+
+    if system_prompt is None:
+        system_prompt = ROLE_PROMPTS.get(
+            profile_role,
+            ROLE_PROMPTS['primary_filter']
+        )
+        logger.info(f'[PresetIA] Usando prompt padrão para role={profile_role}')
 
     # Coletar mercado
     snapshot = await _get_market_snapshot()
