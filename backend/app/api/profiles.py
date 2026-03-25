@@ -145,11 +145,17 @@ async def update_profile(
         profile.is_active = payload["is_active"]
     if "config" in payload:
         profile.config = _validate_profile_config(payload["config"])
+    # Salvar papel do profile no pipeline
+    if "profile_role" in payload:
+        profile.profile_role = payload["profile_role"]
+    if "pipeline_order" in payload:
+        profile.pipeline_order = str(payload["pipeline_order"]) if payload["pipeline_order"] is not None else "99"
     
     await db.commit()
     await db.refresh(profile)
     
     return _profile_to_dict(profile)
+
 
 
 @router.delete("/{profile_id}")
