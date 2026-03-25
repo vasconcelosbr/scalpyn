@@ -27,6 +27,7 @@ interface PipelineWatchlist {
   filters_json: Record<string, any>;
   created_at: string | null;
   updated_at: string | null;
+  asset_count: number;
 }
 
 interface PipelineAsset {
@@ -273,20 +274,23 @@ function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed,
     ? allWatchlists.find((w) => w.id === wl.source_watchlist_id)?.name ?? 'Watchlist'
     : '—';
 
-  const loadAssets = useCallback(async () => {
+  const loadAssets = useCallback(async (triggerParentRefresh = false) => {
     setLoadingAssets(true);
     try {
       const data = await apiFetch<{ assets: PipelineAsset[] }>(`/watchlists/${wl.id}/assets`);
       setAssets(data.assets);
+      if (triggerParentRefresh && data.assets.length > 0) {
+        onRefreshed();
+      }
     } catch {
       // ignore
     } finally {
       setLoadingAssets(false);
     }
-  }, [wl.id]);
+  }, [wl.id, onRefreshed]);
 
   useEffect(() => {
-    if (expanded) loadAssets();
+    if (expanded) loadAssets(true);
   }, [expanded, loadAssets]);
 
   async function handleRefresh() {
@@ -568,11 +572,17 @@ function PipelineTab() {
           {(['L1', 'L2', 'L3'] as const).map((lvl) => {
             const lvlWls = byLevel(lvl);
             if (lvlWls.length === 0) return null;
+            const totalAssets = lvlWls.reduce((sum, w) => sum + (w.asset_count ?? 0), 0);
             return (
               <div key={lvl}>
                 <div className="flex items-center gap-2 mb-3">
                   <LevelBadge level={lvl} />
                   <span className="text-xs text-[#4B5563]">{lvlWls.length} watchlist{lvlWls.length !== 1 ? 's' : ''}</span>
+                  {totalAssets > 0 && (
+                    <span className="ml-1 px-2 py-0.5 rounded-full text-xs font-medium bg-[#1E2433] text-[#94A3B8] border border-[#2A3448]">
+                      {totalAssets} ativo{totalAssets !== 1 ? 's' : ''}
+                    </span>
+                  )}
                 </div>
                 <div className="space-y-2">
                   {lvlWls.map((wl) => (

@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, text
+from sqlalchemy import select, text, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
@@ -78,7 +78,28 @@ async def list_watchlists(
         .order_by(PipelineWatchlist.created_at)
     )
     wls = result.scalars().all()
-    return {"watchlists": [_wl_to_dict(w) for w in wls], "total": len(wls)}
+
+    # Fetch asset counts for all watchlists in one query
+    if wls:
+        wl_ids = [w.id for w in wls]
+        count_result = await db.execute(
+            select(
+                PipelineWatchlistAsset.watchlist_id,
+                func.count(PipelineWatchlistAsset.id).label("cnt"),
+            )
+            .where(PipelineWatchlistAsset.watchlist_id.in_(wl_ids))
+            .group_by(PipelineWatchlistAsset.watchlist_id)
+        )
+        counts: Dict[UUID, int] = {row.watchlist_id: row.cnt for row in count_result.fetchall()}
+    else:
+        counts = {}
+
+    def _with_count(w: PipelineWatchlist) -> Dict[str, Any]:
+        d = _wl_to_dict(w)
+        d["asset_count"] = counts.get(w.id, 0)
+        return d
+
+    return {"watchlists": [_with_count(w) for w in wls], "total": len(wls)}
 
 
 @router.post("/")
