@@ -105,7 +105,17 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
   const [minScore, setMinScore] = useState(String(wl?.filters_json?.min_score ?? ''));
   const [requireSignal, setRequireSignal] = useState(Boolean(wl?.filters_json?.require_signal));
   const [autoRefresh, setAutoRefresh] = useState(wl?.auto_refresh ?? true);
+
   const [saving, setSaving] = useState(false);
+
+  function handleLevelChange(newLevel: string) {
+    setLevel(newLevel);
+    if (isNew) {
+      if (newLevel === 'L2' && minScore === '') setMinScore('55');
+      if (newLevel === 'L3') { if (minScore === '') setMinScore('60'); setRequireSignal(true); }
+      if (newLevel === 'L1' || newLevel === 'custom') { setMinScore(''); setRequireSignal(false); }
+    }
+  }
 
   const otherWatchlists = watchlists.filter((w) => w.id !== wl?.id);
 
@@ -155,7 +165,7 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
             <select
               className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
               value={level}
-              onChange={(e) => setLevel(e.target.value)}
+              onChange={(e) => handleLevelChange(e.target.value)}
             >
               <option value="L1">L1 — All pool assets</option>
               <option value="L2">L2 — Score filtered</option>
