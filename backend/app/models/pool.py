@@ -16,6 +16,7 @@ class Pool(Base):
     market_type = Column(String(20), default='spot')  # spot, futures, tradfi
     profile_id = Column(UUID(as_uuid=True), ForeignKey('profiles.id', ondelete='SET NULL'), nullable=True)
     overrides = Column(JSONB, nullable=True, default=dict)
+    autopilot_enabled = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

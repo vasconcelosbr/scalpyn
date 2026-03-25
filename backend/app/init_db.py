@@ -20,6 +20,14 @@ async def init_db():
             logger.info("Added 'overrides' column to pools table (or already exists)")
         except Exception as e:
             logger.warning(f"Could not add 'overrides' column: {e}")
+
+        try:
+            await conn.execute(text("""
+                ALTER TABLE pools ADD COLUMN IF NOT EXISTS autopilot_enabled BOOLEAN NOT NULL DEFAULT false;
+            """))
+            logger.info("Added 'autopilot_enabled' column to pools table (or already exists)")
+        except Exception as e:
+            logger.warning(f"Could not add 'autopilot_enabled' column: {e}")
         
         # Ensure profiles and watchlist_profiles tables exist with all columns
         try:

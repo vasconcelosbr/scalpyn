@@ -414,3 +414,187 @@ async def run_preset_ia(
         'config':           validated_config,
         'executed_at':      datetime.now(timezone.utc).isoformat(),
     }
+
+
+# ── Pool Preset IA ────────────────────────────────────────────────────────────
+
+def _build_pool_analysis_prompt(
+    pool_name: str,
+    symbols: list,
+    market_data: list,
+    current_config: dict,
+) -> str:
+    symbols_str = ", ".join(symbols[:50]) if symbols else "nenhum ativo"
+    total = len(symbols)
+    sample_data = market_data[:10] if market_data else []
+    sample_lines = "\n".join(
+        f"  {d.get('symbol','?')}: ${d.get('price',0):.4f} | vol={d.get('volume_24h',0)/1e6:.1f}M | Δ24h={d.get('change_24h_pct',0):.1f}%"
+        for d in sample_data
+    ) or "  (sem dados)"
+    snapshot_str = json.dumps(current_config, indent=2, ensure_ascii=False)
+
+    return f"""
+POOL: {pool_name}
+Total de ativos: {total}
+Amostra de ativos: {symbols_str}
+
+DADOS DE MERCADO (top 10 por volume):
+{sample_lines}
+
+CONFIGURAÇÃO ATUAL DO POOL (overrides):
+{snapshot_str}
+
+INSTRUÇÃO
+=========
+Analise os ativos deste pool e as condições de mercado.
+Sugira critérios de filtro e scoring para melhorar a qualidade do pool.
+Responda APENAS com JSON no formato:
+
+{{
+  "regime": "BULL|BEAR|SIDEWAYS|HIGH_VOLATILITY",
+  "macro_risk": "LOW|MEDIUM|HIGH|EXTREME",
+  "analysis_summary": "2-3 frases em português explicando o raciocínio",
+  "recommendations": {{
+    "min_volume_24h": <número em USD ou null>,
+    "min_market_cap": <número em USD ou null>,
+    "max_assets": <número ou null>,
+    "remove_symbols": [<lista de símbolos a remover, se algum>],
+    "add_symbols": [<lista de símbolos a considerar adicionar, se algum>]
+  }}
+}}
+"""
+
+
+async def run_preset_ia_for_pool(
+    pool_id: str,
+    pool_name: str,
+    symbols: list,
+    user_id: str,
+    current_overrides: dict,
+    db=None,
+) -> dict:
+    """
+    Executa Preset IA para um Pool.
+    Analisa os ativos do pool e sugere critérios de filtro/scoring.
+
+    Returns:
+        {
+            'regime':           str,
+            'macro_risk':       str,
+            'analysis_summary': str,
+            'recommendations':  dict,
+            'executed_at':      str,
+        }
+    """
+    from .ai_keys_service import get_anthropic_client
+    from .market_data_service import market_data_service
+
+    client = await get_anthropic_client(db=db, user_id=user_id)
+
+    # Coletar dados de mercado para os ativos do pool
+    try:
+        market_data = await market_data_service.get_market_metadata(symbols=symbols)
+        market_data.sort(key=lambda x: x.get('volume_24h', 0), reverse=True)
+    except Exception as e:
+        logger.warning(f'[PoolPresetIA] Falha ao coletar market data: {e}')
+        market_data = []
+
+    # Montar prompt
+    snapshot = await _get_market_snapshot()
+    system_prompt = f"""
+Você é o Preset IA do Scalpyn analisando um POOL de ativos para trading.
+
+Seu papel: analisar os ativos do pool e sugerir critérios de filtro e scoring
+para melhorar a qualidade e performance do pool.
+
+{_BASE_RULES}
+"""
+    user_prompt = _build_pool_analysis_prompt(
+        pool_name=pool_name,
+        symbols=symbols,
+        market_data=market_data,
+        current_config=current_overrides,
+    )
+
+    logger.info(f'[PoolPresetIA] Chamando Claude | pool={pool_id} assets={len(symbols)}')
+    try:
+        message = client.messages.create(
+            model='claude-sonnet-4-5',
+            max_tokens=2048,
+            system=system_prompt,
+            messages=[{'role': 'user', 'content': user_prompt}],
+        )
+        raw = message.content[0].text.strip()
+    except Exception as e:
+        logger.error(f'[PoolPresetIA] Erro na chamada Claude: {e}')
+        raise
+
+    try:
+        clean = raw.replace('```json', '').replace('```', '').strip()
+        result = json.loads(clean)
+    except json.JSONDecodeError as e:
+        logger.error(f'[PoolPresetIA] JSON inválido: {e}\nRaw: {raw[:500]}')
+        raise ValueError(f'Claude retornou JSON inválido: {e}')
+
+    return {
+        'regime':           result.get('regime', 'UNKNOWN'),
+        'macro_risk':       result.get('macro_risk', 'MEDIUM'),
+        'analysis_summary': result.get('analysis_summary', ''),
+        'recommendations':  result.get('recommendations', {}),
+        'executed_at':      datetime.now(timezone.utc).isoformat(),
+    }
+
+
+async def apply_pool_preset_recommendations(
+    pool_id: str,
+    recommendations: dict,
+    db,
+) -> dict:
+    """
+    Aplica as recomendações do Preset IA ao pool.
+    Atualiza overrides e remove símbolos marcados para remoção.
+
+    Returns: { applied_overrides, removed_count }
+    """
+    from sqlalchemy import select, delete
+    from ..models.pool import Pool, PoolCoin
+
+    pool_query = select(Pool).where(Pool.id == pool_id)
+    result = await db.execute(pool_query)
+    pool = result.scalar_one_or_none()
+    if not pool:
+        raise ValueError(f'Pool {pool_id} não encontrado')
+
+    overrides = dict(pool.overrides or {})
+
+    # Aplicar overrides recomendados
+    if recommendations.get('min_volume_24h') is not None:
+        overrides['min_volume_24h'] = recommendations['min_volume_24h']
+    if recommendations.get('min_market_cap') is not None:
+        overrides['min_market_cap'] = recommendations['min_market_cap']
+    if recommendations.get('max_assets') is not None:
+        overrides['max_assets'] = recommendations['max_assets']
+
+    pool.overrides = overrides
+
+    # Remover símbolos marcados (apenas discovered)
+    removed_count = 0
+    remove_symbols = recommendations.get('remove_symbols', [])
+    if remove_symbols:
+        coins_query = select(PoolCoin).where(
+            PoolCoin.pool_id == pool_id,
+            PoolCoin.symbol.in_([s.upper() for s in remove_symbols]),
+            PoolCoin.origin == 'discovered',
+        )
+        coins_result = await db.execute(coins_query)
+        coins_to_remove = coins_result.scalars().all()
+        for coin in coins_to_remove:
+            await db.delete(coin)
+            removed_count += 1
+
+    await db.commit()
+
+    return {
+        'applied_overrides': overrides,
+        'removed_count': removed_count,
+    }

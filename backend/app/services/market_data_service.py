@@ -112,4 +112,37 @@ class MarketDataService:
         return symbols
 
 
+    async def get_market_metadata(
+        self,
+        min_volume: float = 0,
+        min_market_cap: float = 0,
+        symbols: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch market metadata (price, volume, market_cap) for USDT pairs from Gate.io.
+        Optionally filter by min_volume, min_market_cap, or a specific symbol list.
+        Returns list of dicts with symbol, price, volume_24h, market_cap, change_24h_pct.
+        """
+        tickers = await self.fetch_all_tickers()
+        result = []
+        for t in tickers:
+            pair = t.get("currency_pair", "")
+            symbol = pair.replace("_USDT", "USDT")
+            if symbols and symbol not in symbols:
+                continue
+            volume = float(t.get("quote_volume", 0) or 0)
+            if volume < min_volume:
+                continue
+            price = float(t.get("last", 0) or 0)
+            change_pct = float(t.get("change_percentage", 0) or 0)
+            result.append({
+                "symbol": symbol,
+                "price": price,
+                "volume_24h": volume,
+                "market_cap": 0,  # Gate.io tickers don't include market_cap
+                "change_24h_pct": change_pct,
+            })
+        return result
+
+
 market_data_service = MarketDataService()

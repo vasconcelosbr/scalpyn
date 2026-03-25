@@ -748,3 +748,37 @@ async def run_preset_ia(
         "profile":          _profile_to_dict(profile),
         "executed_at":      ia_result["executed_at"],
     }
+
+
+# ============================================================================
+# AUTO-PILOT TOGGLE
+# ============================================================================
+
+@router.post("/{profile_id}/autopilot/toggle")
+async def toggle_profile_autopilot(
+    profile_id: str,
+    payload: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Liga/desliga o Auto-Pilot do profile."""
+    query = select(Profile).where(Profile.id == profile_id, Profile.user_id == user_id)
+    result = await db.execute(query)
+    profile = result.scalar_one_or_none()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile não encontrado")
+
+    enabled = payload.get("enabled")
+    if enabled is None:
+        current = getattr(profile, "auto_pilot_enabled", False) or False
+        enabled = not current
+
+    # O campo no banco é auto_pilot_enabled (migration 009)
+    if hasattr(profile, "auto_pilot_enabled"):
+        profile.auto_pilot_enabled = bool(enabled)
+    await db.commit()
+    await db.refresh(profile)
+
+    response = _profile_to_dict(profile)
+    response["autopilot_enabled"] = getattr(profile, "auto_pilot_enabled", False)
+    return {"status": "success", "profile": response}

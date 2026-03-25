@@ -3,8 +3,8 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from typing import Dict, Any
+from sqlalchemy import select, func
+from typing import Dict, Any, List
 from uuid import UUID
 
 from ..database import get_db
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/pools", tags=["Pools"])
 
 
-def _pool_to_dict(pool: Pool) -> Dict[str, Any]:
+def _pool_to_dict(pool: Pool, asset_count: int = 0) -> Dict[str, Any]:
     return {
         "id": str(pool.id),
         "name": pool.name,
@@ -26,6 +26,8 @@ def _pool_to_dict(pool: Pool) -> Dict[str, Any]:
         "market_type": pool.market_type,
         "profile_id": str(pool.profile_id) if pool.profile_id else None,
         "overrides": pool.overrides if pool.overrides else {},
+        "autopilot_enabled": getattr(pool, "autopilot_enabled", False) or False,
+        "asset_count": asset_count,
         "created_at": pool.created_at.isoformat() if pool.created_at else None,
         "updated_at": pool.updated_at.isoformat() if pool.updated_at else None,
     }
@@ -49,7 +51,19 @@ async def get_pools(db: AsyncSession = Depends(get_db), user_id: UUID = Depends(
     query = select(Pool).where(Pool.user_id == user_id)
     result = await db.execute(query)
     pools = result.scalars().all()
-    return {"pools": [_pool_to_dict(p) for p in pools]}
+
+    pool_list = []
+    for pool in pools:
+        count_result = await db.execute(
+            select(func.count(PoolCoin.id)).where(
+                PoolCoin.pool_id == pool.id,
+                PoolCoin.is_active == True,
+            )
+        )
+        asset_count = count_result.scalar() or 0
+        pool_list.append(_pool_to_dict(pool, asset_count=asset_count))
+
+    return {"pools": pool_list}
 
 
 @router.post("/")
@@ -364,4 +378,196 @@ async def discover_pool_assets(
             "min_volume_24h": min_volume,
             "min_market_cap": min_market_cap,
         }
+    }
+
+
+# ============================================================================
+# PRESET IA PARA POOL
+# ============================================================================
+
+@router.post("/{pool_id}/preset-ia")
+async def run_pool_preset_ia(
+    pool_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """
+    Executa Preset IA para o pool.
+    Analisa os ativos e sugere critérios de filtro/scoring.
+    """
+    from ..services.preset_ia_service import run_preset_ia_for_pool
+
+    pool_query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id)
+    pool_result = await db.execute(pool_query)
+    pool = pool_result.scalars().first()
+    if not pool:
+        raise HTTPException(status_code=404, detail="Pool not found")
+
+    coins_result = await db.execute(
+        select(PoolCoin).where(PoolCoin.pool_id == pool_id, PoolCoin.is_active == True)
+    )
+    coins = coins_result.scalars().all()
+    symbols = [c.symbol for c in coins]
+
+    result = await run_preset_ia_for_pool(
+        pool_id=str(pool_id),
+        pool_name=pool.name,
+        symbols=symbols,
+        user_id=str(user_id),
+        current_overrides=pool.overrides or {},
+        db=db,
+    )
+
+    return {
+        "status": "success",
+        "pool_id": str(pool_id),
+        **result,
+    }
+
+
+@router.post("/{pool_id}/preset-ia/apply")
+async def apply_pool_preset_ia(
+    pool_id: UUID,
+    payload: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """
+    Aplica as recomendações do Preset IA ao pool.
+    Payload: { "recommendations": { "min_volume_24h": ..., "remove_symbols": [...] } }
+    """
+    from ..services.preset_ia_service import apply_pool_preset_recommendations
+
+    pool_query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id)
+    pool_result = await db.execute(pool_query)
+    pool = pool_result.scalars().first()
+    if not pool:
+        raise HTTPException(status_code=404, detail="Pool not found")
+
+    recommendations = payload.get("recommendations", {})
+    if not recommendations:
+        raise HTTPException(status_code=400, detail="recommendations é obrigatório")
+
+    applied = await apply_pool_preset_recommendations(
+        pool_id=str(pool_id),
+        recommendations=recommendations,
+        db=db,
+    )
+
+    await db.refresh(pool)
+    return {
+        "status": "success",
+        "pool_id": str(pool_id),
+        "pool": _pool_to_dict(pool),
+        **applied,
+    }
+
+
+@router.post("/{pool_id}/autopilot/toggle")
+async def toggle_pool_autopilot(
+    pool_id: UUID,
+    payload: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """
+    Liga/desliga o AutoPilot do pool.
+    Payload: { "enabled": true|false }
+    """
+    pool_query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id)
+    pool_result = await db.execute(pool_query)
+    pool = pool_result.scalars().first()
+    if not pool:
+        raise HTTPException(status_code=404, detail="Pool not found")
+
+    enabled = payload.get("enabled")
+    if enabled is None:
+        enabled = not (getattr(pool, "autopilot_enabled", False) or False)
+
+    pool.autopilot_enabled = bool(enabled)
+    await db.commit()
+    await db.refresh(pool)
+
+    return {
+        "status": "success",
+        "pool_id": str(pool_id),
+        "autopilot_enabled": pool.autopilot_enabled,
+        "pool": _pool_to_dict(pool),
+    }
+
+
+@router.post("/{pool_id}/scan")
+async def scan_and_populate_pool(
+    pool_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """
+    Escaneia o mercado e popula o pool com ativos que passam nos filtros de overrides.
+    Equivale ao /discover mas aplica também min_market_cap dos overrides.
+    """
+    from ..services.market_data_service import market_data_service
+
+    pool_query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id)
+    pool_result = await db.execute(pool_query)
+    pool = pool_result.scalars().first()
+    if not pool:
+        raise HTTPException(status_code=404, detail="Pool not found")
+
+    overrides = pool.overrides or {}
+    min_volume = float(overrides.get("min_volume_24h", 0))
+    min_market_cap = float(overrides.get("min_market_cap", 0))
+    max_assets = int(overrides.get("max_assets", 200))
+
+    # Buscar ativos do mercado com filtros
+    try:
+        market_assets = await market_data_service.get_market_metadata(
+            min_volume=min_volume,
+            min_market_cap=min_market_cap,
+        )
+        market_assets.sort(key=lambda x: x.get("volume_24h", 0), reverse=True)
+        universe_symbols = {a["symbol"] for a in market_assets[:max_assets]}
+    except Exception as e:
+        logger.error(f"[Scan] Falha ao buscar mercado: {e}")
+        raise HTTPException(status_code=502, detail=f"Falha ao buscar dados de mercado: {e}")
+
+    # Carregar coins existentes
+    coins_result = await db.execute(select(PoolCoin).where(PoolCoin.pool_id == pool_id))
+    existing_coins = coins_result.scalars().all()
+    existing_manual = {c.symbol for c in existing_coins if (c.origin or "manual") == "manual"}
+    existing_discovered = {c.symbol: c for c in existing_coins if (c.origin or "manual") == "discovered"}
+
+    to_add = universe_symbols - existing_manual - set(existing_discovered.keys())
+    to_remove = set(existing_discovered.keys()) - universe_symbols
+
+    now = datetime.now(timezone.utc)
+    market_type = pool.market_type or "spot"
+
+    for symbol in to_add:
+        db.add(PoolCoin(
+            pool_id=pool_id,
+            symbol=symbol,
+            market_type=market_type,
+            is_active=True,
+            origin="discovered",
+            discovered_at=now,
+        ))
+
+    for symbol, coin_obj in existing_discovered.items():
+        if symbol in to_remove:
+            await db.delete(coin_obj)
+
+    await db.commit()
+
+    return {
+        "status": "success",
+        "found": len(universe_symbols),
+        "added": len(to_add),
+        "removed": len(to_remove),
+        "kept_manual": len(existing_manual),
+        "filters_used": {
+            "min_volume_24h": min_volume,
+            "min_market_cap": min_market_cap,
+            "max_assets": max_assets,
+        },
     }
