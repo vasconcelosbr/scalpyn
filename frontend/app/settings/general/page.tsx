@@ -140,10 +140,10 @@ function CMCProviderCard() {
             )}
           </div>
           <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: 0, lineHeight: 1.5 }}>
-            Fornece market cap em tempo real para o filtro de universo de ativos.
+            <strong style={{ color: "var(--text-primary)" }}>Opcional.</strong> Gate.io já fornece market cap gratuitamente. CMC melhora a precisão dos dados para moedas com menor liquidez.
           </p>
           <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-            {["Filtro Market Cap", "Pipeline L1", "Auto-atualização 30min"].map(tag => (
+            {["Melhoria de precisão", "Fallback Gate.io ativo", "30min"].map(tag => (
               <span key={tag} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 20, background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-subtle)", color: "var(--text-tertiary)" }}>{tag}</span>
             ))}
           </div>
