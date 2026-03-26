@@ -18,7 +18,7 @@ from ..database import get_db
 
 security = HTTPBearer()
 
-PROVIDERS = ("anthropic", "openai", "gemini")
+PROVIDERS = ("anthropic", "openai", "gemini", "coinmarketcap")
 
 PROVIDER_META = {
     "anthropic": {
@@ -35,6 +35,11 @@ PROVIDER_META = {
         "name": "Gemini",
         "prefix": "AIza",
         "docs_url": "https://aistudio.google.com/apikey",
+    },
+    "coinmarketcap": {
+        "name": "CoinMarketCap",
+        "prefix": "",
+        "docs_url": "https://pro.coinmarketcap.com/account",
     },
 }
 
@@ -113,7 +118,7 @@ async def save_key(
     from ..services.ai_keys_service import save_ai_key
 
     prefix = PROVIDER_META[provider]["prefix"]
-    if not body.api_key.startswith(prefix):
+    if prefix and not body.api_key.startswith(prefix):
         raise HTTPException(
             status_code=422,
             detail=f"Invalid {provider} key. Must start with \"{prefix}\".",
@@ -152,7 +157,34 @@ async def test_key(
 ):
     if provider not in PROVIDER_META:
         raise HTTPException(status_code=404, detail=f"Unknown provider: {provider}")
-    if provider != "anthropic":
+
+    if provider == "coinmarketcap":
+        from ..services.ai_keys_service import get_decrypted_api_key
+        import httpx
+        plain_key = await get_decrypted_api_key(db, user_id, provider)
+        if not plain_key:
+            raise HTTPException(status_code=404, detail="CoinMarketCap key not configured.")
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(
+                    "https://pro-api.coinmarketcap.com/v1/key/info",
+                    headers={"X-CMC_PRO_API_KEY": plain_key, "Accept": "application/json"},
+                )
+            if resp.status_code == 200:
+                data = resp.json()
+                plan = data.get("data", {}).get("plan", {}).get("name", "")
+                credits = data.get("data", {}).get("usage", {}).get("current_month", {}).get("credits_used", "?")
+                return {
+                    "provider": provider,
+                    "success": True,
+                    "message": f"Conectado. Plano: {plan}. Créditos usados este mês: {credits}.",
+                }
+            else:
+                return {"provider": provider, "success": False, "message": f"Chave inválida (HTTP {resp.status_code})."}
+        except Exception as e:
+            return {"provider": provider, "success": False, "message": f"Erro ao conectar: {str(e)}"}
+
+    if provider not in ("anthropic",):
         raise HTTPException(status_code=501, detail=f"Test not implemented for {provider}.")
 
     from ..services.ai_keys_service import test_anthropic_key

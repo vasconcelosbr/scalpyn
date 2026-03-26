@@ -17,6 +17,7 @@ celery_app = Celery(
         "app.tasks.macro_regime_update",
         "app.tasks.auto_discover_assets",
         "app.tasks.execute_buy",
+        "app.tasks.fetch_market_caps",
     ]
 )
 
@@ -62,5 +63,10 @@ celery_app.conf.beat_schedule = {
     "execute_buy_cycle": {
         "task": "app.tasks.execute_buy.execute_buy_cycle",
         "schedule": 60.0,
+    },
+    # Fetch market caps from CoinMarketCap every 30 minutes
+    "fetch_market_caps": {
+        "task": "app.tasks.fetch_market_caps.fetch_market_caps",
+        "schedule": 1800.0,
     },
 }
