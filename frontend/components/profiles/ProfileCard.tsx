@@ -1,6 +1,7 @@
 "use client";
 
-import { Settings2, Trash2, Play, Copy } from "lucide-react";
+import { useState } from "react";
+import { Settings2, Trash2, Play, Copy, Bot } from "lucide-react";
 
 interface ProfileCardProps {
   profile: {
@@ -11,11 +12,13 @@ interface ProfileCardProps {
     config: any;
     created_at: string;
     updated_at: string;
+    autopilot_enabled?: boolean;
   };
   onEdit: () => void;
   onDelete: () => void;
   onTest: () => void;
   onDuplicate: () => void;
+  onUpdate?: () => void;
 }
 
 export function ProfileCard({
@@ -24,8 +27,26 @@ export function ProfileCard({
   onDelete,
   onTest,
   onDuplicate,
+  onUpdate,
 }: ProfileCardProps) {
+  const [isTogglingAutoPilot, setIsTogglingAutoPilot] = useState(false);
   const filterCount = profile.config?.filters?.conditions?.length || 0;
+
+  const toggleAutoPilot = async () => {
+    setIsTogglingAutoPilot(true);
+    try {
+      await fetch(`/api/profiles/${profile.id}/autopilot/toggle`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !profile.autopilot_enabled }),
+      });
+      onUpdate?.();
+    } catch (error) {
+      console.error("Erro ao alternar Auto-Pilot:", error);
+    } finally {
+      setIsTogglingAutoPilot(false);
+    }
+  };
   const signalCount = profile.config?.signals?.conditions?.length || 0;
   const weights = profile.config?.scoring?.weights || {};
 
@@ -45,6 +66,18 @@ export function ProfileCard({
               </span>
             </div>
           </div>
+          <button
+            onClick={toggleAutoPilot}
+            disabled={isTogglingAutoPilot}
+            className={`p-2 rounded-lg transition-colors ${
+              profile.autopilot_enabled
+                ? "bg-blue-600 text-white hover:bg-blue-700"
+                : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+            }`}
+            title={profile.autopilot_enabled ? "Auto-Pilot ativo" : "Ativar Auto-Pilot"}
+          >
+            <Bot className="h-4 w-4" />
+          </button>
         </div>
 
         {profile.description && (
