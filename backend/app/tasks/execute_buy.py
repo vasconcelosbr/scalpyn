@@ -3,6 +3,7 @@
 Pipeline per candidate:
   alpha_scores (≥ threshold, last 2 min)
   → symbol cooldown check
+  → profile filters (market_cap, volume, etc. from Pool's linked Profile)
   → entry triggers (SignalEngine / "signal" ConfigProfile)
   → block rules (BlockEngine / "block" ConfigProfile)
   → capital check (SpotCapitalManager — global + per-asset)
@@ -77,6 +78,62 @@ async def _execute_buy_cycle_async() -> dict:
         except Exception:
             pass
 
+    def _apply_profile_filters(
+        market_cap: Optional[float],
+        indicators: dict,
+        conditions: list,
+        logic: str = "AND",
+    ) -> bool:
+        """Evaluate profile filter conditions against a candidate.
+
+        Fields resolved in order: market_cap (from DB join), then indicators_json.
+        Returns True if the candidate passes all filters (AND) or any filter (OR).
+        """
+        if not conditions:
+            return True
+
+        results = []
+        for cond in conditions:
+            field = cond.get("field") or cond.get("indicator", "")
+            operator = cond.get("operator", ">")
+            threshold = cond.get("value")
+            if threshold is None:
+                continue
+
+            if field == "market_cap":
+                actual = market_cap
+            else:
+                raw = indicators.get(field)
+                actual = float(raw) if raw is not None else None
+
+            if actual is None:
+                results.append(False)
+                continue
+
+            try:
+                actual = float(actual)
+                threshold = float(threshold)
+            except (TypeError, ValueError):
+                results.append(False)
+                continue
+
+            if operator in (">", "gt"):
+                results.append(actual > threshold)
+            elif operator in (">=", "gte"):
+                results.append(actual >= threshold)
+            elif operator in ("<", "lt"):
+                results.append(actual < threshold)
+            elif operator in ("<=", "lte"):
+                results.append(actual <= threshold)
+            elif operator in ("==", "=", "eq"):
+                results.append(actual == threshold)
+            else:
+                results.append(True)
+
+        if not results:
+            return True
+        return all(results) if logic.upper() == "AND" else any(results)
+
     async with AsyncSessionLocal() as db:
         # 1. Find all active spot_engine configs (one per user, usually)
         cfg_rows = await db.execute(
@@ -126,6 +183,20 @@ async def _execute_buy_cycle_async() -> dict:
                 pool       = pool_res.scalars().first()
                 paper_mode = True if not pool else (pool.mode != "live")
 
+                # 3b. Load profile filter conditions (market_cap, volume, etc.)
+                profile_filter_conditions: list = []
+                profile_filter_logic: str = "AND"
+                if pool and pool.profile_id:
+                    from ..models.profile import Profile
+                    prof_res = await db.execute(
+                        select(Profile).where(Profile.id == pool.profile_id)
+                    )
+                    prof = prof_res.scalars().first()
+                    if prof and prof.config_json:
+                        pf = prof.config_json.get("filters", {})
+                        profile_filter_conditions = pf.get("conditions", [])
+                        profile_filter_logic = pf.get("logic", "AND")
+
                 # 4. USDT balance → capital state
                 usdt_balance = 0.0
                 if adapter and not paper_mode:
@@ -153,14 +224,16 @@ async def _execute_buy_cycle_async() -> dict:
 
                 trade_size_usdt = capital_mgr.calc_trade_size(state)
 
-                # 5. Top-scoring candidates (last 2 min)
+                # 5. Top-scoring candidates (last 2 min) — includes market_cap from metadata
                 ranked_res = await db.execute(text("""
                     SELECT DISTINCT ON (a.symbol)
                         a.symbol,
                         a.score,
-                        i.indicators_json
+                        i.indicators_json,
+                        mm.market_cap
                     FROM alpha_scores a
                     JOIN indicators i ON a.symbol = i.symbol
+                    LEFT JOIN market_metadata mm ON mm.symbol = a.symbol
                     WHERE a.time > now() - interval '2 minutes'
                       AND i.time > now() - interval '2 minutes'
                       AND a.score >= :threshold
@@ -194,6 +267,7 @@ async def _execute_buy_cycle_async() -> dict:
                     symbol      = row.symbol
                     alpha_score = float(row.score)
                     indicators  = row.indicators_json or {}
+                    candidate_market_cap = float(row.market_cap) if row.market_cap else None
                     current_price = float(indicators.get("close", 0))
 
                     if current_price <= 0:
@@ -206,6 +280,21 @@ async def _execute_buy_cycle_async() -> dict:
                         logger.debug("Skipping %s — on cooldown", symbol)
                         stats["skipped"] += 1
                         continue
+
+                    # 6a2. Profile filter conditions (market_cap, volume_24h, etc.)
+                    if profile_filter_conditions:
+                        if not _apply_profile_filters(
+                            candidate_market_cap,
+                            indicators,
+                            profile_filter_conditions,
+                            profile_filter_logic,
+                        ):
+                            logger.debug(
+                                "Profile filters not met for %s (user %s) — market_cap=%.0f",
+                                symbol, user_id, candidate_market_cap or 0,
+                            )
+                            stats["skipped"] += 1
+                            continue
 
                     # 6b. Entry triggers (SignalEngine)
                     if signal_engine:
