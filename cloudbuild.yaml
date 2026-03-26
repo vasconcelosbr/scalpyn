@@ -34,7 +34,7 @@ steps:
       - '8080'
 
 substitutions:
-  _REGION: southamerica-east1
+  _REGION: us-central1
   _REPO: scalpyn
   _SERVICE: scalpyn
 
