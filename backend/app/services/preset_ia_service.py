@@ -280,6 +280,60 @@ Responda APENAS com o JSON no formato abaixo, sem nenhum texto adicional:
 """
 
 
+def _audit_filter_fields(conditions: list) -> list:
+    """
+    SCALPYN_PRESET_AUDITOR_V1 — Corrige mapeamentos de campo errados gerados pelo AI.
+
+    Regras (baseadas em faixas de valor):
+      value < 0 em volume_24h         → change_24h_pct
+      0 < value <= 5 em volume_24h    → atr_pct
+      5 < value <= 100 em volume_24h  → change_24h_pct
+      value > 100 em volume_24h       → manter (volume real em unidades pequenas improvável)
+      value >= 100_000 em volume_24h  → correto, manter
+
+    Remove condições logicamente impossíveis:
+      volume_24h ou market_cap com valor negativo
+      atr_pct <= 0
+    """
+    fixed = []
+    for cond in conditions:
+        field = cond.get("field", "")
+        value = cond.get("value", 0)
+        op    = cond.get("operator", ">=")
+
+        if field == "volume_24h" and isinstance(value, (int, float)):
+            abs_val = abs(value)
+            if value < 0:
+                cond["field"] = "change_24h_pct"
+            elif abs_val <= 5:
+                cond["field"] = "atr_pct"
+            elif abs_val <= 100:
+                cond["field"] = "change_24h_pct"
+
+        new_field = cond.get("field", "")
+
+        if new_field in ("volume_24h", "market_cap"):
+            if isinstance(value, (int, float)) and value < 0:
+                continue
+
+        if new_field == "atr_pct":
+            if op in ("<=", "<") and isinstance(value, (int, float)) and value <= 0:
+                continue
+
+        fixed.append(cond)
+
+    # Remover duplicatas exatas (mesmo field + operator + value)
+    seen = set()
+    deduped = []
+    for cond in fixed:
+        key = (cond.get("field"), cond.get("operator"), cond.get("value"))
+        if key not in seen:
+            seen.add(key)
+            deduped.append(cond)
+
+    return deduped
+
+
 def _validate_config(config: dict, profile_role: str) -> dict:
     """
     Valida e corrige o config retornado pelo Claude.
@@ -294,6 +348,11 @@ def _validate_config(config: dict, profile_role: str) -> dict:
         config['scoring'] = {'enabled': True, 'weights': {'liquidity': 25, 'market_structure': 25, 'momentum': 25, 'signal': 25}}
     if 'signals' not in config:
         config['signals'] = {'logic': 'AND', 'conditions': []}
+
+    # Auditar e corrigir mapeamentos de campo antes de processar
+    config['filters']['conditions'] = _audit_filter_fields(
+        config['filters'].get('conditions', [])
+    )
 
     # Garantir IDs únicos nas conditions
     for i, cond in enumerate(config['filters'].get('conditions', [])):
