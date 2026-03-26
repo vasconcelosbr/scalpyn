@@ -16,7 +16,107 @@ import {
 } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
 
-const DEFAULT_SELLING = {
+interface SellingConfig {
+  take_profit_pct: number;
+  min_profit_pct: number;
+  never_sell_at_loss: boolean;
+  safety_margin_above_entry_pct: number;
+  enable_ai_consultation: boolean;
+  ai_rate_limit_seconds: number;
+  ai_model: string;
+}
+
+interface RangingConfig {
+  enabled: boolean;
+  adx_threshold: number;
+  bb_width_threshold: number;
+}
+
+interface ExhaustionConfig {
+  enabled: boolean;
+  rsi_overbought: number;
+  volume_decline_pct: number;
+}
+
+interface AIConsultationLayerConfig {
+  enabled: boolean;
+  trigger_profit_pct: number;
+}
+
+interface TargetConfig {
+  volatility_filter_enabled: boolean;
+  min_volume_multiplier: number;
+  liquidity_check_enabled: boolean;
+}
+
+interface TrailingConfig {
+  enabled: boolean;
+  hwm_trail_pct: number;
+  activation_profit_pct: number;
+}
+
+interface SellFlowConfig {
+  ranging: RangingConfig;
+  exhaustion: ExhaustionConfig;
+  ai_consultation: AIConsultationLayerConfig;
+  target: TargetConfig;
+  trailing: TrailingConfig;
+}
+
+interface ScannerConfig {
+  scan_interval_seconds: number;
+  universe_source: string;
+  buy_threshold_score: number;
+  strong_buy_threshold: number;
+  max_opportunities_per_scan: number;
+  symbol_cooldown_seconds: number;
+  global_cooldown_after_n_buys: number;
+}
+
+interface BuyingConfig {
+  capital_per_trade_pct: number;
+  capital_per_trade_min_usdt: number;
+  capital_reserve_pct: number;
+  max_capital_in_use_pct: number;
+  max_positions_total: number;
+  max_positions_per_asset: number;
+  max_exposure_per_asset_pct: number;
+  order_type: string;
+  limit_order_timeout_seconds: number;
+}
+
+interface HoldingUnderwaterConfig {
+  alert_after_hours: number;
+  alert_repeat_interval_hours: number;
+  track_opportunity_cost: boolean;
+}
+
+interface DCAConfig {
+  enabled: boolean;
+  trigger_drop_pct: number;
+  min_score_for_dca: number;
+  max_dca_layers: number;
+  dca_amount_usdt: number;
+  dca_decay_factor: number;
+  max_total_exposure_per_asset_pct: number;
+}
+
+interface MacroFilterConfig {
+  enabled: boolean;
+  block_in_risk_off: boolean;
+}
+
+interface SpotEngineConfig {
+  scanner: ScannerConfig;
+  buying: BuyingConfig;
+  selling: SellingConfig;
+  holding_underwater: HoldingUnderwaterConfig;
+  dca: DCAConfig;
+  sell_flow: SellFlowConfig;
+  macro_filter: MacroFilterConfig;
+}
+
+const DEFAULT_SELLING: SellingConfig = {
   take_profit_pct: 1.5,
   min_profit_pct: 0.5,
   never_sell_at_loss: true,
@@ -26,7 +126,7 @@ const DEFAULT_SELLING = {
   ai_model: "google/gemini-2.5-flash",
 };
 
-const DEFAULT_SELL_FLOW = {
+const DEFAULT_SELL_FLOW: SellFlowConfig = {
   ranging: { enabled: true, adx_threshold: 18.0, bb_width_threshold: 0.03 },
   exhaustion: { enabled: true, rsi_overbought: 72.0, volume_decline_pct: 20.0 },
   ai_consultation: { enabled: false, trigger_profit_pct: 1.0 },
@@ -34,17 +134,67 @@ const DEFAULT_SELL_FLOW = {
   trailing: { enabled: false, hwm_trail_pct: 0.5, activation_profit_pct: 2.0 },
 };
 
-type SellLayer = {
-  key: string;
+const DEFAULT_SPOT_ENGINE: SpotEngineConfig = {
+  scanner: {
+    scan_interval_seconds: 30,
+    universe_source: "dynamic",
+    buy_threshold_score: 75.0,
+    strong_buy_threshold: 85.0,
+    max_opportunities_per_scan: 3,
+    symbol_cooldown_seconds: 300,
+    global_cooldown_after_n_buys: 0,
+  },
+  buying: {
+    capital_per_trade_pct: 10.0,
+    capital_per_trade_min_usdt: 20.0,
+    capital_reserve_pct: 10.0,
+    max_capital_in_use_pct: 80.0,
+    max_positions_total: 20,
+    max_positions_per_asset: 5,
+    max_exposure_per_asset_pct: 25.0,
+    order_type: "market",
+    limit_order_timeout_seconds: 120,
+  },
+  selling: DEFAULT_SELLING,
+  holding_underwater: {
+    alert_after_hours: 24.0,
+    alert_repeat_interval_hours: 12.0,
+    track_opportunity_cost: true,
+  },
+  dca: {
+    enabled: false,
+    trigger_drop_pct: 5.0,
+    min_score_for_dca: 70.0,
+    max_dca_layers: 3,
+    dca_amount_usdt: 50.0,
+    dca_decay_factor: 0.7,
+    max_total_exposure_per_asset_pct: 30.0,
+  },
+  sell_flow: DEFAULT_SELL_FLOW,
+  macro_filter: {
+    enabled: false,
+    block_in_risk_off: true,
+  },
+};
+
+interface Strategy {
+  id: string;
+  name: string;
+  enabled: boolean;
+  params: Record<string, number>;
+}
+
+interface SellLayerDef {
+  key: keyof SellFlowConfig;
   layer: number;
   label: string;
   description: string;
   icon: React.ReactNode;
   hasToggle: boolean;
   toggleKey?: string;
-};
+}
 
-const SELL_LAYERS: SellLayer[] = [
+const SELL_LAYERS: SellLayerDef[] = [
   {
     key: "ranging",
     layer: 1,
@@ -145,29 +295,30 @@ export default function StrategySettings() {
   const { config: stratConfig, updateConfig: updateStratConfig, isLoading: stratLoading } = useConfig("strategy");
   const { config: seConfig, updateConfig: updateSeConfig, isLoading: seLoading } = useConfig("spot_engine");
 
-  const [strategies, setStrategies] = useState<any[]>([]);
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [expandedLayer, setExpandedLayer] = useState<string | null>(null);
-  const [selling, setSelling] = useState<any>(DEFAULT_SELLING);
-  const [sellFlow, setSellFlow] = useState<any>(DEFAULT_SELL_FLOW);
-  const [seConfigFull, setSeConfigFull] = useState<any>({});
+  const [expandedLayer, setExpandedLayer] = useState<keyof SellFlowConfig | null>(null);
+  const [selling, setSelling] = useState<SellingConfig>(DEFAULT_SELLING);
+  const [sellFlow, setSellFlow] = useState<SellFlowConfig>(DEFAULT_SELL_FLOW);
+  const [seConfigFull, setSeConfigFull] = useState<SpotEngineConfig>(DEFAULT_SPOT_ENGINE);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (stratConfig?.strategies) setStrategies(stratConfig.strategies);
+    if (stratConfig?.strategies) setStrategies(stratConfig.strategies as Strategy[]);
   }, [stratConfig]);
 
   useEffect(() => {
     if (!seConfig || Object.keys(seConfig).length === 0) return;
-    setSeConfigFull(seConfig);
-    if (seConfig.selling) setSelling((prev: any) => ({ ...prev, ...seConfig.selling }));
-    if (seConfig.sell_flow) {
-      setSellFlow((prev: any) => ({
-        ranging: { ...prev.ranging, ...(seConfig.sell_flow.ranging ?? {}) },
-        exhaustion: { ...prev.exhaustion, ...(seConfig.sell_flow.exhaustion ?? {}) },
-        ai_consultation: { ...prev.ai_consultation, ...(seConfig.sell_flow.ai_consultation ?? {}) },
-        target: { ...prev.target, ...(seConfig.sell_flow.target ?? {}) },
-        trailing: { ...prev.trailing, ...(seConfig.sell_flow.trailing ?? {}) },
+    const loaded = seConfig as Partial<SpotEngineConfig>;
+    setSeConfigFull((prev) => ({ ...prev, ...loaded }));
+    if (loaded.selling) setSelling((prev) => ({ ...prev, ...loaded.selling }));
+    if (loaded.sell_flow) {
+      setSellFlow((prev) => ({
+        ranging: { ...prev.ranging, ...(loaded.sell_flow?.ranging ?? {}) },
+        exhaustion: { ...prev.exhaustion, ...(loaded.sell_flow?.exhaustion ?? {}) },
+        ai_consultation: { ...prev.ai_consultation, ...(loaded.sell_flow?.ai_consultation ?? {}) },
+        target: { ...prev.target, ...(loaded.sell_flow?.target ?? {}) },
+        trailing: { ...prev.trailing, ...(loaded.sell_flow?.trailing ?? {}) },
       }));
     }
   }, [seConfig]);
@@ -175,9 +326,14 @@ export default function StrategySettings() {
   const handleSave = async () => {
     setSaving(true);
     try {
+      const fullSpotEnginePayload: SpotEngineConfig = {
+        ...seConfigFull,
+        selling,
+        sell_flow: sellFlow,
+      };
       await Promise.all([
         updateStratConfig({ strategies }),
-        updateSeConfig({ ...seConfigFull, selling, sell_flow: sellFlow }),
+        updateSeConfig(fullSpotEnginePayload),
       ]);
     } catch (e) {
       console.error(e);
@@ -189,17 +345,21 @@ export default function StrategySettings() {
     setStrategies(strategies.map((s) => (s.id === id ? { ...s, enabled: !s.enabled } : s)));
   };
 
-  const updateParam = (stratId: string, paramKey: string, value: any) => {
+  const updateParam = (stratId: string, paramKey: string, value: number) => {
     setStrategies(strategies.map((s) =>
       s.id === stratId ? { ...s, params: { ...s.params, [paramKey]: value } } : s
     ));
   };
 
-  const updateSelling = (key: string, value: any) =>
-    setSelling((prev: any) => ({ ...prev, [key]: value }));
+  const updateSelling = <K extends keyof SellingConfig>(key: K, value: SellingConfig[K]) =>
+    setSelling((prev) => ({ ...prev, [key]: value }));
 
-  const updateLayer = (layerKey: string, field: string, value: any) =>
-    setSellFlow((prev: any) => ({
+  const updateLayer = <L extends keyof SellFlowConfig>(
+    layerKey: L,
+    field: keyof SellFlowConfig[L],
+    value: SellFlowConfig[L][keyof SellFlowConfig[L]]
+  ) =>
+    setSellFlow((prev) => ({
       ...prev,
       [layerKey]: { ...prev[layerKey], [field]: value },
     }));
@@ -278,7 +438,7 @@ export default function StrategySettings() {
                           type="number"
                           step="any"
                           className="input numeric w-24 h-8 text-[13px]"
-                          value={val as number}
+                          value={val}
                           onChange={(e) => updateParam(strat.id, key, parseFloat(e.target.value) || 0)}
                         />
                       </div>
@@ -389,8 +549,10 @@ export default function StrategySettings() {
         {/* 5 Layer Cards */}
         <div className="space-y-3">
           {SELL_LAYERS.map((layer) => {
-            const layerData = sellFlow[layer.key] ?? {};
-            const isActive = layer.hasToggle ? !!layerData[layer.toggleKey!] : true;
+            const layerData = sellFlow[layer.key];
+            const isActive = layer.hasToggle
+              ? !!(layerData as unknown as Record<string, unknown>)[layer.toggleKey!]
+              : true;
             const isExpanded = expandedLayer === layer.key;
 
             return (
@@ -429,10 +591,12 @@ export default function StrategySettings() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      {layer.hasToggle && (
+                      {layer.hasToggle && layer.toggleKey && (
                         <Toggle
                           active={isActive}
-                          onToggle={() => updateLayer(layer.key, layer.toggleKey!, !isActive)}
+                          onToggle={() =>
+                            updateLayer(layer.key, layer.toggleKey as keyof SellFlowConfig[typeof layer.key], !isActive as SellFlowConfig[typeof layer.key][keyof SellFlowConfig[typeof layer.key]])
+                          }
                         />
                       )}
                       <button
@@ -461,7 +625,7 @@ export default function StrategySettings() {
                         <div className="space-y-5">
                           <Slider
                             label="ADX — Limiar de Direcionalidade"
-                            value={layerData.adx_threshold ?? 18}
+                            value={(layerData as RangingConfig).adx_threshold}
                             min={5}
                             max={40}
                             step={0.5}
@@ -470,7 +634,7 @@ export default function StrategySettings() {
                           />
                           <Slider
                             label="BB Width — Limiar de Compressão"
-                            value={layerData.bb_width_threshold ?? 0.03}
+                            value={(layerData as RangingConfig).bb_width_threshold}
                             min={0.001}
                             max={0.2}
                             step={0.001}
@@ -485,7 +649,7 @@ export default function StrategySettings() {
                         <div className="space-y-5">
                           <Slider
                             label="RSI — Zona de Sobrecompra"
-                            value={layerData.rsi_overbought ?? 72}
+                            value={(layerData as ExhaustionConfig).rsi_overbought}
                             min={50}
                             max={100}
                             step={0.5}
@@ -494,7 +658,7 @@ export default function StrategySettings() {
                           />
                           <Slider
                             label="Queda de Volume para Sinalizar Exaustão"
-                            value={layerData.volume_decline_pct ?? 20}
+                            value={(layerData as ExhaustionConfig).volume_decline_pct}
                             min={5}
                             max={80}
                             step={1}
@@ -509,7 +673,7 @@ export default function StrategySettings() {
                         <div className="space-y-5">
                           <Slider
                             label="Lucro Mínimo para Acionar Consulta IA"
-                            value={layerData.trigger_profit_pct ?? 1.0}
+                            value={(layerData as AIConsultationLayerConfig).trigger_profit_pct}
                             min={0}
                             max={10}
                             step={0.1}
@@ -539,12 +703,12 @@ export default function StrategySettings() {
                               </p>
                             </div>
                             <Toggle
-                              active={layerData.volatility_filter_enabled ?? true}
+                              active={(layerData as TargetConfig).volatility_filter_enabled}
                               onToggle={() =>
                                 updateLayer(
                                   "target",
                                   "volatility_filter_enabled",
-                                  !layerData.volatility_filter_enabled
+                                  !(layerData as TargetConfig).volatility_filter_enabled
                                 )
                               }
                             />
@@ -559,19 +723,19 @@ export default function StrategySettings() {
                               </p>
                             </div>
                             <Toggle
-                              active={layerData.liquidity_check_enabled ?? true}
+                              active={(layerData as TargetConfig).liquidity_check_enabled}
                               onToggle={() =>
                                 updateLayer(
                                   "target",
                                   "liquidity_check_enabled",
-                                  !layerData.liquidity_check_enabled
+                                  !(layerData as TargetConfig).liquidity_check_enabled
                                 )
                               }
                             />
                           </div>
                           <Slider
                             label="Multiplicador Mínimo de Volume"
-                            value={layerData.min_volume_multiplier ?? 0.8}
+                            value={(layerData as TargetConfig).min_volume_multiplier}
                             min={0.1}
                             max={5}
                             step={0.1}
@@ -586,7 +750,7 @@ export default function StrategySettings() {
                         <div className="space-y-5">
                           <Slider
                             label="Trail Distance do HWM"
-                            value={layerData.hwm_trail_pct ?? 0.5}
+                            value={(layerData as TrailingConfig).hwm_trail_pct}
                             min={0.1}
                             max={50}
                             step={0.1}
@@ -595,7 +759,7 @@ export default function StrategySettings() {
                           />
                           <Slider
                             label="Lucro de Ativação do Trailing"
-                            value={layerData.activation_profit_pct ?? 2.0}
+                            value={(layerData as TrailingConfig).activation_profit_pct}
                             min={0.1}
                             max={20}
                             step={0.1}
