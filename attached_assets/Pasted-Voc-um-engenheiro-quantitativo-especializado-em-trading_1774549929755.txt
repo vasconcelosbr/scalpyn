@@ -1,0 +1,171 @@
+Você é um engenheiro quantitativo especializado em trading algorítmico de criptomoedas.
+
+Sua tarefa é projetar um sistema de decisão de VENDA (exit strategy) totalmente dinâmico, SEM HARDCODE, onde todos os parâmetros são controlados via interface gráfica (GUI), especificamente via endpoint:
+
+/settings/risk
+
+---
+
+## REGRAS CRÍTICAS
+
+1. NÃO usar valores fixos no código
+2. TODOS os thresholds devem vir de configuração externa (GUI)
+3. NÃO usar venda parcial — sempre liquidar 100% da posição
+4. Sistema deve ser modular e adaptável
+
+---
+
+## INPUT DE CONFIGURAÇÃO (GUI)
+
+Os seguintes parâmetros devem ser consumidos dinamicamente:
+
+* trailing_stop_enabled (bool)
+* default_take_profit (%)
+* dynamic_stop_loss_atr (multiplier)
+* max_concurrent_positions
+* daily_loss_limit (%)
+* capital_per_trade (%)
+* max_capital_in_use (%)
+* max_slippage (%)
+* circuit_breaker_losses (int)
+* order_type (LIMIT ou MARKET)
+
+Esses valores NÃO podem ser fixos no código.
+
+---
+
+MÓDULOS EXISTENTES
+
+1. Momentum Breakout
+
+* adx_min
+* lookback
+* volume_spike_multiplier
+
+2. Mean Reversion
+
+* rsi_threshold
+* zscore_threshold
+* bollinger_deviation
+
+Todos esses parâmetros também vêm da GUI.
+
+---
+
+OBJETIVO
+
+Construir um sistema de decisão de venda que:
+
+* combine Momentum + Mean Reversion
+* utilize uma camada de IA para contexto
+* execute venda TOTAL (100% da posição)
+* respeite integralmente os parâmetros de risco da GUI
+
+---
+
+LÓGICA DE VENDA (SEM HARD CODE)
+
+CAMADA 0 — FILTRO DE LUCRO
+
+* Só vender se lucro >= default_take_profit
+
+CAMADA 1 — MEAN REVERSION
+
+* RSI >= rsi_threshold
+* Z-score >= zscore_threshold
+* Preço acima da banda superior
+
+CAMADA 2 — MOMENTUM EXIT
+
+* ADX >= adx_min
+* Volume Spike >= volume_spike_multiplier
+* Perda de força do movimento
+
+CAMADA 3 — TRAILING STOP
+
+* Só ativo se trailing_stop_enabled = true
+* Usar parâmetros da GUI (não fixos)
+
+CAMADA 4 — MARKET REGIME
+
+* Determinado por ADX (valor vindo da config)
+
+CAMADA 5 — KILL SWITCH
+
+* Baseado em ATR ou variação configurável (sem hardcode)
+
+---
+
+IA (OBRIGATÓRIO)
+
+A IA deve gerar:
+
+trend_continuation_score (0–100)
+
+INPUTS:
+
+* ADX
+* Volume
+* RSI + slope
+* Volatilidade
+* Estrutura de candles
+
+A IA NÃO executa ordens.
+
+---
+
+USO DA IA
+
+A IA deve:
+
+1. Priorizar estratégia:
+
+* Score baixo → Mean Reversion
+* Score alto → Momentum
+
+2. Ajustar trailing dinamicamente (sem hardcode)
+
+3. Confirmar ou bloquear venda
+
+---
+
+EXECUÇÃO DE VENDA
+
+IMPORTANTE:
+
+* Sempre vender 100% da posição
+* Nunca vender parcialmente
+* Tipo de ordem deve respeitar:
+  order_type (LIMIT ou MARKET)
+* Respeitar:
+  max_slippage
+
+---
+
+SAÍDA ESPERADA
+
+Gerar:
+
+1. Arquitetura modular
+2. Pseudocódigo completo
+3. Código (Node.js ou Python)
+4. Funções separadas:
+
+   * loadConfig()
+   * calculateIndicators()
+   * aiScore()
+   * decideSell()
+   * executeSell()
+
+---
+
+OBJETIVO FINAL
+
+Criar um sistema institucional onde:
+
+* Toda lógica é configurável via GUI
+* Não existe hardcode
+* Venda é sempre total
+* IA melhora decisão sem substituir regras
+
+Agora gere a solução completa.

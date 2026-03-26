@@ -2,6 +2,13 @@
 
 All thresholds and parameters come from the DB (ConfigProfile.config_json).
 Zero hardcode — every numeric default here is the UI default, not a constant.
+
+Sell Pipeline (5 layers):
+  L1 Mean Reversion  — RSI, Z-score, Bollinger
+  L2 Momentum Exit   — ADX, volume spike
+  L3 AI Hold         — LLM consultation before selling
+  L4 Trailing Stop   — HWM-based trail after activation profit
+  L5 Kill Switch     — ATR stop or max drawdown from HWM (always-on risk floor)
 """
 
 from pydantic import BaseModel, Field
@@ -33,7 +40,7 @@ class BuyingConfig(BaseModel):
 class SellingConfig(BaseModel):
     take_profit_pct: float = Field(1.5, ge=0.1, le=1000)
     min_profit_pct: float = Field(0.5, ge=0.0, le=1000)
-    never_sell_at_loss: bool = True            # INVIOLÁVEL — never False in prod
+    never_sell_at_loss: bool = True
     safety_margin_above_entry_pct: float = Field(0.3, ge=0)
     enable_ai_consultation: bool = False
     ai_rate_limit_seconds: int = Field(60, ge=10)
@@ -56,41 +63,80 @@ class DCAConfig(BaseModel):
     max_total_exposure_per_asset_pct: float = Field(30.0, ge=1, le=100)
 
 
-class RangingConfig(BaseModel):
-    enabled: bool = True
-    adx_threshold: float = Field(18.0, ge=5, le=40)
-    bb_width_threshold: float = Field(0.03, ge=0.001)
+# ── Sell Pipeline Layers ──────────────────────────────────────────────────────
 
-
-class ExhaustionConfig(BaseModel):
+class MeanReversionConfig(BaseModel):
+    """L1 — Mean Reversion: sell when RSI overbought + Z-score extended + price above BB."""
     enabled: bool = True
     rsi_overbought: float = Field(72.0, ge=50, le=100)
+    zscore_threshold: float = Field(2.0, ge=0.5, le=5.0)
+    bollinger_deviation: float = Field(2.0, ge=0.5, le=5.0)
     volume_decline_pct: float = Field(20.0, ge=5, le=80)
 
 
+class MomentumExitConfig(BaseModel):
+    """L2 — Momentum Exit: sell when trend strength fades (ADX drop + volume spike reversal)."""
+    enabled: bool = True
+    adx_min: float = Field(18.0, ge=5, le=40)
+    bb_width_threshold: float = Field(0.03, ge=0.001)
+    volume_spike_multiplier: float = Field(2.0, ge=1.0, le=10.0)
+
+
 class AIConsultationConfig(BaseModel):
+    """L3 — AI Hold: consult LLM before selling; can veto the sell decision."""
     enabled: bool = False
     trigger_profit_pct: float = Field(1.0, ge=0)
 
 
-class TargetConfig(BaseModel):
-    volatility_filter_enabled: bool = True
-    min_volume_multiplier: float = Field(0.8, ge=0.1)
-    liquidity_check_enabled: bool = True
-
-
 class TrailingConfig(BaseModel):
+    """L4 — Trailing Stop: activates after activation_profit_pct, trails HWM."""
     enabled: bool = False
     hwm_trail_pct: float = Field(0.5, ge=0.1, le=50)
     activation_profit_pct: float = Field(2.0, ge=0.1)
 
 
+class KillSwitchConfig(BaseModel):
+    """L5 — Kill Switch: emergency exit regardless of profit. ATR-based or fixed drawdown.
+    Always evaluated last; overrides all other layers if triggered.
+    """
+    enabled: bool = True
+    atr_stop_multiplier: float = Field(2.0, ge=0.5, le=10.0)
+    max_drawdown_from_hwm_pct: float = Field(5.0, ge=0.5, le=50.0)
+
+
+class TargetConfig(BaseModel):
+    """Pre-execution filters: volatility and liquidity checks before placing sell order."""
+    volatility_filter_enabled: bool = True
+    min_volume_multiplier: float = Field(0.8, ge=0.1)
+    liquidity_check_enabled: bool = True
+
+
 class SellFlowConfig(BaseModel):
-    ranging: RangingConfig = Field(default_factory=RangingConfig)
-    exhaustion: ExhaustionConfig = Field(default_factory=ExhaustionConfig)
+    mean_reversion: MeanReversionConfig = Field(default_factory=MeanReversionConfig)
+    momentum_exit: MomentumExitConfig = Field(default_factory=MomentumExitConfig)
     ai_consultation: AIConsultationConfig = Field(default_factory=AIConsultationConfig)
-    target: TargetConfig = Field(default_factory=TargetConfig)
     trailing: TrailingConfig = Field(default_factory=TrailingConfig)
+    kill_switch: KillSwitchConfig = Field(default_factory=KillSwitchConfig)
+    target: TargetConfig = Field(default_factory=TargetConfig)
+
+    # Backward compatibility aliases (old keys from saved configs)
+    @classmethod
+    def from_dict(cls, data: dict) -> "SellFlowConfig":
+        """Load from dict with backward compat for old 'ranging'/'exhaustion' keys."""
+        compat = dict(data)
+        if "ranging" in compat and "momentum_exit" not in compat:
+            compat["momentum_exit"] = compat.pop("ranging")
+        if "exhaustion" in compat and "mean_reversion" not in compat:
+            compat["exhaustion_data"] = compat.pop("exhaustion")
+            old = compat.pop("exhaustion_data", {})
+            compat["mean_reversion"] = {
+                "enabled": old.get("enabled", True),
+                "rsi_overbought": old.get("rsi_overbought", 72.0),
+                "zscore_threshold": 2.0,
+                "bollinger_deviation": 2.0,
+                "volume_decline_pct": old.get("volume_decline_pct", 20.0),
+            }
+        return cls(**{k: v for k, v in compat.items() if k in cls.model_fields})
 
 
 class MacroFilterConfig(BaseModel):
@@ -99,8 +145,7 @@ class MacroFilterConfig(BaseModel):
 
 
 class SpotEngineConfig(BaseModel):
-    """
-    Full config for the Spot Engine.
+    """Full config for the Spot Engine.
     Loaded from ConfigProfile where config_type = 'spot_engine'.
     Every field is GUI-editable; zero hardcode in engine code.
     """
@@ -115,8 +160,10 @@ class SpotEngineConfig(BaseModel):
 
     @classmethod
     def from_config_json(cls, config_json: dict) -> "SpotEngineConfig":
-        return cls(**config_json)
+        data = dict(config_json)
+        if "sell_flow" in data and isinstance(data["sell_flow"], dict):
+            data["sell_flow"] = SellFlowConfig.from_dict(data["sell_flow"])
+        return cls(**data)
 
     def default_json(self) -> dict:
-        """Return the full default config as dict (for DB seeding)."""
         return self.model_dump()
