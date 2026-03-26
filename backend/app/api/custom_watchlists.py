@@ -445,6 +445,7 @@ async def get_watchlist_ranking(
             "price": processed.get("price"),
             "change_24h": processed.get("change_24h"),
             "volume_24h": asset.get("volume_24h"),
+            "market_cap": asset.get("market_cap"),
             "score": processed.get("score", {}).get("total_score", 0),
             "score_breakdown": {
                 "liquidity": processed.get("score", {}).get("liquidity", 0),
@@ -555,6 +556,7 @@ async def get_watchlist_signals(
                 "name": asset.get("name"),
                 "price": asset.get("price"),
                 "change_24h": asset.get("change_24h"),
+                "market_cap": asset.get("market_cap"),
                 "action": _determine_action(asset),
                 "score": asset.get("score", {}).get("total_score", 0),
                 "confidence": _calculate_confidence(asset),

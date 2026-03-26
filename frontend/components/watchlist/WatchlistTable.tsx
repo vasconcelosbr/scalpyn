@@ -22,6 +22,7 @@ interface RankedAsset {
   name: string;
   price: number;
   change_24h: number;
+  market_cap?: number | null;
   score: number;
   rating: string;
   score_breakdown: {
@@ -37,6 +38,7 @@ interface Signal {
   name: string;
   price: number;
   change_24h: number;
+  market_cap?: number | null;
   action: string;
   score: number;
   confidence: number;
@@ -878,6 +880,7 @@ export function WatchlistTable() {
                     <th>Symbol</th>
                     <th className="text-right">Price</th>
                     <th className="text-right">24h %</th>
+                    <th className="text-right">Market Cap</th>
                     <th>
                       <span className="flex items-center gap-1">
                         Alpha Score
@@ -897,6 +900,7 @@ export function WatchlistTable() {
                       <td className={`numeric percentage ${asset.change_24h >= 0 ? "profit" : "loss"}`}>
                         {formatPercent(asset.change_24h)}
                       </td>
+                      <td className="numeric text-[var(--text-secondary)]">{formatLargeNumber(asset.market_cap)}</td>
                       <td>
                         <div className="score-bar" data-level={deriveScoreLevel(asset.score)}>
                           <span className="score-label">{asset.score.toFixed(1)}</span>
@@ -934,7 +938,7 @@ export function WatchlistTable() {
                   ))}
                   {rankedAssets.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="text-center py-12 text-[var(--text-tertiary)] text-[13px]">
+                      <td colSpan={8} className="text-center py-12 text-[var(--text-tertiary)] text-[13px]">
                         {l2Profile 
                           ? "No assets passed the L1 filters. Try adjusting your profile."
                           : "Select a L2 profile to generate ranking."}
@@ -962,6 +966,7 @@ export function WatchlistTable() {
                     <th>Symbol</th>
                     <th className="text-right">Price</th>
                     <th className="text-right">24h %</th>
+                    <th className="text-right">Market Cap</th>
                     <th>Action</th>
                     <th>Score</th>
                     <th>Confidence</th>
@@ -976,6 +981,7 @@ export function WatchlistTable() {
                       <td className={`numeric percentage ${signal.change_24h >= 0 ? "profit" : "loss"}`}>
                         {formatPercent(signal.change_24h)}
                       </td>
+                      <td className="numeric text-[var(--text-secondary)]">{formatLargeNumber(signal.market_cap)}</td>
                       <td>
                         <span className={`badge ${
                           signal.action === "LONG" ? "bullish" :
@@ -1023,7 +1029,7 @@ export function WatchlistTable() {
                   ))}
                   {signals.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="text-center py-12 text-[var(--text-tertiary)] text-[13px]">
+                      <td colSpan={8} className="text-center py-12 text-[var(--text-tertiary)] text-[13px]">
                         {l3Profile 
                           ? "No signals triggered. Conditions not met or no assets passed filters."
                           : "Select a L3 profile to generate signals."}
