@@ -1,15 +1,15 @@
 """Add autopilot_enabled to pools table
 
-Revision ID: 010_autopilot_pool
-Revises: 009_profile_role_autopilot
+Revision ID: 011_autopilot_pool
+Revises: 010_ai_skills
 Create Date: 2026-03-25
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "010_autopilot_pool"
-down_revision = "009_profile_role_autopilot"
+revision = "011_autopilot_pool"
+down_revision = "010_ai_skills"
 branch_labels = None
 depends_on = None
 

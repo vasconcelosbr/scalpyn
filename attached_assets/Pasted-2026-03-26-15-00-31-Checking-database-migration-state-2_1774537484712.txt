@@ -1,0 +1,71 @@
+2026-03-26 15:00:31 ==> Checking database migration state...
+2026-03-26 15:00:32   Current alembic revision(s): ['010_ai_skills']
+2026-03-26 15:00:32 ==> Running: alembic upgrade head
+2026-03-26 15:00:33 INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+2026-03-26 15:00:33 INFO  [alembic.runtime.migration] Will assume transactional DDL.
+2026-03-26 15:00:33 ERROR [alembic.util.messaging] Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:00:33 FAILED: Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:00:37 ==> Checking database migration state...
+2026-03-26 15:00:39   Current alembic revision(s): ['010_ai_skills']
+2026-03-26 15:00:39 ==> Running: alembic upgrade head
+2026-03-26 15:00:40 INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+2026-03-26 15:00:40 INFO  [alembic.runtime.migration] Will assume transactional DDL.
+2026-03-26 15:00:40 ERROR [alembic.util.messaging] Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:00:40 FAILED: Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:00:44 ==> Checking database migration state...
+2026-03-26 15:00:46   Current alembic revision(s): ['010_ai_skills']
+2026-03-26 15:00:46 ==> Running: alembic upgrade head
+2026-03-26 15:00:47 INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+2026-03-26 15:00:47 INFO  [alembic.runtime.migration] Will assume transactional DDL.
+2026-03-26 15:00:47 ERROR [alembic.util.messaging] Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:00:47 FAILED: Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:00:51 ==> Checking database migration state...
+2026-03-26 15:00:53   Current alembic revision(s): ['010_ai_skills']
+2026-03-26 15:00:53 ==> Running: alembic upgrade head
+2026-03-26 15:00:54 INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+2026-03-26 15:00:54 INFO  [alembic.runtime.migration] Will assume transactional DDL.
+2026-03-26 15:00:54 ERROR [alembic.util.messaging] Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:00:54 FAILED: Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:01:00 ==> Checking database migration state...
+2026-03-26 15:01:02   Current alembic revision(s): ['010_ai_skills']
+2026-03-26 15:01:02 ==> Running: alembic upgrade head
+2026-03-26 15:01:04 INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+2026-03-26 15:01:04 INFO  [alembic.runtime.migration] Will assume transactional DDL.
+2026-03-26 15:01:04 ERROR [alembic.util.messaging] Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:01:04 FAILED: Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:01:10 ==> Checking database migration state...
+2026-03-26 15:01:12   Current alembic revision(s): ['010_ai_skills']
+2026-03-26 15:01:12 ==> Running: alembic upgrade head
+2026-03-26 15:01:13 INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+2026-03-26 15:01:13 INFO  [alembic.runtime.migration] Will assume transactional DDL.
+2026-03-26 15:01:13 ERROR [alembic.util.messaging] Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:01:13 FAILED: Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:01:20 ==> Checking database migration state...
+2026-03-26 15:01:22   Current alembic revision(s): ['010_ai_skills']
+2026-03-26 15:01:22 ==> Running: alembic upgrade head
+2026-03-26 15:01:23 INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+2026-03-26 15:01:23 INFO  [alembic.runtime.migration] Will assume transactional DDL.
+2026-03-26 15:01:23 ERROR [alembic.util.messaging] Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:01:23 FAILED: Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:01:31 ==> Checking database migration state...
+2026-03-26 15:01:33   Current alembic revision(s): ['010_ai_skills']
+2026-03-26 15:01:33 ==> Running: alembic upgrade head
+2026-03-26 15:01:34 INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+2026-03-26 15:01:34 INFO  [alembic.runtime.migration] Will assume transactional DDL.
+2026-03-26 15:01:34 ERROR [alembic.util.messaging] Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:01:34 FAILED: Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:01:46 ==> Checking database migration state...
+2026-03-26 15:01:48   Current alembic revision(s): ['010_ai_skills']
+2026-03-26 15:01:48 ==> Running: alembic upgrade head
+2026-03-26 15:01:49 INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+2026-03-26 15:01:49 INFO  [alembic.runtime.migration] Will assume transactional DDL.
+2026-03-26 15:01:49 ERROR [alembic.util.messaging] Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:01:49 FAILED: Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:02:02 ==> Checking database migration state...
+2026-03-26 15:02:04   Current alembic revision(s): ['010_ai_skills']
+2026-03-26 15:02:04 ==> Running: alembic upgrade head
+2026-03-26 15:02:06 INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+2026-03-26 15:02:06 INFO  [alembic.runtime.migration] Will assume transactional DDL.
+2026-03-26 15:02:06 FAILED: Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+2026-03-26 15:02:06 ERROR [alembic.util.messaging] Multiple head revisions are present for given argument 'head'; please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+ricardovieiravasconcelos@cloudshell:~/scalpyn (clickrate-477217)$ 
