@@ -33,7 +33,7 @@ interface DefaultPrompt {
 
 function useAuthHeaders(): Record<string, string> {
   if (typeof window === "undefined") return {};
-  const token = localStorage.getItem("access_token") || sessionStorage.getItem("access_token");
+  const token = localStorage.getItem("token") || sessionStorage.getItem("token");
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
