@@ -251,14 +251,88 @@ async def _execute_buy_cycle_async() -> dict:
                 # Sort best score first
                 candidates = sorted(candidates, key=lambda r: float(r.score), reverse=True)
 
-                # 6. Load entry-trigger config (SignalEngine) and block config (BlockEngine)
-                signal_config = await config_service.get_config(db, "signal", user_id)
-                block_config  = await config_service.get_config(db, "block",  user_id)
+                # 6. Load entry-trigger + block config from the L3 pipeline watchlist profile
+                # Chain: Pool → L1 pipeline watchlist (source_pool_id) → L2 → L3
+                from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
+                from ..models.profile import Profile as UserProfile
 
-                signal_engine: Optional[SignalEngine] = SignalEngine(signal_config) if signal_config else None
-                block_engine:  Optional[BlockEngine]  = BlockEngine(block_config)   if block_config  else None
+                signal_engine: Optional[SignalEngine] = None
+                block_engine:  Optional[BlockEngine]  = None
+                l3_symbols: Optional[set] = None  # restrict candidates to L3 assets
+
+                try:
+                    l1_res = await db.execute(
+                        select(PipelineWatchlist).where(
+                            PipelineWatchlist.source_pool_id == pool.id,
+                            PipelineWatchlist.user_id == user_id,
+                        ).limit(1)
+                    )
+                    l1_wl = l1_res.scalars().first()
+
+                    if l1_wl:
+                        l2_res = await db.execute(
+                            select(PipelineWatchlist).where(
+                                PipelineWatchlist.source_watchlist_id == l1_wl.id,
+                                PipelineWatchlist.user_id == user_id,
+                            ).limit(1)
+                        )
+                        l2_wl = l2_res.scalars().first()
+
+                        if l2_wl:
+                            l3_res = await db.execute(
+                                select(PipelineWatchlist).where(
+                                    PipelineWatchlist.source_watchlist_id == l2_wl.id,
+                                    PipelineWatchlist.user_id == user_id,
+                                ).limit(1)
+                            )
+                            l3_wl = l3_res.scalars().first()
+
+                            if l3_wl:
+                                # L3 candidate symbols
+                                l3_assets_res = await db.execute(
+                                    select(PipelineWatchlistAsset.symbol).where(
+                                        PipelineWatchlistAsset.watchlist_id == l3_wl.id
+                                    )
+                                )
+                                l3_symbols = {r[0] for r in l3_assets_res.fetchall()}
+
+                                # L3 profile → signals + block_rules
+                                if l3_wl.profile_id:
+                                    l3_prof_res = await db.execute(
+                                        select(UserProfile).where(UserProfile.id == l3_wl.profile_id)
+                                    )
+                                    l3_prof = l3_prof_res.scalars().first()
+                                    if l3_prof and l3_prof.config:
+                                        cfg = l3_prof.config
+                                        sig_cfg = cfg.get("entry_triggers") or cfg.get("signals")
+                                        blk_cfg = cfg.get("block_rules")
+                                        if sig_cfg:
+                                            signal_engine = SignalEngine(sig_cfg)
+                                        if blk_cfg:
+                                            block_engine = BlockEngine(blk_cfg)
+                except Exception as _pipeline_exc:
+                    logger.warning("Could not load L3 pipeline profile for user %s: %s", user_id, _pipeline_exc)
+
+                # Fallback: load from legacy ConfigProfile records if pipeline not found
+                if signal_engine is None:
+                    signal_config = await config_service.get_config(db, "signal", user_id)
+                    if signal_config:
+                        signal_engine = SignalEngine(signal_config)
+                if block_engine is None:
+                    block_config = await config_service.get_config(db, "block", user_id)
+                    if block_config:
+                        block_engine = BlockEngine(block_config)
 
                 buys_this_cycle = 0
+
+                # Restrict candidates to L3 pipeline watchlist symbols (if pipeline is configured)
+                if l3_symbols is not None:
+                    before_l3 = len(candidates)
+                    candidates = [r for r in candidates if r.symbol in l3_symbols]
+                    logger.info(
+                        "L3 pipeline filter for user %s: %d → %d candidates (%d removed)",
+                        user_id, before_l3, len(candidates), before_l3 - len(candidates),
+                    )
 
                 for row in candidates:
                     if buys_this_cycle >= max_opps:

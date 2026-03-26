@@ -31,6 +31,44 @@ logger = logging.getLogger(__name__)
 GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/spot/tickers"
 from ..services.market_data_service import _is_etf_pair
 
+
+def _passes_profile_filters(asset: Dict[str, Any], conditions: list, logic: str = "AND") -> bool:
+    """Evaluate profile filter conditions (market_cap, volume_24h, etc.) against a pipeline asset."""
+    if not conditions:
+        return True
+    results = []
+    for cond in conditions:
+        field = cond.get("field") or cond.get("indicator", "")
+        operator = cond.get("operator", ">")
+        threshold = cond.get("value")
+        if threshold is None or not field:
+            continue
+        actual = asset.get(field)
+        if actual is None:
+            results.append(False)
+            continue
+        try:
+            actual = float(actual)
+            threshold = float(threshold)
+        except (TypeError, ValueError):
+            results.append(False)
+            continue
+        if operator in (">", "gt"):
+            results.append(actual > threshold)
+        elif operator in (">=", "gte"):
+            results.append(actual >= threshold)
+        elif operator in ("<", "lt"):
+            results.append(actual < threshold)
+        elif operator in ("<=", "lte"):
+            results.append(actual <= threshold)
+        elif operator in ("==", "=", "eq"):
+            results.append(actual == threshold)
+        else:
+            results.append(True)
+    if not results:
+        return True
+    return all(results) if logic.upper() == "AND" else any(results)
+
 router = APIRouter(prefix="/api/watchlists", tags=["Pipeline Watchlists"])
 
 
@@ -574,6 +612,23 @@ async def _resolve_and_persist(
             "market_cap":       meta.get("market_cap"),
             "alpha_score":      round(alpha, 1) if scoring_data_available else None,
         })
+
+    # Apply profile filter conditions (market_cap, volume_24h, Change 24h%, etc.)
+    if wl.profile_id and assets_out:
+        from ..models.profile import Profile
+        prof_res = await db.execute(select(Profile).where(Profile.id == wl.profile_id))
+        prof = prof_res.scalars().first()
+        if prof and prof.config:
+            pf = prof.config.get("filters", {})
+            p_conditions = pf.get("conditions", [])
+            p_logic = pf.get("logic", "AND")
+            if p_conditions:
+                before = len(assets_out)
+                assets_out = [a for a in assets_out if _passes_profile_filters(a, p_conditions, p_logic)]
+                logger.info(
+                    "Pipeline profile filter [%s / %s]: %d → %d assets (removed %d)",
+                    wl.name, wl.level, before, len(assets_out), before - len(assets_out),
+                )
 
     # Detect level transitions & upsert
     existing_result = await db.execute(
