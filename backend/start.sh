@@ -85,6 +85,32 @@ celery -A app.tasks.celery_app beat \
 CELERY_BEAT_PID=$!
 echo "  Celery beat PID: $CELERY_BEAT_PID"
 
+# Capture the PID that exec uvicorn will inherit (shell PID becomes uvicorn PID)
+MAIN_PID=$$
+
+# Watchdog: if Celery worker or beat exits unexpectedly, signal uvicorn to shut
+# down so Cloud Run restarts the container and recovers the trading pipeline.
+( while sleep 30; do
+    if ! kill -0 "$CELERY_WORKER_PID" 2>/dev/null; then
+        echo "ERROR: Celery worker (PID $CELERY_WORKER_PID) exited — shutting down container"
+        kill -TERM "$MAIN_PID" 2>/dev/null
+        break
+    fi
+    if ! kill -0 "$CELERY_BEAT_PID" 2>/dev/null; then
+        echo "ERROR: Celery beat (PID $CELERY_BEAT_PID) exited — shutting down container"
+        kill -TERM "$MAIN_PID" 2>/dev/null
+        break
+    fi
+done ) &
+
+# Graceful cleanup: when uvicorn/container receives SIGTERM, stop children first
+cleanup() {
+    echo "==> SIGTERM received — stopping Celery processes..."
+    kill -TERM "$CELERY_WORKER_PID" "$CELERY_BEAT_PID" 2>/dev/null
+    wait "$CELERY_WORKER_PID" "$CELERY_BEAT_PID" 2>/dev/null
+}
+trap cleanup TERM INT
+
 echo "==> Starting uvicorn..."
 exec uvicorn app.main:app \
     --host 0.0.0.0 \
