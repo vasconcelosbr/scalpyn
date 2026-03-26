@@ -184,12 +184,68 @@ async def test_key(
         except Exception as e:
             return {"provider": provider, "success": False, "message": f"Erro ao conectar: {str(e)}"}
 
+    if provider == "gemini":
+        from ..services.ai_keys_service import get_decrypted_api_key
+        import httpx
+        plain_key = await get_decrypted_api_key(db, user_id, provider)
+        if not plain_key:
+            raise HTTPException(status_code=404, detail="Chave Gemini não configurada.")
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(
+                    "https://generativelanguage.googleapis.com/v1beta/models",
+                    params={"key": plain_key},
+                    headers={"Accept": "application/json"},
+                )
+            if resp.status_code == 200:
+                models = resp.json().get("models", [])
+                names = [m.get("displayName", m.get("name", "")) for m in models[:3]]
+                return {
+                    "provider": provider,
+                    "success": True,
+                    "message": f"Conectado. {len(models)} modelos disponíveis: {', '.join(names)}.",
+                }
+            elif resp.status_code == 400:
+                return {"provider": provider, "success": False, "message": "Chave inválida (formato incorreto)."}
+            elif resp.status_code == 403:
+                return {"provider": provider, "success": False, "message": "Chave inválida ou sem permissão. Verifique no Google AI Studio."}
+            else:
+                return {"provider": provider, "success": False, "message": f"Erro HTTP {resp.status_code} ao validar chave."}
+        except Exception as e:
+            return {"provider": provider, "success": False, "message": f"Erro de conexão: {str(e)}"}
+
+    if provider == "openai":
+        from ..services.ai_keys_service import get_decrypted_api_key
+        import httpx
+        plain_key = await get_decrypted_api_key(db, user_id, provider)
+        if not plain_key:
+            raise HTTPException(status_code=404, detail="Chave OpenAI não configurada.")
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(
+                    "https://api.openai.com/v1/models",
+                    headers={"Authorization": f"Bearer {plain_key}", "Accept": "application/json"},
+                )
+            if resp.status_code == 200:
+                models = resp.json().get("data", [])
+                return {
+                    "provider": provider,
+                    "success": True,
+                    "message": f"Conectado. {len(models)} modelos disponíveis.",
+                }
+            elif resp.status_code == 401:
+                return {"provider": provider, "success": False, "message": "Chave inválida ou expirada."}
+            else:
+                return {"provider": provider, "success": False, "message": f"Erro HTTP {resp.status_code}."}
+        except Exception as e:
+            return {"provider": provider, "success": False, "message": f"Erro de conexão: {str(e)}"}
+
     if provider not in ("anthropic",):
-        raise HTTPException(status_code=501, detail=f"Test not implemented for {provider}.")
+        raise HTTPException(status_code=404, detail=f"Provider não suportado: {provider}.")
 
     from ..services.ai_keys_service import test_anthropic_key
 
     success, message = await test_anthropic_key(db, user_id, provider)
     if not message:
-        message = "Erro desconhecido. Verifique os logs do Cloud Run."
+        message = "Erro ao conectar. Verifique os logs do servidor."
     return {"provider": provider, "success": success, "message": message}

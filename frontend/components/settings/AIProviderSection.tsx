@@ -146,9 +146,19 @@ function ProviderCard({ status, onRefresh }: { status: ProviderStatus; onRefresh
         headers: authHeaders(),
       })
       const data = await res.json()
-      const msg = data.message || (data.success ? 'Conectado.' : 'Erro desconhecido. Veja os logs do Cloud Run.')
+      if (!res.ok) {
+        const errMsg = typeof data.detail === 'string'
+          ? data.detail
+          : Array.isArray(data.detail)
+            ? data.detail.map((e: { msg: string }) => e.msg).join(', ')
+            : `Erro HTTP ${res.status}`
+        setTesting(false)
+        setTestResult({ success: false, message: errMsg })
+        return
+      }
+      const msg = data.message || (data.success ? 'Conectado.' : 'Sem resposta do servidor.')
       setTesting(false)
-      setTestResult({ success: data.success, message: msg })
+      setTestResult({ success: !!data.success, message: msg })
       if (data.success) onRefresh()
     } catch {
       setTesting(false)
