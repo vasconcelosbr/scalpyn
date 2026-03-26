@@ -60,7 +60,7 @@ celery_app.conf.beat_schedule = {
     },
     # Buy execution cycle every 60 seconds (SpotEngineConfig-driven)
     "execute_buy_cycle": {
-        "task": "app.tasks.execute_buy.run_buy_cycle",
+        "task": "app.tasks.execute_buy.execute_buy_cycle",
         "schedule": 60.0,
     },
 }

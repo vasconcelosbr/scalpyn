@@ -74,7 +74,6 @@ celery -A app.tasks.celery_app worker \
     --loglevel=info \
     --concurrency="${CELERY_CONCURRENCY:-2}" \
     --queues=celery \
-    --logfile=/tmp/celery-worker.log \
     &
 CELERY_WORKER_PID=$!
 echo "  Celery worker PID: $CELERY_WORKER_PID"
@@ -82,7 +81,6 @@ echo "  Celery worker PID: $CELERY_WORKER_PID"
 echo "==> Starting Celery beat..."
 celery -A app.tasks.celery_app beat \
     --loglevel=info \
-    --logfile=/tmp/celery-beat.log \
     &
 CELERY_BEAT_PID=$!
 echo "  Celery beat PID: $CELERY_BEAT_PID"
