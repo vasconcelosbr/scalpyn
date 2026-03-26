@@ -32,6 +32,14 @@ interface Profile {
   name: string;
 }
 
+interface PipelineWatchlist {
+  id: string;
+  name: string;
+  level: string;
+  source_pool_id: string | null;
+  profile_id: string | null;
+}
+
 interface SearchResult {
   symbol: string;
   base: string;
@@ -54,6 +62,9 @@ export default function PoolConfigPage() {
   const [pool, setPool] = useState<Pool | null>(null);
   const [coins, setCoins] = useState<Coin[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [pipelineWatchlists, setPipelineWatchlists] = useState<PipelineWatchlist[]>([]);
+  const [watchlistId, setWatchlistId] = useState<string>("");
+  const [assignedWatchlistId, setAssignedWatchlistId] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -91,10 +102,11 @@ export default function PoolConfigPage() {
     setLoading(true);
     setError(null);
     try {
-      const [poolsData, coinsData, profilesData] = await Promise.all([
+      const [poolsData, coinsData, profilesData, watchlistsData] = await Promise.all([
         apiGet(`/pools`),
         apiGet(`/pools/${id}/coins`),
         apiGet(`/profiles`).catch(() => ({ profiles: [] })),
+        apiGet(`/watchlists`).catch(() => ({ watchlists: [] })),
       ]);
 
       const found: Pool | undefined = poolsData.pools?.find(
@@ -115,6 +127,17 @@ export default function PoolConfigPage() {
       setProfileId(found.profile_id ?? "");
       setCoins(coinsData.coins ?? []);
       setProfiles(profilesData.profiles ?? []);
+
+      const wls: PipelineWatchlist[] = watchlistsData.watchlists ?? [];
+      setPipelineWatchlists(wls);
+      const linkedWl = wls.find(w => w.source_pool_id === id);
+      if (linkedWl) {
+        setWatchlistId(linkedWl.id);
+        setAssignedWatchlistId(linkedWl.id);
+      } else {
+        setWatchlistId("");
+        setAssignedWatchlistId("");
+      }
 
       // Load auto-refresh settings from overrides
       const ov = found.overrides ?? {};
@@ -155,6 +178,23 @@ export default function PoolConfigPage() {
           },
         }),
       });
+
+      // Update pipeline watchlist association if changed
+      if (watchlistId !== assignedWatchlistId) {
+        if (assignedWatchlistId) {
+          await apiFetch(`/watchlists/${assignedWatchlistId}`, {
+            method: "PUT",
+            body: JSON.stringify({ source_pool_id: null }),
+          });
+        }
+        if (watchlistId) {
+          await apiFetch(`/watchlists/${watchlistId}`, {
+            method: "PUT",
+            body: JSON.stringify({ source_pool_id: id }),
+          });
+        }
+      }
+
       await fetchAll();
     } catch (e: any) {
       setError(e.message ?? "Failed to save.");
@@ -373,6 +413,29 @@ export default function PoolConfigPage() {
                   </option>
                 ))}
               </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="label">Pipeline Watchlist</label>
+              <select
+                className="input"
+                value={watchlistId}
+                onChange={(e) => setWatchlistId(e.target.value)}
+              >
+                <option value="">Nenhuma Watchlist</option>
+                {pipelineWatchlists.map((wl) => (
+                  <option key={wl.id} value={wl.id}>
+                    [{wl.level.toUpperCase()}] {wl.name}
+                  </option>
+                ))}
+              </select>
+              {assignedWatchlistId && assignedWatchlistId === watchlistId && (
+                <p style={{ fontSize: "11px", color: "var(--color-profit)" }}>
+                  ✓ Vinculada: {pipelineWatchlists.find(w => w.id === assignedWatchlistId)?.name}
+                </p>
+              )}
             </div>
           </div>
 

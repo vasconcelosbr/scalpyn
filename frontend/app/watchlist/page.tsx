@@ -27,6 +27,7 @@ interface PipelineWatchlist {
   filters_json: Record<string, any>;
   created_at: string | null;
   updated_at: string | null;
+  asset_count: number;
 }
 
 interface PipelineAsset {
@@ -104,7 +105,17 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
   const [minScore, setMinScore] = useState(String(wl?.filters_json?.min_score ?? ''));
   const [requireSignal, setRequireSignal] = useState(Boolean(wl?.filters_json?.require_signal));
   const [autoRefresh, setAutoRefresh] = useState(wl?.auto_refresh ?? true);
+
   const [saving, setSaving] = useState(false);
+
+  function handleLevelChange(newLevel: string) {
+    setLevel(newLevel);
+    if (isNew) {
+      if (newLevel === 'L2' && minScore === '') setMinScore('55');
+      if (newLevel === 'L3') { if (minScore === '') setMinScore('60'); setRequireSignal(true); }
+      if (newLevel === 'L1' || newLevel === 'custom') { setMinScore(''); setRequireSignal(false); }
+    }
+  }
 
   const otherWatchlists = watchlists.filter((w) => w.id !== wl?.id);
 
@@ -154,7 +165,7 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
             <select
               className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
               value={level}
-              onChange={(e) => setLevel(e.target.value)}
+              onChange={(e) => handleLevelChange(e.target.value)}
             >
               <option value="L1">L1 — All pool assets</option>
               <option value="L2">L2 — Score filtered</option>
@@ -164,7 +175,7 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
           </div>
 
           <div>
-            <label className="block text-xs text-[#64748B] mb-1">Source Pool (optional)</label>
+            <label className="block text-xs text-[#64748B] mb-1">Source Pool <span className="text-[#4B5563]">(para L1)</span></label>
             <select
               className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
               value={sourcePoolId}
@@ -177,21 +188,23 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
             </select>
           </div>
 
-          {!sourcePoolId && (
-            <div>
-              <label className="block text-xs text-[#64748B] mb-1">Source Watchlist (optional)</label>
-              <select
-                className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
-                value={sourceWatchlistId}
-                onChange={(e) => setSourceWatchlistId(e.target.value)}
-              >
-                <option value="">— None —</option>
-                {otherWatchlists.map((w) => (
-                  <option key={w.id} value={w.id}>{w.name} ({w.level})</option>
-                ))}
-              </select>
-            </div>
-          )}
+          <div>
+            <label className="block text-xs text-[#64748B] mb-1">Source Watchlist <span className="text-[#4B5563]">(para L2 / L3)</span></label>
+            <select
+              className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
+              value={sourceWatchlistId}
+              onChange={(e) => { setSourceWatchlistId(e.target.value); if (e.target.value) setSourcePoolId(''); }}
+              disabled={!!sourcePoolId}
+            >
+              <option value="">— None —</option>
+              {otherWatchlists.map((w) => (
+                <option key={w.id} value={w.id}>[{w.level}] {w.name}</option>
+              ))}
+            </select>
+            {sourcePoolId && (
+              <p className="text-xs text-[#4B5563] mt-1">Limpe o Source Pool acima para usar uma watchlist como fonte.</p>
+            )}
+          </div>
 
           <div>
             <label className="block text-xs text-[#64748B] mb-1">Min Alpha Score (0–100)</label>
@@ -273,20 +286,23 @@ function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed,
     ? allWatchlists.find((w) => w.id === wl.source_watchlist_id)?.name ?? 'Watchlist'
     : '—';
 
-  const loadAssets = useCallback(async () => {
+  const loadAssets = useCallback(async (triggerParentRefresh = false) => {
     setLoadingAssets(true);
     try {
       const data = await apiFetch<{ assets: PipelineAsset[] }>(`/watchlists/${wl.id}/assets`);
       setAssets(data.assets);
+      if (triggerParentRefresh && data.assets.length > 0) {
+        onRefreshed();
+      }
     } catch {
       // ignore
     } finally {
       setLoadingAssets(false);
     }
-  }, [wl.id]);
+  }, [wl.id, onRefreshed]);
 
   useEffect(() => {
-    if (expanded) loadAssets();
+    if (expanded) loadAssets(true);
   }, [expanded, loadAssets]);
 
   async function handleRefresh() {
@@ -482,8 +498,8 @@ function PipelineTab() {
     };
   }, []);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [wlData, poolData] = await Promise.all([
         apiFetch<{ watchlists: PipelineWatchlist[] }>('/watchlists'),
@@ -494,9 +510,11 @@ function PipelineTab() {
     } catch {
       // ignore
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
+
+  const loadSilent = useCallback(() => load(true), [load]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -519,6 +537,7 @@ function PipelineTab() {
       setWatchlists((prev) => [...prev, created]);
     }
     closeModal();
+    await load(true);
   }
 
   function handleDelete(id: string) {
@@ -568,11 +587,17 @@ function PipelineTab() {
           {(['L1', 'L2', 'L3'] as const).map((lvl) => {
             const lvlWls = byLevel(lvl);
             if (lvlWls.length === 0) return null;
+            const totalAssets = lvlWls.reduce((sum, w) => sum + (w.asset_count ?? 0), 0);
             return (
               <div key={lvl}>
                 <div className="flex items-center gap-2 mb-3">
                   <LevelBadge level={lvl} />
                   <span className="text-xs text-[#4B5563]">{lvlWls.length} watchlist{lvlWls.length !== 1 ? 's' : ''}</span>
+                  {totalAssets > 0 && (
+                    <span className="ml-1 px-2 py-0.5 rounded-full text-xs font-medium bg-[#1E2433] text-[#94A3B8] border border-[#2A3448]">
+                      {totalAssets} ativo{totalAssets !== 1 ? 's' : ''}
+                    </span>
+                  )}
                 </div>
                 <div className="space-y-2">
                   {lvlWls.map((wl) => (
@@ -583,7 +608,7 @@ function PipelineTab() {
                       allWatchlists={watchlists}
                       onEdit={openEdit}
                       onDelete={handleDelete}
-                      onRefreshed={load}
+                      onRefreshed={loadSilent}
                       liveDirections={liveDirections}
                     />
                   ))}
@@ -606,7 +631,7 @@ function PipelineTab() {
                     allWatchlists={watchlists}
                     onEdit={openEdit}
                     onDelete={handleDelete}
-                    onRefreshed={load}
+                    onRefreshed={loadSilent}
                   />
                 ))}
               </div>

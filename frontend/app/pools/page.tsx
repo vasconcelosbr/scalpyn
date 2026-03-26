@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Plus, Layers, Trash2, Briefcase } from "lucide-react";
-import { apiGet, apiPost, apiDelete } from "@/lib/api";
+import { apiGet, apiPost, apiDelete, apiFetch } from "@/lib/api";
 
 interface Profile {
   id: string;
@@ -10,9 +11,18 @@ interface Profile {
   description?: string;
 }
 
+interface PipelineWatchlist {
+  id: string;
+  name: string;
+  level: string;
+  source_pool_id: string | null;
+}
+
 export default function PoolsPage() {
+  const router = useRouter();
   const [pools, setPools] = useState<any[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [pipelineWatchlists, setPipelineWatchlists] = useState<PipelineWatchlist[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
@@ -20,6 +30,7 @@ export default function PoolsPage() {
   const [newMode, setNewMode] = useState("paper");
   const [newMarketType, setNewMarketType] = useState("spot");
   const [newProfileId, setNewProfileId] = useState("");
+  const [newWatchlistId, setNewWatchlistId] = useState("");
 
   const fetchPools = async () => {
     setLoading(true);
@@ -41,15 +52,25 @@ export default function PoolsPage() {
     }
   };
 
+  const fetchWatchlists = async () => {
+    try {
+      const data = await apiGet("/watchlists");
+      setPipelineWatchlists(data.watchlists || []);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   useEffect(() => { 
     fetchPools(); 
     fetchProfiles();
+    fetchWatchlists();
   }, []);
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
     try {
-      await apiPost("/pools", { 
+      const created = await apiPost("/pools", { 
         name: newName, 
         description: newDesc, 
         mode: newMode, 
@@ -57,13 +78,24 @@ export default function PoolsPage() {
         profile_id: newProfileId || null,
         is_active: true 
       });
+
+      // Link pipeline watchlist if selected
+      if (newWatchlistId && created?.id) {
+        await apiFetch(`/watchlists/${newWatchlistId}`, {
+          method: "PUT",
+          body: JSON.stringify({ source_pool_id: created.id }),
+        });
+      }
+
       setShowCreate(false);
       setNewName("");
       setNewDesc("");
       setNewMode("paper");
       setNewMarketType("spot");
       setNewProfileId("");
+      setNewWatchlistId("");
       fetchPools();
+      fetchWatchlists();
     } catch (e: any) {
       alert(`Failed: ${e.message}`);
     }
@@ -144,6 +176,19 @@ export default function PoolsPage() {
                 </select>
               </div>
             </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="label">Pipeline Watchlist <span className="text-[var(--text-tertiary)] font-normal">(opcional)</span></label>
+                <select className="input" value={newWatchlistId} onChange={(e) => setNewWatchlistId(e.target.value)}>
+                  <option value="">Nenhuma Watchlist</option>
+                  {pipelineWatchlists.map((wl) => (
+                    <option key={wl.id} value={wl.id}>
+                      [{wl.level.toUpperCase()}] {wl.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
             <div className="space-y-2">
               <label className="label">Description</label>
               <input className="input" placeholder="Optional description..." value={newDesc} onChange={(e) => setNewDesc(e.target.value)} />
@@ -211,7 +256,7 @@ export default function PoolsPage() {
                 <button className="btn btn-secondary text-[12px] px-3 py-1.5 text-red-500 hover:bg-red-500/10" aria-label="Delete pool" onClick={() => handleDelete(pool.id)}>
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
-                <button className="btn btn-secondary text-[12px] px-3 py-1.5">Configure</button>
+                <button className="btn btn-secondary text-[12px] px-3 py-1.5" onClick={() => router.push(`/pools/${pool.id}`)}>Configure</button>
               </div>
             </div>
           ))}

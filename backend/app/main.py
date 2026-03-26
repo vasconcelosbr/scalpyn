@@ -18,10 +18,12 @@ from .api import (
     reports,
     notifications,
     watchlist,
+    watchlists,
     websocket,
     profiles,
     custom_watchlists,
     ai_keys,
+    ai_skills,
 )
 
 
@@ -49,10 +51,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "http://localhost:5000",
         "https://scalpyn.vercel.app",
         "https://www.scalpyn.vercel.app",
     ],
-    allow_origin_regex=r"https://scalpyn.*\.vercel\.app",
+    allow_origin_regex=r"https://.*\.(replit\.app|replit\.dev|repl\.co|vercel\.app)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -65,6 +68,7 @@ app.include_router(config_api.router)
 # Market Data & Watchlist
 app.include_router(market.router)
 app.include_router(watchlist.router)
+app.include_router(watchlists.router)
 app.include_router(custom_watchlists.router)
 
 # Trading
@@ -85,6 +89,9 @@ app.include_router(notifications.router)
 
 # AI Provider Keys
 app.include_router(ai_keys.router)
+
+# AI Skills
+app.include_router(ai_skills.router)
 
 # WebSocket
 app.include_router(websocket.router)

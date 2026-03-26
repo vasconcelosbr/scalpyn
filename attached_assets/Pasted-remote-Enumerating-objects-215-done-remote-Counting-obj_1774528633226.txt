@@ -1,0 +1,71 @@
+remote: Enumerating objects: 215, done.
+remote: Counting objects: 100% (215/215), done.
+remote: Compressing objects: 100% (60/60), done.
+remote: Total 176 (delta 139), reused 143 (delta 106), pack-reused 0 (from 0)
+Receiving objects: 100% (176/176), 334.10 KiB | 1.19 MiB/s, done.
+Resolving deltas: 100% (139/139), completed with 32 local objects.
+From https://github.com/vasconcelosbr/scalpyn
+   b198707..bf7689a  main       -> origin/main
+Updating b198707..bf7689a
+Fast-forward
+ .replit                                                                                          |  54 +++++
+ attached_assets/IMG_2625_1774462594786.jpeg                                                      | Bin 0 -> 225855 bytes
+ attached_assets/Pasted-icardovieiravasconcelos-cloudshell-scalpyn-clickrate-47_1774527103344.txt |  85 ++++++++
+ attached_assets/Pasted-ricardovieiravasconcelos-cloudshell-scalpyn-clickrate-4_1774526995800.txt |  86 ++++++++
+ attached_assets/Pasted-starting-build-e2cbd237-218e-48b8-beb2-50ce2942a121-FET_1774526022483.txt | 677 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ attached_assets/image_1774451904529.png                                                          | Bin 0 -> 51374 bytes
+ attached_assets/image_1774451929569.png                                                          | Bin 0 -> 27276 bytes
+ attached_assets/image_1774459588733.png                                                          | Bin 0 -> 39164 bytes
+ attached_assets/image_1774459647851.png                                                          | Bin 0 -> 38457 bytes
+ backend/alembic/env.py                                                                           |  34 ++-
+ backend/alembic/versions/010_ai_skills.py                                                        |  63 ++++++
+ backend/app/api/ai_skills.py                                                                     | 211 ++++++++++++++++++
+ backend/app/api/pools.py                                                                         | 214 +++++++++++++++++-
+ backend/app/api/profiles.py                                                                      |  34 +++
+ backend/app/api/watchlists.py                                                                    | 186 ++++++++++++++--
+ backend/app/config.py                                                                            |  19 +-
+ backend/app/database.py                                                                          |  32 ++-
+ backend/app/init_db.py                                                                           |   8 +
+ backend/app/main.py                                                                              |  13 +-
+ backend/app/models/__init__.py                                                                   |   9 +-
+ backend/app/models/ai_skill.py                                                                   |  24 ++
+ backend/app/models/pool.py                                                                       |   1 +
+ backend/app/services/market_data_service.py                                                      |  33 +++
+ backend/app/services/preset_ia_service.py                                                        | 218 ++++++++++++++++++-
+ frontend/app/api/[...path]/route.ts                                                              |   4 +-
+ frontend/app/pools/[id]/page.tsx                                                                 |  65 +++++-
+ frontend/app/pools/page.tsx                                                                      |  51 ++++-
+ frontend/app/settings/skills/page.tsx                                                            | 465 +++++++++++++++++++++++++++++++++++++++
+ frontend/app/watchlist/page.tsx                                                                  |  75 ++++---
+ frontend/components/layout/Sidebar.tsx                                                           |   4 +-
+ frontend/components/profiles/ProfileBuilder.tsx                                                  |  85 +++-----
+ frontend/package-lock.json                                                                       |   5 +-
+ frontend/package.json                                                                            |   4 +-
+ replit.md                                                                                        |  44 ++++
+ 34 files changed, 2683 insertions(+), 120 deletions(-)
+ create mode 100644 .replit
+ create mode 100644 attached_assets/IMG_2625_1774462594786.jpeg
+ create mode 100644 attached_assets/Pasted-icardovieiravasconcelos-cloudshell-scalpyn-clickrate-47_1774527103344.txt
+ create mode 100644 attached_assets/Pasted-ricardovieiravasconcelos-cloudshell-scalpyn-clickrate-4_1774526995800.txt
+ create mode 100644 attached_assets/Pasted-starting-build-e2cbd237-218e-48b8-beb2-50ce2942a121-FET_1774526022483.txt
+ create mode 100644 attached_assets/image_1774451904529.png
+ create mode 100644 attached_assets/image_1774451929569.png
+ create mode 100644 attached_assets/image_1774459588733.png
+ create mode 100644 attached_assets/image_1774459647851.png
+ create mode 100644 backend/alembic/versions/010_ai_skills.py
+ create mode 100644 backend/app/api/ai_skills.py
+ create mode 100644 backend/app/models/ai_skill.py
+ create mode 100644 frontend/app/settings/skills/page.tsx
+ create mode 100644 replit.md
+ERROR: (gcloud.builds.submit) You do not currently have an active account selected.
+Please run:
+
+  $ gcloud auth login
+
+to obtain new credentials.
+
+If you have already logged in with a different account, run:
+
+  $ gcloud config set account ACCOUNT
+
+to select an already authenticated account to use.

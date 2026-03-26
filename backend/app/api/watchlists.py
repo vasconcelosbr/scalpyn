@@ -17,17 +17,70 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, text
+import httpx
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from sqlalchemy import select, text, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..database import get_db
+from ..database import get_db, AsyncSessionLocal
 from ..api.config import get_current_user_id
 from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
 
 logger = logging.getLogger(__name__)
 
+GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/spot/tickers"
+
 router = APIRouter(prefix="/api/watchlists", tags=["Pipeline Watchlists"])
+
+
+async def _seed_market_metadata_bg(symbols: List[str]) -> None:
+    """Background task: fetch Gate.io tickers and upsert into market_metadata.
+
+    Runs after the HTTP response is sent — does not block the request.
+    Opens its own DB session so it is independent of the request session.
+    """
+    symbol_set = set(symbols)
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(GATE_TICKERS_URL)
+            resp.raise_for_status()
+            tickers = resp.json()
+
+        now = datetime.now(timezone.utc)
+        rows = []
+        for ticker in tickers:
+            pair = ticker.get("currency_pair", "")
+            if pair not in symbol_set:
+                continue
+            price = float(ticker.get("last", 0) or 0)
+            change = float(ticker.get("change_percentage", 0) or 0)
+            volume = float(ticker.get("quote_volume", 0) or 0)
+            if price <= 0:
+                continue
+            rows.append({"symbol": pair, "price": price, "change": change, "volume": volume, "updated": now})
+
+        if not rows:
+            return
+
+        async with AsyncSessionLocal() as db:
+            for row in rows:
+                try:
+                    await db.execute(
+                        text("""
+                            INSERT INTO market_metadata (symbol, price, price_change_24h, volume_24h, last_updated)
+                            VALUES (:symbol, :price, :change, :volume, :updated)
+                            ON CONFLICT (symbol) DO UPDATE SET
+                                price = :price, price_change_24h = :change,
+                                volume_24h = :volume, last_updated = :updated
+                        """),
+                        row,
+                    )
+                except Exception:
+                    pass
+            await db.commit()
+        logger.info("[Pipeline] Background seed: upserted market data for %d symbols", len(rows))
+    except Exception as e:
+        logger.warning("[Pipeline] Background market seed failed: %s", e)
 
 
 # ── Serializers ────────────────────────────────────────────────────────────────
@@ -78,7 +131,31 @@ async def list_watchlists(
         .order_by(PipelineWatchlist.created_at)
     )
     wls = result.scalars().all()
-    return {"watchlists": [_wl_to_dict(w) for w in wls], "total": len(wls)}
+
+    # Fetch asset counts for all watchlists in one query
+    if wls:
+        wl_ids = [w.id for w in wls]
+        count_result = await db.execute(
+            select(
+                PipelineWatchlistAsset.watchlist_id,
+                func.count(PipelineWatchlistAsset.id).label("cnt"),
+            )
+            .where(
+                PipelineWatchlistAsset.watchlist_id.in_(wl_ids),
+                PipelineWatchlistAsset.level_direction != "down",
+            )
+            .group_by(PipelineWatchlistAsset.watchlist_id)
+        )
+        counts: Dict[UUID, int] = {row.watchlist_id: row.cnt for row in count_result.fetchall()}
+    else:
+        counts = {}
+
+    def _with_count(w: PipelineWatchlist) -> Dict[str, Any]:
+        d = _wl_to_dict(w)
+        d["asset_count"] = counts.get(w.id, 0)
+        return d
+
+    return {"watchlists": [_with_count(w) for w in wls], "total": len(wls)}
 
 
 @router.post("/")
@@ -100,15 +177,24 @@ async def create_watchlist(
         except ValueError:
             return None
 
+    level = payload.get("level", "custom")
+    # Apply sensible default filters when none provided for L2/L3
+    filters = payload.get("filters_json") or {}
+    if not filters:
+        if level == "L2":
+            filters = {"min_score": 55}
+        elif level == "L3":
+            filters = {"min_score": 60, "require_signal": True}
+
     wl = PipelineWatchlist(
         user_id=user_id,
         name=name,
-        level=payload.get("level", "custom"),
+        level=level,
         source_pool_id=_to_uuid(payload.get("source_pool_id")),
         source_watchlist_id=_to_uuid(payload.get("source_watchlist_id")),
         profile_id=_to_uuid(payload.get("profile_id")),
         auto_refresh=payload.get("auto_refresh", True),
-        filters_json=payload.get("filters_json", {}),
+        filters_json=filters,
     )
     db.add(wl)
     await db.commit()
@@ -220,7 +306,8 @@ async def _get_base_symbols(
         if parent:
             assets = await db.execute(
                 select(PipelineWatchlistAsset).where(
-                    PipelineWatchlistAsset.watchlist_id == parent.id
+                    PipelineWatchlistAsset.watchlist_id == parent.id,
+                    PipelineWatchlistAsset.level_direction != "down",
                 )
             )
             saved = assets.scalars().all()
@@ -292,6 +379,19 @@ async def _resolve_and_persist(
     except Exception:
         score_map = {}
 
+    # When no real alpha scores are available, derive scores from market_metadata
+    # using price_change_24h as momentum proxy: score = clamp(50 + pct*2, 0, 100).
+    # Real alpha_scores take priority when present.
+    use_derived_scores = len(score_map) == 0
+    scoring_data_available = bool(score_map) or bool(meta_map)
+
+    if use_derived_scores and meta_map:
+        for symbol, meta in meta_map.items():
+            pct = meta.get("price_change_24h", 0.0)
+            derived = max(0.0, min(100.0, 50.0 + pct * 2.0))
+            signal = 100.0 if derived >= 60.0 else 0.0
+            score_map[symbol] = {"score": derived, "signal_score": signal}
+
     now = datetime.now(timezone.utc)
     assets_out: List[Dict[str, Any]] = []
 
@@ -300,7 +400,9 @@ async def _resolve_and_persist(
         alpha = scores.get("score", 0.0)
         signal = scores.get("signal_score", 0.0)
 
-        # Apply filters
+        # Apply score filters (derived scores make them meaningful when market data exists).
+        # When no scoring data is available, symbols score 0 and will fail min_score filters —
+        # L1 watchlists typically have no filters so they still propagate all base symbols.
         if min_score and alpha < min_score:
             continue
         if require_signal and signal < 50:
@@ -313,7 +415,7 @@ async def _resolve_and_persist(
             "price_change_24h": meta.get("price_change_24h"),
             "volume_24h":       meta.get("volume_24h"),
             "market_cap":       meta.get("market_cap"),
-            "alpha_score":      alpha,
+            "alpha_score":      round(alpha, 1) if scoring_data_available else None,
         })
 
     # Detect level transitions & upsert
@@ -370,7 +472,11 @@ async def get_watchlist_assets(
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return resolved and filtered assets for this watchlist level."""
+    """Return resolved and filtered assets for this watchlist level.
+
+    Auto-resolves the pipeline on first access when auto_refresh=True and
+    no assets have been persisted yet — this propagates L1→L2→L3 automatically.
+    """
     result = await db.execute(
         select(PipelineWatchlist).where(
             PipelineWatchlist.id == watchlist_id,
@@ -381,23 +487,64 @@ async def get_watchlist_assets(
     if not wl:
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
-    # Return saved assets with their level direction data
+    # Check saved assets — exclude symbols that exited this level ("down")
     assets_result = await db.execute(
         select(PipelineWatchlistAsset)
-        .where(PipelineWatchlistAsset.watchlist_id == watchlist_id)
+        .where(
+            PipelineWatchlistAsset.watchlist_id == watchlist_id,
+            PipelineWatchlistAsset.level_direction != "down",
+        )
         .order_by(PipelineWatchlistAsset.alpha_score.desc().nullslast())
     )
     assets = assets_result.scalars().all()
+
+    # Auto-resolve on first open when there are no saved assets
+    if not assets and wl.auto_refresh:
+        try:
+            await _resolve_and_persist(wl, user_id, db)
+            assets_result2 = await db.execute(
+                select(PipelineWatchlistAsset)
+                .where(
+                    PipelineWatchlistAsset.watchlist_id == watchlist_id,
+                    PipelineWatchlistAsset.level_direction != "down",
+                )
+                .order_by(PipelineWatchlistAsset.alpha_score.desc().nullslast())
+            )
+            assets = assets_result2.scalars().all()
+        except Exception as e:
+            logger.warning("[Pipeline] Auto-resolve failed for %s: %s", watchlist_id, e)
+
     return {"assets": [_asset_to_dict(a) for a in assets], "total": len(assets)}
+
+
+async def _cascade_refresh(wl_id: UUID, user_id: UUID, db: AsyncSession, depth: int = 0) -> None:
+    """Cascade refresh to all watchlists that use this one as their source."""
+    if depth > 3:
+        return
+    children_result = await db.execute(
+        select(PipelineWatchlist).where(
+            PipelineWatchlist.source_watchlist_id == wl_id,
+            PipelineWatchlist.user_id == user_id,
+            PipelineWatchlist.auto_refresh == True,
+        )
+    )
+    children = children_result.scalars().all()
+    for child in children:
+        try:
+            await _resolve_and_persist(child, user_id, db)
+            await _cascade_refresh(child.id, user_id, db, depth + 1)
+        except Exception as e:
+            logger.warning("[Pipeline] Cascade refresh failed for child %s: %s", child.id, e)
 
 
 @router.post("/{watchlist_id}/refresh")
 async def refresh_watchlist(
     watchlist_id: UUID,
+    background_tasks: BackgroundTasks,
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Force re-resolve the pipeline and update assets for this watchlist."""
+    """Force re-resolve the pipeline and cascade to all downstream watchlists."""
     result = await db.execute(
         select(PipelineWatchlist).where(
             PipelineWatchlist.id == watchlist_id,
@@ -408,7 +555,20 @@ async def refresh_watchlist(
     if not wl:
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
+    # Get base symbols first so we can seed market data if needed
+    base_symbols = await _get_base_symbols(wl, user_id, db)
+
+    # Schedule background market-data seed when the source is a pool.
+    # This runs after the response is sent, so it never blocks the request.
+    # On the next refresh the fresh scores will be used for filtering.
+    if wl.source_pool_id and base_symbols:
+        background_tasks.add_task(_seed_market_metadata_bg, base_symbols)
+
     assets = await _resolve_and_persist(wl, user_id, db)
+
+    # Cascade refresh to downstream watchlists (L1 → L2 → L3)
+    await _cascade_refresh(watchlist_id, user_id, db)
+
     return {"refreshed": True, "asset_count": len(assets)}
 
 
