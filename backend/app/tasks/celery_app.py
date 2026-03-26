@@ -16,6 +16,7 @@ celery_app = Celery(
         "app.tasks.anti_liq_monitor",
         "app.tasks.macro_regime_update",
         "app.tasks.auto_discover_assets",
+        "app.tasks.execute_buy",
     ]
 )
 
@@ -56,5 +57,10 @@ celery_app.conf.beat_schedule = {
     "auto_discover_assets_hourly": {
         "task": "app.tasks.auto_discover_assets.discover",
         "schedule": 3600.0,
+    },
+    # Buy execution cycle every 60 seconds (SpotEngineConfig-driven)
+    "execute_buy_cycle": {
+        "task": "app.tasks.execute_buy.run_buy_cycle",
+        "schedule": 60.0,
     },
 }
