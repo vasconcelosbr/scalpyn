@@ -404,21 +404,20 @@ async def toggle_watchlist_profile(
 def _validate_profile_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """Validate and normalize profile configuration."""
     validated = {}
-    
+
     # Validate filters
     filters = config.get("filters", {})
     validated["filters"] = {
         "logic": filters.get("logic", "AND").upper(),
         "conditions": filters.get("conditions", [])
     }
-    
-    # Validate conditions have required fields
+
     for cond in validated["filters"]["conditions"]:
         if "field" not in cond:
             raise ValueError("Filter condition missing 'field'")
         if "operator" not in cond:
             cond["operator"] = "=="
-    
+
     # Validate scoring weights
     scoring = config.get("scoring", {})
     weights = scoring.get("weights", {})
@@ -436,20 +435,33 @@ def _validate_profile_config(config: Dict[str, Any]) -> Dict[str, Any]:
             "neutral": 40
         })
     }
-    
-    # Validate signals
+
+    # Validate signals (L3 entry conditions)
     signals = config.get("signals", {})
     validated["signals"] = {
         "logic": signals.get("logic", "AND").upper(),
         "conditions": signals.get("conditions", [])
     }
-    
+
     for cond in validated["signals"]["conditions"]:
         if "field" not in cond:
             raise ValueError("Signal condition missing 'field'")
         if "operator" not in cond:
             cond["operator"] = "=="
-    
+
+    # Preserve block_rules (blocking conditions that prevent a buy)
+    block_rules = config.get("block_rules", {})
+    validated["block_rules"] = {
+        "blocks": block_rules.get("blocks", [])
+    }
+
+    # Preserve entry_triggers (explicit entry conditions)
+    entry_triggers = config.get("entry_triggers", {})
+    validated["entry_triggers"] = {
+        "logic": entry_triggers.get("logic", "AND").upper(),
+        "conditions": entry_triggers.get("conditions", [])
+    }
+
     return validated
 
 
