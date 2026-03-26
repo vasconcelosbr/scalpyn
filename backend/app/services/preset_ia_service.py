@@ -42,9 +42,9 @@ Formato de saída do Claude (obrigatório):
   }
 
 Campos de condition disponíveis (field):
-  Price & Volume: volume_24h, market_cap, price, change_24h_pct
-  Momentum:       rsi, macd, macd_histogram, stochastic_k, stochastic_d, z_score
-  Trend:          adx, bollinger_width, atr, atr_pct, di_plus, di_minus
+  Price & Volume: volume_24h, market_cap, price, change_24h
+  Momentum:       rsi, macd, macd_histogram, stoch_k, stoch_d, zscore
+  Trend:          adx, bb_width, atr, atr_percent, di_plus, di_minus
   EMA:            ema_full_alignment (is_true/is_false)
   Funding:        funding_rate
 
@@ -70,10 +70,10 @@ REGRAS OBRIGATÓRIAS:
 4. Use APENAS os campos (field) e operadores listados abaixo.
 
 CAMPOS DISPONÍVEIS (field):
-  volume_24h, market_cap, price, change_24h_pct,
-  rsi, macd, macd_histogram, stochastic_k, stochastic_d, z_score,
-  adx, bollinger_width, atr, atr_pct, di_plus, di_minus,
-  ema_full_alignment, funding_rate
+  volume_24h, market_cap, price, change_24h,
+  rsi, macd, macd_histogram, stoch_k, stoch_d, zscore,
+  adx, bb_width, atr, atr_percent, di_plus, di_minus,
+  ema_full_alignment, ema9_gt_ema50, ema50_gt_ema200, funding_rate
 
 OPERADORES: >, >=, <, <=, ==, !=, between, in, not_in, is_true, is_false
   (para "between": use "min" e "max" no lugar de "value")
@@ -91,7 +91,7 @@ entram no universo analisado. São critérios mínimos de liquidez e existência
 Configure FILTERS com:
   - volume_24h mínimo (liquidez básica para operar)
   - market_cap mínimo (evitar micro-caps manipuláveis)
-  - change_24h_pct para excluir ativos em colapso extremo
+  - change_24h para excluir ativos em colapso extremo
 
 NÃO configure signals para este role.
 Scoring: deixe weights em 25/25/25/25 (neutro).
@@ -111,7 +111,7 @@ Seu papel: filtrar ativos com qualidade técnica inadequada para trading.
 Estes filtros eliminam ativos antes de calcular o score.
 
 Configure FILTERS com:
-  - atr_pct mínimo (volatilidade suficiente para o trade se desenvolver)
+  - atr_percent mínimo (volatilidade suficiente para o trade se desenvolver)
   - adx mínimo (tendência detectável — evitar mercado sem direção)
   - volume_24h relativo (liquidez operacional)
   - rsi para excluir extremos absolutos (crashes ou pumps absurdos)
@@ -120,10 +120,10 @@ Configure SIGNALS (condições de entrada adicionais):
   - ema_full_alignment para confirmar direção (is_true em BULL)
   - di_plus > di_minus para confirmar força direcional
 
-Regime BULL:           atr_pct > 1.5, adx > 18, rsi entre 25-70
-Regime BEAR:           atr_pct > 2.0, adx > 22, rsi entre 20-60
-Regime SIDEWAYS:       atr_pct > 1.0, adx > 15
-Regime HIGH_VOLATILITY: atr_pct > 3.0, adx > 25
+Regime BULL:           atr_percent > 1.5, adx > 18, rsi entre 25-70
+Regime BEAR:           atr_percent > 2.0, adx > 22, rsi entre 20-60
+Regime SIDEWAYS:       atr_percent > 1.0, adx > 15
+Regime HIGH_VOLATILITY: atr_percent > 3.0, adx > 25
 
 {_BASE_RULES}
 """,
@@ -154,11 +154,11 @@ Regime BEAR:
 
 Regime SIDEWAYS:
   market_structure: 35, momentum: 25, signal: 25, liquidity: 15
-  signals: bollinger_width < 0.1 (range-bound), rsi between 30-70
+  signals: bb_width < 0.1 (range-bound), rsi between 30-70
 
 Regime HIGH_VOLATILITY:
   momentum: 40, liquidity: 30, market_structure: 20, signal: 10
-  signals: volume_24h > threshold, atr_pct > 3
+  signals: volume_24h > threshold, atr_percent > 3
 
 {_BASE_RULES}
 """,
@@ -190,7 +190,7 @@ Regime BEAR:
 
 Regime SIDEWAYS:
   filters: rsi between 30-65, adx > 15
-  signals: rsi < 45, z_score < -1 (mean reversion)
+  signals: rsi < 45, zscore < -1 (mean reversion)
 
 Regime EXTREME:
   filters: rsi < 35 (apenas oversold extremo)
@@ -284,46 +284,67 @@ def _audit_filter_fields(conditions: list) -> list:
     """
     SCALPYN_PRESET_AUDITOR_V1 — Corrige mapeamentos de campo errados gerados pelo AI.
 
-    Regras (baseadas em faixas de valor):
-      value < 0 em volume_24h         → change_24h_pct
-      0 < value <= 5 em volume_24h    → atr_pct
-      5 < value <= 100 em volume_24h  → change_24h_pct
-      value > 100 em volume_24h       → manter (volume real em unidades pequenas improvável)
-      value >= 100_000 em volume_24h  → correto, manter
+    Normaliza nomes de campo para o padrão do frontend (INDICATOR_FIELDS):
+      change_24h_pct / price_change_24h → change_24h
+      atr_pct / atr_percentage          → atr_percent
+
+    Regras de detecção quando field = volume_24h mas valor não faz sentido:
+      value < 0                → change_24h
+      0 < |value| <= 5         → atr_percent
+      5 < |value| <= 100       → change_24h
+      |value| >= 100_000       → manter como volume_24h
 
     Remove condições logicamente impossíveis:
       volume_24h ou market_cap com valor negativo
-      atr_pct <= 0
+      atr_percent <= 0
     """
+    # Normalização de aliases de nomes de campo
+    FIELD_ALIASES = {
+        "change_24h_pct":    "change_24h",
+        "price_change_24h":  "change_24h",
+        "change_pct_24h":    "change_24h",
+        "atr_pct":           "atr_percent",
+        "atr_percentage":    "atr_percent",
+        "bollinger_width":   "bb_width",
+    }
+
     fixed = []
     for cond in conditions:
         field = cond.get("field", "")
         value = cond.get("value", 0)
         op    = cond.get("operator", ">=")
 
+        # Normalizar aliases primeiro
+        if field in FIELD_ALIASES:
+            cond["field"] = FIELD_ALIASES[field]
+            field = cond["field"]
+
+        # Detectar uso incorreto de volume_24h baseado no valor
         if field == "volume_24h" and isinstance(value, (int, float)):
             abs_val = abs(value)
             if value < 0:
-                cond["field"] = "change_24h_pct"
+                cond["field"] = "change_24h"
+                field = "change_24h"
             elif abs_val <= 5:
-                cond["field"] = "atr_pct"
+                cond["field"] = "atr_percent"
+                field = "atr_percent"
             elif abs_val <= 100:
-                cond["field"] = "change_24h_pct"
+                cond["field"] = "change_24h"
+                field = "change_24h"
 
-        new_field = cond.get("field", "")
-
-        if new_field in ("volume_24h", "market_cap"):
+        # Remover condições logicamente impossíveis
+        if field in ("volume_24h", "market_cap"):
             if isinstance(value, (int, float)) and value < 0:
                 continue
 
-        if new_field == "atr_pct":
+        if field == "atr_percent":
             if op in ("<=", "<") and isinstance(value, (int, float)) and value <= 0:
                 continue
 
         fixed.append(cond)
 
     # Remover duplicatas exatas (mesmo field + operator + value)
-    seen = set()
+    seen: set = set()
     deduped = []
     for cond in fixed:
         key = (cond.get("field"), cond.get("operator"), cond.get("value"))
@@ -513,7 +534,7 @@ def _build_pool_analysis_prompt(
     total = len(symbols)
     sample_data = market_data[:10] if market_data else []
     sample_lines = "\n".join(
-        f"  {d.get('symbol','?')}: ${d.get('price',0):.4f} | vol={d.get('volume_24h',0)/1e6:.1f}M | Δ24h={d.get('change_24h_pct',0):.1f}%"
+        f"  {d.get('symbol','?')}: ${d.get('price',0):.4f} | vol={d.get('volume_24h',0)/1e6:.1f}M | Δ24h={d.get('change_24h', d.get('change_24h_pct',0)):.1f}%"
         for d in sample_data
     ) or "  (sem dados)"
     snapshot_str = json.dumps(current_config, indent=2, ensure_ascii=False)
