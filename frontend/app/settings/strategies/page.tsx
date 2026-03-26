@@ -302,6 +302,7 @@ export default function StrategySettings() {
   const [sellFlow, setSellFlow] = useState<SellFlowConfig>(DEFAULT_SELL_FLOW);
   const [seConfigFull, setSeConfigFull] = useState<SpotEngineConfig>(DEFAULT_SPOT_ENGINE);
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     if (stratConfig?.strategies) setStrategies(stratConfig.strategies as Strategy[]);
@@ -325,6 +326,7 @@ export default function StrategySettings() {
 
   const handleSave = async () => {
     setSaving(true);
+    setSaved(false);
     try {
       const fullSpotEnginePayload: SpotEngineConfig = {
         ...seConfigFull,
@@ -335,6 +337,8 @@ export default function StrategySettings() {
         updateStratConfig({ strategies }),
         updateSeConfig(fullSpotEnginePayload),
       ]);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
     } catch (e) {
       console.error(e);
     }
@@ -384,9 +388,17 @@ export default function StrategySettings() {
             Configure estratégias de compra e as regras das 5 camadas de venda.
           </p>
         </div>
-        <button onClick={handleSave} disabled={saving} className="btn btn-primary">
-          {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-          {saving ? "Saving..." : "Save All"}
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className={`btn ${saved ? "btn-success" : "btn-primary"}`}
+        >
+          {saving ? (
+            <RefreshCw className="w-4 h-4 animate-spin" />
+          ) : (
+            <Save className="w-4 h-4" />
+          )}
+          {saving ? "Saving..." : saved ? "Saved!" : "Save All"}
         </button>
       </div>
 
