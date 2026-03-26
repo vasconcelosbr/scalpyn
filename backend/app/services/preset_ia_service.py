@@ -322,13 +322,15 @@ def _audit_filter_fields(conditions: list) -> list:
             field = cond["field"]
 
         # Coerção de tipo: AI às vezes retorna valores numéricos como strings
+        # Inclui tratamento de notação europeia (vírgula como separador decimal: "0,5" → 0.5)
         if isinstance(value, str):
             try:
-                coerced = float(value)
+                normalized = value.strip().replace(",", ".")
+                coerced = float(normalized)
                 value = coerced
                 cond["value"] = coerced
             except (ValueError, TypeError):
-                pass
+                logger.warning(f'[Auditor] Não foi possível converter valor "{value}" para número no campo "{field}"')
 
         # Detectar uso incorreto de volume_24h baseado no valor
         if field == "volume_24h" and isinstance(value, (int, float)):

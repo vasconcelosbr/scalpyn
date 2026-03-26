@@ -153,11 +153,67 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     setConfig({ ...config, scoring: { ...config.scoring, enabled } });
   };
 
+  // Normaliza campos do config gerado pelo AI para garantir compatibilidade
+  // independente da versão do backend em produção (safety net frontend)
+  const normalizePresetConfig = (config: any): any => {
+    const FIELD_ALIASES: Record<string, string> = {
+      "change_24h_pct":   "change_24h",
+      "price_change_24h": "change_24h",
+      "change_pct_24h":   "change_24h",
+      "atr_pct":          "atr_percent",
+      "atr_percentage":   "atr_percent",
+      "bollinger_width":  "bb_width",
+      "stochastic_k":     "stoch_k",
+      "stochastic_d":     "stoch_d",
+      "z_score":          "zscore",
+    };
+
+    const fixConditions = (conditions: any[]): any[] => {
+      if (!Array.isArray(conditions)) return conditions;
+      return conditions.map((cond) => {
+        let field = cond.field || "";
+        let value = cond.value;
+
+        // Normalizar aliases de campo
+        if (FIELD_ALIASES[field]) field = FIELD_ALIASES[field];
+
+        // Converter valores string para número (incluindo notação europeia "0,5" → 0.5)
+        if (typeof value === "string") {
+          const parsed = parseFloat(value.replace(",", "."));
+          if (!isNaN(parsed)) value = parsed;
+        }
+
+        // Corrigir volume_24h com valores que não fazem sentido para volume
+        if (field === "volume_24h" && typeof value === "number") {
+          const abs = Math.abs(value);
+          if (value < 0)       field = "change_24h";
+          else if (abs <= 5)   field = "atr_percent";
+          else if (abs <= 100) field = "change_24h";
+        }
+
+        return { ...cond, field, value };
+      });
+    };
+
+    return {
+      ...config,
+      filters: config.filters ? {
+        ...config.filters,
+        conditions: fixConditions(config.filters.conditions ?? []),
+      } : config.filters,
+      signals: config.signals ? {
+        ...config.signals,
+        conditions: fixConditions(config.signals.conditions ?? []),
+      } : config.signals,
+    };
+  };
+
   const handlePresetIASuccess = (result: any) => {
     if (result?.config) {
-      setConfig(result.config);
-      if (result.config.scoring?.enabled !== undefined) {
-        setScoringEnabled(result.config.scoring.enabled !== false);
+      const normalized = normalizePresetConfig(result.config);
+      setConfig(normalized);
+      if (normalized.scoring?.enabled !== undefined) {
+        setScoringEnabled(normalized.scoring.enabled !== false);
       }
     }
   };
