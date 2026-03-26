@@ -308,6 +308,8 @@ def _audit_filter_fields(conditions: list) -> list:
         "bollinger_width":   "bb_width",
     }
 
+    logger.info(f'[Auditor] Iniciando auditoria em {len(conditions)} condições: {conditions}')
+
     fixed = []
     for cond in conditions:
         field = cond.get("field", "")
@@ -318,6 +320,15 @@ def _audit_filter_fields(conditions: list) -> list:
         if field in FIELD_ALIASES:
             cond["field"] = FIELD_ALIASES[field]
             field = cond["field"]
+
+        # Coerção de tipo: AI às vezes retorna valores numéricos como strings
+        if isinstance(value, str):
+            try:
+                coerced = float(value)
+                value = coerced
+                cond["value"] = coerced
+            except (ValueError, TypeError):
+                pass
 
         # Detectar uso incorreto de volume_24h baseado no valor
         if field == "volume_24h" and isinstance(value, (int, float)):
@@ -352,6 +363,7 @@ def _audit_filter_fields(conditions: list) -> list:
             seen.add(key)
             deduped.append(cond)
 
+    logger.info(f'[Auditor] Resultado após auditoria ({len(deduped)} condições): {deduped}')
     return deduped
 
 
