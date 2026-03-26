@@ -65,19 +65,27 @@ logger = logging.getLogger(__name__)
 _BASE_RULES = """
 REGRAS OBRIGATÓRIAS:
 1. Responda APENAS com JSON válido. Sem markdown, sem texto antes ou depois.
-2. Todos os "id" de conditions devem ser únicos: use "cond_1", "cond_2", etc para filters; "sig_1", "sig_2" para signals.
+2. IDs devem ser únicos: use "cond_1", "cond_2" para filters; "sig_1", "sig_2" para signals; "block_1", "block_2" para block_rules; "entry_1", "entry_2" para entry_triggers.
 3. Weights em scoring devem somar EXATAMENTE 100.
-4. Use APENAS os campos (field) e operadores listados abaixo.
+4. Use APENAS os campos (field/indicator) e operadores listados abaixo.
+5. Sempre inclua TODAS as seções no JSON: filters, scoring, signals, block_rules, entry_triggers.
 
-CAMPOS DISPONÍVEIS (field):
+CAMPOS DISPONÍVEIS (field / indicator):
   volume_24h, market_cap, price, change_24h,
   rsi, macd, macd_histogram, stoch_k, stoch_d, zscore,
   adx, bb_width, atr, atr_percent, di_plus, di_minus,
-  ema_full_alignment, ema9_gt_ema50, ema50_gt_ema200, funding_rate
+  ema_full_alignment, ema9_gt_ema50, ema50_gt_ema200, funding_rate,
+  alpha_score, volume_spike
 
-OPERADORES: >, >=, <, <=, ==, !=, between, in, not_in, is_true, is_false
+OPERADORES filters/signals: >, >=, <, <=, ==, !=, between, in, not_in, is_true, is_false
   (para "between": use "min" e "max" no lugar de "value")
   (para "is_true"/"is_false": não use "value")
+OPERADORES block_rules/entry_triggers: >, <, >=, <=
+
+REGRAS DE LAYER:
+  POOL / L1  → filters + block_rules (sem entry_triggers)
+  L2         → filters + scoring + signals + block_rules (sem entry_triggers)
+  L3         → block_rules + signals + entry_triggers (sem filters)
 """
 
 ROLE_PROMPTS = {
@@ -88,18 +96,16 @@ Você é o Preset IA do Scalpyn configurando um FILTRO DE UNIVERSO (POOL — Sta
 Seu papel: definir filtros básicos que determinam quais ativos da corretora
 entram no universo analisado. São critérios mínimos de liquidez e existência.
 
-Configure FILTERS com:
-  - volume_24h mínimo (liquidez básica para operar)
-  - market_cap mínimo (evitar micro-caps manipuláveis)
-  - change_24h para excluir ativos em colapso extremo
+FILTERS: volume_24h mínimo, market_cap mínimo, change_24h para excluir colapsos extremos.
+SCORING: deixe weights em 25/25/25/25 (neutro para POOL).
+SIGNALS: deixe vazio [] para POOL.
+BLOCK_RULES: veto de ativos com spread abusivo ou funding_rate extremo.
+ENTRY_TRIGGERS: deixe vazio [] para POOL (sem execução neste layer).
 
-NÃO configure signals para este role.
-Scoring: deixe weights em 25/25/25/25 (neutro).
-
-Regime BULL:   volume_24h > 500k, market_cap > 10M
-Regime BEAR:   volume_24h > 2M,   market_cap > 50M (apenas blue chips)
-Regime SIDEWAYS: volume_24h > 1M, market_cap > 20M
-Regime EXTREME: volume_24h > 5M,  market_cap > 100M (apenas top assets)
+Regime BULL:     volume_24h > 500k, market_cap > 10M
+Regime BEAR:     volume_24h > 2M,   market_cap > 50M
+Regime SIDEWAYS: volume_24h > 1M,   market_cap > 20M
+Regime EXTREME:  volume_24h > 5M,   market_cap > 100M
 
 {_BASE_RULES}
 """,
@@ -108,22 +114,17 @@ Regime EXTREME: volume_24h > 5M,  market_cap > 100M (apenas top assets)
 Você é o Preset IA do Scalpyn configurando um FILTRO PRIMÁRIO L1 (Stage 1).
 
 Seu papel: filtrar ativos com qualidade técnica inadequada para trading.
-Estes filtros eliminam ativos antes de calcular o score.
 
-Configure FILTERS com:
-  - atr_percent mínimo (volatilidade suficiente para o trade se desenvolver)
-  - adx mínimo (tendência detectável — evitar mercado sem direção)
-  - volume_24h relativo (liquidez operacional)
-  - rsi para excluir extremos absolutos (crashes ou pumps absurdos)
+FILTERS: atr_percent mínimo, adx mínimo, volume_24h operacional, rsi para excluir extremos.
+SCORING: weights neutros 25/25/25/25 (L1 não rankeia, apenas filtra).
+SIGNALS: ema_full_alignment, di_plus/di_minus para confirmar direção.
+BLOCK_RULES: bloquear ativos em rsi extremo (>85 overbought, <15 oversold), adx < 10 (sem tendência).
+ENTRY_TRIGGERS: deixe vazio [] para L1.
 
-Configure SIGNALS (condições de entrada adicionais):
-  - ema_full_alignment para confirmar direção (is_true em BULL)
-  - di_plus > di_minus para confirmar força direcional
-
-Regime BULL:           atr_percent > 1.5, adx > 18, rsi entre 25-70
-Regime BEAR:           atr_percent > 2.0, adx > 22, rsi entre 20-60
-Regime SIDEWAYS:       atr_percent > 1.0, adx > 15
-Regime HIGH_VOLATILITY: atr_percent > 3.0, adx > 25
+Regime BULL:            atr_percent > 1.5, adx > 18, block rsi > 85
+Regime BEAR:            atr_percent > 2.0, adx > 22, block rsi > 80
+Regime SIDEWAYS:        atr_percent > 1.0, adx > 15
+Regime HIGH_VOLATILITY: atr_percent > 3.0, adx > 25, block rsi > 78
 
 {_BASE_RULES}
 """,
@@ -132,33 +133,17 @@ Regime HIGH_VOLATILITY: atr_percent > 3.0, adx > 25
 Você é o Preset IA do Scalpyn configurando o SCORE ENGINE L2 (Stage 2).
 
 Seu papel: definir os PESOS que ranqueiam as oportunidades de 0-100.
-Os weights determinam quanto cada dimensão vale no score final.
 
-Dimensões disponíveis (devem somar 100):
-  liquidity        → volume, spread, profundidade
-  market_structure → tendência, EMAs, suporte/resistência
-  momentum         → RSI, MACD, ADX, força do movimento
-  signal           → condições específicas de entrada
+FILTERS: condições mínimas para entrar no cálculo de score.
+SCORING: weights que somam 100 (liquidity, market_structure, momentum, signal).
+SIGNALS: condições de sinal obrigatórias para confirmar qualidade do ativo.
+BLOCK_RULES: veto de ativos com rsi overbought, spread alto ou sem tendência.
+ENTRY_TRIGGERS: deixe vazio [] para L2 (sem execução neste layer).
 
-Configure SCORING com weights adequados ao regime.
-Configure FILTERS com condições mínimas de score (ex: rsi < 60 para não entrar em overbought).
-Configure SIGNALS com condições obrigatórias de entrada.
-
-Regime BULL:
-  momentum: 35, market_structure: 30, signal: 20, liquidity: 15
-  signals: rsi < 60 required, adx > 20
-
-Regime BEAR:
-  market_structure: 35, momentum: 30, liquidity: 20, signal: 15
-  signals: rsi < 50 required, adx > 25, ema_full_alignment is_false
-
-Regime SIDEWAYS:
-  market_structure: 35, momentum: 25, signal: 25, liquidity: 15
-  signals: bb_width < 0.1 (range-bound), rsi between 30-70
-
-Regime HIGH_VOLATILITY:
-  momentum: 40, liquidity: 30, market_structure: 20, signal: 10
-  signals: volume_24h > threshold, atr_percent > 3
+Regime BULL:            momentum: 35, market_structure: 30, signal: 20, liquidity: 15; block rsi > 82
+Regime BEAR:            market_structure: 35, momentum: 30, liquidity: 20, signal: 15; block rsi > 75
+Regime SIDEWAYS:        market_structure: 35, momentum: 25, signal: 25, liquidity: 15; block adx < 12
+Regime HIGH_VOLATILITY: momentum: 40, liquidity: 30, market_structure: 20, signal: 10; block spread_pct > 1.5
 
 {_BASE_RULES}
 """,
@@ -166,35 +151,30 @@ Regime HIGH_VOLATILITY:
     'acquisition_queue': f"""
 Você é o Preset IA do Scalpyn configurando a FILA DE EXECUÇÃO L3 (Stage 3).
 
-Seu papel: definir as condições FINAIS de veto e entrada.
-Apenas ativos que passaram L1 e L2 chegam aqui.
-Estas são as últimas condições antes da execução real.
+Seu papel: definir as condições FINAIS de veto (block_rules) e entrada (entry_triggers).
+Apenas ativos que passaram L1 e L2 chegam aqui. São as últimas condições antes da execução.
 
-Configure FILTERS (hard blocks — veto absoluto):
-  - rsi máximo de entrada (nunca comprar em overbought)
-  - adx mínimo de força (garantir tendência real)
-  - ema_full_alignment is_true (estrutura bullish obrigatória em BULL)
-
-Configure SIGNALS (entry triggers — timing preciso):
-  - rsi na zona ideal de entrada
-  - macd positivo ou em cruzamento
-  - volume_24h como confirmação de interesse
+FILTERS: deixe vazio [] para L3 (filtros já foram feitos em L1/L2).
+SCORING: weights neutros 25/25/25/25.
+SIGNALS: contexto de momentum — rsi, macd, volume_24h.
+BLOCK_RULES: veto absoluto — nunca comprar overbought, sem tendência ou spread alto.
+ENTRY_TRIGGERS: timing exato de entrada — rsi na zona ideal, macd positivo, volume confirmando.
 
 Regime BULL:
-  filters: rsi < 65, adx > 20, ema_full_alignment is_true
-  signals: rsi < 55, macd > 0, volume_24h > 1000000
+  block: rsi > 65, adx < 18
+  entry: rsi < 55, macd > 0, volume_24h > 1000000, ema_full_alignment is_true
 
 Regime BEAR:
-  filters: rsi < 50, adx > 25
-  signals: rsi < 40, adx > 30 (apenas setups muito seletivos)
+  block: rsi > 50, adx < 25
+  entry: rsi < 40, adx > 30
 
 Regime SIDEWAYS:
-  filters: rsi between 30-65, adx > 15
-  signals: rsi < 45, zscore < -1 (mean reversion)
+  block: rsi > 65, adx < 12
+  entry: rsi < 45, zscore < -1
 
 Regime EXTREME:
-  filters: rsi < 35 (apenas oversold extremo)
-  signals: volume_24h > 5000000 (apenas muito líquido)
+  block: rsi > 40, spread_pct > 1.0
+  entry: rsi < 30, volume_24h > 5000000
 
 {_BASE_RULES}
 """,
@@ -246,8 +226,9 @@ CONFIGURAÇÃO ATUAL DO PROFILE
 
 INSTRUÇÃO
 =========
-Analise as condições de mercado e gere a configuração ideal para este profile.
-Responda APENAS com o JSON no formato abaixo, sem nenhum texto adicional:
+Analise as condições de mercado e gere a configuração COMPLETA para este profile.
+Responda APENAS com o JSON no formato abaixo, sem nenhum texto adicional.
+Inclua TODAS as 5 seções: filters, scoring, signals, block_rules, entry_triggers.
 
 {{
   "regime":           "BULL|BEAR|SIDEWAYS|HIGH_VOLATILITY",
@@ -273,6 +254,17 @@ Responda APENAS com o JSON no formato abaixo, sem nenhum texto adicional:
       "logic": "AND",
       "conditions": [
         {{ "id": "sig_1", "field": "FIELD", "operator": "OPERATOR", "value": VALUE, "required": true }}
+      ]
+    }},
+    "block_rules": {{
+      "blocks": [
+        {{ "id": "block_1", "name": "NOME DO BLOCK", "enabled": true, "indicator": "INDICATOR", "type": "threshold", "operator": "OPERATOR", "value": VALUE, "reason": "MOTIVO DO BLOQUEIO" }}
+      ]
+    }},
+    "entry_triggers": {{
+      "logic": "AND",
+      "conditions": [
+        {{ "id": "entry_1", "indicator": "INDICATOR", "operator": "OPERATOR", "value": VALUE, "required": true, "enabled": true }}
       ]
     }}
   }}
@@ -372,32 +364,36 @@ def _audit_filter_fields(conditions: list) -> list:
 def _validate_config(config: dict, profile_role: str) -> dict:
     """
     Valida e corrige o config retornado pelo Claude.
-    Garante que está no formato exato do ProfileBuilder.
+    Garante que está no formato exato do ProfileBuilder (5 seções).
     """
     ts = int(time.time() * 1000)
 
-    # Garantir estrutura base
+    # ── Garantir estrutura base das 5 seções ──────────────────────────────────
     if 'filters' not in config:
         config['filters'] = {'logic': 'AND', 'conditions': []}
     if 'scoring' not in config:
         config['scoring'] = {'enabled': True, 'weights': {'liquidity': 25, 'market_structure': 25, 'momentum': 25, 'signal': 25}}
     if 'signals' not in config:
         config['signals'] = {'logic': 'AND', 'conditions': []}
+    if 'block_rules' not in config:
+        config['block_rules'] = {'blocks': []}
+    if 'entry_triggers' not in config:
+        config['entry_triggers'] = {'logic': 'AND', 'conditions': []}
 
-    # Auditar e corrigir mapeamentos de campo antes de processar
+    # ── Auditar e corrigir campos de filters ──────────────────────────────────
     config['filters']['conditions'] = _audit_filter_fields(
         config['filters'].get('conditions', [])
     )
 
-    # Garantir IDs únicos nas conditions
+    # ── Garantir IDs e defaults nas conditions de filters ─────────────────────
     for i, cond in enumerate(config['filters'].get('conditions', [])):
         if not cond.get('id'):
             cond['id'] = f'cond_{ts}_{i}'
-        # Garantir campos obrigatórios
         cond.setdefault('field', 'volume_24h')
         cond.setdefault('operator', '>')
         cond.setdefault('value', 0)
 
+    # ── Garantir IDs e defaults nas conditions de signals ─────────────────────
     for i, cond in enumerate(config['signals'].get('conditions', [])):
         if not cond.get('id'):
             cond['id'] = f'sig_{ts}_{i}'
@@ -406,16 +402,46 @@ def _validate_config(config: dict, profile_role: str) -> dict:
         cond.setdefault('value', 50)
         cond.setdefault('required', False)
 
-    # Validar weights somam 100
+    # ── Garantir IDs e defaults nos blocks de block_rules ─────────────────────
+    blocks = config['block_rules'].get('blocks', [])
+    if not isinstance(blocks, list):
+        blocks = []
+        config['block_rules']['blocks'] = blocks
+    for i, block in enumerate(blocks):
+        if not block.get('id'):
+            block['id'] = f'block_{ts}_{i}'
+        block.setdefault('name', f'Block {i + 1}')
+        block.setdefault('enabled', True)
+        block.setdefault('indicator', 'rsi')
+        block.setdefault('type', 'threshold')
+        block.setdefault('operator', '>')
+        block.setdefault('value', 80)
+        block.setdefault('reason', '')
+
+    # ── Garantir IDs e defaults nas conditions de entry_triggers ──────────────
+    entry_conds = config['entry_triggers'].get('conditions', [])
+    if not isinstance(entry_conds, list):
+        entry_conds = []
+        config['entry_triggers']['conditions'] = entry_conds
+    config['entry_triggers'].setdefault('logic', 'AND')
+    for i, trig in enumerate(entry_conds):
+        if not trig.get('id'):
+            trig['id'] = f'entry_{ts}_{i}'
+        # entry_triggers usa "indicator" em vez de "field"
+        if 'field' in trig and 'indicator' not in trig:
+            trig['indicator'] = trig.pop('field')
+        trig.setdefault('indicator', 'rsi')
+        trig.setdefault('operator', '<')
+        trig.setdefault('value', 60)
+        trig.setdefault('required', False)
+        trig.setdefault('enabled', True)
+
+    # ── Validar weights somam 100 ─────────────────────────────────────────────
     weights = config['scoring'].get('weights', {})
     total   = sum(weights.values())
     if total != 100 and total > 0:
-        # Normalizar para somar 100
         factor = 100 / total
-        config['scoring']['weights'] = {
-            k: round(v * factor) for k, v in weights.items()
-        }
-        # Ajustar arredondamento
+        config['scoring']['weights'] = {k: round(v * factor) for k, v in weights.items()}
         diff = 100 - sum(config['scoring']['weights'].values())
         if diff != 0:
             first_key = next(iter(config['scoring']['weights']))
