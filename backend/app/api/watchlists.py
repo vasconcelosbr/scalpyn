@@ -801,6 +801,129 @@ async def _cascade_refresh(wl_id: UUID, user_id: UUID, db: AsyncSession, depth: 
             logger.warning("[Pipeline] Cascade refresh failed for child %s: %s", child.id, e)
 
 
+@router.get("/{watchlist_id}/signals")
+async def get_watchlist_signals(
+    watchlist_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    L3 SIGNALS — Return pipeline watchlist assets that have active entry signals.
+
+    Pipeline:
+    1. Load assets from pipeline_watchlist_assets (already pre-filtered through L1/L2/L3)
+    2. Load the watchlist's Profile (via profile_id)
+    3. Fetch latest indicators from the indicators table for each symbol
+    4. Apply the Profile's entry_triggers via SignalEngine
+    5. Return all assets with their signal status; triggered=True assets appear first
+    """
+    from ..services.signal_engine import SignalEngine
+    from ..models.profile import Profile
+
+    wl_result = await db.execute(
+        select(PipelineWatchlist).where(
+            PipelineWatchlist.id == watchlist_id,
+            PipelineWatchlist.user_id == user_id,
+        )
+    )
+    wl = wl_result.scalars().first()
+    if not wl:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    # Load pipeline assets
+    assets_result = await db.execute(
+        select(PipelineWatchlistAsset).where(PipelineWatchlistAsset.watchlist_id == watchlist_id)
+    )
+    pipeline_assets = assets_result.scalars().all()
+
+    if not pipeline_assets:
+        return {
+            "watchlist": wl.name,
+            "watchlist_id": str(watchlist_id),
+            "level": wl.level,
+            "profile": None,
+            "profile_id": None,
+            "total_assets": 0,
+            "signals_count": 0,
+            "signals": [],
+        }
+
+    symbols = [a.symbol for a in pipeline_assets]
+    placeholders = ", ".join(f"'{s}'" for s in symbols)
+
+    # Fetch latest indicators
+    try:
+        ind_rows = await db.execute(
+            text(f"""
+                SELECT DISTINCT ON (symbol) symbol, indicators_json
+                FROM indicators
+                WHERE symbol IN ({placeholders})
+                ORDER BY symbol, time DESC
+            """)
+        )
+        indicators_map = {r.symbol: r.indicators_json or {} for r in ind_rows.fetchall()}
+    except Exception:
+        indicators_map = {}
+
+    # Load profile for signal evaluation
+    profile_name = None
+    profile_id_str = None
+    signal_engine: Optional[SignalEngine] = None
+
+    if wl.profile_id:
+        prof_res = await db.execute(select(Profile).where(Profile.id == wl.profile_id))
+        prof = prof_res.scalars().first()
+        if prof:
+            profile_name = prof.name
+            profile_id_str = str(prof.id)
+            cfg = prof.config or {}
+            sig_cfg = cfg.get("entry_triggers") or cfg.get("signals")
+            if sig_cfg and sig_cfg.get("conditions"):
+                signal_engine = SignalEngine(sig_cfg)
+
+    # Evaluate each asset
+    triggered_signals = []
+    all_signals = []
+
+    for pa in pipeline_assets:
+        indicators = indicators_map.get(pa.symbol, {})
+        alpha = float(pa.alpha_score) if pa.alpha_score else 0.0
+
+        signal_result = {"signal": False, "direction": None, "matched": [], "failed_required": []}
+        if signal_engine:
+            signal_result = signal_engine.evaluate(indicators, alpha)
+
+        asset_out = {
+            "symbol":         pa.symbol,
+            "price":          float(pa.current_price) if pa.current_price else None,
+            "change_24h":     float(pa.price_change_24h) if pa.price_change_24h else None,
+            "volume_24h":     float(pa.volume_24h) if pa.volume_24h else None,
+            "market_cap":     float(pa.market_cap) if pa.market_cap else None,
+            "alpha_score":    alpha,
+            "signal":         signal_result.get("signal", False),
+            "direction":      signal_result.get("direction"),
+            "matched":        signal_result.get("matched", []),
+            "failed_required": signal_result.get("failed_required", []),
+        }
+        all_signals.append(asset_out)
+        if asset_out["signal"]:
+            triggered_signals.append(asset_out)
+
+    # Sort: triggered first, then by alpha_score descending
+    all_signals.sort(key=lambda x: (not x["signal"], -(x["alpha_score"] or 0)))
+
+    return {
+        "watchlist":     wl.name,
+        "watchlist_id":  str(watchlist_id),
+        "level":         wl.level,
+        "profile":       profile_name,
+        "profile_id":    profile_id_str,
+        "total_assets":  len(all_signals),
+        "signals_count": len(triggered_signals),
+        "signals":       all_signals,
+    }
+
+
 @router.post("/{watchlist_id}/refresh")
 async def refresh_watchlist(
     watchlist_id: UUID,
