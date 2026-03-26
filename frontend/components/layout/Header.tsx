@@ -85,15 +85,9 @@ export function Header() {
       <div className="flex items-center gap-4">
 
         {/* Mode Indicator */}
-        {mode === 'live' ? (
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--color-profit-muted)] border border-[var(--color-profit-border)] rounded-full text-[var(--color-profit)] text-[11px] font-semibold tracking-[0.05em] uppercase">
-            <span className="live-dot bg-[var(--color-profit)]" /> LIVE TRADING
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--color-warning-muted)] border border-[rgba(251,191,36,0.3)] rounded-full text-[var(--color-warning)] text-[11px] font-semibold tracking-[0.05em] uppercase">
-            <span className="live-dot bg-[var(--color-warning)]" /> PAPER TRADING
-          </div>
-        )}
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--color-profit-muted)] border border-[var(--color-profit-border)] rounded-full text-[var(--color-profit)] text-[11px] font-semibold tracking-[0.05em] uppercase">
+          <span className="live-dot bg-[var(--color-profit)]" /> LIVE TRADING
+        </div>
 
         {/* Notifications */}
         <button className="btn-icon relative ml-2">

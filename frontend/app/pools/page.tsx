@@ -27,7 +27,7 @@ export default function PoolsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
-  const [newMode, setNewMode] = useState("paper");
+  const [newMode, setNewMode] = useState("live");
   const [newMarketType, setNewMarketType] = useState("spot");
   const [newProfileId, setNewProfileId] = useState("");
   const [newWatchlistId, setNewWatchlistId] = useState("");
@@ -90,7 +90,7 @@ export default function PoolsPage() {
       setShowCreate(false);
       setNewName("");
       setNewDesc("");
-      setNewMode("paper");
+      setNewMode("live");
       setNewMarketType("spot");
       setNewProfileId("");
       setNewWatchlistId("");
@@ -150,7 +150,6 @@ export default function PoolsPage() {
               <div className="space-y-2">
                 <label className="label">Trading Mode</label>
                 <select className="input" value={newMode} onChange={(e) => setNewMode(e.target.value)}>
-                  <option value="paper">Paper Trading</option>
                   <option value="live">Live Trading</option>
                 </select>
               </div>
