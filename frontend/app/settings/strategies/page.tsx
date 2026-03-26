@@ -150,6 +150,7 @@ export default function StrategySettings() {
   const [expandedLayer, setExpandedLayer] = useState<string | null>(null);
   const [selling, setSelling] = useState<any>(DEFAULT_SELLING);
   const [sellFlow, setSellFlow] = useState<any>(DEFAULT_SELL_FLOW);
+  const [seConfigFull, setSeConfigFull] = useState<any>({});
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -158,6 +159,7 @@ export default function StrategySettings() {
 
   useEffect(() => {
     if (!seConfig || Object.keys(seConfig).length === 0) return;
+    setSeConfigFull(seConfig);
     if (seConfig.selling) setSelling((prev: any) => ({ ...prev, ...seConfig.selling }));
     if (seConfig.sell_flow) {
       setSellFlow((prev: any) => ({
@@ -175,7 +177,7 @@ export default function StrategySettings() {
     try {
       await Promise.all([
         updateStratConfig({ strategies }),
-        updateSeConfig({ selling, sell_flow: sellFlow }),
+        updateSeConfig({ ...seConfigFull, selling, sell_flow: sellFlow }),
       ]);
     } catch (e) {
       console.error(e);
@@ -298,12 +300,10 @@ export default function StrategySettings() {
               Pipeline de 5 camadas que decide quando e como vender cada posição.
             </p>
           </div>
-          {selling.never_sell_at_loss && (
-            <span className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-[var(--color-red-bg,#3f1a1a)] text-[var(--color-red,#ef4444)] border border-[var(--color-red-border,#7f1d1d)]">
-              <Shield className="w-3.5 h-3.5" />
-              NUNCA VENDE NO PREJUÍZO — INVIOLÁVEL
-            </span>
-          )}
+          <span className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-[#3f1a1a] text-[#ef4444] border border-[#7f1d1d]">
+            <Shield className="w-3.5 h-3.5" />
+            NUNCA VENDE NO PREJUÍZO — INVIOLÁVEL
+          </span>
         </div>
 
         {/* Global Sell Config */}
