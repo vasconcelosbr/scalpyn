@@ -8,6 +8,7 @@ Runs every 30 minutes via Celery Beat.
 
 import asyncio
 import logging
+import re
 
 from ..tasks.celery_app import celery_app
 
@@ -16,6 +17,9 @@ logger = logging.getLogger(__name__)
 GATE_CURRENCIES_URL = "https://api.gateio.ws/api/v4/spot/currencies"
 CMC_LISTINGS_URL    = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest"
 CMC_LIMIT           = 500
+
+# Filter out leveraged ETF tokens (e.g. BTC3L, PEPE5S, TON2L)
+_ETF_PATTERN = re.compile(r"\d+[LS]$", re.IGNORECASE)
 
 
 def _run_async(coro):
@@ -38,6 +42,10 @@ async def _fetch_from_gate() -> dict[str, float]:
         result = {}
         for coin in coins:
             symbol = coin.get("currency", "").upper()
+            if _ETF_PATTERN.search(symbol):
+                continue
+            if coin.get("trade_disabled") or coin.get("delisted"):
+                continue
             mcap_str = coin.get("market_cap", "") or ""
             try:
                 mcap = float(mcap_str)

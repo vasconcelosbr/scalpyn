@@ -1,6 +1,7 @@
 """Market Data Service — centralized collection from exchanges into TimescaleDB."""
 
 import logging
+import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 
@@ -12,6 +13,15 @@ logger = logging.getLogger(__name__)
 GATE_SPOT_URL = "https://api.gateio.ws/api/v4/spot/candlesticks"
 GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/spot/tickers"
 GATE_FUNDING_URL = "https://api.gateio.ws/api/v4/futures/usdt/funding_rate"
+
+# Regex to detect Gate.io leveraged ETF tokens (e.g. BTC3L, PEPE5S, TON2L)
+_ETF_PATTERN = re.compile(r"\d+[LS]$", re.IGNORECASE)
+
+
+def _is_etf_pair(currency_pair: str) -> bool:
+    """Return True if the pair is a leveraged ETF token (e.g. BTC3L_USDT, PEPE5S_USDT)."""
+    base = currency_pair.split("_")[0]
+    return bool(_ETF_PATTERN.search(base))
 
 
 class MarketDataService:
@@ -71,7 +81,9 @@ class MarketDataService:
 
             usdt_tickers = [
                 t for t in tickers
-                if isinstance(t, dict) and t.get("currency_pair", "").endswith("_USDT")
+                if isinstance(t, dict)
+                and t.get("currency_pair", "").endswith("_USDT")
+                and not _is_etf_pair(t.get("currency_pair", ""))
             ]
             return usdt_tickers
         except Exception as e:
