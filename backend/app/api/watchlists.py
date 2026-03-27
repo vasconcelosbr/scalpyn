@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db, AsyncSessionLocal
 from ..api.config import get_current_user_id
 from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
+from ..services.market_data_service import _is_etf_pair
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,7 @@ async def _seed_market_metadata_bg(symbols: List[str]) -> None:
                               continue
               if pair not in symbol_set:
                 continue
-            if ticker.get("etf_net_value") is not None:
+            if _is_etf_pair(pair) or ticker.get("etf_net_value") is not None:
                 continue
             price = float(ticker.get("last", 0) or 0)
             change = float(ticker.get("change_percentage", 0) or 0)
