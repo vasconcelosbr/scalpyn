@@ -93,6 +93,8 @@ async def _seed_market_metadata_bg(symbols: List[str]) -> None:
                               continue
               if pair not in symbol_set:
                 continue
+            if ticker.get("etf_net_value") is not None:
+                continue
             price = float(ticker.get("last", 0) or 0)
             change = float(ticker.get("change_percentage", 0) or 0)
             volume = float(ticker.get("quote_volume", 0) or 0)

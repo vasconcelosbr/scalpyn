@@ -84,6 +84,7 @@ class MarketDataService:
                 if isinstance(t, dict)
                 and t.get("currency_pair", "").endswith("_USDT")
                 and not _is_etf_pair(t.get("currency_pair", ""))
+                and t.get("etf_net_value") is None
             ]
             return usdt_tickers
         except Exception as e:
