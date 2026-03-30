@@ -400,13 +400,15 @@ async def _resolve_and_persist(
         alpha = scores.get("score", 0.0)
         signal = scores.get("signal_score", 0.0)
 
-        # Apply score filters (derived scores make them meaningful when market data exists).
-        # When no scoring data is available, symbols score 0 and will fail min_score filters —
-        # L1 watchlists typically have no filters so they still propagate all base symbols.
-        if min_score and alpha < min_score:
-            continue
-        if require_signal and signal < 50:
-            continue
+        # Apply score filter only when we actually HAVE scoring data.
+        # If market_metadata + alpha_scores are both empty (first run, pipeline
+        # not yet populated), we let all symbols through for L1 so the user can
+        # see their pool assets immediately even before the Celery pipeline runs.
+        if scoring_data_available:
+            if min_score and alpha < min_score:
+                continue
+            if require_signal and signal < 50:
+                continue
 
         meta = meta_map.get(symbol, {})
         assets_out.append({

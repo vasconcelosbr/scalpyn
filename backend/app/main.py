@@ -22,7 +22,6 @@ from .api import (
     websocket,
     profiles,
     custom_watchlists,
-    pipeline_watchlists,
     ai_keys,
     ai_skills,
 )
@@ -71,7 +70,6 @@ app.include_router(market.router)
 app.include_router(watchlist.router)
 app.include_router(watchlists.router)
 app.include_router(custom_watchlists.router)
-app.include_router(pipeline_watchlists.router)
 
 # Trading
 app.include_router(trades.router)
