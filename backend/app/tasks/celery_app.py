@@ -19,6 +19,7 @@ celery_app = Celery(
         "app.tasks.auto_discover_assets",
         "app.tasks.execute_buy",
         "app.tasks.fetch_market_caps",
+        "app.tasks.pipeline_scan",
     ]
 )
 
@@ -66,5 +67,10 @@ celery_app.conf.beat_schedule = {
     "fetch_market_caps": {
         "task": "app.tasks.fetch_market_caps.fetch_market_caps",
         "schedule": 1800.0,
+    },
+    # Pipeline scan: L1 → L2 → L3 evaluation every 60 seconds
+    "pipeline_scan": {
+        "task": "app.tasks.pipeline_scan.scan",
+        "schedule": 60.0,
     },
 }
