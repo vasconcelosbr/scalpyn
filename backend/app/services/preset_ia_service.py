@@ -352,7 +352,10 @@ def _audit_filter_fields(conditions: list) -> list:
     seen: set = set()
     deduped = []
     for cond in fixed:
-        key = (cond.get("field"), cond.get("operator"), cond.get("value"))
+        raw_value = cond.get("value")
+        # Lists (e.g. [min, max] for "between") are not hashable — convert to tuple
+        hashable_value = tuple(raw_value) if isinstance(raw_value, list) else raw_value
+        key = (cond.get("field"), cond.get("operator"), hashable_value)
         if key not in seen:
             seen.add(key)
             deduped.append(cond)

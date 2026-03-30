@@ -1,6 +1,7 @@
 """Celery application configuration for Scalpyn."""
 
 from celery import Celery
+from celery.schedules import crontab
 from ..config import settings
 
 celery_app = Celery(
@@ -39,10 +40,7 @@ celery_app.conf.beat_schedule = {
     # Daily summary at 20:00 UTC
     "daily_summary": {
         "task": "app.tasks.daily_summary.send",
-        "schedule": {
-            "hour": 20,
-            "minute": 0,
-        },
+        "schedule": crontab(hour=20, minute=0),
     },
     # Anti-liquidation monitor every 30 seconds
     "anti_liq_monitor": {
