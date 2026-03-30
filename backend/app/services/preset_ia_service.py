@@ -471,7 +471,8 @@ async def run_preset_ia(
         profile_role:           role do profile (universe_filter, primary_filter, etc.)
         user_id:                ID do usuário
         current_profile_config: config atual do profile (campo config do profile)
-        db:                     sessão de banco
+        db:                     sessão de banco (ignorada internamente — cria sessão própria
+                                para evitar InterfaceError de operação concorrente em asyncpg)
 
     Returns:
         {
@@ -484,17 +485,17 @@ async def run_preset_ia(
     """
     from .ai_keys_service import get_anthropic_client
     from ..models.ai_skill import AiSkill
+    from ..database import AsyncSessionLocal
     from sqlalchemy import select, and_
     import uuid as _uuid
 
-    client = await get_anthropic_client(db=db, user_id=user_id)
-
-    # Tentar buscar Skill ativa do usuário para este role_key
+    # ── Buscar Skill do usuário com sessão própria (não reusar a sessão do endpoint
+    # para evitar InterfaceError "another operation is in progress" no asyncpg) ──
     system_prompt = None
-    if db is not None:
-        try:
-            uid = _uuid.UUID(str(user_id))
-            result = await db.execute(
+    try:
+        uid = _uuid.UUID(str(user_id))
+        async with AsyncSessionLocal() as own_db:
+            result = await own_db.execute(
                 select(AiSkill).where(
                     and_(
                         AiSkill.user_id == uid,
@@ -507,8 +508,8 @@ async def run_preset_ia(
             if skill:
                 system_prompt = skill.prompt_text
                 logger.info(f'[PresetIA] Usando Skill personalizada "{skill.name}" para role={profile_role}')
-        except Exception as e:
-            logger.warning(f'[PresetIA] Falha ao buscar Skill do DB: {e}')
+    except Exception as e:
+        logger.warning(f'[PresetIA] Falha ao buscar Skill do DB: {e}')
 
     if system_prompt is None:
         system_prompt = ROLE_PROMPTS.get(
@@ -516,6 +517,10 @@ async def run_preset_ia(
             ROLE_PROMPTS['primary_filter']
         )
         logger.info(f'[PresetIA] Usando prompt padrão para role={profile_role}')
+
+    # Obter client Anthropic com sessão própria (evita conflito de DB)
+    async with AsyncSessionLocal() as own_db2:
+        client = await get_anthropic_client(db=own_db2, user_id=user_id)
 
     # Coletar mercado
     snapshot = await _get_market_snapshot()
