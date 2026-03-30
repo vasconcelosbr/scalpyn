@@ -83,6 +83,112 @@ async def _seed_market_metadata_bg(symbols: List[str]) -> None:
         logger.warning("[Pipeline] Background market seed failed: %s", e)
 
 
+# ── Profile indicator helpers ──────────────────────────────────────────────────
+
+# Map: profile config field name → key in indicators_json (or special source)
+FIELD_MAP: Dict[str, str] = {
+    # Market metadata (sourced from market_metadata table, not indicators_json)
+    "volume_24h":          "_meta:volume_24h",
+    "market_cap":          "_meta:market_cap",
+    "change_24h":          "_meta:price_change_24h",
+    "price_change_24h":    "_meta:price_change_24h",
+    # Indicator fields
+    "atr_pct":             "atr_pct",
+    "rsi":                 "rsi",
+    "adx":                 "adx",
+    "di_plus":             "di_plus",
+    "macd_histogram":      "macd_histogram",
+    "bb_width":            "bb_width",
+    "zscore":              "zscore",
+    "ema_full_alignment":  "ema_full_alignment",
+    "ema9_gt_ema50":       "ema9_gt_ema50",
+    "ema50_gt_ema200":     "ema50_gt_ema200",
+    "volume_spike":        "volume_spike",
+    "macd":                "macd",
+    "macd_signal":         "macd_signal",
+    "stoch_k":             "stoch_k",
+    "vwap":                "vwap",
+}
+
+# Human-readable labels
+FIELD_LABELS: Dict[str, str] = {
+    "_meta:volume_24h":    "Volume 24h",
+    "_meta:market_cap":    "Market Cap",
+    "_meta:price_change_24h": "24h%",
+    "atr_pct":             "ATR%",
+    "rsi":                 "RSI",
+    "adx":                 "ADX",
+    "di_plus":             "DI+",
+    "macd_histogram":      "MACD Hist",
+    "bb_width":            "BB Width",
+    "zscore":              "Z-Score",
+    "ema_full_alignment":  "EMA Align",
+    "ema9_gt_ema50":       "EMA 9>50",
+    "ema50_gt_ema200":     "EMA 50>200",
+    "volume_spike":        "Vol Spike",
+    "macd":                "MACD",
+    "macd_signal":         "MACD Sig",
+    "stoch_k":             "Stoch K",
+    "vwap":                "VWAP",
+}
+
+
+def _extract_profile_indicator_fields(profile_config: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """
+    Extract the ordered list of unique indicator fields referenced in a profile's
+    filters + signals conditions.
+    Returns [{"key": "_meta:volume_24h", "label": "Volume 24h", "field": "volume_24h"}, ...]
+    """
+    if not profile_config:
+        # Default columns when no profile is assigned
+        return [
+            {"key": "_meta:price_change_24h", "label": "24h%",       "field": "price_change_24h"},
+            {"key": "_meta:volume_24h",       "label": "Volume 24h", "field": "volume_24h"},
+            {"key": "_meta:market_cap",       "label": "Market Cap", "field": "market_cap"},
+        ]
+
+    seen: Dict[str, bool] = {}   # key → already_added (ordered dedup)
+    result: List[Dict[str, str]] = []
+
+    def _add(field: str):
+        mapped = FIELD_MAP.get(field)
+        if mapped and mapped not in seen:
+            seen[mapped] = True
+            result.append({
+                "key":   mapped,
+                "label": FIELD_LABELS.get(mapped, field),
+                "field": field,
+            })
+
+    # Collect from filters
+    for cond in profile_config.get("filters", {}).get("conditions", []):
+        _add(cond.get("field", ""))
+
+    # Collect from signals
+    for cond in profile_config.get("signals", {}).get("conditions", []):
+        _add(cond.get("field", ""))
+
+    return result
+
+
+async def _fetch_indicators_map(db: AsyncSession, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Fetch latest indicators_json per symbol from the indicators table."""
+    if not symbols:
+        return {}
+    placeholders = ", ".join(f"'{s}'" for s in symbols)
+    try:
+        rows = (await db.execute(text(f"""
+            SELECT DISTINCT ON (symbol) symbol, indicators_json
+            FROM indicators
+            WHERE symbol IN ({placeholders})
+            ORDER BY symbol, time DESC
+        """))).fetchall()
+        return {r.symbol: (r.indicators_json or {}) for r in rows}
+    except Exception as exc:
+        logger.warning("[Pipeline] indicators fetch failed: %s", exc)
+        return {}
+
+
 # ── Serializers ────────────────────────────────────────────────────────────────
 
 def _wl_to_dict(wl: PipelineWatchlist) -> Dict[str, Any]:
@@ -100,7 +206,9 @@ def _wl_to_dict(wl: PipelineWatchlist) -> Dict[str, Any]:
     }
 
 
-def _asset_to_dict(a: PipelineWatchlistAsset) -> Dict[str, Any]:
+def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any]] = None, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    ind = indicators or {}
+    mt  = meta or {}
     return {
         "id":               str(a.id),
         "watchlist_id":     str(a.watchlist_id),
@@ -114,6 +222,13 @@ def _asset_to_dict(a: PipelineWatchlistAsset) -> Dict[str, Any]:
         "previous_level":   a.previous_level,
         "level_change_at":  a.level_change_at.isoformat() if a.level_change_at else None,
         "level_direction":  a.level_direction,
+        # Enriched indicator values — merged from indicators_json + meta
+        "indicators": {
+            "_meta:volume_24h":        float(a.volume_24h)       if a.volume_24h       else mt.get("volume_24h"),
+            "_meta:market_cap":        float(a.market_cap)       if a.market_cap       else mt.get("market_cap"),
+            "_meta:price_change_24h":  float(a.price_change_24h) if a.price_change_24h else mt.get("price_change_24h"),
+            **{k: v for k, v in ind.items() if k in FIELD_MAP.values()},
+        },
     }
 
 
@@ -516,7 +631,54 @@ async def get_watchlist_assets(
         except Exception as e:
             logger.warning("[Pipeline] Auto-resolve failed for %s: %s", watchlist_id, e)
 
-    return {"assets": [_asset_to_dict(a) for a in assets], "total": len(assets)}
+    # ── Load profile to derive dynamic indicator column schema ────────────────
+    profile_config: Optional[Dict[str, Any]] = None
+    if wl.profile_id:
+        from ..models.profile import Profile
+        prof_result = await db.execute(
+            select(Profile).where(Profile.id == wl.profile_id)
+        )
+        prof = prof_result.scalars().first()
+        if prof:
+            # preset_ia_config holds the structured filters/signals with field+operator+value
+            profile_config = prof.preset_ia_config or prof.config
+
+    profile_indicators = _extract_profile_indicator_fields(profile_config)
+
+    # ── Fetch live indicator values for all asset symbols ─────────────────────
+    symbols = [a.symbol for a in assets]
+    ind_map = await _fetch_indicators_map(db, symbols) if symbols else {}
+
+    # Fresh meta (some values may be missing from pipeline_watchlist_assets)
+    meta_map: Dict[str, Dict[str, Any]] = {}
+    if symbols:
+        try:
+            placeholders = ", ".join(f"'{s}'" for s in symbols)
+            meta_rows = (await db.execute(text(f"""
+                SELECT symbol, price_change_24h, volume_24h, market_cap
+                FROM market_metadata WHERE symbol IN ({placeholders})
+            """))).fetchall()
+            meta_map = {
+                r.symbol: {
+                    "price_change_24h": float(r.price_change_24h) if r.price_change_24h else None,
+                    "volume_24h":       float(r.volume_24h)       if r.volume_24h       else None,
+                    "market_cap":       float(r.market_cap)       if r.market_cap       else None,
+                }
+                for r in meta_rows
+            }
+        except Exception:
+            pass
+
+    enriched = [
+        _asset_to_dict(a, indicators=ind_map.get(a.symbol), meta=meta_map.get(a.symbol))
+        for a in assets
+    ]
+
+    return {
+        "assets":             enriched,
+        "total":              len(enriched),
+        "profile_indicators": profile_indicators,  # [{key, label, field}, ...]
+    }
 
 
 async def _cascade_refresh(wl_id: UUID, user_id: UUID, db: AsyncSession, depth: int = 0) -> None:
