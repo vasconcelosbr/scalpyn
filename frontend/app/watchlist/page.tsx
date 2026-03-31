@@ -43,6 +43,13 @@ interface PipelineAsset {
   previous_level: string | null;
   level_change_at: string | null;
   level_direction: string | null;
+  indicators: Record<string, number | boolean | string | null>;
+}
+
+interface IndicatorCol {
+  key: string;    // e.g. "_meta:volume_24h" or "rsi"
+  label: string;  // e.g. "Volume 24h" or "RSI"
+  field: string;  // original profile field name
 }
 
 interface Pool {
@@ -80,10 +87,41 @@ function fmtPrice(n: number | null) {
   return `$${n.toFixed(6)}`;
 }
 
+function fmtVol(n: number | null) {
+  if (n == null) return '—';
+  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
+  return `$${n.toFixed(0)}`;
+}
+
 function fmtChange(n: number | null) {
   if (n == null) return '—';
   const sign = n >= 0 ? '+' : '';
   return `${sign}${n.toFixed(2)}%`;
+}
+
+// ── Indicator Cell ────────────────────────────────────────────────────────────
+
+function IndicatorCell({ value }: { value: number | boolean | string | null | undefined }) {
+  if (value === null || value === undefined) {
+    return <span className="text-[#4B5563]">—</span>;
+  }
+  if (typeof value === 'boolean') {
+    return value
+      ? <span className="text-[#34D399] font-semibold">✓</span>
+      : <span className="text-[#F87171]">✗</span>;
+  }
+  if (typeof value === 'string') {
+    // macd_signal: "positive" / "negative"
+    if (value === 'positive') return <span className="text-[#34D399] font-semibold">{value}</span>;
+    if (value === 'negative') return <span className="text-[#F87171]">{value}</span>;
+    return <span className="text-[#94A3B8]">{value}</span>;
+  }
+  // number
+  const abs = Math.abs(value);
+  const display = abs >= 1_000_000 ? fmtVol(value) : fmt(value, abs >= 10 ? 1 : 3);
+  return <span className="text-[#CBD5E1]">{display}</span>;
 }
 
 // ── Create/Edit Modal ─────────────────────────────────────────────────────────
@@ -276,6 +314,7 @@ interface WatchlistRowProps {
 function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed, liveDirections = {} }: WatchlistRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [assets, setAssets] = useState<PipelineAsset[]>([]);
+  const [profileIndicators, setProfileIndicators] = useState<IndicatorCol[]>([]);
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -289,8 +328,9 @@ function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed,
   const loadAssets = useCallback(async (triggerParentRefresh = false) => {
     setLoadingAssets(true);
     try {
-      const data = await apiFetch<{ assets: PipelineAsset[] }>(`/watchlists/${wl.id}/assets`);
+      const data = await apiFetch<{ assets: PipelineAsset[]; profile_indicators?: IndicatorCol[] }>(`/watchlists/${wl.id}/assets`);
       setAssets(data.assets);
+      if (data.profile_indicators) setProfileIndicators(data.profile_indicators);
       if (triggerParentRefresh && data.assets.length > 0) {
         onRefreshed();
       }
@@ -401,10 +441,15 @@ function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed,
                   <tr className="border-b border-[#1E2433] bg-[#0A0B10]">
                     <th className="px-4 py-2 text-left text-[#4B5563] font-medium">Symbol</th>
                     <th className="px-4 py-2 text-right text-[#4B5563] font-medium">Price</th>
-                    <th className="px-4 py-2 text-right text-[#4B5563] font-medium">24h %</th>
-                    <th className="px-4 py-2 text-right text-[#4B5563] font-medium">Volume 24h</th>
+                    <th className="px-4 py-2 text-right text-[#4B5563] font-medium">24h%</th>
+                    {/* Dynamic indicator columns from profile */}
+                    {profileIndicators.map((col) => (
+                      <th key={col.key} className="px-4 py-2 text-right text-[#4B5563] font-medium whitespace-nowrap">
+                        {col.label}
+                      </th>
+                    ))}
                     <th className="px-4 py-2 text-right text-[#4B5563] font-medium">Alpha</th>
-                    <th className="px-4 py-2 text-right text-[#4B5563] font-medium">Direction</th>
+                    <th className="px-4 py-2 text-right text-[#4B5563] font-medium">Dir</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -426,20 +471,26 @@ function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed,
                         <td className={`px-4 py-2.5 text-right font-medium ${changePos ? 'text-[#34D399]' : 'text-[#F87171]'}`}>
                           {fmtChange(asset.price_change_24h)}
                         </td>
-                        <td className="px-4 py-2.5 text-right text-[#64748B]">
-                          {asset.volume_24h != null ? `$${(asset.volume_24h / 1_000_000).toFixed(1)}M` : '—'}
-                        </td>
+                        {/* Dynamic indicator values */}
+                        {profileIndicators.map((col) => (
+                          <td key={col.key} className="px-4 py-2.5 text-right">
+                            <IndicatorCell value={(asset.indicators ?? {})[col.key]} />
+                          </td>
+                        ))}
                         <td className="px-4 py-2.5 text-right">
-                          <span className={`font-semibold ${(asset.alpha_score ?? 0) >= 75 ? 'text-[#34D399]' : (asset.alpha_score ?? 0) >= 50 ? 'text-[#FBBF24]' : 'text-[#94A3B8]'}`}>
+                          <span className={`font-semibold ${
+                            (asset.alpha_score ?? 0) >= 75 ? 'text-[#34D399]' :
+                            (asset.alpha_score ?? 0) >= 50 ? 'text-[#FBBF24]' : 'text-[#94A3B8]'
+                          }`}>
                             {asset.alpha_score != null ? asset.alpha_score.toFixed(1) : '—'}
                           </span>
                         </td>
                         <td className="px-4 py-2.5 text-right">
                           {asset.level_direction === 'up' && (
-                            <span className="text-[#34D399] font-bold">↑ up</span>
+                            <span className="text-[#34D399] font-bold">↑</span>
                           )}
                           {asset.level_direction === 'down' && (
-                            <span className="text-[#F87171] font-bold">↓ down</span>
+                            <span className="text-[#F87171] font-bold">↓</span>
                           )}
                           {!asset.level_direction && <span className="text-[#4B5563]">—</span>}
                         </td>

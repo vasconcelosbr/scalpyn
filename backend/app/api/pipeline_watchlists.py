@@ -26,7 +26,7 @@ from .config import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/pipeline", tags=["Pipeline"])
+router = APIRouter(prefix="/api/watchlists", tags=["Pipeline Watchlists"])
 
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
@@ -184,13 +184,18 @@ async def get_pipeline_assets(
 
     assets = [
         {
-            "symbol":       r.symbol,
-            "price":        float(r.current_price)    if r.current_price    else 0.0,
-            "change_24h":   float(r.price_change_24h) if r.price_change_24h else 0.0,
-            "volume_24h":   float(r.volume_24h)       if r.volume_24h       else 0.0,
-            "market_cap":   float(r.market_cap)       if r.market_cap       else 0.0,
-            "score":        float(r.alpha_score)       if r.alpha_score       else 0.0,
-            "entered_at":   r.entered_at.isoformat()  if r.entered_at       else None,
+            "id":         r.symbol,   # frontend uses asset.id as key
+            "watchlist_id": str(wl_id),
+            "symbol":     r.symbol,
+            "current_price":    float(r.current_price)    if r.current_price    else None,
+            "price_change_24h": float(r.price_change_24h) if r.price_change_24h else None,
+            "volume_24h":       float(r.volume_24h)       if r.volume_24h       else None,
+            "market_cap":       float(r.market_cap)       if r.market_cap       else None,
+            "alpha_score":      float(r.alpha_score)       if r.alpha_score       else None,
+            "entered_at":       r.entered_at.isoformat()  if r.entered_at       else None,
+            "previous_level":   None,
+            "level_change_at":  None,
+            "level_direction":  None,
         }
         for r in rows
     ]
