@@ -106,7 +106,7 @@ async def _fetch_market_data(db, symbols: list) -> list:
                 momentum_score, signal_score
             FROM alpha_scores
             WHERE symbol IN ({symbols_sql})
-              AND time > now() - interval '10 minutes'
+              AND time > now() - interval '2 hours'
             ORDER BY symbol, time DESC
         """))).fetchall()
 
@@ -206,53 +206,72 @@ def _evaluate_l3_signals(assets: list, profile_config: Optional[dict]) -> list:
 # ─── DB upsert ────────────────────────────────────────────────────────────────
 
 async def _upsert_assets(db, watchlist_id: str, assets: list):
-    """Upsert current pipeline_watchlist_assets snapshot for a watchlist."""
-    from sqlalchemy import text
+    """Upsert current pipeline_watchlist_assets snapshot for a watchlist.
 
-    if not assets:
-        # Clear stale assets
-        await db.execute(
-            text("DELETE FROM pipeline_watchlist_assets WHERE watchlist_id = :wid"),
-            {"wid": watchlist_id},
-        )
-        await db.commit()
-        return
+    Symbols in `assets` → INSERT or UPDATE (level_direction stays/becomes NULL).
+    Symbols previously saved but not in `assets` → UPDATE level_direction = 'down'.
+    Records with level_direction = 'down' older than 24h are cleaned up.
+    """
+    from sqlalchemy import text
 
     now = datetime.now(timezone.utc)
 
-    # Upsert each asset
-    for a in assets:
-        await db.execute(text("""
-            INSERT INTO pipeline_watchlist_assets
-                (id, watchlist_id, symbol, current_price, price_change_24h,
-                 volume_24h, market_cap, alpha_score, entered_at)
-            VALUES
-                (gen_random_uuid(), :wid, :sym, :price, :chg,
-                 :vol, :mc, :score, :now)
-            ON CONFLICT (watchlist_id, symbol)
-            DO UPDATE SET
-                current_price   = EXCLUDED.current_price,
-                price_change_24h = EXCLUDED.price_change_24h,
-                volume_24h      = EXCLUDED.volume_24h,
-                market_cap      = EXCLUDED.market_cap,
-                alpha_score     = EXCLUDED.alpha_score
-        """), {
-            "wid":   watchlist_id,
-            "sym":   a["symbol"],
-            "price": a.get("price"),
-            "chg":   a.get("change_24h"),
-            "vol":   a.get("volume_24h"),
-            "mc":    a.get("market_cap"),
-            "score": a.get("_score", a.get("score")),
-            "now":   now,
-        })
+    if assets:
+        # Upsert active symbols (preserve entered_at on conflict)
+        for a in assets:
+            await db.execute(text("""
+                INSERT INTO pipeline_watchlist_assets
+                    (id, watchlist_id, symbol, current_price, price_change_24h,
+                     volume_24h, market_cap, alpha_score, entered_at, level_direction)
+                VALUES
+                    (gen_random_uuid(), :wid, :sym, :price, :chg,
+                     :vol, :mc, :score, :now, NULL)
+                ON CONFLICT (watchlist_id, symbol)
+                DO UPDATE SET
+                    current_price    = EXCLUDED.current_price,
+                    price_change_24h = EXCLUDED.price_change_24h,
+                    volume_24h       = EXCLUDED.volume_24h,
+                    market_cap       = EXCLUDED.market_cap,
+                    alpha_score      = EXCLUDED.alpha_score,
+                    level_direction  = NULL
+            """), {
+                "wid":   watchlist_id,
+                "sym":   a["symbol"],
+                "price": a.get("price"),
+                "chg":   a.get("change_24h"),
+                "vol":   a.get("volume_24h"),
+                "mc":    a.get("market_cap"),
+                "score": a.get("_score", a.get("score")),
+                "now":   now,
+            })
 
-    # Remove symbols no longer in the list
-    syms_sql = ",".join(f"'{a['symbol']}'" for a in assets)
-    await db.execute(text(f"""
+        # Mark symbols that are no longer passing as 'down'
+        active_syms_sql = ",".join(f"'{a['symbol']}'" for a in assets)
+        await db.execute(text(f"""
+            UPDATE pipeline_watchlist_assets
+            SET level_direction = 'down',
+                level_change_at = :now
+            WHERE watchlist_id = :wid
+              AND symbol NOT IN ({active_syms_sql})
+              AND (level_direction IS NULL OR level_direction != 'down')
+        """), {"wid": watchlist_id, "now": now})
+
+    else:
+        # No assets passed — mark all as 'down'
+        await db.execute(text("""
+            UPDATE pipeline_watchlist_assets
+            SET level_direction = 'down',
+                level_change_at = :now
+            WHERE watchlist_id = :wid
+              AND (level_direction IS NULL OR level_direction != 'down')
+        """), {"wid": watchlist_id, "now": now})
+
+    # Cleanup: remove 'down' records older than 24h to keep the table lean
+    await db.execute(text("""
         DELETE FROM pipeline_watchlist_assets
         WHERE watchlist_id = :wid
-          AND symbol NOT IN ({syms_sql})
+          AND level_direction = 'down'
+          AND level_change_at < now() - interval '24 hours'
     """), {"wid": watchlist_id})
 
     await db.commit()
@@ -362,7 +381,8 @@ async def _run_pipeline_scan():
                         select(Profile).where(Profile.id == wl.profile_id)
                     )).scalars().first()
                     if prof:
-                        profile_config = prof.config
+                        # preset_ia_config holds filter/signal conditions; fallback to config
+                        profile_config = prof.preset_ia_config or prof.config
 
                 # ── 4. Per-level evaluation ───────────────────────────────────
                 if level in ("L1", "L2"):

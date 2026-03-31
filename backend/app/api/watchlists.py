@@ -257,7 +257,8 @@ async def list_watchlists(
             )
             .where(
                 PipelineWatchlistAsset.watchlist_id.in_(wl_ids),
-                PipelineWatchlistAsset.level_direction != "down",
+                (PipelineWatchlistAsset.level_direction.is_(None)) |
+                (PipelineWatchlistAsset.level_direction == "up"),
             )
             .group_by(PipelineWatchlistAsset.watchlist_id)
         )
@@ -422,7 +423,8 @@ async def _get_base_symbols(
             assets = await db.execute(
                 select(PipelineWatchlistAsset).where(
                     PipelineWatchlistAsset.watchlist_id == parent.id,
-                    PipelineWatchlistAsset.level_direction != "down",
+                    (PipelineWatchlistAsset.level_direction.is_(None)) |
+                    (PipelineWatchlistAsset.level_direction == "up"),
                 )
             )
             saved = assets.scalars().all()
@@ -604,15 +606,18 @@ async def get_watchlist_assets(
     if not wl:
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
-    # Check saved assets — exclude symbols that exited this level ("down")
+    # Active assets: level_direction IS NULL (set by Celery scan) or 'up' (manual refresh)
+    # 'down' means the asset no longer passes the pipeline filter
     assets_result = await db.execute(
         select(PipelineWatchlistAsset)
         .where(
             PipelineWatchlistAsset.watchlist_id == watchlist_id,
-            PipelineWatchlistAsset.level_direction != "down",
+            (PipelineWatchlistAsset.level_direction.is_(None)) |
+            (PipelineWatchlistAsset.level_direction == "up"),
         )
         .order_by(PipelineWatchlistAsset.alpha_score.desc().nullslast())
     )
+
     assets = assets_result.scalars().all()
 
     # Auto-resolve on first open when there are no saved assets
@@ -623,7 +628,8 @@ async def get_watchlist_assets(
                 select(PipelineWatchlistAsset)
                 .where(
                     PipelineWatchlistAsset.watchlist_id == watchlist_id,
-                    PipelineWatchlistAsset.level_direction != "down",
+                    (PipelineWatchlistAsset.level_direction.is_(None)) |
+                    (PipelineWatchlistAsset.level_direction == "up"),
                 )
                 .order_by(PipelineWatchlistAsset.alpha_score.desc().nullslast())
             )
