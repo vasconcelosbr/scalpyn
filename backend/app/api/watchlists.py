@@ -103,6 +103,10 @@ FIELD_MAP: Dict[str, str] = {
     "ema_full_alignment":  "ema_full_alignment",
     "ema9_gt_ema50":       "ema9_gt_ema50",
     "ema50_gt_ema200":     "ema50_gt_ema200",
+    "ema9":                "ema9",
+    "ema50":               "ema50",
+    "ema200":              "ema200",
+    "ema_align_label":     "ema_align_label",
     "volume_spike":        "volume_spike",
     "macd":                "macd",
     "macd_signal":         "macd_signal",
@@ -122,9 +126,13 @@ FIELD_LABELS: Dict[str, str] = {
     "macd_histogram":      "MACD Hist",
     "bb_width":            "BB Width",
     "zscore":              "Z-Score",
-    "ema_full_alignment":  "EMA Align",
+    "ema_full_alignment":  "EMA Full",
     "ema9_gt_ema50":       "EMA 9>50",
     "ema50_gt_ema200":     "EMA 50>200",
+    "ema9":                "EMA 9",
+    "ema50":               "EMA 50",
+    "ema200":              "EMA 200",
+    "ema_align_label":     "EMA Align",
     "volume_spike":        "Vol Spike",
     "macd":                "MACD",
     "macd_signal":         "MACD Sig",
@@ -168,6 +176,18 @@ def _extract_profile_indicator_fields(profile_config: Optional[Dict[str, Any]]) 
     for cond in profile_config.get("signals", {}).get("conditions", []):
         _add(cond.get("field", ""))
 
+    # Auto-expand EMA columns: if any EMA field is referenced in the profile,
+    # inject ema9 / ema50 / ema200 + alignment badge in logical order.
+    EMA_KEYS = {"ema_full_alignment", "ema9_gt_ema50", "ema50_gt_ema200", "ema9", "ema50", "ema200"}
+    if any(k in seen for k in EMA_KEYS):
+        result = [r for r in result if r["key"] not in {
+            "ema9", "ema50", "ema200", "ema_align_label",
+            "ema_full_alignment", "ema9_gt_ema50", "ema50_gt_ema200",
+        }]
+        seen = {r["key"]: True for r in result}
+        for field in ["ema9", "ema50", "ema200", "ema_align_label"]:
+            _add(field)
+
     return result
 
 
@@ -209,6 +229,27 @@ def _wl_to_dict(wl: PipelineWatchlist) -> Dict[str, Any]:
 def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any]] = None, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     ind = indicators or {}
     mt  = meta or {}
+    ind_out = {
+        "_meta:volume_24h":        float(a.volume_24h)       if a.volume_24h       else mt.get("volume_24h"),
+        "_meta:market_cap":        float(a.market_cap)       if a.market_cap       else mt.get("market_cap"),
+        "_meta:price_change_24h":  float(a.price_change_24h) if a.price_change_24h else mt.get("price_change_24h"),
+        **{k: v for k, v in ind.items() if k in FIELD_MAP.values()},
+    }
+    try:
+        e9   = float(ind_out.get("ema9")   or 0)
+        e50  = float(ind_out.get("ema50")  or 0)
+        e200 = float(ind_out.get("ema200") or 0)
+        if e9 > 0 and e50 > 0 and e200 > 0:
+            if e9 > e50 > e200:
+                ind_out["ema_align_label"] = "9>50>200"
+            elif e9 > e50 and e50 <= e200:
+                ind_out["ema_align_label"] = "9>50"
+            elif e9 < e50 < e200:
+                ind_out["ema_align_label"] = "9<50<200"
+            else:
+                ind_out["ema_align_label"] = "mix"
+    except (TypeError, ValueError):
+        pass
     return {
         "id":               str(a.id),
         "watchlist_id":     str(a.watchlist_id),
@@ -222,13 +263,7 @@ def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any
         "previous_level":   a.previous_level,
         "level_change_at":  a.level_change_at.isoformat() if a.level_change_at else None,
         "level_direction":  a.level_direction,
-        # Enriched indicator values — merged from indicators_json + meta
-        "indicators": {
-            "_meta:volume_24h":        float(a.volume_24h)       if a.volume_24h       else mt.get("volume_24h"),
-            "_meta:market_cap":        float(a.market_cap)       if a.market_cap       else mt.get("market_cap"),
-            "_meta:price_change_24h":  float(a.price_change_24h) if a.price_change_24h else mt.get("price_change_24h"),
-            **{k: v for k, v in ind.items() if k in FIELD_MAP.values()},
-        },
+        "indicators": ind_out,
     }
 
 

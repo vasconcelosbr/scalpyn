@@ -114,6 +114,26 @@ function IndicatorCell({ value }: { value: number | boolean | string | null | un
   }
   if (typeof value === 'string') {
     // macd_signal: "positive" / "negative"
+    if (value === '9>50>200') return (
+      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-[#34D399]/10 text-[#34D399] border border-[#34D399]/20 whitespace-nowrap">
+        9›50›200
+      </span>
+    );
+    if (value === '9>50') return (
+      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 whitespace-nowrap">
+        9›50
+      </span>
+    );
+    if (value === '9<50<200') return (
+      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-[#F87171]/10 text-[#F87171] border border-[#F87171]/20 whitespace-nowrap">
+        9‹ 50‹200
+      </span>
+    );
+    if (value === 'mix') return (
+      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono bg-[#1E2433] text-[#64748B] border border-[#334155]/40 whitespace-nowrap">
+        mix
+      </span>
+    );
     if (value === 'positive') return <span className="text-[#34D399] font-semibold">{value}</span>;
     if (value === 'negative') return <span className="text-[#F87171]">{value}</span>;
     return <span className="text-[#94A3B8]">{value}</span>;
