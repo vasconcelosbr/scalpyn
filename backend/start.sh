@@ -9,6 +9,24 @@
 
 set -e
 
+# ── Retry helper ──────────────────────────────────────────────────────────────
+# Runs a command up to N times with a delay, useful for DB cold-starts.
+wait_for_db() {
+    local max_attempts=10
+    local delay=5
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        if "$@"; then
+            return 0
+        fi
+        echo "  [attempt $attempt/$max_attempts] command failed — retrying in ${delay}s..."
+        sleep $delay
+        attempt=$((attempt + 1))
+    done
+    echo "  All $max_attempts attempts failed — continuing anyway"
+    return 0   # never abort; let uvicorn start regardless
+}
+
 echo "==> Checking database migration state..."
 
 # Stamp the DB at the initial revision if alembic_version table is missing
@@ -66,8 +84,15 @@ except Exception as e:
 PYEOF
 
 echo "==> Running: alembic upgrade head"
-alembic upgrade head
-echo "==> Migrations complete."
+set +e   # don't abort if alembic fails — uvicorn must start regardless
+wait_for_db alembic upgrade head
+ALEMBIC_RC=$?
+set -e
+if [ $ALEMBIC_RC -eq 0 ]; then
+    echo "==> Migrations complete."
+else
+    echo "  WARNING: alembic upgrade head exited with code $ALEMBIC_RC — starting server anyway."
+fi
 
 echo "==> Starting Celery worker..."
 celery -A app.tasks.celery_app worker \

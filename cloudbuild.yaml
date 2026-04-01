@@ -32,6 +32,9 @@ steps:
       - '--allow-unauthenticated'
       - '--port'
       - '8080'
+      - '--timeout'
+      - '300'
+      - '--startup-cpu-boost'
 
 substitutions:
   _REGION: us-central1
