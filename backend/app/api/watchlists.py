@@ -7,7 +7,7 @@ Routes:
   POST   /api/watchlists                → create watchlist
   PUT    /api/watchlists/{id}           → update watchlist
   DELETE /api/watchlists/{id}           → delete watchlist
-  GET    /api/watchlists/{id}/assets    → resolved assets with live data + scores
+  GET    /api/watchlists/{id}/assets    → resolved assets with livhe data + scores
   POST   /api/watchlists/{id}/refresh   → force re-resolve pipeline
   POST   /api/watchlists/{id}/default-setup → create L1/L2/L3 defaults for a pool
 """
@@ -29,6 +29,7 @@ from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsse
 logger = logging.getLogger(__name__)
 
 GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/spot/tickers"
+from ..services.market_data_service import _is_etf_pair
 
 router = APIRouter(prefix="/api/watchlists", tags=["Pipeline Watchlists"])
 
@@ -50,7 +51,9 @@ async def _seed_market_metadata_bg(symbols: List[str]) -> None:
         rows = []
         for ticker in tickers:
             pair = ticker.get("currency_pair", "")
-            if pair not in symbol_set:
+            if _is_etf_pair(pair):
+                              continue
+              if pair not in symbol_set:
                 continue
             price = float(ticker.get("last", 0) or 0)
             change = float(ticker.get("change_percentage", 0) or 0)
