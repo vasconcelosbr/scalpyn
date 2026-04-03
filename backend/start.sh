@@ -1,41 +1,22 @@
 #!/bin/sh
 # Scalpyn backend startup script
-# Runs Alembic migrations before starting the application server.
 #
-# Safety mechanism for DBs bootstrapped by create_all (no alembic_version):
-#   If the pools table already exists but alembic_version is empty/missing,
-#   we stamp the DB at the base revision so Alembic knows where to start,
-#   then run 'upgrade head' to apply only the newer migrations.
+# Strategy: start uvicorn IMMEDIATELY so Cloud Run startup probe passes,
+# then run Alembic migrations and Celery in the background.
+# All migrations use IF NOT EXISTS so they are safe to run concurrently.
 
 set -e
 
-# ── Retry helper ──────────────────────────────────────────────────────────────
-# Runs a command up to N times with a delay, useful for DB cold-starts.
-wait_for_db() {
+# ── Background migration runner ────────────────────────────────────────────
+run_migrations() {
     local max_attempts=5
     local delay=3
     local attempt=1
-    while [ $attempt -le $max_attempts ]; do
-        if "$@"; then
-            return 0
-        fi
-        echo "  [attempt $attempt/$max_attempts] command failed — retrying in ${delay}s..."
-        sleep $delay
-        attempt=$((attempt + 1))
-    done
-    echo "  All $max_attempts attempts failed — continuing anyway"
-    return 0   # never abort; let uvicorn start regardless
-}
 
-echo "==> Checking database migration state..."
+    echo "==> [migrations] Checking alembic state..."
 
-# Stamp the DB at the initial revision if alembic_version table is missing
-# or empty (i.e., the schema was created by create_all without Alembic history).
-# This prevents migration 001 from trying to re-add 'overrides' and failing
-# on a DB where create_all already created it.
-python - <<'PYEOF'
-import os
-import sys
+    python - <<'PYEOF'
+import os, sys
 try:
     from sqlalchemy import create_engine, text, inspect
     from alembic.config import Config
@@ -43,57 +24,54 @@ try:
 
     db_url = os.environ.get("DATABASE_URL", "")
     if not db_url:
-        print("  DATABASE_URL not set — skipping stamp check")
+        print("  [migrations] DATABASE_URL not set — skipping stamp check")
         sys.exit(0)
 
-    # Use synchronous engine for this quick check
     sync_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
     engine = create_engine(sync_url, connect_args={"connect_timeout": 10})
 
     with engine.connect() as conn:
         insp = inspect(conn)
-
-        # Does alembic_version table exist?
         has_alembic = insp.has_table("alembic_version")
-
+        versions = []
         if has_alembic:
             result = conn.execute(text("SELECT version_num FROM alembic_version"))
             versions = [r[0] for r in result]
-        else:
-            versions = []
-
-        # Does the pools table already exist (bootstrapped by create_all)?
         has_pools = insp.has_table("pools")
-
     engine.dispose()
 
     if has_pools and not versions:
-        print("  DB was bootstrapped by create_all — stamping alembic to base revision...")
+        print("  [migrations] Stamping alembic to base revision (create_all DB)...")
         cfg = Config("/app/alembic.ini")
-        # Stamp at None (base) so alembic knows to run from the very first migration
-        # All migrations use IF NOT EXISTS so they are safe to run on existing schema
         command.stamp(cfg, "base")
-        print("  Stamped at base.")
+        print("  [migrations] Stamped at base.")
     elif versions:
-        print(f"  Current alembic revision(s): {versions}")
+        print(f"  [migrations] Current revision(s): {versions}")
     else:
-        print("  Fresh database — running all migrations from scratch.")
-
+        print("  [migrations] Fresh database — running all migrations.")
 except Exception as e:
-    print(f"  Warning: stamp check failed ({e}) — proceeding with upgrade anyway")
+    print(f"  [migrations] Stamp check failed ({e}) — proceeding with upgrade anyway")
 PYEOF
 
-echo "==> Running: alembic upgrade head"
-set +e   # don't abort if alembic fails — uvicorn must start regardless
-wait_for_db alembic upgrade head
-ALEMBIC_RC=$?
-set -e
-if [ $ALEMBIC_RC -eq 0 ]; then
-    echo "==> Migrations complete."
-else
-    echo "  WARNING: alembic upgrade head exited with code $ALEMBIC_RC — starting server anyway."
-fi
+    while [ $attempt -le $max_attempts ]; do
+        echo "  [migrations] alembic upgrade head (attempt $attempt/$max_attempts)..."
+        if alembic upgrade head; then
+            echo "==> [migrations] Complete."
+            return 0
+        fi
+        echo "  [migrations] Failed — retrying in ${delay}s..."
+        sleep $delay
+        attempt=$((attempt + 1))
+    done
+    echo "  [migrations] WARNING: all attempts failed — server running without latest schema."
+    return 0
+}
 
+# ── Run migrations in the background ─────────────────────────────────────
+run_migrations &
+MIGRATIONS_PID=$!
+
+# ── Start Celery worker ───────────────────────────────────────────────────
 echo "==> Starting Celery worker..."
 celery -A app.tasks.celery_app worker \
     --loglevel=info \
@@ -103,6 +81,7 @@ celery -A app.tasks.celery_app worker \
 CELERY_WORKER_PID=$!
 echo "  Celery worker PID: $CELERY_WORKER_PID"
 
+# ── Start Celery beat ─────────────────────────────────────────────────────
 echo "==> Starting Celery beat..."
 celery -A app.tasks.celery_app beat \
     --loglevel=info \
@@ -130,13 +109,14 @@ done ) &
 
 # Graceful cleanup: when uvicorn/container receives SIGTERM, stop children first
 cleanup() {
-    echo "==> SIGTERM received — stopping Celery processes..."
-    kill -TERM "$CELERY_WORKER_PID" "$CELERY_BEAT_PID" 2>/dev/null
+    echo "==> SIGTERM received — stopping background processes..."
+    kill -TERM "$CELERY_WORKER_PID" "$CELERY_BEAT_PID" "$MIGRATIONS_PID" 2>/dev/null
     wait "$CELERY_WORKER_PID" "$CELERY_BEAT_PID" 2>/dev/null
 }
 trap cleanup TERM INT
 
-echo "==> Starting uvicorn..."
+# ── Start uvicorn immediately (port 8080 must bind before Cloud Run probe) ──
+echo "==> Starting uvicorn (migrations running in background)..."
 exec uvicorn app.main:app \
     --host 0.0.0.0 \
     --port "${PORT:-8080}" \
