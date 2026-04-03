@@ -381,8 +381,8 @@ async def _run_pipeline_scan():
                         select(Profile).where(Profile.id == wl.profile_id)
                     )).scalars().first()
                     if prof:
-                        # preset_ia_config holds filter/signal conditions; fallback to config
-                        profile_config = prof.preset_ia_config or prof.config
+                        # .config always holds filters/signals conditions; preset_ia_config is IA metadata only
+                        profile_config = prof.config
 
                 # ── 4. Per-level evaluation ───────────────────────────────────
                 if level in ("L1", "L2"):

@@ -681,8 +681,9 @@ async def get_watchlist_assets(
         )
         prof = prof_result.scalars().first()
         if prof:
-            # preset_ia_config holds the structured filters/signals with field+operator+value
-            profile_config = prof.preset_ia_config or prof.config
+            # .config always holds filters/signals conditions; preset_ia_config is IA metadata only
+            # (regime, macro_risk, analysis_summary) — never use it for indicator extraction
+            profile_config = prof.config
 
     profile_indicators = _extract_profile_indicator_fields(profile_config)
 
