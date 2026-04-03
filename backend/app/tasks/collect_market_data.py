@@ -126,3 +126,65 @@ def collect_all():
     # Chain to compute indicators
     celery_app.send_task("app.tasks.compute_indicators.compute")
     return f"Collected {count} symbols"
+
+
+async def _collect_5m_async():
+    """Collect 5-minute OHLCV candles for pipeline scan freshness."""
+    from ..services.market_data_service import market_data_service
+    from ..database import AsyncSessionLocal
+    from sqlalchemy import text
+
+    logger.info("Starting 5m market data collection...")
+
+    symbols = await market_data_service.get_universe_symbols({
+        "min_volume_24h": 5_000_000,
+        "max_assets": 100,
+    })
+
+    if not symbols:
+        logger.warning("No symbols for 5m collection")
+        return 0
+
+    collected = 0
+    async with AsyncSessionLocal() as db:
+        for symbol in symbols[:50]:  # Same rate-limit cap as 1h collection
+            try:
+                df = await market_data_service.fetch_ohlcv(symbol, "5m", limit=100)
+                if df is None or df.empty:
+                    continue
+
+                # Bulk-insert all returned candles (ON CONFLICT DO NOTHING is idempotent)
+                for _, row in df.iterrows():
+                    await db.execute(text("""
+                        INSERT INTO ohlcv (time, symbol, exchange, timeframe, open, high, low, close, volume)
+                        VALUES (:time, :symbol, :exchange, :timeframe, :open, :high, :low, :close, :volume)
+                        ON CONFLICT DO NOTHING
+                    """), {
+                        "time":      row["time"],
+                        "symbol":    symbol,
+                        "exchange":  "gate.io",
+                        "timeframe": "5m",
+                        "open":      float(row["open"]),
+                        "high":      float(row["high"]),
+                        "low":       float(row["low"]),
+                        "close":     float(row["close"]),
+                        "volume":    float(row["volume"]),
+                    })
+
+                collected += 1
+            except Exception as e:
+                logger.warning(f"Failed to collect 5m data for {symbol}: {e}")
+                continue
+
+        await db.commit()
+
+    logger.info(f"5m collection complete: {collected} symbols")
+    return collected
+
+
+@celery_app.task(name="app.tasks.collect_market_data.collect_5m")
+def collect_5m():
+    count = _run_async(_collect_5m_async())
+    # Chain: fresh 5m candles → compute 5m indicators → pipeline scan
+    celery_app.send_task("app.tasks.compute_indicators.compute_5m")
+    return f"Collected 5m data for {count} symbols"

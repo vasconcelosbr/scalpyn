@@ -1,6 +1,6 @@
 """Celery Task — Pipeline Scan (L1 → L2 → L3).
 
-Runs every 60 seconds.
+Runs every 5 minutes (triggered by compute_5m chain or beat schedule).
 For each active user:
   1. Fetch all PipelineWatchlists (POOL / L1 / L2 / L3)
   2. Resolve the symbol universe per watchlist (from Pool or parent watchlist)
@@ -14,7 +14,7 @@ For each active user:
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from ..tasks.celery_app import celery_app
@@ -92,12 +92,26 @@ async def _fetch_market_data(db, symbols: list) -> list:
             WHERE symbol IN ({symbols_sql})
         """))).fetchall()
 
+        # Prefer 5m indicators (fresh, 5-min cadence); fall back to any timeframe
         ind_rows = (await db.execute(text(f"""
             SELECT DISTINCT ON (symbol) symbol, indicators_json
             FROM indicators
             WHERE symbol IN ({symbols_sql})
+              AND timeframe = '5m'
             ORDER BY symbol, time DESC
         """))).fetchall()
+
+        found_syms = {r.symbol for r in ind_rows}
+        missing = [s for s in symbols if s not in found_syms]
+        if missing:
+            missing_sql = ",".join(f"'{s}'" for s in missing)
+            fallback_rows = (await db.execute(text(f"""
+                SELECT DISTINCT ON (symbol) symbol, indicators_json
+                FROM indicators
+                WHERE symbol IN ({missing_sql})
+                ORDER BY symbol, time DESC
+            """))).fetchall()
+            ind_rows = list(ind_rows) + list(fallback_rows)
 
         score_rows = (await db.execute(text(f"""
             SELECT DISTINCT ON (symbol)
@@ -205,12 +219,13 @@ def _evaluate_l3_signals(assets: list, profile_config: Optional[dict]) -> list:
 
 # ─── DB upsert ────────────────────────────────────────────────────────────────
 
-async def _upsert_assets(db, watchlist_id: str, assets: list):
+async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict | None = None):
     """Upsert current pipeline_watchlist_assets snapshot for a watchlist.
 
     Symbols in `assets` → INSERT or UPDATE (level_direction stays/becomes NULL).
     Symbols previously saved but not in `assets` → UPDATE level_direction = 'down'.
-    Records with level_direction = 'down' older than 24h are cleaned up.
+    Records with level_direction = 'down' older than 2h are cleaned up.
+    If filters_json contains max_stay_minutes, assets older than that are expired.
     """
     from sqlalchemy import text
 
@@ -266,12 +281,25 @@ async def _upsert_assets(db, watchlist_id: str, assets: list):
               AND (level_direction IS NULL OR level_direction != 'down')
         """), {"wid": watchlist_id, "now": now})
 
-    # Cleanup: remove 'down' records older than 24h to keep the table lean
+    # Expire assets that have exceeded max_stay_minutes (GUI-configurable per watchlist)
+    max_stay = (filters_json or {}).get("max_stay_minutes")
+    if max_stay:
+        cutoff = now - timedelta(minutes=int(max_stay))
+        await db.execute(text("""
+            UPDATE pipeline_watchlist_assets
+            SET level_direction = 'down',
+                level_change_at = :now
+            WHERE watchlist_id = :wid
+              AND level_direction IS NULL
+              AND entered_at < :cutoff
+        """), {"wid": watchlist_id, "now": now, "cutoff": cutoff})
+
+    # Cleanup: remove 'down' records older than 2h to keep the table lean
     await db.execute(text("""
         DELETE FROM pipeline_watchlist_assets
         WHERE watchlist_id = :wid
           AND level_direction = 'down'
-          AND level_change_at < now() - interval '24 hours'
+          AND level_change_at < now() - interval '2 hours'
     """), {"wid": watchlist_id})
 
     await db.commit()
@@ -393,7 +421,7 @@ async def _run_pipeline_scan():
                     if min_score > 0:
                         passed = [a for a in passed if a.get("_score", 0) >= min_score]
 
-                    await _upsert_assets(db, wl_id, passed)
+                    await _upsert_assets(db, wl_id, passed, filters_json)
 
                 elif level == "L3":
                     # L3: signals + optional min_score gate
@@ -411,7 +439,7 @@ async def _run_pipeline_scan():
                     new_syms    = sorted(current_set - prior_set)
 
                     _save_signals(redis, wl_id, current_set)
-                    await _upsert_assets(db, wl_id, signals)
+                    await _upsert_assets(db, wl_id, signals, filters_json)
 
                     if new_syms:
                         stats["new_signals"] += len(new_syms)
@@ -443,7 +471,7 @@ async def _run_pipeline_scan():
 
 @celery_app.task(name="app.tasks.pipeline_scan.scan", bind=True, max_retries=0)
 def scan(self):
-    """Periodic pipeline scan — L1 filter → L2 ranking → L3 signals (60 s)."""
+    """Periodic pipeline scan — L1 filter → L2 ranking → L3 signals (5 min)."""
     logger.info("[PipelineScan] Starting pipeline scan…")
     try:
         result = _run_async(_run_pipeline_scan())
