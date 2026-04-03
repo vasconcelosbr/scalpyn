@@ -350,7 +350,10 @@ function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed,
     try {
       const data = await apiFetch<{ assets: PipelineAsset[]; profile_indicators?: IndicatorCol[] }>(`/watchlists/${wl.id}/assets`);
       setAssets(data.assets);
-      if (data.profile_indicators) setProfileIndicators(data.profile_indicators);
+      if (data.profile_indicators) {
+        // Remove _meta:price_change_24h — already rendered as fixed "24h%" column
+        setProfileIndicators(data.profile_indicators.filter((c) => c.key !== '_meta:price_change_24h'));
+      }
       if (triggerParentRefresh && data.assets.length > 0) {
         onRefreshed();
       }
