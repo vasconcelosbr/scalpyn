@@ -69,7 +69,7 @@ async def run_async_migrations() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
-        connect_args=connect_args,
+        connect_args={**connect_args, "timeout": 20},  # fail fast — don't block Cloud Run startup
     )
 
     async with connectable.connect() as connection:

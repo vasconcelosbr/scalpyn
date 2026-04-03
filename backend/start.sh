@@ -12,8 +12,8 @@ set -e
 # ── Retry helper ──────────────────────────────────────────────────────────────
 # Runs a command up to N times with a delay, useful for DB cold-starts.
 wait_for_db() {
-    local max_attempts=10
-    local delay=5
+    local max_attempts=5
+    local delay=3
     local attempt=1
     while [ $attempt -le $max_attempts ]; do
         if "$@"; then
