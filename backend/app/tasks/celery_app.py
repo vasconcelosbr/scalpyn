@@ -68,9 +68,15 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.fetch_market_caps.fetch_market_caps",
         "schedule": 1800.0,
     },
-    # Pipeline scan: L1 → L2 → L3 evaluation every 60 seconds
+    # 5m pipeline: collect 5m candles → compute 5m indicators → pipeline scan (chained)
+    # This is the primary driver for fresh layer analysis every 5 minutes
+    "collect_5m_data_every_5min": {
+        "task": "app.tasks.collect_market_data.collect_5m",
+        "schedule": 300.0,
+    },
+    # Pipeline scan safety-net beat: runs every 5 min independently in case chain breaks
     "pipeline_scan": {
         "task": "app.tasks.pipeline_scan.scan",
-        "schedule": 60.0,
+        "schedule": 300.0,
     },
 }
