@@ -5,78 +5,98 @@ from celery.schedules import crontab
 from ..config import settings
 
 celery_app = Celery(
-    "scalpyn_tasks",
-    broker=settings.REDIS_URL,
-    backend=settings.REDIS_URL,
-    include=[
-        "app.tasks.collect_market_data",
-        "app.tasks.compute_indicators",
-        "app.tasks.compute_scores",
-        "app.tasks.evaluate_signals",
-        "app.tasks.daily_summary",
-        "app.tasks.anti_liq_monitor",
-        "app.tasks.macro_regime_update",
-        "app.tasks.auto_discover_assets",
-        "app.tasks.execute_buy",
-        "app.tasks.fetch_market_caps",
-        "app.tasks.pipeline_scan",
-    ]
+        "scalpyn_tasks",
+        broker=settings.REDIS_URL,
+        backend=settings.REDIS_URL,
+        include=[
+                    "app.tasks.collect_market_data",
+                    "app.tasks.compute_indicators",
+                    "app.tasks.compute_scores",
+                    "app.tasks.evaluate_signals",
+                    "app.tasks.daily_summary",
+                    "app.tasks.anti_liq_monitor",
+                    "app.tasks.macro_regime_update",
+                    "app.tasks.auto_discover_assets",
+                    "app.tasks.execute_buy",
+                    "app.tasks.fetch_market_caps",
+                    "app.tasks.pipeline_scan",
+        ]
 )
 
 celery_app.conf.update(
-    task_serializer="json",
-    accept_content=["json"],
-    result_serializer="json",
-    timezone="UTC",
-    enable_utc=True,
+        task_serializer="json",
+        accept_content=["json"],
+        result_serializer="json",
+        timezone="UTC",
+        enable_utc=True,
+        # ── Redis connection resilience ──────────────────────────────────
+        broker_pool_limit=3,                      # limit concurrent Redis connections
+        broker_connection_retry_on_startup=True,   # retry broker on boot
+        broker_connection_max_retries=10,          # max retries before giving up
+        broker_connection_retry=True,              # retry on connection loss
+        broker_transport_options={
+                    "max_connections": 5,                  # Redis transport pool cap
+                    "socket_connect_timeout": 5,
+                    "socket_timeout": 5,
+                    "retry_on_timeout": True,
+        },
+        result_backend_transport_options={
+                    "max_connections": 3,
+        },
+        # ── Task execution guards ────────────────────────────────────────
+        worker_prefetch_multiplier=1,              # fetch 1 task at a time
+        task_acks_late=True,                       # ack after execution
+        task_reject_on_worker_lost=True,           # re-queue on crash
+        worker_max_tasks_per_child=200,            # recycle workers to free memory
+        result_expires=300,                        # expire results after 5 min
 )
 
 # Periodic task schedule
 celery_app.conf.beat_schedule = {
-    # Full pipeline every 60 seconds
+        # Full pipeline every 60 seconds
     "collect_market_data_every_minute": {
-        "task": "app.tasks.collect_market_data.collect_all",
-        "schedule": 60.0,
+                "task": "app.tasks.collect_market_data.collect_all",
+                "schedule": 60.0,
     },
-    # Daily summary at 20:00 UTC
-    "daily_summary": {
-        "task": "app.tasks.daily_summary.send",
-        "schedule": crontab(hour=20, minute=0),
-    },
-    # Anti-liquidation monitor every 30 seconds
-    "anti_liq_monitor": {
-        "task": "app.tasks.anti_liq_monitor.monitor",
-        "schedule": 30.0,
-    },
-    # Macro regime update every 30 minutes
-    "macro_regime_update": {
-        "task": "app.tasks.macro_regime_update.update",
-        "schedule": 1800.0,
-    },
-    # Auto-discover assets for pools with auto_refresh=true every 1 hour
-    "auto_discover_assets_hourly": {
-        "task": "app.tasks.auto_discover_assets.discover",
-        "schedule": 3600.0,
-    },
-    # Buy execution cycle every 60 seconds (SpotEngineConfig-driven)
-    "execute_buy_cycle": {
-        "task": "app.tasks.execute_buy.execute_buy_cycle",
-        "schedule": 60.0,
-    },
-    # Fetch market caps from CoinMarketCap every 30 minutes
-    "fetch_market_caps": {
-        "task": "app.tasks.fetch_market_caps.fetch_market_caps",
-        "schedule": 1800.0,
-    },
-    # 5m pipeline: collect 5m candles → compute 5m indicators → pipeline scan (chained)
-    # This is the primary driver for fresh layer analysis every 5 minutes
-    "collect_5m_data_every_5min": {
-        "task": "app.tasks.collect_market_data.collect_5m",
-        "schedule": 300.0,
-    },
-    # Pipeline scan safety-net beat: runs every 5 min independently in case chain breaks
-    "pipeline_scan": {
-        "task": "app.tasks.pipeline_scan.scan",
-        "schedule": 300.0,
-    },
+        # Daily summary at 20:00 UTC
+        "daily_summary": {
+                    "task": "app.tasks.daily_summary.send",
+                    "schedule": crontab(hour=20, minute=0),
+        },
+        # Anti-liquidation monitor every 30 seconds
+        "anti_liq_monitor": {
+                    "task": "app.tasks.anti_liq_monitor.monitor",
+                    "schedule": 30.0,
+        },
+        # Macro regime update every 30 minutes
+        "macro_regime_update": {
+                    "task": "app.tasks.macro_regime_update.update",
+                    "schedule": 1800.0,
+        },
+        # Auto-discover assets for pools with auto_refresh=true every 1 hour
+        "auto_discover_assets_hourly": {
+                    "task": "app.tasks.auto_discover_assets.discover",
+                    "schedule": 3600.0,
+        },
+        # Buy execution cycle every 60 seconds (SpotEngineConfig-driven)
+        "execute_buy_cycle": {
+                    "task": "app.tasks.execute_buy.execute_buy_cycle",
+                    "schedule": 60.0,
+        },
+        # Fetch market caps from CoinMarketCap every 30 minutes
+        "fetch_market_caps": {
+                    "task": "app.tasks.fetch_market_caps.fetch_market_caps",
+                    "schedule": 1800.0,
+        },
+        # 5m pipeline: collect 5m candles -> compute 5m indicators -> pipeline scan (chained)
+        # This is the primary driver for fresh layer analysis every 5 minutes
+        "collect_5m_data_every_5min": {
+                    "task": "app.tasks.collect_market_data.collect_5m",
+                    "schedule": 300.0,
+        },
+        # Pipeline scan safety-net beat: runs every 5 min independently in case chain breaks
+        "pipeline_scan": {
+                    "task": "app.tasks.pipeline_scan.scan",
+                    "schedule": 300.0,
+        },
 }
