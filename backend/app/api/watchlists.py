@@ -237,14 +237,16 @@ async def _fetch_indicators_map(db: AsyncSession, symbols: List[str]) -> Dict[st
     """Fetch latest indicators_json per symbol from the indicators table."""
     if not symbols:
         return {}
-    placeholders = ", ".join(f"'{s}'" for s in symbols)
     try:
-        rows = (await db.execute(text(f"""
-            SELECT DISTINCT ON (symbol) symbol, indicators_json
-            FROM indicators
-            WHERE symbol IN ({placeholders})
-            ORDER BY symbol, time DESC
-        """))).fetchall()
+        rows = (await db.execute(
+            text("""
+                SELECT DISTINCT ON (symbol) symbol, indicators_json
+                FROM indicators
+                WHERE symbol = ANY(:symbols)
+                ORDER BY symbol, time DESC
+            """),
+            {"symbols": list(symbols)},
+        )).fetchall()
         return {r.symbol: (r.indicators_json or {}) for r in rows}
     except Exception as exc:
         logger.warning("[Pipeline] indicators fetch failed: %s", exc)
@@ -532,15 +534,14 @@ async def _resolve_and_persist(
     require_no_blocks: bool = bool(filters.get("require_no_blocks", False))
 
     # Fetch market metadata + latest scores for these symbols
-    placeholders = ", ".join(f"'{s}'" for s in base_symbols)
-
     try:
         meta_rows = await db.execute(
-            text(f"""
+            text("""
                 SELECT symbol, price, price_change_24h, volume_24h, market_cap
                 FROM market_metadata
-                WHERE symbol IN ({placeholders})
-            """)
+                WHERE symbol = ANY(:symbols)
+            """),
+            {"symbols": list(base_symbols)},
         )
         meta_map = {
             r.symbol: {
@@ -556,12 +557,13 @@ async def _resolve_and_persist(
 
     try:
         score_rows = await db.execute(
-            text(f"""
+            text("""
                 SELECT DISTINCT ON (symbol) symbol, score, signal_score
                 FROM alpha_scores
-                WHERE symbol IN ({placeholders})
+                WHERE symbol = ANY(:symbols)
                 ORDER BY symbol, time DESC
-            """)
+            """),
+            {"symbols": list(base_symbols)},
         )
         score_map = {
             r.symbol: {
@@ -754,11 +756,13 @@ async def get_watchlist_assets(
     meta_map: Dict[str, Dict[str, Any]] = {}
     if symbols:
         try:
-            placeholders = ", ".join(f"'{s}'" for s in symbols)
-            meta_rows = (await db.execute(text(f"""
-                SELECT symbol, price_change_24h, volume_24h, market_cap
-                FROM market_metadata WHERE symbol IN ({placeholders})
-            """))).fetchall()
+            meta_rows = (await db.execute(
+                text("""
+                    SELECT symbol, price_change_24h, volume_24h, market_cap
+                    FROM market_metadata WHERE symbol = ANY(:symbols)
+                """),
+                {"symbols": list(symbols)},
+            )).fetchall()
             meta_map = {
                 r.symbol: {
                     "price_change_24h": float(r.price_change_24h) if r.price_change_24h else None,
@@ -850,17 +854,17 @@ async def get_watchlist_signals(
         }
 
     symbols = [a.symbol for a in pipeline_assets]
-    placeholders = ", ".join(f"'{s}'" for s in symbols)
 
     # Fetch latest indicators
     try:
         ind_rows = await db.execute(
-            text(f"""
+            text("""
                 SELECT DISTINCT ON (symbol) symbol, indicators_json
                 FROM indicators
-                WHERE symbol IN ({placeholders})
+                WHERE symbol = ANY(:symbols)
                 ORDER BY symbol, time DESC
-            """)
+            """),
+            {"symbols": symbols},
         )
         indicators_map = {r.symbol: r.indicators_json or {} for r in ind_rows.fetchall()}
     except Exception:

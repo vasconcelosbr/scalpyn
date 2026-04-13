@@ -451,7 +451,7 @@ async def _run_pipeline_scan():
                             watchlist_id=wl_id,
                             watchlist_name=wl.name,
                             level="L3",
-                            new_signals=new_syms,
+                            new_symbols=new_syms,
                             all_signals=signals,
                         )
 
