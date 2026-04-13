@@ -34,7 +34,7 @@ steps:
       - '8080'
       - '--timeout'
       - '300'
-      - '--startup-cpu-boost'
+      - '--cpu-boost'
       - '--memory'
       - '2Gi'
       - '--add-cloudsql-instances'
