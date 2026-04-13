@@ -29,13 +29,24 @@ from .api import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import logging
+    _log = logging.getLogger(__name__)
+
     try:
-        import logging
-        logging.info("Initializing database schema...")
+        _log.info("Initializing database schema...")
         await init_db()
     except Exception as e:
-        import logging
-        logging.error(f"Database initialization error: {e}")
+        _log.error("Database initialization error: %s", e)
+
+    try:
+        from sqlalchemy import text
+        from .database import AsyncSessionLocal
+        async with AsyncSessionLocal() as _sess:
+            await _sess.execute(text("SELECT 1"))
+        _log.info("DB connection pool warmed up successfully.")
+    except Exception as e:
+        _log.warning("DB warmup failed (will retry on first request): %s", e)
+
     yield
 
 

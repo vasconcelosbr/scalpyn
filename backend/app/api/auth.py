@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
@@ -13,6 +15,8 @@ from ..config import settings
 from ..database import get_db
 from ..models.user import User
 from ..services.seed_service import seed_user_defaults
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
@@ -67,49 +71,79 @@ def _create_refresh_token(user: User) -> str:
 
 @router.post("/register")
 async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == payload.email))
-    if result.scalars().first():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
+    try:
+        result = await db.execute(select(User).where(User.email == payload.email))
+        if result.scalars().first():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
 
-    user = User(
-        email=payload.email,
-        password_hash=pwd_context.hash(payload.password),
-        name=payload.name,
-        is_active=True,
-    )
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
+        user = User(
+            email=payload.email,
+            password_hash=pwd_context.hash(payload.password),
+            name=payload.name,
+            is_active=True,
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
 
-    await seed_user_defaults(db, user.id)
+        await seed_user_defaults(db, user.id)
 
-    access_token = _create_access_token(user)
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user": {"id": str(user.id), "email": user.email, "name": user.name},
-    }
+        access_token = _create_access_token(user)
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {"id": str(user.id), "email": user.email, "name": user.name},
+        }
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        logger.error("register: CancelledError during DB operation")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable, please retry",
+        )
+    except BaseException as exc:
+        logger.error("register: unexpected %s: %s", type(exc).__name__, exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Registration failed: {type(exc).__name__}",
+        )
 
 
 @router.post("/login")
 async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == payload.email))
-    user = result.scalars().first()
+    try:
+        result = await db.execute(select(User).where(User.email == payload.email))
+        user = result.scalars().first()
 
-    if not user or not pwd_context.verify(payload.password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        if not user or not pwd_context.verify(payload.password, user.password_hash):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account inactive")
+        if not user.is_active:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Account inactive")
 
-    access_token = _create_access_token(user)
-    refresh_token = _create_refresh_token(user)
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
-        "user": {"id": str(user.id), "email": user.email, "name": user.name},
-    }
+        access_token = _create_access_token(user)
+        refresh_token = _create_refresh_token(user)
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+            "user": {"id": str(user.id), "email": user.email, "name": user.name},
+        }
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        logger.error("login: CancelledError during DB operation")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable, please retry",
+        )
+    except BaseException as exc:
+        logger.error("login: unexpected %s: %s", type(exc).__name__, exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Login failed: {type(exc).__name__}",
+        )
 
 
 @router.post("/refresh")

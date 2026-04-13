@@ -1,7 +1,13 @@
+import asyncio
+import logging
+
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from fastapi import HTTPException, status
 from .config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_db_url(url: str) -> tuple[str, dict]:
@@ -31,6 +37,8 @@ engine = create_async_engine(
     _db_url,
     echo=False,
     connect_args=_connect_args,
+    pool_pre_ping=True,
+    pool_recycle=1800,
 )
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -38,5 +46,18 @@ Base = declarative_base()
 
 
 async def get_db():
-    async with AsyncSessionLocal() as session:
-        yield session
+    try:
+        async with AsyncSessionLocal() as session:
+            yield session
+    except asyncio.CancelledError:
+        logger.error("DB session cancelled (CancelledError) — cold start or pool timeout")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable, please retry",
+        )
+    except Exception as exc:
+        logger.error("DB session error: %s: %s", type(exc).__name__, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error",
+        )
