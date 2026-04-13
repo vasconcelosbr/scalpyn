@@ -61,3 +61,9 @@ async def get_db():
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
         )
+    except BaseException as exc:
+        logger.error("DB session fatal: %s: %s", type(exc).__name__, exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database temporarily unavailable",
+        )
