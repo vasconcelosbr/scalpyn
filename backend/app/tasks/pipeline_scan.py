@@ -83,46 +83,57 @@ async def _fetch_market_data(db, symbols: list) -> list:
     if not symbols:
         return []
 
-    symbols_sql = ",".join(f"'{s}'" for s in symbols)
+    syms_list = list(symbols)
 
     try:
-        meta_rows = (await db.execute(text(f"""
-            SELECT symbol, name, market_cap, volume_24h, price, price_change_24h
-            FROM market_metadata
-            WHERE symbol IN ({symbols_sql})
-        """))).fetchall()
+        meta_rows = (await db.execute(
+            text("""
+                SELECT symbol, name, market_cap, volume_24h, price, price_change_24h
+                FROM market_metadata
+                WHERE symbol = ANY(:symbols)
+            """),
+            {"symbols": syms_list},
+        )).fetchall()
 
         # Prefer 5m indicators (fresh, 5-min cadence); fall back to any timeframe
-        ind_rows = (await db.execute(text(f"""
-            SELECT DISTINCT ON (symbol) symbol, indicators_json
-            FROM indicators
-            WHERE symbol IN ({symbols_sql})
-              AND timeframe = '5m'
-            ORDER BY symbol, time DESC
-        """))).fetchall()
+        ind_rows = (await db.execute(
+            text("""
+                SELECT DISTINCT ON (symbol) symbol, indicators_json
+                FROM indicators
+                WHERE symbol = ANY(:symbols)
+                  AND timeframe = '5m'
+                ORDER BY symbol, time DESC
+            """),
+            {"symbols": syms_list},
+        )).fetchall()
 
         found_syms = {r.symbol for r in ind_rows}
         missing = [s for s in symbols if s not in found_syms]
         if missing:
-            missing_sql = ",".join(f"'{s}'" for s in missing)
-            fallback_rows = (await db.execute(text(f"""
-                SELECT DISTINCT ON (symbol) symbol, indicators_json
-                FROM indicators
-                WHERE symbol IN ({missing_sql})
-                ORDER BY symbol, time DESC
-            """))).fetchall()
+            fallback_rows = (await db.execute(
+                text("""
+                    SELECT DISTINCT ON (symbol) symbol, indicators_json
+                    FROM indicators
+                    WHERE symbol = ANY(:symbols)
+                    ORDER BY symbol, time DESC
+                """),
+                {"symbols": missing},
+            )).fetchall()
             ind_rows = list(ind_rows) + list(fallback_rows)
 
-        score_rows = (await db.execute(text(f"""
-            SELECT DISTINCT ON (symbol)
-                symbol, score,
-                liquidity_score, market_structure_score,
-                momentum_score, signal_score
-            FROM alpha_scores
-            WHERE symbol IN ({symbols_sql})
-              AND time > now() - interval '2 hours'
-            ORDER BY symbol, time DESC
-        """))).fetchall()
+        score_rows = (await db.execute(
+            text("""
+                SELECT DISTINCT ON (symbol)
+                    symbol, score,
+                    liquidity_score, market_structure_score,
+                    momentum_score, signal_score
+                FROM alpha_scores
+                WHERE symbol = ANY(:symbols)
+                  AND time > now() - interval '2 hours'
+                ORDER BY symbol, time DESC
+            """),
+            {"symbols": syms_list},
+        )).fetchall()
 
     except Exception as exc:
         logger.warning("Pipeline scan: market data fetch failed: %s", exc)
@@ -261,15 +272,18 @@ async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict
             })
 
         # Mark symbols that are no longer passing as 'down'
-        active_syms_sql = ",".join(f"'{a['symbol']}'" for a in assets)
-        await db.execute(text(f"""
-            UPDATE pipeline_watchlist_assets
-            SET level_direction = 'down',
-                level_change_at = :now
-            WHERE watchlist_id = :wid
-              AND symbol NOT IN ({active_syms_sql})
-              AND (level_direction IS NULL OR level_direction != 'down')
-        """), {"wid": watchlist_id, "now": now})
+        active_syms = [a["symbol"] for a in assets]
+        await db.execute(
+            text("""
+                UPDATE pipeline_watchlist_assets
+                SET level_direction = 'down',
+                    level_change_at = :now
+                WHERE watchlist_id = :wid
+                  AND NOT (symbol = ANY(:active_syms))
+                  AND (level_direction IS NULL OR level_direction != 'down')
+            """),
+            {"wid": watchlist_id, "now": now, "active_syms": active_syms},
+        )
 
     else:
         # No assets passed — mark all as 'down'
