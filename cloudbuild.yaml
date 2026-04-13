@@ -35,6 +35,10 @@ steps:
       - '--timeout'
       - '300'
       - '--startup-cpu-boost'
+      - '--memory'
+      - '2Gi'
+      - '--add-cloudsql-instances'
+      - 'clickrate-477217:us-central1:scalpyn'
 
 substitutions:
   _REGION: us-central1

@@ -75,7 +75,7 @@ MIGRATIONS_PID=$!
 echo "==> Starting Celery worker..."
 celery -A app.tasks.celery_app worker \
     --loglevel=info \
-    --concurrency="${CELERY_CONCURRENCY:-2}" \
+    --concurrency="${CELERY_CONCURRENCY:-1}" \
     --queues=celery \
     &
 CELERY_WORKER_PID=$!
