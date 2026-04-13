@@ -90,11 +90,9 @@ async def _seed_market_metadata_bg(symbols: List[str]) -> None:
         rows = []
         for ticker in tickers:
             pair = ticker.get("currency_pair", "")
-            if _is_etf_pair(pair):
-                              continue
-              if pair not in symbol_set:
-                continue
             if _is_etf_pair(pair) or ticker.get("etf_net_value") is not None:
+                continue
+            if pair not in symbol_set:
                 continue
             price = float(ticker.get("last", 0) or 0)
             change = float(ticker.get("change_percentage", 0) or 0)

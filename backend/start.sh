@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Scalpyn backend startup script
 #
 # Strategy: start uvicorn IMMEDIATELY so Cloud Run startup probe passes,
