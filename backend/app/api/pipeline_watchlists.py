@@ -28,6 +28,45 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/watchlists", tags=["Pipeline Watchlists"])
 
+# ─── Field label maps ──────────────────────────────────────────────────────────
+
+_META_FIELDS: Dict[str, Dict[str, str]] = {
+    "market_cap":  {"key": "_meta:market_cap",  "label": "Mkt Cap"},
+    "volume_24h":  {"key": "_meta:volume_24h",  "label": "Vol 24h"},
+    "price":       {"key": "_meta:price",        "label": "Price"},
+    "change_24h":  {"key": "_meta:change_24h",   "label": "24h%"},
+    "score":       {"key": "_meta:score",         "label": "Alpha"},
+}
+
+_INDICATOR_LABELS: Dict[str, str] = {
+    "rsi":                    "RSI",
+    "adx":                    "ADX",
+    "macd":                   "MACD",
+    "macd_histogram":         "MACD Hist",
+    "stoch_k":                "Stoch %K",
+    "stoch_d":                "Stoch %D",
+    "bb_width":               "BB Width",
+    "atr":                    "ATR",
+    "atr_percent":            "ATR%",
+    "obv":                    "OBV",
+    "vwap_distance_pct":      "VWAP%",
+    "zscore":                 "Z-Score",
+    "di_plus":                "DI+",
+    "di_minus":               "DI-",
+    "volume_spike":           "Vol Spike",
+    "ema_full_alignment":     "EMA Align",
+    "ema9_gt_ema50":          "EMA9>50",
+    "ema50_gt_ema200":        "EMA50>200",
+    "psar_trend":             "PSAR",
+    "macd_signal":            "MACD Sig",
+    "liquidity_score":        "Liq Score",
+    "momentum_score":         "Mom Score",
+    "market_structure_score": "Mkt Str",
+    "signal_score":           "Sig Score",
+    "spread_pct":             "Spread%",
+    "atr_pct":                "ATR% (legacy)",
+}
+
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -168,44 +207,121 @@ async def get_pipeline_assets(
     user_id: UUID = Depends(get_current_user_id),
 ):
     """
-    Return the current asset snapshot stored by the pipeline_scan task.
-    No re-computation — just reads what the Celery task last persisted.
+    Return the current asset snapshot stored by the pipeline_scan task,
+    enriched with live indicator values and profile-derived column definitions.
     """
     wl = await _get_own_wl(db, wl_id, user_id)
 
+    # ── 1. Asset rows ──────────────────────────────────────────────────────────
     rows = (await db.execute(text("""
         SELECT symbol, current_price, price_change_24h,
-               volume_24h, market_cap, alpha_score, entered_at
+               volume_24h, market_cap, alpha_score, entered_at,
+               level_direction, previous_level, level_change_at
         FROM   pipeline_watchlist_assets
         WHERE  watchlist_id = :wid
         ORDER  BY alpha_score DESC NULLS LAST
         LIMIT  :limit
     """), {"wid": str(wl_id), "limit": limit})).fetchall()
 
-    assets = [
-        {
-            "id":         r.symbol,   # frontend uses asset.id as key
-            "watchlist_id": str(wl_id),
-            "symbol":     r.symbol,
-            "current_price":    float(r.current_price)    if r.current_price    else None,
-            "price_change_24h": float(r.price_change_24h) if r.price_change_24h else None,
-            "volume_24h":       float(r.volume_24h)       if r.volume_24h       else None,
-            "market_cap":       float(r.market_cap)       if r.market_cap       else None,
-            "alpha_score":      float(r.alpha_score)       if r.alpha_score       else None,
-            "entered_at":       r.entered_at.isoformat()  if r.entered_at       else None,
-            "previous_level":   None,
-            "level_change_at":  None,
-            "level_direction":  None,
+    symbols = [r.symbol for r in rows]
+
+    # ── 2. Profile → indicator column definitions ──────────────────────────────
+    profile_indicators: List[Dict[str, str]] = []
+    ind_fields_needed: List[str] = []   # non-meta fields to pull from indicators table
+
+    if wl.profile_id:
+        prof = (await db.execute(
+            select(Profile).where(Profile.id == wl.profile_id)
+        )).scalars().first()
+
+        if prof and prof.config:
+            seen: set = set()
+            all_conds: List[Dict] = []
+            all_conds += (prof.config.get("filters", {}) or {}).get("conditions", [])
+            all_conds += (prof.config.get("signals", {}) or {}).get("conditions", [])
+
+            for cond in all_conds:
+                field = cond.get("field", "")
+                if not field or field in seen:
+                    continue
+                seen.add(field)
+
+                if field in _META_FIELDS:
+                    m = _META_FIELDS[field]
+                    profile_indicators.append({"key": m["key"], "label": m["label"], "field": field})
+                else:
+                    label = _INDICATOR_LABELS.get(field, field.upper())
+                    profile_indicators.append({"key": field, "label": label, "field": field})
+                    ind_fields_needed.append(field)
+
+    # ── 3. Fetch live indicators from DB ───────────────────────────────────────
+    ind_map: Dict[str, Dict] = {}
+    if symbols and ind_fields_needed:
+        try:
+            ind_rows = (await db.execute(text("""
+                SELECT DISTINCT ON (symbol) symbol, indicators_json
+                FROM   indicators
+                WHERE  symbol = ANY(:syms)
+                  AND  timeframe = '5m'
+                ORDER  BY symbol, time DESC
+            """), {"syms": symbols})).fetchall()
+
+            found = {r.symbol for r in ind_rows}
+            missing_syms = [s for s in symbols if s not in found]
+            if missing_syms:
+                fb = (await db.execute(text("""
+                    SELECT DISTINCT ON (symbol) symbol, indicators_json
+                    FROM   indicators
+                    WHERE  symbol = ANY(:syms)
+                    ORDER  BY symbol, time DESC
+                """), {"syms": missing_syms})).fetchall()
+                ind_rows = list(ind_rows) + list(fb)
+
+            for r in ind_rows:
+                j = r.indicators_json or {}
+                ind_map[r.symbol] = {f: j[f] for f in ind_fields_needed if f in j}
+        except Exception as exc:
+            logger.warning("pipeline assets: indicator fetch failed: %s", exc)
+
+    # ── 4. Build response ──────────────────────────────────────────────────────
+    assets = []
+    for r in rows:
+        sym = r.symbol
+        ind_data = ind_map.get(sym, {})
+
+        # Flat indicators dict keyed by col.key
+        indicators: Dict[str, Any] = {
+            "_meta:market_cap":  float(r.market_cap)       if r.market_cap       is not None else None,
+            "_meta:volume_24h":  float(r.volume_24h)       if r.volume_24h       is not None else None,
+            "_meta:price":       float(r.current_price)    if r.current_price    is not None else None,
+            "_meta:change_24h":  float(r.price_change_24h) if r.price_change_24h is not None else None,
+            "_meta:score":       float(r.alpha_score)      if r.alpha_score      is not None else None,
         }
-        for r in rows
-    ]
+        indicators.update(ind_data)
+
+        assets.append({
+            "id":               sym,
+            "watchlist_id":     str(wl_id),
+            "symbol":           sym,
+            "current_price":    float(r.current_price)    if r.current_price    is not None else None,
+            "price_change_24h": float(r.price_change_24h) if r.price_change_24h is not None else None,
+            "volume_24h":       float(r.volume_24h)       if r.volume_24h       is not None else None,
+            "market_cap":       float(r.market_cap)       if r.market_cap       is not None else None,
+            "alpha_score":      float(r.alpha_score)      if r.alpha_score      is not None else None,
+            "entered_at":       r.entered_at.isoformat()  if r.entered_at       else None,
+            "level_direction":  r.level_direction,
+            "previous_level":   r.previous_level,
+            "level_change_at":  r.level_change_at.isoformat() if r.level_change_at else None,
+            "indicators":       indicators,
+        })
 
     return {
-        "watchlist_id":   str(wl_id),
-        "watchlist_name": wl.name,
-        "level":          wl.level,
-        "asset_count":    len(assets),
-        "assets":         assets,
+        "watchlist_id":      str(wl_id),
+        "watchlist_name":    wl.name,
+        "level":             wl.level,
+        "asset_count":       len(assets),
+        "assets":            assets,
+        "profile_indicators": profile_indicators,
     }
 
 
