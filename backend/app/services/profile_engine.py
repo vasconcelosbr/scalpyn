@@ -146,14 +146,33 @@ class ProfileEngine:
         }
     
     def _apply_filters(self, assets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Apply L1 filter conditions to assets."""
+        """Apply L1 filter conditions to assets.
+
+        Lenient evaluation: conditions whose field is absent or None in the
+        asset dict are skipped rather than treated as failures.  This prevents
+        the entire watchlist from being emptied when, for example, the
+        indicators table has no RSI/ADX data yet but the profile requires
+        ``rsi >= 30``.
+        """
         filter_conditions = self.filters_config.get("conditions", [])
         filter_logic = self.filters_config.get("logic", "AND")
-        
+
         if not filter_conditions:
             return assets
-        
-        return self.rule_engine.filter_assets(assets, filter_conditions, filter_logic)
+
+        result = []
+        for asset in assets:
+            applicable = [
+                c for c in filter_conditions
+                if asset.get(c.get("field")) is not None
+            ]
+            if not applicable:
+                result.append(asset)
+                continue
+            eval_result = self.rule_engine.evaluate(applicable, asset, filter_logic)
+            if eval_result["passed"]:
+                result.append(asset)
+        return result
     
     def _process_single_asset(
         self,

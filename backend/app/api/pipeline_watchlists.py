@@ -226,11 +226,10 @@ async def get_pipeline_assets(
 
     symbols = [r.symbol for r in rows]
 
-    # ── 2. Profile → indicator columns + filter conditions ────────────────────
-    profile_indicators: List[Dict[str, str]] = []
-    ind_fields_needed: List[str] = []   # non-meta fields to pull from indicators table
+    # ── 2. Profile → filter conditions ───────────────────────────────────────
     filter_conditions: List[Dict] = []
     filter_logic: str = "AND"
+    profile_cond_fields: set = set()
 
     if wl.profile_id:
         prof = (await db.execute(
@@ -243,27 +242,17 @@ async def get_pipeline_assets(
             filter_conditions = filter_cfg.get("conditions", [])
             filter_logic = filter_cfg.get("logic", "AND")
 
-            seen: set = set()
             all_conds: List[Dict] = list(filter_conditions)
             all_conds += (cfg.get("signals", {}) or {}).get("conditions", [])
-
             for cond in all_conds:
-                field = cond.get("field", "")
-                if not field or field in seen:
-                    continue
-                seen.add(field)
+                f = cond.get("field", "")
+                if f:
+                    profile_cond_fields.add(f)
 
-                if field in _META_FIELDS:
-                    m = _META_FIELDS[field]
-                    profile_indicators.append({"key": m["key"], "label": m["label"], "field": field})
-                else:
-                    label = _INDICATOR_LABELS.get(field, field.upper())
-                    profile_indicators.append({"key": field, "label": label, "field": field})
-                    ind_fields_needed.append(field)
-
-    # ── 3. Fetch live indicators from DB ───────────────────────────────────────
+    # ── 3. Fetch FULL indicator data from DB ──────────────────────────────────
     ind_map: Dict[str, Dict] = {}
-    if symbols and ind_fields_needed:
+    all_ind_keys: set = set()
+    if symbols:
         try:
             ind_rows = (await db.execute(text("""
                 SELECT DISTINCT ON (symbol) symbol, indicators_json
@@ -286,9 +275,31 @@ async def get_pipeline_assets(
 
             for r in ind_rows:
                 j = r.indicators_json or {}
-                ind_map[r.symbol] = {f: j[f] for f in ind_fields_needed if f in j}
+                numeric = {k: v for k, v in j.items() if isinstance(v, (int, float))}
+                ind_map[r.symbol] = numeric
+                all_ind_keys.update(numeric.keys())
         except Exception as exc:
             logger.warning("pipeline assets: indicator fetch failed: %s", exc)
+
+    # ── 3b. Build dynamic column definitions ─────────────────────────────────
+    profile_indicators: List[Dict[str, str]] = []
+    seen_cols: set = set()
+
+    for field in sorted(profile_cond_fields):
+        if field in _META_FIELDS:
+            m = _META_FIELDS[field]
+            profile_indicators.append({"key": m["key"], "label": m["label"], "field": field})
+        else:
+            label = _INDICATOR_LABELS.get(field, field.upper())
+            profile_indicators.append({"key": field, "label": label, "field": field})
+        seen_cols.add(field)
+
+    for field in sorted(all_ind_keys):
+        if field in seen_cols or field in _META_FIELDS:
+            continue
+        if field in _INDICATOR_LABELS:
+            profile_indicators.append({"key": field, "label": _INDICATOR_LABELS[field], "field": field})
+            seen_cols.add(field)
 
     # ── 4. Build response — apply profile filter at query time ────────────────
     rule_engine = RuleEngine() if filter_conditions else None
