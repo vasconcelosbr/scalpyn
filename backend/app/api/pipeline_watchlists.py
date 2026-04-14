@@ -295,10 +295,6 @@ async def get_pipeline_assets(
 
     assets = []
     for r in rows:
-        # Skip assets already marked as 'down' by the pipeline scan
-        if r.level_direction == 'down':
-            continue
-
         sym = r.symbol
         ind_data = ind_map.get(sym, {})
 
@@ -312,11 +308,19 @@ async def get_pipeline_assets(
             **ind_data,
         }
 
-        # Re-evaluate profile filter conditions right here — don't wait for scan
-        if rule_engine:
-            result = rule_engine.evaluate(filter_conditions, eval_dict, filter_logic)
-            if not result["passed"]:
-                continue  # Asset fails current filter — hide it immediately
+        # Re-evaluate profile filter at query time — but only for conditions
+        # where the stored value is known (non-None).  Null-valued fields are
+        # skipped so we don't wrongly exclude assets whose data isn't in the DB
+        # yet (the periodic pipeline scan will clean them up once data arrives).
+        if rule_engine and filter_conditions:
+            applicable = [
+                c for c in filter_conditions
+                if eval_dict.get(c.get("field")) is not None
+            ]
+            if applicable:
+                result = rule_engine.evaluate(applicable, eval_dict, filter_logic)
+                if not result["passed"]:
+                    continue  # Known-bad value — hide immediately
 
         # Flat indicators dict keyed by col.key (for dynamic table columns)
         indicators: Dict[str, Any] = {
