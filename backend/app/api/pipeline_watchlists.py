@@ -23,6 +23,7 @@ from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsse
 from ..models.profile import Profile
 from ..models.pool import Pool
 from .config import get_current_user_id
+from ..services.rule_engine import RuleEngine
 
 logger = logging.getLogger(__name__)
 
@@ -225,9 +226,11 @@ async def get_pipeline_assets(
 
     symbols = [r.symbol for r in rows]
 
-    # ── 2. Profile → indicator column definitions ──────────────────────────────
+    # ── 2. Profile → indicator columns + filter conditions ────────────────────
     profile_indicators: List[Dict[str, str]] = []
     ind_fields_needed: List[str] = []   # non-meta fields to pull from indicators table
+    filter_conditions: List[Dict] = []
+    filter_logic: str = "AND"
 
     if wl.profile_id:
         prof = (await db.execute(
@@ -235,10 +238,14 @@ async def get_pipeline_assets(
         )).scalars().first()
 
         if prof and prof.config:
+            cfg = prof.config
+            filter_cfg = cfg.get("filters", {}) or {}
+            filter_conditions = filter_cfg.get("conditions", [])
+            filter_logic = filter_cfg.get("logic", "AND")
+
             seen: set = set()
-            all_conds: List[Dict] = []
-            all_conds += (prof.config.get("filters", {}) or {}).get("conditions", [])
-            all_conds += (prof.config.get("signals", {}) or {}).get("conditions", [])
+            all_conds: List[Dict] = list(filter_conditions)
+            all_conds += (cfg.get("signals", {}) or {}).get("conditions", [])
 
             for cond in all_conds:
                 field = cond.get("field", "")
@@ -283,19 +290,41 @@ async def get_pipeline_assets(
         except Exception as exc:
             logger.warning("pipeline assets: indicator fetch failed: %s", exc)
 
-    # ── 4. Build response ──────────────────────────────────────────────────────
+    # ── 4. Build response — apply profile filter at query time ────────────────
+    rule_engine = RuleEngine() if filter_conditions else None
+
     assets = []
     for r in rows:
+        # Skip assets already marked as 'down' by the pipeline scan
+        if r.level_direction == 'down':
+            continue
+
         sym = r.symbol
         ind_data = ind_map.get(sym, {})
 
-        # Flat indicators dict keyed by col.key
+        # Build evaluation dict (meta fields + live indicator fields)
+        eval_dict: Dict[str, Any] = {
+            "market_cap":  float(r.market_cap)       if r.market_cap       is not None else None,
+            "volume_24h":  float(r.volume_24h)       if r.volume_24h       is not None else None,
+            "price":       float(r.current_price)    if r.current_price    is not None else None,
+            "change_24h":  float(r.price_change_24h) if r.price_change_24h is not None else None,
+            "score":       float(r.alpha_score)      if r.alpha_score      is not None else None,
+            **ind_data,
+        }
+
+        # Re-evaluate profile filter conditions right here — don't wait for scan
+        if rule_engine:
+            result = rule_engine.evaluate(filter_conditions, eval_dict, filter_logic)
+            if not result["passed"]:
+                continue  # Asset fails current filter — hide it immediately
+
+        # Flat indicators dict keyed by col.key (for dynamic table columns)
         indicators: Dict[str, Any] = {
-            "_meta:market_cap":  float(r.market_cap)       if r.market_cap       is not None else None,
-            "_meta:volume_24h":  float(r.volume_24h)       if r.volume_24h       is not None else None,
-            "_meta:price":       float(r.current_price)    if r.current_price    is not None else None,
-            "_meta:change_24h":  float(r.price_change_24h) if r.price_change_24h is not None else None,
-            "_meta:score":       float(r.alpha_score)      if r.alpha_score      is not None else None,
+            "_meta:market_cap":  eval_dict["market_cap"],
+            "_meta:volume_24h":  eval_dict["volume_24h"],
+            "_meta:price":       eval_dict["price"],
+            "_meta:change_24h":  eval_dict["change_24h"],
+            "_meta:score":       eval_dict["score"],
         }
         indicators.update(ind_data)
 
@@ -303,11 +332,11 @@ async def get_pipeline_assets(
             "id":               sym,
             "watchlist_id":     str(wl_id),
             "symbol":           sym,
-            "current_price":    float(r.current_price)    if r.current_price    is not None else None,
-            "price_change_24h": float(r.price_change_24h) if r.price_change_24h is not None else None,
-            "volume_24h":       float(r.volume_24h)       if r.volume_24h       is not None else None,
-            "market_cap":       float(r.market_cap)       if r.market_cap       is not None else None,
-            "alpha_score":      float(r.alpha_score)      if r.alpha_score      is not None else None,
+            "current_price":    eval_dict["price"],
+            "price_change_24h": eval_dict["change_24h"],
+            "volume_24h":       eval_dict["volume_24h"],
+            "market_cap":       eval_dict["market_cap"],
+            "alpha_score":      eval_dict["score"],
             "entered_at":       r.entered_at.isoformat()  if r.entered_at       else None,
             "level_direction":  r.level_direction,
             "previous_level":   r.previous_level,
