@@ -297,9 +297,9 @@ async def get_pipeline_assets(
     for field in sorted(all_ind_keys):
         if field in seen_cols or field in _META_FIELDS:
             continue
-        if field in _INDICATOR_LABELS:
-            profile_indicators.append({"key": field, "label": _INDICATOR_LABELS[field], "field": field})
-            seen_cols.add(field)
+        label = _INDICATOR_LABELS.get(field, field.replace("_", " ").title())
+        profile_indicators.append({"key": field, "label": label, "field": field})
+        seen_cols.add(field)
 
     # ── 4. Build response — apply profile filter at query time ────────────────
     rule_engine = RuleEngine() if filter_conditions else None
@@ -326,7 +326,8 @@ async def get_pipeline_assets(
         if rule_engine and filter_conditions:
             applicable = [
                 c for c in filter_conditions
-                if eval_dict.get(c.get("field")) is not None
+                if "group" in c
+                or eval_dict.get(c.get("field")) is not None
             ]
             if applicable:
                 result = rule_engine.evaluate(applicable, eval_dict, filter_logic)

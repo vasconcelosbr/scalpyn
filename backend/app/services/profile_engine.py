@@ -164,7 +164,8 @@ class ProfileEngine:
         for asset in assets:
             applicable = [
                 c for c in filter_conditions
-                if asset.get(c.get("field")) is not None
+                if "group" in c
+                or asset.get(c.get("field")) is not None
             ]
             if not applicable:
                 result.append(asset)
