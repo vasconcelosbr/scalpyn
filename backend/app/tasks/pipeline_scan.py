@@ -137,7 +137,7 @@ async def _fetch_market_data(db, symbols: list) -> list:
 
     except Exception as exc:
         logger.warning("Pipeline scan: market data fetch failed: %s", exc)
-        return []
+        return None
 
     ind_map   = {r.symbol: (r.indicators_json or {}) for r in ind_rows}
     score_map = {r.symbol: r for r in score_rows}
@@ -153,8 +153,8 @@ async def _fetch_market_data(db, symbols: list) -> list:
             "name":      row.name or sym,
             "price":     float(row.price)            if row.price            else 0.0,
             "change_24h": float(row.price_change_24h) if row.price_change_24h else 0.0,
-            "market_cap": float(row.market_cap)       if row.market_cap       else 0.0,
-            "volume_24h": float(row.volume_24h)       if row.volume_24h       else 0.0,
+            "market_cap": float(row.market_cap)       if row.market_cap is not None else None,
+            "volume_24h": float(row.volume_24h)       if row.volume_24h is not None else None,
             "indicators": indicators,
             # Flatten numeric indicators for ProfileEngine filter evaluation
             **{k: v for k, v in indicators.items() if isinstance(v, (int, float, bool, str))},
@@ -412,9 +412,11 @@ async def _run_pipeline_scan():
 
                 # ── 2. Fetch market data ──────────────────────────────────────
                 assets = await _fetch_market_data(db, symbols)
-                if not assets:
-                    logger.debug("[PipelineScan] %s (%s): no market data.", wl.name, level)
+                if assets is None:
+                    logger.warning("[PipelineScan] %s (%s): market data fetch error — skipping.", wl.name, level)
                     continue
+                if not assets:
+                    logger.debug("[PipelineScan] %s (%s): no market data — cleaning up stale entries.", wl.name, level)
 
                 # ── 3. Load profile config ────────────────────────────────────
                 profile_config: Optional[dict] = None
@@ -427,8 +429,11 @@ async def _run_pipeline_scan():
                         profile_config = prof.config
 
                 # ── 4. Per-level evaluation ───────────────────────────────────
-                if level in ("L1", "L2"):
-                    passed, _ = _apply_level_filter(assets, profile_config, level)
+                # Treat 'CUSTOM' level same as L1 (filters + scoring, no signal requirement)
+                effective_level = level if level in ("L1", "L2", "L3") else "L1"
+
+                if effective_level in ("L1", "L2"):
+                    passed, _ = _apply_level_filter(assets, profile_config, effective_level)
 
                     # Apply level-specific min_score gate
                     min_score = float(filters_json.get("min_score", 0))
@@ -437,7 +442,7 @@ async def _run_pipeline_scan():
 
                     await _upsert_assets(db, wl_id, passed, filters_json)
 
-                elif level == "L3":
+                elif effective_level == "L3":
                     # L3: signals + optional min_score gate
                     min_score = float(filters_json.get("min_score", 0))
                     require_signal = filters_json.get("require_signal", True)
