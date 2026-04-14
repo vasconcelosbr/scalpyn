@@ -92,7 +92,7 @@ async def _collect_all_async():
                 pair = ticker.get("currency_pair", "")
                 if not pair.endswith("_USDT"):
                     continue
-                symbol = pair.replace("_", "")
+                symbol = pair  # keep BTC_USDT format (with underscore)
                 price = float(ticker.get("last", 0) or 0)
                 change = float(ticker.get("change_percentage", 0) or 0)
                 volume = float(ticker.get("quote_volume", 0) or 0)
@@ -129,25 +129,43 @@ def collect_all():
 
 
 async def _collect_5m_async():
-    """Collect 5-minute OHLCV candles for pipeline scan freshness."""
+    """Collect 5-minute OHLCV candles for pipeline scan freshness.
+
+    Universe = top-100 high-volume symbols  UNION  all active pool coin symbols.
+    This ensures every asset in a user's pipeline pool gets indicator data even
+    if its 24h volume is below the universe threshold.
+    """
     from ..services.market_data_service import market_data_service
+    from ..utils.symbol_filters import filter_real_assets
     from ..database import AsyncSessionLocal
     from sqlalchemy import text
 
     logger.info("Starting 5m market data collection...")
 
-    symbols = await market_data_service.get_universe_symbols({
+    universe = await market_data_service.get_universe_symbols({
         "min_volume_24h": 5_000_000,
         "max_assets": 100,
     })
+
+    # Also include all active pool coin symbols so lower-volume assets get data
+    async with AsyncSessionLocal() as db:
+        pool_rows = (await db.execute(text(
+            "SELECT DISTINCT symbol FROM pool_coins WHERE is_active = true"
+        ))).fetchall()
+    pool_syms = filter_real_assets([r.symbol for r in pool_rows])
+
+    symbols = list(dict.fromkeys(universe + pool_syms))  # deduplicate, preserve order
 
     if not symbols:
         logger.warning("No symbols for 5m collection")
         return 0
 
+    logger.info("5m collection universe: %d symbols (%d from universe, %d from pools)",
+                len(symbols), len(universe), len(pool_syms))
+
     collected = 0
     async with AsyncSessionLocal() as db:
-        for symbol in symbols[:50]:  # Same rate-limit cap as 1h collection
+        for symbol in symbols[:200]:  # raised cap to cover pool coins
             try:
                 df = await market_data_service.fetch_ohlcv(symbol, "5m", limit=100)
                 if df is None or df.empty:

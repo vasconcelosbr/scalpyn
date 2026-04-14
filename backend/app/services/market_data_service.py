@@ -115,10 +115,11 @@ class MarketDataService:
         symbols = []
         for ticker in tickers:
             pair = ticker.get("currency_pair", "")
+            if not pair.endswith("_USDT"):
+                continue
             vol = float(ticker.get("quote_volume", 0) or 0)
-            if vol >= min_volume:
-                symbol = pair.replace("_", "")  # BTC_USDT -> BTCUSDT
-                symbols.append(symbol)
+            if vol >= min_volume and not _is_etf_pair(pair):
+                symbols.append(pair)  # keep BTC_USDT format (with underscore)
             if len(symbols) >= max_assets:
                 break
 
