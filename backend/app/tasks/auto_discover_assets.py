@@ -51,9 +51,14 @@ async def _discover_async():
                 min_volume = float(overrides.get("min_volume_24h", 0))
 
                 # Fetch universe
+                from ..utils.symbol_filters import is_leveraged_token
+
                 if market_type == "futures":
                     raw_pairs = await adapter.list_futures_contracts()
-                    universe_symbols: set[str] = {p["name"] for p in raw_pairs}
+                    universe_symbols: set[str] = {
+                        p["name"] for p in raw_pairs
+                        if not is_leveraged_token(p["name"])
+                    }
                 else:
                     raw_pairs = await adapter.list_spot_pairs()
                     universe_symbols = {
@@ -61,6 +66,7 @@ async def _discover_async():
                         for p in raw_pairs
                         if p.get("quote", "") == "USDT"
                         and p.get("trade_status") == "tradable"
+                        and not is_leveraged_token(p["id"])
                     }
 
                 # Volume filter

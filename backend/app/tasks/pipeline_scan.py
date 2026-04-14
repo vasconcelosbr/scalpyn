@@ -388,23 +388,25 @@ async def _run_pipeline_scan():
 
                 if wl.source_pool_id:
                     # Pool origin: use pool_coins
+                    from ..utils.symbol_filters import filter_real_assets
                     coin_rows = (await db.execute(
                         select(PoolCoin).where(
                             PoolCoin.pool_id == wl.source_pool_id,
                             PoolCoin.is_active == True,
                         )
                     )).scalars().all()
-                    symbols = [c.symbol for c in coin_rows]
+                    symbols = filter_real_assets([c.symbol for c in coin_rows])
 
                 elif wl.source_watchlist_id:
                     # Upstream watchlist: use pipeline_watchlist_assets
                     from sqlalchemy import text
+                    from ..utils.symbol_filters import filter_real_assets
                     asset_rows = (await db.execute(text("""
                         SELECT symbol FROM pipeline_watchlist_assets
                         WHERE watchlist_id = :wid
                         ORDER BY alpha_score DESC NULLS LAST
                     """), {"wid": str(wl.source_watchlist_id)})).fetchall()
-                    symbols = [r.symbol for r in asset_rows]
+                    symbols = filter_real_assets([r.symbol for r in asset_rows])
 
                 if not symbols:
                     logger.debug("[PipelineScan] %s (%s): no symbols — skipping.", wl.name, level)

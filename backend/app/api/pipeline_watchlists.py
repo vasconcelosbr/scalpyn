@@ -224,6 +224,8 @@ async def get_pipeline_assets(
         LIMIT  :limit
     """), {"wid": str(wl_id), "limit": limit})).fetchall()
 
+    from ..utils.symbol_filters import is_leveraged_token
+    rows = [r for r in rows if not is_leveraged_token(r.symbol)]
     symbols = [r.symbol for r in rows]
 
     # ── 2. Profile → filter conditions ───────────────────────────────────────
