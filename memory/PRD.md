@@ -69,6 +69,14 @@ Cache do score calculado em pipeline_watchlist_assets para próximas requests.
 **Pool**: `spread_pct <= 1`, `orderbook_depth_usdt >= 5000`
 **L1**: `spread_pct <= 0.8`, `orderbook_depth_usdt >= 10000`
 
+### Fix #6 – UnboundLocalError `ind_rows` em pipeline_scan (Feb 2026) — P0
+**CAUSA**: `ind_rows` e `score_rows` estavam dentro do bloco `except` do fallback de
+liquidez. Quando a query principal (com `spread_pct`/`orderbook_depth_usdt`) **sucedia**,
+o `except` nunca executava e `ind_rows` ficava sem valor → `UnboundLocalError` no Cloud Run.
+**FIX**: Separado em dois blocos try/except independentes:
+  1. try/except para `meta_rows` (fallback de colunas de liquidez)
+  2. try/except para `ind_rows` + `score_rows` (sempre executa)
+
 ## Prioritized Backlog
 - P1: Scoring rules melhores configuradas pelo usuário nos profiles
 - P2: Coluna Alpha com cores (verde/amarelo/vermelho por threshold)

@@ -85,14 +85,12 @@ async def _fetch_market_data(db, symbols: list) -> list:
 
     syms_list = list(symbols)
 
+    # Step 1: Fetch market metadata — try with new liquidity columns, fall back if absent
     try:
-        # Include new liquidity columns via COALESCE; fall back gracefully if
-        # the columns haven't been added to this database deployment yet.
         meta_rows = (await db.execute(
             text("""
                 SELECT
                     m.symbol, m.name,
-                    -- Prefer market_metadata; fall back to latest stored pwa value
                     COALESCE(m.market_cap,  pwa.market_cap)  AS market_cap,
                     COALESCE(m.volume_24h,  pwa.volume_24h)  AS volume_24h,
                     m.price,
@@ -136,6 +134,8 @@ async def _fetch_market_data(db, symbols: list) -> list:
             {"symbols": syms_list},
         )).fetchall()
 
+    # Step 2: Fetch indicators — always runs regardless of which meta path was taken
+    try:
         # Prefer 5m indicators (fresh, 5-min cadence); fall back to any timeframe
         ind_rows = (await db.execute(
             text("""
