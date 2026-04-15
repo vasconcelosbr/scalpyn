@@ -45,7 +45,12 @@ class ProfileEngine:
         # Extract config sections
         self.filters_config = self.profile.get("filters", {})
         self.scoring_config = self.profile.get("scoring", {})
-        self.signals_config = self.profile.get("signals", {})
+        # Signal conditions may be stored under 'entry_triggers' OR 'signals'
+        self.signals_config = (
+            self.profile.get("entry_triggers") or
+            self.profile.get("signals") or
+            {}
+        )
         
         # Initialize engines with profile config
         self._init_engines()
@@ -166,7 +171,7 @@ class ProfileEngine:
         # Indicator fields remain lenient (None → skip condition).
         _STRICT_META = frozenset({
             "volume_24h", "market_cap", "price",
-            "change_24h", "change_24h_pct",
+            "change_24h", "change_24h_pct", "price_change_24h",
             "spread_pct", "orderbook_depth_usdt",
         })
 

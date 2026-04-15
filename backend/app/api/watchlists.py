@@ -34,7 +34,23 @@ from ..services.market_data_service import _is_etf_pair
 
 
 def _passes_profile_filters(asset: Dict[str, Any], conditions: list, logic: str = "AND") -> bool:
-    """Evaluate profile filter conditions (market_cap, volume_24h, etc.) against a pipeline asset."""
+    """Evaluate profile filter conditions against a pipeline asset.
+
+    Meta fields (market_cap, volume_24h, price, change %, spread, depth) are
+    STRICT: if the value is None the condition FAILS.  This prevents assets with
+    unknown market-cap from slipping through a 'market_cap >= 500M' gate.
+
+    Indicator fields (rsi, adx, atr_pct, …) are LENIENT: if the indicator is not
+    present in the asset dict the condition is SKIPPED (not counted as a fail).
+    This mirrors ProfileEngine._apply_filters behaviour so manual-refresh and
+    Celery pipeline produce consistent results.
+    """
+    _STRICT_META = frozenset({
+        "volume_24h", "market_cap", "price", "current_price",
+        "change_24h", "price_change_24h", "change_24h_pct",
+        "spread_pct", "orderbook_depth_usdt",
+    })
+
     if not conditions:
         return True
     results = []
@@ -44,12 +60,22 @@ def _passes_profile_filters(asset: Dict[str, Any], conditions: list, logic: str 
         threshold = cond.get("value")
         if not field:
             continue
+
         actual = asset.get(field)
+
+        # Alias: profile may store 'change_24h' but asset uses 'price_change_24h'
+        if actual is None and field == "change_24h":
+            actual = asset.get("price_change_24h")
+        if actual is None and field == "price_change_24h":
+            actual = asset.get("change_24h")
+
         if actual is None:
-            results.append(False)
+            if field in _STRICT_META:
+                results.append(False)   # Strict: meta None always fails
+            # else: indicator missing → skip (lenient, don't count)
             continue
 
-        # Between operator (RSI between 45 and 60)
+        # Between operator
         if operator == "between":
             try:
                 min_v = float(cond.get("min", float("-inf")))
@@ -62,25 +88,26 @@ def _passes_profile_filters(asset: Dict[str, Any], conditions: list, logic: str 
         if threshold is None:
             continue
         try:
-            actual = float(actual)
-            threshold = float(threshold)
+            actual_f = float(actual)
+            threshold_f = float(threshold)
         except (TypeError, ValueError):
             results.append(False)
             continue
         if operator in (">", "gt"):
-            results.append(actual > threshold)
+            results.append(actual_f > threshold_f)
         elif operator in (">=", "gte"):
-            results.append(actual >= threshold)
+            results.append(actual_f >= threshold_f)
         elif operator in ("<", "lt"):
-            results.append(actual < threshold)
+            results.append(actual_f < threshold_f)
         elif operator in ("<=", "lte"):
-            results.append(actual <= threshold)
+            results.append(actual_f <= threshold_f)
         elif operator in ("==", "=", "eq"):
-            results.append(actual == threshold)
+            results.append(actual_f == threshold_f)
         elif operator in ("!=", "ne"):
-            results.append(actual != threshold)
+            results.append(actual_f != threshold_f)
         else:
             results.append(True)
+
     if not results:
         return True
     return all(results) if logic.upper() == "AND" else any(results)
@@ -566,13 +593,22 @@ async def _get_base_symbols(
     db: AsyncSession,
     depth: int = 0,
 ) -> List[str]:
-    """Recursively resolve base symbols for a watchlist from its source."""
+    """Recursively resolve base symbols for a watchlist from its source.
+
+    Cascade logic:
+    - Pool (source_pool_id): always returns raw pool_coins — filters are applied later
+    - Levels (source_watchlist_id): reads ACTIVE assets from the immediate parent.
+      If the parent has ACTIVE assets → use them (pipeline is up to date).
+      If the parent has NO active assets but WAS populated before → return [] (don't
+        bypass the pipeline; the parent is temporarily empty after a filter tightening).
+      If the parent was NEVER populated → cascade up (initial bootstrap scenario).
+    """
     if depth > 5:
         logger.warning("Pipeline resolution depth exceeded for wl %s", wl.id)
         return []
 
     if wl.source_pool_id:
-        # Source is a Pool → get pool's coins
+        # Terminal source: return ALL pool coins. Filtering happens in _resolve_and_persist.
         result = await db.execute(
             text("""
                 SELECT symbol FROM pool_coins
@@ -583,7 +619,6 @@ async def _get_base_symbols(
         return [row.symbol for row in result.fetchall()]
 
     if wl.source_watchlist_id:
-        # Source is another PipelineWatchlist → get its saved assets
         result = await db.execute(
             select(PipelineWatchlist).where(
                 PipelineWatchlist.id == wl.source_watchlist_id,
@@ -592,17 +627,36 @@ async def _get_base_symbols(
         )
         parent = result.scalars().first()
         if parent:
-            assets = await db.execute(
+            # Active (in or neutral direction) assets from the parent
+            active_assets = (await db.execute(
                 select(PipelineWatchlistAsset).where(
                     PipelineWatchlistAsset.watchlist_id == parent.id,
                     (PipelineWatchlistAsset.level_direction.is_(None)) |
                     (PipelineWatchlistAsset.level_direction == "up"),
                 )
-            )
-            saved = assets.scalars().all()
-            if saved:
-                return [a.symbol for a in saved]
-            # Parent has no saved assets — resolve it first
+            )).scalars().all()
+
+            if active_assets:
+                return [a.symbol for a in active_assets]
+
+            # No active assets right now. Check if parent was EVER populated.
+            # If yes → parent filtered everything out legitimately → return [].
+            # If no  → parent never ran → cascade up to bootstrap.
+            ever_populated = (await db.execute(
+                text("SELECT 1 FROM pipeline_watchlist_assets WHERE watchlist_id = :wid LIMIT 1"),
+                {"wid": str(parent.id)},
+            )).fetchone()
+
+            if ever_populated:
+                # Parent was populated before but all assets exited — respect the filter
+                logger.info(
+                    "[GetBaseSymbols] Parent %s was populated before but has 0 active assets. "
+                    "Returning [] to preserve cascade integrity.",
+                    parent.name,
+                )
+                return []
+
+            # Parent never populated → recurse (first-run bootstrap)
             return await _get_base_symbols(parent, user_id, db, depth + 1)
 
     return []
@@ -720,7 +774,12 @@ async def _resolve_and_persist(
             prof = prof_res.scalars().first()
             if prof and prof.config:
                 profile_config_for_signals = prof.config
-                sig_conditions = prof.config.get("signals", {}).get("conditions", [])
+                # Signal conditions may be stored under 'entry_triggers' OR 'signals'
+                sig_conditions = (
+                    prof.config.get("entry_triggers", {}).get("conditions") or
+                    prof.config.get("signals", {}).get("conditions") or
+                    []
+                )
         except Exception:
             pass
 
@@ -758,14 +817,24 @@ async def _resolve_and_persist(
                 continue
 
         meta = meta_map.get(symbol, {})
-        assets_out.append({
+        ind = ind_map.get(symbol, {})
+        # Build asset dict with BOTH meta AND indicator data so that profile
+        # filter conditions on indicator fields (atr_pct, rsi, etc.) can be
+        # evaluated properly in _passes_profile_filters.
+        asset_entry: Dict[str, Any] = {
             "symbol":           symbol,
             "current_price":    meta.get("price"),
             "price_change_24h": meta.get("price_change_24h"),
+            "change_24h":       meta.get("price_change_24h"),   # alias for conditions
             "volume_24h":       meta.get("volume_24h"),
             "market_cap":       meta.get("market_cap"),
             "alpha_score":      alpha if scoring_data_available else None,
-        })
+        }
+        # Merge indicator values (skip non-scalar) for profile filter evaluation
+        for k, v in ind.items():
+            if isinstance(v, (int, float, bool)) and k not in asset_entry:
+                asset_entry[k] = v
+        assets_out.append(asset_entry)
 
     # Apply profile filter conditions (market_cap, volume_24h, Change 24h%, etc.)
     if wl.profile_id and assets_out and profile_config_for_signals:

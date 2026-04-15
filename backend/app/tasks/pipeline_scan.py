@@ -286,8 +286,13 @@ def _evaluate_l3_signals(assets: list, profile_config: Optional[dict]) -> list:
 
     engine = ProfileEngine(profile_config)
 
-    # Check if the profile has any signal conditions at all
-    sig_conditions = (profile_config or {}).get("signals", {}).get("conditions", [])
+    # Check if the profile has any signal conditions at all.
+    # Signal conditions may be stored under 'entry_triggers' OR 'signals'.
+    sig_conditions = (
+        (profile_config or {}).get("entry_triggers", {}).get("conditions") or
+        (profile_config or {}).get("signals", {}).get("conditions") or
+        []
+    )
     has_signal_conditions = bool(sig_conditions)
 
     result = engine.process_watchlist(assets, include_details=True)
