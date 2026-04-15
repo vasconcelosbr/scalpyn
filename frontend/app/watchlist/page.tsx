@@ -349,7 +349,11 @@ function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed,
     setLoadingAssets(true);
     try {
       const data = await apiFetch<{ assets: PipelineAsset[]; profile_indicators?: IndicatorCol[] }>(`/watchlists/${wl.id}/assets`);
-      setAssets(data.assets);
+      // Always render highest alpha_score first
+      const sorted = [...(data.assets ?? [])].sort(
+        (a, b) => (b.alpha_score ?? 0) - (a.alpha_score ?? 0)
+      );
+      setAssets(sorted);
       if (data.profile_indicators) {
         // Remove _meta:price_change_24h — already rendered as fixed "24h%" column
         setProfileIndicators(data.profile_indicators.filter((c) => c.key !== '_meta:price_change_24h'));
