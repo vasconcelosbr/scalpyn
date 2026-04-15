@@ -42,11 +42,24 @@ def _passes_profile_filters(asset: Dict[str, Any], conditions: list, logic: str 
         field = cond.get("field") or cond.get("indicator", "")
         operator = cond.get("operator", ">")
         threshold = cond.get("value")
-        if threshold is None or not field:
+        if not field:
             continue
         actual = asset.get(field)
         if actual is None:
             results.append(False)
+            continue
+
+        # Between operator (RSI between 45 and 60)
+        if operator == "between":
+            try:
+                min_v = float(cond.get("min", float("-inf")))
+                max_v = float(cond.get("max", float("inf")))
+                results.append(min_v <= float(actual) <= max_v)
+            except (TypeError, ValueError):
+                results.append(False)
+            continue
+
+        if threshold is None:
             continue
         try:
             actual = float(actual)
@@ -64,6 +77,8 @@ def _passes_profile_filters(asset: Dict[str, Any], conditions: list, logic: str 
             results.append(actual <= threshold)
         elif operator in ("==", "=", "eq"):
             results.append(actual == threshold)
+        elif operator in ("!=", "ne"):
+            results.append(actual != threshold)
         else:
             results.append(True)
     if not results:
@@ -380,7 +395,7 @@ def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any
         "price_change_24h": float(a.price_change_24h) if a.price_change_24h else None,
         "volume_24h":       float(a.volume_24h) if a.volume_24h else None,
         "market_cap":       float(a.market_cap) if a.market_cap else None,
-        "alpha_score":      float(a.alpha_score) if a.alpha_score else None,
+        "alpha_score":      float(a.alpha_score) if a.alpha_score is not None else None,
         "entered_at":       a.entered_at.isoformat() if a.entered_at else None,
         "previous_level":   a.previous_level,
         "level_change_at":  a.level_change_at.isoformat() if a.level_change_at else None,

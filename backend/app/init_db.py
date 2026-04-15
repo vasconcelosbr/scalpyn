@@ -127,9 +127,20 @@ async def init_db():
               price DECIMAL(20,8),
               price_change_24h DECIMAL(10,4),
               ranking INTEGER,
+              spread_pct DECIMAL(10,4),
+              orderbook_depth_usdt DECIMAL(20,2),
               last_updated TIMESTAMPTZ
             );
         """))
+        # Add liquidity columns to market_metadata if they don't exist (migration)
+        try:
+            await conn.execute(text("""
+                ALTER TABLE market_metadata
+                  ADD COLUMN IF NOT EXISTS spread_pct DECIMAL(10,4),
+                  ADD COLUMN IF NOT EXISTS orderbook_depth_usdt DECIMAL(20,2);
+            """))
+        except Exception as e:
+            logger.warning(f"Could not add liquidity columns to market_metadata: {e}")
     # Attempt to create hypertables in separate transactions so failures don't abort the connection
     tables_to_hyper = ['ohlcv', 'indicators', 'alpha_scores', 'funding_rates']
     for table in tables_to_hyper:

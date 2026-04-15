@@ -1,73 +1,70 @@
 # Scalpyn - PRD
 
 ## Problem Statement
-`https://scalpyn.vercel.app/watchlist` – Na página watchlist (Pipeline view), a lista de cripto ativos filtrados pelo profile mostra indicadores técnicos (RSI, ADX, BB Width, MACD Hist, EMA 9, EMA 50, EMA 200, EMA Alignment) para apenas alguns ativos. A maioria exibe "–" em todas as colunas de indicadores.
+Sistema de análise de criptoativos via Gate.io com pipeline de filtros L1/L2/L3 e scoring.
 
 ## Architecture
 - **Frontend**: Next.js → Vercel (auto-deploy via GitHub main branch)
 - **Backend**: FastAPI + Celery + TimescaleDB/PostgreSQL → Cloud Run
-- **Exchange**: Gate.io (OHLCV via public API)
-- **Task Queue**: Celery + Redis (beat scheduler: tasks a cada 5 min)
+- **Exchange**: Gate.io (OHLCV, Tickers, Orderbook via API pública)
+- **Task Queue**: Celery + Redis (beat: collect_5m → compute_5m → pipeline_scan a cada 5 min)
 
-## Core Data Flow
-1. `collect_5m` Celery task (5 min) → coleta OHLCV 5m de até 500 símbolos (universe top-100 + todos pool coins)
-2. `compute_5m` Celery task (encadeado) → calcula indicadores técnicos para símbolos com OHLCV recente (últimas 2h)
-3. `pipeline_scan` → filtra ativos pelo profile em 3 níveis (L1/L2/L3)
-4. `GET /api/watchlists/{id}/assets` → retorna ativos com indicadores da tabela `indicators`
+## Bug Fixes Implemented
 
-## Root Cause Identified
-- Tabela `indicators` vazia ou sem dados para a maioria dos símbolos
-- Causas possíveis: tasks Celery recém-iniciadas, rate-limit/timeout na Gate.io, symbols novos no pool sem histórico
+### Fix #1 – Indicadores ausentes na watchlist (Feb 2026)
+**`backend/app/api/watchlists.py`**: `_compute_indicators_on_demand()` adicionada — busca OHLCV 1h diretamente da Gate.io quando indicadores ausentes na DB, calcula via FeatureEngine, cacheia na tabela `indicators`.
+**`backend/app/tasks/collect_market_data.py`**: Cap 200→500 símbolos no collect_5m.
 
-## Fixes Implemented (Feb 2026)
+### Fix #2 – Filtro Market Cap não aplicado (Feb 2026)
+**`backend/app/tasks/pipeline_scan.py`**: `market_cap` e `volume_24h` defaultam para `0.0` (não None) → filtros tipo `>= 5M` avaliam `0 >= 5M = False` → asset excluído.
+**`backend/app/services/profile_engine.py`**: _STRICT_META adicionado → enforcement estrito para campos meta (market_cap, volume_24h, price, change_24h, spread_pct, orderbook_depth_usdt).
 
-### 1. On-demand indicator computation (`backend/app/api/watchlists.py`)
-- Função `_compute_indicators_on_demand()` adicionada
-- Quando `GET /api/watchlists/{id}/assets` detecta símbolos sem indicadores na DB:
-  - Busca OHLCV 1h (200 candles) diretamente da Gate.io via `market_data_service.fetch_ohlcv`
-  - Calcula indicadores usando `FeatureEngine`
-  - Cacheia na tabela `indicators` com timeframe='1h'
-  - Retorna indicadores calculados na mesma request
-- Execução paralela com `asyncio.gather` + `Semaphore(8)` para limitar carga na API
-- Cap de 40 símbolos por request para manter tempo de resposta aceitável (~3-5s first load)
+### Fix #3 – Alpha Score sempre "–" (Feb 2026)
+**`backend/app/api/watchlists.py`** `_asset_to_dict`: `if a.alpha_score` → `if a.alpha_score is not None` (0.0 era falsy → None).
 
-### 2. Expand collect_5m universe (`backend/app/tasks/collect_market_data.py`)
-- Cap aumentado de 200 → 500 símbolos para cobrir pools com muitos ativos
+## Feature Implementations (Feb 2026)
 
-## Bug Fix #2: Market Cap filter não exclui ativos com market_cap baixo (Feb 2026)
+### Novos Indicadores de Liquidez
+- **`backend/app/services/market_data_service.py`**: `fetch_orderbook_metrics(symbol)` → `{spread_pct, orderbook_depth_usdt}` via Gate.io `/spot/order_book`; `compute_spread_from_ticker()` → spread_pct de bid/ask dos tickers (sem custo extra de API)
+- **`backend/app/tasks/collect_market_data.py`**: `collect_all` agora armazena `spread_pct` de tickers; `collect_5m` busca orderbook por símbolo e armazena `orderbook_depth_usdt`
+- **`backend/app/init_db.py`**: Colunas `spread_pct DECIMAL(10,4)` e `orderbook_depth_usdt DECIMAL(20,2)` adicionadas à `market_metadata`
+- **`backend/app/tasks/pipeline_scan.py`**: `spread_pct` e `orderbook_depth_usdt` incluídos no asset dict; `di_trend = di_plus > di_minus` como campo derivado
 
-### Problema
-A watchlist POOL associada ao Profile Pool (com filtro Market Cap >= 5,000,000)
-exibia ativos com market cap muito abaixo do limite (ex: $1.5M, $666K, $23K).
+### Correção DI Directional Index
+- **`backend/app/services/score_engine.py`**: Operadores `di+>di-` e `di->di+` adicionados para comparação real de tendência
+- **`backend/app/tasks/pipeline_scan.py`**: Campo `di_trend` (boolean) calculado automaticamente = `di_plus > di_minus`
 
-### Causa Raiz
-**Dupla falha:**
+### RSI Between (Range)
+- **`backend/app/services/rule_engine.py`**: Já suportava `between` com `{min, max}`
+- **`backend/app/api/watchlists.py`** `_passes_profile_filters`: Adicionado suporte a `between`
 
-1. **`pipeline_scan.py` `_fetch_market_data()`**: `market_cap` e `volume_24h` eram
-   definidos como `None` quando NULL no banco (em vez de `0.0`). Com `None`, o
-   `ProfileEngine._apply_filters` usava avaliação "lenient" e **saltava** a condição
-   em vez de falhar → asset passava mesmo sem market_cap conhecido.
+### GUI ConditionBuilder
+- **`frontend/components/profiles/ConditionBuilder.tsx`**: 
+  - Interface `Condition` com `min?`/`max?` para operator `between`
+  - Operador `entre` (between) com dois inputs (Min / Max) → RSI entre 45 e 60
+  - Grupo "Liquidez Real" com `Spread %` e `Profundidade Book (USDT)`
+  - Campo `di_trend` = "DI+ > DI- (Alta)" como boolean
+  - Fix: campo boolean agora force operator `==`
+  - Grupos organizados: Preco e Volume | Liquidez Real | Momentum | Tendencia e Estrutura | EMA e Alinhamento | Scores
 
-2. **`profile_engine.py` `_apply_filters()`**: Avaliação lenient aplicada indiscriminadamente
-   a TODOS os campos, incluindo campos de mercado (market_cap, volume_24h) que DEVEM
-   ser estritamente avaliados.
+## Filters Recommended by User
+**Pool (universo)**:
+- `spread_pct <= 1`
+- `orderbook_depth_usdt >= 5000`
 
-### Fixes
-- **`backend/app/tasks/pipeline_scan.py`**: `market_cap` e `volume_24h` agora defaultam
-  para `0.0` quando NULL → filtro `>= 5M` avalia `0 >= 5M = False` → asset excluído
-- **`backend/app/services/profile_engine.py`**: `_apply_filters` agora aplica enforcement
-  ESTRITO para campos meta (`volume_24h`, `market_cap`, `price`, `change_24h`):
-  se o campo é None, a condição FALHA (não é saltada). Campos indicadores (RSI, ADX, etc.)
-  continuam lenient.
-- **`backend/app/tasks/pipeline_scan.py`**: Adicionado alias `atr_percent → atr_pct`
-  no asset dict para corrigir mismatch entre nome usado na GUI e nome armazenado
-  pelo feature engine.
+**L1 (qualidade)**:
+- `spread_pct <= 0.8`
+- `orderbook_depth_usdt >= 10000`
 
-- P0: On-demand indicators (DONE)
-- P1: Monitoring/alertas quando tasks Celery falham silenciosamente
-- P2: Cache TTL para on-demand indicators (re-compute se > 30min antigo)
-- P3: Indicadores 5m opcionais por symbol na watchlist view
+## Data Flow
+1. `collect_all` (60s) → Tickers → market_metadata (price, volume, spread_pct)
+2. `collect_5m` (5min) → OHLCV + Orderbook → ohlcv table + market_metadata (orderbook_depth)
+3. `compute_5m` (encadeado) → calcula RSI/ADX/EMA/DI/BB → indicators table
+4. `pipeline_scan` (5min) → lê indicators + market_metadata → aplica filtros → armazena em pipeline_watchlist_assets
 
-## Next Tasks
-- Validar que indicadores aparecem para todos os símbolos em produção após deploy
-- Monitorar logs de "[Pipeline] On-demand indicators computed" em Cloud Run
+## Prioritized Backlog
+- P0: Todos os fixes acima (DONE)
+- P1: Scoring rules melhores (DEFAULT_SCORE só tem 3 regras simples)
+- P2: UI de scoring rules com suporte a `di+>di-` operador e `between`
+- P3: Monitoramento de falhas no pipeline Celery
+- P3: Coluna `Spread %` e `Depth` visíveis na watchlist table

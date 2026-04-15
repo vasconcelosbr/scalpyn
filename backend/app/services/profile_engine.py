@@ -167,6 +167,7 @@ class ProfileEngine:
         _STRICT_META = frozenset({
             "volume_24h", "market_cap", "price",
             "change_24h", "change_24h_pct",
+            "spread_pct", "orderbook_depth_usdt",
         })
 
         result = []

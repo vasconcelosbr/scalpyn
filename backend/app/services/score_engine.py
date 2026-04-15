@@ -83,16 +83,19 @@ class ScoreEngine:
         """Evaluate scoring rules and sum points.
 
         Rules are mapped to categories by indicator type:
-        - liquidity: volume_spike, volume_24h, spread_pct, obv
-        - market_structure: adx, ema_trend, atr, psar_trend, bb_width
+        - liquidity: volume_spike, volume_24h, spread_pct, orderbook_depth_usdt, obv
+        - market_structure: adx, ema_trend, atr, psar_trend, bb_width, di_plus, di_minus, di_trend
         - momentum: rsi, macd, macd_signal, stoch_k, zscore, vwap_distance_pct
-        - signal: taker_ratio, adx_acceleration, volume_delta, funding_rate
+        - signal: adx_acceleration, ema_trend, ema alignment booleans
         """
         category_indicators = {
-            "liquidity": {"volume_spike", "volume_24h", "spread_pct", "obv", "taker_ratio"},
-            "market_structure": {"adx", "ema_trend", "atr", "atr_pct", "psar_trend", "bb_width", "di_plus", "di_minus"},
-            "momentum": {"rsi", "macd", "macd_signal", "macd_histogram", "stoch_k", "stoch_d", "zscore", "vwap_distance_pct"},
-            "signal": {"adx_acceleration", "volume_delta", "funding_rate", "ema9_gt_ema50", "ema50_gt_ema200", "ema_full_alignment"},
+            "liquidity": {"volume_spike", "volume_24h", "spread_pct", "orderbook_depth_usdt", "obv", "taker_ratio"},
+            "market_structure": {"adx", "ema_trend", "atr", "atr_pct", "psar_trend", "bb_width",
+                                 "di_plus", "di_minus", "di_trend"},
+            "momentum": {"rsi", "macd", "macd_signal", "macd_histogram", "stoch_k", "stoch_d",
+                         "zscore", "vwap_distance_pct"},
+            "signal": {"adx_acceleration", "volume_delta", "funding_rate",
+                       "ema9_gt_ema50", "ema50_gt_ema200", "ema_full_alignment"},
         }
 
         relevant_indicators = category_indicators.get(category, set())
@@ -132,6 +135,26 @@ class ScoreEngine:
             return bool(indicators.get("ema50_gt_ema200", False))
         elif operator_str == "ema9<ema50":
             return not bool(indicators.get("ema9_gt_ema50", True))
+
+        # DI directional comparison: DI+ > DI- (real trend confirmation, not just DI+ > 0)
+        if operator_str == "di+>di-":
+            di_plus = indicators.get("di_plus")
+            di_minus = indicators.get("di_minus")
+            if di_plus is None or di_minus is None:
+                return False
+            try:
+                return float(di_plus) > float(di_minus)
+            except (TypeError, ValueError):
+                return False
+        if operator_str == "di->di+":
+            di_plus = indicators.get("di_plus")
+            di_minus = indicators.get("di_minus")
+            if di_plus is None or di_minus is None:
+                return False
+            try:
+                return float(di_minus) > float(di_plus)
+            except (TypeError, ValueError):
+                return False
 
         # ADX acceleration operators
         if operator_str == ">prev+" and indicator_name == "adx_acceleration":

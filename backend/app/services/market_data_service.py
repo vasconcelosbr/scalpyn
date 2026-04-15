@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 GATE_SPOT_URL = "https://api.gateio.ws/api/v4/spot/candlesticks"
 GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/spot/tickers"
+GATE_ORDERBOOK_URL = "https://api.gateio.ws/api/v4/spot/order_book"
 GATE_FUNDING_URL = "https://api.gateio.ws/api/v4/futures/usdt/funding_rate"
 
 # Regex to detect Gate.io leveraged ETF tokens (e.g. BTC3L, PEPE5S, TON2L)
@@ -90,6 +91,65 @@ class MarketDataService:
         except Exception as e:
             logger.error(f"Failed to fetch tickers: {e}")
             return []
+
+    async def fetch_orderbook_metrics(self, symbol: str, depth: int = 10) -> Dict[str, Any]:
+        """Fetch orderbook for a symbol and compute spread_pct and orderbook_depth_usdt.
+
+        Returns:
+            {
+              "spread_pct": float (% difference between best ask and best bid),
+              "orderbook_depth_usdt": float (total USDT value in top N levels of bid+ask),
+            }
+        Returns empty dict on failure.
+        """
+        pair = symbol.replace("USDT", "_USDT") if "_" not in symbol else symbol
+        try:
+            async with httpx.AsyncClient(timeout=8) as client:
+                resp = await client.get(GATE_ORDERBOOK_URL, params={
+                    "currency_pair": pair,
+                    "limit": depth,
+                    "with_id": "false",
+                })
+                resp.raise_for_status()
+                book = resp.json()
+
+            bids = book.get("bids", [])
+            asks = book.get("asks", [])
+
+            if not bids or not asks:
+                return {}
+
+            best_bid = float(bids[0][0])
+            best_ask = float(asks[0][0])
+
+            if best_ask <= 0:
+                return {}
+
+            spread_pct = round((best_ask - best_bid) / best_ask * 100, 4)
+
+            # Total USDT depth: price * qty for each level on both sides
+            bid_depth = sum(float(p) * float(q) for p, q in bids[:depth])
+            ask_depth = sum(float(p) * float(q) for p, q in asks[:depth])
+            orderbook_depth_usdt = round(bid_depth + ask_depth, 2)
+
+            return {
+                "spread_pct": spread_pct,
+                "orderbook_depth_usdt": orderbook_depth_usdt,
+            }
+        except Exception as e:
+            logger.debug(f"fetch_orderbook_metrics failed for {symbol}: {e}")
+            return {}
+
+    def compute_spread_from_ticker(self, ticker: Dict[str, Any]) -> Optional[float]:
+        """Compute spread_pct from a ticker dict (highest_bid / lowest_ask fields)."""
+        try:
+            bid = float(ticker.get("highest_bid") or 0)
+            ask = float(ticker.get("lowest_ask") or 0)
+            if ask > 0 and bid > 0:
+                return round((ask - bid) / ask * 100, 4)
+        except (TypeError, ValueError):
+            pass
+        return None
 
     async def fetch_funding_rates(self) -> List[Dict[str, Any]]:
         """Fetch funding rates for USDT perpetual futures."""

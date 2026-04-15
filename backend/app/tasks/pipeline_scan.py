@@ -88,7 +88,8 @@ async def _fetch_market_data(db, symbols: list) -> list:
     try:
         meta_rows = (await db.execute(
             text("""
-                SELECT symbol, name, market_cap, volume_24h, price, price_change_24h
+                SELECT symbol, name, market_cap, volume_24h, price, price_change_24h,
+                       spread_pct, orderbook_depth_usdt
                 FROM market_metadata
                 WHERE symbol = ANY(:symbols)
             """),
@@ -155,8 +156,10 @@ async def _fetch_market_data(db, symbols: list) -> list:
             "change_24h": float(row.price_change_24h) if row.price_change_24h else 0.0,
             # Default NULL meta-fields to 0.0 so filters like "market_cap >= 5M" correctly
             # FAIL (instead of being skipped) when data isn't available yet.
-            "market_cap": float(row.market_cap)       if row.market_cap is not None else 0.0,
-            "volume_24h": float(row.volume_24h)       if row.volume_24h is not None else 0.0,
+            "market_cap":           float(row.market_cap)             if row.market_cap             is not None else 0.0,
+            "volume_24h":           float(row.volume_24h)             if row.volume_24h             is not None else 0.0,
+            "spread_pct":           float(row.spread_pct)             if row.spread_pct             is not None else None,
+            "orderbook_depth_usdt": float(row.orderbook_depth_usdt)   if row.orderbook_depth_usdt   is not None else None,
             "indicators": indicators,
             # Flatten numeric indicators for ProfileEngine filter evaluation
             **{k: v for k, v in indicators.items() if isinstance(v, (int, float, bool, str))},
@@ -166,6 +169,16 @@ async def _fetch_market_data(db, symbols: list) -> list:
         # field names ("atr_percent") match the feature-engine output ("atr_pct").
         if "atr_pct" in asset and "atr_percent" not in asset:
             asset["atr_percent"] = asset["atr_pct"]
+
+        # di_trend: True when DI+ > DI- (real directional confirmation).
+        # Used in filter conditions ("di_trend = true") and scoring rules.
+        di_plus  = asset.get("di_plus")
+        di_minus = asset.get("di_minus")
+        if di_plus is not None and di_minus is not None:
+            try:
+                asset["di_trend"] = float(di_plus) > float(di_minus)
+            except (TypeError, ValueError):
+                pass
 
         if score_row:
             asset["score"]                  = float(score_row.score)                  if score_row.score                  else 0.0

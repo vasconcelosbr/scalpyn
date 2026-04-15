@@ -85,10 +85,11 @@ async def _collect_all_async():
                 logger.warning(f"Failed to collect {symbol}: {e}")
                 continue
 
-        # Also fetch tickers for metadata
+        # Also fetch tickers for metadata (price, volume, change + spread_pct from bid/ask)
         try:
             tickers = await market_data_service.fetch_all_tickers()
-            for ticker in tickers[:200]:
+            now_ts = datetime.now(timezone.utc)
+            for ticker in tickers[:500]:
                 pair = ticker.get("currency_pair", "")
                 if not pair.endswith("_USDT"):
                     continue
@@ -96,20 +97,24 @@ async def _collect_all_async():
                 price = float(ticker.get("last", 0) or 0)
                 change = float(ticker.get("change_percentage", 0) or 0)
                 volume = float(ticker.get("quote_volume", 0) or 0)
+                # Compute spread from tickers bid/ask (no extra API call needed)
+                spread = market_data_service.compute_spread_from_ticker(ticker)
 
                 if price > 0:
                     await db.execute(text("""
-                        INSERT INTO market_metadata (symbol, price, price_change_24h, volume_24h, last_updated)
-                        VALUES (:symbol, :price, :change, :volume, :updated)
+                        INSERT INTO market_metadata
+                            (symbol, price, price_change_24h, volume_24h, spread_pct, last_updated)
+                        VALUES (:symbol, :price, :change, :volume, :spread, :updated)
                         ON CONFLICT (symbol) DO UPDATE SET
                             price = :price, price_change_24h = :change,
-                            volume_24h = :volume, last_updated = :updated
+                            volume_24h = :volume, spread_pct = :spread, last_updated = :updated
                     """), {
                         "symbol": symbol,
-                        "price": price,
+                        "price":  price,
                         "change": change,
                         "volume": volume,
-                        "updated": datetime.now(timezone.utc),
+                        "spread": spread,
+                        "updated": now_ts,
                     })
         except Exception as e:
             logger.warning(f"Failed to update metadata: {e}")
@@ -188,6 +193,26 @@ async def _collect_5m_async():
                         "close":     float(row["close"]),
                         "volume":    float(row["volume"]),
                     })
+
+                # Fetch orderbook metrics (spread + depth) and update market_metadata
+                try:
+                    ob = await market_data_service.fetch_orderbook_metrics(symbol, depth=10)
+                    if ob:
+                        await db.execute(text("""
+                            INSERT INTO market_metadata (symbol, spread_pct, orderbook_depth_usdt, last_updated)
+                            VALUES (:sym, :spread, :depth, :ts)
+                            ON CONFLICT (symbol) DO UPDATE SET
+                                spread_pct = :spread,
+                                orderbook_depth_usdt = :depth,
+                                last_updated = :ts
+                        """), {
+                            "sym":    symbol,
+                            "spread": ob.get("spread_pct"),
+                            "depth":  ob.get("orderbook_depth_usdt"),
+                            "ts":     datetime.now(timezone.utc),
+                        })
+                except Exception:
+                    pass  # non-blocking — orderbook metrics are best-effort
 
                 collected += 1
             except Exception as e:
