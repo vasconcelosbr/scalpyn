@@ -624,9 +624,8 @@ async def _resolve_and_persist(
     filters = wl.filters_json or {}
     min_score: float = float(filters.get("min_score", 0))
     require_signal: bool = bool(filters.get("require_signal", False))
-    require_no_blocks: bool = bool(filters.get("require_no_blocks", False))
 
-    # Fetch market metadata + latest scores for these symbols
+    # Fetch market metadata for these symbols
     try:
         meta_rows = await db.execute(
             text("""
@@ -648,55 +647,114 @@ async def _resolve_and_persist(
     except Exception:
         meta_map = {}
 
+    # Load indicators for scoring + signal evaluation
+    ind_map: Dict[str, Dict] = {}
     try:
-        score_rows = await db.execute(
+        ind_rows = (await db.execute(
             text("""
-                SELECT DISTINCT ON (symbol) symbol, score, signal_score
+                SELECT DISTINCT ON (symbol) symbol, indicators_json
+                FROM indicators WHERE symbol = ANY(:symbols)
+                ORDER BY symbol, time DESC
+            """),
+            {"symbols": list(base_symbols)},
+        )).fetchall()
+        ind_map = {r.symbol: (r.indicators_json or {}) for r in ind_rows}
+    except Exception:
+        pass
+
+    # Load pre-computed alpha scores (used as fallback when no rules configured)
+    try:
+        score_rows = (await db.execute(
+            text("""
+                SELECT DISTINCT ON (symbol) symbol, score
                 FROM alpha_scores
                 WHERE symbol = ANY(:symbols)
                 ORDER BY symbol, time DESC
             """),
             {"symbols": list(base_symbols)},
-        )
-        score_map = {
-            r.symbol: {
-                "score":        float(r.score) if r.score else 0.0,
-                "signal_score": float(r.signal_score) if r.signal_score else 0.0,
-            }
-            for r in score_rows.fetchall()
-        }
+        )).fetchall()
+        precomp_score_map = {r.symbol: float(r.score) if r.score else 0.0 for r in score_rows}
     except Exception:
-        score_map = {}
+        precomp_score_map = {}
 
-    # When no real alpha scores are available, derive scores from market_metadata
-    # using price_change_24h as momentum proxy: score = clamp(50 + pct*2, 0, 100).
-    # Real alpha_scores take priority when present.
-    use_derived_scores = len(score_map) == 0
-    scoring_data_available = bool(score_map) or bool(meta_map)
+    # Compute live alpha scores using the user's global score config
+    from ..services.score_engine import ScoreEngine as _SE
+    from ..services.seed_service import DEFAULT_SCORE
+    from ..services.config_service import config_service as _cs
 
-    if use_derived_scores and meta_map:
-        for symbol, meta in meta_map.items():
-            pct = meta.get("price_change_24h", 0.0)
-            derived = max(0.0, min(100.0, 50.0 + pct * 2.0))
-            signal = 100.0 if derived >= 60.0 else 0.0
-            score_map[symbol] = {"score": derived, "signal_score": signal}
+    global_score_config = DEFAULT_SCORE
+    try:
+        cfg = await _cs.get_config(db, "score", user_id)
+        if cfg and cfg.get("scoring_rules"):
+            global_score_config = cfg
+    except Exception:
+        pass
+
+    _score_engine = _SE(global_score_config)
+    live_score_map: Dict[str, float] = {}
+    for sym in base_symbols:
+        ind = ind_map.get(sym, {})
+        meta = meta_map.get(sym, {})
+        if ind:
+            eval_data = {
+                **ind,
+                "price":      meta.get("price", 0),
+                "volume_24h": meta.get("volume_24h", 0),
+                "market_cap": meta.get("market_cap", 0),
+                "change_24h": meta.get("price_change_24h", 0),
+            }
+            r = _score_engine.compute_alpha_score(eval_data)
+            live_score_map[sym] = round(r.get("total_score", 0), 1)
+        else:
+            live_score_map[sym] = precomp_score_map.get(sym, 0.0)
+
+    scoring_data_available = bool(live_score_map) or bool(meta_map)
+
+    # Load profile for signal evaluation
+    profile_config_for_signals = None
+    sig_conditions = []
+    if wl.profile_id:
+        try:
+            from ..models.profile import Profile
+            prof_res = await db.execute(select(Profile).where(Profile.id == wl.profile_id))
+            prof = prof_res.scalars().first()
+            if prof and prof.config:
+                profile_config_for_signals = prof.config
+                sig_conditions = prof.config.get("signals", {}).get("conditions", [])
+        except Exception:
+            pass
+
+    # For L3 with require_signal=True: evaluate signals using profile's SignalEngine
+    # (not pre-computed signal_score which is unreliable).
+    # If the profile has NO signal conditions, fall back to score-only filtering.
+    signal_status: Dict[str, bool] = {}
+    if require_signal and sig_conditions:
+        from ..services.signal_engine import SignalEngine as _SigE
+        sig_cfg = (profile_config_for_signals or {}).get("signals", {})
+        _sig_engine = _SigE(sig_cfg)
+        for sym in base_symbols:
+            ind = ind_map.get(sym, {})
+            alpha = live_score_map.get(sym, 0.0)
+            sig_result = _sig_engine.evaluate(ind, alpha)
+            signal_status[sym] = sig_result.get("signal", False)
+    elif require_signal and not sig_conditions:
+        # No signal conditions configured — treat all min_score-qualified assets as passing
+        for sym in base_symbols:
+            signal_status[sym] = True
 
     now = datetime.now(timezone.utc)
     assets_out: List[Dict[str, Any]] = []
 
     for symbol in base_symbols:
-        scores = score_map.get(symbol, {})
-        alpha = scores.get("score", 0.0)
-        signal = scores.get("signal_score", 0.0)
+        alpha = live_score_map.get(symbol, 0.0)
 
         # Apply score filter only when we actually HAVE scoring data.
-        # If market_metadata + alpha_scores are both empty (first run, pipeline
-        # not yet populated), we let all symbols through for L1 so the user can
-        # see their pool assets immediately even before the Celery pipeline runs.
         if scoring_data_available:
             if min_score and alpha < min_score:
                 continue
-            if require_signal and signal < 50:
+            # Signal check: if require_signal is set, use the live signal evaluation
+            # (never use pre-computed signal_score which has unreliable signal categories)
+            if require_signal and not signal_status.get(symbol, True):
                 continue
 
         meta = meta_map.get(symbol, {})
@@ -706,25 +764,21 @@ async def _resolve_and_persist(
             "price_change_24h": meta.get("price_change_24h"),
             "volume_24h":       meta.get("volume_24h"),
             "market_cap":       meta.get("market_cap"),
-            "alpha_score":      round(alpha, 1) if scoring_data_available else None,
+            "alpha_score":      alpha if scoring_data_available else None,
         })
 
     # Apply profile filter conditions (market_cap, volume_24h, Change 24h%, etc.)
-    if wl.profile_id and assets_out:
-        from ..models.profile import Profile
-        prof_res = await db.execute(select(Profile).where(Profile.id == wl.profile_id))
-        prof = prof_res.scalars().first()
-        if prof and prof.config:
-            pf = prof.config.get("filters", {})
-            p_conditions = pf.get("conditions", [])
-            p_logic = pf.get("logic", "AND")
-            if p_conditions:
-                before = len(assets_out)
-                assets_out = [a for a in assets_out if _passes_profile_filters(a, p_conditions, p_logic)]
-                logger.info(
-                    "Pipeline profile filter [%s / %s]: %d → %d assets (removed %d)",
-                    wl.name, wl.level, before, len(assets_out), before - len(assets_out),
-                )
+    if wl.profile_id and assets_out and profile_config_for_signals:
+        pf = profile_config_for_signals.get("filters", {})
+        p_conditions = pf.get("conditions", [])
+        p_logic = pf.get("logic", "AND")
+        if p_conditions:
+            before = len(assets_out)
+            assets_out = [a for a in assets_out if _passes_profile_filters(a, p_conditions, p_logic)]
+            logger.info(
+                "Pipeline profile filter [%s / %s]: %d → %d assets (removed %d)",
+                wl.name, wl.level, before, len(assets_out), before - len(assets_out),
+            )
 
     # Detect level transitions & upsert
     existing_result = await db.execute(

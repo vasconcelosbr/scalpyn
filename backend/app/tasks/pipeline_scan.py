@@ -275,27 +275,61 @@ def _apply_level_filter(assets: list, profile_config: Optional[dict], level: str
 
 def _evaluate_l3_signals(assets: list, profile_config: Optional[dict]) -> list:
     """
-    Apply L3 signal conditions and return only assets with triggered signals.
+    Apply L3 signal conditions and return triggered assets.
+
+    If the profile has NO signal conditions configured, fall back to scoring-only
+    mode: return all assets that passed the profile filters, sorted by score.
+    This prevents L3 from being permanently empty just because no signal conditions
+    have been set up yet.
     """
     from ..services.profile_engine import ProfileEngine
 
     engine = ProfileEngine(profile_config)
+
+    # Check if the profile has any signal conditions at all
+    sig_conditions = (profile_config or {}).get("signals", {}).get("conditions", [])
+    has_signal_conditions = bool(sig_conditions)
+
     result = engine.process_watchlist(assets, include_details=True)
 
-    signals = []
-    for asset in result.get("assets", []):
-        sig = asset.get("signal", {})
-        if sig.get("triggered"):
-            signals.append({
+    if has_signal_conditions:
+        # Signal evaluation mode: only return assets with triggered signals
+        signals = []
+        for asset in result.get("assets", []):
+            sig = asset.get("signal", {})
+            if sig.get("triggered"):
+                signals.append({
+                    "symbol":             asset["symbol"],
+                    "score":              asset.get("score", {}).get("total_score", 0),
+                    "price":              asset.get("price", 0),
+                    "change_24h":         asset.get("change_24h", 0),
+                    "volume_24h":         asset.get("volume_24h"),
+                    "market_cap":         asset.get("market_cap"),
+                    "matched_conditions": sig.get("matched_conditions", []),
+                })
+        signals.sort(key=lambda x: x["score"], reverse=True)
+        return signals
+    else:
+        # No signal conditions — fall back to scoring mode: return all filtered
+        # assets sorted by score (same as L2 behavior)
+        logger.info(
+            "[PipelineScan] L3: no signal conditions in profile — using scoring fallback (%d assets)",
+            len(result.get("assets", [])),
+        )
+        fallback = []
+        for asset in result.get("assets", []):
+            total = asset.get("score", {}).get("total_score", 0)
+            fallback.append({
                 "symbol":             asset["symbol"],
-                "score":              asset.get("score", {}).get("total_score", 0),
+                "score":              total,
                 "price":              asset.get("price", 0),
                 "change_24h":         asset.get("change_24h", 0),
-                "matched_conditions": sig.get("matched_conditions", []),
+                "volume_24h":         asset.get("volume_24h"),
+                "market_cap":         asset.get("market_cap"),
+                "matched_conditions": [],
             })
-
-    signals.sort(key=lambda x: x["score"], reverse=True)
-    return signals
+        fallback.sort(key=lambda x: x["score"], reverse=True)
+        return fallback
 
 
 # ─── DB upsert ────────────────────────────────────────────────────────────────
