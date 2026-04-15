@@ -86,12 +86,52 @@ async def _fetch_market_data(db, symbols: list) -> list:
     syms_list = list(symbols)
 
     try:
+        # Include new liquidity columns via COALESCE; fall back gracefully if
+        # the columns haven't been added to this database deployment yet.
         meta_rows = (await db.execute(
             text("""
-                SELECT symbol, name, market_cap, volume_24h, price, price_change_24h,
-                       spread_pct, orderbook_depth_usdt
-                FROM market_metadata
-                WHERE symbol = ANY(:symbols)
+                SELECT
+                    m.symbol, m.name,
+                    -- Prefer market_metadata; fall back to latest stored pwa value
+                    COALESCE(m.market_cap,  pwa.market_cap)  AS market_cap,
+                    COALESCE(m.volume_24h,  pwa.volume_24h)  AS volume_24h,
+                    m.price,
+                    m.price_change_24h,
+                    m.spread_pct,
+                    m.orderbook_depth_usdt
+                FROM market_metadata m
+                LEFT JOIN (
+                    SELECT DISTINCT ON (symbol)
+                           symbol, market_cap, volume_24h
+                    FROM   pipeline_watchlist_assets
+                    WHERE  symbol = ANY(:symbols)
+                    ORDER  BY symbol, entered_at DESC
+                ) pwa ON pwa.symbol = m.symbol
+                WHERE  m.symbol = ANY(:symbols)
+            """),
+            {"symbols": syms_list},
+        )).fetchall()
+    except Exception:
+        # Fallback: columns spread_pct / orderbook_depth_usdt may not exist yet
+        meta_rows = (await db.execute(
+            text("""
+                SELECT
+                    m.symbol, m.name,
+                    COALESCE(m.market_cap, pwa.market_cap) AS market_cap,
+                    COALESCE(m.volume_24h, pwa.volume_24h) AS volume_24h,
+                    m.price,
+                    m.price_change_24h,
+                    NULL AS spread_pct,
+                    NULL AS orderbook_depth_usdt
+                FROM market_metadata m
+                LEFT JOIN (
+                    SELECT DISTINCT ON (symbol)
+                           symbol, market_cap, volume_24h
+                    FROM   pipeline_watchlist_assets
+                    WHERE  symbol = ANY(:symbols)
+                    ORDER  BY symbol, entered_at DESC
+                ) pwa ON pwa.symbol = m.symbol
+                WHERE  m.symbol = ANY(:symbols)
             """),
             {"symbols": syms_list},
         )).fetchall()
@@ -154,10 +194,12 @@ async def _fetch_market_data(db, symbols: list) -> list:
             "name":      row.name or sym,
             "price":     float(row.price)            if row.price            else 0.0,
             "change_24h": float(row.price_change_24h) if row.price_change_24h else 0.0,
-            # Default NULL meta-fields to 0.0 so filters like "market_cap >= 5M" correctly
-            # FAIL (instead of being skipped) when data isn't available yet.
-            "market_cap":           float(row.market_cap)             if row.market_cap             is not None else 0.0,
-            "volume_24h":           float(row.volume_24h)             if row.volume_24h             is not None else 0.0,
+            # Keep None when market_cap / volume_24h are truly unknown — the lenient filter
+            # evaluation in ProfileEngine will skip conditions on None fields.
+            # COALESCE in the SQL above already gives the best available value from both
+            # market_metadata and pipeline_watchlist_assets, so None here is rare.
+            "market_cap":           float(row.market_cap)             if row.market_cap             is not None else None,
+            "volume_24h":           float(row.volume_24h)             if row.volume_24h             is not None else None,
             "spread_pct":           float(row.spread_pct)             if row.spread_pct             is not None else None,
             "orderbook_depth_usdt": float(row.orderbook_depth_usdt)   if row.orderbook_depth_usdt   is not None else None,
             "indicators": indicators,
@@ -418,12 +460,14 @@ async def _run_pipeline_scan():
                     symbols = filter_real_assets([c.symbol for c in coin_rows])
 
                 elif wl.source_watchlist_id:
-                    # Upstream watchlist: use pipeline_watchlist_assets
+                    # Upstream watchlist: use only ACTIVE pipeline_watchlist_assets
+                    # ('down' assets are stale — excluded to prevent ghost data in L2/L3)
                     from sqlalchemy import text
                     from ..utils.symbol_filters import filter_real_assets
                     asset_rows = (await db.execute(text("""
                         SELECT symbol FROM pipeline_watchlist_assets
                         WHERE watchlist_id = :wid
+                          AND (level_direction IS NULL OR level_direction = 'up')
                         ORDER BY alpha_score DESC NULLS LAST
                     """), {"wid": str(wl.source_watchlist_id)})).fetchall()
                     symbols = filter_real_assets([r.symbol for r in asset_rows])

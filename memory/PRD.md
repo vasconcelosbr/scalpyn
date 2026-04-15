@@ -1,7 +1,7 @@
 # Scalpyn - PRD
 
 ## Problem Statement
-Sistema de análise de criptoativos via Gate.io com pipeline de filtros L1/L2/L3 e scoring.
+Sistema de análise de criptoativos via Gate.io com pipeline de filtros L1/L2/L3 e scoring alpha.
 
 ## Architecture
 - **Frontend**: Next.js → Vercel (auto-deploy via GitHub main branch)
@@ -9,62 +9,68 @@ Sistema de análise de criptoativos via Gate.io com pipeline de filtros L1/L2/L3
 - **Exchange**: Gate.io (OHLCV, Tickers, Orderbook via API pública)
 - **Task Queue**: Celery + Redis (beat: collect_5m → compute_5m → pipeline_scan a cada 5 min)
 
+## Data Flow
+1. `collect_all` (60s) → Tickers → market_metadata (price, volume, spread_pct de bid/ask)
+2. `collect_5m` (5min) → OHLCV 100 candles + Orderbook top-10 → ohlcv + market_metadata
+3. `compute_5m` (encadeado) → RSI/ADX/EMA/DI/BB/MACD → indicators table
+4. `pipeline_scan` (5min) → market_metadata + indicators → filtros profile → pipeline_watchlist_assets
+5. `fetch_market_caps` (30min) → Gate.io currencies → market_cap em market_metadata + pwa
+6. `GET /api/watchlists/{id}/assets` → lê pwa + on-demand OHLCV/indicators/scoring se necessário
+
 ## Bug Fixes Implemented
 
-### Fix #1 – Indicadores ausentes na watchlist (Feb 2026)
-**`backend/app/api/watchlists.py`**: `_compute_indicators_on_demand()` adicionada — busca OHLCV 1h diretamente da Gate.io quando indicadores ausentes na DB, calcula via FeatureEngine, cacheia na tabela `indicators`.
-**`backend/app/tasks/collect_market_data.py`**: Cap 200→500 símbolos no collect_5m.
+### Fix #1 – Indicadores ausentes (Feb 2026)
+`_compute_indicators_on_demand()` em watchlists.py — busca OHLCV e computa indicators quando ausentes.
 
-### Fix #2 – Filtro Market Cap não aplicado (Feb 2026)
-**`backend/app/tasks/pipeline_scan.py`**: `market_cap` e `volume_24h` defaultam para `0.0` (não None) → filtros tipo `>= 5M` avaliam `0 >= 5M = False` → asset excluído.
-**`backend/app/services/profile_engine.py`**: _STRICT_META adicionado → enforcement estrito para campos meta (market_cap, volume_24h, price, change_24h, spread_pct, orderbook_depth_usdt).
+### Fix #2 – Filtro Market Cap não aplicado (Feb 2026 - v1)
+profile_engine.py `_STRICT_META` + pipeline_scan defaults 0.0.
 
-### Fix #3 – Alpha Score sempre "–" (Feb 2026)
-**`backend/app/api/watchlists.py`** `_asset_to_dict`: `if a.alpha_score` → `if a.alpha_score is not None` (0.0 era falsy → None).
+### Fix #2b – L1 vazia após fix anterior (Feb 2026 - v2)
+**CAUSA**: SQL em `_fetch_market_data` incluía colunas `spread_pct`/`orderbook_depth_usdt` que podem não existir → query falha → []
+**FIX**: TRY/EXCEPT com query fallback sem as colunas novas
+**FIX**: Revertido `market_cap = None` (não 0.0) + COALESCE de market_metadata JOIN pwa
+para obter o melhor valor disponível de market_cap/volume_24h
 
-## Feature Implementations (Feb 2026)
+### Fix #3 – L2/L3 com assets stale (Fix "down assets") (Feb 2026)
+**CAUSA**: Pipeline scan de L2 buscava TODOS assets do L1 incluindo `level_direction = 'down'`
+**FIX**: `WHERE (level_direction IS NULL OR level_direction = 'up')` na query do upstream
 
-### Novos Indicadores de Liquidez
-- **`backend/app/services/market_data_service.py`**: `fetch_orderbook_metrics(symbol)` → `{spread_pct, orderbook_depth_usdt}` via Gate.io `/spot/order_book`; `compute_spread_from_ticker()` → spread_pct de bid/ask dos tickers (sem custo extra de API)
-- **`backend/app/tasks/collect_market_data.py`**: `collect_all` agora armazena `spread_pct` de tickers; `collect_5m` busca orderbook por símbolo e armazena `orderbook_depth_usdt`
-- **`backend/app/init_db.py`**: Colunas `spread_pct DECIMAL(10,4)` e `orderbook_depth_usdt DECIMAL(20,2)` adicionadas à `market_metadata`
-- **`backend/app/tasks/pipeline_scan.py`**: `spread_pct` e `orderbook_depth_usdt` incluídos no asset dict; `di_trend = di_plus > di_minus` como campo derivado
+### Fix #4 – Alpha Score = 0.0 (Feb 2026)
+**CAUSA**: `if a.alpha_score` era falsy para 0.0 → retornava None
+**FIX A**: `if a.alpha_score is not None`
+**FIX B**: On-demand scoring em `get_watchlist_assets` — após calcular indicators, computa
+alpha score com ScoreEngine usando profile config. Override do score 0/None com valor real.
+Cache do score calculado em pipeline_watchlist_assets para próximas requests.
 
-### Correção DI Directional Index
-- **`backend/app/services/score_engine.py`**: Operadores `di+>di-` e `di->di+` adicionados para comparação real de tendência
-- **`backend/app/tasks/pipeline_scan.py`**: Campo `di_trend` (boolean) calculado automaticamente = `di_plus > di_minus`
+### Fix #5 – Alpha Score "–" (0 falsy) (Feb 2026)
+`_asset_to_dict`: suporta `override_score` para usar score calculado on-demand.
 
-### RSI Between (Range)
-- **`backend/app/services/rule_engine.py`**: Já suportava `between` com `{min, max}`
-- **`backend/app/api/watchlists.py`** `_passes_profile_filters`: Adicionado suporte a `between`
+### Fix Filtros (Feb 2026)
+- `_passes_profile_filters` em watchlists.py: suporte operator `between` (min/max)
+- `!=` operator adicionado
+
+## Features Implementadas
+
+### Liquidez Real
+- `spread_pct` e `orderbook_depth_usdt` em market_metadata (colunas novas)
+- `fetch_orderbook_metrics()` em market_data_service
+- `collect_5m` busca orderbook por símbolo
+- `collect_all` calcula spread de tickers
+- Campo `di_trend = di_plus > di_minus` no pipeline_scan
+- Operadores `di+>di-` / `di->di+` no ScoreEngine
 
 ### GUI ConditionBuilder
-- **`frontend/components/profiles/ConditionBuilder.tsx`**: 
-  - Interface `Condition` com `min?`/`max?` para operator `between`
-  - Operador `entre` (between) com dois inputs (Min / Max) → RSI entre 45 e 60
-  - Grupo "Liquidez Real" com `Spread %` e `Profundidade Book (USDT)`
-  - Campo `di_trend` = "DI+ > DI- (Alta)" como boolean
-  - Fix: campo boolean agora force operator `==`
-  - Grupos organizados: Preco e Volume | Liquidez Real | Momentum | Tendencia e Estrutura | EMA e Alinhamento | Scores
+- Operator `entre` (between) com inputs Min/Max → ex: RSI entre 45 e 60
+- Grupo "Liquidez Real" com Spread % e Profundidade Book
+- Campo `di_trend` = "DI+ > DI- (Alta)" boolean
+- 6 grupos organizados
 
-## Filters Recommended by User
-**Pool (universo)**:
-- `spread_pct <= 1`
-- `orderbook_depth_usdt >= 5000`
-
-**L1 (qualidade)**:
-- `spread_pct <= 0.8`
-- `orderbook_depth_usdt >= 10000`
-
-## Data Flow
-1. `collect_all` (60s) → Tickers → market_metadata (price, volume, spread_pct)
-2. `collect_5m` (5min) → OHLCV + Orderbook → ohlcv table + market_metadata (orderbook_depth)
-3. `compute_5m` (encadeado) → calcula RSI/ADX/EMA/DI/BB → indicators table
-4. `pipeline_scan` (5min) → lê indicators + market_metadata → aplica filtros → armazena em pipeline_watchlist_assets
+## Filters Recomendados pelo Usuário
+**Pool**: `spread_pct <= 1`, `orderbook_depth_usdt >= 5000`
+**L1**: `spread_pct <= 0.8`, `orderbook_depth_usdt >= 10000`
 
 ## Prioritized Backlog
-- P0: Todos os fixes acima (DONE)
-- P1: Scoring rules melhores (DEFAULT_SCORE só tem 3 regras simples)
-- P2: UI de scoring rules com suporte a `di+>di-` operador e `between`
+- P1: Scoring rules melhores configuradas pelo usuário nos profiles
+- P2: Coluna Alpha com cores (verde/amarelo/vermelho por threshold)
+- P2: Colunas Spread % e Depth visíveis na tabela watchlist
 - P3: Monitoramento de falhas no pipeline Celery
-- P3: Coluna `Spread %` e `Depth` visíveis na watchlist table

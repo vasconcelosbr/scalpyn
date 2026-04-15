@@ -363,7 +363,7 @@ def _wl_to_dict(wl: PipelineWatchlist) -> Dict[str, Any]:
     }
 
 
-def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any]] = None, meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any]] = None, meta: Optional[Dict[str, Any]] = None, override_score: Optional[float] = None) -> Dict[str, Any]:
     ind = indicators or {}
     mt  = meta or {}
     ind_out = {
@@ -395,7 +395,7 @@ def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any
         "price_change_24h": float(a.price_change_24h) if a.price_change_24h else None,
         "volume_24h":       float(a.volume_24h) if a.volume_24h else None,
         "market_cap":       float(a.market_cap) if a.market_cap else None,
-        "alpha_score":      float(a.alpha_score) if a.alpha_score is not None else None,
+        "alpha_score":      override_score if override_score is not None else (float(a.alpha_score) if a.alpha_score is not None else None),
         "entered_at":       a.entered_at.isoformat() if a.entered_at else None,
         "previous_level":   a.previous_level,
         "level_change_at":  a.level_change_at.isoformat() if a.level_change_at else None,
@@ -853,6 +853,48 @@ async def get_watchlist_assets(
             on_demand = await _compute_indicators_on_demand(db, missing)
             ind_map.update(on_demand)
 
+    # ── Compute alpha scores on-demand using fresh indicators ─────────────────
+    # The stored alpha_score on pipeline_watchlist_assets may be 0 / stale when
+    # the Celery scan ran before indicators were available.  We recompute here
+    # from the fresh ind_map and update the DB so subsequent loads are fast.
+    score_override: Dict[str, Optional[float]] = {}
+    if profile_config and ind_map:
+        try:
+            from ..services.profile_engine import ProfileEngine as _PE
+            _pe = _PE(profile_config)
+            _to_update: list = []
+            for a in assets:
+                ind = ind_map.get(a.symbol)
+                if not ind:
+                    continue
+                eval_data = {
+                    "symbol":     a.symbol,
+                    "price":      float(a.current_price)    if a.current_price    else 0.0,
+                    "volume_24h": float(a.volume_24h)       if a.volume_24h       else 0.0,
+                    "market_cap": float(a.market_cap)       if a.market_cap       else 0.0,
+                    "change_24h": float(a.price_change_24h) if a.price_change_24h else 0.0,
+                    **ind,
+                }
+                result = _pe._process_single_asset(eval_data)
+                fresh_score = result.get("score", {}).get("total_score")
+                if fresh_score is not None:
+                    score_override[a.symbol] = round(float(fresh_score), 1)
+                    # Only update DB when score changed (avoids noisy writes)
+                    stored = float(a.alpha_score) if a.alpha_score is not None else None
+                    if stored != score_override[a.symbol]:
+                        _to_update.append((score_override[a.symbol], str(a.watchlist_id), a.symbol))
+
+            if _to_update:
+                for sc, wid, sym in _to_update:
+                    await db.execute(
+                        text("UPDATE pipeline_watchlist_assets SET alpha_score = :sc "
+                             "WHERE watchlist_id = :wid AND symbol = :sym"),
+                        {"sc": sc, "wid": wid, "sym": sym},
+                    )
+                await db.commit()
+        except Exception as _e:
+            logger.debug("[Pipeline] On-demand scoring error: %s", _e)
+
     # Fresh meta (some values may be missing from pipeline_watchlist_assets)
     meta_map: Dict[str, Dict[str, Any]] = {}
     if symbols:
@@ -876,7 +918,12 @@ async def get_watchlist_assets(
             pass
 
     enriched = [
-        _asset_to_dict(a, indicators=ind_map.get(a.symbol), meta=meta_map.get(a.symbol))
+        _asset_to_dict(
+            a,
+            indicators=ind_map.get(a.symbol),
+            meta=meta_map.get(a.symbol),
+            override_score=score_override.get(a.symbol),
+        )
         for a in assets
     ]
 
