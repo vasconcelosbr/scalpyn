@@ -174,7 +174,19 @@ class ScoreEngine:
 
         # Standard numeric operators
         actual_value = indicators.get(indicator_name)
-        if actual_value is None or target_value is None:
+        if actual_value is None:
+            return False
+
+        # Between operator — uses min/max fields instead of value
+        if operator_str == "between":
+            min_val = rule.get("min", 0)
+            max_val = rule.get("max", 100)
+            try:
+                return float(min_val) <= float(actual_value) <= float(max_val)
+            except (TypeError, ValueError):
+                return False
+
+        if target_value is None:
             return False
 
         try:
@@ -186,12 +198,6 @@ class ScoreEngine:
         op_func = OPERATORS.get(operator_str)
         if op_func:
             return op_func(actual_value, target_value)
-
-        # Between operator
-        if operator_str == "between":
-            min_val = rule.get("min", 0)
-            max_val = rule.get("max", 100)
-            return min_val <= actual_value <= max_val
 
         return False
 

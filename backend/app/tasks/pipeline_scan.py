@@ -236,15 +236,23 @@ async def _fetch_market_data(db, symbols: list) -> list:
 
 # ─── level evaluators ─────────────────────────────────────────────────────────
 
-def _apply_level_filter(assets: list, profile_config: Optional[dict], level: str) -> tuple[list, list]:
+def _apply_level_filter(assets: list, profile_config: Optional[dict], level: str, score_config: Optional[dict] = None) -> tuple[list, list]:
     """
     Apply ProfileEngine filters for a given level.
     Returns (passed, all_scored).
+
+    score_config: when provided, overrides the ProfileEngine's internal score engine
+    with the user's global /settings/score configuration.
     """
     from ..services.profile_engine import ProfileEngine
+    from ..services.score_engine import ScoreEngine
 
     engine = ProfileEngine(profile_config)
-    filters_config = (profile_config or {}).get("filters", {})
+
+    # Override with global score config so scoring respects /settings/score rules
+    if score_config:
+        engine.score_engine = ScoreEngine(score_config)
+
     min_score = 0.0
 
     # L2: min alpha score gate
@@ -494,12 +502,25 @@ async def _run_pipeline_scan():
                         # .config always holds filters/signals conditions; preset_ia_config is IA metadata only
                         profile_config = prof.config
 
+                # ── 3b. Load global score config (/settings/score) ────────────
+                # This ensures Alpha Score respects the user's configured scoring rules.
+                score_config: Optional[dict] = None
+                try:
+                    from ..services.config_service import config_service
+                    from ..services.seed_service import DEFAULT_SCORE
+                    score_config = await config_service.get_config(db, "score", wl.user_id)
+                    if not score_config:
+                        score_config = DEFAULT_SCORE
+                except Exception:
+                    from ..services.seed_service import DEFAULT_SCORE
+                    score_config = DEFAULT_SCORE
+
                 # ── 4. Per-level evaluation ───────────────────────────────────
                 # Treat 'CUSTOM' level same as L1 (filters + scoring, no signal requirement)
                 effective_level = level if level in ("L1", "L2", "L3") else "L1"
 
                 if effective_level in ("L1", "L2"):
-                    passed, _ = _apply_level_filter(assets, profile_config, effective_level)
+                    passed, _ = _apply_level_filter(assets, profile_config, effective_level, score_config=score_config)
 
                     # Apply level-specific min_score gate
                     min_score = float(filters_json.get("min_score", 0))

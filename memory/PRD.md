@@ -77,6 +77,28 @@ o `except` nunca executava e `ind_rows` ficava sem valor → `UnboundLocalError`
   1. try/except para `meta_rows` (fallback de colunas de liquidez)
   2. try/except para `ind_rows` + `score_rows` (sempre executa)
 
+### Fix #7 – Score Engine usa DEFAULT_SCORE em vez do /settings/score (Feb 2026) — P1
+**CAUSA**: `compute_scores.py`, `pipeline_scan.py` e `watchlists.py` usavam `DEFAULT_SCORE`
+hardcoded para calcular Alpha Score, ignorando as regras configuradas pelo usuário em `/settings/score`.
+**FIX**:
+  - `watchlists.py`: on-demand scoring agora carrega `config_service.get_config(db, "score", user_id)`
+    e usa `ScoreEngine(global_score_config)` diretamente (em vez de `ProfileEngine._process_single_asset`)
+  - `pipeline_scan.py`: `_apply_level_filter` recebe `score_config` e sobrescreve
+    `engine.score_engine` com o config global do usuário
+  - `compute_scores.py`: busca user_id do primeiro pipeline watchlist e carrega o config do DB
+
+### Fix #8 – Operador `between` falhava para `target_value = None` (Feb 2026) — P1
+**CAUSA**: `score_engine._evaluate_rule` retornava `False` prematuramente quando `target_value is None`,
+impedindo o handler `between` de ser alcançado (o `between` usa `min`/`max`, não `value`).
+**FIX**: Mover verificação de `target_value is None` para depois do handler `between`.
+
+## GUI Score Engine (/settings/score) — Melhorias (Feb 2026)
+- Adicionado `macd_histogram` à lista de indicadores
+- Corrigido input de value=0 (era convertido para null por `|| null`)
+- Operador `between` com campos Min/Max (para RSI e outros intervalos)
+- Total de pontos exibido no cabeçalho "Scoring Rules" (ex: "45 / 100 pts")
+- Novos indicadores: di_plus, di_minus, di_trend, spread_pct, orderbook_depth_usdt, bb_width, stoch_k, stoch_d, vwap_distance_pct
+
 ## Prioritized Backlog
 - P1: Scoring rules melhores configuradas pelo usuário nos profiles
 - P2: Coluna Alpha com cores (verde/amarelo/vermelho por threshold)

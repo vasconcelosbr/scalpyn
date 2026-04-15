@@ -853,15 +853,23 @@ async def get_watchlist_assets(
             on_demand = await _compute_indicators_on_demand(db, missing)
             ind_map.update(on_demand)
 
-    # ── Compute alpha scores on-demand using fresh indicators ─────────────────
-    # The stored alpha_score on pipeline_watchlist_assets may be 0 / stale when
-    # the Celery scan ran before indicators were available.  We recompute here
-    # from the fresh ind_map and update the DB so subsequent loads are fast.
+    # ── Compute alpha scores on-demand using global /settings/score config ──────
+    # Always use the user's global score config (from /settings/score) — not the
+    # profile's scoring rules — so watchlist scores respect what the user configured.
     score_override: Dict[str, Optional[float]] = {}
-    if profile_config and ind_map:
+    if ind_map:
         try:
-            from ..services.profile_engine import ProfileEngine as _PE
-            _pe = _PE(profile_config)
+            from ..services.score_engine import ScoreEngine as _SE
+            from ..services.seed_service import DEFAULT_SCORE
+            from ..services.config_service import config_service
+
+            global_score_config = None
+            try:
+                global_score_config = await config_service.get_config(db, "score", user_id)
+            except Exception:
+                pass
+            _score_engine = _SE(global_score_config or DEFAULT_SCORE)
+
             _to_update: list = []
             for a in assets:
                 ind = ind_map.get(a.symbol)
@@ -875,8 +883,8 @@ async def get_watchlist_assets(
                     "change_24h": float(a.price_change_24h) if a.price_change_24h else 0.0,
                     **ind,
                 }
-                result = _pe._process_single_asset(eval_data)
-                fresh_score = result.get("score", {}).get("total_score")
+                result = _score_engine.compute_alpha_score(eval_data)
+                fresh_score = result.get("total_score")
                 if fresh_score is not None:
                     score_override[a.symbol] = round(float(fresh_score), 1)
                     # Only update DB when score changed (avoids noisy writes)

@@ -1,8 +1,20 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Save, RefreshCw, Plus, Trash2, Target } from "lucide-react";
+import { Save, RefreshCw, Plus, Trash2 } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
+
+const INDICATORS = [
+  "rsi", "adx", "ema_trend", "taker_ratio", "adx_acceleration",
+  "volume_spike", "macd_signal", "macd_histogram",
+  "di_plus", "di_minus", "di_trend", "spread_pct", "orderbook_depth_usdt",
+  "bb_width", "stoch_k", "stoch_d", "vwap_distance_pct",
+];
+
+const OPERATORS = ["<=", ">=", "<", ">", "=", "between", "ema9>ema50>ema200", "ema9>ema50", "ema50>ema200", "di+>di-", "di->di+", ">prev+", ">prev"];
+
+// Indicators where "between" range is the most common use-case
+const RANGE_INDICATORS = new Set(["rsi", "stoch_k", "stoch_d", "adx", "vwap_distance_pct", "bb_width"]);
 
 export default function ScoreEngineSettings() {
   const { config, updateConfig, isLoading } = useConfig("score");
@@ -25,6 +37,9 @@ export default function ScoreEngineSettings() {
 
   const weightSum = Object.values(weights).reduce((a, b) => a + b, 0);
 
+  // Total points across all scoring rules
+  const totalPoints = rules.reduce((sum, r) => sum + (Number(r.points) || 0), 0);
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -37,13 +52,20 @@ export default function ScoreEngineSettings() {
   };
 
   const addRule = () => {
-    setRules([...rules, { id: `rule_${Date.now()}`, indicator: "rsi", operator: "<=", value: 30, points: 20 }]);
+    setRules([...rules, { id: `rule_${Date.now()}`, indicator: "rsi", operator: "between", min: 30, max: 60, value: null, points: 10 }]);
   };
 
   const removeRule = (id: string) => setRules(rules.filter((r) => r.id !== id));
 
   const updateRule = (id: string, field: string, value: any) => {
     setRules(rules.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+  };
+
+  // Parse numeric input, preserving zero
+  const parseNum = (v: string, asInt = false) => {
+    if (v === "" || v === "-") return null;
+    const n = asInt ? parseInt(v) : parseFloat(v);
+    return isNaN(n) ? null : n;
   };
 
   if (isLoading) {
@@ -90,7 +112,12 @@ export default function ScoreEngineSettings() {
       {/* Scoring Rules */}
       <div className="card">
         <div className="card-header">
-          <h3>Scoring Rules</h3>
+          <div className="flex items-center gap-3">
+            <h3>Scoring Rules</h3>
+            <span className={`text-[12px] font-semibold px-2 py-0.5 rounded-full ${totalPoints <= 100 ? "bg-[var(--color-profit)]/15 text-[var(--color-profit)]" : "bg-[var(--color-loss)]/15 text-[var(--color-loss)]"}`}>
+              {totalPoints} / 100 pts
+            </span>
+          </div>
           <button onClick={addRule} className="btn btn-secondary text-[12px] px-3 py-1.5"><Plus className="w-3.5 h-3.5 mr-1" />Add Rule</button>
         </div>
         <div className="overflow-x-auto">
@@ -99,7 +126,7 @@ export default function ScoreEngineSettings() {
               <tr>
                 <th>Indicator</th>
                 <th>Operator</th>
-                <th>Value</th>
+                <th>Value / Range</th>
                 <th>Points</th>
                 <th className="w-10"></th>
               </tr>
@@ -107,25 +134,101 @@ export default function ScoreEngineSettings() {
             <tbody>
               {rules.map((rule) => (
                 <tr key={rule.id}>
+                  {/* Indicator */}
                   <td>
-                    <select className="input h-8 text-[13px] w-36" value={rule.indicator} onChange={(e) => updateRule(rule.id, "indicator", e.target.value)}>
-                      {["rsi", "adx", "ema_trend", "taker_ratio", "adx_acceleration", "volume_spike", "macd_signal"].map((i) => (
+                    <select
+                      className="input h-8 text-[13px] w-36"
+                      value={rule.indicator}
+                      onChange={(e) => {
+                        const ind = e.target.value;
+                        // Auto-switch to "between" for range indicators
+                        const op = RANGE_INDICATORS.has(ind) && rule.operator === "between" ? "between"
+                          : RANGE_INDICATORS.has(ind) && !["<=",">=","<",">","=","between"].includes(rule.operator) ? "between"
+                          : rule.operator;
+                        updateRule(rule.id, "indicator", ind);
+                        if (op !== rule.operator) updateRule(rule.id, "operator", op);
+                      }}
+                    >
+                      {INDICATORS.map((i) => (
                         <option key={i} value={i}>{i}</option>
                       ))}
                     </select>
                   </td>
+
+                  {/* Operator */}
                   <td>
-                    <select className="input h-8 text-[13px] w-36" value={rule.operator} onChange={(e) => updateRule(rule.id, "operator", e.target.value)}>
-                      {["<=", ">=", "<", ">", "=", "ema9>ema50>ema200", "ema9>ema50", "ema50>ema200", ">prev+", ">prev"].map((o) => (
+                    <select
+                      className="input h-8 text-[13px] w-40"
+                      value={rule.operator}
+                      onChange={(e) => updateRule(rule.id, "operator", e.target.value)}
+                    >
+                      {OPERATORS.map((o) => (
                         <option key={o} value={o}>{o}</option>
                       ))}
                     </select>
                   </td>
-                  <td><input type="number" className="input numeric h-8 w-20 text-[13px]" value={rule.value ?? ""} onChange={(e) => updateRule(rule.id, "value", parseFloat(e.target.value) || null)} /></td>
-                  <td><input type="number" className="input numeric h-8 w-16 text-[13px]" value={rule.points} onChange={(e) => updateRule(rule.id, "points", parseInt(e.target.value) || 0)} /></td>
-                  <td><button onClick={() => removeRule(rule.id)} className="btn-icon w-7 h-7 flex items-center justify-center hover:text-[var(--color-loss)]"><Trash2 className="w-3.5 h-3.5" /></button></td>
+
+                  {/* Value / Range */}
+                  <td>
+                    {rule.operator === "between" ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          placeholder="Min"
+                          className="input numeric h-8 w-16 text-[13px]"
+                          value={rule.min ?? ""}
+                          onChange={(e) => updateRule(rule.id, "min", parseNum(e.target.value))}
+                          data-testid={`rule-min-${rule.id}`}
+                        />
+                        <span className="text-[var(--text-secondary)] text-[11px]">–</span>
+                        <input
+                          type="number"
+                          placeholder="Max"
+                          className="input numeric h-8 w-16 text-[13px]"
+                          value={rule.max ?? ""}
+                          onChange={(e) => updateRule(rule.id, "max", parseNum(e.target.value))}
+                          data-testid={`rule-max-${rule.id}`}
+                        />
+                      </div>
+                    ) : (
+                      <input
+                        type="number"
+                        className="input numeric h-8 w-20 text-[13px]"
+                        value={rule.value ?? ""}
+                        onChange={(e) => updateRule(rule.id, "value", parseNum(e.target.value))}
+                        data-testid={`rule-value-${rule.id}`}
+                      />
+                    )}
+                  </td>
+
+                  {/* Points */}
+                  <td>
+                    <input
+                      type="number"
+                      className="input numeric h-8 w-16 text-[13px]"
+                      value={rule.points ?? ""}
+                      onChange={(e) => updateRule(rule.id, "points", parseNum(e.target.value, true) ?? 0)}
+                      data-testid={`rule-points-${rule.id}`}
+                    />
+                  </td>
+
+                  <td>
+                    <button
+                      onClick={() => removeRule(rule.id)}
+                      className="btn-icon w-7 h-7 flex items-center justify-center hover:text-[var(--color-loss)]"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </td>
                 </tr>
               ))}
+              {rules.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="text-center text-[var(--text-secondary)] text-[13px] py-6">
+                    No scoring rules. Click "Add Rule" to create one.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -138,23 +241,23 @@ export default function ScoreEngineSettings() {
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <div className="space-y-1">
               <label className="label">Strong Buy ≥</label>
-              <input type="number" className="input numeric h-9" value={thresholds.strong_buy} onChange={(e) => setThresholds({ ...thresholds, strong_buy: parseInt(e.target.value) })} />
+              <input type="number" className="input numeric h-9" value={thresholds.strong_buy} onChange={(e) => setThresholds({ ...thresholds, strong_buy: parseInt(e.target.value) || 0 })} />
             </div>
             <div className="space-y-1">
               <label className="label">Buy ≥</label>
-              <input type="number" className="input numeric h-9" value={thresholds.buy} onChange={(e) => setThresholds({ ...thresholds, buy: parseInt(e.target.value) })} />
+              <input type="number" className="input numeric h-9" value={thresholds.buy} onChange={(e) => setThresholds({ ...thresholds, buy: parseInt(e.target.value) || 0 })} />
             </div>
             <div className="space-y-1">
               <label className="label">Neutral ≥</label>
-              <input type="number" className="input numeric h-9" value={thresholds.neutral} onChange={(e) => setThresholds({ ...thresholds, neutral: parseInt(e.target.value) })} />
+              <input type="number" className="input numeric h-9" value={thresholds.neutral} onChange={(e) => setThresholds({ ...thresholds, neutral: parseInt(e.target.value) || 0 })} />
             </div>
             <div className="space-y-1">
               <label className="label">Top N Assets</label>
-              <input type="number" className="input numeric h-9" value={topN} onChange={(e) => setTopN(parseInt(e.target.value))} />
+              <input type="number" className="input numeric h-9" value={topN} onChange={(e) => setTopN(parseInt(e.target.value) || 0)} />
             </div>
             <div className="space-y-1">
               <label className="label">Min Score</label>
-              <input type="number" className="input numeric h-9" value={minScore} onChange={(e) => setMinScore(parseInt(e.target.value))} />
+              <input type="number" className="input numeric h-9" value={minScore} onChange={(e) => setMinScore(parseInt(e.target.value) || 0)} />
             </div>
           </div>
         </div>

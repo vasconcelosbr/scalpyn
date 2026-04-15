@@ -27,11 +27,26 @@ async def _score_async():
 
     logger.info("Starting Alpha Score computation...")
 
-    score_config = DEFAULT_SCORE
-    engine = ScoreEngine(score_config)
-    scored = 0
-
     async with AsyncSessionLocal() as db:
+        # Load score config from the first user who has it configured
+        score_config = DEFAULT_SCORE
+        try:
+            from ..services.config_service import config_service
+            from ..models.pipeline_watchlist import PipelineWatchlist
+            from sqlalchemy import select as sa_select
+            user_row = (await db.execute(
+                text("SELECT DISTINCT user_id FROM pipeline_watchlists LIMIT 1")
+            )).fetchone()
+            if user_row:
+                cfg = await config_service.get_config(db, "score", user_row.user_id)
+                if cfg and cfg.get("scoring_rules"):
+                    score_config = cfg
+        except Exception as _e:
+            logger.debug("compute_scores: could not load user score config: %s", _e)
+
+        engine = ScoreEngine(score_config)
+        scored = 0
+
         # Get latest indicators for all symbols
         result = await db.execute(text("""
             SELECT DISTINCT ON (symbol) symbol, indicators_json, time
