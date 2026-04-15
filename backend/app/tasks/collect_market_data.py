@@ -165,7 +165,7 @@ async def _collect_5m_async():
 
     collected = 0
     async with AsyncSessionLocal() as db:
-        for symbol in symbols[:200]:  # raised cap to cover pool coins
+        for symbol in symbols[:500]:  # cap raised to cover large pools
             try:
                 df = await market_data_service.fetch_ohlcv(symbol, "5m", limit=100)
                 if df is None or df.empty:

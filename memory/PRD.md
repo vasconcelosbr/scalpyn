@@ -1,78 +1,45 @@
-# Scalpyn - PRD (Product Requirements Document)
+# Scalpyn - PRD
 
-## Original Problem Statement
-- Frontend Vercel: scalpyn.vercel.app
-- Backend: https://scalpyn-330575088921.us-central1.run.app
-- Initial Issue: "Failed: Not Found" ao criar pools
-- Feature Request: Profile Engine implementation
+## Problem Statement
+`https://scalpyn.vercel.app/watchlist` – Na página watchlist (Pipeline view), a lista de cripto ativos filtrados pelo profile mostra indicadores técnicos (RSI, ADX, BB Width, MACD Hist, EMA 9, EMA 50, EMA 200, EMA Alignment) para apenas alguns ativos. A maioria exibe "–" em todas as colunas de indicadores.
 
 ## Architecture
-- **Frontend**: Next.js 15 (Vercel)
-- **Backend**: FastAPI (Google Cloud Run)
-- **Database**: PostgreSQL/TimescaleDB
+- **Frontend**: Next.js → Vercel (auto-deploy via GitHub main branch)
+- **Backend**: FastAPI + Celery + TimescaleDB/PostgreSQL → Cloud Run
+- **Exchange**: Gate.io (OHLCV via public API)
+- **Task Queue**: Celery + Redis (beat scheduler: tasks a cada 5 min)
 
-## User Personas
-1. **Quant Trader**: Needs dynamic strategy configuration
-2. **Platform Admin**: Manages system configurations
+## Core Data Flow
+1. `collect_5m` Celery task (5 min) → coleta OHLCV 5m de até 500 símbolos (universe top-100 + todos pool coins)
+2. `compute_5m` Celery task (encadeado) → calcula indicadores técnicos para símbolos com OHLCV recente (últimas 2h)
+3. `pipeline_scan` → filtra ativos pelo profile em 3 níveis (L1/L2/L3)
+4. `GET /api/watchlists/{id}/assets` → retorna ativos com indicadores da tabela `indicators`
 
-## Core Requirements (Static)
-- Trading platform for crypto
-- Strategy Pools management
-- Dynamic Profile Engine for strategy definition
-- Analytics and reports
-- Exchange integrations
+## Root Cause Identified
+- Tabela `indicators` vazia ou sem dados para a maioria dos símbolos
+- Causas possíveis: tasks Celery recém-iniciadas, rate-limit/timeout na Gate.io, symbols novos no pool sem histórico
 
-## What's Been Implemented (March 2026)
+## Fixes Implemented (Feb 2026)
 
-### Bug Fix - Pools Creation Error (Session 1)
-- Fixed trailing slash causing 308 redirects
-- Updated proxy to add trailing slash for collection routes
-- Added `overrides` column migration
+### 1. On-demand indicator computation (`backend/app/api/watchlists.py`)
+- Função `_compute_indicators_on_demand()` adicionada
+- Quando `GET /api/watchlists/{id}/assets` detecta símbolos sem indicadores na DB:
+  - Busca OHLCV 1h (200 candles) diretamente da Gate.io via `market_data_service.fetch_ohlcv`
+  - Calcula indicadores usando `FeatureEngine`
+  - Cacheia na tabela `indicators` com timeframe='1h'
+  - Retorna indicadores calculados na mesma request
+- Execução paralela com `asyncio.gather` + `Semaphore(8)` para limitar carga na API
+- Cap de 40 símbolos por request para manter tempo de resposta aceitável (~3-5s first load)
 
-### Profile Engine Implementation (Session 2)
-**Backend:**
-- Profile model (PostgreSQL JSONB)
-- WatchlistProfile junction table
-- RuleEngine for condition evaluation
-- ProfileEngine integrating Score/Signal engines
-- Full CRUD API + testing endpoints
-
-**Frontend:**
-- ProfilesPage with grid view
-- ProfileBuilder with tabbed interface
-- ConditionBuilder for dynamic rules
-- WeightSliders for Alpha Score weights
+### 2. Expand collect_5m universe (`backend/app/tasks/collect_market_data.py`)
+- Cap aumentado de 200 → 500 símbolos para cobrir pools com muitos ativos
 
 ## Prioritized Backlog
-
-### P0 (Critical)
-- [x] Fix pools creation error
-- [x] Implement Profile Engine backend
-- [x] Implement Profile Builder UI
-- [x] Add Market Type selector (Spot, Futures, TradFi) to pools
-- [x] Add Strategy Profile selector to pools
-- [x] Add Alpha Score Weights toggle to Profile Builder
-
-### P1 (High)
-- [x] Integrate profile filtering in Watchlist view (L1/L2/L3 tabs)
-- [x] Add profile assignment to pools
-- [ ] Implement backtesting for profiles
-- [ ] Implement "Test Profile" endpoint (simulate without saving)
-
-### P2 (Medium)
-- [ ] Profile import/export
-- [ ] Profile performance analytics
-- [ ] Automated profile suggestions
-- [ ] Redis caching for L2/L3 endpoints
-- [ ] Add vercel.json for trailing slash configuration
+- P0: On-demand indicators (DONE)
+- P1: Monitoring/alertas quando tasks Celery falham silenciosamente
+- P2: Cache TTL para on-demand indicators (re-compute se > 30min antigo)
+- P3: Indicadores 5m opcionais por symbol na watchlist view
 
 ## Next Tasks
-1. Deploy changes to production (push to GitHub)
-2. Test pool creation with Market Type and Profile selectors
-3. Test Alpha Score Weights toggle in Profile Builder
-4. Verify L1/L2/L3 profile assignment in Watchlist
-
-## Technical Decisions
-- JSONB for profile config (flexibility)
-- Generic RuleEngine (no hardcoded indicators)
-- Backward compatible (no profile = default behavior)
+- Validar que indicadores aparecem para todos os símbolos em produção após deploy
+- Monitorar logs de "[Pipeline] On-demand indicators computed" em Cloud Run

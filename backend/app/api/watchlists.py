@@ -253,6 +253,84 @@ async def _fetch_indicators_map(db: AsyncSession, symbols: List[str]) -> Dict[st
         return {}
 
 
+async def _compute_indicators_on_demand(
+    db: AsyncSession,
+    symbols: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Fetch OHLCV from Gate.io and compute technical indicators on-demand
+    for symbols that have no stored indicators in the DB.
+    Results are cached in the indicators table for subsequent requests.
+    """
+    from ..services.market_data_service import market_data_service
+    from ..services.feature_engine import FeatureEngine
+    from ..services.seed_service import DEFAULT_INDICATORS
+    import asyncio
+    import json
+
+    if not symbols:
+        return {}
+
+    engine = FeatureEngine(DEFAULT_INDICATORS)
+    result: Dict[str, Dict[str, Any]] = {}
+
+    # Semaphore to avoid overwhelming Gate.io public API
+    sem = asyncio.Semaphore(8)
+
+    async def _fetch_and_compute(symbol: str):
+        async with sem:
+            try:
+                df = await market_data_service.fetch_ohlcv(symbol, "1h", limit=200)
+                if df is None or len(df) < 14:
+                    return symbol, {}
+                indicators = engine.calculate(df)
+                return symbol, indicators
+            except Exception as exc:
+                logger.debug("[Pipeline] On-demand compute failed for %s: %s", symbol, exc)
+                return symbol, {}
+
+    # Cap at 40 to keep response time reasonable (~2-3s max with parallel fetches)
+    compute_syms = symbols[:40]
+    tasks = [_fetch_and_compute(s) for s in compute_syms]
+    computed = await asyncio.gather(*tasks)
+
+    now = datetime.now(timezone.utc)
+    cached_count = 0
+    for symbol, indicators in computed:
+        if not indicators:
+            continue
+        result[symbol] = indicators
+        try:
+            await db.execute(
+                text("""
+                    INSERT INTO indicators (time, symbol, timeframe, indicators_json)
+                    VALUES (:time, :symbol, :timeframe, :indicators)
+                """),
+                {
+                    "time":       now,
+                    "symbol":     symbol,
+                    "timeframe":  "1h",
+                    "indicators": json.dumps(indicators),
+                },
+            )
+            cached_count += 1
+        except Exception:
+            pass
+
+    if cached_count:
+        try:
+            await db.commit()
+            logger.info(
+                "[Pipeline] On-demand indicators computed and cached for %d/%d symbols",
+                cached_count, len(compute_syms),
+            )
+        except Exception as exc:
+            logger.warning("[Pipeline] Failed to cache on-demand indicators: %s", exc)
+            await db.rollback()
+
+    return result
+
+
 # ── Serializers ────────────────────────────────────────────────────────────────
 
 def _wl_to_dict(wl: PipelineWatchlist) -> Dict[str, Any]:
@@ -751,6 +829,14 @@ async def get_watchlist_assets(
     # ── Fetch live indicator values for all asset symbols ─────────────────────
     symbols = [a.symbol for a in assets]
     ind_map = await _fetch_indicators_map(db, symbols) if symbols else {}
+
+    # On-demand computation: if some symbols have no indicators in DB, fetch
+    # OHLCV from Gate.io and compute them now (results are also cached to DB).
+    if symbols:
+        missing = [s for s in symbols if not ind_map.get(s)]
+        if missing:
+            on_demand = await _compute_indicators_on_demand(db, missing)
+            ind_map.update(on_demand)
 
     # Fresh meta (some values may be missing from pipeline_watchlist_assets)
     meta_map: Dict[str, Dict[str, Any]] = {}
