@@ -34,7 +34,35 @@
 ### 2. Expand collect_5m universe (`backend/app/tasks/collect_market_data.py`)
 - Cap aumentado de 200 → 500 símbolos para cobrir pools com muitos ativos
 
-## Prioritized Backlog
+## Bug Fix #2: Market Cap filter não exclui ativos com market_cap baixo (Feb 2026)
+
+### Problema
+A watchlist POOL associada ao Profile Pool (com filtro Market Cap >= 5,000,000)
+exibia ativos com market cap muito abaixo do limite (ex: $1.5M, $666K, $23K).
+
+### Causa Raiz
+**Dupla falha:**
+
+1. **`pipeline_scan.py` `_fetch_market_data()`**: `market_cap` e `volume_24h` eram
+   definidos como `None` quando NULL no banco (em vez de `0.0`). Com `None`, o
+   `ProfileEngine._apply_filters` usava avaliação "lenient" e **saltava** a condição
+   em vez de falhar → asset passava mesmo sem market_cap conhecido.
+
+2. **`profile_engine.py` `_apply_filters()`**: Avaliação lenient aplicada indiscriminadamente
+   a TODOS os campos, incluindo campos de mercado (market_cap, volume_24h) que DEVEM
+   ser estritamente avaliados.
+
+### Fixes
+- **`backend/app/tasks/pipeline_scan.py`**: `market_cap` e `volume_24h` agora defaultam
+  para `0.0` quando NULL → filtro `>= 5M` avalia `0 >= 5M = False` → asset excluído
+- **`backend/app/services/profile_engine.py`**: `_apply_filters` agora aplica enforcement
+  ESTRITO para campos meta (`volume_24h`, `market_cap`, `price`, `change_24h`):
+  se o campo é None, a condição FALHA (não é saltada). Campos indicadores (RSI, ADX, etc.)
+  continuam lenient.
+- **`backend/app/tasks/pipeline_scan.py`**: Adicionado alias `atr_percent → atr_pct`
+  no asset dict para corrigir mismatch entre nome usado na GUI e nome armazenado
+  pelo feature engine.
+
 - P0: On-demand indicators (DONE)
 - P1: Monitoring/alertas quando tasks Celery falham silenciosamente
 - P2: Cache TTL para on-demand indicators (re-compute se > 30min antigo)

@@ -148,11 +148,13 @@ class ProfileEngine:
     def _apply_filters(self, assets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Apply L1 filter conditions to assets.
 
-        Lenient evaluation: conditions whose field is absent or None in the
-        asset dict are skipped rather than treated as failures.  This prevents
-        the entire watchlist from being emptied when, for example, the
-        indicators table has no RSI/ADX data yet but the profile requires
-        ``rsi >= 30``.
+        Strict enforcement for market metadata fields (market_cap, volume_24h,
+        price, change_24h): a None/missing value is treated as FAIL, not skip.
+        This prevents assets with unknown market cap or volume from slipping
+        through a "market_cap >= 5M" filter.
+
+        Lenient evaluation is preserved for technical indicator fields (RSI, ADX,
+        etc.) that may not be computed yet — those are skipped when absent.
         """
         filter_conditions = self.filters_config.get("conditions", [])
         filter_logic = self.filters_config.get("logic", "AND")
@@ -160,12 +162,20 @@ class ProfileEngine:
         if not filter_conditions:
             return assets
 
+        # Market-data fields must always be evaluated (None → FAIL, not skip).
+        # Indicator fields remain lenient (None → skip condition).
+        _STRICT_META = frozenset({
+            "volume_24h", "market_cap", "price",
+            "change_24h", "change_24h_pct",
+        })
+
         result = []
         for asset in assets:
             applicable = [
                 c for c in filter_conditions
                 if "group" in c
-                or asset.get(c.get("field")) is not None
+                or c.get("field") in _STRICT_META          # always evaluate meta fields
+                or asset.get(c.get("field")) is not None   # skip only missing indicators
             ]
             if not applicable:
                 result.append(asset)

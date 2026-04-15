@@ -153,12 +153,19 @@ async def _fetch_market_data(db, symbols: list) -> list:
             "name":      row.name or sym,
             "price":     float(row.price)            if row.price            else 0.0,
             "change_24h": float(row.price_change_24h) if row.price_change_24h else 0.0,
-            "market_cap": float(row.market_cap)       if row.market_cap is not None else None,
-            "volume_24h": float(row.volume_24h)       if row.volume_24h is not None else None,
+            # Default NULL meta-fields to 0.0 so filters like "market_cap >= 5M" correctly
+            # FAIL (instead of being skipped) when data isn't available yet.
+            "market_cap": float(row.market_cap)       if row.market_cap is not None else 0.0,
+            "volume_24h": float(row.volume_24h)       if row.volume_24h is not None else 0.0,
             "indicators": indicators,
             # Flatten numeric indicators for ProfileEngine filter evaluation
             **{k: v for k, v in indicators.items() if isinstance(v, (int, float, bool, str))},
         }
+
+        # Add field-name aliases so profile conditions written with the GUI's
+        # field names ("atr_percent") match the feature-engine output ("atr_pct").
+        if "atr_pct" in asset and "atr_percent" not in asset:
+            asset["atr_percent"] = asset["atr_pct"]
 
         if score_row:
             asset["score"]                  = float(score_row.score)                  if score_row.score                  else 0.0
