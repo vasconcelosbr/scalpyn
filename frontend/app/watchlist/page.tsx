@@ -13,7 +13,26 @@ import {
   ChevronRight,
   Settings,
   Layers,
+  Zap,
+  BookOpen,
+  ArrowLeftRight,
 } from 'lucide-react';
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface Profile {
+  id: string;
+  name: string;
+  description?: string;
+  profile_role?: string | null;
+  config?: {
+    filters?:        { conditions?: any[] };
+    signals?:        { conditions?: any[] };
+    entry_triggers?: { conditions?: any[] };
+    scoring?:        { weights?: Record<string, number> };
+    block_rules?:    { blocks?: any[] };
+  };
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -24,6 +43,7 @@ interface PipelineWatchlist {
   source_pool_id: string | null;
   source_watchlist_id: string | null;
   profile_id: string | null;
+  profile_name?: string | null;
   auto_refresh: boolean;
   filters_json: Record<string, any>;
   created_at: string | null;
@@ -142,21 +162,97 @@ interface ModalProps {
   wl: Partial<PipelineWatchlist> | null;
   pools: Pool[];
   watchlists: PipelineWatchlist[];
+  profiles: Profile[];
   onClose: () => void;
   onSave: (data: Partial<PipelineWatchlist>) => Promise<void>;
 }
 
-function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) {
+const ROLE_LABEL: Record<string, string> = {
+  universe_filter: 'Universe Filter',
+  primary_filter: 'Primary Filter',
+  score_engine: 'Score Engine',
+  acquisition_queue: 'Acquisition Queue',
+};
+
+function ProfilePreview({ profile }: { profile: Profile }) {
+  const filterCount  = profile.config?.filters?.conditions?.length ?? 0;
+  const signalCount  = profile.config?.signals?.conditions?.length ?? 0;
+  const triggerCount = profile.config?.entry_triggers?.conditions?.length ?? 0;
+  const blockCount   = profile.config?.block_rules?.blocks?.filter((b: any) => b.enabled)?.length ?? 0;
+  const weights      = profile.config?.scoring?.weights ?? {};
+
+  return (
+    <div className="mt-2 p-3 rounded-lg bg-[#060A12] border border-[#1E2433] space-y-2.5">
+      <div className="flex items-center gap-1.5 text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider">
+        <BookOpen size={10} />
+        Profile Preview
+      </div>
+
+      {/* Rule counts */}
+      <div className="flex flex-wrap gap-1.5">
+        {filterCount > 0 && (
+          <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#0D1F36] text-[#60A5FA] border border-[#1D4ED8]/30">
+            {filterCount} filter{filterCount !== 1 ? 's' : ''}
+          </span>
+        )}
+        {signalCount > 0 && (
+          <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#0D2B1F] text-[#34D399] border border-[#059669]/30">
+            {signalCount} signal{signalCount !== 1 ? 's' : ''}
+          </span>
+        )}
+        {triggerCount > 0 && (
+          <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#2D1B00] text-[#FBBF24] border border-[#D97706]/30">
+            {triggerCount} trigger{triggerCount !== 1 ? 's' : ''}
+          </span>
+        )}
+        {blockCount > 0 && (
+          <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#2A0A0A] text-[#F87171] border border-[#991B1B]/30">
+            {blockCount} block rule{blockCount !== 1 ? 's' : ''}
+          </span>
+        )}
+        {filterCount === 0 && signalCount === 0 && triggerCount === 0 && (
+          <span className="text-[10px] text-[#334155]">Sem regras configuradas ainda</span>
+        )}
+      </div>
+
+      {/* Scoring weights */}
+      {Object.keys(weights).length > 0 && (
+        <div className="space-y-1">
+          {Object.entries(weights).map(([cat, w]) => (
+            <div key={cat} className="flex items-center gap-2">
+              <span className="text-[10px] text-[#4B5563] w-24 capitalize">{cat.replace('_', ' ')}</span>
+              <div className="flex-1 h-1 bg-[#1A2035] rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-[#3B82F6] rounded-full"
+                  style={{ width: `${Math.min(100, Number(w))}%` }}
+                />
+              </div>
+              <span className="text-[10px] text-[#64748B] font-mono w-6 text-right">{w}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {profile.description && (
+        <p className="text-[10px] text-[#4B5563] italic leading-relaxed">{profile.description}</p>
+      )}
+    </div>
+  );
+}
+
+function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: ModalProps) {
   const isNew = !wl?.id;
   const [name, setName] = useState(wl?.name ?? '');
   const [level, setLevel] = useState(wl?.level ?? 'custom');
   const [sourcePoolId, setSourcePoolId] = useState(wl?.source_pool_id ?? '');
   const [sourceWatchlistId, setSourceWatchlistId] = useState(wl?.source_watchlist_id ?? '');
+  const [profileId, setProfileId] = useState(wl?.profile_id ?? '');
   const [minScore, setMinScore] = useState(String(wl?.filters_json?.min_score ?? ''));
   const [requireSignal, setRequireSignal] = useState(Boolean(wl?.filters_json?.require_signal));
   const [autoRefresh, setAutoRefresh] = useState(wl?.auto_refresh ?? true);
-
   const [saving, setSaving] = useState(false);
+
+  const selectedProfile = profiles.find((p) => p.id === profileId) ?? null;
 
   function handleLevelChange(newLevel: string) {
     setLevel(newLevel);
@@ -180,6 +276,7 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
       level,
       source_pool_id: sourcePoolId || null,
       source_watchlist_id: sourceWatchlistId || null,
+      profile_id: profileId || null,
       auto_refresh: autoRefresh,
       filters_json: filters,
     });
@@ -188,8 +285,8 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-[#0F1117] border border-[#1E2433] rounded-xl w-full max-w-md mx-4 shadow-2xl">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[#1E2433]">
+      <div className="bg-[#0F1117] border border-[#1E2433] rounded-xl w-full max-w-lg mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[#1E2433] sticky top-0 bg-[#0F1117] z-10">
           <h2 className="text-base font-semibold text-[#E2E8F0]">
             {isNew ? 'New Pipeline Watchlist' : 'Edit Watchlist'}
           </h2>
@@ -199,6 +296,7 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {/* Name */}
           <div>
             <label className="block text-xs text-[#64748B] mb-1">Name</label>
             <input
@@ -207,15 +305,18 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. L2 Ranking"
               required
+              data-testid="watchlist-name-input"
             />
           </div>
 
+          {/* Level */}
           <div>
             <label className="block text-xs text-[#64748B] mb-1">Level</label>
             <select
               className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
               value={level}
               onChange={(e) => handleLevelChange(e.target.value)}
+              data-testid="watchlist-level-select"
             >
               <option value="L1">L1 — All pool assets</option>
               <option value="L2">L2 — Score filtered</option>
@@ -224,12 +325,14 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
             </select>
           </div>
 
+          {/* Source Pool */}
           <div>
             <label className="block text-xs text-[#64748B] mb-1">Source Pool <span className="text-[#4B5563]">(para L1)</span></label>
             <select
               className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
               value={sourcePoolId}
               onChange={(e) => { setSourcePoolId(e.target.value); if (e.target.value) setSourceWatchlistId(''); }}
+              data-testid="watchlist-pool-select"
             >
               <option value="">— None —</option>
               {pools.map((p) => (
@@ -238,6 +341,7 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
             </select>
           </div>
 
+          {/* Source Watchlist */}
           <div>
             <label className="block text-xs text-[#64748B] mb-1">Source Watchlist <span className="text-[#4B5563]">(para L2 / L3)</span></label>
             <select
@@ -245,6 +349,7 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
               value={sourceWatchlistId}
               onChange={(e) => { setSourceWatchlistId(e.target.value); if (e.target.value) setSourcePoolId(''); }}
               disabled={!!sourcePoolId}
+              data-testid="watchlist-source-select"
             >
               <option value="">— None —</option>
               {otherWatchlists.map((w) => (
@@ -256,6 +361,42 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
             )}
           </div>
 
+          {/* ── Profile — central source of truth ── */}
+          <div className="border-t border-[#1E2433] pt-4">
+            <div className="flex items-center gap-2 mb-1">
+              <Zap size={12} className="text-[#FBBF24]" />
+              <label className="text-xs font-semibold text-[#94A3B8]">
+                Strategy Profile <span className="text-[#F87171] ml-0.5">*</span>
+              </label>
+            </div>
+            <p className="text-[10px] text-[#4B5563] mb-2">
+              O Profile é a fonte única de regras — filtros, scoring e sinais são aplicados automaticamente.
+            </p>
+            <select
+              className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#FBBF24]"
+              value={profileId}
+              onChange={(e) => setProfileId(e.target.value)}
+              data-testid="watchlist-profile-select"
+            >
+              <option value="">— Selecione um Profile —</option>
+              {profiles.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}{p.profile_role ? ` · ${ROLE_LABEL[p.profile_role] ?? p.profile_role}` : ''}
+                </option>
+              ))}
+            </select>
+
+            {/* Profile preview */}
+            {selectedProfile && <ProfilePreview profile={selectedProfile} />}
+
+            {profiles.length === 0 && (
+              <p className="text-[11px] text-[#F87171] mt-1.5">
+                Nenhum profile encontrado. Crie um em /profiles antes de configurar a watchlist.
+              </p>
+            )}
+          </div>
+
+          {/* Min Alpha Score */}
           <div>
             <label className="block text-xs text-[#64748B] mb-1">Min Alpha Score (0–100)</label>
             <input
@@ -265,10 +406,12 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
               className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
               value={minScore}
               onChange={(e) => setMinScore(e.target.value)}
-              placeholder="Leave blank for no filter"
+              placeholder="Deixe em branco para sem filtro"
+              data-testid="watchlist-min-score"
             />
           </div>
 
+          {/* Toggles */}
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
@@ -301,6 +444,7 @@ function WatchlistModal({ wl, pools, watchlists, onClose, onSave }: ModalProps) 
               type="submit"
               disabled={saving || !name.trim()}
               className="flex-1 px-4 py-2 rounded-lg bg-[#3B82F6] text-sm font-medium text-white hover:bg-[#2563EB] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              data-testid="watchlist-save-btn"
             >
               {saving ? 'Saving…' : isNew ? 'Create' : 'Save'}
             </button>
@@ -317,13 +461,14 @@ interface WatchlistRowProps {
   wl: PipelineWatchlist;
   pools: Pool[];
   allWatchlists: PipelineWatchlist[];
+  profiles: Profile[];
   onEdit: (wl: PipelineWatchlist) => void;
   onDelete: (id: string) => void;
   onRefreshed: () => void;
-  liveDirections?: Record<string, string>;  // symbol → "up" | "down" (transient, 3s)
+  liveDirections?: Record<string, string>;
 }
 
-function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed, liveDirections = {} }: WatchlistRowProps) {
+function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, onRefreshed, liveDirections = {} }: WatchlistRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [assets, setAssets] = useState<PipelineAsset[]>([]);
   const [loadingAssets, setLoadingAssets] = useState(false);
@@ -335,6 +480,10 @@ function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed,
     : wl.source_watchlist_id
     ? allWatchlists.find((w) => w.id === wl.source_watchlist_id)?.name ?? 'Watchlist'
     : '—';
+
+  const profileName = wl.profile_id
+    ? (profiles.find((p) => p.id === wl.profile_id)?.name ?? wl.profile_name ?? 'Profile')
+    : null;
 
   const loadAssets = useCallback(async (triggerParentRefresh = false) => {
     setLoadingAssets(true);
@@ -396,6 +545,29 @@ function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed,
         <LevelBadge level={wl.level} />
         <span className="text-sm font-medium text-[#E2E8F0] flex-1">{wl.name}</span>
         <span className="text-xs text-[#4B5563]">from {sourceName}</span>
+        {/* Profile badge */}
+        {profileName && (
+          <span
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-[#1A1A2E] text-[#818CF8] border border-[#4338CA]/30 cursor-pointer hover:border-[#6366F1]/50 transition-colors"
+            title="Clique em Edit para trocar o profile"
+            onClick={(e) => { e.stopPropagation(); onEdit(wl); }}
+            data-testid={`profile-badge-${wl.id}`}
+          >
+            <Zap size={9} />
+            {profileName}
+            <ArrowLeftRight size={9} className="text-[#4B5563]" />
+          </span>
+        )}
+        {!profileName && (
+          <span
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-[#4B5563] border border-dashed border-[#1E2433] cursor-pointer hover:border-[#334155] hover:text-[#64748B] transition-colors"
+            onClick={(e) => { e.stopPropagation(); onEdit(wl); }}
+            title="Associar profile"
+          >
+            <Zap size={9} />
+            sem profile
+          </span>
+        )}
         {wl.filters_json?.min_score != null && (
           <span className="text-xs text-[#64748B] bg-[#1E2433] px-2 py-0.5 rounded">
             score ≥ {wl.filters_json.min_score}
@@ -459,6 +631,7 @@ function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed,
 function PipelineTab() {
   const [watchlists, setWatchlists] = useState<PipelineWatchlist[]>([]);
   const [pools, setPools] = useState<Pool[]>([]);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalWl, setModalWl] = useState<Partial<PipelineWatchlist> | null>(null);
   const [showModal, setShowModal] = useState(false);
@@ -499,12 +672,14 @@ function PipelineTab() {
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const [wlData, poolData] = await Promise.all([
+      const [wlData, poolData, profData] = await Promise.all([
         apiFetch<{ watchlists: PipelineWatchlist[] }>('/watchlists'),
         apiFetch<{ pools: Pool[] }>('/pools'),
+        apiFetch<{ profiles: Profile[] }>('/profiles'),
       ]);
       setWatchlists(wlData.watchlists);
       setPools(poolData.pools ?? []);
+      setProfiles(profData.profiles ?? []);
     } catch {
       // ignore
     } finally {
@@ -604,6 +779,7 @@ function PipelineTab() {
                       wl={wl}
                       pools={pools}
                       allWatchlists={watchlists}
+                      profiles={profiles}
                       onEdit={openEdit}
                       onDelete={handleDelete}
                       onRefreshed={loadSilent}
@@ -627,6 +803,7 @@ function PipelineTab() {
                     wl={wl}
                     pools={pools}
                     allWatchlists={watchlists}
+                    profiles={profiles}
                     onEdit={openEdit}
                     onDelete={handleDelete}
                     onRefreshed={loadSilent}
@@ -643,6 +820,7 @@ function PipelineTab() {
           wl={modalWl}
           pools={pools}
           watchlists={watchlists}
+          profiles={profiles}
           onClose={closeModal}
           onSave={handleSave}
         />

@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { ArrowLeft, Save, Play, Link, RefreshCw, ShieldOff, Zap, Plus, Trash2 } from "lucide-react";
-import { apiGet, apiPost, apiPut } from "@/lib/api";
+import { ArrowLeft, Save, Play, RefreshCw, ShieldOff, Zap, Plus, Trash2 } from "lucide-react";
+import { apiPost } from "@/lib/api";
 import { ConditionBuilder } from "./ConditionBuilder";
 import { WeightSliders } from "./WeightSliders";
 import PresetIAButton from "./PresetIAButton";
@@ -42,14 +42,6 @@ interface EntryTrigger {
   value: any;
   required: boolean;
   enabled: boolean;
-}
-
-interface PipelineWatchlist {
-  id: string;
-  name: string;
-  level: string;
-  profile_id: string | null;
-  source_pool_id: string | null;
 }
 
 const BLOCK_INDICATORS = [
@@ -95,33 +87,9 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   const [testResult, setTestResult]         = useState<any>(null);
   const [testing, setTesting]               = useState(false);
   const [saving, setSaving]                 = useState(false);
-  const [pipelineWatchlists, setPipelineWatchlists] = useState<PipelineWatchlist[]>([]);
-  const [selectedWatchlistId, setSelectedWatchlistId] = useState<string>("");
-  const [assignedWatchlistId, setAssignedWatchlistId] = useState<string>("");
-  const [assigning, setAssigning]           = useState(false);
   const [scoringEnabled, setScoringEnabled] = useState(
     profile?.config?.scoring?.enabled !== false
   );
-
-  useEffect(() => { loadPipelineWatchlists(); }, []);
-
-  useEffect(() => {
-    if (!profile?.id || pipelineWatchlists.length === 0) return;
-    const assigned = pipelineWatchlists.find(w => w.profile_id === profile.id);
-    if (assigned) {
-      setAssignedWatchlistId(assigned.id);
-      setSelectedWatchlistId(assigned.id);
-    }
-  }, [profile?.id, pipelineWatchlists]);
-
-  const loadPipelineWatchlists = async () => {
-    try {
-      const data = await apiGet("/watchlists");
-      setPipelineWatchlists(data.watchlists || []);
-    } catch (e) {
-      console.error("Failed to load pipeline watchlists:", e);
-    }
-  };
 
   const handleSave = async () => {
     if (!name.trim()) { alert("Profile name is required"); return; }
@@ -138,23 +106,6 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     };
     onSave(profileData);
     setSaving(false);
-  };
-
-  const handleAssignWatchlist = async () => {
-    if (!profile?.id) { alert("Salve o profile primeiro antes de associar uma watchlist."); return; }
-    if (!selectedWatchlistId) { alert("Selecione uma watchlist."); return; }
-    setAssigning(true);
-    try {
-      if (assignedWatchlistId && assignedWatchlistId !== selectedWatchlistId) {
-        await apiPut(`/watchlists/${assignedWatchlistId}`, { profile_id: null });
-      }
-      await apiPut(`/watchlists/${selectedWatchlistId}`, { profile_id: profile.id });
-      setAssignedWatchlistId(selectedWatchlistId);
-      await loadPipelineWatchlists();
-    } catch (e: any) {
-      alert(`Falha ao associar watchlist: ${e.message}`);
-    }
-    setAssigning(false);
   };
 
   const handleTest = async () => {
@@ -329,10 +280,6 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   const entryConditions: EntryTrigger[] = config.entry_triggers?.conditions || [];
   const entryLogic: string            = config.entry_triggers?.logic || "AND";
 
-  const selectedWatchlist  = pipelineWatchlists.find(w => w.id === selectedWatchlistId);
-  const assignedWatchlist  = pipelineWatchlists.find(w => w.id === assignedWatchlistId);
-  const isWatchlistChanged = selectedWatchlistId && selectedWatchlistId !== assignedWatchlistId;
-
   const TABS: { key: ActiveTab; label: string; count?: number; icon?: React.ReactNode }[] = [
     { key: "filters",       label: "Filters",       count: config.filters?.conditions?.length ?? 0 },
     { key: "scoring",       label: "Scoring" },
@@ -385,46 +332,6 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                 onChange={(e) => setName(e.target.value)}
                 data-testid="profile-name-input"
               />
-            </div>
-
-            <div className="space-y-2">
-              <label className="label">Pipeline Watchlist</label>
-              <div className="flex gap-2">
-                <select
-                  className="input flex-1"
-                  value={selectedWatchlistId}
-                  onChange={(e) => setSelectedWatchlistId(e.target.value)}
-                  data-testid="watchlist-select"
-                >
-                  <option value="">-- Selecione uma Pipeline Watchlist --</option>
-                  {pipelineWatchlists.map((wl) => (
-                    <option key={wl.id} value={wl.id}>
-                      [{wl.level.toUpperCase()}] {wl.name}
-                    </option>
-                  ))}
-                </select>
-                {profile?.id && selectedWatchlistId && (
-                  <button
-                    className="btn btn-secondary px-3"
-                    onClick={handleAssignWatchlist}
-                    disabled={assigning || !isWatchlistChanged}
-                    title="Associar este profile à watchlist selecionada"
-                  >
-                    {assigning ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Link className="w-4 h-4" />}
-                  </button>
-                )}
-              </div>
-              {assignedWatchlist && (
-                <p className="text-[11px] text-[var(--color-profit)]">
-                  ✓ Associado a: <strong>{assignedWatchlist.name}</strong>
-                  {profileRole && ` (${ROLE_TO_TYPE[profileRole] ?? "L1"})`}
-                </p>
-              )}
-              {!assignedWatchlistId && profile?.id && (
-                <p className="text-[11px] text-[var(--text-tertiary)]">
-                  Selecione uma watchlist e clique em 🔗 para associar.
-                </p>
-              )}
             </div>
           </div>
 
