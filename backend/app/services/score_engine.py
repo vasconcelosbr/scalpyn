@@ -16,6 +16,7 @@ _IND_LABELS: Dict[str, str] = {
     "obv": "OBV", "vwap_distance_pct": "VWAP%", "stoch_k": "Stoch%K",
     "stoch_d": "Stoch%D", "bb_width": "BB Width", "volume_24h": "Vol 24h",
     "zscore": "Z-Score", "psar_trend": "PSAR", "atr_pct": "ATR%", "atr": "ATR",
+    "ema9_distance_pct": "EMA9 Dist%",
 }
 
 # ── Category per indicator name ────────────────────────────────────────────────
@@ -31,6 +32,7 @@ _IND_CATEGORY: Dict[str, str] = {
     "rsi": "momentum", "macd": "momentum", "macd_signal": "momentum",
     "macd_histogram": "momentum", "stoch_k": "momentum",
     "stoch_d": "momentum", "zscore": "momentum", "vwap_distance_pct": "momentum",
+    "ema9_distance_pct": "momentum",
     "adx_acceleration": "signal", "volume_delta": "signal",
     "funding_rate": "signal", "ema9_gt_ema50": "signal",
     "ema50_gt_ema200": "signal", "ema_full_alignment": "signal",
@@ -86,7 +88,7 @@ class ScoreEngine:
     def __init__(self, score_config: Dict[str, Any]):
         self.config = score_config
         self.weights = score_config.get("weights", {
-            "liquidity": 25, "market_structure": 25, "momentum": 25, "signal": 25
+            "liquidity": 35, "market_structure": 25, "momentum": 25, "signal": 15
         })
         # Accept both "scoring_rules" (global config key) and "rules" (profile scoring key)
         self.rules = (

@@ -189,6 +189,7 @@ FIELD_MAP: Dict[str, str] = {
     "rsi":                 "rsi",
     "adx":                 "adx",
     "di_plus":             "di_plus",
+    "di_minus":            "di_minus",
     "macd_histogram":      "macd_histogram",
     "bb_width":            "bb_width",
     "zscore":              "zscore",
@@ -204,6 +205,10 @@ FIELD_MAP: Dict[str, str] = {
     "macd_signal":         "macd_signal",
     "stoch_k":             "stoch_k",
     "vwap":                "vwap",
+    "taker_ratio":         "taker_ratio",
+    "ema9_distance_pct":   "ema9_distance_pct",
+    "spread_pct":          "spread_pct",
+    "orderbook_depth_usdt": "orderbook_depth_usdt",
 }
 
 # Human-readable labels
@@ -215,6 +220,7 @@ FIELD_LABELS: Dict[str, str] = {
     "rsi":                 "RSI",
     "adx":                 "ADX",
     "di_plus":             "DI+",
+    "di_minus":            "DI-",
     "macd_histogram":      "MACD Hist",
     "bb_width":            "BB Width",
     "zscore":              "Z-Score",
@@ -230,6 +236,10 @@ FIELD_LABELS: Dict[str, str] = {
     "macd_signal":         "MACD Sig",
     "stoch_k":             "Stoch K",
     "vwap":                "VWAP",
+    "taker_ratio":         "Taker Ratio",
+    "ema9_distance_pct":   "EMA 9%",
+    "spread_pct":          "Spread%",
+    "orderbook_depth_usdt": "Depth",
 }
 
 
@@ -407,6 +417,12 @@ def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any
         "_meta:price_change_24h":  float(a.price_change_24h) if a.price_change_24h else mt.get("price_change_24h"),
         **{k: v for k, v in ind.items() if k in FIELD_MAP.values()},
     }
+    # Inject spread_pct and orderbook_depth_usdt from market_metadata if not already
+    # present from indicators (these come from the market_metadata table, not feature engine)
+    if "spread_pct" not in ind_out or ind_out.get("spread_pct") is None:
+        ind_out["spread_pct"] = mt.get("spread_pct")
+    if "orderbook_depth_usdt" not in ind_out or ind_out.get("orderbook_depth_usdt") is None:
+        ind_out["orderbook_depth_usdt"] = mt.get("orderbook_depth_usdt")
     try:
         e9   = float(ind_out.get("ema9")   or 0)
         e50  = float(ind_out.get("ema50")  or 0)
@@ -422,6 +438,38 @@ def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any
                 ind_out["ema_align_label"] = "mix"
     except (TypeError, ValueError):
         pass
+
+    # ── Anti-bad-entry blocking rules ──────────────────────────────────────────
+    block_reasons: List[str] = []
+    spread = ind_out.get("spread_pct")
+    depth = ind_out.get("orderbook_depth_usdt")
+    rsi = ind_out.get("rsi")
+    taker = ind_out.get("taker_ratio")
+    if spread is not None:
+        try:
+            if float(spread) > 1.5:
+                block_reasons.append("spread>1.5%")
+        except (TypeError, ValueError):
+            pass
+    if depth is not None:
+        try:
+            if float(depth) < 5000:
+                block_reasons.append("depth<5k")
+        except (TypeError, ValueError):
+            pass
+    if rsi is not None:
+        try:
+            if float(rsi) > 75:
+                block_reasons.append("rsi>75")
+        except (TypeError, ValueError):
+            pass
+    if taker is not None:
+        try:
+            if float(taker) < 0.4:
+                block_reasons.append("taker<0.4")
+        except (TypeError, ValueError):
+            pass
+
     return {
         "id":               str(a.id),
         "watchlist_id":     str(a.watchlist_id),
@@ -435,6 +483,8 @@ def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any
         "previous_level":   a.previous_level,
         "level_change_at":  a.level_change_at.isoformat() if a.level_change_at else None,
         "level_direction":  a.level_direction,
+        "blocked":          len(block_reasons) > 0,
+        "block_reasons":    block_reasons,
         "indicators": ind_out,
     }
 
@@ -1095,21 +1145,42 @@ async def get_watchlist_assets(
         try:
             meta_rows = (await db.execute(
                 text("""
-                    SELECT symbol, price_change_24h, volume_24h, market_cap
+                    SELECT symbol, price_change_24h, volume_24h, market_cap,
+                           spread_pct, orderbook_depth_usdt
                     FROM market_metadata WHERE symbol = ANY(:symbols)
                 """),
                 {"symbols": list(symbols)},
             )).fetchall()
             meta_map = {
                 r.symbol: {
-                    "price_change_24h": float(r.price_change_24h) if r.price_change_24h else None,
-                    "volume_24h":       float(r.volume_24h)       if r.volume_24h       else None,
-                    "market_cap":       float(r.market_cap)       if r.market_cap       else None,
+                    "price_change_24h":     float(r.price_change_24h)     if r.price_change_24h     else None,
+                    "volume_24h":           float(r.volume_24h)           if r.volume_24h           else None,
+                    "market_cap":           float(r.market_cap)           if r.market_cap           else None,
+                    "spread_pct":           float(r.spread_pct)           if r.spread_pct           else None,
+                    "orderbook_depth_usdt": float(r.orderbook_depth_usdt) if r.orderbook_depth_usdt else None,
                 }
                 for r in meta_rows
             }
         except Exception:
-            pass
+            # Fallback: spread_pct / orderbook_depth_usdt columns may not exist yet
+            try:
+                meta_rows = (await db.execute(
+                    text("""
+                        SELECT symbol, price_change_24h, volume_24h, market_cap
+                        FROM market_metadata WHERE symbol = ANY(:symbols)
+                    """),
+                    {"symbols": list(symbols)},
+                )).fetchall()
+                meta_map = {
+                    r.symbol: {
+                        "price_change_24h": float(r.price_change_24h) if r.price_change_24h else None,
+                        "volume_24h":       float(r.volume_24h)       if r.volume_24h       else None,
+                        "market_cap":       float(r.market_cap)       if r.market_cap       else None,
+                    }
+                    for r in meta_rows
+                }
+            except Exception:
+                pass
 
     enriched = [
         _asset_to_dict(

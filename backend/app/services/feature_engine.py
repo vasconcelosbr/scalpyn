@@ -69,6 +69,9 @@ class FeatureEngine:
             # Derived: volume spike (always useful)
             results.update(self._calc_volume_spike(df))
 
+            # Derived: taker buy ratio (proxy from candle direction)
+            results.update(self._calc_taker_ratio(df))
+
             # Derived: EMA trend alignment
             if "ema9" in results and "ema50" in results:
                 results["ema9_gt_ema50"] = results["ema9"] > results["ema50"]
@@ -84,6 +87,12 @@ class FeatureEngine:
                 results["atr_pct"] = round((results["atr"] / results["close"]) * 100, 4) if results["close"] > 0 else 0
 
             results["close"] = float(df["close"].iloc[-1])
+
+            # Derived: EMA 9 distance as percentage of current price
+            if "ema9" in results and results["close"] > 0 and results["ema9"] > 0:
+                results["ema9_distance_pct"] = round(
+                    (results["close"] - results["ema9"]) / results["ema9"] * 100, 4
+                )
 
         except Exception as e:
             logger.exception(f"Error calculating indicators: {e}")
@@ -294,3 +303,20 @@ class FeatureEngine:
             spike = df["volume"].iloc[-1] / val
             return {"volume_spike": round(float(spike), 2)}
         return {"volume_spike": 1.0}
+
+    def _calc_taker_ratio(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Approximate taker buy ratio from candle direction over last 20 periods.
+
+        Uses bullish candle volume / total volume as a proxy for buy pressure.
+        Returns value between 0.0 and 1.0 where > 0.5 indicates net buying.
+        """
+        lookback = min(20, len(df))
+        recent = df.tail(lookback)
+        if recent.empty or recent["volume"].sum() == 0:
+            return {"taker_ratio": 0.5}
+
+        bullish_mask = recent["close"] >= recent["open"]
+        buy_volume = recent.loc[bullish_mask, "volume"].sum()
+        total_volume = recent["volume"].sum()
+        ratio = buy_volume / total_volume if total_volume > 0 else 0.5
+        return {"taker_ratio": round(float(ratio), 4)}
