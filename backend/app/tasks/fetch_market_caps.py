@@ -90,7 +90,7 @@ async def _fetch_from_cmc(cmc_key: str) -> dict[str, float]:
 
 async def _fetch_market_caps_async() -> dict:
     from sqlalchemy import select, text
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..models.ai_provider_key import AIProviderKey
     from ..services.ai_keys_service import decrypt_value
 

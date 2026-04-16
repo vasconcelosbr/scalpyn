@@ -20,7 +20,7 @@ def _run_async(coro):
 
 async def _collect_all_async():
     from ..services.market_data_service import market_data_service
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.config_service import config_service
     from sqlalchemy import text
 
@@ -142,7 +142,7 @@ async def _collect_5m_async():
     """
     from ..services.market_data_service import market_data_service
     from ..utils.symbol_filters import filter_real_assets
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from sqlalchemy import text
 
     logger.info("Starting 5m market data collection...")

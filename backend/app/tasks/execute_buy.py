@@ -37,7 +37,7 @@ def _run_async(coro):
 # ─── async core ──────────────────────────────────────────────────────────────
 
 async def _execute_buy_cycle_async() -> dict:
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..models.pool import Pool
     from ..models.config_profile import ConfigProfile
     from ..models.exchange_connection import ExchangeConnection
@@ -192,8 +192,8 @@ async def _execute_buy_cycle_async() -> dict:
                         select(Profile).where(Profile.id == pool.profile_id)
                     )
                     prof = prof_res.scalars().first()
-                    if prof and prof.config_json:
-                        pf = prof.config_json.get("filters", {})
+                    if prof and prof.config:
+                        pf = prof.config.get("filters", {})
                         profile_filter_conditions = pf.get("conditions", [])
                         profile_filter_logic = pf.get("logic", "AND")
 

@@ -273,7 +273,7 @@ def _apply_level_filter(assets: list, profile_config: Optional[dict], level: str
     return scored, filtered
 
 
-def _evaluate_l3_signals(assets: list, profile_config: Optional[dict]) -> list:
+def _evaluate_l3_signals(assets: list, profile_config: Optional[dict], score_config: Optional[dict] = None) -> list:
     """
     Apply L3 signal conditions and return triggered assets.
 
@@ -281,10 +281,18 @@ def _evaluate_l3_signals(assets: list, profile_config: Optional[dict]) -> list:
     mode: return all assets that passed the profile filters, sorted by score.
     This prevents L3 from being permanently empty just because no signal conditions
     have been set up yet.
+
+    score_config: when provided, overrides the ProfileEngine's internal score engine
+    with the user's global /settings/score configuration.
     """
     from ..services.profile_engine import ProfileEngine
+    from ..services.score_engine import ScoreEngine
 
     engine = ProfileEngine(profile_config)
+
+    # Override with global score config so scoring respects /settings/score rules
+    if score_config:
+        engine.score_engine = ScoreEngine(score_config)
 
     # Check if the profile has any signal conditions at all.
     # Signal conditions may be stored under 'entry_triggers' OR 'signals'.
@@ -464,7 +472,7 @@ async def _broadcast_pipeline_update(
 # ─── core async pipeline ──────────────────────────────────────────────────────
 
 async def _run_pipeline_scan():
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..models.pipeline_watchlist import PipelineWatchlist
     from ..models.pool import Pool, PoolCoin
     from ..models.profile import Profile
@@ -573,7 +581,7 @@ async def _run_pipeline_scan():
                     min_score = float(filters_json.get("min_score", 0))
                     require_signal = filters_json.get("require_signal", True)
 
-                    signals = _evaluate_l3_signals(assets, profile_config)
+                    signals = _evaluate_l3_signals(assets, profile_config, score_config=score_config)
 
                     if min_score > 0:
                         signals = [s for s in signals if s.get("score", 0) >= min_score]

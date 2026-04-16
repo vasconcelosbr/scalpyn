@@ -19,7 +19,7 @@ def _run_async(coro):
 
 
 async def _daily_summary_async():
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.analytics_service import analytics_service
     from ..services.notification_service import notification_service
     from ..models.user import User

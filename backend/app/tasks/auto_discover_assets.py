@@ -20,7 +20,7 @@ def _run_async(coro):
 
 
 async def _discover_async():
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..models.pool import Pool, PoolCoin
     from ..exchange_adapters.gate_adapter import GateAdapter
     from sqlalchemy import select

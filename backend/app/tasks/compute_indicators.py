@@ -22,7 +22,7 @@ def _run_async(coro):
 
 
 async def _compute_async():
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.feature_engine import FeatureEngine
     from ..services.seed_service import DEFAULT_INDICATORS
 
@@ -99,7 +99,7 @@ def compute():
 
 async def _compute_5m_async():
     """Compute technical indicators from 5-minute OHLCV candles."""
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.feature_engine import FeatureEngine
     from ..services.seed_service import DEFAULT_INDICATORS
 

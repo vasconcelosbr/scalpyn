@@ -53,7 +53,7 @@ def _run_async(coro) -> Any:
 async def _monitor_async() -> int:
     from sqlalchemy import text, select
 
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..models.trade import Trade
     from ..models.exchange_connection import ExchangeConnection
     from ..exchange_adapters.gate_adapter import GateAdapter

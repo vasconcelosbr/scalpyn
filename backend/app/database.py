@@ -3,6 +3,7 @@ import logging
 
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.orm import declarative_base
+from sqlalchemy.pool import NullPool
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from fastapi import HTTPException, status
 from .config import settings
@@ -41,6 +42,19 @@ engine = create_async_engine(
     pool_recycle=1800,
 )
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+# ── Celery-safe session factory ───────────────────────────────────────────────
+# Celery workers create a NEW event loop per task via asyncio.new_event_loop().
+# asyncpg connection pools are bound to a specific event loop — reusing a pool
+# across loops raises "Future attached to a different loop".
+# NullPool disables connection reuse: each session opens/closes its own
+# connection within the task's event loop, fully avoiding this error.
+_celery_engine = create_async_engine(
+    _db_url,
+    connect_args=_connect_args,
+    poolclass=NullPool,
+)
+CeleryAsyncSessionLocal = async_sessionmaker(_celery_engine, expire_on_commit=False)
 
 Base = declarative_base()
 

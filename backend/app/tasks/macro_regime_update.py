@@ -52,7 +52,7 @@ async def _update_async() -> dict[str, Any]:
     from sqlalchemy import select
 
     from ..config import settings
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..engines.futures_macro_gate import FuturesMacroGate
     from ..exchange_adapters.gate_adapter import GateAdapter
     from ..models.exchange_connection import ExchangeConnection

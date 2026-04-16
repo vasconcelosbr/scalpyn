@@ -21,7 +21,7 @@ def _run_async(coro):
 
 
 async def _score_async():
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.score_engine import ScoreEngine
     from ..services.seed_service import DEFAULT_SCORE
 

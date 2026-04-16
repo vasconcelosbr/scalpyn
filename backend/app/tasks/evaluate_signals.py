@@ -21,7 +21,7 @@ def _run_async(coro):
 
 
 async def _evaluate_async():
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.signal_engine import SignalEngine
     from ..services.block_engine import BlockEngine
     from ..services.risk_engine import RiskEngine
