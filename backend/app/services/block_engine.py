@@ -178,6 +178,10 @@ class BlockEngine:
                 actual_f = float(actual)
                 min_val = float(cond.get("min", 0))
                 max_val = float(cond.get("max", 0))
+                if min_val > max_val:
+                    logger.warning("between trigger %s: min (%s) > max (%s), swapping",
+                                   indicator, min_val, max_val)
+                    min_val, max_val = max_val, min_val
                 return min_val <= actual_f <= max_val
             except (ValueError, TypeError):
                 return False

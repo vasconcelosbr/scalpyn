@@ -667,8 +667,9 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                       onChange={(e) => {
                         const op = e.target.value;
                         if (op === "between") {
+                          const minVal = typeof trig.value === "number" ? trig.value : (parseFloat(trig.value) || 0);
                           updateTrigger(trig.id, "operator", op);
-                          updateTrigger(trig.id, "min", typeof trig.value === "number" ? trig.value : 0);
+                          updateTrigger(trig.id, "min", minVal);
                           updateTrigger(trig.id, "max", 100);
                           updateTrigger(trig.id, "value", undefined);
                         } else if (trig.operator === "between") {
@@ -702,7 +703,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                           value={trig.max ?? 100}
                           onChange={(e) => {
                             const num = parseFloat(e.target.value);
-                            updateTrigger(trig.id, "max", isNaN(num) ? 0 : num);
+                            updateTrigger(trig.id, "max", isNaN(num) ? (trig.max ?? 100) : num);
                           }}
                           placeholder="Max"
                         />
