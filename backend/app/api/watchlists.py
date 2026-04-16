@@ -501,13 +501,9 @@ async def create_watchlist(
             return None
 
     level = payload.get("level", "custom")
-    # Apply sensible default filters when none provided for L2/L3
+    # filters_json is kept for backward compatibility but IGNORED at runtime.
+    # All filtering is driven exclusively by the associated profile.
     filters = payload.get("filters_json") or {}
-    if not filters:
-        if level == "L2":
-            filters = {"min_score": 55}
-        elif level == "L3":
-            filters = {"min_score": 60, "require_signal": True}
 
     wl = PipelineWatchlist(
         user_id=user_id,
@@ -700,9 +696,10 @@ async def _resolve_and_persist(
     if not base_symbols:
         return []
 
-    filters = wl.filters_json or {}
-    min_score: float = float(filters.get("min_score", 0))
-    require_signal: bool = bool(filters.get("require_signal", False))
+    # NOTE: filters_json on the watchlist is IGNORED at runtime.
+    # All filtering criteria (min_score, require_signal, market_cap, volume, etc.)
+    # come exclusively from the associated Profile (profile.config.filters.conditions).
+    # The watchlist is purely an organisational grouping (L1/L2/L3) + profile reference.
 
     # Fetch market metadata for these symbols
     try:
@@ -789,40 +786,46 @@ async def _resolve_and_persist(
 
     scoring_data_available = bool(live_score_map) or bool(meta_map)
 
-    # Load profile for signal evaluation
-    profile_config_for_signals = None
-    sig_conditions = []
+    # Load profile config — the SINGLE source of truth for all filtering
+    profile_config_full = None
     if wl.profile_id:
         try:
             from ..models.profile import Profile
             prof_res = await db.execute(select(Profile).where(Profile.id == wl.profile_id))
             prof = prof_res.scalars().first()
             if prof and prof.config:
-                profile_config_for_signals = prof.config
-                # Signal conditions may be stored under 'entry_triggers' OR 'signals'
-                sig_conditions = (
-                    prof.config.get("entry_triggers", {}).get("conditions") or
-                    prof.config.get("signals", {}).get("conditions") or
-                    []
-                )
+                profile_config_full = prof.config
         except Exception:
             pass
 
-    # For L3 with require_signal=True: evaluate signals using profile's SignalEngine
-    # (not pre-computed signal_score which is unreliable).
-    # If the profile has NO signal conditions, fall back to score-only filtering.
+    # Extract profile-level filter settings
+    pf_cfg = (profile_config_full or {}).get("filters", {})
+    p_conditions = pf_cfg.get("conditions", [])
+    p_logic = pf_cfg.get("logic", "AND")
+    profile_min_score: float = float(pf_cfg.get("min_score", 0))
+    profile_require_signal: bool = bool(pf_cfg.get("require_signal", False))
+
+    # Evaluate signals when the PROFILE requires them
+    sig_conditions = []
+    if profile_config_full:
+        sig_conditions = (
+            profile_config_full.get("entry_triggers", {}).get("conditions") or
+            profile_config_full.get("signals", {}).get("conditions") or
+            []
+        )
+
     signal_status: Dict[str, bool] = {}
-    if require_signal and sig_conditions:
+    if profile_require_signal and sig_conditions:
         from ..services.signal_engine import SignalEngine as _SigE
-        sig_cfg = (profile_config_for_signals or {}).get("signals", {})
+        sig_cfg = (profile_config_full or {}).get("signals", {})
         _sig_engine = _SigE(sig_cfg)
         for sym in base_symbols:
             ind = ind_map.get(sym, {})
             alpha = live_score_map.get(sym, 0.0)
             sig_result = _sig_engine.evaluate(ind, alpha)
             signal_status[sym] = sig_result.get("signal", False)
-    elif require_signal and not sig_conditions:
-        # No signal conditions configured — treat all min_score-qualified assets as passing
+    elif profile_require_signal and not sig_conditions:
+        # No signal conditions configured in profile — treat all as passing
         for sym in base_symbols:
             signal_status[sym] = True
 
@@ -832,13 +835,12 @@ async def _resolve_and_persist(
     for symbol in base_symbols:
         alpha = live_score_map.get(symbol, 0.0)
 
-        # Apply score filter only when we actually HAVE scoring data.
+        # Apply profile-level min_score gate (only when scoring data exists)
         if scoring_data_available:
-            if min_score and alpha < min_score:
+            if profile_min_score and alpha < profile_min_score:
                 continue
-            # Signal check: if require_signal is set, use the live signal evaluation
-            # (never use pre-computed signal_score which has unreliable signal categories)
-            if require_signal and not signal_status.get(symbol, True):
+            # Signal check from profile
+            if profile_require_signal and not signal_status.get(symbol, True):
                 continue
 
         meta = meta_map.get(symbol, {})
@@ -865,46 +867,42 @@ async def _resolve_and_persist(
     # IMPORTANT: Only apply meta-based filters when market data is actually available.
     # If meta_map is empty (no market data in DB yet), skipping strict meta conditions
     # prevents the watchlist from being wiped on first run / before data collection.
-    if wl.profile_id and assets_out and profile_config_for_signals:
-        pf = profile_config_for_signals.get("filters", {})
-        p_conditions = pf.get("conditions", [])
-        p_logic = pf.get("logic", "AND")
-        if p_conditions:
-            _STRICT_META_FIELDS = frozenset({
-                "volume_24h", "market_cap", "price", "current_price",
-                "change_24h", "price_change_24h", "change_24h_pct",
-                "spread_pct", "orderbook_depth_usdt",
-            })
-            # Check how many symbols actually have market data
-            symbols_with_meta = sum(1 for s in base_symbols if meta_map.get(s))
-            # Only apply strict meta conditions when at least 10% of symbols have market data.
-            # If we have no meta data at all, skip meta conditions to prevent wiping the watchlist.
-            if symbols_with_meta == 0:
-                # No market data available — skip meta conditions, keep indicator-only conditions
-                non_meta_conds = [c for c in p_conditions if c.get("field") not in _STRICT_META_FIELDS]
-                if non_meta_conds:
-                    before = len(assets_out)
-                    assets_out = [a for a in assets_out if _passes_profile_filters(a, non_meta_conds, p_logic)]
-                    logger.info(
-                        "Pipeline profile filter [%s / %s]: no meta data — applying indicator-only "
-                        "conditions (%d conditions): %d → %d assets",
-                        wl.name, wl.level, len(non_meta_conds), before, len(assets_out),
-                    )
-                else:
-                    logger.info(
-                        "Pipeline profile filter [%s / %s]: no market data available yet — "
-                        "skipping all meta conditions to preserve %d assets.",
-                        wl.name, wl.level, len(assets_out),
-                    )
-            else:
+    if wl.profile_id and assets_out and profile_config_full and p_conditions:
+        _STRICT_META_FIELDS = frozenset({
+            "volume_24h", "market_cap", "price", "current_price",
+            "change_24h", "price_change_24h", "change_24h_pct",
+            "spread_pct", "orderbook_depth_usdt",
+        })
+        # Check how many symbols actually have market data
+        symbols_with_meta = sum(1 for s in base_symbols if meta_map.get(s))
+        # Only apply strict meta conditions when at least 10% of symbols have market data.
+        # If we have no meta data at all, skip meta conditions to prevent wiping the watchlist.
+        if symbols_with_meta == 0:
+            # No market data available — skip meta conditions, keep indicator-only conditions
+            non_meta_conds = [c for c in p_conditions if c.get("field") not in _STRICT_META_FIELDS]
+            if non_meta_conds:
                 before = len(assets_out)
-                assets_out = [a for a in assets_out if _passes_profile_filters(a, p_conditions, p_logic)]
+                assets_out = [a for a in assets_out if _passes_profile_filters(a, non_meta_conds, p_logic)]
                 logger.info(
-                    "Pipeline profile filter [%s / %s]: %d → %d assets (removed %d) "
-                    "[%d/%d symbols had market data]",
-                    wl.name, wl.level, before, len(assets_out), before - len(assets_out),
-                    symbols_with_meta, len(base_symbols),
+                    "Pipeline profile filter [%s / %s]: no meta data — applying indicator-only "
+                    "conditions (%d conditions): %d → %d assets",
+                    wl.name, wl.level, len(non_meta_conds), before, len(assets_out),
                 )
+            else:
+                logger.info(
+                    "Pipeline profile filter [%s / %s]: no market data available yet — "
+                    "skipping all meta conditions to preserve %d assets.",
+                    wl.name, wl.level, len(assets_out),
+                )
+        else:
+            before = len(assets_out)
+            assets_out = [a for a in assets_out if _passes_profile_filters(a, p_conditions, p_logic)]
+            logger.info(
+                "Pipeline profile filter [%s / %s]: %d → %d assets (removed %d) "
+                "[%d/%d symbols had market data]",
+                wl.name, wl.level, before, len(assets_out), before - len(assets_out),
+                symbols_with_meta, len(base_symbols),
+            )
 
     # Detect level transitions & upsert
     existing_result = await db.execute(
@@ -1353,12 +1351,12 @@ async def create_default_pipeline(
     l2 = await _get_or_create(
         "L2 Ranking", "L2",
         source_watchlist_id=l1.id,
-        filters_json={"min_score": 0},
+        filters_json={},
     )
     await _get_or_create(
         "L3 Signals", "L3",
         source_watchlist_id=l2.id,
-        filters_json={"min_score": 75, "require_signal": True, "require_no_blocks": True},
+        filters_json={},
     )
 
     await db.commit()

@@ -48,10 +48,11 @@ class PipelineWatchlist(Base):
 
     auto_refresh = Column(Boolean, default=True)
 
-    # Level-specific filters
-    # L1: {}
-    # L2: {"min_score": 0}
-    # L3: {"min_score": 75, "require_signal": true, "require_no_blocks": true}
+    # Level-specific filters — DEPRECATED at runtime.
+    # All filtering is now driven exclusively by the associated Profile
+    # (profile.config.filters.conditions). This field is retained for
+    # backward compatibility but IGNORED during pipeline resolution.
+    # Only max_stay_minutes (if present) is still used for asset expiry.
     filters_json = Column(JSONB, default=dict)
 
     created_at = Column(

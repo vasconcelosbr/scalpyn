@@ -131,7 +131,7 @@ async def create_pipeline_watchlist(
       source_watchlist_id UUID of another PipelineWatchlist (L2/L3)
       profile_id          UUID of a Profile to apply
       auto_refresh        bool (default true)
-      filters_json        {"min_score": 60, "require_signal": true}
+      filters_json        {} (DEPRECATED — filtering is driven by the profile)
     """
     name = payload.get("name")
     if not name:
