@@ -247,8 +247,6 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
   const [sourcePoolId, setSourcePoolId] = useState(wl?.source_pool_id ?? '');
   const [sourceWatchlistId, setSourceWatchlistId] = useState(wl?.source_watchlist_id ?? '');
   const [profileId, setProfileId] = useState(wl?.profile_id ?? '');
-  const [minScore, setMinScore] = useState(String(wl?.filters_json?.min_score ?? ''));
-  const [requireSignal, setRequireSignal] = useState(Boolean(wl?.filters_json?.require_signal));
   const [autoRefresh, setAutoRefresh] = useState(wl?.auto_refresh ?? true);
   const [saving, setSaving] = useState(false);
 
@@ -256,11 +254,6 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
 
   function handleLevelChange(newLevel: string) {
     setLevel(newLevel);
-    if (isNew) {
-      if (newLevel === 'L2' && minScore === '') setMinScore('55');
-      if (newLevel === 'L3') { if (minScore === '') setMinScore('60'); setRequireSignal(true); }
-      if (newLevel === 'L1' || newLevel === 'custom') { setMinScore(''); setRequireSignal(false); }
-    }
   }
 
   const otherWatchlists = watchlists.filter((w) => w.id !== wl?.id);
@@ -268,9 +261,8 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
-    const filters: Record<string, any> = {};
-    if (minScore !== '') filters.min_score = parseFloat(minScore);
-    if (requireSignal) filters.require_signal = true;
+    // NOTE: filters_json is no longer used for filtering at runtime.
+    // All filtering is driven exclusively by the associated profile.
     await onSave({
       name,
       level,
@@ -278,7 +270,7 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
       source_watchlist_id: sourceWatchlistId || null,
       profile_id: profileId || null,
       auto_refresh: autoRefresh,
-      filters_json: filters,
+      filters_json: {},
     });
     setSaving(false);
   }
@@ -396,31 +388,8 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
             )}
           </div>
 
-          {/* Min Alpha Score */}
-          <div>
-            <label className="block text-xs text-[#64748B] mb-1">Min Alpha Score (0–100)</label>
-            <input
-              type="number"
-              min="0"
-              max="100"
-              className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
-              value={minScore}
-              onChange={(e) => setMinScore(e.target.value)}
-              placeholder="Deixe em branco para sem filtro"
-              data-testid="watchlist-min-score"
-            />
-          </div>
-
-          {/* Toggles */}
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={requireSignal}
-              onChange={(e) => setRequireSignal(e.target.checked)}
-              className="rounded border-[#334155] accent-[#3B82F6]"
-            />
-            <span className="text-sm text-[#94A3B8]">Require signal score ≥ 50</span>
-          </label>
+          {/* NOTE: min_score and require_signal filters have been moved to the Profile.
+              All filtering criteria are now controlled exclusively via the associated profile. */}
 
           <label className="flex items-center gap-2 cursor-pointer">
             <input
@@ -567,14 +536,6 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
             <Zap size={9} />
             sem profile
           </span>
-        )}
-        {wl.filters_json?.min_score != null && (
-          <span className="text-xs text-[#64748B] bg-[#1E2433] px-2 py-0.5 rounded">
-            score ≥ {wl.filters_json.min_score}
-          </span>
-        )}
-        {wl.filters_json?.require_signal && (
-          <span className="text-xs text-[#64748B] bg-[#1E2433] px-2 py-0.5 rounded">signal</span>
         )}
         {/* Actions — stop propagation so clicks don't toggle expand */}
         <div className="flex items-center gap-1 ml-2" onClick={(e) => e.stopPropagation()}>

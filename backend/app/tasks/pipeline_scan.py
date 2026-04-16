@@ -608,27 +608,17 @@ async def _run_pipeline_scan():
 
                 # ── 4. Per-level evaluation ───────────────────────────────────
                 # Treat 'CUSTOM' level same as L1 (filters + scoring, no signal requirement)
+                # NOTE: filters_json on the watchlist is IGNORED. All filtering
+                # (including min_score, require_signal) comes from the profile.
                 effective_level = level if level in ("L1", "L2", "L3") else "L1"
 
                 if effective_level in ("L1", "L2"):
                     passed, _ = _apply_level_filter(assets, profile_config, effective_level, score_config=score_config)
 
-                    # Apply level-specific min_score gate
-                    min_score = float(filters_json.get("min_score", 0))
-                    if min_score > 0:
-                        passed = [a for a in passed if a.get("_score", 0) >= min_score]
-
                     await _upsert_assets(db, wl_id, passed, filters_json)
 
                 elif effective_level == "L3":
-                    # L3: signals + optional min_score gate
-                    min_score = float(filters_json.get("min_score", 0))
-                    require_signal = filters_json.get("require_signal", True)
-
                     signals = _evaluate_l3_signals(assets, profile_config, score_config=score_config)
-
-                    if min_score > 0:
-                        signals = [s for s in signals if s.get("score", 0) >= min_score]
 
                     # ── 5. Detect new signals ─────────────────────────────────
                     current_set = {s["symbol"] for s in signals}

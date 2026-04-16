@@ -97,7 +97,7 @@ async def _score_async():
 
     # ── Level transition detection ────────────────────────────────────────────
     # Compare fresh scores against pipeline_watchlist_assets to detect
-    # assets entering / leaving L3 criteria (score >= 75 as default threshold).
+    # assets entering / leaving criteria (min_score from profile config).
     try:
         await _detect_level_transitions(db, rows)
     except Exception as e:
@@ -110,7 +110,8 @@ async def _detect_level_transitions(db, scored_rows) -> None:
     """
     For each symbol that just got a new score, check if its position in the
     pipeline has changed.  We look at pipeline_watchlist_assets rows and compare
-    the new score against the watchlist's min_score filter.
+    the new score against the PROFILE's min_score filter (not the watchlist's
+    filters_json, which is no longer used for filtering).
 
     When a transition is detected:
       - Update level_direction + level_change_at in pipeline_watchlist_assets
@@ -135,14 +136,17 @@ async def _detect_level_transitions(db, scored_rows) -> None:
     if not new_scores:
         return
 
-    # Fetch all pipeline_watchlist_assets for symbols with new scores
+    # Fetch all pipeline_watchlist_assets for symbols with new scores,
+    # including the profile config to get the min_score threshold.
     result = await db.execute(
         text("""
             SELECT pwa.id, pwa.watchlist_id, pwa.symbol,
                    pwa.alpha_score, pwa.level_direction,
-                   pw.filters_json, pw.level, pw.user_id
+                   pw.level, pw.user_id, pw.profile_id,
+                   p.config AS profile_config
             FROM pipeline_watchlist_assets pwa
             JOIN pipeline_watchlists pw ON pw.id = pwa.watchlist_id
+            LEFT JOIN profiles p ON p.id = pw.profile_id
             WHERE pwa.symbol = ANY(:symbols)
         """),
         {"symbols": list(new_scores.keys())},
@@ -155,10 +159,12 @@ async def _detect_level_transitions(db, scored_rows) -> None:
         symbol = ar.symbol
         new_score = new_scores.get(symbol, 0)
         old_score = float(ar.alpha_score or 0)
-        filters = ar.filters_json or {}
-        min_score = float(filters.get("min_score", 0))
 
-        # Determine if asset currently meets watchlist criteria
+        # Get min_score from the PROFILE (single source of truth)
+        profile_cfg = ar.profile_config or {}
+        min_score = float((profile_cfg.get("filters") or {}).get("min_score", 0))
+
+        # Determine if asset currently meets profile criteria
         was_qualifying = old_score >= min_score if min_score > 0 else True
         now_qualifying = new_score >= min_score if min_score > 0 else True
 
