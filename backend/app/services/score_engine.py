@@ -38,6 +38,38 @@ _IND_CATEGORY: Dict[str, str] = {
 
 logger = logging.getLogger(__name__)
 
+
+def merge_score_config(
+    global_config: Dict[str, Any],
+    profile_config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Merge global score config (/settings/score) with profile scoring weights.
+
+    Rules always come from the global config.  Weights come from the profile's
+    ``config.scoring.weights`` when the profile has scoring enabled; otherwise
+    the global weights are used.
+
+    This ensures every watchlist score respects the user-configured rules while
+    honouring per-profile weight customisations (Alpha Score Weights).
+    """
+    merged = dict(global_config)
+
+    if not profile_config:
+        return merged
+
+    scoring_section = profile_config.get("scoring") or {}
+
+    # Only apply profile weights when scoring is explicitly enabled
+    if scoring_section.get("enabled") is False:
+        return merged
+
+    profile_weights = scoring_section.get("weights")
+    if profile_weights and isinstance(profile_weights, dict):
+        merged["weights"] = profile_weights
+
+    return merged
+
+
 OPERATORS = {
     "<=": op.le,
     ">=": op.ge,

@@ -754,7 +754,7 @@ async def _resolve_and_persist(
         precomp_score_map = {}
 
     # Compute live alpha scores using the user's global score config
-    from ..services.score_engine import ScoreEngine as _SE
+    from ..services.score_engine import ScoreEngine as _SE, merge_score_config
     from ..services.seed_service import DEFAULT_SCORE
     from ..services.config_service import config_service as _cs
 
@@ -766,7 +766,21 @@ async def _resolve_and_persist(
     except Exception:
         pass
 
-    _score_engine = _SE(global_score_config)
+    # Load profile config — the SINGLE source of truth for all filtering
+    profile_config_full = None
+    if wl.profile_id:
+        try:
+            from ..models.profile import Profile
+            prof_res = await db.execute(select(Profile).where(Profile.id == wl.profile_id))
+            prof = prof_res.scalars().first()
+            if prof and prof.config:
+                profile_config_full = prof.config
+        except Exception as e:
+            logger.debug("Failed to load profile %s: %s", wl.profile_id, e)
+
+    # Merge global scoring rules with profile weights so both are respected
+    merged_score_config = merge_score_config(global_score_config, profile_config_full)
+    _score_engine = _SE(merged_score_config)
     live_score_map: Dict[str, float] = {}
     for sym in base_symbols:
         ind = ind_map.get(sym, {})
@@ -785,18 +799,6 @@ async def _resolve_and_persist(
             live_score_map[sym] = precomp_score_map.get(sym, 0.0)
 
     scoring_data_available = bool(live_score_map) or bool(meta_map)
-
-    # Load profile config — the SINGLE source of truth for all filtering
-    profile_config_full = None
-    if wl.profile_id:
-        try:
-            from ..models.profile import Profile
-            prof_res = await db.execute(select(Profile).where(Profile.id == wl.profile_id))
-            prof = prof_res.scalars().first()
-            if prof and prof.config:
-                profile_config_full = prof.config
-        except Exception:
-            pass
 
     # Extract profile-level filter settings
     pf_cfg = (profile_config_full or {}).get("filters", {})
@@ -1037,12 +1039,12 @@ async def get_watchlist_assets(
             ind_map.update(on_demand)
 
     # ── Compute alpha scores on-demand using global /settings/score config ──────
-    # Always use the user's global score config (from /settings/score) — not the
-    # profile's scoring rules — so watchlist scores respect what the user configured.
+    # Uses global scoring rules merged with the profile's Alpha Score Weights
+    # so watchlist scores respect both configurations.
     score_override: Dict[str, Optional[float]] = {}
     if ind_map:
         try:
-            from ..services.score_engine import ScoreEngine as _SE
+            from ..services.score_engine import ScoreEngine as _SE, merge_score_config
             from ..services.seed_service import DEFAULT_SCORE
             from ..services.config_service import config_service
 
@@ -1051,7 +1053,8 @@ async def get_watchlist_assets(
                 global_score_config = await config_service.get_config(db, "score", user_id)
             except Exception:
                 pass
-            _score_engine = _SE(global_score_config or DEFAULT_SCORE)
+            merged = merge_score_config(global_score_config or DEFAULT_SCORE, profile_config)
+            _score_engine = _SE(merged)
 
             _to_update: list = []
             for a in assets:
