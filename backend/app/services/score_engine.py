@@ -119,28 +119,26 @@ class ScoreEngine:
     def _evaluate_category_rules(self, indicators: Dict[str, Any], category: str) -> float:
         """Evaluate scoring rules and sum points.
 
-        Rules are mapped to categories by indicator type:
-        - liquidity: volume_spike, volume_24h, spread_pct, orderbook_depth_usdt, obv
-        - market_structure: adx, ema_trend, atr, psar_trend, bb_width, di_plus, di_minus, di_trend
-        - momentum: rsi, macd, macd_signal, stoch_k, zscore, vwap_distance_pct
-        - signal: adx_acceleration, ema_trend, ema alignment booleans
-        """
-        category_indicators = {
-            "liquidity": {"volume_spike", "volume_24h", "spread_pct", "orderbook_depth_usdt", "obv", "taker_ratio"},
-            "market_structure": {"adx", "ema_trend", "atr", "atr_pct", "psar_trend", "bb_width",
-                                 "di_plus", "di_minus", "di_trend"},
-            "momentum": {"rsi", "macd", "macd_signal", "macd_histogram", "stoch_k", "stoch_d",
-                         "zscore", "vwap_distance_pct"},
-            "signal": {"adx_acceleration", "volume_delta", "funding_rate",
-                       "ema9_gt_ema50", "ema50_gt_ema200", "ema_full_alignment"},
-        }
+        Each rule is assigned to exactly ONE category based on _IND_CATEGORY
+        (the canonical mapping).  This prevents double-counting — e.g. an
+        ``ema_trend`` rule counts only in ``market_structure``, never also in
+        ``signal``.
 
-        relevant_indicators = category_indicators.get(category, set())
+        Rules are mapped to categories by indicator type:
+        - liquidity: volume_spike, volume_24h, spread_pct, orderbook_depth_usdt, obv, taker_ratio
+        - market_structure: adx, ema_trend, atr, atr_pct, psar_trend, bb_width, di_plus, di_minus, di_trend
+        - momentum: rsi, macd, macd_signal, macd_histogram, stoch_k, stoch_d, zscore, vwap_distance_pct
+        - signal: adx_acceleration, volume_delta, funding_rate, ema9_gt_ema50, ema50_gt_ema200, ema_full_alignment
+        """
         points = 0.0
 
         for rule in self.rules:
             indicator_name = rule.get("indicator", "")
-            if indicator_name not in relevant_indicators and not self._is_derived_indicator(indicator_name, relevant_indicators):
+            # Use _IND_CATEGORY as the single source of truth for which
+            # category an indicator belongs to.  Default to "other" so that
+            # unknown indicators are never silently dropped into a wrong bucket.
+            rule_category = _IND_CATEGORY.get(indicator_name, "other")
+            if rule_category != category:
                 continue
 
             matched = self._evaluate_rule(rule, indicators)
@@ -148,14 +146,6 @@ class ScoreEngine:
                 points += rule.get("points", 0)
 
         return points
-
-    def _is_derived_indicator(self, indicator: str, category_set: set) -> bool:
-        """Check if a derived indicator belongs to a category."""
-        derived_map = {
-            "ema_trend": {"ema9_gt_ema50", "ema50_gt_ema200", "ema_full_alignment"},
-        }
-        mapped = derived_map.get(indicator, set())
-        return bool(mapped & category_set)
 
     def _evaluate_rule(self, rule: Dict[str, Any], indicators: Dict[str, Any]) -> bool:
         """Evaluate a single scoring rule against indicator values."""

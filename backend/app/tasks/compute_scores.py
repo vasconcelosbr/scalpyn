@@ -93,20 +93,21 @@ async def _score_async():
 
         await db.commit()
 
-    logger.info(f"Alpha Score computation complete: {scored} symbols")
+        logger.info(f"Alpha Score computation complete: {scored} symbols")
 
-    # ── Level transition detection ────────────────────────────────────────────
-    # Compare fresh scores against pipeline_watchlist_assets to detect
-    # assets entering / leaving criteria (min_score from profile config).
-    try:
-        await _detect_level_transitions(db, rows)
-    except Exception as e:
-        logger.warning(f"Level transition detection failed: {e}")
+        # ── Level transition detection ────────────────────────────────────────
+        # Compare fresh scores against pipeline_watchlist_assets to detect
+        # assets entering / leaving criteria (min_score from profile config).
+        # Must run inside the same session so the DB connection is still open.
+        try:
+            await _detect_level_transitions(db, rows, score_config)
+        except Exception as e:
+            logger.warning(f"Level transition detection failed: {e}")
 
     return scored
 
 
-async def _detect_level_transitions(db, scored_rows) -> None:
+async def _detect_level_transitions(db, scored_rows, score_config=None) -> None:
     """
     For each symbol that just got a new score, check if its position in the
     pipeline has changed.  We look at pipeline_watchlist_assets rows and compare
@@ -122,13 +123,16 @@ async def _detect_level_transitions(db, scored_rows) -> None:
     now = datetime.now(timezone.utc)
 
     # Build a quick symbol → new_score map from the rows we just scored
+    # Use the same score config that was used to compute and store the scores,
+    # so transition detection is consistent with the stored alpha_scores.
     new_scores: dict = {}
+    from ..services.score_engine import ScoreEngine
+    from ..services.seed_service import DEFAULT_SCORE
+    _engine = ScoreEngine(score_config or DEFAULT_SCORE)
     for row in scored_rows:
         try:
             indicators = row.indicators_json or {}
-            from ..services.score_engine import ScoreEngine
-            from ..services.seed_service import DEFAULT_SCORE
-            result = ScoreEngine(DEFAULT_SCORE).compute_alpha_score(indicators)
+            result = _engine.compute_alpha_score(indicators)
             new_scores[row.symbol] = result.get("total_score", 0)
         except Exception:
             continue
