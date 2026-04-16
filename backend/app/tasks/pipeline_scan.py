@@ -242,16 +242,18 @@ def _apply_level_filter(assets: list, profile_config: Optional[dict], level: str
     Returns (passed, all_scored).
 
     score_config: when provided, overrides the ProfileEngine's internal score engine
-    with the user's global /settings/score configuration.
+    with the user's global /settings/score configuration.  Profile-level
+    Alpha Score Weights are merged in so they are respected.
     """
     from ..services.profile_engine import ProfileEngine
-    from ..services.score_engine import ScoreEngine
+    from ..services.score_engine import ScoreEngine, merge_score_config
 
     engine = ProfileEngine(profile_config)
 
-    # Override with global score config so scoring respects /settings/score rules
+    # Merge global scoring rules with profile weights so both are respected
     if score_config:
-        engine.score_engine = ScoreEngine(score_config)
+        merged = merge_score_config(score_config, profile_config)
+        engine.score_engine = ScoreEngine(merged)
 
     min_score = 0.0
 
@@ -283,16 +285,18 @@ def _evaluate_l3_signals(assets: list, profile_config: Optional[dict], score_con
     have been set up yet.
 
     score_config: when provided, overrides the ProfileEngine's internal score engine
-    with the user's global /settings/score configuration.
+    with the user's global /settings/score configuration.  Profile-level
+    Alpha Score Weights are merged in so they are respected.
     """
     from ..services.profile_engine import ProfileEngine
-    from ..services.score_engine import ScoreEngine
+    from ..services.score_engine import ScoreEngine, merge_score_config
 
     engine = ProfileEngine(profile_config)
 
-    # Override with global score config so scoring respects /settings/score rules
+    # Merge global scoring rules with profile weights so both are respected
     if score_config:
-        engine.score_engine = ScoreEngine(score_config)
+        merged = merge_score_config(score_config, profile_config)
+        engine.score_engine = ScoreEngine(merged)
 
     # Check if the profile has any signal conditions at all.
     # Signal conditions may be stored under 'entry_triggers' OR 'signals'.
