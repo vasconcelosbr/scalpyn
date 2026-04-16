@@ -323,8 +323,16 @@ async def get_pipeline_assets(
         sc = _cp_row.config_json if _cp_row else None
         # Fall back to profile's scoring config if no global config exists
         if not sc or not (sc.get("scoring_rules") or sc.get("rules")):
-            if profile_config_for_score:
-                scoring_section = profile_config_for_score.get("scoring", {})
+            # Load the profile config to get scoring section (fix: variable was previously undefined)
+            _profile_for_score = None
+            if wl.profile_id:
+                _profile_for_score_row = (await db.execute(
+                    select(Profile).where(Profile.id == wl.profile_id)
+                )).scalars().first()
+                if _profile_for_score_row:
+                    _profile_for_score = _profile_for_score_row.config
+            if _profile_for_score:
+                scoring_section = _profile_for_score.get("scoring", {})
                 _rules = scoring_section.get("scoring_rules") or scoring_section.get("rules")
                 if _rules:
                     sc = {
@@ -444,3 +452,156 @@ async def refresh_pipeline_watchlist(
     except Exception as exc:
         logger.exception("Manual pipeline refresh failed for %s: %s", wl_id, exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ─── Debug endpoint ────────────────────────────────────────────────────────────
+
+@router.get("/{wl_id}/debug")
+async def debug_pipeline_watchlist(
+    wl_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """
+    Return a full observability report for this pipeline watchlist.
+    Shows exactly why assets are dropped at each pipeline stage.
+
+    Returns:
+      - pool_coins_total: number of coins in the source pool
+      - symbols_after_filter: after filter_real_assets (removes leveraged tokens)
+      - symbols_with_market_data: how many pool coins exist in market_metadata
+      - symbols_missing_market_data: list of symbols not found in market_metadata
+      - symbols_passing_profile_filters: how many pass the profile conditions
+      - symbols_in_watchlist: how many are currently in pipeline_watchlist_assets
+      - filter_drop_reasons: breakdown per condition of how many assets were dropped
+    """
+    from ..models.pool import PoolCoin
+    from ..utils.symbol_filters import filter_real_assets
+    from ..services.profile_engine import ProfileEngine
+    from sqlalchemy import select, text
+
+    wl = await _get_own_wl(db, wl_id, user_id)
+
+    report: dict = {
+        "watchlist_id":   str(wl_id),
+        "watchlist_name": wl.name,
+        "level":          wl.level,
+        "source_pool_id": str(wl.source_pool_id) if wl.source_pool_id else None,
+        "profile_id":     str(wl.profile_id) if wl.profile_id else None,
+        "stages": {},
+        "filter_drop_reasons": [],
+        "symbols_missing_market_data": [],
+        "error": None,
+    }
+
+    try:
+        # ── Stage 1: Pool coins ───────────────────────────────────────────────
+        raw_symbols: list[str] = []
+        if wl.source_pool_id:
+            coin_rows = (await db.execute(
+                select(PoolCoin).where(
+                    PoolCoin.pool_id == wl.source_pool_id,
+                    PoolCoin.is_active == True,
+                )
+            )).scalars().all()
+            raw_symbols = [c.symbol for c in coin_rows]
+        elif wl.source_watchlist_id:
+            asset_rows = (await db.execute(text("""
+                SELECT symbol FROM pipeline_watchlist_assets
+                WHERE watchlist_id = :wid
+                  AND (level_direction IS NULL OR level_direction = 'up')
+            """), {"wid": str(wl.source_watchlist_id)})).fetchall()
+            raw_symbols = [r.symbol for r in asset_rows]
+
+        report["stages"]["1_pool_coins_total"] = len(raw_symbols)
+
+        # ── Stage 2: After leveraged-token filter ─────────────────────────────
+        filtered_symbols = filter_real_assets(raw_symbols)
+        removed_by_filter = [s for s in raw_symbols if s not in set(filtered_symbols)]
+        report["stages"]["2_after_filter_real_assets"] = len(filtered_symbols)
+        report["stages"]["2_removed_leveraged_tokens"] = removed_by_filter
+
+        # ── Stage 3: Market metadata coverage ────────────────────────────────
+        if filtered_symbols:
+            meta_rows = (await db.execute(text("""
+                SELECT symbol FROM market_metadata
+                WHERE symbol = ANY(:syms)
+            """), {"syms": filtered_symbols})).fetchall()
+            found_in_meta = {r.symbol for r in meta_rows}
+            missing_from_meta = [s for s in filtered_symbols if s not in found_in_meta]
+            report["stages"]["3_symbols_with_market_data"] = len(found_in_meta)
+            report["stages"]["3_symbols_missing_market_data"] = len(missing_from_meta)
+            report["symbols_missing_market_data"] = missing_from_meta[:50]  # cap list at 50
+        else:
+            found_in_meta = set()
+            report["stages"]["3_symbols_with_market_data"] = 0
+            report["stages"]["3_symbols_missing_market_data"] = 0
+
+        # ── Stage 4: Profile filter pass rate ────────────────────────────────
+        profile_config = None
+        if wl.profile_id:
+            from ..models.profile import Profile as _Prof
+            prof = (await db.execute(
+                select(_Prof).where(_Prof.id == wl.profile_id)
+            )).scalars().first()
+            if prof:
+                profile_config = prof.config
+
+        symbols_in_meta = list(found_in_meta)
+        filter_pass_count = 0
+        condition_drop_map: dict[str, int] = {}
+
+        if symbols_in_meta and profile_config:
+            # Fetch market data for symbols that have meta
+            from ..tasks.pipeline_scan import _fetch_market_data
+            assets = await _fetch_market_data(db, symbols_in_meta)
+            if assets:
+                engine = ProfileEngine(profile_config)
+                conditions = (profile_config.get("filters", {}) or {}).get("conditions", [])
+                for asset in assets:
+                    passed = engine._apply_filters([asset])
+                    if passed:
+                        filter_pass_count += 1
+                    else:
+                        # Find which condition failed
+                        from ..services.rule_engine import RuleEngine
+                        re = RuleEngine()
+                        for cond in conditions:
+                            field = cond.get("field", "unknown")
+                            result = re.evaluate([cond], asset, "AND")
+                            if not result.get("passed"):
+                                condition_drop_map[field] = condition_drop_map.get(field, 0) + 1
+
+        report["stages"]["4_symbols_passing_profile_filters"] = filter_pass_count
+        if condition_drop_map:
+            report["filter_drop_reasons"] = [
+                {"field": k, "assets_dropped": v}
+                for k, v in sorted(condition_drop_map.items(), key=lambda x: -x[1])
+            ]
+
+        # ── Stage 5: Current watchlist state ─────────────────────────────────
+        asset_count_row = (await db.execute(text("""
+            SELECT
+                COUNT(*) FILTER (WHERE level_direction IS NULL OR level_direction = 'up') AS active_count,
+                COUNT(*) FILTER (WHERE level_direction = 'down') AS down_count
+            FROM pipeline_watchlist_assets
+            WHERE watchlist_id = :wid
+        """), {"wid": str(wl_id)})).fetchone()
+
+        report["stages"]["5_active_in_watchlist"] = asset_count_row.active_count if asset_count_row else 0
+        report["stages"]["5_down_in_watchlist"] = asset_count_row.down_count if asset_count_row else 0
+
+        # ── Summary ───────────────────────────────────────────────────────────
+        report["summary"] = (
+            f"Pool: {report['stages'].get('1_pool_coins_total', 0)} coins → "
+            f"filter: {report['stages'].get('2_after_filter_real_assets', 0)} → "
+            f"market data: {report['stages'].get('3_symbols_with_market_data', 0)} → "
+            f"profile filter: {report['stages'].get('4_symbols_passing_profile_filters', 0)} → "
+            f"watchlist: {report['stages'].get('5_active_in_watchlist', 0)} active"
+        )
+
+    except Exception as exc:
+        logger.exception("debug_pipeline_watchlist failed for %s: %s", wl_id, exc)
+        report["error"] = str(exc)
+
+    return report

@@ -86,10 +86,12 @@ async def _collect_all_async():
                 continue
 
         # Also fetch tickers for metadata (price, volume, change + spread_pct from bid/ask)
+        # Process ALL tickers (not capped) so every pool coin gets market data,
+        # even niche coins beyond the top-500.
         try:
             tickers = await market_data_service.fetch_all_tickers()
             now_ts = datetime.now(timezone.utc)
-            for ticker in tickers[:500]:
+            for ticker in tickers:
                 pair = ticker.get("currency_pair", "")
                 if not pair.endswith("_USDT"):
                     continue
@@ -157,7 +159,13 @@ async def _collect_5m_async():
         pool_rows = (await db.execute(text(
             "SELECT DISTINCT symbol FROM pool_coins WHERE is_active = true"
         ))).fetchall()
-    pool_syms = filter_real_assets([r.symbol for r in pool_rows])
+    # Normalize pool symbols to BTC_USDT format (market_metadata uses underscores)
+    def _norm_sym(s: str) -> str:
+        s = s.upper().strip()
+        if "_" not in s and s.endswith("USDT"):
+            return s[:-4] + "_USDT"
+        return s
+    pool_syms = filter_real_assets([_norm_sym(r.symbol) for r in pool_rows])
 
     symbols = list(dict.fromkeys(universe + pool_syms))  # deduplicate, preserve order
 
@@ -170,7 +178,7 @@ async def _collect_5m_async():
 
     collected = 0
     async with AsyncSessionLocal() as db:
-        for symbol in symbols[:500]:  # cap raised to cover large pools
+        for symbol in symbols:  # no cap — process all pool symbols
             try:
                 df = await market_data_service.fetch_ohlcv(symbol, "5m", limit=100)
                 if df is None or df.empty:

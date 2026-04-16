@@ -503,6 +503,13 @@ async def _run_pipeline_scan():
                 # ── 1. Resolve symbol universe ────────────────────────────────
                 symbols: list[str] = []
 
+                def _normalize_sym(s: str) -> str:
+                    """Normalize symbol to BTC_USDT format (add underscore if missing)."""
+                    s = s.upper().strip()
+                    if "_" not in s and s.endswith("USDT"):
+                        return s[:-4] + "_USDT"
+                    return s
+
                 if wl.source_pool_id:
                     # Pool origin: use pool_coins
                     from ..utils.symbol_filters import filter_real_assets
@@ -512,7 +519,13 @@ async def _run_pipeline_scan():
                             PoolCoin.is_active == True,
                         )
                     )).scalars().all()
-                    symbols = filter_real_assets([c.symbol for c in coin_rows])
+                    # Normalize symbols to BTC_USDT format (market_metadata uses underscores)
+                    raw_syms = [_normalize_sym(c.symbol) for c in coin_rows]
+                    symbols = filter_real_assets(raw_syms)
+                    logger.debug(
+                        "[PipelineScan] %s (%s): pool %s → %d raw coins → %d after filter",
+                        wl.name, level, wl.source_pool_id, len(raw_syms), len(symbols),
+                    )
 
                 elif wl.source_watchlist_id:
                     # Upstream watchlist: use only ACTIVE pipeline_watchlist_assets
@@ -525,7 +538,11 @@ async def _run_pipeline_scan():
                           AND (level_direction IS NULL OR level_direction = 'up')
                         ORDER BY alpha_score DESC NULLS LAST
                     """), {"wid": str(wl.source_watchlist_id)})).fetchall()
-                    symbols = filter_real_assets([r.symbol for r in asset_rows])
+                    symbols = filter_real_assets([_normalize_sym(r.symbol) for r in asset_rows])
+                    logger.debug(
+                        "[PipelineScan] %s (%s): upstream watchlist %s → %d symbols",
+                        wl.name, level, wl.source_watchlist_id, len(symbols),
+                    )
 
                 if not symbols:
                     # L1 fallback: when no source is configured, use all
@@ -560,9 +577,9 @@ async def _run_pipeline_scan():
                     continue
                 if not assets:
                     logger.warning(
-                        "[PipelineScan] %s (%s): no market data found for %d requested symbols — "
-                        "skipping to preserve existing watchlist entries.",
-                        wl.name, level, len(symbols),
+                        "[PipelineScan] %s (%s): no market data found for %d requested symbols "
+                        "(sample: %s) — skipping to preserve existing watchlist entries.",
+                        wl.name, level, len(symbols), symbols[:5],
                     )
                     continue  # Don't wipe the watchlist when market data is temporarily unavailable
 

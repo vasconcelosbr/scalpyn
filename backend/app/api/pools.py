@@ -168,6 +168,11 @@ async def add_pool_coin(pool_id: UUID, payload: Dict[str, Any], db: AsyncSession
     if not symbol:
         raise HTTPException(status_code=400, detail="Symbol is required")
 
+    # Normalize symbol to Gate.io format with underscore (e.g. BTCUSDT → BTC_USDT)
+    # This ensures consistency with market_metadata which uses BTC_USDT format.
+    if "_" not in symbol and symbol.endswith("USDT"):
+        symbol = symbol[:-4] + "_USDT"
+
     existing_query = select(PoolCoin).where(PoolCoin.pool_id == pool_id, PoolCoin.symbol == symbol)
     existing_result = await db.execute(existing_query)
     if existing_result.scalars().first():
@@ -526,7 +531,13 @@ async def scan_and_populate_pool(
             min_market_cap=min_market_cap,
         )
         market_assets.sort(key=lambda x: x.get("volume_24h", 0), reverse=True)
-        universe_symbols = {a["symbol"] for a in market_assets[:max_assets]}
+        # Normalize symbols to BTC_USDT format for market_metadata consistency
+        def _norm(s: str) -> str:
+            s = s.upper().strip()
+            if "_" not in s and s.endswith("USDT"):
+                return s[:-4] + "_USDT"
+            return s
+        universe_symbols = {_norm(a["symbol"]) for a in market_assets[:max_assets]}
     except Exception as e:
         logger.error(f"[Scan] Falha ao buscar mercado: {e}")
         raise HTTPException(status_code=502, detail=f"Falha ao buscar dados de mercado: {e}")

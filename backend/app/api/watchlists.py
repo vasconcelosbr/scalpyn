@@ -30,7 +30,6 @@ from ..services.market_data_service import _is_etf_pair
 logger = logging.getLogger(__name__)
 
 GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/spot/tickers"
-from ..services.market_data_service import _is_etf_pair
 
 
 def _passes_profile_filters(asset: Dict[str, Any], conditions: list, logic: str = "AND") -> bool:
@@ -120,8 +119,15 @@ async def _seed_market_metadata_bg(symbols: List[str]) -> None:
 
     Runs after the HTTP response is sent — does not block the request.
     Opens its own DB session so it is independent of the request session.
+    Symbols are normalized to BTC_USDT format before comparison with tickers.
     """
-    symbol_set = set(symbols)
+    # Normalize symbols to BTC_USDT format (Gate.io uses underscores)
+    def _norm(s: str) -> str:
+        s = s.upper().strip()
+        if "_" not in s and s.endswith("USDT"):
+            return s[:-4] + "_USDT"
+        return s
+    symbol_set = {_norm(s) for s in symbols}
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.get(GATE_TICKERS_URL)
@@ -607,6 +613,16 @@ async def _get_base_symbols(
         logger.warning("Pipeline resolution depth exceeded for wl %s", wl.id)
         return []
 
+    def _normalize_sym(s: str) -> str:
+        """Normalize symbol to BTC_USDT format (Gate.io format with underscore).
+        Ensures market_metadata lookups succeed since market_metadata uses underscores.
+        e.g.: BTCUSDT → BTC_USDT, BTC_USDT → BTC_USDT (unchanged)
+        """
+        s = s.upper().strip()
+        if "_" not in s and s.endswith("USDT"):
+            return s[:-4] + "_USDT"
+        return s
+
     if wl.source_pool_id:
         # Terminal source: return ALL pool coins. Filtering happens in _resolve_and_persist.
         result = await db.execute(
@@ -616,7 +632,14 @@ async def _get_base_symbols(
             """),
             {"pool_id": str(wl.source_pool_id)},
         )
-        return [row.symbol for row in result.fetchall()]
+        raw_symbols = [row.symbol for row in result.fetchall()]
+        # Normalize symbols to BTC_USDT format so market_metadata lookups work
+        normalized = list(dict.fromkeys(_normalize_sym(s) for s in raw_symbols))
+        logger.debug(
+            "[GetBaseSymbols] Pool %s: %d raw coins → %d normalized symbols",
+            wl.source_pool_id, len(raw_symbols), len(normalized),
+        )
+        return normalized
 
     if wl.source_watchlist_id:
         result = await db.execute(
@@ -637,7 +660,7 @@ async def _get_base_symbols(
             )).scalars().all()
 
             if active_assets:
-                return [a.symbol for a in active_assets]
+                return [_normalize_sym(a.symbol) for a in active_assets]
 
             # No active assets right now. Check if parent was EVER populated.
             # If yes → parent filtered everything out legitimately → return [].
@@ -837,17 +860,49 @@ async def _resolve_and_persist(
         assets_out.append(asset_entry)
 
     # Apply profile filter conditions (market_cap, volume_24h, Change 24h%, etc.)
+    # IMPORTANT: Only apply meta-based filters when market data is actually available.
+    # If meta_map is empty (no market data in DB yet), skipping strict meta conditions
+    # prevents the watchlist from being wiped on first run / before data collection.
     if wl.profile_id and assets_out and profile_config_for_signals:
         pf = profile_config_for_signals.get("filters", {})
         p_conditions = pf.get("conditions", [])
         p_logic = pf.get("logic", "AND")
         if p_conditions:
-            before = len(assets_out)
-            assets_out = [a for a in assets_out if _passes_profile_filters(a, p_conditions, p_logic)]
-            logger.info(
-                "Pipeline profile filter [%s / %s]: %d → %d assets (removed %d)",
-                wl.name, wl.level, before, len(assets_out), before - len(assets_out),
-            )
+            _STRICT_META_FIELDS = frozenset({
+                "volume_24h", "market_cap", "price", "current_price",
+                "change_24h", "price_change_24h", "change_24h_pct",
+                "spread_pct", "orderbook_depth_usdt",
+            })
+            # Check how many symbols actually have market data
+            symbols_with_meta = sum(1 for s in base_symbols if meta_map.get(s))
+            # Only apply strict meta conditions when at least 10% of symbols have market data.
+            # If we have no meta data at all, skip meta conditions to prevent wiping the watchlist.
+            if symbols_with_meta == 0:
+                # No market data available — skip meta conditions, keep indicator-only conditions
+                non_meta_conds = [c for c in p_conditions if c.get("field") not in _STRICT_META_FIELDS]
+                if non_meta_conds:
+                    before = len(assets_out)
+                    assets_out = [a for a in assets_out if _passes_profile_filters(a, non_meta_conds, p_logic)]
+                    logger.info(
+                        "Pipeline profile filter [%s / %s]: no meta data — applying indicator-only "
+                        "conditions (%d conditions): %d → %d assets",
+                        wl.name, wl.level, len(non_meta_conds), before, len(assets_out),
+                    )
+                else:
+                    logger.info(
+                        "Pipeline profile filter [%s / %s]: no market data available yet — "
+                        "skipping all meta conditions to preserve %d assets.",
+                        wl.name, wl.level, len(assets_out),
+                    )
+            else:
+                before = len(assets_out)
+                assets_out = [a for a in assets_out if _passes_profile_filters(a, p_conditions, p_logic)]
+                logger.info(
+                    "Pipeline profile filter [%s / %s]: %d → %d assets (removed %d) "
+                    "[%d/%d symbols had market data]",
+                    wl.name, wl.level, before, len(assets_out), before - len(assets_out),
+                    symbols_with_meta, len(base_symbols),
+                )
 
     # Detect level transitions & upsert
     existing_result = await db.execute(
@@ -1301,3 +1356,166 @@ async def create_default_pipeline(
 
     await db.commit()
     return {"created": created, "total_created": len(created)}
+
+
+# ── Debug endpoint ────────────────────────────────────────────────────────────
+
+@router.get("/{watchlist_id}/debug")
+async def debug_watchlist_pipeline(
+    watchlist_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Pipeline observability report — shows exactly how many assets are dropped at each stage.
+
+    Returns:
+      - stages.1_pool_coins_total: raw coins in the source pool
+      - stages.2_after_format_normalize: after symbol normalization (BTC_USDT format)
+      - stages.3_symbols_with_market_data: how many have entries in market_metadata
+      - stages.4_symbols_passing_profile_filters: how many pass the profile conditions
+      - stages.5_active_in_watchlist: how many are active in pipeline_watchlist_assets
+      - symbols_missing_market_data: list of symbols not found in market_metadata (first 50)
+      - filter_drop_reasons: breakdown per condition of how many assets were dropped
+    """
+    result = await db.execute(
+        select(PipelineWatchlist).where(
+            PipelineWatchlist.id == watchlist_id,
+            PipelineWatchlist.user_id == user_id,
+        )
+    )
+    wl = result.scalars().first()
+    if not wl:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+
+    report: dict = {
+        "watchlist_id":   str(watchlist_id),
+        "watchlist_name": wl.name,
+        "level":          wl.level,
+        "source_pool_id": str(wl.source_pool_id) if wl.source_pool_id else None,
+        "profile_id":     str(wl.profile_id) if wl.profile_id else None,
+        "stages": {},
+        "filter_drop_reasons": [],
+        "symbols_missing_market_data": [],
+        "error": None,
+    }
+
+    def _norm(s: str) -> str:
+        s = s.upper().strip()
+        if "_" not in s and s.endswith("USDT"):
+            return s[:-4] + "_USDT"
+        return s
+
+    try:
+        # ── Stage 1: Raw pool coins ────────────────────────────────────────────
+        raw_symbols: List[str] = []
+        if wl.source_pool_id:
+            coin_rows = (await db.execute(text("""
+                SELECT symbol FROM pool_coins
+                WHERE pool_id = :pool_id AND is_active = TRUE
+            """), {"pool_id": str(wl.source_pool_id)})).fetchall()
+            raw_symbols = [r.symbol for r in coin_rows]
+        elif wl.source_watchlist_id:
+            asset_rows = (await db.execute(text("""
+                SELECT symbol FROM pipeline_watchlist_assets
+                WHERE watchlist_id = :wid
+                  AND (level_direction IS NULL OR level_direction = 'up')
+            """), {"wid": str(wl.source_watchlist_id)})).fetchall()
+            raw_symbols = [r.symbol for r in asset_rows]
+
+        report["stages"]["1_pool_coins_total"] = len(raw_symbols)
+
+        # ── Stage 2: After format normalization ──────────────────────────────
+        normalized = list(dict.fromkeys(_norm(s) for s in raw_symbols))
+        removed_by_norm = [s for s in raw_symbols if s != _norm(s)]
+        report["stages"]["2_after_format_normalize"] = len(normalized)
+        report["stages"]["2_symbols_auto_normalized"] = removed_by_norm[:20]
+
+        # ── Stage 3: Market metadata coverage ────────────────────────────────
+        found_in_meta: set = set()
+        if normalized:
+            meta_rows = (await db.execute(text("""
+                SELECT symbol FROM market_metadata WHERE symbol = ANY(:syms)
+            """), {"syms": normalized})).fetchall()
+            found_in_meta = {r.symbol for r in meta_rows}
+        missing_from_meta = [s for s in normalized if s not in found_in_meta]
+        report["stages"]["3_symbols_with_market_data"] = len(found_in_meta)
+        report["stages"]["3_symbols_missing_market_data"] = len(missing_from_meta)
+        report["symbols_missing_market_data"] = missing_from_meta[:50]
+
+        # ── Stage 4: Profile filter pass rate ─────────────────────────────────
+        profile_config = None
+        if wl.profile_id:
+            from ..models.profile import Profile as _Prof
+            prof = (await db.execute(
+                select(_Prof).where(_Prof.id == wl.profile_id)
+            )).scalars().first()
+            if prof:
+                profile_config = prof.config
+
+        filter_pass_count = len(normalized)  # default: all pass when no profile
+        condition_drop_map: dict = {}
+
+        if profile_config:
+            pf = profile_config.get("filters", {}) or {}
+            p_conditions = pf.get("conditions", [])
+            if p_conditions and found_in_meta:
+                # Fetch meta for found symbols
+                meta_rows2 = (await db.execute(text("""
+                    SELECT symbol, price, price_change_24h, volume_24h, market_cap
+                    FROM market_metadata WHERE symbol = ANY(:syms)
+                """), {"syms": list(found_in_meta)})).fetchall()
+                meta_map = {r.symbol: {
+                    "price": float(r.price) if r.price else None,
+                    "price_change_24h": float(r.price_change_24h) if r.price_change_24h else None,
+                    "change_24h": float(r.price_change_24h) if r.price_change_24h else None,
+                    "volume_24h": float(r.volume_24h) if r.volume_24h else None,
+                    "market_cap": float(r.market_cap) if r.market_cap else None,
+                } for r in meta_rows2}
+
+                filter_pass_count = 0
+                for sym in found_in_meta:
+                    asset = {"symbol": sym, **meta_map.get(sym, {})}
+                    passed = _passes_profile_filters(asset, p_conditions)
+                    if passed:
+                        filter_pass_count += 1
+                    else:
+                        # Find which condition failed
+                        for cond in p_conditions:
+                            field = cond.get("field", "unknown")
+                            single_result = _passes_profile_filters(asset, [cond])
+                            if not single_result:
+                                condition_drop_map[field] = condition_drop_map.get(field, 0) + 1
+
+        report["stages"]["4_symbols_passing_profile_filters"] = filter_pass_count
+        if condition_drop_map:
+            report["filter_drop_reasons"] = [
+                {"field": k, "assets_dropped": v}
+                for k, v in sorted(condition_drop_map.items(), key=lambda x: -x[1])
+            ]
+
+        # ── Stage 5: Current watchlist state ─────────────────────────────────
+        count_row = (await db.execute(text("""
+            SELECT
+                COUNT(*) FILTER (WHERE level_direction IS NULL OR level_direction = 'up') AS active_count,
+                COUNT(*) FILTER (WHERE level_direction = 'down') AS down_count
+            FROM pipeline_watchlist_assets WHERE watchlist_id = :wid
+        """), {"wid": str(watchlist_id)})).fetchone()
+
+        report["stages"]["5_active_in_watchlist"] = count_row.active_count if count_row else 0
+        report["stages"]["5_down_in_watchlist"]   = count_row.down_count   if count_row else 0
+
+        # ── Summary ───────────────────────────────────────────────────────────
+        report["summary"] = (
+            f"Pool: {report['stages'].get('1_pool_coins_total', 0)} coins → "
+            f"normalize: {report['stages'].get('2_after_format_normalize', 0)} → "
+            f"market_data: {report['stages'].get('3_symbols_with_market_data', 0)} → "
+            f"profile_filter: {report['stages'].get('4_symbols_passing_profile_filters', 0)} → "
+            f"watchlist: {report['stages'].get('5_active_in_watchlist', 0)} active"
+        )
+
+    except Exception as exc:
+        logger.exception("debug_watchlist_pipeline failed for %s: %s", watchlist_id, exc)
+        report["error"] = str(exc)
+
+    return report

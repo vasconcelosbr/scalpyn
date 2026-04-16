@@ -1,0 +1,32 @@
+{
+  "summary": "Backend testing of Watchlist L1 pipeline fixes: symbol normalization, market.py format, debug endpoint, and L1 asset resolution. All 13 tests passed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_watchlist_l1_pipeline.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Code looks correct. Symbol normalization in pools.py (BTCUSDT→BTC_USDT) and watchlists.py _get_base_symbols() both handle normalization consistently.",
+    "_resolve_and_persist() correctly bypasses strict meta conditions when meta_map is empty (symbols_with_meta == 0), preventing watchlist wipe on first run.",
+    "Debug endpoint at GET /{watchlist_id}/debug returns all 5 pipeline stages with observability data.",
+    "market.py spot-currencies returns underscore format (BTC_USDT) consistent with market_metadata table."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_watchlist_l1_pipeline.py"
+  ],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "N/A"},
+  "test_credentials": "test@scalpyn.com / TestPass123! (login working)",
+  "seed_data_creation": "No new seed data. Used existing: POOLGATE (d166102a), L1-POOLGATE watchlist (56987c59), seeded market data for BTC_USDT/ETH_USDT/SOL_USDT.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All L1 pipeline fixes verified: symbol normalization (BTCUSDT→BTC_USDT) works in pools.py and watchlists.py; market.py returns BTC_USDT format; debug endpoint returns pipeline stages; L1 assets populated correctly both with and without market data. Pool POOLGATE has coins including BTC_USDT, ETH_USDT, SOL_USDT, DOG_USDT, XRP_USDT (and newly added LINK_USDT, ADA_USDT from tests). Test file at /app/backend/tests/test_watchlist_l1_pipeline.py."
+}

@@ -84,7 +84,7 @@ async def get_spot_currencies():
 
             result.append({
                 "rank": rank,
-                "symbol": currency_pair.replace("_", ""),  # e.g. BTCUSDT
+                "symbol": currency_pair,  # e.g. BTC_USDT (keep underscore for market_metadata consistency)
                 "base": base,
                 "last_price": last_price,
                 "change_24h": change_pct,
@@ -138,7 +138,7 @@ async def get_futures_currencies():
 
             result.append({
                 "rank": rank,
-                "symbol": contract.replace("_", ""),  # e.g. BTCUSDT
+                "symbol": contract,  # e.g. BTC_USDT (keep underscore for market_metadata consistency)
                 "base": base,
                 "last_price": last_price,
                 "change_24h": change_pct,
