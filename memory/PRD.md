@@ -1,238 +1,112 @@
 # Scalpyn - PRD
 
-## Problem Statement
-Sistema de análise de criptoativos via Gate.io com pipeline de filtros L1/L2/L3 e scoring alpha.
+## Product Summary
+Scalpyn is an institutional-grade crypto trading platform with a 3-level pipeline watchlist system (L1 → L2 → L3) that filters and scores crypto assets using configurable strategy profiles.
 
-## Architecture
-- **Frontend**: Next.js → Vercel (auto-deploy via GitHub main branch)
-- **Backend**: FastAPI + Celery + TimescaleDB/PostgreSQL → Cloud Run
-- **Exchange**: Gate.io (OHLCV, Tickers, Orderbook via API pública)
-- **Task Queue**: Celery + Redis (beat: collect_5m → compute_5m → pipeline_scan a cada 5 min)
+## Tech Stack
+- **Frontend**: Next.js 14/15, React, Tailwind CSS, Shadcn UI (port 3000)
+- **Backend**: FastAPI (port 8001), Celery + Redis (background tasks), WebSockets
+- **Database**: PostgreSQL (SQLAlchemy async ORM, asyncpg)
+- **External APIs**: Gate.io (market data, order execution)
+- **Deployment**: Cloud Run (backend), Vercel (frontend)
 
-## Data Flow
-1. `collect_all` (60s) → Tickers → market_metadata (price, volume, spread_pct de bid/ask)
-2. `collect_5m` (5min) → OHLCV 100 candles + Orderbook top-10 → ohlcv + market_metadata
-3. `compute_5m` (encadeado) → RSI/ADX/EMA/DI/BB/MACD → indicators table
-4. `pipeline_scan` (5min) → market_metadata + indicators → filtros profile → pipeline_watchlist_assets
-5. `fetch_market_caps` (30min) → Gate.io currencies → market_cap em market_metadata + pwa
-6. `GET /api/watchlists/{id}/assets` → lê pwa + on-demand OHLCV/indicators/scoring se necessário
+## Core Architecture
+```
+/app/
+├── backend/
+│   ├── app/
+│   │   ├── api/            # FastAPI routes
+│   │   │   ├── watchlists.py         # Pipeline watchlists (L1/L2/L3) — ACTIVE
+│   │   │   ├── pipeline_watchlists.py # INACTIVE (not registered in main.py)
+│   │   │   ├── pools.py              # Pool management
+│   │   │   ├── market.py             # Market data endpoints
+│   │   │   └── pipeline_watchlists.py # Debug endpoint moved to watchlists.py
+│   │   ├── models/         # SQLAlchemy ORM models
+│   │   ├── services/       # score_engine, profile_engine, market_data_service
+│   │   ├── tasks/          # Celery: collect_market_data.py, pipeline_scan.py
+│   │   └── utils/          # symbol_filters.py
+├── frontend/
+│   ├── app/                # Next.js App Router
+│   │   ├── watchlist/page.tsx        # Pipeline watchlist page
+│   │   └── pools/[id]/page.tsx       # Pool management
+│   └── components/
+│       └── watchlist/PipelineAssetTable.tsx  # Score breakdown table
+```
 
-## Bug Fixes Implemented
+## Key Models
+- **Pool** / **PoolCoin**: `BTC_USDT` format (Gate.io with underscore) — CRITICAL
+- **PipelineWatchlist**: {level, source_pool_id, source_watchlist_id, profile_id, auto_refresh}
+- **PipelineWatchlistAsset**: {symbol, alpha_score, level_direction ('up'|'down'|null)}
+- **market_metadata**: {symbol in `BTC_USDT` format, price, price_change_24h, volume_24h, market_cap}
+- **Trade**: {market_type (not 'profile'!), holding_seconds, ...}
 
-### Fix #1 – Indicadores ausentes (Feb 2026)
-`_compute_indicators_on_demand()` em watchlists.py — busca OHLCV e computa indicators quando ausentes.
+## Symbol Format Convention — CRITICAL
+**ALL symbols MUST be in `BTC_USDT` format (with underscore).**
+- market_metadata stores: `BTC_USDT`
+- pool_coins must store: `BTC_USDT`
+- Normalization function: if `"_" not in s and s.endswith("USDT"): return s[:-4] + "_USDT"`
+- Normalization is applied in: pools.py (add_pool_coin), watchlists.py (_get_base_symbols), pipeline_scan.py, collect_market_data.py
 
-### Fix #2 – Filtro Market Cap não aplicado (Feb 2026 - v1)
-profile_engine.py `_STRICT_META` + pipeline_scan defaults 0.0.
+## What's Been Implemented
 
-### Fix #2b – L1 vazia após fix anterior (Feb 2026 - v2)
-**CAUSA**: SQL em `_fetch_market_data` incluía colunas `spread_pct`/`orderbook_depth_usdt` que podem não existir → query falha → []
-**FIX**: TRY/EXCEPT com query fallback sem as colunas novas
-**FIX**: Revertido `market_cap = None` (não 0.0) + COALESCE de market_metadata JOIN pwa
-para obter o melhor valor disponível de market_cap/volume_24h
+### Phase 1 — MVP Pipeline (Completed)
+- L1/L2/L3 pipeline watchlist system with Celery background scanning
+- Score Engine with configurable scoring rules
+- Profile Engine with configurable filter conditions
+- Market data collection from Gate.io (all tickers, OHLCV, orderbook)
 
-### Fix #3 – L2/L3 com assets stale (Fix "down assets") (Feb 2026)
-**CAUSA**: Pipeline scan de L2 buscava TODOS assets do L1 incluindo `level_direction = 'down'`
-**FIX**: `WHERE (level_direction IS NULL OR level_direction = 'up')` na query do upstream
+### Phase 2 — UI Improvements (Completed)
+- Score Breakdown Table (PipelineAssetTable.tsx) with RSI, Vol, Taker, ADX, MACD, EMA scores
+- Accordion drilldown for indicator details
+- Status colors: 🟢 🟡 🔴 per metric
+- Centralized Strategy Profile assignment in Watchlist UI
 
-### Fix #4 – Alpha Score = 0.0 (Feb 2026)
-**CAUSA**: `if a.alpha_score` era falsy para 0.0 → retornava None
-**FIX A**: `if a.alpha_score is not None`
-**FIX B**: On-demand scoring em `get_watchlist_assets` — após calcular indicators, computa
-alpha score com ScoreEngine usando profile config. Override do score 0/None com valor real.
-Cache do score calculado em pipeline_watchlist_assets para próximas requests.
+### Phase 3 — Bug Fixes (Completed)
+- Fixed Celery event loop crash: CeleryAsyncSessionLocal with NullPool
+- Fixed Trade.market_type rename (was Trade.profile) across 8 files
+- Fixed ScoreEngine config key mismatch ("rules" vs "scoring_rules")
+- Fixed Market Cap strict filtering in pipeline_scan.py
 
-### Fix #5 – Alpha Score "–" (0 falsy) (Feb 2026)
-`_asset_to_dict`: suporta `override_score` para usar score calculado on-demand.
+### Phase 4 — L1 POOLGATE Fix (Completed — 2026-04-16)
+**Root Causes Fixed:**
+1. Symbol format mismatch: `market.py` returned `BTCUSDT` (no underscore) — FIXED to return `BTC_USDT`
+2. `_get_base_symbols()` didn't normalize pool coins — FIXED to apply `_normalize_sym()`
+3. `_seed_market_metadata_bg()` didn't normalize symbols — FIXED
+4. `pools.py add_pool_coin()` didn't normalize — FIXED
+5. `pools.py scan_and_populate_pool()` used `get_market_metadata()` returning `BTCUSDT` — FIXED
+6. `collect_market_data.py` had 500-symbol cap — REMOVED
+7. `_resolve_and_persist()` applied strict meta filters even when no market data → wiped watchlist — FIXED (skip meta conditions when meta_map is empty)
+8. `profile_config_for_score` NameError in pipeline_watchlists.py — FIXED
+9. Frontend port mismatch: package.json had `next start -p 5000` but K8s routes to 3000 — FIXED to port 3000
+10. New **debug endpoint** `GET /api/watchlists/{watchlist_id}/debug` — IMPLEMENTED
 
-### Fix Filtros (Feb 2026)
-- `_passes_profile_filters` em watchlists.py: suporte operator `between` (min/max)
-- `!=` operator adicionado
+## Key API Endpoints
+- `GET /api/watchlists/` — List all pipeline watchlists
+- `POST /api/watchlists/` — Create pipeline watchlist
+- `GET /api/watchlists/{id}/assets` — Get assets with scores
+- `POST /api/watchlists/{id}/refresh` — Manual pipeline refresh
+- `GET /api/watchlists/{id}/debug` — **NEW** Pipeline observability report
+- `POST /api/pools/{id}/coins` — Add coin to pool (normalizes to BTC_USDT)
+- `GET /api/market/spot-currencies` — Market data (returns BTC_USDT format)
+- `POST /api/pipeline/{wl_id}/refresh` — (via pipeline_watchlists.py — INACTIVE)
 
-## Features Implementadas
+## Critical Notes for Future Agents
+1. **`pipeline_watchlists.py` is NOT registered in main.py** — only `watchlists.py` is active
+2. **DB is PostgreSQL**, NOT MongoDB. Do NOT use PyObjectId or Mongo methods.
+3. **Celery tasks** MUST use `CeleryAsyncSessionLocal` (NullPool), not `AsyncSessionLocal`
+4. **Trade model**: use `Trade.market_type`, NOT `Trade.profile`
+5. **Symbol format**: ALWAYS `BTC_USDT` with underscore, never `BTCUSDT`
 
-### Liquidez Real
-- `spread_pct` e `orderbook_depth_usdt` em market_metadata (colunas novas)
-- `fetch_orderbook_metrics()` em market_data_service
-- `collect_5m` busca orderbook por símbolo
-- `collect_all` calcula spread de tickers
-- Campo `di_trend = di_plus > di_minus` no pipeline_scan
-- Operadores `di+>di-` / `di->di+` no ScoreEngine
+## Backlog / Upcoming Tasks
+### P1
+- Frontend button to trigger `GET /api/watchlists/{id}/debug` and show results in UI
+- Better pipeline observability: log why each asset was dropped (per condition)
 
-### GUI ConditionBuilder
-- Operator `entre` (between) com inputs Min/Max → ex: RSI entre 45 e 60
-- Grupo "Liquidez Real" com Spread % e Profundidade Book
-- Campo `di_trend` = "DI+ > DI- (Alta)" boolean
-- 6 grupos organizados
+### P2
+- Celery task health monitoring (show last run time in UI)
+- L2/L3 watchlist testing with real profile filters
+- Score breakdown UI verification with live Gate.io data
 
-## Filters Recomendados pelo Usuário
-**Pool**: `spread_pct <= 1`, `orderbook_depth_usdt >= 5000`
-**L1**: `spread_pct <= 0.8`, `orderbook_depth_usdt >= 10000`
-
-### Fix #6 – UnboundLocalError `ind_rows` em pipeline_scan (Feb 2026) — P0
-**CAUSA**: `ind_rows` e `score_rows` estavam dentro do bloco `except` do fallback de
-liquidez. Quando a query principal (com `spread_pct`/`orderbook_depth_usdt`) **sucedia**,
-o `except` nunca executava e `ind_rows` ficava sem valor → `UnboundLocalError` no Cloud Run.
-**FIX**: Separado em dois blocos try/except independentes:
-  1. try/except para `meta_rows` (fallback de colunas de liquidez)
-  2. try/except para `ind_rows` + `score_rows` (sempre executa)
-
-### Fix #7 – Score Engine usa DEFAULT_SCORE em vez do /settings/score (Feb 2026) — P1
-**CAUSA**: `compute_scores.py`, `pipeline_scan.py` e `watchlists.py` usavam `DEFAULT_SCORE`
-hardcoded para calcular Alpha Score, ignorando as regras configuradas pelo usuário em `/settings/score`.
-**FIX**:
-  - `watchlists.py`: on-demand scoring agora carrega `config_service.get_config(db, "score", user_id)`
-    e usa `ScoreEngine(global_score_config)` diretamente (em vez de `ProfileEngine._process_single_asset`)
-  - `pipeline_scan.py`: `_apply_level_filter` recebe `score_config` e sobrescreve
-    `engine.score_engine` com o config global do usuário
-  - `compute_scores.py`: busca user_id do primeiro pipeline watchlist e carrega o config do DB
-
-### Fix #8 – Operador `between` falhava para `target_value = None` (Feb 2026) — P1
-**CAUSA**: `score_engine._evaluate_rule` retornava `False` prematuramente quando `target_value is None`,
-impedindo o handler `between` de ser alcançado (o `between` usa `min`/`max`, não `value`).
-**FIX**: Mover verificação de `target_value is None` para depois do handler `between`.
-
-## GUI Score Engine (/settings/score) — Melhorias (Feb 2026)
-- Adicionado `macd_histogram` à lista de indicadores
-- Corrigido input de value=0 (era convertido para null por `|| null`)
-- Operador `between` com campos Min/Max (para RSI e outros intervalos)
-- Total de pontos exibido no cabeçalho "Scoring Rules" (ex: "45 / 100 pts")
-- Novos indicadores: di_plus, di_minus, di_trend, spread_pct, orderbook_depth_usdt, bb_width, stoch_k, stoch_d, vwap_distance_pct
-
-### Fix #9 – L3 sempre vazia (Feb 2026) — P0
-**CAUSAS**:
-  1. `_evaluate_l3_signals` (Celery): Se o perfil não tem `signals.conditions`, `SignalEngine.evaluate`
-     retorna `signal=False` para todos os ativos → L3 vazia permanentemente
-  2. `_resolve_and_persist` (Refresh Now): `require_signal and signal < 50` usava `alpha_scores.signal_score`
-     pré-computado — o DEFAULT_SCORE só gera até 30 pts em categoria signal (abaixo do threshold 50) →
-     L3 sempre vazia no refresh manual
-**FIX**:
-  - `_evaluate_l3_signals`: se perfil sem signal conditions → fallback para modo scoring
-    (retorna todos ativos filtrados, ordenados por score)
-  - `_resolve_and_persist` (L3): substituído checagem de `signal_score` pré-computado por
-    avaliação live via `SignalEngine` com os indicadores reais. Se perfil sem signal conditions →
-    todos os ativos acima de `min_score` passam
-
-### Fix #10 – Falha arquitetural na análise em camadas (Feb 2026) — P0
-
-**3 bugs causando L3 mostrar ativos que deveriam ser filtrados pelo Profile Pool:**
-
-**Bug A — Cascade indevido em `_get_base_symbols`**:
-  Quando qualquer nível pai tinha 0 ativos ativos, o sistema subia até os pool_coins crus
-  (1259 símbolos), pulando todos os filtros. Fix: quando o pai já foi populado antes mas
-  está vazio, retorna `[]` em vez de escalar para pool_coins.
-
-**Bug B — `_passes_profile_filters` muito restritivo**:
-  Campos de indicadores ausentes (atr_pct, rsi, etc.) → None → `results.append(False)`
-  → todos os ativos excluídos do Pool manual. Fix: apenas campos meta (`market_cap`,
-  `volume_24h`, `price_change_24h`, `spread_pct`, `orderbook_depth_usdt`) são STRICT
-  (None = FAIL); campos de indicadores são LENIENT (None = skip).
-
-**Bug C — Signal conditions sob chave errada**:
-  Código buscava `profile.config.signals.conditions` mas frontend salva sob
-  `entry_triggers`. Fix: checks `entry_triggers` primeiro, depois `signals`,
-  em `ProfileEngine.__init__`, `_evaluate_l3_signals`, e `_resolve_and_persist`.
-
-**Fix adicional**: assets_out em `_resolve_and_persist` agora inclui dados de indicadores
-  do `ind_map`, permitindo que condições de filtro de indicadores sejam avaliadas
-  corretamente. Alias `change_24h` ↔ `price_change_24h` adicionado.
-
-## Prioritized Backlog
-- P1: Scoring rules melhores configuradas pelo usuário nos profiles
-- P2: Coluna Alpha com cores (verde/amarelo/vermelho por threshold)
-- P2: Colunas Spread % e Depth visíveis na tabela watchlist
-- P3: Monitoramento de falhas no pipeline Celery
-
-## Fix #15 — Trade.profile error + L1 empty + Score Breakdown (Apr 2026)
-
-### Bug 1: AttributeError: Trade has no attribute 'profile' (Cloud Run)
-**Arquivos afetados:** 8 arquivos — `spot_capital_manager.py`, `spot_position_manager.py`, `spot_scanner.py`, `futures_scanner.py`, `futures_position_manager.py`, `futures_position_manager.py`, `event_handlers.py`, `futures_engine.py`
-**Causa:** Todos usavam `Trade.profile == "spot"/"futures"` mas o model `Trade` tem coluna `market_type` não `profile`
-**Fix:** Substituição global: `Trade.profile == "spot"` → `Trade.market_type == "spot"` (e "futures")
-
-### Bug 2: L1 com pool configurado ainda aparece vazia
-**Causa:** Em `pipeline_scan.py`, quando `_fetch_market_data(db, symbols)` retorna `[]` (símbolos não em market_metadata), o código NÃO tinha `continue` — caía direto para `_apply_level_filter([], ...)` → `_upsert_assets(db, wl_id, [])` → **LIMPAVA** todos os assets existentes da watchlist silenciosamente
-**Fix:** Adicionado `continue` com log `WARNING` para preservar assets existentes quando market data está temporariamente indisponível
-
-### Bug 3: Score Breakdown sempre vazio (0/0 pts brutos)
-**Causa:** `config_service.get_config(db, "score", user_id)` usava o `user_id` do token JWT (API caller), que podia ter type mismatch ou ser diferente do `wl.user_id`. Falha silenciosa → `se = None` → `score_rules = []`
-**Fix:** `pipeline_watchlists.py` agora usa query direta no DB com `wl.user_id` (exato mesmo ID que o pipeline_scan usa) para buscar o score config, bypassando Redis/cache. Fallback: profile scoring config → DEFAULT_SCORE
-
----
-
-### Bug 1: L1 Watchlist não listando criptos
-**Causa:** L1 sem `source_pool_id` → `symbols=[]` → pipeline scan skipava com `continue`
-**Fix:** `pipeline_scan.py`: quando L1 não tem source configurado, usa todos os PoolCoin ativos dos pools do usuário como universo de scan (fallback automático)
-
-### Bug 2: Score Breakdown mostrando 0/0 pts
-**Causa 1:** `ScoreEngine.__init__` usava `sc.get("scoring_rules", [])` mas configs salvas via UI podiam usar chave `"rules"` → `self.rules = []`
-**Fix:** `score_engine.py`: `self.rules = score_config.get("scoring_rules") or score_config.get("rules") or []` (aceita ambas as chaves)
-
-**Causa 2:** `profile_engine.py` `_init_engines` passava `"scoring_rules": self.scoring_config.get("rules", [])` — agora aceita ambas as chaves na construção do score_config interno
-
-**Causa 3:** `pipeline_watchlists.py` — score engine init falhava silenciosamente (se e-score global config vazia/null, cairia sem regras). Novo fluxo: tenta global config → tenta profile scoring config → fallback DEFAULT_SCORE
-
-### Bug 3: Assets com market_cap abaixo do threshold aparecendo
-**Causa:** Query-time re-evaluation em `get_pipeline_assets` pulava condições onde `eval_dict.get(field) is None`. Para `market_cap`, quando null na tabela → filter era ignorado
-**Fix:** `pipeline_watchlists.py`: criado `_STRICT_META = {"market_cap", "volume_24h", "price", ...}` — esses campos são SEMPRE incluídos na avaliação mesmo quando None (None → FAIL para filtros de mercado)
-
----
-
-### Mudanças:
-
-**ProfileBuilder.tsx (`/profiles`):**
-- Removida a seção "Pipeline Watchlist" (dropdown + botão associar)
-- Removidos: `pipelineWatchlists`, `selectedWatchlistId`, `assignedWatchlistId` state
-- Removidos: `loadPipelineWatchlists`, `handleAssignWatchlist` functions
-- Mantidos intactos: Filters, Scoring, Signals, Block Rules, Entry Triggers
-
-**watchlist/page.tsx (`/watchlist → Pipeline`):**
-- Novo campo "Strategy Profile" (com asterisco = obrigatório por UX) no WatchlistModal
-- `ProfilePreview` component: mostra contagem de filters/signals/triggers/block rules + scoring weights bars ao selecionar um profile
-- Badge "Using Profile: X" no header de cada WatchlistRow (clicável para abrir o modal de edição)
-- Badge dashed "sem profile" para watchlists sem profile (também clicável)
-- Quick-switch: clicar no badge abre diretamente o modal de edição
-- `PipelineTab` carrega `/profiles` junto com `/watchlists` e `/pools`
-- `profile_id` incluído no payload de save/update da watchlist
-
----
-
-### O que foi implementado:
-
-**Backend:**
-- `score_engine.py`: Adicionados `_IND_LABELS`, `_IND_CATEGORY` (module-level) e método `get_full_breakdown(indicators)` → retorna lista detalhada por regra: indicator, label, actual_value, passed, points_awarded, points_possible, condition_text, category
-- `pipeline_watchlists.py`:
-  - Boolean indicators agora incluídos em `ind_map` (ema9_gt_ema50, etc.)
-  - Score engine carregado e `score_rules` computado por ativo no GET `/api/watchlists/{id}/assets`
-
-**Frontend:**
-- Novo componente `/components/watchlist/PipelineAssetTable.tsx`:
-  - Tabela fixa: Symbol | Score (barra animada) | RSI | Vol Spike | Taker Ratio | ADX | MACD Hist | EMA Trend | Status | Weakness
-  - `IndicatorCell`: valor + ícone ✅/❌/⚬ com tooltip da regra
-  - `StatusBadge`: STRONG/GOOD/MIXED/WEAK por score
-  - `Weakness`: lista dos indicadores com mais pontos perdidos
-  - Alertas visuais: DIV (divergência MACD), ADX (breakout potencial)
-  - Accordion drilldown por ativo: todas as regras agrupadas por categoria com pts awarded/possible
-- `page.tsx`: WatchlistRow atualizado para usar PipelineAssetTable
-
---- (Feb 2026) — P0
-
-**3 erros no Cloud Run (710 + 568 + 82 ocorrências)**:
-
-**Bug A — "Future attached to a different loop" (asyncpg) — 710x**:
-`pipeline_scan.py:369` + demais tasks Celery
-**CAUSA**: Celery tasks usam `asyncio.new_event_loop()` a cada execução. O `AsyncSessionLocal` compartilhado usa engine com connection pool do asyncpg vinculado ao loop anterior → erro ao reutilizar conexões em novo loop.
-**FIX**: Criado `CeleryAsyncSessionLocal` com `NullPool` em `database.py`. Todos os 13 arquivos de tasks Celery atualizados para usar `CeleryAsyncSessionLocal`.
-
-**Bug B — "Event loop is closed" — 568x**:
-**CAUSA**: Consequência direta do Bug A — tasks tentam usar conexões do pool após o loop fechar.
-**FIX**: Mesma correção do Bug A (NullPool não reutiliza conexões entre loops).
-
-**Bug C — AttributeError: 'Profile' object has no attribute 'config_json' — 82x**:
-`execute_buy.py:195` em `_execute_buy_cycle_async`
-**CAUSA**: `Profile` model tem campo `config` (não `config_json`). `ConfigProfile` model tem `config_json` — confusão entre os dois models.
-**FIX**: `prof.config_json` → `prof.config` em execute_buy.py linha 195-196.
-
-**Fix adicional — L3 usa DEFAULT_WEIGHTS em vez do /settings/score**:
-`_evaluate_l3_signals` não recebia `score_config` → scores calculados com DEFAULT_WEIGHTS → assets podiam falhar o `min_score` gate do L3.
-**FIX**: `_evaluate_l3_signals` agora aceita e aplica `score_config` (mesmo padrão do `_apply_level_filter` para L1/L2).
+### P3
+- TimescaleDB extension for time-series optimization (currently using plain PostgreSQL)
+- Performance optimization for large pools (>500 coins)
