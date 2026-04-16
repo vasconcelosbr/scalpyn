@@ -528,6 +528,28 @@ async def _run_pipeline_scan():
                     symbols = filter_real_assets([r.symbol for r in asset_rows])
 
                 if not symbols:
+                    # L1 fallback: when no source is configured, use all
+                    # active coins across the user's pools as the scan universe.
+                    if level == "L1" and not wl.source_pool_id and not wl.source_watchlist_id:
+                        from ..utils.symbol_filters import filter_real_assets as _filt
+                        all_coins = (await db.execute(
+                            select(PoolCoin)
+                            .join(Pool, PoolCoin.pool_id == Pool.id)
+                            .where(
+                                Pool.user_id == wl.user_id,
+                                Pool.is_active == True,
+                                PoolCoin.is_active == True,
+                            )
+                        )).scalars().all()
+                        symbols = _filt([c.symbol for c in all_coins])
+                        if symbols:
+                            logger.info(
+                                "[PipelineScan] %s (L1): no source configured — using "
+                                "%d coins from all user pools as fallback universe.",
+                                wl.name, len(symbols),
+                            )
+
+                if not symbols:
                     logger.debug("[PipelineScan] %s (%s): no symbols — skipping.", wl.name, level)
                     continue
 

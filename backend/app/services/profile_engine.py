@@ -57,11 +57,16 @@ class ProfileEngine:
     
     def _init_engines(self):
         """Initialize Score and Signal engines with profile config."""
-        # Build score config from profile weights
+        # Build score config from profile weights — use "scoring_rules" key for ScoreEngine
         weights = self.scoring_config.get("weights", DEFAULT_WEIGHTS)
         score_config = {
             "weights": weights,
-            "scoring_rules": self.scoring_config.get("rules", []),
+            # Profile stores scoring rules under "rules" — ScoreEngine accepts both keys
+            "scoring_rules": (
+                self.scoring_config.get("scoring_rules")
+                or self.scoring_config.get("rules")
+                or []
+            ),
             "thresholds": self.scoring_config.get("thresholds", {
                 "strong_buy": 80,
                 "buy": 65,

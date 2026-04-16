@@ -56,7 +56,12 @@ class ScoreEngine:
         self.weights = score_config.get("weights", {
             "liquidity": 25, "market_structure": 25, "momentum": 25, "signal": 25
         })
-        self.rules = score_config.get("scoring_rules", [])
+        # Accept both "scoring_rules" (global config key) and "rules" (profile scoring key)
+        self.rules = (
+            score_config.get("scoring_rules")
+            or score_config.get("rules")
+            or []
+        )
         self.thresholds = score_config.get("thresholds", {
             "strong_buy": 80, "buy": 65, "neutral": 40
         })

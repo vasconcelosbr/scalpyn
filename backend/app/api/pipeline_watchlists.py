@@ -305,15 +305,47 @@ async def get_pipeline_assets(
         seen_cols.add(field)
 
     # ── 3c. Load score engine for per-asset rule breakdown ────────────────────
+    # Priority: 1) user's global /settings/score config (same as pipeline scan)
+    #           2) watchlist profile's own scoring rules
+    #           3) seed DEFAULT_SCORE
     se = None
+    profile_config_for_score: dict | None = None
+    if wl.profile_id:
+        try:
+            _prof = (await db.execute(
+                select(Profile).where(Profile.id == wl.profile_id)
+            )).scalars().first()
+            if _prof and _prof.config:
+                profile_config_for_score = _prof.config
+        except Exception:
+            pass
+
     try:
         from ..services.config_service import config_service
         from ..services.seed_service import DEFAULT_SCORE
         from ..services.score_engine import ScoreEngine
         sc = await config_service.get_config(db, "score", user_id)
-        se = ScoreEngine(sc if sc else DEFAULT_SCORE)
+        # Use global score config if it has actual rules; else fall back to profile scoring
+        has_global_rules = bool(
+            (sc or {}).get("scoring_rules") or (sc or {}).get("rules")
+        )
+        if has_global_rules:
+            se = ScoreEngine(sc)
+        elif profile_config_for_score:
+            scoring_section = profile_config_for_score.get("scoring", {})
+            if scoring_section.get("rules") or scoring_section.get("scoring_rules"):
+                se = ScoreEngine({
+                    "scoring_rules": (
+                        scoring_section.get("scoring_rules")
+                        or scoring_section.get("rules")
+                        or []
+                    ),
+                    "weights": scoring_section.get("weights", {}),
+                })
+        if se is None:
+            se = ScoreEngine(DEFAULT_SCORE)
     except Exception as exc:
-        logger.warning("pipeline assets: score engine init failed: %s", exc)
+        logger.warning("pipeline assets: score engine init failed [%s]: %s", type(exc).__name__, exc)
 
     # ── 4. Build response — apply profile filter at query time ────────────────
     rule_engine = RuleEngine() if filter_conditions else None
@@ -325,28 +357,33 @@ async def get_pipeline_assets(
 
         # Build evaluation dict (meta fields + live indicator fields)
         eval_dict: Dict[str, Any] = {
-            "market_cap":  float(r.market_cap)       if r.market_cap       is not None else None,
-            "volume_24h":  float(r.volume_24h)       if r.volume_24h       is not None else None,
-            "price":       float(r.current_price)    if r.current_price    is not None else None,
-            "change_24h":  float(r.price_change_24h) if r.price_change_24h is not None else None,
-            "score":       float(r.alpha_score)      if r.alpha_score      is not None else None,
+            "market_cap":         float(r.market_cap)       if r.market_cap       is not None else None,
+            "volume_24h":         float(r.volume_24h)       if r.volume_24h       is not None else None,
+            "price":              float(r.current_price)    if r.current_price    is not None else None,
+            "change_24h":         float(r.price_change_24h) if r.price_change_24h is not None else None,
+            "price_change_24h":   float(r.price_change_24h) if r.price_change_24h is not None else None,
+            "score":              float(r.alpha_score)      if r.alpha_score      is not None else None,
             **ind_data,
         }
 
-        # Re-evaluate profile filter at query time — but only for conditions
-        # where the stored value is known (non-None).  Null-valued fields are
-        # skipped so we don't wrongly exclude assets whose data isn't in the DB
-        # yet (the periodic pipeline scan will clean them up once data arrives).
+        # Re-evaluate profile filter at query time.
+        # STRICT fields (market_cap, volume_24h, etc.): always evaluated — None → FAIL.
+        # Technical indicator fields: skipped when None (may not be computed yet).
+        _STRICT_META = frozenset({
+            "market_cap", "volume_24h", "price",
+            "change_24h", "price_change_24h", "spread_pct",
+        })
         if rule_engine and filter_conditions:
             applicable = [
                 c for c in filter_conditions
                 if "group" in c
                 or eval_dict.get(c.get("field")) is not None
+                or c.get("field", "") in _STRICT_META  # always include strict meta
             ]
             if applicable:
                 result = rule_engine.evaluate(applicable, eval_dict, filter_logic)
                 if not result["passed"]:
-                    continue  # Known-bad value — hide immediately
+                    continue  # Filter violation — hide asset
 
         # Flat indicators dict keyed by col.key (for dynamic table columns)
         indicators: Dict[str, Any] = {
