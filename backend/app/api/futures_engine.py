@@ -152,7 +152,7 @@ async def engine_status(
             positions_result = await db.execute(
                 select(Trade).where(
                     Trade.user_id == str(user_id),
-                    Trade.profile == "futures",
+                    Trade.market_type == "futures",
                     Trade.status.in_(["ACTIVE", "open"]),
                 )
             )

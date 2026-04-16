@@ -93,7 +93,7 @@ async def _process_futures_position(session, pos: dict) -> None:
         select(Trade)
         .where(
             Trade.symbol == contract,
-            Trade.profile == "futures",
+            Trade.market_type == "futures",
             Trade.status.in_(["ACTIVE", "open"]),
         )
         .limit(1)
@@ -244,7 +244,7 @@ async def _process_futures_order(session, order: dict) -> None:
         select(Trade)
         .where(
             Trade.symbol == contract,
-            Trade.profile == "futures",
+            Trade.market_type == "futures",
             Trade.status.in_(["ACTIVE", "open"]),
         )
         .limit(1)
@@ -390,7 +390,7 @@ async def _process_futures_liquidate(session, liq: dict) -> None:
         select(Trade)
         .where(
             Trade.symbol == contract,
-            Trade.profile == "futures",
+            Trade.market_type == "futures",
             Trade.status.in_(["ACTIVE", "open"]),
         )
         .limit(1)
@@ -485,7 +485,7 @@ async def _process_spot_order(session, order: dict) -> None:
         select(Trade)
         .where(
             Trade.symbol == currency_pair,
-            Trade.profile == "spot",
+            Trade.market_type == "spot",
         )
     )
 

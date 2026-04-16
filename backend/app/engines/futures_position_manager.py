@@ -391,7 +391,7 @@ class FuturesPositionManager:
     async def _load_open_futures(db: AsyncSession, user_id: str) -> List[Trade]:
         q = select(Trade).where(
             Trade.user_id == user_id,
-            Trade.profile == "futures",
+            Trade.market_type == "futures",
             Trade.status.in_(["ACTIVE", "open"]),
         )
         r = await db.execute(q)

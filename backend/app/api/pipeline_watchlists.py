@@ -305,45 +305,33 @@ async def get_pipeline_assets(
         seen_cols.add(field)
 
     # ── 3c. Load score engine for per-asset rule breakdown ────────────────────
-    # Priority: 1) user's global /settings/score config (same as pipeline scan)
-    #           2) watchlist profile's own scoring rules
-    #           3) seed DEFAULT_SCORE
+    # Uses a direct DB query with wl.user_id (same user as pipeline_scan uses)
+    # to avoid Redis/cache issues and UUID type-mismatch with config_service.
     se = None
-    profile_config_for_score: dict | None = None
-    if wl.profile_id:
-        try:
-            _prof = (await db.execute(
-                select(Profile).where(Profile.id == wl.profile_id)
-            )).scalars().first()
-            if _prof and _prof.config:
-                profile_config_for_score = _prof.config
-        except Exception:
-            pass
-
     try:
-        from ..services.config_service import config_service
-        from ..services.seed_service import DEFAULT_SCORE
+        from ..models.config_profile import ConfigProfile as _CP
         from ..services.score_engine import ScoreEngine
-        sc = await config_service.get_config(db, "score", user_id)
-        # Use global score config if it has actual rules; else fall back to profile scoring
-        has_global_rules = bool(
-            (sc or {}).get("scoring_rules") or (sc or {}).get("rules")
-        )
-        if has_global_rules:
-            se = ScoreEngine(sc)
-        elif profile_config_for_score:
-            scoring_section = profile_config_for_score.get("scoring", {})
-            if scoring_section.get("rules") or scoring_section.get("scoring_rules"):
-                se = ScoreEngine({
-                    "scoring_rules": (
-                        scoring_section.get("scoring_rules")
-                        or scoring_section.get("rules")
-                        or []
-                    ),
-                    "weights": scoring_section.get("weights", {}),
-                })
-        if se is None:
-            se = ScoreEngine(DEFAULT_SCORE)
+        from ..services.seed_service import DEFAULT_SCORE
+        # Prefer watchlist owner's config (same path as pipeline_scan)
+        _cp_row = (await db.execute(
+            select(_CP).where(
+                _CP.user_id == wl.user_id,
+                _CP.pool_id.is_(None),
+                _CP.config_type == "score",
+            ).order_by(_CP.updated_at.desc()).limit(1)
+        )).scalars().first()
+        sc = _cp_row.config_json if _cp_row else None
+        # Fall back to profile's scoring config if no global config exists
+        if not sc or not (sc.get("scoring_rules") or sc.get("rules")):
+            if profile_config_for_score:
+                scoring_section = profile_config_for_score.get("scoring", {})
+                _rules = scoring_section.get("scoring_rules") or scoring_section.get("rules")
+                if _rules:
+                    sc = {
+                        "scoring_rules": _rules,
+                        "weights": scoring_section.get("weights", {}),
+                    }
+        se = ScoreEngine(sc if sc else DEFAULT_SCORE)
     except Exception as exc:
         logger.warning("pipeline assets: score engine init failed [%s]: %s", type(exc).__name__, exc)
 

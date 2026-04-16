@@ -243,7 +243,7 @@ class SpotPositionManager:
     async def _load_open_positions(db: AsyncSession, user_id: str) -> List[Trade]:
         q = select(Trade).where(
             Trade.user_id == user_id,
-            Trade.profile == "spot",
+            Trade.market_type == "spot",
             Trade.status.in_(["ACTIVE", "HOLDING_UNDERWATER", "open"]),
         )
         r = await db.execute(q)
@@ -253,7 +253,7 @@ class SpotPositionManager:
     async def _load_underwater_positions(db: AsyncSession, user_id: str) -> List[Trade]:
         q = select(Trade).where(
             Trade.user_id == user_id,
-            Trade.profile == "spot",
+            Trade.market_type == "spot",
             Trade.status == "HOLDING_UNDERWATER",
         )
         r = await db.execute(q)

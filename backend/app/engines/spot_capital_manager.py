@@ -190,7 +190,7 @@ class SpotCapitalManager:
         """Load open/active/holding_underwater positions for a user."""
         q = select(Trade).where(
             Trade.user_id == user_id,
-            Trade.profile == "spot",
+            Trade.market_type == "spot",
             Trade.status.in_(["ACTIVE", "HOLDING_UNDERWATER", "open"]),
         )
         if symbol:

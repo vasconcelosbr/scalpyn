@@ -545,7 +545,7 @@ class FuturesScanner:
         today_start = datetime.combine(date.today(), datetime.min.time()).replace(tzinfo=timezone.utc)
         q = select(Trade).where(
             Trade.user_id == self.user_id,
-            Trade.profile == "futures",
+            Trade.market_type == "futures",
             Trade.status == "CLOSED",
             Trade.exit_at >= today_start,
         )
@@ -563,7 +563,7 @@ class FuturesScanner:
     async def _count_open_positions(self, db: AsyncSession) -> int:
         q = select(Trade).where(
             Trade.user_id == self.user_id,
-            Trade.profile == "futures",
+            Trade.market_type == "futures",
             Trade.status.in_(["ACTIVE", "open"]),
         )
         r = await db.execute(q)

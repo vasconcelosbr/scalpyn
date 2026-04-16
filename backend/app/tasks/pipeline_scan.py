@@ -559,7 +559,12 @@ async def _run_pipeline_scan():
                     logger.warning("[PipelineScan] %s (%s): market data fetch error — skipping.", wl.name, level)
                     continue
                 if not assets:
-                    logger.debug("[PipelineScan] %s (%s): no market data — cleaning up stale entries.", wl.name, level)
+                    logger.warning(
+                        "[PipelineScan] %s (%s): no market data found for %d requested symbols — "
+                        "skipping to preserve existing watchlist entries.",
+                        wl.name, level, len(symbols),
+                    )
+                    continue  # Don't wipe the watchlist when market data is temporarily unavailable
 
                 # ── 3. Load profile config ────────────────────────────────────
                 profile_config: Optional[dict] = None

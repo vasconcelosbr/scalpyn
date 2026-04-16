@@ -221,7 +221,7 @@ class SpotScanner:
         from sqlalchemy import select
         q = select(Trade).where(
             Trade.user_id == self.user_id,
-            Trade.profile == "spot",
+            Trade.market_type == "spot",
             Trade.status == "ACTIVE",
         )
         result  = await db.execute(q)
