@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { WatchlistTable } from '@/components/watchlist/WatchlistTable';
+import { PipelineAssetTable, type PipelineAssetWithScore } from '@/components/watchlist/PipelineAssetTable';
 import { apiFetch } from '@/lib/api';
 import { useWebSocket, getCurrentUserId } from '@/hooks/useWebSocket';
 import {
@@ -30,20 +31,11 @@ interface PipelineWatchlist {
   asset_count: number;
 }
 
-interface PipelineAsset {
-  id: string;
+interface PipelineAsset extends PipelineAssetWithScore {
   watchlist_id: string;
-  symbol: string;
-  current_price: number | null;
-  price_change_24h: number | null;
-  volume_24h: number | null;
-  market_cap: number | null;
-  alpha_score: number | null;
   entered_at: string | null;
   previous_level: string | null;
   level_change_at: string | null;
-  level_direction: string | null;
-  indicators: Record<string, number | boolean | string | null>;
 }
 
 interface IndicatorCol {
@@ -334,7 +326,6 @@ interface WatchlistRowProps {
 function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed, liveDirections = {} }: WatchlistRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [assets, setAssets] = useState<PipelineAsset[]>([]);
-  const [profileIndicators, setProfileIndicators] = useState<IndicatorCol[]>([]);
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -354,10 +345,6 @@ function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed,
         (a, b) => (b.alpha_score ?? 0) - (a.alpha_score ?? 0)
       );
       setAssets(sorted);
-      if (data.profile_indicators) {
-        // Remove _meta:price_change_24h — already rendered as fixed "24h%" column
-        setProfileIndicators(data.profile_indicators.filter((c) => c.key !== '_meta:price_change_24h'));
-      }
       if (triggerParentRefresh && data.assets.length > 0) {
         onRefreshed();
       }
@@ -449,84 +436,17 @@ function WatchlistRow({ wl, pools, allWatchlists, onEdit, onDelete, onRefreshed,
       {expanded && (
         <div className="border-t border-[#1E2433]">
           {loadingAssets ? (
-            <div className="px-4 py-6 text-center text-sm text-[#4B5563]">Loading assets…</div>
-          ) : assets.length === 0 ? (
-            <div className="px-4 py-6 text-center">
-              <p className="text-sm text-[#4B5563]">No assets. Click refresh to resolve the pipeline.</p>
-              <button
-                onClick={handleRefresh}
-                disabled={refreshing}
-                className="mt-3 px-4 py-1.5 text-xs rounded-lg bg-[#1E2433] text-[#94A3B8] hover:bg-[#263048] transition-colors disabled:opacity-40"
-              >
-                {refreshing ? 'Refreshing…' : 'Refresh Now'}
-              </button>
+            <div className="px-4 py-6 text-center text-sm text-[#4B5563] flex items-center justify-center gap-2">
+              <RefreshCw size={13} className="animate-spin" />
+              Loading assets…
             </div>
           ) : (
-            <div className="table-scroll overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-[#1E2433] bg-[#0A0B10]">
-                    <th className="px-4 py-2 text-left text-[#4B5563] font-medium">Symbol</th>
-                    <th className="px-4 py-2 text-right text-[#4B5563] font-medium">Price</th>
-                    <th className="px-4 py-2 text-right text-[#4B5563] font-medium">24h%</th>
-                    {/* Dynamic indicator columns from profile */}
-                    {profileIndicators.map((col) => (
-                      <th key={col.key} className="px-4 py-2 text-right text-[#4B5563] font-medium whitespace-nowrap">
-                        {col.label}
-                      </th>
-                    ))}
-                    <th className="px-4 py-2 text-right text-[#4B5563] font-medium">Alpha</th>
-                    <th className="px-4 py-2 text-right text-[#4B5563] font-medium">Dir</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {assets.map((asset) => {
-                    const effectiveDirection = liveDirections[asset.symbol] ?? asset.level_direction;
-                    const rowCls = effectiveDirection === 'up'
-                      ? 'row-level-up'
-                      : effectiveDirection === 'down'
-                      ? 'row-level-down'
-                      : '';
-                    const changePos = (asset.price_change_24h ?? 0) >= 0;
-                    return (
-                      <tr
-                        key={asset.id}
-                        className={`border-b border-[#1E2433]/50 hover:bg-[#0F1117] transition-colors ${rowCls}`}
-                      >
-                        <td className="px-4 py-2.5 font-medium text-[#E2E8F0]">{asset.symbol}</td>
-                        <td className="px-4 py-2.5 text-right text-[#94A3B8]">{fmtPrice(asset.current_price)}</td>
-                        <td className={`px-4 py-2.5 text-right font-medium ${changePos ? 'text-[#34D399]' : 'text-[#F87171]'}`}>
-                          {fmtChange(asset.price_change_24h)}
-                        </td>
-                        {/* Dynamic indicator values */}
-                        {profileIndicators.map((col) => (
-                          <td key={col.key} className="px-4 py-2.5 text-right">
-                            <IndicatorCell value={(asset.indicators ?? {})[col.key]} />
-                          </td>
-                        ))}
-                        <td className="px-4 py-2.5 text-right">
-                          <span className={`font-semibold ${
-                            (asset.alpha_score ?? 0) >= 75 ? 'text-[#34D399]' :
-                            (asset.alpha_score ?? 0) >= 50 ? 'text-[#FBBF24]' : 'text-[#94A3B8]'
-                          }`}>
-                            {asset.alpha_score != null ? asset.alpha_score.toFixed(1) : '—'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 text-right">
-                          {asset.level_direction === 'up' && (
-                            <span className="text-[#34D399] font-bold">↑</span>
-                          )}
-                          {asset.level_direction === 'down' && (
-                            <span className="text-[#F87171] font-bold">↓</span>
-                          )}
-                          {!asset.level_direction && <span className="text-[#4B5563]">—</span>}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <PipelineAssetTable
+              assets={assets}
+              onRefresh={handleRefresh}
+              refreshing={refreshing}
+              liveDirections={liveDirections}
+            />
           )}
         </div>
       )}

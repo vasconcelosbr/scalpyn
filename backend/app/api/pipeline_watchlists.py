@@ -277,9 +277,10 @@ async def get_pipeline_assets(
 
             for r in ind_rows:
                 j = r.indicators_json or {}
-                numeric = {k: v for k, v in j.items() if isinstance(v, (int, float))}
+                # Keep numeric AND boolean indicators (booleans needed for EMA trend display)
+                numeric = {k: v for k, v in j.items() if isinstance(v, (int, float, bool))}
                 ind_map[r.symbol] = numeric
-                all_ind_keys.update(numeric.keys())
+                all_ind_keys.update(k for k, v in numeric.items() if isinstance(v, (int, float)))
         except Exception as exc:
             logger.warning("pipeline assets: indicator fetch failed: %s", exc)
 
@@ -302,6 +303,17 @@ async def get_pipeline_assets(
         label = _INDICATOR_LABELS.get(field, field.replace("_", " ").title())
         profile_indicators.append({"key": field, "label": label, "field": field})
         seen_cols.add(field)
+
+    # ── 3c. Load score engine for per-asset rule breakdown ────────────────────
+    se = None
+    try:
+        from ..services.config_service import config_service
+        from ..services.seed_service import DEFAULT_SCORE
+        from ..services.score_engine import ScoreEngine
+        sc = await config_service.get_config(db, "score", user_id)
+        se = ScoreEngine(sc if sc else DEFAULT_SCORE)
+    except Exception as exc:
+        logger.warning("pipeline assets: score engine init failed: %s", exc)
 
     # ── 4. Build response — apply profile filter at query time ────────────────
     rule_engine = RuleEngine() if filter_conditions else None
@@ -346,6 +358,9 @@ async def get_pipeline_assets(
         }
         indicators.update(ind_data)
 
+        # Compute per-rule scoring breakdown for drilldown / transparency
+        score_rules = se.get_full_breakdown(eval_dict) if se else []
+
         assets.append({
             "id":               sym,
             "watchlist_id":     str(wl_id),
@@ -360,6 +375,7 @@ async def get_pipeline_assets(
             "previous_level":   r.previous_level,
             "level_change_at":  r.level_change_at.isoformat() if r.level_change_at else None,
             "indicators":       indicators,
+            "score_rules":      score_rules,
         })
 
     return {

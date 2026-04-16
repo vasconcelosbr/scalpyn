@@ -4,6 +4,38 @@ import logging
 import operator as op
 from typing import Dict, Any, List, Optional
 
+# ── Display labels per indicator name ─────────────────────────────────────────
+_IND_LABELS: Dict[str, str] = {
+    "rsi": "RSI", "volume_spike": "Vol Spike", "taker_ratio": "Taker Ratio",
+    "adx": "ADX", "macd_histogram": "MACD Hist", "macd": "MACD",
+    "macd_signal": "MACD Signal", "ema9_gt_ema50": "EMA 9>50",
+    "ema50_gt_ema200": "EMA 50>200", "ema_full_alignment": "EMA Trend",
+    "ema_trend": "EMA Trend", "adx_acceleration": "ADX Accel",
+    "di_trend": "DI Trend", "di_plus": "DI+", "di_minus": "DI-",
+    "spread_pct": "Spread%", "orderbook_depth_usdt": "Book Depth",
+    "obv": "OBV", "vwap_distance_pct": "VWAP%", "stoch_k": "Stoch%K",
+    "stoch_d": "Stoch%D", "bb_width": "BB Width", "volume_24h": "Vol 24h",
+    "zscore": "Z-Score", "psar_trend": "PSAR", "atr_pct": "ATR%", "atr": "ATR",
+}
+
+# ── Category per indicator name ────────────────────────────────────────────────
+_IND_CATEGORY: Dict[str, str] = {
+    "volume_spike": "liquidity", "volume_24h": "liquidity",
+    "spread_pct": "liquidity", "orderbook_depth_usdt": "liquidity",
+    "obv": "liquidity", "taker_ratio": "liquidity",
+    "adx": "market_structure", "ema_trend": "market_structure",
+    "atr": "market_structure", "atr_pct": "market_structure",
+    "psar_trend": "market_structure", "bb_width": "market_structure",
+    "di_plus": "market_structure", "di_minus": "market_structure",
+    "di_trend": "market_structure",
+    "rsi": "momentum", "macd": "momentum", "macd_signal": "momentum",
+    "macd_histogram": "momentum", "stoch_k": "momentum",
+    "stoch_d": "momentum", "zscore": "momentum", "vwap_distance_pct": "momentum",
+    "adx_acceleration": "signal", "volume_delta": "signal",
+    "funding_rate": "signal", "ema9_gt_ema50": "signal",
+    "ema50_gt_ema200": "signal", "ema_full_alignment": "signal",
+}
+
 logger = logging.getLogger(__name__)
 
 OPERATORS = {
@@ -208,6 +240,68 @@ class ScoreEngine:
             if self._evaluate_rule(rule, indicators):
                 matched.append(rule.get("id", "unknown"))
         return matched
+
+    def get_full_breakdown(self, indicators: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Return per-rule detailed breakdown for transparency/drilldown UI.
+
+        Each element:
+          id, indicator, label, operator, target_value, min, max,
+          actual_value, passed, points_awarded, points_possible,
+          condition_text, category
+        """
+        result = []
+        for rule in self.rules:
+            indicator = rule.get("indicator", "")
+            operator_str = rule.get("operator", "")
+            target = rule.get("value")
+            pts = float(rule.get("points", 0))
+
+            # ── Resolve actual_value and human-readable condition text ──
+            lbl = _IND_LABELS.get(indicator, indicator.upper())
+
+            if operator_str == "ema9>ema50>ema200":
+                actual: Any = bool(indicators.get("ema_full_alignment", False))
+                cond = "EMA 9>50>200"
+            elif operator_str == "ema9>ema50":
+                actual = bool(indicators.get("ema9_gt_ema50", False))
+                cond = "EMA 9>50"
+            elif operator_str == "ema9<ema50":
+                actual = not bool(indicators.get("ema9_gt_ema50", True))
+                cond = "EMA 9<50"
+            elif operator_str == "ema50>ema200":
+                actual = bool(indicators.get("ema50_gt_ema200", False))
+                cond = "EMA 50>200"
+            elif operator_str == "di+>di-":
+                actual = indicators.get("di_plus")
+                cond = "DI+ > DI-"
+            elif operator_str == "di->di+":
+                actual = indicators.get("di_minus")
+                cond = "DI- > DI+"
+            elif operator_str == "between":
+                actual = indicators.get(indicator)
+                mn, mx = rule.get("min", 0), rule.get("max", 100)
+                cond = f"{lbl} {mn}–{mx}"
+            else:
+                actual = indicators.get(indicator)
+                cond = f"{lbl} {operator_str} {target}" if target is not None else f"{lbl} {operator_str}"
+
+            passed = self._evaluate_rule(rule, indicators)
+            result.append({
+                "id": rule.get("id", f"{indicator}_{operator_str}"),
+                "indicator": indicator,
+                "label": lbl,
+                "operator": operator_str,
+                "target_value": target,
+                "min": rule.get("min"),
+                "max": rule.get("max"),
+                "actual_value": actual if not isinstance(actual, dict) else None,
+                "passed": passed,
+                "points_awarded": pts if passed else 0.0,
+                "points_possible": pts,
+                "condition_text": cond,
+                "category": _IND_CATEGORY.get(indicator, "other"),
+            })
+        return result
 
     def _classify(self, score: float) -> str:
         if score >= self.thresholds.get("strong_buy", 80):
