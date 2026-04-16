@@ -775,8 +775,8 @@ async def _resolve_and_persist(
             prof = prof_res.scalars().first()
             if prof and prof.config:
                 profile_config_full = prof.config
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to load profile %s: %s", wl.profile_id, e)
 
     # Merge global scoring rules with profile weights so both are respected
     merged_score_config = merge_score_config(global_score_config, profile_config_full)
