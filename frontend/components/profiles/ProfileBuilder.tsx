@@ -40,6 +40,8 @@ interface EntryTrigger {
   indicator: string;
   operator: string;
   value: any;
+  min?: number;
+  max?: number;
   required: boolean;
   enabled: boolean;
 }
@@ -54,6 +56,8 @@ const TRIGGER_INDICATORS = [
   "alpha_score", "rsi", "adx", "volume_spike", "macd", "macd_histogram",
   "ema_full_alignment", "stoch_k", "stoch_d", "atr_percent",
   "bb_width", "zscore", "di_plus", "di_minus", "volume_24h",
+  "taker_ratio", "ema9_gt_ema21", "ema9_gt_ema50",
+  "volume_delta", "orderbook_pressure", "bid_ask_imbalance",
 ];
 
 const DEFAULT_CONFIG = {
@@ -658,14 +662,52 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                       ))}
                     </select>
                     <select
-                      className="input h-8 text-[12px] w-16"
+                      className="input h-8 text-[12px] w-20"
                       value={trig.operator}
-                      onChange={(e) => updateTrigger(trig.id, "operator", e.target.value)}
+                      onChange={(e) => {
+                        const op = e.target.value;
+                        if (op === "between") {
+                          updateTrigger(trig.id, "operator", op);
+                          updateTrigger(trig.id, "min", typeof trig.value === "number" ? trig.value : 0);
+                          updateTrigger(trig.id, "max", 100);
+                          updateTrigger(trig.id, "value", undefined);
+                        } else if (trig.operator === "between") {
+                          updateTrigger(trig.id, "operator", op);
+                          updateTrigger(trig.id, "value", trig.min ?? 0);
+                        } else {
+                          updateTrigger(trig.id, "operator", op);
+                        }
+                      }}
                     >
-                      {[">", "<", ">=", "<=", "=", "!="].map((o) => (
-                        <option key={o} value={o}>{o}</option>
+                      {[">", "<", ">=", "<=", "=", "!=", "between"].map((o) => (
+                        <option key={o} value={o}>{o === "between" ? "entre" : o}</option>
                       ))}
                     </select>
+                    {trig.operator === "between" ? (
+                      <>
+                        <input
+                          type="number"
+                          className="input h-8 text-[12px] w-20 font-mono"
+                          value={trig.min ?? 0}
+                          onChange={(e) => {
+                            const num = parseFloat(e.target.value);
+                            updateTrigger(trig.id, "min", isNaN(num) ? 0 : num);
+                          }}
+                          placeholder="Min"
+                        />
+                        <span className="text-[11px] text-[var(--text-secondary)] font-medium">e</span>
+                        <input
+                          type="number"
+                          className="input h-8 text-[12px] w-20 font-mono"
+                          value={trig.max ?? 100}
+                          onChange={(e) => {
+                            const num = parseFloat(e.target.value);
+                            updateTrigger(trig.id, "max", isNaN(num) ? 0 : num);
+                          }}
+                          placeholder="Max"
+                        />
+                      </>
+                    ) : (
                     <input
                       type="text"
                       className="input h-8 text-[12px] w-20 font-mono"
@@ -675,6 +717,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                         updateTrigger(trig.id, "value", isNaN(num) ? e.target.value : num);
                       }}
                     />
+                    )}
                     <label className="flex items-center gap-1.5 text-[12px] cursor-pointer">
                       <input
                         type="checkbox"
@@ -708,13 +751,13 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                     <p className="text-[11px] text-[var(--text-tertiary)] mb-2 font-semibold uppercase tracking-wider">Logic Preview</p>
                     <pre className="text-[12px] font-mono text-[var(--text-secondary)] overflow-x-auto">
 {`IF (
-${entryConditions.filter(t => t.enabled && t.required).map(t => `  [REQUIRED] ${t.indicator} ${t.operator} ${t.value}`).join("\n  AND\n")}${
+${entryConditions.filter(t => t.enabled && t.required).map(t => `  [REQUIRED] ${t.indicator} ${t.operator === "between" ? `entre ${t.min} e ${t.max}` : `${t.operator} ${t.value}`}`).join("\n  AND\n")}${
   entryConditions.filter(t => t.enabled && t.required).length > 0 &&
   entryConditions.filter(t => t.enabled && !t.required).length > 0
     ? "\n  AND ("
     : ""
 }
-${entryConditions.filter(t => t.enabled && !t.required).map(t => `    ${t.indicator} ${t.operator} ${t.value}`).join(`\n    ${entryLogic}\n`)}${
+${entryConditions.filter(t => t.enabled && !t.required).map(t => `    ${t.indicator} ${t.operator === "between" ? `entre ${t.min} e ${t.max}` : `${t.operator} ${t.value}`}`).join(`\n    ${entryLogic}\n`)}${
   entryConditions.filter(t => t.enabled && !t.required).length > 0 ? "\n  )" : ""
 }
 ) → ALLOW TRADE ENTRY`}

@@ -172,6 +172,16 @@ class BlockEngine:
         if actual is None:
             return False
 
+        # Handle "between" operator (range check)
+        if operator_str == "between":
+            try:
+                actual_f = float(actual)
+                min_val = float(cond.get("min", 0))
+                max_val = float(cond.get("max", 0))
+                return min_val <= actual_f <= max_val
+            except (ValueError, TypeError):
+                return False
+
         if isinstance(target, str):
             if operator_str == "=":
                 return str(actual) == target
