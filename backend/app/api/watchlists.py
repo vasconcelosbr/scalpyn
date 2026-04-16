@@ -69,9 +69,11 @@ def _passes_profile_filters(asset: Dict[str, Any], conditions: list, logic: str 
             actual = asset.get("change_24h")
 
         if actual is None:
-            if field in _STRICT_META:
-                results.append(False)   # Strict: meta None always fails
-            # else: indicator missing → skip (lenient, don't count)
+            # Data not available — skip this condition (don't count as fail or pass).
+            # "Unknown" ≠ "0": when market_metadata hasn't been fully populated yet
+            # (e.g. _seed_market_metadata_bg provides price/volume but not market_cap),
+            # we shouldn't reject the asset.  Once fetch_market_caps runs and fills in
+            # the value, the condition will be evaluated normally on the next refresh.
             continue
 
         # Between operator
@@ -716,8 +718,8 @@ async def _resolve_and_persist(
             r.symbol: {
                 "price":            float(r.price) if r.price else 0.0,
                 "price_change_24h": float(r.price_change_24h) if r.price_change_24h else 0.0,
-                "volume_24h":       float(r.volume_24h) if r.volume_24h else 0.0,
-                "market_cap":       float(r.market_cap) if r.market_cap else 0.0,
+                "volume_24h":       float(r.volume_24h) if r.volume_24h is not None else None,
+                "market_cap":       float(r.market_cap) if r.market_cap is not None else None,
             }
             for r in meta_rows.fetchall()
         }
@@ -923,6 +925,11 @@ async def _resolve_and_persist(
             row.volume_24h       = asset_data["volume_24h"]
             row.market_cap       = asset_data["market_cap"]
             row.alpha_score      = asset_data["alpha_score"]
+            # Re-activate asset if it was previously marked as "down"
+            if row.level_direction == "down":
+                row.level_direction = "up"
+                row.level_change_at = now
+                asset_data["level_direction"] = "up"
         else:
             # New asset entered this watchlist level
             row = PipelineWatchlistAsset(
