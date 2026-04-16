@@ -27,7 +27,11 @@ const INDICATOR_FIELDS = [
   // Liquidity
   { value: "spread_pct",           label: "Spread %",                type: "number",  group: "liquidity" },
   { value: "orderbook_depth_usdt", label: "Profundidade Book (USDT)",type: "number",  group: "liquidity" },
+  { value: "taker_ratio",          label: "Taker Ratio",             type: "number",  group: "liquidity" },
   { value: "volume_spike",         label: "Volume Spike",            type: "boolean", group: "liquidity" },
+  { value: "volume_delta",         label: "Volume Delta",            type: "number",  group: "liquidity" },
+  { value: "orderbook_pressure",   label: "Orderbook Pressure",      type: "number",  group: "liquidity" },
+  { value: "bid_ask_imbalance",    label: "Bid/Ask Imbalance",       type: "number",  group: "liquidity" },
   { value: "obv",                  label: "OBV",                     type: "number",  group: "liquidity" },
   { value: "vwap_distance_pct",    label: "VWAP Distance %",         type: "number",  group: "liquidity" },
   // Momentum
@@ -49,6 +53,7 @@ const INDICATOR_FIELDS = [
   { value: "psar_trend",           label: "PSAR Trend",              type: "string",  group: "trend" },
   // EMA
   { value: "ema_full_alignment",   label: "EMA Full Alignment",      type: "boolean", group: "ema" },
+  { value: "ema9_gt_ema21",        label: "EMA9 > EMA21",            type: "boolean", group: "ema" },
   { value: "ema9_gt_ema50",        label: "EMA9 > EMA50",            type: "boolean", group: "ema" },
   { value: "ema50_gt_ema200",      label: "EMA50 > EMA200",          type: "boolean", group: "ema" },
   // Scores
