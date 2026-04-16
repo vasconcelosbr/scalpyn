@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, CheckCircle2, XCircle, MinusCircle, RefreshCw } from 'lucide-react';
+import { ChevronDown, ChevronRight, CheckCircle2, XCircle, RefreshCw } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -30,6 +30,8 @@ export interface PipelineAssetWithScore {
   market_cap: number | null;
   alpha_score: number | null;
   level_direction: string | null;
+  blocked: boolean;
+  block_reasons: string[];
   indicators: Record<string, any>;
   score_rules: ScoreRule[];
 }
@@ -37,21 +39,104 @@ export interface PipelineAssetWithScore {
 // ── Fixed indicator columns shown in the table ─────────────────────────────────
 
 const INDICATOR_COLS = [
-  { key: 'rsi',            label: 'RSI' },
-  { key: 'volume_spike',   label: 'Vol Spike' },
-  { key: 'taker_ratio',    label: 'Taker Ratio' },
-  { key: 'adx',            label: 'ADX' },
-  { key: 'macd_histogram', label: 'MACD Hist' },
-  { key: 'ema9_gt_ema50',  label: 'EMA Trend' },
+  { key: 'rsi',                  label: 'RSI' },
+  { key: 'volume_spike',         label: 'Vol Spike' },
+  { key: 'taker_ratio',          label: 'Taker' },
+  { key: 'spread_pct',           label: 'Spread' },
+  { key: 'orderbook_depth_usdt', label: 'Depth' },
+  { key: 'ema9_distance_pct',    label: 'EMA 9%' },
+  { key: 'di_trend',             label: 'DI+/DI-' },
 ] as const;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function fmtMarketCap(val: number | null | undefined): string {
+  if (val == null || val === 0) return '—';
+  if (val >= 1_000_000_000) return `$${(val / 1_000_000_000).toFixed(1)}B`;
+  if (val >= 1_000_000)     return `$${(val / 1_000_000).toFixed(0)}M`;
+  if (val >= 1_000)         return `$${(val / 1_000).toFixed(0)}K`;
+  return `$${val.toFixed(0)}`;
+}
+
+function marketCapColor(val: number | null | undefined): string {
+  if (val == null || val === 0) return 'text-[#4B5563]';
+  if (val < 50_000_000)  return 'text-[#F87171]';  // microcap red
+  if (val <= 500_000_000) return 'text-[#FBBF24]';  // yellow
+  return 'text-[#34D399]';  // green
+}
+
+function fmtDepth(val: number | null | undefined): string {
+  if (val == null) return '—';
+  if (val >= 1_000_000) return `${(val / 1_000_000).toFixed(1)}M`;
+  if (val >= 1_000) return `${(val / 1_000).toFixed(0)}k`;
+  return val.toFixed(0);
+}
+
+/** Color-coded indicator cell value + emoji dot */
+function getIndicatorColor(key: string, value: any): { text: string; cls: string; dot: string } {
+  if (value == null) return { text: '—', cls: 'text-[#4B5563]', dot: '' };
+  const n = Number(value);
+  if (isNaN(n)) return { text: String(value), cls: 'text-[#4B5563]', dot: '' };
+
+  switch (key) {
+    case 'rsi':
+      return {
+        text: n.toFixed(1),
+        cls: (n >= 45 && n <= 65) ? 'text-[#34D399]' : (n > 75 || n < 35) ? 'text-[#F87171]' : 'text-[#E2E8F0]',
+        dot: (n >= 45 && n <= 65) ? '🟢' : (n > 75 || n < 35) ? '🔴' : '',
+      };
+    case 'volume_spike':
+      return {
+        text: n.toFixed(1),
+        cls: n > 2.0 ? 'text-[#34D399]' : n >= 1.3 ? 'text-[#FBBF24]' : 'text-[#F87171]',
+        dot: n > 2.0 ? '🟢' : n >= 1.3 ? '🟡' : '🔴',
+      };
+    case 'taker_ratio':
+      return {
+        text: n.toFixed(2),
+        cls: n > 0.6 ? 'text-[#34D399]' : n < 0.4 ? 'text-[#F87171]' : 'text-[#94A3B8]',
+        dot: n > 0.6 ? '🟢' : n < 0.4 ? '🔴' : '⚪',
+      };
+    case 'spread_pct':
+      return {
+        text: n.toFixed(2) + '%',
+        cls: n <= 0.8 ? 'text-[#34D399]' : n <= 1.5 ? 'text-[#FBBF24]' : 'text-[#F87171]',
+        dot: n <= 0.8 ? '🟢' : n <= 1.5 ? '🟡' : '🔴',
+      };
+    case 'orderbook_depth_usdt':
+      return {
+        text: fmtDepth(n),
+        cls: n >= 5000 ? 'text-[#E2E8F0]' : 'text-[#F87171]',
+        dot: n < 5000 ? '🔴' : '',
+      };
+    case 'ema9_distance_pct':
+      return {
+        text: (n >= 0 ? '+' : '') + n.toFixed(2) + '%',
+        cls: Math.abs(n) > 3 ? 'text-[#FBBF24]' : 'text-[#E2E8F0]',
+        dot: '',
+      };
+    case 'di_trend':
+      // value is boolean: true = DI+ > DI-, false = DI- > DI+
+      return {
+        text: value ? '▲ DI+' : '▼ DI-',
+        cls: value ? 'text-[#34D399]' : 'text-[#F87171]',
+        dot: '',
+      };
+    default:
+      return {
+        text: Math.abs(n) >= 100 ? n.toFixed(1) : Math.abs(n) >= 1 ? n.toFixed(2) : n.toFixed(4),
+        cls: 'text-[#E2E8F0]',
+        dot: '',
+      };
+  }
+}
 
 function fmtIndValue(key: string, value: any): string {
   if (value == null) return '—';
   if (typeof value === 'boolean') {
     if (key === 'ema9_gt_ema50' || key === 'ema_trend') return value ? '9>50' : '9<50';
     if (key === 'ema_full_alignment') return value ? '9>50>200' : '—';
+    if (key === 'di_trend') return value ? '▲ DI+' : '▼ DI-';
     return value ? '✓' : '✗';
   }
   if (key === 'macd_histogram') {
@@ -72,7 +157,8 @@ function getRuleForIndicator(key: string, rules: ScoreRule[]): ScoreRule | undef
   return r;
 }
 
-function getStatus(score: number) {
+function getStatus(score: number, blocked: boolean = false) {
+  if (blocked) return { label: 'BLOCKED', cls: 'text-[#F87171]', dot: 'bg-[#F87171]' };
   if (score >= 75) return { label: 'STRONG', cls: 'text-[#34D399]', dot: 'bg-[#34D399]' };
   if (score >= 60) return { label: 'GOOD',   cls: 'text-[#4ADE80]', dot: 'bg-[#4ADE80]' };
   if (score >= 40) return { label: 'MIXED',  cls: 'text-[#FBBF24]', dot: 'bg-[#FBBF24]' };
@@ -96,26 +182,15 @@ function scoreBarColor(score: number) {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function StatusIcon({ status }: { status: 'pass' | 'fail' | 'neutral' }) {
-  if (status === 'pass') return <CheckCircle2 size={12} className="text-[#34D399] shrink-0" />;
-  if (status === 'fail') return <XCircle      size={12} className="text-[#F87171] shrink-0" />;
-  return                        <MinusCircle  size={12} className="text-[#334155] shrink-0" />;
-}
-
 function IndicatorCell({ indKey, value, rules }: { indKey: string; value: any; rules: ScoreRule[] }) {
-  const rule   = getRuleForIndicator(indKey, rules);
-  const status = !rule ? 'neutral' : rule.passed ? 'pass' : 'fail';
-  const disp   = fmtIndValue(indKey, value);
-  const tip    = rule ? `${rule.condition_text}  →  ${rule.passed ? '+' + rule.points_awarded.toFixed(0) + ' pts' : 'falhou'}` : undefined;
-
-  const textCls = status === 'pass' ? 'text-[#E2E8F0]'
-                : status === 'fail' ? 'text-[#64748B]'
-                : 'text-[#4B5563]';
+  const { text, cls, dot } = getIndicatorColor(indKey, value);
+  const rule = getRuleForIndicator(indKey, rules);
+  const tip = rule ? `${rule.condition_text}  →  ${rule.passed ? '+' + rule.points_awarded.toFixed(0) + ' pts' : 'falhou'}` : undefined;
 
   return (
     <div className="flex items-center justify-end gap-1" title={tip}>
-      <span className={`font-mono text-xs ${textCls}`}>{disp}</span>
-      <StatusIcon status={status} />
+      {dot && <span className="text-[10px]">{dot}</span>}
+      <span className={`font-mono text-xs ${cls}`}>{text}</span>
     </div>
   );
 }
@@ -270,26 +345,28 @@ export function PipelineAssetTable({
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-xs min-w-[960px]">
+      <table className="w-full text-xs min-w-[1100px]">
         <thead>
           <tr className="border-b border-[#1A2035] bg-[#060810] sticky top-0">
             <th className="w-8 px-2 py-2.5" />
             <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium">Symbol</th>
             <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[130px]">Score</th>
+            <th className="px-3 py-2.5 text-right text-[#4B5563] font-medium whitespace-nowrap">Mkt Cap</th>
             {INDICATOR_COLS.map(col => (
               <th key={col.key} className="px-3 py-2.5 text-right text-[#4B5563] font-medium whitespace-nowrap">
                 {col.label}
               </th>
             ))}
             <th className="px-3 py-2.5 text-center text-[#4B5563] font-medium">Status</th>
-            <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium">Weakness</th>
           </tr>
         </thead>
         <tbody>
           {assets.map((asset) => {
             const score     = asset.alpha_score ?? 0;
             const rules     = asset.score_rules ?? [];
-            const status    = getStatus(score);
+            const isBlocked = asset.blocked ?? false;
+            const blockReasons = asset.block_reasons ?? [];
+            const status    = getStatus(score, isBlocked);
             const weakness  = getWeaknesses(rules);
             const isExpanded = expandedRow === asset.symbol;
             const effectiveDir = liveDirections[asset.symbol] ?? asset.level_direction;
@@ -301,10 +378,13 @@ export function PipelineAssetTable({
             const hasHighADX =
               (asset.indicators?.['adx'] ?? 0) > 40;
 
-            const rowAlert = hasDivergence ? 'border-l-2 border-l-[#FBBF24]/60'
-                           : hasVolSpike   ? 'border-l-2 border-l-[#60A5FA]/60'
-                           : hasHighADX    ? 'border-l-2 border-l-[#A78BFA]/60'
+            const rowAlert = isBlocked        ? 'border-l-2 border-l-[#F87171]/60'
+                           : hasDivergence    ? 'border-l-2 border-l-[#FBBF24]/60'
+                           : hasVolSpike      ? 'border-l-2 border-l-[#60A5FA]/60'
+                           : hasHighADX       ? 'border-l-2 border-l-[#A78BFA]/60'
                            : '';
+
+            const mcapVal = asset.market_cap ?? asset.indicators?.['_meta:market_cap'];
 
             return (
               <>
@@ -328,12 +408,17 @@ export function PipelineAssetTable({
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-1.5">
                       <span className="font-semibold text-[#E2E8F0] tracking-wide">{asset.symbol}</span>
-                      {hasDivergence && (
+                      {isBlocked && (
+                        <span className="text-[9px] px-1 py-0.5 rounded bg-[#F87171]/10 text-[#F87171] border border-[#F87171]/20" title={`Bloqueado: ${blockReasons.join(', ')}`}>
+                          🚨
+                        </span>
+                      )}
+                      {hasDivergence && !isBlocked && (
                         <span className="text-[9px] px-1 py-0.5 rounded bg-[#FBBF24]/10 text-[#FBBF24] border border-[#FBBF24]/20" title="Score alto mas MACD negativo">
                           DIV
                         </span>
                       )}
-                      {hasHighADX && (
+                      {hasHighADX && !isBlocked && (
                         <span className="text-[9px] px-1 py-0.5 rounded bg-[#A78BFA]/10 text-[#A78BFA] border border-[#A78BFA]/20" title="ADX alto — possível breakout">
                           ADX
                         </span>
@@ -342,6 +427,7 @@ export function PipelineAssetTable({
                     {rules.length > 0 && (
                       <div className="mt-0.5 text-[10px] text-[#334155]">
                         {earnedPts(rules).toFixed(0)}/{totalPts(rules).toFixed(0)} pts
+                        {weakness ? ` · ${weakness}` : ''}
                       </div>
                     )}
                   </td>
@@ -349,6 +435,13 @@ export function PipelineAssetTable({
                   {/* Score bar */}
                   <td className="px-3 py-2.5">
                     <ScoreBar score={score} />
+                  </td>
+
+                  {/* Market Cap */}
+                  <td className="px-3 py-2.5 text-right">
+                    <span className={`font-mono text-xs ${marketCapColor(mcapVal)}`}>
+                      {fmtMarketCap(mcapVal)}
+                    </span>
                   </td>
 
                   {/* Fixed indicator columns */}
@@ -364,28 +457,20 @@ export function PipelineAssetTable({
 
                   {/* Status */}
                   <td className="px-3 py-2.5 text-center">
-                    <div className="inline-flex items-center gap-1.5">
+                    <div className="inline-flex items-center gap-1.5" title={isBlocked ? blockReasons.join(', ') : ''}>
                       <div className={`w-1.5 h-1.5 rounded-full ${status.dot} shrink-0`} />
                       <span className={`font-semibold text-[10px] tracking-wide ${status.cls}`}>
                         {status.label}
                       </span>
+                      {isBlocked && <span className="text-[9px]">🚨</span>}
                     </div>
-                  </td>
-
-                  {/* Weakness */}
-                  <td className="px-3 py-2.5 max-w-[140px]">
-                    {weakness ? (
-                      <span className="text-[#F87171]/70 text-[10px] leading-tight">{weakness}</span>
-                    ) : (
-                      <span className="text-[#1E2433]">—</span>
-                    )}
                   </td>
                 </tr>
 
                 {/* Drilldown row */}
                 {isExpanded && (
                   <tr key={`${asset.symbol}-drill`} className="border-b border-[#1A2035]">
-                    <td colSpan={10} className="p-0">
+                    <td colSpan={11 + INDICATOR_COLS.length} className="p-0">
                       <DrilldownPanel rules={rules} score={score} />
                     </td>
                   </tr>
