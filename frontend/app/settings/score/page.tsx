@@ -9,6 +9,9 @@ const INDICATORS = [
   "volume_spike", "macd_signal", "macd_histogram",
   "di_plus", "di_minus", "di_trend", "spread_pct", "orderbook_depth_usdt",
   "bb_width", "stoch_k", "stoch_d", "vwap_distance_pct",
+  "volume_24h", "obv", "atr", "atr_pct", "psar_trend", "zscore",
+  "volume_delta", "funding_rate",
+  "ema9_gt_ema50", "ema50_gt_ema200", "ema_full_alignment",
 ];
 
 const OPERATORS = ["<=", ">=", "<", ">", "=", "between", "ema9>ema50>ema200", "ema9>ema50", "ema50>ema200", "di+>di-", "di->di+", ">prev+", ">prev"];
