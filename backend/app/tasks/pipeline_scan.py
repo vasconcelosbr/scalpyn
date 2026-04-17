@@ -619,10 +619,30 @@ async def _run_pipeline_scan():
                 if effective_level in ("L1", "L2"):
                     passed, _ = _apply_level_filter(assets, profile_config, effective_level, score_config=score_config)
 
+                    # Remove assets blocked by anti-bad-entry rules
+                    from ..utils.blocking_rules import is_blocked as _is_blocked
+                    before_block = len(passed)
+                    passed = [a for a in passed if not _is_blocked(a)]
+                    if before_block != len(passed):
+                        logger.info(
+                            "[PipelineScan] %s (%s): anti-bad-entry removed %d/%d assets",
+                            wl.name, level, before_block - len(passed), before_block,
+                        )
+
                     await _upsert_assets(db, wl_id, passed, filters_json)
 
                 elif effective_level == "L3":
                     signals = _evaluate_l3_signals(assets, profile_config, score_config=score_config)
+
+                    # Remove assets blocked by anti-bad-entry rules
+                    from ..utils.blocking_rules import is_blocked as _is_blocked
+                    before_block = len(signals)
+                    signals = [s for s in signals if not _is_blocked(s)]
+                    if before_block != len(signals):
+                        logger.info(
+                            "[PipelineScan] %s (L3): anti-bad-entry removed %d/%d signals",
+                            wl.name, before_block - len(signals), before_block,
+                        )
 
                     # ── 5. Detect new signals ─────────────────────────────────
                     current_set = {s["symbol"] for s in signals}

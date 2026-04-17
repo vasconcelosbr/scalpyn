@@ -440,36 +440,9 @@ def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any
     except (TypeError, ValueError):
         pass
 
-    # ── Anti-bad-entry blocking rules ──────────────────────────────────────────
-    block_reasons: List[str] = []
-    spread = ind_out.get("spread_pct")
-    depth = ind_out.get("orderbook_depth_usdt")
-    rsi = ind_out.get("rsi")
-    taker = ind_out.get("taker_ratio")
-    if spread is not None:
-        try:
-            if float(spread) > 1.5:
-                block_reasons.append("spread>1.5%")
-        except (TypeError, ValueError):
-            pass
-    if depth is not None:
-        try:
-            if float(depth) < 5000:
-                block_reasons.append("depth<5k")
-        except (TypeError, ValueError):
-            pass
-    if rsi is not None:
-        try:
-            if float(rsi) > 75:
-                block_reasons.append("rsi>75")
-        except (TypeError, ValueError):
-            pass
-    if taker is not None:
-        try:
-            if float(taker) < 0.4:
-                block_reasons.append("taker<0.4")
-        except (TypeError, ValueError):
-            pass
+    # ── Anti-bad-entry blocking rules (shared utility) ───────────────────────────
+    from ..utils.blocking_rules import check_anti_bad_entry
+    _blocked, block_reasons = check_anti_bad_entry({"indicators": ind_out})
 
     return {
         "id":               str(a.id),
@@ -484,7 +457,7 @@ def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any
         "previous_level":   a.previous_level,
         "level_change_at":  a.level_change_at.isoformat() if a.level_change_at else None,
         "level_direction":  a.level_direction,
-        "blocked":          len(block_reasons) > 0,
+        "blocked":          _blocked,
         "block_reasons":    block_reasons,
         "indicators": ind_out,
     }
@@ -955,6 +928,18 @@ async def _resolve_and_persist(
                 "[%d/%d symbols had market data]",
                 wl.name, wl.level, before, len(assets_out), before - len(assets_out),
                 symbols_with_meta, len(base_symbols),
+            )
+
+    # ── Anti-bad-entry blocking: remove assets that violate microstructure rules ──
+    # These assets should NOT persist in any watchlist level.
+    if assets_out:
+        from ..utils.blocking_rules import is_blocked as _is_blocked
+        before_block = len(assets_out)
+        assets_out = [a for a in assets_out if not _is_blocked(a)]
+        if before_block != len(assets_out):
+            logger.info(
+                "[Pipeline] %s (%s): anti-bad-entry removed %d/%d assets on refresh",
+                wl.name, wl.level, before_block - len(assets_out), before_block,
             )
 
     # Detect level transitions & upsert
