@@ -833,7 +833,11 @@ async def _resolve_and_persist(
         else:
             live_score_map[sym] = precomp_score_map.get(sym, 0.0)
 
-    scoring_data_available = bool(live_score_map) or bool(meta_map)
+    # Only consider scoring data available if we have REAL indicator data,
+    # pre-computed scores, or market metadata — not just fallback zeros from
+    # the live_score_map dict comprehension.  This prevents the min_score gate
+    # from filtering out all assets on the first refresh when no data exists.
+    scoring_data_available = bool(ind_map) or bool(precomp_score_map) or bool(meta_map)
 
     # Extract profile-level filter settings
     pf_cfg = (profile_config_full or {}).get("filters", {})
@@ -841,6 +845,13 @@ async def _resolve_and_persist(
     p_logic = pf_cfg.get("logic", "AND")
     profile_min_score: float = float(pf_cfg.get("min_score", 0))
     profile_require_signal: bool = bool(pf_cfg.get("require_signal", False))
+
+    # Level-aware gating: match pipeline_scan behaviour where min_score is
+    # only applied for L2+ and signal requirement only for L3.  Custom and L1
+    # levels receive structural filters only (market_cap, volume, etc.).
+    effective_level = wl.level if wl.level in ("L1", "L2", "L3") else "L1"
+    should_apply_min_score = effective_level in ("L2", "L3")
+    should_require_signal = effective_level == "L3"
 
     # Evaluate signals when the PROFILE requires them
     sig_conditions = []
@@ -872,12 +883,13 @@ async def _resolve_and_persist(
     for symbol in base_symbols:
         alpha = live_score_map.get(symbol, 0.0)
 
-        # Apply profile-level min_score gate (only when scoring data exists)
+        # Apply profile-level min_score gate (only when scoring data exists
+        # AND the level warrants it — L1/custom never gate on min_score).
         if scoring_data_available:
-            if profile_min_score and alpha < profile_min_score:
+            if should_apply_min_score and profile_min_score and alpha < profile_min_score:
                 continue
-            # Signal check from profile
-            if profile_require_signal and not signal_status.get(symbol, True):
+            # Signal check from profile (only for L3)
+            if should_require_signal and profile_require_signal and not signal_status.get(symbol, True):
                 continue
 
         meta = meta_map.get(symbol, {})
