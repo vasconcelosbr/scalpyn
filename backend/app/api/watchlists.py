@@ -69,11 +69,12 @@ def _passes_profile_filters(asset: Dict[str, Any], conditions: list, logic: str 
             actual = asset.get("change_24h")
 
         if actual is None:
-            # Data not available — skip this condition (don't count as fail or pass).
-            # "Unknown" ≠ "0": when market_metadata hasn't been fully populated yet
-            # (e.g. _seed_market_metadata_bg provides price/volume but not market_cap),
-            # we shouldn't reject the asset.  Once fetch_market_caps runs and fills in
-            # the value, the condition will be evaluated normally on the next refresh.
+            # Strict meta fields (market_cap, volume_24h, etc.) FAIL when None to prevent
+            # assets with unknown values from bypassing filters (e.g., "market_cap >= 5M").
+            # Indicator fields (RSI, ADX, etc.) are SKIPPED when None since they may not
+            # be computed yet and should not block the asset.
+            if field in _STRICT_META:
+                results.append(False)
             continue
 
         # Between operator
