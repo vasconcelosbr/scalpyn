@@ -136,7 +136,7 @@ async def _collect_all_async():
             else:
                 logger.error(
                     "market_metadata: 0 tickers upserted (fetched %d) — "
-                    "pool coins will have NO metadata until next successful run!",
+                    "collect_5m backup pathway will provide fallback metadata.",
                     len(tickers),
                 )
         except Exception as e:
@@ -292,7 +292,7 @@ async def _collect_5m_async():
                                 price = :price,
                                 price_change_24h = :change,
                                 volume_24h = :volume,
-                                spread_pct = COALESCE(market_metadata.spread_pct, :spread),
+                                spread_pct = :spread,
                                 last_updated = :updated
                         """), {
                             "symbol": pair,
@@ -303,7 +303,9 @@ async def _collect_5m_async():
                             "updated": now_ts,
                         })
                         ticker_ok += 1
-                    except Exception:
+                    except Exception as te:
+                        logger.debug("5m: backup ticker upsert failed for %s: %s",
+                                     ticker.get("currency_pair", "?"), te)
                         continue
                 logger.info("5m: backup ticker metadata upserted for %d symbols", ticker_ok)
         except Exception as e:
