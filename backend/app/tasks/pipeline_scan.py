@@ -616,11 +616,12 @@ async def _run_pipeline_scan():
                 # (including min_score, require_signal) comes from the profile.
                 effective_level = level if level in ("L1", "L2", "L3") else "L1"
 
+                # Remove assets blocked by anti-bad-entry rules (shared utility)
+                from ..utils.blocking_rules import is_blocked as _is_blocked
+
                 if effective_level in ("L1", "L2"):
                     passed, _ = _apply_level_filter(assets, profile_config, effective_level, score_config=score_config)
 
-                    # Remove assets blocked by anti-bad-entry rules
-                    from ..utils.blocking_rules import is_blocked as _is_blocked
                     before_block = len(passed)
                     passed = [a for a in passed if not _is_blocked(a)]
                     if before_block != len(passed):
@@ -634,8 +635,6 @@ async def _run_pipeline_scan():
                 elif effective_level == "L3":
                     signals = _evaluate_l3_signals(assets, profile_config, score_config=score_config)
 
-                    # Remove assets blocked by anti-bad-entry rules
-                    from ..utils.blocking_rules import is_blocked as _is_blocked
                     before_block = len(signals)
                     signals = [s for s in signals if not _is_blocked(s)]
                     if before_block != len(signals):
