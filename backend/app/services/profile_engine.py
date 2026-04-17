@@ -88,14 +88,20 @@ class ProfileEngine:
         """Convert profile signal conditions to SignalEngine format."""
         converted = []
         for cond in conditions:
-            converted.append({
+            entry: Dict[str, Any] = {
                 "id": cond.get("id", cond.get("field", "unknown")),
                 "indicator": cond.get("field", ""),
                 "operator": cond.get("operator", "=="),
                 "value": cond.get("value"),
                 "required": cond.get("required", False),
-                "enabled": cond.get("enabled", True)
-            })
+                "enabled": cond.get("enabled", True),
+            }
+            # Preserve per-indicator timeframe/period if set
+            if cond.get("timeframe"):
+                entry["timeframe"] = cond["timeframe"]
+            if cond.get("period") is not None:
+                entry["period"] = cond["period"]
+            converted.append(entry)
         return converted
     
     def process_watchlist(
