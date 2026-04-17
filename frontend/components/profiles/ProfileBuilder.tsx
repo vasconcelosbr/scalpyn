@@ -33,6 +33,8 @@ interface BlockRule {
   min?: number;
   max?: number;
   reason?: string;
+  timeframe?: string;
+  period?: number;
 }
 
 interface EntryTrigger {
@@ -44,6 +46,8 @@ interface EntryTrigger {
   max?: number;
   required: boolean;
   enabled: boolean;
+  timeframe?: string;
+  period?: number;
 }
 
 const BLOCK_INDICATORS = [
@@ -60,7 +64,31 @@ const TRIGGER_INDICATORS = [
   "volume_delta", "orderbook_pressure", "bid_ask_imbalance",
 ];
 
+const TIMEFRAME_OPTIONS = [
+  { value: "1m",  label: "1m" },
+  { value: "3m",  label: "3m" },
+  { value: "5m",  label: "5m" },
+  { value: "15m", label: "15m" },
+  { value: "1h",  label: "1h" },
+];
+
+/** Period defaults for indicators that support configurable periods */
+const PERIOD_DEFAULTS: Record<string, number> = {
+  rsi: 14, adx: 14, di_plus: 14, di_minus: 14,
+  atr_percent: 14, stoch_k: 14, stoch_d: 14,
+  macd: 12, macd_histogram: 12, bb_width: 20,
+  zscore: 20, volume_spike: 20, volume_delta: 20,
+};
+
+/** Indicators that should NOT show the timeframe selector (metadata / derived / scores) */
+const NO_TF_INDICATORS = new Set([
+  "alpha_score", "volume_24h", "spread_pct", "taker_ratio",
+  "ema_full_alignment", "ema9_gt_ema21", "ema9_gt_ema50",
+  "orderbook_pressure", "bid_ask_imbalance",
+]);
+
 const DEFAULT_CONFIG = {
+  default_timeframe: "5m",
   filters:       { logic: "AND", conditions: [] },
   scoring:       { enabled: true, weights: { liquidity: 25, market_structure: 25, momentum: 25, signal: 25 } },
   signals:       { logic: "AND", conditions: [] },
@@ -337,6 +365,22 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                 data-testid="profile-name-input"
               />
             </div>
+            <div className="space-y-2">
+              <label className="label">Default Timeframe</label>
+              <select
+                className="input"
+                value={config.default_timeframe || "5m"}
+                onChange={(e) => setConfig((c: any) => ({ ...c, default_timeframe: e.target.value }))}
+                data-testid="default-timeframe-select"
+              >
+                {TIMEFRAME_OPTIONS.map((tf) => (
+                  <option key={tf.value} value={tf.value}>{tf.label}</option>
+                ))}
+              </select>
+              <p className="text-[11px] text-[var(--text-tertiary)]">
+                Indicators inherit this timeframe unless overridden
+              </p>
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -406,6 +450,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                 conditions={config.filters?.conditions ?? []}
                 onChange={(conditions) => updateFilters(conditions, config.filters?.logic ?? "AND")}
                 showRequired={false}
+                defaultTimeframe={config.default_timeframe || "5m"}
               />
             </div>
           )}
@@ -471,6 +516,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                 conditions={config.signals?.conditions ?? []}
                 onChange={(conditions) => updateSignals(conditions, config.signals?.logic ?? "AND")}
                 showRequired={true}
+                defaultTimeframe={config.default_timeframe || "5m"}
               />
             </div>
           )}
@@ -547,6 +593,41 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                           </select>
                         </div>
                       </div>
+
+                      {/* Timeframe / Period overrides */}
+                      {!NO_TF_INDICATORS.has(block.indicator) && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="space-y-1">
+                            <label className="label text-[11px]">Timeframe</label>
+                            <select
+                              className="input h-8 text-[12px]"
+                              value={block.timeframe || ""}
+                              onChange={(e) => updateBlock(block.id, "timeframe", e.target.value || undefined)}
+                            >
+                              <option value="">{config.default_timeframe || "5m"} (default)</option>
+                              {TIMEFRAME_OPTIONS.map((tf) => (
+                                <option key={tf.value} value={tf.value}>{tf.label}</option>
+                              ))}
+                            </select>
+                          </div>
+                          {PERIOD_DEFAULTS[block.indicator] !== undefined && (
+                            <div className="space-y-1">
+                              <label className="label text-[11px]">Period</label>
+                              <input
+                                type="number"
+                                min={1}
+                                className="input h-8 text-[12px] font-mono"
+                                value={block.period ?? ""}
+                                onChange={(e) => {
+                                  const v = parseInt(e.target.value, 10);
+                                  updateBlock(block.id, "period", isNaN(v) ? undefined : v);
+                                }}
+                                placeholder={`${PERIOD_DEFAULTS[block.indicator]}`}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {block.type === "threshold" && (
                         <div className="flex items-center gap-2">
@@ -719,6 +800,35 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                       }}
                     />
                     )}
+                    {/* Timeframe override */}
+                    {!NO_TF_INDICATORS.has(trig.indicator) && (
+                      <select
+                        className="input h-8 text-[11px] w-[68px]"
+                        value={trig.timeframe || ""}
+                        onChange={(e) => updateTrigger(trig.id, "timeframe", e.target.value || undefined)}
+                        title={`Timeframe (default: ${config.default_timeframe || "5m"})`}
+                      >
+                        <option value="">{config.default_timeframe || "5m"}</option>
+                        {TIMEFRAME_OPTIONS.map((tf) => (
+                          <option key={tf.value} value={tf.value}>{tf.label}</option>
+                        ))}
+                      </select>
+                    )}
+                    {/* Period override */}
+                    {PERIOD_DEFAULTS[trig.indicator] !== undefined && (
+                      <input
+                        type="number"
+                        min={1}
+                        className="input h-8 text-[11px] w-14 font-mono"
+                        value={trig.period ?? ""}
+                        onChange={(e) => {
+                          const v = parseInt(e.target.value, 10);
+                          updateTrigger(trig.id, "period", isNaN(v) ? undefined : v);
+                        }}
+                        placeholder={`P:${PERIOD_DEFAULTS[trig.indicator]}`}
+                        title={`Period (default: ${PERIOD_DEFAULTS[trig.indicator]})`}
+                      />
+                    )}
                     <label className="flex items-center gap-1.5 text-[12px] cursor-pointer">
                       <input
                         type="checkbox"
@@ -752,13 +862,23 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                     <p className="text-[11px] text-[var(--text-tertiary)] mb-2 font-semibold uppercase tracking-wider">Logic Preview</p>
                     <pre className="text-[12px] font-mono text-[var(--text-secondary)] overflow-x-auto">
 {`IF (
-${entryConditions.filter(t => t.enabled && t.required).map(t => `  [REQUIRED] ${t.indicator} ${t.operator === "between" ? `entre ${t.min} e ${t.max}` : `${t.operator} ${t.value}`}`).join("\n  AND\n")}${
+${entryConditions.filter(t => t.enabled && t.required).map(t => {
+  const tf = t.timeframe || config.default_timeframe || "5m";
+  const p = t.period ? `, P:${t.period}` : "";
+  const cond = t.operator === "between" ? `entre ${t.min} e ${t.max}` : `${t.operator} ${t.value}`;
+  return `  [REQUIRED] ${t.indicator} (${tf}${p}) ${cond}`;
+}).join("\n  AND\n")}${
   entryConditions.filter(t => t.enabled && t.required).length > 0 &&
   entryConditions.filter(t => t.enabled && !t.required).length > 0
     ? "\n  AND ("
     : ""
 }
-${entryConditions.filter(t => t.enabled && !t.required).map(t => `    ${t.indicator} ${t.operator === "between" ? `entre ${t.min} e ${t.max}` : `${t.operator} ${t.value}`}`).join(`\n    ${entryLogic}\n`)}${
+${entryConditions.filter(t => t.enabled && !t.required).map(t => {
+  const tf = t.timeframe || config.default_timeframe || "5m";
+  const p = t.period ? `, P:${t.period}` : "";
+  const cond = t.operator === "between" ? `entre ${t.min} e ${t.max}` : `${t.operator} ${t.value}`;
+  return `    ${t.indicator} (${tf}${p}) ${cond}`;
+}).join(`\n    ${entryLogic}\n`)}${
   entryConditions.filter(t => t.enabled && !t.required).length > 0 ? "\n  )" : ""
 }
 ) → ALLOW TRADE ENTRY`}

@@ -27,11 +27,12 @@ class Profile(Base):
     # Full strategy configuration as JSONB
     # Structure:
     # {
+    #   "default_timeframe": "5m",     # profile-level default timeframe
     #   "filters": {
     #     "logic": "AND" | "OR",
     #     "conditions": [
     #       {"field": "volume_24h", "operator": ">", "value": 10000000},
-    #       {"field": "atr_percent", "operator": ">", "value": 0.5}
+    #       {"field": "rsi", "operator": ">", "value": 50, "timeframe": "15m", "period": 14}
     #     ]
     #   },
     #   "scoring": {
@@ -45,8 +46,19 @@ class Profile(Base):
     #   "signals": {
     #     "logic": "AND",
     #     "conditions": [
-    #       {"field": "adx", "operator": ">", "value": 25, "required": true},
+    #       {"field": "adx", "operator": ">", "value": 25, "required": true, "timeframe": "5m", "period": 14},
     #       {"field": "rsi", "operator": "<", "value": 45, "required": false}
+    #     ]
+    #   },
+    #   "block_rules": {
+    #     "blocks": [
+    #       {"id": "...", "indicator": "rsi", "operator": ">", "value": 80, "timeframe": "15m", "period": 14}
+    #     ]
+    #   },
+    #   "entry_triggers": {
+    #     "logic": "AND",
+    #     "conditions": [
+    #       {"indicator": "volume_spike", "operator": ">=", "value": 2, "timeframe": "1m", "period": 7}
     #     ]
     #   }
     # }

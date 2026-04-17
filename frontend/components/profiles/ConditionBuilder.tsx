@@ -10,12 +10,15 @@ interface Condition {
   min?: number;   // used when operator === "between"
   max?: number;   // used when operator === "between"
   required?: boolean;
+  timeframe?: string;  // override timeframe (e.g. "1m","3m","5m","15m","1h"); empty = inherit profile default
+  period?: number;     // indicator period (e.g. 14 for RSI, 7 for volume_spike)
 }
 
 interface ConditionBuilderProps {
   conditions: Condition[];
   onChange: (conditions: Condition[]) => void;
   showRequired?: boolean;
+  defaultTimeframe?: string;  // profile-level default (e.g. "5m")
 }
 
 const INDICATOR_FIELDS = [
@@ -76,10 +79,57 @@ const BOOLEAN_OPERATORS = [
   { value: "==", label: "is" },
 ];
 
+/** Available timeframe options for per-indicator override */
+const TIMEFRAME_OPTIONS = [
+  { value: "",    label: "Default" },
+  { value: "1m",  label: "1m" },
+  { value: "3m",  label: "3m" },
+  { value: "5m",  label: "5m" },
+  { value: "15m", label: "15m" },
+  { value: "1h",  label: "1h" },
+];
+
+/**
+ * Indicators that support a configurable period.
+ * The `default` is shown in the input as placeholder and auto-filled on add.
+ */
+const PERIOD_DEFAULTS: Record<string, number> = {
+  rsi:                14,
+  adx:                14,
+  di_plus:            14,
+  di_minus:           14,
+  atr:                14,
+  atr_percent:        14,
+  stoch_k:            14,
+  stoch_d:            14,
+  macd:               12,
+  macd_histogram:     12,
+  bb_width:           20,
+  zscore:             20,
+  volume_spike:       20,
+  obv:                20,
+  volume_delta:       20,
+  vwap_distance_pct:  20,
+};
+
+/**
+ * Indicators that should NOT show the timeframe/period selectors.
+ * These are market metadata, derived booleans, or computed scores.
+ */
+const NO_TF_INDICATORS = new Set([
+  "volume_24h", "market_cap", "price", "change_24h",
+  "spread_pct", "orderbook_depth_usdt",
+  "score", "liquidity_score", "momentum_score",
+  "di_trend", "ema_full_alignment", "ema9_gt_ema21",
+  "ema9_gt_ema50", "ema50_gt_ema200", "psar_trend",
+  "macd_signal",
+]);
+
 export function ConditionBuilder({
   conditions,
   onChange,
   showRequired = false,
+  defaultTimeframe = "5m",
 }: ConditionBuilderProps) {
   const addCondition = () => {
     onChange([...conditions, {
@@ -237,6 +287,40 @@ export function ConditionBuilder({
                 value={condition.value ?? 0}
                 onChange={(e) => updateCondition(index, { value: parseFloat(e.target.value) || 0 })}
                 data-testid={`condition-value-${index}`}
+              />
+            )}
+
+            {/* Timeframe override (only for technical indicators) */}
+            {!NO_TF_INDICATORS.has(condition.field) && (
+              <select
+                className="input w-[72px] text-[11px]"
+                value={condition.timeframe || ""}
+                onChange={(e) => updateCondition(index, { timeframe: e.target.value || undefined })}
+                title={`Timeframe (default: ${defaultTimeframe})`}
+                data-testid={`condition-timeframe-${index}`}
+              >
+                {TIMEFRAME_OPTIONS.map((tf) => (
+                  <option key={tf.value} value={tf.value}>
+                    {tf.value === "" ? defaultTimeframe : tf.label}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {/* Period input (only for indicators that support it) */}
+            {PERIOD_DEFAULTS[condition.field] !== undefined && (
+              <input
+                className="input w-16 text-[11px] font-mono"
+                type="number"
+                min={1}
+                value={condition.period ?? ""}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  updateCondition(index, { period: isNaN(v) ? undefined : v });
+                }}
+                placeholder={`P:${PERIOD_DEFAULTS[condition.field]}`}
+                title={`Period (default: ${PERIOD_DEFAULTS[condition.field]})`}
+                data-testid={`condition-period-${index}`}
               />
             )}
 
