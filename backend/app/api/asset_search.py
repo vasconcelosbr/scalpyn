@@ -23,8 +23,21 @@ GATE_IO_FUTURES_URL = "https://api.gateio.ws/api/v4/futures/usdt/tickers"
 COINGECKO_MARKETS_URL = "https://api.coingecko.com/api/v3/coins/markets"
 
 
+# Simple in-memory cache for CoinGecko market caps (TTL: 5 minutes)
+_mcap_cache: Dict[str, float] = {}
+_mcap_cache_ts: float = 0.0
+_MCAP_CACHE_TTL = 300.0  # 5 minutes
+
+
 async def _fetch_coingecko_market_caps() -> Dict[str, float]:
-    """Fetch market cap data for top 250 coins from CoinGecko."""
+    """Fetch market cap data for top 250 coins from CoinGecko (cached 5 min)."""
+    import time
+
+    global _mcap_cache, _mcap_cache_ts
+    now = time.monotonic()
+    if _mcap_cache and (now - _mcap_cache_ts) < _MCAP_CACHE_TTL:
+        return _mcap_cache
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
@@ -38,14 +51,17 @@ async def _fetch_coingecko_market_caps() -> Dict[str, float]:
             )
             resp.raise_for_status()
             coins = resp.json()
-            return {
+            result = {
                 c["symbol"].upper(): c.get("market_cap", 0) or 0
                 for c in coins
                 if c.get("market_cap")
             }
+            _mcap_cache = result
+            _mcap_cache_ts = now
+            return result
     except Exception as e:
         logger.warning("Failed to fetch market caps from CoinGecko: %s", e)
-        return {}
+        return _mcap_cache if _mcap_cache else {}
 
 
 async def _fetch_spot_assets(query: str) -> List[Dict[str, Any]]:
@@ -156,12 +172,18 @@ async def search_assets(
     if pool_id:
         try:
             pool_uuid = UUID(pool_id)
-            coins_result = await db.execute(
-                select(PoolCoin.symbol).where(PoolCoin.pool_id == pool_uuid)
-            )
-            pool_symbols = {row[0] for row in coins_result.all()}
-        except (ValueError, Exception) as e:
-            logger.warning("Failed to load pool coins for %s: %s", pool_id, e)
+        except ValueError:
+            logger.warning("Invalid pool_id format: %s", pool_id)
+            pool_uuid = None
+
+        if pool_uuid:
+            try:
+                coins_result = await db.execute(
+                    select(PoolCoin.symbol).where(PoolCoin.pool_id == pool_uuid)
+                )
+                pool_symbols = {row[0] for row in coins_result.all()}
+            except Exception as e:
+                logger.warning("Failed to load pool coins for %s: %s", pool_id, e)
 
     # Tag each asset with already_in_pool
     for asset in all_assets:

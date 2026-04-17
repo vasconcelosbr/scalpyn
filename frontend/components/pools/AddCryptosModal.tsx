@@ -203,13 +203,9 @@ export default function AddCryptosModal({
   // ── Confirm: bulk add ──────────────────────────────────────────────────────
 
   const handleConfirm = async () => {
-    const assets: { symbol: string; market_type: string }[] = [];
-
-    for (const [mType, syms] of Object.entries(selectionsByTab)) {
-      for (const sym of syms) {
-        assets.push({ symbol: sym, market_type: mType });
-      }
-    }
+    const assets = Object.entries(selectionsByTab).flatMap(([mType, syms]) =>
+      Array.from(syms).map((sym) => ({ symbol: sym, market_type: mType }))
+    );
 
     if (assets.length === 0) {
       onClose();

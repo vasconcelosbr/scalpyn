@@ -222,6 +222,7 @@ async def bulk_add_pool_coins(
 
     added: List[str] = []
     skipped: List[str] = []
+    new_coins: List[PoolCoin] = []
 
     for item in assets:
         symbol = (item.get("symbol") or "").upper().strip()
@@ -238,16 +239,19 @@ async def bulk_add_pool_coins(
             skipped.append(symbol)
             continue
 
-        coin = PoolCoin(
+        new_coins.append(PoolCoin(
             pool_id=pool_id,
             symbol=symbol,
             market_type=market_type,
             is_active=True,
             origin="manual",
-        )
-        db.add(coin)
+        ))
         existing_symbols.add(symbol)
         added.append(symbol)
+
+    # Bulk insert all new coins at once
+    if new_coins:
+        db.add_all(new_coins)
 
     # Ensure market_metadata rows exist for newly added symbols
     if added:
