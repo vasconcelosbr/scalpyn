@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 
 _REDIS_PREFIX = "spe:pipeline:"   # Redis key prefix per watchlist
 
+# Default staleness threshold (minutes).  Assets not re-confirmed within this
+# window are automatically marked 'down'.  Override per-watchlist via
+# filters_json.staleness_minutes (GUI-editable).
+_DEFAULT_STALENESS_MINUTES = 30
+
 # Strict metadata fields — NULL means FAIL (not skip) in profile filters.
 # Used by diagnostic logging in _apply_level_filter.
 _DIAG_STRICT_META = frozenset({
@@ -76,6 +81,20 @@ def _save_signals(redis, watchlist_id: str, symbols: set, ttl: int = 300):
         redis.setex(f"{_REDIS_PREFIX}{watchlist_id}:signals", ttl, json.dumps(list(symbols)))
     except Exception:
         pass
+
+
+async def _update_last_scanned(db, watchlist_id: str):
+    """Update last_scanned_at on a PipelineWatchlist after each scan attempt."""
+    from sqlalchemy import text
+    now = datetime.now(timezone.utc)
+    try:
+        await db.execute(
+            text("UPDATE pipeline_watchlists SET last_scanned_at = :now WHERE id = :wid"),
+            {"now": now, "wid": watchlist_id},
+        )
+        await db.commit()
+    except Exception as exc:
+        logger.debug("[PipelineScan] Failed to update last_scanned_at for %s: %s", watchlist_id, exc)
 
 
 # ─── market data loader ───────────────────────────────────────────────────────
@@ -455,6 +474,48 @@ def _evaluate_l3_signals(assets: list, profile_config: Optional[dict], score_con
         return fallback
 
 
+async def _run_staleness_only(db, watchlist_id: str, filters_json: dict | None = None):
+    """Run ONLY staleness expiry + cleanup — no active/down marking.
+
+    Called when a pipeline scan cannot fetch market data, so we don't want to
+    wipe the watchlist. Instead, we only expire assets whose refreshed_at is
+    older than staleness_minutes (default 30 min).
+    """
+    from sqlalchemy import text
+    now = datetime.now(timezone.utc)
+
+    staleness_minutes = int((filters_json or {}).get("staleness_minutes", _DEFAULT_STALENESS_MINUTES))
+    staleness_cutoff = now - timedelta(minutes=staleness_minutes)
+    stale_result = await db.execute(text("""
+        UPDATE pipeline_watchlist_assets
+        SET level_direction = 'down',
+            level_change_at = :now
+        WHERE watchlist_id = :wid
+          AND level_direction IS NULL
+          AND refreshed_at IS NOT NULL
+          AND refreshed_at < :cutoff
+        RETURNING symbol
+    """), {"wid": watchlist_id, "now": now, "cutoff": staleness_cutoff})
+    stale_rows = stale_result.fetchall()
+    if stale_rows:
+        logger.info(
+            "[PipelineScan] Staleness-only expiry (%d min): marked %d assets as 'down' "
+            "in watchlist %s (no market data): %s",
+            staleness_minutes, len(stale_rows), watchlist_id,
+            [r.symbol for r in stale_rows],
+        )
+
+    # Cleanup: remove 'down' records older than 2h
+    await db.execute(text("""
+        DELETE FROM pipeline_watchlist_assets
+        WHERE watchlist_id = :wid
+          AND level_direction = 'down'
+          AND level_change_at < now() - interval '2 hours'
+    """), {"wid": watchlist_id})
+
+    await db.commit()
+
+
 # ─── DB upsert ────────────────────────────────────────────────────────────────
 
 async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict | None = None):
@@ -464,21 +525,23 @@ async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict
     Symbols previously saved but not in `assets` → UPDATE level_direction = 'down'.
     Records with level_direction = 'down' older than 2h are cleaned up.
     If filters_json contains max_stay_minutes, assets older than that are expired.
+    Staleness expiry: assets not refreshed in staleness_minutes (default 30) are marked 'down'.
     """
     from sqlalchemy import text
 
     now = datetime.now(timezone.utc)
 
     if assets:
-        # Upsert active symbols (preserve entered_at on conflict)
+        # Upsert active symbols (preserve entered_at on conflict, update refreshed_at)
         for a in assets:
             await db.execute(text("""
                 INSERT INTO pipeline_watchlist_assets
                     (id, watchlist_id, symbol, current_price, price_change_24h,
-                     volume_24h, market_cap, alpha_score, entered_at, level_direction)
+                     volume_24h, market_cap, alpha_score, entered_at, refreshed_at,
+                     level_direction)
                 VALUES
                     (gen_random_uuid(), :wid, :sym, :price, :chg,
-                     :vol, :mc, :score, :now, NULL)
+                     :vol, :mc, :score, :now, :now, NULL)
                 ON CONFLICT (watchlist_id, symbol)
                 DO UPDATE SET
                     current_price    = EXCLUDED.current_price,
@@ -486,6 +549,7 @@ async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict
                     volume_24h       = EXCLUDED.volume_24h,
                     market_cap       = EXCLUDED.market_cap,
                     alpha_score      = EXCLUDED.alpha_score,
+                    refreshed_at     = EXCLUDED.refreshed_at,
                     level_direction  = NULL
             """), {
                 "wid":   watchlist_id,
@@ -534,6 +598,30 @@ async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict
               AND level_direction IS NULL
               AND entered_at < :cutoff
         """), {"wid": watchlist_id, "now": now, "cutoff": cutoff})
+
+    # Staleness expiry: assets not re-confirmed by a pipeline scan within
+    # staleness_minutes (default 30 min) are marked 'down'.
+    # This prevents assets from lingering when the scan skips due to
+    # missing market data or upstream failures.
+    staleness_minutes = int((filters_json or {}).get("staleness_minutes", _DEFAULT_STALENESS_MINUTES))
+    staleness_cutoff = now - timedelta(minutes=staleness_minutes)
+    stale_result = await db.execute(text("""
+        UPDATE pipeline_watchlist_assets
+        SET level_direction = 'down',
+            level_change_at = :now
+        WHERE watchlist_id = :wid
+          AND level_direction IS NULL
+          AND refreshed_at IS NOT NULL
+          AND refreshed_at < :cutoff
+        RETURNING symbol
+    """), {"wid": watchlist_id, "now": now, "cutoff": staleness_cutoff})
+    stale_rows = stale_result.fetchall()
+    if stale_rows:
+        logger.info(
+            "[PipelineScan] Staleness expiry (%d min): marked %d assets as 'down' in watchlist %s: %s",
+            staleness_minutes, len(stale_rows), watchlist_id,
+            [r.symbol for r in stale_rows],
+        )
 
     # Cleanup: remove 'down' records older than 2h to keep the table lean
     await db.execute(text("""
@@ -713,20 +801,28 @@ async def _run_pipeline_scan():
 
                 if not symbols:
                     logger.debug("[PipelineScan] %s (%s): no symbols — skipping.", wl.name, level)
+                    await _update_last_scanned(db, wl_id)
                     continue
 
                 # ── 2. Fetch market data ──────────────────────────────────────
                 assets = await _fetch_market_data(db, symbols)
                 if assets is None:
-                    logger.warning("[PipelineScan] %s (%s): market data fetch error — skipping.", wl.name, level)
+                    logger.warning("[PipelineScan] %s (%s): market data fetch error — running staleness check.", wl.name, level)
+                    await _run_staleness_only(db, wl_id, filters_json)
+                    await _update_last_scanned(db, wl_id)
                     continue
                 if not assets:
                     logger.warning(
                         "[PipelineScan] %s (%s): no market data found for %d requested symbols "
-                        "(sample: %s) — skipping to preserve existing watchlist entries.",
+                        "(sample: %s) — running staleness check on existing assets.",
                         wl.name, level, len(symbols), symbols[:5],
                     )
-                    continue  # Don't wipe the watchlist when market data is temporarily unavailable
+                    # Don't wipe immediately, but DO run staleness expiry so
+                    # assets that haven't been refreshed in staleness_minutes
+                    # get marked 'down' instead of lingering forever.
+                    await _run_staleness_only(db, wl_id, filters_json)
+                    await _update_last_scanned(db, wl_id)
+                    continue
 
                 logger.info(
                     "[PipelineScan] %s (%s) FUNNEL: %d pool symbols → %d with market_metadata (%d lost)",
@@ -822,6 +918,7 @@ async def _run_pipeline_scan():
                     })
 
                     await _upsert_assets(db, wl_id, passed, filters_json)
+                    await _update_last_scanned(db, wl_id)
 
                 elif effective_level == "L3":
                     signals = _evaluate_l3_signals(assets, profile_config, score_config=score_config)
@@ -853,6 +950,7 @@ async def _run_pipeline_scan():
 
                     _save_signals(redis, wl_id, current_set)
                     await _upsert_assets(db, wl_id, signals, filters_json)
+                    await _update_last_scanned(db, wl_id)
 
                     if new_syms:
                         stats["new_signals"] += len(new_syms)

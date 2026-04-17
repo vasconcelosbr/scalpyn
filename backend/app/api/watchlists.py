@@ -404,6 +404,7 @@ def _wl_to_dict(wl: PipelineWatchlist) -> Dict[str, Any]:
         "profile_id":           str(wl.profile_id) if wl.profile_id else None,
         "auto_refresh":         wl.auto_refresh,
         "filters_json":         wl.filters_json or {},
+        "last_scanned_at":      wl.last_scanned_at.isoformat() if getattr(wl, "last_scanned_at", None) else None,
         "created_at":           wl.created_at.isoformat() if wl.created_at else None,
         "updated_at":           wl.updated_at.isoformat() if wl.updated_at else None,
     }
@@ -465,6 +466,7 @@ def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any
         "market_cap":       float(a.market_cap) if a.market_cap else None,
         "alpha_score":      override_score if override_score is not None else (float(a.alpha_score) if a.alpha_score is not None else None),
         "entered_at":       a.entered_at.isoformat() if a.entered_at else None,
+        "refreshed_at":     a.refreshed_at.isoformat() if getattr(a, "refreshed_at", None) else None,
         "previous_level":   a.previous_level,
         "level_change_at":  a.level_change_at.isoformat() if a.level_change_at else None,
         "level_direction":  a.level_direction,
@@ -1007,6 +1009,7 @@ async def _resolve_and_persist(
             row.volume_24h       = asset_data["volume_24h"]
             row.market_cap       = asset_data["market_cap"]
             row.alpha_score      = asset_data["alpha_score"]
+            row.refreshed_at     = now
             # Re-activate asset if it was previously marked as "down"
             if row.level_direction == "down":
                 row.level_direction = "up"
@@ -1023,6 +1026,7 @@ async def _resolve_and_persist(
                 market_cap=asset_data["market_cap"],
                 alpha_score=asset_data["alpha_score"],
                 entered_at=now,
+                refreshed_at=now,
                 level_direction="up",
                 level_change_at=now,
             )
@@ -1034,6 +1038,9 @@ async def _resolve_and_persist(
         row = existing_map[sym]
         row.level_direction = "down"
         row.level_change_at = now
+
+    # Track when this watchlist was last refreshed
+    wl.last_scanned_at = now
 
     await db.commit()
     return assets_out

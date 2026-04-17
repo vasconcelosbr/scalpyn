@@ -16,6 +16,7 @@ import {
   Zap,
   BookOpen,
   ArrowLeftRight,
+  Clock,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -46,6 +47,7 @@ interface PipelineWatchlist {
   profile_name?: string | null;
   auto_refresh: boolean;
   filters_json: Record<string, any>;
+  last_scanned_at: string | null;
   created_at: string | null;
   updated_at: string | null;
   asset_count: number;
@@ -54,6 +56,7 @@ interface PipelineWatchlist {
 interface PipelineAsset extends PipelineAssetWithScore {
   watchlist_id: string;
   entered_at: string | null;
+  refreshed_at: string | null;
   previous_level: string | null;
   level_change_at: string | null;
 }
@@ -111,6 +114,24 @@ function fmtChange(n: number | null) {
   if (n == null) return '—';
   const sign = n >= 0 ? '+' : '';
   return `${sign}${n.toFixed(2)}%`;
+}
+
+/** Relative time label (e.g. "2m ago", "1h ago") */
+function timeAgo(isoStr: string | null | undefined): string {
+  if (!isoStr) return '—';
+  const diff = Date.now() - new Date(isoStr).getTime();
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return 'agora';
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h${mins % 60 > 0 ? `${mins % 60}m` : ''}`;
+  return `${Math.floor(hrs / 24)}d`;
+}
+
+/** True when last_scanned_at is >10 min old (stale pipeline). */
+function isScanStale(isoStr: string | null | undefined): boolean {
+  if (!isoStr) return true;
+  return Date.now() - new Date(isoStr).getTime() > 10 * 60_000;
 }
 
 // ── Indicator Cell ────────────────────────────────────────────────────────────
@@ -527,6 +548,20 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
         <LevelBadge level={wl.level} />
         <span className="text-sm font-medium text-[#E2E8F0] flex-1">{wl.name}</span>
         <span className="text-xs text-[#4B5563]">from {sourceName}</span>
+        {/* Freshness indicator */}
+        {wl.auto_refresh && (
+          <span
+            className={`inline-flex items-center gap-1 text-[10px] ${
+              isScanStale(wl.last_scanned_at)
+                ? 'text-amber-400'
+                : 'text-emerald-500'
+            }`}
+            title={wl.last_scanned_at ? `Last scan: ${new Date(wl.last_scanned_at).toLocaleString()}` : 'Never scanned'}
+          >
+            <Clock size={10} />
+            {wl.last_scanned_at ? timeAgo(wl.last_scanned_at) : 'pending'}
+          </span>
+        )}
         {/* Profile badge */}
         {profileName && (
           <span
