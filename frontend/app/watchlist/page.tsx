@@ -249,6 +249,7 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
   const [profileId, setProfileId] = useState(wl?.profile_id ?? '');
   const [autoRefresh, setAutoRefresh] = useState(wl?.auto_refresh ?? true);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const selectedProfile = profiles.find((p) => p.id === profileId) ?? null;
 
@@ -261,18 +262,24 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
-    // NOTE: filters_json is no longer used for filtering at runtime.
-    // All filtering is driven exclusively by the associated profile.
-    await onSave({
-      name,
-      level,
-      source_pool_id: sourcePoolId || null,
-      source_watchlist_id: sourceWatchlistId || null,
-      profile_id: profileId || null,
-      auto_refresh: autoRefresh,
-      filters_json: {},
-    });
-    setSaving(false);
+    setSaveError(null);
+    try {
+      // NOTE: filters_json is no longer used for filtering at runtime.
+      // All filtering is driven exclusively by the associated profile.
+      await onSave({
+        name,
+        level,
+        source_pool_id: sourcePoolId || null,
+        source_watchlist_id: sourceWatchlistId || null,
+        profile_id: profileId || null,
+        auto_refresh: autoRefresh,
+        filters_json: {},
+      });
+    } catch (err: any) {
+      setSaveError(err?.message ?? 'Failed to save watchlist settings. Please try again.');
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -401,6 +408,10 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
             <span className="text-sm text-[#94A3B8]">Auto-refresh on load</span>
           </label>
 
+          {saveError && (
+            <p className="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">{saveError}</p>
+          )}
+
           <div className="flex gap-3 pt-2">
             <button
               type="button"
@@ -443,6 +454,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
 
   const sourceName = wl.source_pool_id
     ? pools.find((p) => p.id === wl.source_pool_id)?.name ?? 'Pool'
@@ -479,12 +491,13 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
 
   async function handleRefresh() {
     setRefreshing(true);
+    setRefreshError(null);
     try {
       await apiFetch(`/watchlists/${wl.id}/refresh`, { method: 'POST' });
       await loadAssets();
       onRefreshed();
-    } catch {
-      // ignore
+    } catch (err: any) {
+      setRefreshError(err?.message ?? 'Failed to refresh watchlist assets. Check source pool configuration.');
     } finally {
       setRefreshing(false);
     }
@@ -568,6 +581,11 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
       {/* Asset table */}
       {expanded && (
         <div className="border-t border-[#1E2433]">
+          {refreshError && (
+            <div className="px-4 py-2 text-xs text-red-400 bg-red-400/10">
+              Refresh error: {refreshError}
+            </div>
+          )}
           {loadingAssets ? (
             <div className="px-4 py-6 text-center text-sm text-[#4B5563] flex items-center justify-center gap-2">
               <RefreshCw size={13} className="animate-spin" />
