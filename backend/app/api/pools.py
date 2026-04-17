@@ -325,6 +325,7 @@ async def discover_pool_assets(
 
     # ── 3. Apply volume filter (requires tickers — skip if no criteria set) ───
     pre_volume_count = len(universe_symbols)
+    post_volume_count = pre_volume_count
     if min_volume > 0:
         try:
             tickers = await adapter.get_tickers(symbols=None, market=market_type)
@@ -343,9 +344,10 @@ async def discover_pool_assets(
                 s for s in universe_symbols
                 if vol_map.get(s, 0) >= min_volume
             }
+            post_volume_count = len(universe_symbols)
             logger.info(
                 "[Discovery] Volume filter (>= $%s): %d → %d assets",
-                f"{min_volume:,.0f}", pre_volume_count, len(universe_symbols),
+                f"{min_volume:,.0f}", pre_volume_count, post_volume_count,
             )
         except Exception as e:
             logger.warning(f"Ticker fetch failed, skipping volume filter: {e}")
@@ -361,9 +363,10 @@ async def discover_pool_assets(
 
     found = len(universe_symbols)
     logger.info(
-        "[Discovery] Pool %s final discovery: %d assets (raw=%d, post-filter=%d, post-volume=%d, post-cap=%d)",
+        "[Discovery] Pool %s final discovery: %d assets "
+        "(raw=%d, post-filter=%d, post-volume=%d, post-cap=%d)",
         pool_id, found, len(raw_pairs), pre_volume_count,
-        pre_volume_count if min_volume <= 0 else len(universe_symbols), found,
+        post_volume_count, found,
     )
 
     # ── 4. Load existing pool coins ───────────────────────────────────────────
