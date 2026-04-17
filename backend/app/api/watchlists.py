@@ -424,6 +424,17 @@ def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any
         ind_out["spread_pct"] = mt.get("spread_pct")
     if "orderbook_depth_usdt" not in ind_out or ind_out.get("orderbook_depth_usdt") is None:
         ind_out["orderbook_depth_usdt"] = mt.get("orderbook_depth_usdt")
+
+    # Derive di_trend (DI+ > DI-) for the frontend, matching pipeline_scan logic
+    if "di_trend" not in ind_out or ind_out.get("di_trend") is None:
+        di_p = ind_out.get("di_plus")
+        di_m = ind_out.get("di_minus")
+        if di_p is not None and di_m is not None:
+            try:
+                ind_out["di_trend"] = float(di_p) > float(di_m)
+            except (TypeError, ValueError):
+                pass
+
     try:
         e9   = float(ind_out.get("ema9")   or 0)
         e50  = float(ind_out.get("ema50")  or 0)
@@ -1066,10 +1077,14 @@ async def get_watchlist_assets(
     symbols = [a.symbol for a in assets]
     ind_map = await _fetch_indicators_map(db, symbols) if symbols else {}
 
-    # On-demand computation: if some symbols have no indicators in DB, fetch
-    # OHLCV from Gate.io and compute them now (results are also cached to DB).
+    # On-demand computation: if some symbols have no indicators in DB OR are
+    # missing key indicator fields (stale cache), fetch OHLCV and recompute.
+    _KEY_INDICATOR_FIELDS = {"taker_ratio", "ema9_distance_pct", "rsi"}
     if symbols:
-        missing = [s for s in symbols if not ind_map.get(s)]
+        missing = [
+            s for s in symbols
+            if not ind_map.get(s) or not _KEY_INDICATOR_FIELDS.issubset(ind_map[s].keys())
+        ]
         if missing:
             on_demand = await _compute_indicators_on_demand(db, missing)
             ind_map.update(on_demand)
@@ -1167,6 +1182,68 @@ async def get_watchlist_assets(
                 }
             except Exception:
                 pass
+
+    # ── On-demand orderbook metrics for symbols missing depth data ──────────────
+    # When spread_pct / orderbook_depth_usdt are NULL in market_metadata, fetch
+    # orderbook data from Gate.io and update both meta_map and the DB.
+    if symbols:
+        need_orderbook = [
+            s for s in symbols
+            if not meta_map.get(s, {}).get("orderbook_depth_usdt")
+        ]
+        if need_orderbook:
+            try:
+                from ..services.market_data_service import market_data_service
+                import asyncio
+
+                sem = asyncio.Semaphore(8)
+
+                async def _fetch_ob(sym: str):
+                    async with sem:
+                        return sym, await market_data_service.fetch_orderbook_metrics(sym, depth=10)
+
+                ob_results = await asyncio.gather(
+                    *[_fetch_ob(s) for s in need_orderbook[:40]],
+                    return_exceptions=True,
+                )
+                _now = datetime.now(timezone.utc)
+                for item in ob_results:
+                    if isinstance(item, Exception):
+                        continue
+                    sym, ob = item
+                    if not ob:
+                        continue
+                    # Update meta_map so _asset_to_dict will use these values
+                    if sym not in meta_map:
+                        meta_map[sym] = {}
+                    meta_map[sym]["spread_pct"] = ob.get("spread_pct")
+                    meta_map[sym]["orderbook_depth_usdt"] = ob.get("orderbook_depth_usdt")
+                    # Persist to DB for subsequent requests
+                    try:
+                        await db.execute(
+                            text("""
+                                INSERT INTO market_metadata (symbol, spread_pct, orderbook_depth_usdt, last_updated)
+                                VALUES (:sym, :spread, :depth, :ts)
+                                ON CONFLICT (symbol) DO UPDATE SET
+                                    spread_pct = COALESCE(:spread, market_metadata.spread_pct),
+                                    orderbook_depth_usdt = COALESCE(:depth, market_metadata.orderbook_depth_usdt),
+                                    last_updated = :ts
+                            """),
+                            {
+                                "sym":    sym,
+                                "spread": ob.get("spread_pct"),
+                                "depth":  ob.get("orderbook_depth_usdt"),
+                                "ts":     _now,
+                            },
+                        )
+                    except Exception:
+                        pass
+                try:
+                    await db.commit()
+                except Exception:
+                    pass
+            except Exception as _e:
+                logger.debug("[Pipeline] On-demand orderbook fetch error: %s", _e)
 
     enriched = [
         _asset_to_dict(
