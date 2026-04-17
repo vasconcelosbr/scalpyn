@@ -10,18 +10,18 @@ const INDICATORS = [
   "di_plus", "di_minus", "di_trend", "spread_pct", "orderbook_depth_usdt",
   "bb_width", "stoch_k", "stoch_d", "vwap_distance_pct",
   "volume_24h", "obv", "atr", "atr_pct", "psar_trend", "zscore",
-  "volume_delta", "funding_rate",
+  "volume_delta", "funding_rate", "ema9_distance_pct",
   "ema9_gt_ema50", "ema50_gt_ema200", "ema_full_alignment",
 ];
 
 const OPERATORS = ["<=", ">=", "<", ">", "=", "between", "ema9>ema50>ema200", "ema9>ema50", "ema50>ema200", "di+>di-", "di->di+", ">prev+", ">prev"];
 
 // Indicators where "between" range is the most common use-case
-const RANGE_INDICATORS = new Set(["rsi", "stoch_k", "stoch_d", "adx", "vwap_distance_pct", "bb_width"]);
+const RANGE_INDICATORS = new Set(["rsi", "stoch_k", "stoch_d", "adx", "vwap_distance_pct", "bb_width", "ema9_distance_pct"]);
 
 export default function ScoreEngineSettings() {
   const { config, updateConfig, isLoading } = useConfig("score");
-  const [weights, setWeights] = useState({ liquidity: 25, market_structure: 25, momentum: 25, signal: 25 });
+  const [weights, setWeights] = useState({ liquidity: 35, market_structure: 25, momentum: 25, signal: 15 });
   const [rules, setRules] = useState<any[]>([]);
   const [thresholds, setThresholds] = useState({ strong_buy: 80, buy: 65, neutral: 40 });
   const [topN, setTopN] = useState(5);
