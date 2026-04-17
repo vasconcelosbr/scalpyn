@@ -83,6 +83,9 @@ export default function PoolConfigPage() {
   const [autoRemove, setAutoRemove] = useState(false);
   const [notifyChanges, setNotifyChanges] = useState(false);
 
+  // Discovery settings (stored in pool.overrides)
+  const [maxAssets, setMaxAssets] = useState<number>(0);
+
   // Add coin form
   const [newCoin, setNewCoin] = useState("");
   const [addingCoin, setAddingCoin] = useState(false);
@@ -145,6 +148,7 @@ export default function PoolConfigPage() {
       setAutoAdd(ov.auto_add !== false);
       setAutoRemove(Boolean(ov.auto_remove));
       setNotifyChanges(Boolean(ov.notify_on_changes));
+      setMaxAssets(Number(ov.max_assets) || 0);
     } catch (e: any) {
       setError(e.message ?? "Failed to load pool.");
     }
@@ -175,6 +179,7 @@ export default function PoolConfigPage() {
             auto_add: autoAdd,
             auto_remove: autoRemove,
             notify_on_changes: notifyChanges,
+            max_assets: maxAssets,
           },
         }),
       });
@@ -436,6 +441,21 @@ export default function PoolConfigPage() {
                   ✓ Vinculada: {pipelineWatchlists.find(w => w.id === assignedWatchlistId)?.name}
                 </p>
               )}
+            </div>
+            <div className="space-y-2">
+              <label className="label">Max Assets for Discovery</label>
+              <input
+                className="input"
+                type="number"
+                min={0}
+                step={1}
+                value={maxAssets}
+                onChange={(e) => setMaxAssets(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                placeholder="0 = unlimited"
+              />
+              <p style={{ fontSize: "11px", color: "var(--text-tertiary)" }}>
+                Maximum assets to include during Discover/Scan. 0 = no limit.
+              </p>
             </div>
           </div>
 

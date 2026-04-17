@@ -238,9 +238,9 @@ async def discover_pool_assets(
     """
     Auto-discover assets for a pool from Gate.io universe.
 
-    1. Load pool + profile config (min_volume_24h, min_market_cap from overrides or profile)
+    1. Load pool + linked Strategy Profile
     2. Fetch all tradable pairs from Gate.io public API
-    3. Apply filters from profile config (if profile assigned)
+    3. Apply filters exclusively from linked profile (no hardcoded overrides)
     4. Compare with existing pool_coins
     5. Insert new coins with origin='discovered', remove stale discovered ones
     6. Return { found, added, removed, kept_manual, profile_applied }
@@ -257,31 +257,29 @@ async def discover_pool_assets(
 
     market_type = pool.market_type or "spot"
     overrides = pool.overrides or {}
+    max_assets = int(overrides.get("max_assets", 0))
 
-    # Criteria from pool overrides (set via frontend auto-refresh settings)
-    min_volume = float(overrides.get("min_volume_24h", 0))
-    min_market_cap = float(overrides.get("min_market_cap", 0))
-    
-    # Load profile filters if profile is assigned
-    profile_config = {}
+    # Filters come exclusively from linked Strategy Profile
+    min_volume = 0.0
+    min_market_cap = 0.0
     profile_applied = False
+
     if pool.profile_id:
         profile_query = select(Profile).where(Profile.id == pool.profile_id)
         profile_result = await db.execute(profile_query)
         profile = profile_result.scalars().first()
         if profile and profile.config:
-            profile_config = profile.config
             logger.info(f"[Discovery] Using profile {profile.id} ({profile.name}) filters for pool {pool_id}")
-            
+
             # Extract filter conditions from profile
-            filters = profile_config.get("filters", {})
+            filters = profile.config.get("filters", {})
             conditions = filters.get("conditions", [])
-            
+
             for cond in conditions:
                 field = cond.get("field", "")
                 operator = cond.get("operator", ">")
                 value = cond.get("value", 0)
-                
+
                 # Map profile filter fields to discovery criteria
                 if field in ["volume_24h", "volume_24h_usd"]:
                     if operator in [">", ">="]:
@@ -291,8 +289,8 @@ async def discover_pool_assets(
                     if operator in [">", ">="]:
                         min_market_cap = max(min_market_cap, float(value))
                         profile_applied = True
-            
-            logger.info(f"[Discovery] Filters applied: min_volume={min_volume}, min_market_cap={min_market_cap}")
+
+            logger.info(f"[Discovery] Profile filters: min_volume={min_volume}, min_market_cap={min_market_cap}")
 
     # ── 2. Fetch universe from Gate.io (public endpoints) ─────────────────────
     adapter = GateAdapter(api_key="", api_secret="")
@@ -338,6 +336,10 @@ async def discover_pool_assets(
         except Exception as e:
             logger.warning(f"Ticker fetch failed, skipping volume filter: {e}")
 
+    # ── Apply max_assets cap (user-configurable, 0 = no limit) ──────────────
+    if max_assets > 0 and len(universe_symbols) > max_assets:
+        universe_symbols = set(sorted(universe_symbols)[:max_assets])
+
     found = len(universe_symbols)
 
     # ── 4. Load existing pool coins ───────────────────────────────────────────
@@ -380,8 +382,10 @@ async def discover_pool_assets(
         "kept_manual": len(existing_manual),
         "profile_applied": profile_applied,
         "filters_used": {
+            "source": "profile" if profile_applied else "none",
             "min_volume_24h": min_volume,
             "min_market_cap": min_market_cap,
+            "max_assets": max_assets,
         }
     }
 
@@ -508,10 +512,12 @@ async def scan_and_populate_pool(
     user_id: UUID = Depends(get_current_user_id),
 ) -> Dict[str, Any]:
     """
-    Escaneia o mercado e popula o pool com ativos que passam nos filtros de overrides.
-    Equivale ao /discover mas aplica também min_market_cap dos overrides.
+    Scan market and populate pool with assets.
+    Filters come exclusively from linked Strategy Profile.
+    max_assets is user-configurable via pool overrides (0 = no limit).
     """
     from ..services.market_data_service import market_data_service
+    from ..models.profile import Profile
 
     pool_query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id)
     pool_result = await db.execute(pool_query)
@@ -520,11 +526,40 @@ async def scan_and_populate_pool(
         raise HTTPException(status_code=404, detail="Pool not found")
 
     overrides = pool.overrides or {}
-    min_volume = float(overrides.get("min_volume_24h", 0))
-    min_market_cap = float(overrides.get("min_market_cap", 0))
-    max_assets = int(overrides.get("max_assets", 200))
+    max_assets = int(overrides.get("max_assets", 0))
 
-    # Buscar ativos do mercado com filtros
+    # Filters come exclusively from linked Strategy Profile
+    min_volume = 0.0
+    min_market_cap = 0.0
+    profile_applied = False
+
+    if pool.profile_id:
+        profile_query = select(Profile).where(Profile.id == pool.profile_id)
+        profile_result = await db.execute(profile_query)
+        profile = profile_result.scalars().first()
+        if profile and profile.config:
+            logger.info(f"[Scan] Using profile {profile.id} ({profile.name}) filters for pool {pool_id}")
+
+            filters = profile.config.get("filters", {})
+            conditions = filters.get("conditions", [])
+
+            for cond in conditions:
+                field = cond.get("field", "")
+                operator = cond.get("operator", ">")
+                value = cond.get("value", 0)
+
+                if field in ["volume_24h", "volume_24h_usd"]:
+                    if operator in [">", ">="]:
+                        min_volume = max(min_volume, float(value))
+                        profile_applied = True
+                elif field in ["market_cap", "market_cap_usd"]:
+                    if operator in [">", ">="]:
+                        min_market_cap = max(min_market_cap, float(value))
+                        profile_applied = True
+
+            logger.info(f"[Scan] Profile filters: min_volume={min_volume}, min_market_cap={min_market_cap}")
+
+    # Buscar ativos do mercado com filtros do profile
     try:
         market_assets = await market_data_service.get_market_metadata(
             min_volume=min_volume,
@@ -537,7 +572,11 @@ async def scan_and_populate_pool(
             if "_" not in s and s.endswith("USDT"):
                 return s[:-4] + "_USDT"
             return s
-        universe_symbols = {_norm(a["symbol"]) for a in market_assets[:max_assets]}
+        # Apply max_assets cap (user-configurable, 0 = no limit)
+        if max_assets > 0:
+            universe_symbols = {_norm(a["symbol"]) for a in market_assets[:max_assets]}
+        else:
+            universe_symbols = {_norm(a["symbol"]) for a in market_assets}
     except Exception as e:
         logger.error(f"[Scan] Falha ao buscar mercado: {e}")
         raise HTTPException(status_code=502, detail=f"Falha ao buscar dados de mercado: {e}")
@@ -576,7 +615,9 @@ async def scan_and_populate_pool(
         "added": len(to_add),
         "removed": len(to_remove),
         "kept_manual": len(existing_manual),
+        "profile_applied": profile_applied,
         "filters_used": {
+            "source": "profile" if profile_applied else "none",
             "min_volume_24h": min_volume,
             "min_market_cap": min_market_cap,
             "max_assets": max_assets,
