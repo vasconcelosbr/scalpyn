@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
 from sqlalchemy import select, text, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -518,7 +518,7 @@ async def list_watchlists(
 
 @router.post("/")
 async def create_watchlist(
-    payload: Dict[str, Any],
+    payload: Dict[str, Any] = Body(...),
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -553,13 +553,15 @@ async def create_watchlist(
     db.add(wl)
     await db.commit()
     await db.refresh(wl)
-    return _wl_to_dict(wl)
+    d = _wl_to_dict(wl)
+    d["asset_count"] = 0
+    return d
 
 
 @router.put("/{watchlist_id}")
 async def update_watchlist(
     watchlist_id: UUID,
-    payload: Dict[str, Any],
+    payload: Dict[str, Any] = Body(...),
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -598,9 +600,30 @@ async def update_watchlist(
         wl.filters_json = payload["filters_json"]
     wl.updated_at = datetime.now(timezone.utc)
 
+    logger.info(
+        "[Watchlist] update %s: source_pool_id=%s, source_watchlist_id=%s, profile_id=%s",
+        watchlist_id,
+        wl.source_pool_id,
+        wl.source_watchlist_id,
+        wl.profile_id,
+    )
+
     await db.commit()
     await db.refresh(wl)
-    return _wl_to_dict(wl)
+
+    # Include asset_count in response so the frontend list stays consistent
+    cnt_result = await db.execute(
+        select(func.count(PipelineWatchlistAsset.id)).where(
+            PipelineWatchlistAsset.watchlist_id == wl.id,
+            (PipelineWatchlistAsset.level_direction.is_(None))
+            | (PipelineWatchlistAsset.level_direction == "up"),
+        )
+    )
+    asset_count = cnt_result.scalar() or 0
+
+    d = _wl_to_dict(wl)
+    d["asset_count"] = asset_count
+    return d
 
 
 @router.delete("/{watchlist_id}")
@@ -1456,7 +1479,7 @@ async def refresh_watchlist(
 
 @router.post("/default-setup")
 async def create_default_pipeline(
-    payload: Dict[str, Any],
+    payload: Dict[str, Any] = Body(...),
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
