@@ -657,6 +657,22 @@ class GateAdapter(BaseExchangeAdapter):
         raw = await self._public_get(f"{self.SPOT_BASE}/spot/currency_pairs")
         return raw  # list already
 
+    async def list_spot_tickers_public(self) -> List[Dict[str, Any]]:
+        """
+        GET /spot/tickers (public, no auth) → all spot tickers.
+
+        More reliable than currency_pairs for discovery because tickers
+        only exist for pairs that are actively traded.
+
+        Returns a list of dicts with keys:
+            currency_pair, last, lowest_ask, highest_bid,
+            change_percentage, base_volume, quote_volume,
+            high_24h, low_24h, etf_net_value, etf_pre_net_value,
+            etf_pre_timestamp, etf_leverage.
+        """
+        raw = await self._public_get(f"{self.SPOT_BASE}/spot/tickers")
+        return raw  # list already
+
     async def list_futures_contracts(self) -> List[Dict[str, Any]]:
         """
         GET /futures/usdt/contracts (public) → all USDT-margined perpetual contracts.
@@ -708,7 +724,8 @@ class GateAdapter(BaseExchangeAdapter):
                     "market_type": "spot",
                 }
                 for p in pairs
-                if p.get("trade_status") == "tradable" and q in p["id"].upper()
+                if p.get("trade_status") in ("tradable", "buyable", "sellable")
+                and q in p["id"].upper()
             ]
 
         # Sort: exact prefix match first, then alphabetical
