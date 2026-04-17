@@ -450,7 +450,7 @@ export default function PoolConfigPage() {
                 min={0}
                 step={1}
                 value={maxAssets}
-                onChange={(e) => setMaxAssets(Math.max(0, parseInt(e.target.value) || 0))}
+                onChange={(e) => setMaxAssets(Math.max(0, parseInt(e.target.value, 10) || 0))}
                 placeholder="0 = unlimited"
               />
               <p style={{ fontSize: "11px", color: "var(--text-tertiary)" }}>

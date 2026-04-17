@@ -338,7 +338,7 @@ async def discover_pool_assets(
 
     # ── Apply max_assets cap (user-configurable, 0 = no limit) ──────────────
     if max_assets > 0 and len(universe_symbols) > max_assets:
-        universe_symbols = set(list(universe_symbols)[:max_assets])
+        universe_symbols = set(sorted(universe_symbols)[:max_assets])
 
     found = len(universe_symbols)
 
