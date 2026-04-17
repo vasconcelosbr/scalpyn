@@ -410,10 +410,11 @@ async def discover_pool_assets(
         )
 
     found = len(universe_symbols)
+    raw_count = len(raw_tickers) if market_type != "futures" else len(raw_pairs)
     logger.info(
         "[Discovery] Pool %s final discovery: %d assets "
         "(raw=%d, post-filter=%d, post-volume=%d, post-cap=%d)",
-        pool_id, found, len(raw_pairs), pre_volume_count,
+        pool_id, found, raw_count, pre_volume_count,
         post_volume_count, found,
     )
 

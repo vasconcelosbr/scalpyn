@@ -69,8 +69,11 @@ async def get_db():
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable, please retry",
         )
+    except HTTPException:
+        # Don't mask FastAPI HTTP errors (e.g. 404, 502 from endpoint logic)
+        raise
     except Exception as exc:
-        logger.error("DB session error: %s: %s", type(exc).__name__, exc)
+        logger.error("DB session error: %s: %s", type(exc).__name__, exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database error",
