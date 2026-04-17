@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 
 _REDIS_PREFIX = "spe:pipeline:"   # Redis key prefix per watchlist
 
+# Default staleness threshold (minutes).  Assets not re-confirmed within this
+# window are automatically marked 'down'.  Override per-watchlist via
+# filters_json.staleness_minutes (GUI-editable).
+_DEFAULT_STALENESS_MINUTES = 30
+
 # Strict metadata fields — NULL means FAIL (not skip) in profile filters.
 # Used by diagnostic logging in _apply_level_filter.
 _DIAG_STRICT_META = frozenset({
@@ -88,8 +93,8 @@ async def _update_last_scanned(db, watchlist_id: str):
             {"now": now, "wid": watchlist_id},
         )
         await db.commit()
-    except Exception:
-        pass  # Non-critical: don't let tracking failures break the scan
+    except Exception as exc:
+        logger.debug("[PipelineScan] Failed to update last_scanned_at for %s: %s", watchlist_id, exc)
 
 
 # ─── market data loader ───────────────────────────────────────────────────────
@@ -479,7 +484,7 @@ async def _run_staleness_only(db, watchlist_id: str, filters_json: dict | None =
     from sqlalchemy import text
     now = datetime.now(timezone.utc)
 
-    staleness_minutes = int((filters_json or {}).get("staleness_minutes", 30))
+    staleness_minutes = int((filters_json or {}).get("staleness_minutes", _DEFAULT_STALENESS_MINUTES))
     staleness_cutoff = now - timedelta(minutes=staleness_minutes)
     stale_result = await db.execute(text("""
         UPDATE pipeline_watchlist_assets
@@ -598,7 +603,7 @@ async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict
     # staleness_minutes (default 30 min) are marked 'down'.
     # This prevents assets from lingering when the scan skips due to
     # missing market data or upstream failures.
-    staleness_minutes = int((filters_json or {}).get("staleness_minutes", 30))
+    staleness_minutes = int((filters_json or {}).get("staleness_minutes", _DEFAULT_STALENESS_MINUTES))
     staleness_cutoff = now - timedelta(minutes=staleness_minutes)
     stale_result = await db.execute(text("""
         UPDATE pipeline_watchlist_assets
