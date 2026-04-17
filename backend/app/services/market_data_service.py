@@ -1,12 +1,13 @@
 """Market Data Service — centralized collection from exchanges into TimescaleDB."""
 
 import logging
-import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 
 import httpx
 import pandas as pd
+
+from ..utils.symbol_filters import is_excluded_asset, is_leveraged_base
 
 logger = logging.getLogger(__name__)
 
@@ -15,14 +16,11 @@ GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/spot/tickers"
 GATE_ORDERBOOK_URL = "https://api.gateio.ws/api/v4/spot/order_book"
 GATE_FUNDING_URL = "https://api.gateio.ws/api/v4/futures/usdt/funding_rate"
 
-# Regex to detect Gate.io leveraged ETF tokens (e.g. BTC3L, PEPE5S, TON2L)
-_ETF_PATTERN = re.compile(r"\d+[LS]$", re.IGNORECASE)
-
 
 def _is_etf_pair(currency_pair: str) -> bool:
-    """Return True if the pair is a leveraged ETF token (e.g. BTC3L_USDT, PEPE5S_USDT)."""
+    """Return True if the pair is a leveraged/ETF token (e.g. BTC3L_USDT, BTCUP_USDT)."""
     base = currency_pair.split("_")[0]
-    return bool(_ETF_PATTERN.search(base))
+    return is_leveraged_base(base)
 
 
 class MarketDataService:
@@ -73,7 +71,7 @@ class MarketDataService:
             return None
 
     async def fetch_all_tickers(self) -> List[Dict[str, Any]]:
-        """Fetch all USDT spot tickers from Gate.io."""
+        """Fetch all USDT spot tickers from Gate.io (excluding leveraged tokens + stablecoins)."""
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(GATE_TICKERS_URL)
@@ -84,7 +82,7 @@ class MarketDataService:
                 t for t in tickers
                 if isinstance(t, dict)
                 and t.get("currency_pair", "").endswith("_USDT")
-                and not _is_etf_pair(t.get("currency_pair", ""))
+                and not is_excluded_asset(t.get("currency_pair", ""))
                 and t.get("etf_net_value") is None
             ]
             return usdt_tickers
@@ -178,7 +176,8 @@ class MarketDataService:
             if not pair.endswith("_USDT"):
                 continue
             vol = float(ticker.get("quote_volume", 0) or 0)
-            if vol >= min_volume and not _is_etf_pair(pair):
+            # fetch_all_tickers already filters leveraged + stablecoins
+            if vol >= min_volume:
                 symbols.append(pair)  # keep BTC_USDT format (with underscore)
             if len(symbols) >= max_assets:
                 break

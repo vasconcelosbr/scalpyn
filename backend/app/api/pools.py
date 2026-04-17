@@ -293,28 +293,39 @@ async def discover_pool_assets(
             logger.info(f"[Discovery] Profile filters: min_volume={min_volume}, min_market_cap={min_market_cap}")
 
     # ── 2. Fetch universe from Gate.io (public endpoints) ─────────────────────
+    from ..utils.symbol_filters import is_excluded_asset, is_leveraged_token
+
     adapter = GateAdapter(api_key="", api_secret="")
     try:
         if market_type == "futures":
             raw_pairs = await adapter.list_futures_contracts()
-            # Build symbol set from contract names
+            # Build symbol set from contract names — exclude leveraged tokens
             universe_symbols: set[str] = {
                 p["name"] for p in raw_pairs
+                if not is_leveraged_token(p["name"])
             }
         else:
             raw_pairs = await adapter.list_spot_pairs()
-            # Only tradable USDT pairs
+            # Only tradable USDT pairs — exclude leveraged tokens + stablecoins
             universe_symbols = {
                 p["id"]
                 for p in raw_pairs
                 if p.get("quote", "") == "USDT"
                 and p.get("trade_status") == "tradable"
+                and not is_excluded_asset(p["id"])
             }
+        logger.info(
+            "[Discovery] Gate.io universe for pool %s: %d pairs (%s, "
+            "after leveraged/stablecoin filter from %d raw)",
+            pool_id, len(universe_symbols), market_type, len(raw_pairs),
+        )
     except Exception as e:
         logger.error(f"Gate.io discovery failed for pool {pool_id}: {e}")
         raise HTTPException(status_code=502, detail=f"Gate.io API error: {e}")
 
     # ── 3. Apply volume filter (requires tickers — skip if no criteria set) ───
+    pre_volume_count = len(universe_symbols)
+    post_volume_count = pre_volume_count
     if min_volume > 0:
         try:
             tickers = await adapter.get_tickers(symbols=None, market=market_type)
@@ -333,14 +344,30 @@ async def discover_pool_assets(
                 s for s in universe_symbols
                 if vol_map.get(s, 0) >= min_volume
             }
+            post_volume_count = len(universe_symbols)
+            logger.info(
+                "[Discovery] Volume filter (>= $%s): %d → %d assets",
+                f"{min_volume:,.0f}", pre_volume_count, post_volume_count,
+            )
         except Exception as e:
             logger.warning(f"Ticker fetch failed, skipping volume filter: {e}")
 
     # ── Apply max_assets cap (user-configurable, 0 = no limit) ──────────────
+    pre_cap_count = len(universe_symbols)
     if max_assets > 0 and len(universe_symbols) > max_assets:
         universe_symbols = set(sorted(universe_symbols)[:max_assets])
+        logger.info(
+            "[Discovery] max_assets cap: %d → %d assets",
+            pre_cap_count, len(universe_symbols),
+        )
 
     found = len(universe_symbols)
+    logger.info(
+        "[Discovery] Pool %s final discovery: %d assets "
+        "(raw=%d, post-filter=%d, post-volume=%d, post-cap=%d)",
+        pool_id, found, len(raw_pairs), pre_volume_count,
+        post_volume_count, found,
+    )
 
     # ── 4. Load existing pool coins ───────────────────────────────────────────
     coins_result = await db.execute(
