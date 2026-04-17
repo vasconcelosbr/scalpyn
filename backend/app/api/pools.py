@@ -185,6 +185,97 @@ async def add_pool_coin(pool_id: UUID, payload: Dict[str, Any], db: AsyncSession
     return _coin_to_dict(coin)
 
 
+@router.post("/{pool_id}/coins/bulk")
+async def bulk_add_pool_coins(
+    pool_id: UUID,
+    payload: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """
+    Bulk insert multiple assets into a pool.
+
+    Payload: { "assets": [{ "symbol": "BTC_USDT", "market_type": "spot" }, ...] }
+
+    - Skips duplicates (symbols already in pool)
+    - Normalizes symbols (uppercase, underscore format)
+    - Validates each symbol is non-empty
+    - Ensures market_metadata row exists for each added symbol
+    """
+    pool_query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id)
+    pool_result = await db.execute(pool_query)
+    pool = pool_result.scalars().first()
+    if not pool:
+        raise HTTPException(status_code=404, detail="Pool not found")
+
+    assets: List[Dict[str, str]] = payload.get("assets", [])
+    if not assets:
+        raise HTTPException(status_code=400, detail="No assets provided")
+    if len(assets) > 200:
+        raise HTTPException(status_code=400, detail="Maximum 200 assets per request")
+
+    # Load existing pool symbols for dedup
+    existing_result = await db.execute(
+        select(PoolCoin.symbol).where(PoolCoin.pool_id == pool_id)
+    )
+    existing_symbols: set[str] = {row[0] for row in existing_result.all()}
+
+    added: List[str] = []
+    skipped: List[str] = []
+
+    for item in assets:
+        symbol = (item.get("symbol") or "").upper().strip()
+        market_type = (item.get("market_type") or "spot").lower()
+
+        if not symbol:
+            continue
+
+        # Normalize symbol to Gate.io format (BTCUSDT → BTC_USDT)
+        if "_" not in symbol and symbol.endswith("USDT"):
+            symbol = symbol[:-4] + "_USDT"
+
+        if symbol in existing_symbols:
+            skipped.append(symbol)
+            continue
+
+        coin = PoolCoin(
+            pool_id=pool_id,
+            symbol=symbol,
+            market_type=market_type,
+            is_active=True,
+            origin="manual",
+        )
+        db.add(coin)
+        existing_symbols.add(symbol)
+        added.append(symbol)
+
+    # Ensure market_metadata rows exist for newly added symbols
+    if added:
+        from sqlalchemy import text as sa_text
+
+        for sym in added:
+            try:
+                await db.execute(
+                    sa_text(
+                        "INSERT INTO market_metadata (symbol) VALUES (:sym) "
+                        "ON CONFLICT (symbol) DO NOTHING"
+                    ),
+                    {"sym": sym},
+                )
+            except Exception as e:
+                logger.warning("Failed to upsert market_metadata for %s: %s", sym, e)
+
+    await db.commit()
+
+    return {
+        "status": "success",
+        "added": len(added),
+        "skipped": len(skipped),
+        "added_symbols": added,
+        "skipped_symbols": skipped,
+    }
+
+
 @router.delete("/{pool_id}/coins/{symbol}")
 async def remove_pool_coin(pool_id: UUID, symbol: str, db: AsyncSession = Depends(get_db), user_id: UUID = Depends(get_current_user_id)):
     pool_query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id)
