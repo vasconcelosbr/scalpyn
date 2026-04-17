@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ChevronLeft, Plus, Trash2, Save, Loader2, Search } from "lucide-react";
+import { ChevronLeft, Plus, Trash2, Save, Loader2, Search, ListPlus } from "lucide-react";
 import { apiFetch, apiGet, apiPost, apiDelete } from "@/lib/api";
+import AddCryptosModal from "@/components/pools/AddCryptosModal";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface Pool {
@@ -100,6 +101,9 @@ export default function PoolConfigPage() {
   // Discover
   const [discovering, setDiscovering] = useState(false);
   const [discoverResult, setDiscoverResult] = useState<DiscoverResult | null>(null);
+
+  // Add Cryptos Modal
+  const [showAddCryptosModal, setShowAddCryptosModal] = useState(false);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -679,8 +683,8 @@ export default function PoolConfigPage() {
             </button>
           </div>
 
-          {/* Discover button */}
-          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          {/* Discover + Add Cryptos buttons */}
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
             <button
               className="btn btn-primary"
               onClick={handleDiscover}
@@ -693,6 +697,15 @@ export default function PoolConfigPage() {
                 <Search className="w-4 h-4" />
               )}
               {discovering ? "Discovering…" : "Discover Assets"}
+            </button>
+
+            <button
+              className="btn btn-secondary"
+              onClick={() => setShowAddCryptosModal(true)}
+              style={{ gap: "6px" }}
+            >
+              <ListPlus className="w-4 h-4" />
+              Adicionar Criptos Manualmente
             </button>
 
             {discoverResult && (
@@ -791,6 +804,17 @@ export default function PoolConfigPage() {
           </table>
         )}
       </div>
+
+      {/* ── Add Cryptos Modal ── */}
+      {showAddCryptosModal && (
+        <AddCryptosModal
+          poolId={id}
+          poolMarketType={marketType}
+          existingSymbols={coins.map((c) => c.symbol)}
+          onClose={() => setShowAddCryptosModal(false)}
+          onAdded={() => fetchAll()}
+        />
+      )}
     </div>
   );
 }

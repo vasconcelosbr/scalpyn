@@ -24,6 +24,7 @@ from .api import (
     custom_watchlists,
     ai_keys,
     ai_skills,
+    asset_search,
 )
 
 
@@ -87,6 +88,9 @@ app.include_router(trades.router)
 app.include_router(orders.router)
 app.include_router(pools.router)
 app.include_router(exchanges.router)
+
+# Asset Search
+app.include_router(asset_search.router)
 
 # Strategy Profiles
 app.include_router(profiles.router)
