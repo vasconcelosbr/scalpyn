@@ -55,6 +55,9 @@ class PipelineWatchlist(Base):
     # Only max_stay_minutes (if present) is still used for asset expiry.
     filters_json = Column(JSONB, default=dict)
 
+    # Pipeline scan tracking — set after every scan attempt so UI can show freshness
+    last_scanned_at = Column(DateTime(timezone=True), nullable=True)
+
     created_at = Column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -94,6 +97,8 @@ class PipelineWatchlistAsset(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
+    # Updated every time the pipeline scan re-confirms this asset (staleness detection)
+    refreshed_at = Column(DateTime(timezone=True), nullable=True)
     previous_level = Column(String(10), nullable=True)
     level_change_at = Column(DateTime(timezone=True), nullable=True)
     level_direction = Column(String(4), nullable=True)   # "up" or "down"
