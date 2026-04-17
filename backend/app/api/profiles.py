@@ -566,7 +566,7 @@ async def get_example_profiles(
                     "logic": "AND",
                     "conditions": [
                         {"field": "adx", "operator": ">", "value": 25, "required": True},
-                        {"field": "volume_spike", "operator": "==", "value": True, "required": False},
+                        {"field": "volume_spike", "operator": ">=", "value": 2.0, "required": False},
                         {"field": "rsi", "operator": "<", "value": 70, "required": False}
                     ]
                 }
