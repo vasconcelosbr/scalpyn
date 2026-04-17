@@ -90,36 +90,57 @@ async def _collect_all_async():
         # even niche coins beyond the top-500.
         try:
             tickers = await market_data_service.fetch_all_tickers()
-            now_ts = datetime.now(timezone.utc)
-            for ticker in tickers:
-                pair = ticker.get("currency_pair", "")
-                if not pair.endswith("_USDT"):
-                    continue
-                symbol = pair  # keep BTC_USDT format (with underscore)
-                price = float(ticker.get("last", 0) or 0)
-                change = float(ticker.get("change_percentage", 0) or 0)
-                volume = float(ticker.get("quote_volume", 0) or 0)
-                # Compute spread from tickers bid/ask (no extra API call needed)
-                spread = market_data_service.compute_spread_from_ticker(ticker)
+            if not tickers:
+                logger.warning("fetch_all_tickers returned empty — retrying once after 3 s…")
+                await asyncio.sleep(3)
+                tickers = await market_data_service.fetch_all_tickers()
 
-                if price > 0:
-                    await db.execute(text("""
-                        INSERT INTO market_metadata
-                            (symbol, price, price_change_24h, volume_24h, spread_pct, last_updated)
-                        VALUES (:symbol, :price, :change, :volume, :spread, :updated)
-                        ON CONFLICT (symbol) DO UPDATE SET
-                            price = :price, price_change_24h = :change,
-                            volume_24h = :volume, spread_pct = :spread, last_updated = :updated
-                    """), {
-                        "symbol": symbol,
-                        "price":  price,
-                        "change": change,
-                        "volume": volume,
-                        "spread": spread,
-                        "updated": now_ts,
-                    })
+            now_ts = datetime.now(timezone.utc)
+            ticker_ok = 0
+            for ticker in tickers:
+                try:
+                    pair = ticker.get("currency_pair", "")
+                    if not pair.endswith("_USDT"):
+                        continue
+                    symbol = pair  # keep BTC_USDT format (with underscore)
+                    price = float(ticker.get("last", 0) or 0)
+                    change = float(ticker.get("change_percentage", 0) or 0)
+                    volume = float(ticker.get("quote_volume", 0) or 0)
+                    # Compute spread from tickers bid/ask (no extra API call needed)
+                    spread = market_data_service.compute_spread_from_ticker(ticker)
+
+                    if price > 0:
+                        await db.execute(text("""
+                            INSERT INTO market_metadata
+                                (symbol, price, price_change_24h, volume_24h, spread_pct, last_updated)
+                            VALUES (:symbol, :price, :change, :volume, :spread, :updated)
+                            ON CONFLICT (symbol) DO UPDATE SET
+                                price = :price, price_change_24h = :change,
+                                volume_24h = :volume, spread_pct = :spread, last_updated = :updated
+                        """), {
+                            "symbol": symbol,
+                            "price":  price,
+                            "change": change,
+                            "volume": volume,
+                            "spread": spread,
+                            "updated": now_ts,
+                        })
+                        ticker_ok += 1
+                except Exception as te:
+                    logger.debug("Ticker metadata upsert failed for %s: %s",
+                                 ticker.get("currency_pair", "?"), te)
+                    continue
+
+            if ticker_ok:
+                logger.info("market_metadata: upserted %d/%d tickers", ticker_ok, len(tickers))
+            else:
+                logger.error(
+                    "market_metadata: 0 tickers upserted (fetched %d) — "
+                    "collect_5m backup pathway will provide fallback metadata.",
+                    len(tickers),
+                )
         except Exception as e:
-            logger.warning(f"Failed to update metadata: {e}")
+            logger.error("Failed to fetch/update metadata from tickers: %s", e)
 
         await db.commit()
 
@@ -202,6 +223,22 @@ async def _collect_5m_async():
                         "volume":    float(row["volume"]),
                     })
 
+                # Seed market_metadata with price from latest OHLCV close.
+                # Ensures every pool coin has a metadata row even when the
+                # tickers-based pathway in collect_all has failed.
+                latest_5m = df.iloc[-1]
+                await db.execute(text("""
+                    INSERT INTO market_metadata (symbol, price, last_updated)
+                    VALUES (:sym, :price, :ts)
+                    ON CONFLICT (symbol) DO UPDATE SET
+                        price = :price,
+                        last_updated = :ts
+                """), {
+                    "sym":   symbol,
+                    "price": float(latest_5m["close"]),
+                    "ts":    datetime.now(timezone.utc),
+                })
+
                 # Fetch orderbook metrics (spread + depth) and update market_metadata
                 try:
                     ob = await market_data_service.fetch_orderbook_metrics(symbol, depth=10)
@@ -226,6 +263,53 @@ async def _collect_5m_async():
             except Exception as e:
                 logger.warning(f"Failed to collect 5m data for {symbol}: {e}")
                 continue
+
+        # ── Backup metadata pathway: fetch tickers for volume_24h + spread ───
+        # Ensures pool coins get volume_24h populated even when collect_all's
+        # tickers block has failed.  Without volume_24h, strict profile filters
+        # reject the asset even though a metadata row exists from the OHLCV seed.
+        try:
+            tickers = await market_data_service.fetch_all_tickers()
+            if tickers:
+                now_ts = datetime.now(timezone.utc)
+                ticker_ok = 0
+                for ticker in tickers:
+                    try:
+                        pair = ticker.get("currency_pair", "")
+                        if not pair.endswith("_USDT"):
+                            continue
+                        price = float(ticker.get("last", 0) or 0)
+                        if price <= 0:
+                            continue
+                        volume = float(ticker.get("quote_volume", 0) or 0)
+                        change = float(ticker.get("change_percentage", 0) or 0)
+                        spread = market_data_service.compute_spread_from_ticker(ticker)
+                        await db.execute(text("""
+                            INSERT INTO market_metadata
+                                (symbol, price, price_change_24h, volume_24h, spread_pct, last_updated)
+                            VALUES (:symbol, :price, :change, :volume, :spread, :updated)
+                            ON CONFLICT (symbol) DO UPDATE SET
+                                price = :price,
+                                price_change_24h = :change,
+                                volume_24h = :volume,
+                                spread_pct = :spread,
+                                last_updated = :updated
+                        """), {
+                            "symbol": pair,
+                            "price":  price,
+                            "change": change,
+                            "volume": volume,
+                            "spread": spread,
+                            "updated": now_ts,
+                        })
+                        ticker_ok += 1
+                    except Exception as te:
+                        logger.debug("5m: backup ticker upsert failed for %s: %s",
+                                     ticker.get("currency_pair", "?"), te)
+                        continue
+                logger.info("5m: backup ticker metadata upserted for %d symbols", ticker_ok)
+        except Exception as e:
+            logger.debug("5m: backup ticker fetch failed (non-blocking): %s", e)
 
         await db.commit()
 

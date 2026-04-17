@@ -23,6 +23,14 @@ logger = logging.getLogger(__name__)
 
 _REDIS_PREFIX = "spe:pipeline:"   # Redis key prefix per watchlist
 
+# Strict metadata fields — NULL means FAIL (not skip) in profile filters.
+# Used by diagnostic logging in _apply_level_filter.
+_DIAG_STRICT_META = frozenset({
+    "volume_24h", "market_cap", "price",
+    "change_24h", "change_24h_pct", "price_change_24h",
+    "spread_pct", "orderbook_depth_usdt",
+})
+
 
 def _run_async(coro):
     loop = asyncio.new_event_loop()
@@ -183,6 +191,38 @@ async def _fetch_market_data(db, symbols: list) -> list:
     ind_map   = {r.symbol: (r.indicators_json or {}) for r in ind_rows}
     score_map = {r.symbol: r for r in score_rows}
 
+    # ── Funnel stats: symbols requested vs. found in market_metadata ─────────
+    requested_set = set(symbols)
+    found_meta_set = {r.symbol for r in meta_rows}
+    missing_meta = requested_set - found_meta_set
+    if missing_meta:
+        logger.info(
+            "[PipelineScan] market_metadata gap: %d/%d symbols have NO metadata "
+            "(sample: %s)",
+            len(missing_meta), len(requested_set),
+            sorted(missing_meta)[:10],
+        )
+
+    # Indicator coverage
+    has_indicators = set(ind_map.keys())
+    missing_ind = found_meta_set - has_indicators
+    if missing_ind:
+        logger.info(
+            "[PipelineScan] indicator gap: %d/%d symbols with metadata have NO indicators "
+            "(sample: %s)",
+            len(missing_ind), len(found_meta_set),
+            sorted(missing_ind)[:10],
+        )
+
+    # Score coverage
+    has_scores = set(score_map.keys())
+    missing_scores = found_meta_set - has_scores
+    if missing_scores:
+        logger.debug(
+            "[PipelineScan] score gap: %d/%d symbols with metadata have NO alpha_score",
+            len(missing_scores), len(found_meta_set),
+        )
+
     assets = []
     for row in meta_rows:
         sym = row.symbol
@@ -236,6 +276,26 @@ async def _fetch_market_data(db, symbols: list) -> list:
 
 # ─── level evaluators ─────────────────────────────────────────────────────────
 
+def _check_condition_would_fail(cond: dict, actual_value) -> bool:
+    """Quick check whether a single filter condition would reject an asset.
+
+    Used only for diagnostic logging — not for actual filtering decisions.
+    """
+    op_str = cond.get("operator", ">=")
+    target = cond.get("value")
+    if target is None:
+        return False
+    try:
+        av = float(actual_value) if not isinstance(actual_value, bool) else actual_value
+        tv = float(target) if not isinstance(target, bool) else target
+        ops = {
+            ">=": av >= tv, "<=": av <= tv, ">": av > tv, "<": av < tv,
+            "==": av == tv, "=": av == tv, "!=": av != tv,
+        }
+        return not ops.get(op_str, True)
+    except (TypeError, ValueError):
+        return False
+
 def _apply_level_filter(assets: list, profile_config: Optional[dict], level: str, score_config: Optional[dict] = None) -> tuple[list, list]:
     """
     Apply ProfileEngine filters for a given level.
@@ -261,16 +321,62 @@ def _apply_level_filter(assets: list, profile_config: Optional[dict], level: str
     if level == "L2":
         min_score = float((profile_config or {}).get("filters", {}).get("min_score", 0))
 
+    # ── Diagnostic: analyse rejections per filter condition ────────────────
+    filter_conditions = (profile_config or {}).get("filters", {}).get("conditions", [])
+    if filter_conditions and len(assets) > 0:
+        rejection_counts: dict[str, int] = {}
+        null_counts: dict[str, int] = {}
+
+        for asset in assets:
+            indicators = asset.get("indicators", {})
+            flat = {**asset, **{k: v for k, v in indicators.items() if isinstance(v, (int, float, bool, str))}}
+            for cond in filter_conditions:
+                field = cond.get("field", "")
+                if not field:
+                    continue
+                val = flat.get(field)
+                if val is None:
+                    null_counts[field] = null_counts.get(field, 0) + 1
+                    if field in _DIAG_STRICT_META:
+                        rejection_counts[field + " (NULL→FAIL)"] = rejection_counts.get(field + " (NULL→FAIL)", 0) + 1
+                else:
+                    if _check_condition_would_fail(cond, val):
+                        rejection_counts[field] = rejection_counts.get(field, 0) + 1
+
+        if rejection_counts or null_counts:
+            logger.info(
+                "[PipelineScan] %s filter diagnostics (%d assets):\n"
+                "  NULL fields: %s\n"
+                "  Rejection causes: %s",
+                level, len(assets),
+                {k: f"{v}/{len(assets)}" for k, v in sorted(null_counts.items(), key=lambda x: -x[1])},
+                {k: f"{v}/{len(assets)}" for k, v in sorted(rejection_counts.items(), key=lambda x: -x[1])},
+            )
+
     # Apply structural filters
     filtered = engine._apply_filters(assets)
 
+    logger.info(
+        "[PipelineScan] %s profile filters: %d → %d assets (rejected %d)",
+        level, len(assets), len(filtered), len(assets) - len(filtered),
+    )
+
     # Compute scores for all passing assets
     scored = []
+    below_min_score = 0
     for asset in filtered:
         processed = engine._process_single_asset(asset, include_details=True)
         total = processed.get("score", {}).get("total_score", 0)
         if total >= min_score:
             scored.append({**asset, "_score": total, "_processed": processed})
+        else:
+            below_min_score += 1
+
+    if below_min_score:
+        logger.info(
+            "[PipelineScan] %s min_score gate (%.1f): rejected %d/%d filtered assets",
+            level, min_score, below_min_score, len(filtered),
+        )
 
     return scored, filtered
 
@@ -473,6 +579,41 @@ async def _broadcast_pipeline_update(
         logger.warning("[PipelineScan] WebSocket broadcast failed: %s", exc)
 
 
+async def _broadcast_scan_funnel(
+    watchlist_id: str,
+    watchlist_name: str,
+    level: str,
+    pool_total: int,
+    with_metadata: int,
+    after_profile_filter: int,
+    after_blocking: int,
+):
+    """Broadcast scan funnel stats via 'pipeline' WebSocket channel for frontend diagnostics."""
+    try:
+        from ..api.websocket import manager
+
+        payload = {
+            "type":           "scan_funnel",
+            "level":          level,
+            "watchlist_id":   watchlist_id,
+            "watchlist_name": watchlist_name,
+            "funnel": {
+                "pool_total":            pool_total,
+                "with_metadata":         with_metadata,
+                "no_metadata":           pool_total - with_metadata,
+                "after_profile_filter":  after_profile_filter,
+                "rejected_by_profile":   with_metadata - after_profile_filter,
+                "after_blocking":        after_blocking,
+                "blocked":               after_profile_filter - after_blocking,
+            },
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+
+        await manager.broadcast("pipeline", payload)
+    except Exception as exc:
+        logger.debug("[PipelineScan] Funnel broadcast failed: %s", exc)
+
+
 # ─── core async pipeline ──────────────────────────────────────────────────────
 
 async def _run_pipeline_scan():
@@ -483,7 +624,7 @@ async def _run_pipeline_scan():
     from sqlalchemy import select
 
     redis = _get_redis()
-    stats = {"watchlists": 0, "new_signals": 0, "errors": 0}
+    stats = {"watchlists": 0, "new_signals": 0, "errors": 0, "funnels": []}
 
     async with AsyncSessionLocal() as db:
         # Load all pipeline watchlists with auto_refresh=true
@@ -526,8 +667,8 @@ async def _run_pipeline_scan():
                     # Normalize symbols to BTC_USDT format (market_metadata uses underscores)
                     raw_syms = [_normalize_sym(c.symbol) for c in coin_rows]
                     symbols = filter_real_assets(raw_syms)
-                    logger.debug(
-                        "[PipelineScan] %s (%s): pool %s → %d raw coins → %d after filter",
+                    logger.info(
+                        "[PipelineScan] %s (%s): pool %s → %d raw coins → %d after leveraged-token filter",
                         wl.name, level, wl.source_pool_id, len(raw_syms), len(symbols),
                     )
 
@@ -543,7 +684,7 @@ async def _run_pipeline_scan():
                         ORDER BY alpha_score DESC NULLS LAST
                     """), {"wid": str(wl.source_watchlist_id)})).fetchall()
                     symbols = filter_real_assets([_normalize_sym(r.symbol) for r in asset_rows])
-                    logger.debug(
+                    logger.info(
                         "[PipelineScan] %s (%s): upstream watchlist %s → %d symbols",
                         wl.name, level, wl.source_watchlist_id, len(symbols),
                     )
@@ -586,6 +727,24 @@ async def _run_pipeline_scan():
                         wl.name, level, len(symbols), symbols[:5],
                     )
                     continue  # Don't wipe the watchlist when market data is temporarily unavailable
+
+                logger.info(
+                    "[PipelineScan] %s (%s) FUNNEL: %d pool symbols → %d with market_metadata (%d lost)",
+                    wl.name, level, len(symbols), len(assets), len(symbols) - len(assets),
+                )
+
+                # Quick data quality summary for diagnostics
+                n_has_mcap = sum(1 for a in assets if a.get("market_cap") is not None)
+                n_has_vol = sum(1 for a in assets if a.get("volume_24h") is not None)
+                n_has_spread = sum(1 for a in assets if a.get("spread_pct") is not None)
+                n_has_depth = sum(1 for a in assets if a.get("orderbook_depth_usdt") is not None)
+                n_has_ind = sum(1 for a in assets if a.get("indicators"))
+                logger.info(
+                    "[PipelineScan] %s (%s) DATA COVERAGE of %d assets: "
+                    "market_cap=%d, volume_24h=%d, spread_pct=%d, depth=%d, indicators=%d",
+                    wl.name, level, len(assets),
+                    n_has_mcap, n_has_vol, n_has_spread, n_has_depth, n_has_ind,
+                )
 
                 # ── 3. Load profile config ────────────────────────────────────
                 profile_config: Optional[dict] = None
@@ -630,6 +789,38 @@ async def _run_pipeline_scan():
                             wl.name, level, before_block - len(passed), before_block,
                         )
 
+                    # ── FUNNEL SUMMARY ────────────────────────────────────────
+                    logger.info(
+                        "[PipelineScan] ═══ %s (%s) FUNNEL SUMMARY ═══\n"
+                        "  Pool symbols:       %d\n"
+                        "  With market data:   %d  (-%d no metadata)\n"
+                        "  After profile filt: %d  (-%d rejected)\n"
+                        "  After blocking:     %d  (-%d blocked)\n"
+                        "  ═══════════════════════════",
+                        wl.name, level,
+                        len(symbols),
+                        len(assets), len(symbols) - len(assets),
+                        before_block, len(assets) - before_block,
+                        len(passed), before_block - len(passed),
+                    )
+
+                    # Broadcast funnel stats for frontend diagnostic panel
+                    await _broadcast_scan_funnel(
+                        wl_id, wl.name, level,
+                        pool_total=len(symbols),
+                        with_metadata=len(assets),
+                        after_profile_filter=before_block,
+                        after_blocking=len(passed),
+                    )
+
+                    stats["funnels"].append({
+                        "watchlist": wl.name, "level": level,
+                        "pool_total": len(symbols),
+                        "with_metadata": len(assets),
+                        "after_profile_filter": before_block,
+                        "after_blocking": len(passed),
+                    })
+
                     await _upsert_assets(db, wl_id, passed, filters_json)
 
                 elif effective_level == "L3":
@@ -642,6 +833,18 @@ async def _run_pipeline_scan():
                             "[PipelineScan] %s (L3): anti-bad-entry removed %d/%d signals",
                             wl.name, before_block - len(signals), before_block,
                         )
+
+                    logger.info(
+                        "[PipelineScan] ═══ %s (L3) FUNNEL SUMMARY ═══\n"
+                        "  From upstream:      %d\n"
+                        "  With market data:   %d\n"
+                        "  After signals:      %d\n"
+                        "  After blocking:     %d\n"
+                        "  ═══════════════════════════",
+                        wl.name,
+                        len(symbols), len(assets),
+                        before_block, len(signals),
+                    )
 
                     # ── 5. Detect new signals ─────────────────────────────────
                     current_set = {s["symbol"] for s in signals}
