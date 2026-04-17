@@ -23,6 +23,14 @@ logger = logging.getLogger(__name__)
 
 _REDIS_PREFIX = "spe:pipeline:"   # Redis key prefix per watchlist
 
+# Strict metadata fields — NULL means FAIL (not skip) in profile filters.
+# Used by diagnostic logging in _apply_level_filter.
+_DIAG_STRICT_META = frozenset({
+    "volume_24h", "market_cap", "price",
+    "change_24h", "change_24h_pct", "price_change_24h",
+    "spread_pct", "orderbook_depth_usdt",
+})
+
 
 def _run_async(coro):
     loop = asyncio.new_event_loop()
@@ -318,11 +326,6 @@ def _apply_level_filter(assets: list, profile_config: Optional[dict], level: str
     if filter_conditions and len(assets) > 0:
         rejection_counts: dict[str, int] = {}
         null_counts: dict[str, int] = {}
-        _STRICT_META = frozenset({
-            "volume_24h", "market_cap", "price",
-            "change_24h", "change_24h_pct", "price_change_24h",
-            "spread_pct", "orderbook_depth_usdt",
-        })
 
         for asset in assets:
             indicators = asset.get("indicators", {})
@@ -334,7 +337,7 @@ def _apply_level_filter(assets: list, profile_config: Optional[dict], level: str
                 val = flat.get(field)
                 if val is None:
                     null_counts[field] = null_counts.get(field, 0) + 1
-                    if field in _STRICT_META:
+                    if field in _DIAG_STRICT_META:
                         rejection_counts[field + " (NULL→FAIL)"] = rejection_counts.get(field + " (NULL→FAIL)", 0) + 1
                 else:
                     if _check_condition_would_fail(cond, val):
