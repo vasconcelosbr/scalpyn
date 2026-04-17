@@ -276,7 +276,7 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
         filters_json: {},
       });
     } catch (err: any) {
-      setSaveError(err?.message ?? 'Failed to save watchlist');
+      setSaveError(err?.message ?? 'Failed to save watchlist settings. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -497,7 +497,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
       await loadAssets();
       onRefreshed();
     } catch (err: any) {
-      setRefreshError(err?.message ?? 'Refresh failed');
+      setRefreshError(err?.message ?? 'Failed to refresh watchlist assets. Check source pool configuration.');
     } finally {
       setRefreshing(false);
     }
