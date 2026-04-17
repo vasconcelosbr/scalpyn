@@ -296,6 +296,7 @@ async def discover_pool_assets(
     from ..utils.symbol_filters import is_excluded_asset, is_leveraged_token
 
     adapter = GateAdapter(api_key="", api_secret="")
+    vol_map: dict[str, float] = {}
     try:
         if market_type == "futures":
             raw_pairs = await adapter.list_futures_contracts()
@@ -304,42 +305,91 @@ async def discover_pool_assets(
                 p["name"] for p in raw_pairs
                 if not is_leveraged_token(p["name"])
             }
+            logger.info(
+                "[Discovery] Gate.io futures universe for pool %s: %d contracts "
+                "(from %d raw, after leveraged filter)",
+                pool_id, len(universe_symbols), len(raw_pairs),
+            )
         else:
-            raw_pairs = await adapter.list_spot_pairs()
-            # Only tradable USDT pairs — exclude leveraged tokens + stablecoins
-            universe_symbols = {
-                p["id"]
-                for p in raw_pairs
-                if p.get("quote", "") == "USDT"
-                and p.get("trade_status") == "tradable"
-                and not is_excluded_asset(p["id"])
-            }
-        logger.info(
-            "[Discovery] Gate.io universe for pool %s: %d pairs (%s, "
-            "after leveraged/stablecoin filter from %d raw)",
-            pool_id, len(universe_symbols), market_type, len(raw_pairs),
-        )
+            # Primary source: tickers (public, no auth) — only active pairs
+            # have tickers, so this naturally filters non-tradable pairs.
+            raw_tickers = await adapter.list_spot_tickers_public()
+            logger.info(
+                "[Discovery] Gate.io returned %d spot tickers", len(raw_tickers),
+            )
+            universe_symbols = set()
+            for t in raw_tickers:
+                pair = t.get("currency_pair", "")
+                if not pair.endswith("_USDT"):
+                    continue
+                if is_excluded_asset(pair):
+                    continue
+                # Exclude stale/dead pairs with no last price
+                last = float(t.get("last", 0) or 0)
+                if last <= 0:
+                    continue
+                universe_symbols.add(pair)
+                # Pre-build volume map (avoids a separate ticker fetch)
+                vol_map[pair] = float(t.get("quote_volume", 0) or 0)
+
+            logger.info(
+                "[Discovery] Gate.io spot universe for pool %s: %d USDT pairs "
+                "(from %d raw tickers, after leveraged/stablecoin/active filter)",
+                pool_id, len(universe_symbols), len(raw_tickers),
+            )
+
+            # Fallback: if tickers returned suspiciously few results,
+            # also try currency_pairs endpoint and merge
+            if len(universe_symbols) < 200:
+                logger.warning(
+                    "[Discovery] Ticker-based universe unexpectedly small (%d), "
+                    "supplementing with currency_pairs endpoint",
+                    len(universe_symbols),
+                )
+                try:
+                    raw_pairs = await adapter.list_spot_pairs()
+                    for p in raw_pairs:
+                        sym = p.get("id", "")
+                        if (
+                            p.get("quote", "") == "USDT"
+                            and p.get("trade_status") in (
+                                "tradable", "buyable", "sellable",
+                            )
+                            and not is_excluded_asset(sym)
+                        ):
+                            universe_symbols.add(sym)
+                    logger.info(
+                        "[Discovery] After currency_pairs supplement: %d assets "
+                        "(from %d raw pairs)",
+                        len(universe_symbols), len(raw_pairs),
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "[Discovery] currency_pairs fallback failed: %s", e,
+                    )
     except Exception as e:
         logger.error(f"Gate.io discovery failed for pool {pool_id}: {e}")
         raise HTTPException(status_code=502, detail=f"Gate.io API error: {e}")
 
-    # ── 3. Apply volume filter (requires tickers — skip if no criteria set) ───
+    # ── 3. Apply volume filter ────────────────────────────────────────────────
     pre_volume_count = len(universe_symbols)
     post_volume_count = pre_volume_count
     if min_volume > 0:
-        try:
-            tickers = await adapter.get_tickers(symbols=None, market=market_type)
-            # Build volume lookup: symbol → volume_24h
-            if market_type == "futures":
+        # For futures, need a separate ticker fetch; for spot vol_map is pre-built
+        if market_type == "futures":
+            try:
+                fut_tickers = await adapter._public_get(
+                    f"{adapter.FUTURES_BASE}/futures/{adapter.SETTLE}/tickers"
+                )
                 vol_map = {
                     t.get("contract", ""): float(t.get("volume_24h_quote", 0) or 0)
-                    for t in tickers
+                    for t in fut_tickers
                 }
-            else:
-                vol_map = {
-                    t.get("currency_pair", ""): float(t.get("quote_volume", 0) or 0)
-                    for t in tickers
-                }
+            except Exception as e:
+                logger.warning(f"Futures ticker fetch failed, skipping volume filter: {e}")
+                vol_map = {}
+
+        if vol_map:
             universe_symbols = {
                 s for s in universe_symbols
                 if vol_map.get(s, 0) >= min_volume
@@ -349,8 +399,6 @@ async def discover_pool_assets(
                 "[Discovery] Volume filter (>= $%s): %d → %d assets",
                 f"{min_volume:,.0f}", pre_volume_count, post_volume_count,
             )
-        except Exception as e:
-            logger.warning(f"Ticker fetch failed, skipping volume filter: {e}")
 
     # ── Apply max_assets cap (user-configurable, 0 = no limit) ──────────────
     pre_cap_count = len(universe_symbols)

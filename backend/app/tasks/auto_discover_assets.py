@@ -59,40 +59,80 @@ async def _discover_async():
                         p["name"] for p in raw_pairs
                         if not is_excluded_asset(p["name"])
                     }
+                    vol_map: dict[str, float] = {}
+                    logger.info(
+                        "Pool '%s': futures universe %d contracts (from %d raw)",
+                        pool.name, len(universe_symbols), len(raw_pairs),
+                    )
                 else:
-                    raw_pairs = await adapter.list_spot_pairs()
-                    universe_symbols = {
-                        p["id"]
-                        for p in raw_pairs
-                        if p.get("quote", "") == "USDT"
-                        and p.get("trade_status") == "tradable"
-                        and not is_excluded_asset(p["id"])
-                    }
-                logger.info(
-                    "Pool '%s': universe %d assets (from %d raw, "
-                    "after leveraged/stablecoin filter)",
-                    pool.name, len(universe_symbols), len(raw_pairs),
-                )
+                    # Primary: use tickers (public, no auth) — only active pairs
+                    raw_tickers = await adapter.list_spot_tickers_public()
+                    universe_symbols = set()
+                    vol_map: dict[str, float] = {}
+                    for t in raw_tickers:
+                        pair = t.get("currency_pair", "")
+                        if not pair.endswith("_USDT"):
+                            continue
+                        if is_excluded_asset(pair):
+                            continue
+                        last = float(t.get("last", 0) or 0)
+                        if last <= 0:
+                            continue
+                        universe_symbols.add(pair)
+                        vol_map[pair] = float(t.get("quote_volume", 0) or 0)
+
+                    # Fallback: supplement with currency_pairs if too few
+                    if len(universe_symbols) < 200:
+                        logger.warning(
+                            "Pool '%s': ticker universe small (%d), "
+                            "supplementing with currency_pairs",
+                            pool.name, len(universe_symbols),
+                        )
+                        try:
+                            raw_pairs = await adapter.list_spot_pairs()
+                            for p in raw_pairs:
+                                sym = p.get("id", "")
+                                if (
+                                    p.get("quote", "") == "USDT"
+                                    and p.get("trade_status") in (
+                                        "tradable", "buyable", "sellable",
+                                    )
+                                    and not is_excluded_asset(sym)
+                                ):
+                                    universe_symbols.add(sym)
+                        except Exception as e:
+                            logger.warning(
+                                "Pool '%s': currency_pairs fallback failed: %s",
+                                pool.name, e,
+                            )
+
+                    logger.info(
+                        "Pool '%s': spot universe %d assets (from %d raw tickers, "
+                        "after leveraged/stablecoin/active filter)",
+                        pool.name, len(universe_symbols), len(raw_tickers),
+                    )
 
                 # Volume filter
                 if min_volume > 0:
-                    try:
-                        tickers = await adapter.get_tickers(symbols=None, market=market_type)
-                        if market_type == "futures":
+                    if market_type == "futures":
+                        # Futures need a separate ticker fetch for volume data
+                        try:
+                            fut_tickers = await adapter._public_get(
+                                f"{adapter.FUTURES_BASE}/futures/{adapter.SETTLE}/tickers"
+                            )
                             vol_map = {
                                 t.get("contract", ""): float(t.get("volume_24h_quote", 0) or 0)
-                                for t in tickers
+                                for t in fut_tickers
                             }
-                        else:
-                            vol_map = {
-                                t.get("currency_pair", ""): float(t.get("quote_volume", 0) or 0)
-                                for t in tickers
-                            }
+                        except Exception as e:
+                            logger.warning(f"Futures ticker fetch failed for pool {pool.name}: {e}")
+                            vol_map = {}
+                    # For spot, vol_map was pre-built from tickers above
+
+                    if vol_map:
                         universe_symbols = {
                             s for s in universe_symbols if vol_map.get(s, 0) >= min_volume
                         }
-                    except Exception as e:
-                        logger.warning(f"Ticker fetch failed for pool {pool.name}: {e}")
 
                 # Load existing coins
                 coins_result = await db.execute(
