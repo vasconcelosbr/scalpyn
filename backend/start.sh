@@ -1,13 +1,14 @@
 #!/bin/bash
 # Scalpyn backend startup script
 #
-# Strategy: start uvicorn IMMEDIATELY so Cloud Run startup probe passes,
-# then run Alembic migrations and Celery in the background.
-# All migrations use IF NOT EXISTS so they are safe to run concurrently.
+# Strategy: run Alembic migrations FIRST (synchronously) to guarantee the
+# schema is up-to-date before any traffic hits the app, then start Celery
+# and uvicorn.  Cloud Run gives containers up to 240 s to start, which is
+# more than enough for the lightweight IF-NOT-EXISTS migrations we use.
 
 set -e
 
-# ── Background migration runner ────────────────────────────────────────────────────────────────────────
+# ── Synchronous migration runner ──────────────────────────────────────────────
 run_migrations() {
     local max_attempts=5
     local delay=3
@@ -63,13 +64,12 @@ PYEOF
         sleep $delay
         attempt=$((attempt + 1))
     done
-    echo " [migrations] WARNING: all attempts failed -- server running without latest schema."
+    echo " [migrations] WARNING: all attempts failed -- server may start without latest schema."
     return 0
 }
 
-# ── Run migrations in the background ─────────────────────────────────────────────────────────────────
-run_migrations &
-MIGRATIONS_PID=$!
+# ── Run migrations synchronously before starting the app ─────────────────────
+run_migrations
 
 # ── Start Celery worker ─────────────────────────────────────────────────────────────────────
 echo "==> Starting Celery worker..."
@@ -126,13 +126,13 @@ WATCHDOG_GRACE=${WATCHDOG_GRACE:-120}
 # Graceful cleanup: when uvicorn/container receives SIGTERM, stop children first
 cleanup() {
     echo "==> SIGTERM received -- stopping background processes..."
-    kill -TERM "$CELERY_WORKER_PID" "$CELERY_BEAT_PID" "$MIGRATIONS_PID" 2>/dev/null
+    kill -TERM "$CELERY_WORKER_PID" "$CELERY_BEAT_PID" 2>/dev/null
     wait "$CELERY_WORKER_PID" "$CELERY_BEAT_PID" 2>/dev/null
 }
 trap cleanup TERM INT
 
-# ── Start uvicorn immediately (port 8080 must bind before Cloud Run probe) ──
-echo "==> Starting uvicorn (migrations running in background)..."
+# ── Start uvicorn (schema is already up-to-date) ────────────────────────────
+echo "==> Starting uvicorn..."
 exec uvicorn app.main:app \
     --host 0.0.0.0 \
     --port "${PORT:-8080}" \
