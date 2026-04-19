@@ -800,7 +800,12 @@ async def _run_pipeline_scan():
                             )
 
                 if not symbols:
-                    logger.debug("[PipelineScan] %s (%s): no symbols — skipping.", wl.name, level)
+                    logger.info(
+                        "[PipelineScan] %s (%s): no symbols from upstream — "
+                        "running staleness check on existing assets.",
+                        wl.name, level,
+                    )
+                    await _run_staleness_only(db, wl_id, filters_json)
                     await _update_last_scanned(db, wl_id)
                     continue
 
