@@ -1,17 +1,17 @@
 #!/bin/bash
 # Scalpyn backend startup script
 #
-# Strategy: run Alembic migrations FIRST (synchronously) to guarantee the
-# schema is up-to-date before any traffic hits the app, then start Celery
-# and uvicorn.  Cloud Run gives containers up to 240 s to start, which is
-# more than enough for the lightweight IF-NOT-EXISTS migrations we use.
+# Strategy: run Alembic migrations synchronously but with a hard wall-clock
+# limit so the container always proceeds to start uvicorn within Cloud Run's
+# startup-probe window (~240 s).  Migrations use IF-NOT-EXISTS and are
+# idempotent; they will catch up on the next deploy if skipped here.
 
 set -e
 
-# ── Synchronous migration runner ──────────────────────────────────────────────
+# ── Synchronous migration runner (time-boxed) ────────────────────────────────
 run_migrations() {
-    local max_attempts=5
-    local delay=3
+    local max_attempts=3
+    local delay=2
     local attempt=1
 
     echo "==> [migrations] Checking alembic state..."
@@ -68,10 +68,17 @@ PYEOF
     return 0
 }
 
-# ── Run migrations synchronously before starting the app ─────────────────────
-run_migrations
+# ── Run migrations synchronously but time-boxed ──────────────────────────────
+# Hard wall-clock limit prevents migration retries from consuming the entire
+# Cloud Run startup window.  Default 60 s leaves ~180 s for Celery + uvicorn.
+MIGRATION_TIMEOUT=${MIGRATION_TIMEOUT:-60}
 
-# ── Start Celery worker ─────────────────────────────────────────────────────────────────────
+export -f run_migrations                      # make function visible to subshell
+timeout "$MIGRATION_TIMEOUT" bash -c 'run_migrations' || {
+    echo "==> [migrations] Timed out or failed after ${MIGRATION_TIMEOUT}s -- proceeding."
+}
+
+# ── Start Celery worker ──────────────────────────────────────────────────────
 echo "==> Starting Celery worker..."
 celery -A app.tasks.celery_app worker \
     --loglevel=info \
@@ -81,7 +88,7 @@ celery -A app.tasks.celery_app worker \
 CELERY_WORKER_PID=$!
 echo " Celery worker PID: $CELERY_WORKER_PID"
 
-# ── Start Celery beat ───────────────────────────────────────────────────────────────────────
+# ── Start Celery beat ────────────────────────────────────────────────────────
 echo "==> Starting Celery beat..."
 celery -A app.tasks.celery_app beat \
     --loglevel=info \

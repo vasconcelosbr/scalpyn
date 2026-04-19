@@ -39,6 +39,8 @@ steps:
       - '2Gi'
       - '--add-cloudsql-instances'
       - 'clickrate-477217:us-central1:scalpyn'
+      - '--startup-probe'
+      - 'http-get=:8080/api/health,initial-delay-seconds=5,period-seconds=10,failure-threshold=30,timeout-seconds=5'
 
 substitutions:
   _REGION: us-central1
