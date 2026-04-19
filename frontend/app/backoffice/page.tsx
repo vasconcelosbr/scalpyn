@@ -9,23 +9,23 @@ import { apiGet } from "@/lib/api";
 
 /* ── Types ── */
 interface IntegrityData {
-  status: "healthy" | "degraded" | "critical";
-  feed_delay_ms: number;
-  stale_feeds: number;
+  feed_delay_seconds: number;
+  stale_symbols_count: number;
+  avg_pipeline_latency_ms: number;
 }
 
 interface PipelineMetrics {
   discovered: number;
   filtered: number;
   scored: number;
-  signals: number;
+  signals_count: number;
   executed: number;
-  avg_latency_ms: number;
+  latency_ms: number;
 }
 
 interface Alert {
   id: string;
-  type: "warning" | "critical" | "info";
+  alert_type: "warning" | "critical" | "info";
   message: string;
   created_at: string;
 }
@@ -35,7 +35,7 @@ interface Decision {
   strategy: string;
   score: number;
   decision: string;
-  timestamp: string;
+  created_at: string;
 }
 
 /* ── Skeleton Loaders ── */
@@ -128,7 +128,7 @@ function AlertCard({ alert }: { alert: Alert }) {
     info: { icon: Info, color: "var(--accent-primary)", bg: "var(--accent-primary-muted)", border: "var(--accent-primary-border)" },
   };
 
-  const config = typeConfig[alert.type] || typeConfig.info;
+  const config = typeConfig[alert.alert_type] || typeConfig.info;
   const IconComp = config.icon;
 
   return (
@@ -164,7 +164,7 @@ function AlertCard({ alert }: { alert: Alert }) {
           padding: "2px 6px",
         }}
       >
-        {alert.type}
+        {alert.alert_type}
       </span>
     </div>
   );
@@ -181,17 +181,17 @@ export default function BackofficePage() {
   useEffect(() => {
     Promise.allSettled([
       apiGet<IntegrityData>("/backoffice/data/integrity"),
-      apiGet<{ data: PipelineMetrics[] }>("/backoffice/pipeline/metrics?per_page=1"),
-      apiGet<{ data: Alert[] }>("/backoffice/alerts?status=active&per_page=5"),
-      apiGet<{ data: Decision[] }>("/backoffice/decisions?decision=approved&per_page=5"),
+      apiGet<{ items: PipelineMetrics[] }>("/backoffice/pipeline/metrics?per_page=1"),
+      apiGet<{ items: Alert[] }>("/backoffice/alerts?status=active&per_page=5"),
+      apiGet<{ items: Decision[] }>("/backoffice/decisions?decision=approved&per_page=5"),
     ]).then(([intRes, pipeRes, alertRes, decRes]) => {
       if (intRes.status === "fulfilled") setIntegrity(intRes.value);
       if (pipeRes.status === "fulfilled") {
-        const metrics = pipeRes.value?.data;
+        const metrics = pipeRes.value?.items;
         if (Array.isArray(metrics) && metrics.length > 0) setPipeline(metrics[0]);
       }
-      if (alertRes.status === "fulfilled") setAlerts(alertRes.value?.data || []);
-      if (decRes.status === "fulfilled") setDecisions(decRes.value?.data || []);
+      if (alertRes.status === "fulfilled") setAlerts(alertRes.value?.items || []);
+      if (decRes.status === "fulfilled") setDecisions(decRes.value?.items || []);
       setLoading(false);
     });
   }, []);
@@ -216,12 +216,12 @@ export default function BackofficePage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div
-                className={integrity.status === "healthy" ? "live-dot" : ""}
+                className={integrity.stale_symbols_count === 0 && integrity.feed_delay_seconds < 30 ? "live-dot" : ""}
                 style={{
                   width: "10px",
                   height: "10px",
                   borderRadius: "50%",
-                  background: integrity.status === "healthy" ? "var(--color-profit)" : "var(--color-loss)",
+                  background: integrity.stale_symbols_count === 0 && integrity.feed_delay_seconds < 30 ? "var(--color-profit)" : "var(--color-loss)",
                   flexShrink: 0,
                 }}
               />
@@ -231,11 +231,11 @@ export default function BackofficePage() {
                     fontFamily: "var(--font-mono)",
                     fontSize: "16px",
                     fontWeight: 700,
-                    color: integrity.status === "healthy" ? "var(--color-profit)" : "var(--color-loss)",
+                    color: integrity.stale_symbols_count === 0 && integrity.feed_delay_seconds < 30 ? "var(--color-profit)" : "var(--color-loss)",
                     textTransform: "uppercase",
                   }}
                 >
-                  {integrity.status === "healthy" ? "HEALTHY" : "DEGRADED"}
+                  {integrity.stale_symbols_count === 0 && integrity.feed_delay_seconds < 30 ? "HEALTHY" : "DEGRADED"}
                 </span>
                 <p style={{ fontSize: "12px", color: "var(--text-secondary)", marginTop: "2px" }}>
                   System Status
@@ -245,7 +245,7 @@ export default function BackofficePage() {
             <div className="flex gap-6">
               <div style={{ textAlign: "center" }}>
                 <div style={{ fontFamily: "var(--font-mono)", fontSize: "16px", fontWeight: 600, color: "var(--text-primary)" }}>
-                  {integrity.feed_delay_ms.toFixed(0)}ms
+                  {integrity.feed_delay_seconds.toFixed(1)}s
                 </div>
                 <div style={{ fontSize: "11px", color: "var(--text-tertiary)" }}>Feed Delay</div>
               </div>
@@ -255,17 +255,17 @@ export default function BackofficePage() {
                     fontFamily: "var(--font-mono)",
                     fontSize: "16px",
                     fontWeight: 600,
-                    color: integrity.stale_feeds > 0 ? "var(--color-warning)" : "var(--color-profit)",
+                    color: integrity.stale_symbols_count > 0 ? "var(--color-warning)" : "var(--color-profit)",
                   }}
                 >
-                  {integrity.stale_feeds}
+                  {integrity.stale_symbols_count}
                 </div>
                 <div style={{ fontSize: "11px", color: "var(--text-tertiary)" }}>Stale Feeds</div>
               </div>
               {pipeline && (
                 <div style={{ textAlign: "center" }}>
                   <div style={{ fontFamily: "var(--font-mono)", fontSize: "16px", fontWeight: 600, color: "var(--text-primary)" }}>
-                    {pipeline.avg_latency_ms.toFixed(0)}ms
+                    {pipeline.latency_ms.toFixed(0)}ms
                   </div>
                   <div style={{ fontSize: "11px", color: "var(--text-tertiary)" }}>Avg Latency</div>
                 </div>
@@ -304,7 +304,7 @@ export default function BackofficePage() {
                 <PipelineStep label="Discovered" count={pipeline.discovered} icon={Radio} />
                 <PipelineStep label="Filtered" count={pipeline.filtered} icon={Target} />
                 <PipelineStep label="Scored" count={pipeline.scored} icon={Zap} />
-                <PipelineStep label="Signals" count={pipeline.signals} icon={Activity} />
+                <PipelineStep label="Signals" count={pipeline.signals_count} icon={Activity} />
                 <PipelineStep label="Executed" count={pipeline.executed} icon={CheckCircle} isLast />
               </div>
             ) : (
@@ -420,7 +420,7 @@ export default function BackofficePage() {
                         </td>
                         <td>
                           <span style={{ fontFamily: "var(--font-mono)", fontSize: "12px", color: "var(--text-secondary)" }}>
-                            {new Date(d.timestamp).toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" })}
+                            {new Date(d.created_at).toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" })}
                           </span>
                         </td>
                       </tr>

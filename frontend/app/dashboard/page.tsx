@@ -14,15 +14,15 @@ interface DashboardData {
   approval_rate: number;
   avg_latency_ms: number;
   error_rate: number;
-  strategies: StrategyRow[];
+  strategy_performance: StrategyRow[];
 }
 
 interface StrategyRow {
   strategy: string;
-  runs: number;
   approved: number;
   rejected: number;
-  avg_latency: number;
+  executed: number;
+  avg_latency_ms: number;
 }
 
 interface PipelinePoint {
@@ -345,7 +345,7 @@ export default function DashboardPage() {
       {/* ── Strategy Performance Table ── */}
       {loading ? (
         <TableSkeleton />
-      ) : dashboard?.strategies && dashboard.strategies.length > 0 ? (
+      ) : dashboard?.strategy_performance && dashboard.strategy_performance.length > 0 ? (
         <div className="card">
           <div className="card-header">
             <div className="flex items-center gap-2">
@@ -354,7 +354,7 @@ export default function DashboardPage() {
                 Strategy Performance
               </h3>
             </div>
-            <span className="caption">{dashboard.strategies.length} strategies</span>
+            <span className="caption">{dashboard.strategy_performance.length} strategies</span>
           </div>
           <div className="table-scroll">
             <table className="data-table">
@@ -368,17 +368,17 @@ export default function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {dashboard.strategies.map((row, idx) => (
+                {dashboard.strategy_performance.map((row, idx) => (
                   <tr key={idx}>
                     <td>
                       <StrategyBadge strategy={row.strategy} />
                     </td>
-                    <td className="numeric">{row.runs.toLocaleString()}</td>
+                    <td className="numeric">{(row.approved + row.rejected + row.executed).toLocaleString()}</td>
                     <td className="numeric profit">{row.approved.toLocaleString()}</td>
                     <td className="numeric loss">{row.rejected.toLocaleString()}</td>
                     <td className="numeric">
                       <span style={{ fontFamily: "var(--font-mono)" }}>
-                        {row.avg_latency.toFixed(0)}ms
+                        {row.avg_latency_ms.toFixed(0)}ms
                       </span>
                     </td>
                   </tr>
