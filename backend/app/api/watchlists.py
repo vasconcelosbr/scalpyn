@@ -244,6 +244,11 @@ FIELD_LABELS: Dict[str, str] = {
 }
 
 
+def _uses_pipeline_filters(level: Optional[str]) -> bool:
+    """Only L1/L2/L3 enforce profile filters; custom pool watchlists are monitoring boards."""
+    return (level or "").upper() in {"L1", "L2", "L3"}
+
+
 def _extract_profile_indicator_fields(profile_config: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
     """
     Extract the ordered list of unique indicator fields referenced in a profile's
@@ -963,10 +968,9 @@ async def _resolve_and_persist(
     profile_min_score: float = float(pf_cfg.get("min_score", 0))
     profile_require_signal: bool = bool(pf_cfg.get("require_signal", False))
 
-    # Level-aware gating: match pipeline_scan behaviour where min_score is
-    # only applied for L2+ and signal requirement only for L3.  Custom and L1
-    # levels receive structural filters only (market_cap, volume, etc.).
-    effective_level = wl.level if wl.level in ("L1", "L2", "L3") else "L1"
+    # Custom/source-pool watchlists are monitoring boards: score everything, but do
+    # not hide rows via profile filters or blocking rules. L1/L2/L3 remain filtered.
+    effective_level = (wl.level or "custom").upper()
     should_apply_min_score = effective_level in ("L2", "L3")
     should_require_signal = effective_level == "L3"
 
@@ -1035,7 +1039,7 @@ async def _resolve_and_persist(
     # IMPORTANT: Only apply meta-based filters when market data is actually available.
     # If meta_map is empty (no market data in DB yet), skipping strict meta conditions
     # prevents the watchlist from being wiped on first run / before data collection.
-    if wl.profile_id and assets_out and profile_config_full and p_conditions:
+    if _uses_pipeline_filters(wl.level) and wl.profile_id and assets_out and profile_config_full and p_conditions:
         _STRICT_META_FIELDS = frozenset({
             "volume_24h", "market_cap", "price", "current_price",
             "change_24h", "price_change_24h", "change_24h_pct",
@@ -1072,9 +1076,8 @@ async def _resolve_and_persist(
                 symbols_with_meta, len(base_symbols),
             )
 
-    # ── Anti-bad-entry blocking: remove assets that violate microstructure rules ──
-    # These assets should NOT persist in any watchlist level.
-    if assets_out:
+    # ── Anti-bad-entry blocking: enforced only in the pipeline (L1/L2/L3) ───────
+    if _uses_pipeline_filters(wl.level) and assets_out:
         from ..utils.blocking_rules import is_blocked as _is_blocked
         before_block = len(assets_out)
         assets_out = [a for a in assets_out if not _is_blocked(a)]
@@ -1083,6 +1086,11 @@ async def _resolve_and_persist(
                 "[Pipeline] %s (%s): anti-bad-entry removed %d/%d assets on refresh",
                 wl.name, wl.level, before_block - len(assets_out), before_block,
             )
+    elif assets_out:
+        logger.info(
+            "[Pipeline] %s (%s): monitoring mode enabled — keeping all %d pool assets visible.",
+            wl.name, wl.level, len(assets_out),
+        )
 
     # Detect level transitions & upsert
     existing_result = await db.execute(
@@ -1176,6 +1184,24 @@ async def get_watchlist_assets(
     )
 
     assets = assets_result.scalars().all()
+
+    # Monitoring boards (custom/source-pool watchlists) should always reflect the
+    # full upstream pool, even if a previous scan persisted only a filtered subset.
+    if not _uses_pipeline_filters(wl.level) and wl.auto_refresh:
+        try:
+            await _resolve_and_persist(wl, user_id, db)
+            assets_result = await db.execute(
+                select(PipelineWatchlistAsset)
+                .where(
+                    PipelineWatchlistAsset.watchlist_id == watchlist_id,
+                    (PipelineWatchlistAsset.level_direction.is_(None)) |
+                    (PipelineWatchlistAsset.level_direction == "up"),
+                )
+                .order_by(PipelineWatchlistAsset.alpha_score.desc().nullslast())
+            )
+            assets = assets_result.scalars().all()
+        except Exception as e:
+            logger.warning("[Pipeline] Monitoring refresh failed for %s: %s", watchlist_id, e)
 
     # Auto-resolve on first open when there are no saved assets
     if not assets and wl.auto_refresh:

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { ChevronDown, ChevronRight, CheckCircle2, XCircle, RefreshCw } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -36,17 +36,11 @@ export interface PipelineAssetWithScore {
   score_rules: ScoreRule[];
 }
 
-// ── Fixed indicator columns shown in the table ─────────────────────────────────
-
-const INDICATOR_COLS = [
-  { key: 'rsi',                  label: 'RSI' },
-  { key: 'volume_spike',         label: 'Vol Spike' },
-  { key: 'taker_ratio',          label: 'Taker' },
-  { key: 'spread_pct',           label: 'Spread' },
-  { key: 'orderbook_depth_usdt', label: 'Depth' },
-  { key: 'ema9_distance_pct',    label: 'EMA 9%' },
-  { key: 'di_trend',             label: 'DI+/DI-' },
-] as const;
+export interface IndicatorColumn {
+  key: string;
+  label: string;
+  field: string;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -72,13 +66,78 @@ function fmtDepth(val: number | null | undefined): string {
   return val.toFixed(0);
 }
 
+function fmtVolume(val: number | null | undefined): string {
+  if (val == null || val === 0) return '—';
+  if (val >= 1_000_000_000) return `$${(val / 1_000_000_000).toFixed(1)}B`;
+  if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(1)}M`;
+  if (val >= 1_000) return `$${(val / 1_000).toFixed(1)}K`;
+  return `$${val.toFixed(0)}`;
+}
+
+function normalizeIndicatorKey(key: string): string {
+  return key.startsWith('_meta:') ? key.slice(6) : key;
+}
+
 /** Color-coded indicator cell value + emoji dot */
 function getIndicatorColor(key: string, value: any): { text: string; cls: string; dot: string } {
   if (value == null) return { text: '—', cls: 'text-[#4B5563]', dot: '' };
+  const normalizedKey = normalizeIndicatorKey(key);
+
+  if (typeof value === 'boolean') {
+    if (normalizedKey === 'di_trend') {
+      return {
+        text: value ? '▲ DI+' : '▼ DI-',
+        cls: value ? 'text-[#34D399]' : 'text-[#F87171]',
+        dot: '',
+      };
+    }
+    if (normalizedKey === 'ema_full_alignment') {
+      return {
+        text: value ? '9>50>200' : '—',
+        cls: value ? 'text-[#34D399]' : 'text-[#4B5563]',
+        dot: '',
+      };
+    }
+    return {
+      text: value ? '✓' : '✗',
+      cls: value ? 'text-[#34D399]' : 'text-[#F87171]',
+      dot: '',
+    };
+  }
+
+  if (typeof value === 'string') {
+    if (value === '9>50>200') return { text: '9›50›200', cls: 'text-[#34D399]', dot: '' };
+    if (value === '9>50') return { text: '9›50', cls: 'text-[#FBBF24]', dot: '' };
+    if (value === '9<50<200') return { text: '9‹50‹200', cls: 'text-[#F87171]', dot: '' };
+    if (value === 'mix') return { text: 'mix', cls: 'text-[#94A3B8]', dot: '' };
+    if (value === 'positive') return { text: value, cls: 'text-[#34D399]', dot: '' };
+    if (value === 'negative') return { text: value, cls: 'text-[#F87171]', dot: '' };
+    return { text: value, cls: 'text-[#CBD5E1]', dot: '' };
+  }
+
   const n = Number(value);
   if (isNaN(n)) return { text: String(value), cls: 'text-[#4B5563]', dot: '' };
 
-  switch (key) {
+  switch (normalizedKey) {
+    case 'market_cap':
+      return {
+        text: fmtMarketCap(n),
+        cls: marketCapColor(n),
+        dot: '',
+      };
+    case 'volume_24h':
+      return {
+        text: fmtVolume(n),
+        cls: 'text-[#E2E8F0]',
+        dot: '',
+      };
+    case 'price_change_24h':
+    case 'change_24h':
+      return {
+        text: `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`,
+        cls: n >= 0 ? 'text-[#34D399]' : 'text-[#F87171]',
+        dot: n >= 0 ? '🟢' : '🔴',
+      };
     case 'rsi':
       return {
         text: n.toFixed(1),
@@ -115,13 +174,6 @@ function getIndicatorColor(key: string, value: any): { text: string; cls: string
         cls: Math.abs(n) > 3 ? 'text-[#FBBF24]' : 'text-[#E2E8F0]',
         dot: '',
       };
-    case 'di_trend':
-      // value is boolean: true = DI+ > DI-, false = DI- > DI+
-      return {
-        text: value ? '▲ DI+' : '▼ DI-',
-        cls: value ? 'text-[#34D399]' : 'text-[#F87171]',
-        dot: '',
-      };
     default:
       return {
         text: Math.abs(n) >= 100 ? n.toFixed(1) : Math.abs(n) >= 1 ? n.toFixed(2) : n.toFixed(4),
@@ -133,27 +185,36 @@ function getIndicatorColor(key: string, value: any): { text: string; cls: string
 
 function fmtIndValue(key: string, value: any): string {
   if (value == null) return '—';
+  const normalizedKey = normalizeIndicatorKey(key);
   if (typeof value === 'boolean') {
-    if (key === 'ema9_gt_ema50' || key === 'ema_trend') return value ? '9>50' : '9<50';
-    if (key === 'ema_full_alignment') return value ? '9>50>200' : '—';
-    if (key === 'di_trend') return value ? '▲ DI+' : '▼ DI-';
+    if (normalizedKey === 'ema9_gt_ema50' || normalizedKey === 'ema_trend') return value ? '9>50' : '9<50';
+    if (normalizedKey === 'ema_full_alignment') return value ? '9>50>200' : '—';
+    if (normalizedKey === 'di_trend') return value ? '▲ DI+' : '▼ DI-';
     return value ? '✓' : '✗';
   }
-  if (key === 'macd_histogram') {
+  if (normalizedKey === 'macd_histogram') {
     const n = Number(value);
     return (n >= 0 ? '+' : '') + n.toFixed(4);
   }
   const n = Number(value);
   if (isNaN(n)) return String(value);
+  if (normalizedKey === 'market_cap') return fmtMarketCap(n);
+  if (normalizedKey === 'volume_24h') return fmtVolume(n);
+  if (normalizedKey === 'price_change_24h' || normalizedKey === 'change_24h') return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
+  if (normalizedKey === 'orderbook_depth_usdt') return fmtDepth(n);
+  if (normalizedKey === 'spread_pct' || normalizedKey === 'ema9_distance_pct') return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
   if (Math.abs(n) >= 100) return n.toFixed(1);
   if (Math.abs(n) >= 1)   return n.toFixed(2);
   return n.toFixed(4);
 }
 
-function getRuleForIndicator(key: string, rules: ScoreRule[]): ScoreRule | undefined {
-  let r = rules.find(r => r.indicator === key);
-  if (!r && key === 'ema9_gt_ema50')
-    r = rules.find(r => r.operator === 'ema9>ema50' || r.operator === 'ema9>ema50>ema200');
+function getRuleForIndicator(keys: string[], rules: ScoreRule[]): ScoreRule | undefined {
+  let r = rules.find((rule) => keys.includes(rule.indicator));
+  if (!r && keys.includes('price_change_24h')) r = rules.find((rule) => rule.indicator === 'change_24h');
+  if (!r && keys.includes('change_24h')) r = rules.find((rule) => rule.indicator === 'price_change_24h');
+  if (!r && keys.includes('ema9_gt_ema50')) {
+    r = rules.find((rule) => rule.operator === 'ema9>ema50' || rule.operator === 'ema9>ema50>ema200');
+  }
   return r;
 }
 
@@ -182,9 +243,13 @@ function scoreBarColor(score: number) {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function IndicatorCell({ indKey, value, rules }: { indKey: string; value: any; rules: ScoreRule[] }) {
-  const { text, cls, dot } = getIndicatorColor(indKey, value);
-  const rule = getRuleForIndicator(indKey, rules);
+function IndicatorCell({ column, value, rules }: { column: IndicatorColumn; value: any; rules: ScoreRule[] }) {
+  const { text, cls, dot } = getIndicatorColor(column.key, value);
+  const normalizedKey = normalizeIndicatorKey(column.key);
+  const rule = getRuleForIndicator(
+    Array.from(new Set([column.field, column.key, normalizedKey])),
+    rules,
+  );
   const tip = rule ? `${rule.condition_text}  →  ${rule.passed ? '+' + rule.points_awarded.toFixed(0) + ' pts' : 'falhou'}` : undefined;
 
   return (
@@ -313,11 +378,13 @@ function DrilldownPanel({ rules, score }: { rules: ScoreRule[]; score: number })
 
 export function PipelineAssetTable({
   assets,
+  indicatorCols = [],
   onRefresh,
   refreshing,
   liveDirections = {},
 }: {
   assets: PipelineAssetWithScore[];
+  indicatorCols?: IndicatorColumn[];
   onRefresh: () => void;
   refreshing: boolean;
   liveDirections?: Record<string, string>;
@@ -342,17 +409,23 @@ export function PipelineAssetTable({
 
   const totalPts = (rules: ScoreRule[]) => rules.reduce((s, r) => s + r.points_possible, 0);
   const earnedPts = (rules: ScoreRule[]) => rules.reduce((s, r) => s + r.points_awarded, 0);
+  const visibleColumns = indicatorCols.length > 0
+    ? indicatorCols
+    : [
+        { key: '_meta:price_change_24h', label: '24h%', field: 'price_change_24h' },
+        { key: '_meta:volume_24h', label: 'Volume 24h', field: 'volume_24h' },
+        { key: '_meta:market_cap', label: 'Market Cap', field: 'market_cap' },
+      ];
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-xs min-w-[1100px]">
+      <table className="w-full text-xs min-w-[960px]">
         <thead>
           <tr className="border-b border-[#1A2035] bg-[#060810] sticky top-0">
             <th className="w-8 px-2 py-2.5" />
             <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium">Symbol</th>
             <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[130px]">Score</th>
-            <th className="px-3 py-2.5 text-right text-[#4B5563] font-medium whitespace-nowrap">Mkt Cap</th>
-            {INDICATOR_COLS.map(col => (
+            {visibleColumns.map((col) => (
               <th key={col.key} className="px-3 py-2.5 text-right text-[#4B5563] font-medium whitespace-nowrap">
                 {col.label}
               </th>
@@ -384,12 +457,18 @@ export function PipelineAssetTable({
                            : hasHighADX       ? 'border-l-2 border-l-[#A78BFA]/60'
                            : '';
 
-            const mcapVal = asset.market_cap ?? asset.indicators?.['_meta:market_cap'];
+            const getColumnValue = (column: IndicatorColumn) => {
+              const topLevelValue = (asset as unknown as Record<string, any>)[column.field];
+              return asset.indicators?.[column.key]
+                ?? asset.indicators?.[normalizeIndicatorKey(column.key)]
+                ?? asset.indicators?.[column.field]
+                ?? topLevelValue
+                ?? null;
+            };
 
             return (
-              <>
+              <Fragment key={asset.symbol}>
                 <tr
-                  key={asset.symbol}
                   className={`border-b border-[#1A2035]/60 cursor-pointer transition-colors ${rowAlert} ${
                     isExpanded ? 'bg-[#0C1020]' : 'hover:bg-[#0D1118]'
                   } ${effectiveDir === 'up' ? 'row-level-up' : effectiveDir === 'down' ? 'row-level-down' : ''}`}
@@ -437,19 +516,12 @@ export function PipelineAssetTable({
                     <ScoreBar score={score} />
                   </td>
 
-                  {/* Market Cap */}
-                  <td className="px-3 py-2.5 text-right">
-                    <span className={`font-mono text-xs ${marketCapColor(mcapVal)}`}>
-                      {fmtMarketCap(mcapVal)}
-                    </span>
-                  </td>
-
-                  {/* Fixed indicator columns */}
-                  {INDICATOR_COLS.map(col => (
+                  {/* Dynamic indicator columns from the profile */}
+                  {visibleColumns.map((col) => (
                     <td key={col.key} className="px-3 py-2.5 text-right">
                       <IndicatorCell
-                        indKey={col.key}
-                        value={asset.indicators?.[col.key]}
+                        column={col}
+                        value={getColumnValue(col)}
                         rules={rules}
                       />
                     </td>
@@ -469,13 +541,13 @@ export function PipelineAssetTable({
 
                 {/* Drilldown row */}
                 {isExpanded && (
-                  <tr key={`${asset.symbol}-drill`} className="border-b border-[#1A2035]">
-                    <td colSpan={11 + INDICATOR_COLS.length} className="p-0">
+                  <tr className="border-b border-[#1A2035]">
+                    <td colSpan={4 + visibleColumns.length} className="p-0">
                       <DrilldownPanel rules={rules} score={score} />
                     </td>
                   </tr>
                 )}
-              </>
+              </Fragment>
             );
           })}
         </tbody>

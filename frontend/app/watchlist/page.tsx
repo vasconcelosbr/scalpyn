@@ -2,7 +2,11 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { WatchlistTable } from '@/components/watchlist/WatchlistTable';
-import { PipelineAssetTable, type PipelineAssetWithScore } from '@/components/watchlist/PipelineAssetTable';
+import {
+  PipelineAssetTable,
+  type IndicatorColumn,
+  type PipelineAssetWithScore,
+} from '@/components/watchlist/PipelineAssetTable';
 import { apiFetch } from '@/lib/api';
 import { useWebSocket, getCurrentUserId } from '@/hooks/useWebSocket';
 import {
@@ -59,12 +63,6 @@ interface PipelineAsset extends PipelineAssetWithScore {
   refreshed_at: string | null;
   previous_level: string | null;
   level_change_at: string | null;
-}
-
-interface IndicatorCol {
-  key: string;    // e.g. "_meta:volume_24h" or "rsi"
-  label: string;  // e.g. "Volume 24h" or "RSI"
-  field: string;  // original profile field name
 }
 
 interface Pool {
@@ -472,6 +470,7 @@ interface WatchlistRowProps {
 function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, onRefreshed, liveDirections = {} }: WatchlistRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [assets, setAssets] = useState<PipelineAsset[]>([]);
+  const [indicatorCols, setIndicatorCols] = useState<IndicatorColumn[]>([]);
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -490,12 +489,13 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
   const loadAssets = useCallback(async (triggerParentRefresh = false) => {
     setLoadingAssets(true);
     try {
-      const data = await apiFetch<{ assets: PipelineAsset[]; profile_indicators?: IndicatorCol[] }>(`/watchlists/${wl.id}/assets`);
+      const data = await apiFetch<{ assets: PipelineAsset[]; profile_indicators?: IndicatorColumn[] }>(`/watchlists/${wl.id}/assets`);
       // Always render highest alpha_score first
       const sorted = [...(data.assets ?? [])].sort(
         (a, b) => (b.alpha_score ?? 0) - (a.alpha_score ?? 0)
       );
       setAssets(sorted);
+      setIndicatorCols(data.profile_indicators ?? []);
       if (triggerParentRefresh && data.assets.length > 0) {
         onRefreshed();
       }
@@ -629,6 +629,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
           ) : (
             <PipelineAssetTable
               assets={assets}
+              indicatorCols={indicatorCols}
               onRefresh={handleRefresh}
               refreshing={refreshing}
               liveDirections={liveDirections}

@@ -47,6 +47,11 @@ def _run_async(coro):
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
+def _uses_pipeline_filters(level: Optional[str]) -> bool:
+    """Only L1/L2/L3 are filter-enforced pipeline stages."""
+    return (level or "").upper() in {"L1", "L2", "L3"}
+
+
 def _get_redis():
     """Return a Redis client (soft dependency — returns None if unavailable)."""
     try:
@@ -315,7 +320,13 @@ def _check_condition_would_fail(cond: dict, actual_value) -> bool:
     except (TypeError, ValueError):
         return False
 
-def _apply_level_filter(assets: list, profile_config: Optional[dict], level: str, score_config: Optional[dict] = None) -> tuple[list, list]:
+def _apply_level_filter(
+    assets: list,
+    profile_config: Optional[dict],
+    level: str,
+    score_config: Optional[dict] = None,
+    apply_profile_filters: bool = True,
+) -> tuple[list, list]:
     """
     Apply ProfileEngine filters for a given level.
     Returns (passed, all_scored).
@@ -342,7 +353,7 @@ def _apply_level_filter(assets: list, profile_config: Optional[dict], level: str
 
     # ── Diagnostic: analyse rejections per filter condition ────────────────
     filter_conditions = (profile_config or {}).get("filters", {}).get("conditions", [])
-    if filter_conditions and len(assets) > 0:
+    if apply_profile_filters and filter_conditions and len(assets) > 0:
         rejection_counts: dict[str, int] = {}
         null_counts: dict[str, int] = {}
 
@@ -373,12 +384,18 @@ def _apply_level_filter(assets: list, profile_config: Optional[dict], level: str
             )
 
     # Apply structural filters
-    filtered = engine._apply_filters(assets)
+    filtered = engine._apply_filters(assets) if apply_profile_filters else list(assets)
 
-    logger.info(
-        "[PipelineScan] %s profile filters: %d → %d assets (rejected %d)",
-        level, len(assets), len(filtered), len(assets) - len(filtered),
-    )
+    if apply_profile_filters:
+        logger.info(
+            "[PipelineScan] %s profile filters: %d → %d assets (rejected %d)",
+            level, len(assets), len(filtered), len(assets) - len(filtered),
+        )
+    else:
+        logger.info(
+            "[PipelineScan] %s monitoring mode: keeping all %d assets visible (profile filters bypassed)",
+            level, len(filtered),
+        )
 
     # Compute scores for all passing assets
     scored = []
@@ -846,6 +863,7 @@ async def _run_pipeline_scan():
                     wl.name, level, len(assets),
                     n_has_mcap, n_has_vol, n_has_spread, n_has_depth, n_has_ind,
                 )
+                assets_with_metadata = len(assets)
 
                 # ── 3. Load profile config ────────────────────────────────────
                 profile_config: Optional[dict] = None
@@ -871,10 +889,32 @@ async def _run_pipeline_scan():
                     score_config = DEFAULT_SCORE
 
                 # ── 4. Per-level evaluation ───────────────────────────────────
-                # Treat 'CUSTOM' level same as L1 (filters + scoring, no signal requirement)
-                # NOTE: filters_json on the watchlist is IGNORED. All filtering
-                # (including min_score, require_signal) comes from the profile.
-                effective_level = level if level in ("L1", "L2", "L3") else "L1"
+                # Custom/source-pool watchlists are monitoring boards: they keep
+                # every pool asset visible while still computing live scores.
+                effective_level = level if _uses_pipeline_filters(level) else "CUSTOM"
+
+                if effective_level == "CUSTOM":
+                    existing_symbols = {a.get("symbol") for a in assets}
+                    missing_symbols = [sym for sym in symbols if sym not in existing_symbols]
+                    if missing_symbols:
+                        assets.extend([
+                            {
+                                "symbol": sym,
+                                "name": sym,
+                                "price": None,
+                                "change_24h": None,
+                                "volume_24h": None,
+                                "market_cap": None,
+                                "spread_pct": None,
+                                "orderbook_depth_usdt": None,
+                                "indicators": {},
+                            }
+                            for sym in missing_symbols
+                        ])
+                        logger.info(
+                            "[PipelineScan] %s (%s): appended %d symbols without market data so the monitoring board shows the full pool",
+                            wl.name, level, len(missing_symbols),
+                        )
 
                 # Remove assets blocked by anti-bad-entry rules (shared utility)
                 from ..utils.blocking_rules import is_blocked as _is_blocked
@@ -900,8 +940,8 @@ async def _run_pipeline_scan():
                         "  ═══════════════════════════",
                         wl.name, level,
                         len(symbols),
-                        len(assets), len(symbols) - len(assets),
-                        before_block, len(assets) - before_block,
+                        assets_with_metadata, len(symbols) - assets_with_metadata,
+                        before_block, assets_with_metadata - before_block,
                         len(passed), before_block - len(passed),
                     )
 
@@ -909,7 +949,7 @@ async def _run_pipeline_scan():
                     await _broadcast_scan_funnel(
                         wl_id, wl.name, level,
                         pool_total=len(symbols),
-                        with_metadata=len(assets),
+                        with_metadata=assets_with_metadata,
                         after_profile_filter=before_block,
                         after_blocking=len(passed),
                     )
@@ -917,7 +957,7 @@ async def _run_pipeline_scan():
                     stats["funnels"].append({
                         "watchlist": wl.name, "level": level,
                         "pool_total": len(symbols),
-                        "with_metadata": len(assets),
+                        "with_metadata": assets_with_metadata,
                         "after_profile_filter": before_block,
                         "after_blocking": len(passed),
                     })
@@ -944,7 +984,7 @@ async def _run_pipeline_scan():
                         "  After blocking:     %d\n"
                         "  ═══════════════════════════",
                         wl.name,
-                        len(symbols), len(assets),
+                        len(symbols), assets_with_metadata,
                         before_block, len(signals),
                     )
 
@@ -970,6 +1010,46 @@ async def _run_pipeline_scan():
                             new_symbols=new_syms,
                             all_signals=signals,
                         )
+
+                else:
+                    monitored, _ = _apply_level_filter(
+                        assets,
+                        profile_config,
+                        effective_level,
+                        score_config=score_config,
+                        apply_profile_filters=False,
+                    )
+
+                    logger.info(
+                        "[PipelineScan] ═══ %s (%s) MONITOR SUMMARY ═══\n"
+                        "  Pool symbols:       %d\n"
+                        "  With market data:   %d  (-%d no metadata)\n"
+                        "  Visible in board:   %d\n"
+                        "  ═══════════════════════════",
+                        wl.name, level,
+                        len(symbols),
+                        assets_with_metadata, len(symbols) - assets_with_metadata,
+                        len(monitored),
+                    )
+
+                    await _broadcast_scan_funnel(
+                        wl_id, wl.name, level,
+                        pool_total=len(symbols),
+                        with_metadata=assets_with_metadata,
+                        after_profile_filter=len(monitored),
+                        after_blocking=len(monitored),
+                    )
+
+                    stats["funnels"].append({
+                        "watchlist": wl.name, "level": level,
+                        "pool_total": len(symbols),
+                        "with_metadata": assets_with_metadata,
+                        "after_profile_filter": len(monitored),
+                        "after_blocking": len(monitored),
+                    })
+
+                    await _upsert_assets(db, wl_id, monitored, filters_json)
+                    await _update_last_scanned(db, wl_id)
 
             except Exception as exc:
                 logger.exception("[PipelineScan] Error processing watchlist %s: %s", wl.name, exc)
