@@ -775,11 +775,13 @@ async def _resolve_and_persist(
     # come exclusively from the associated Profile (profile.config.filters.conditions).
     # The watchlist is purely an organisational grouping (L1/L2/L3) + profile reference.
 
-    # Fetch market metadata for these symbols
+    # Fetch market metadata for these symbols (include liquidity columns so profile
+    # filter conditions on spread_pct / orderbook_depth_usdt can be evaluated).
     try:
         meta_rows = await db.execute(
             text("""
-                SELECT symbol, price, price_change_24h, volume_24h, market_cap
+                SELECT symbol, price, price_change_24h, volume_24h, market_cap,
+                       spread_pct, orderbook_depth_usdt
                 FROM market_metadata
                 WHERE symbol = ANY(:symbols)
             """),
@@ -787,15 +789,91 @@ async def _resolve_and_persist(
         )
         meta_map = {
             r.symbol: {
-                "price":            float(r.price) if r.price else 0.0,
-                "price_change_24h": float(r.price_change_24h) if r.price_change_24h else 0.0,
-                "volume_24h":       float(r.volume_24h) if r.volume_24h is not None else None,
-                "market_cap":       float(r.market_cap) if r.market_cap is not None else None,
+                "price":                float(r.price) if r.price else 0.0,
+                "price_change_24h":     float(r.price_change_24h) if r.price_change_24h else 0.0,
+                "volume_24h":           float(r.volume_24h) if r.volume_24h is not None else None,
+                "market_cap":           float(r.market_cap) if r.market_cap is not None else None,
+                "spread_pct":           float(r.spread_pct) if r.spread_pct is not None else None,
+                "orderbook_depth_usdt": float(r.orderbook_depth_usdt) if r.orderbook_depth_usdt is not None else None,
             }
             for r in meta_rows.fetchall()
         }
     except Exception:
-        meta_map = {}
+        try:
+            # Fallback: spread_pct / orderbook_depth_usdt columns may not exist yet
+            meta_rows = await db.execute(
+                text("""
+                    SELECT symbol, price, price_change_24h, volume_24h, market_cap
+                    FROM market_metadata
+                    WHERE symbol = ANY(:symbols)
+                """),
+                {"symbols": list(base_symbols)},
+            )
+            meta_map = {
+                r.symbol: {
+                    "price":            float(r.price) if r.price else 0.0,
+                    "price_change_24h": float(r.price_change_24h) if r.price_change_24h else 0.0,
+                    "volume_24h":       float(r.volume_24h) if r.volume_24h is not None else None,
+                    "market_cap":       float(r.market_cap) if r.market_cap is not None else None,
+                }
+                for r in meta_rows.fetchall()
+            }
+        except Exception:
+            meta_map = {}
+
+    # On-demand orderbook metrics: when spread_pct / orderbook_depth_usdt are NULL
+    # in market_metadata, fetch from exchange API so profile filter conditions on
+    # these strict-meta fields can be evaluated (NULL → FAIL in strict mode).
+    if base_symbols and meta_map:
+        import asyncio as _aio
+        need_orderbook = [
+            s for s in base_symbols
+            if meta_map.get(s) and meta_map[s].get("spread_pct") is None
+        ]
+        if need_orderbook:
+            try:
+                from ..services.market_data_service import market_data_service
+                sem = _aio.Semaphore(8)
+
+                async def _fetch_ob(sym: str):
+                    async with sem:
+                        return sym, await market_data_service.fetch_orderbook_metrics(sym, depth=10)
+
+                ob_results = await _aio.gather(
+                    *[_fetch_ob(s) for s in need_orderbook[:40]],
+                    return_exceptions=True,
+                )
+                _ob_now = datetime.now(timezone.utc)
+                for item in ob_results:
+                    if isinstance(item, Exception):
+                        continue
+                    sym, ob = item
+                    if not ob:
+                        continue
+                    if sym in meta_map:
+                        meta_map[sym]["spread_pct"] = ob.get("spread_pct")
+                        meta_map[sym]["orderbook_depth_usdt"] = ob.get("orderbook_depth_usdt")
+                    # Persist to DB for subsequent requests
+                    try:
+                        await db.execute(
+                            text("""
+                                INSERT INTO market_metadata (symbol, spread_pct, orderbook_depth_usdt, last_updated)
+                                VALUES (:sym, :spread, :depth, :ts)
+                                ON CONFLICT (symbol) DO UPDATE SET
+                                    spread_pct = COALESCE(:spread, market_metadata.spread_pct),
+                                    orderbook_depth_usdt = COALESCE(:depth, market_metadata.orderbook_depth_usdt),
+                                    last_updated = :ts
+                            """),
+                            {"sym": sym, "spread": ob.get("spread_pct"), "depth": ob.get("orderbook_depth_usdt"), "ts": _ob_now},
+                        )
+                    except Exception:
+                        pass
+                try:
+                    await db.commit()
+                except Exception:
+                    pass
+            except Exception as _e:
+                logger.debug("[Pipeline] On-demand orderbook fetch in _resolve_and_persist: %s", _e)
 
     # Load indicators for scoring + signal evaluation
     ind_map: Dict[str, Dict] = {}
@@ -937,13 +1015,15 @@ async def _resolve_and_persist(
         # filter conditions on indicator fields (atr_pct, rsi, etc.) can be
         # evaluated properly in _passes_profile_filters.
         asset_entry: Dict[str, Any] = {
-            "symbol":           symbol,
-            "current_price":    meta.get("price"),
-            "price_change_24h": meta.get("price_change_24h"),
-            "change_24h":       meta.get("price_change_24h"),   # alias for conditions
-            "volume_24h":       meta.get("volume_24h"),
-            "market_cap":       meta.get("market_cap"),
-            "alpha_score":      alpha if scoring_data_available else None,
+            "symbol":               symbol,
+            "current_price":        meta.get("price"),
+            "price_change_24h":     meta.get("price_change_24h"),
+            "change_24h":           meta.get("price_change_24h"),   # alias for conditions
+            "volume_24h":           meta.get("volume_24h"),
+            "market_cap":           meta.get("market_cap"),
+            "spread_pct":           meta.get("spread_pct"),
+            "orderbook_depth_usdt": meta.get("orderbook_depth_usdt"),
+            "alpha_score":          alpha if scoring_data_available else None,
         }
         # Merge indicator values (skip non-scalar) for profile filter evaluation
         for k, v in ind.items():
@@ -1658,17 +1738,28 @@ async def debug_watchlist_pipeline(
             pf = profile_config.get("filters", {}) or {}
             p_conditions = pf.get("conditions", [])
             if p_conditions and found_in_meta:
-                # Fetch meta for found symbols
-                meta_rows2 = (await db.execute(text("""
-                    SELECT symbol, price, price_change_24h, volume_24h, market_cap
-                    FROM market_metadata WHERE symbol = ANY(:syms)
-                """), {"syms": list(found_in_meta)})).fetchall()
+                # Fetch meta for found symbols (include liquidity columns for accurate filter evaluation)
+                try:
+                    meta_rows2 = (await db.execute(text("""
+                        SELECT symbol, price, price_change_24h, volume_24h, market_cap,
+                               spread_pct, orderbook_depth_usdt
+                        FROM market_metadata WHERE symbol = ANY(:syms)
+                    """), {"syms": list(found_in_meta)})).fetchall()
+                except Exception:
+                    # Fallback if liquidity columns don't exist yet
+                    meta_rows2 = (await db.execute(text("""
+                        SELECT symbol, price, price_change_24h, volume_24h, market_cap,
+                               NULL AS spread_pct, NULL AS orderbook_depth_usdt
+                        FROM market_metadata WHERE symbol = ANY(:syms)
+                    """), {"syms": list(found_in_meta)})).fetchall()
                 meta_map = {r.symbol: {
                     "price": float(r.price) if r.price else None,
                     "price_change_24h": float(r.price_change_24h) if r.price_change_24h else None,
                     "change_24h": float(r.price_change_24h) if r.price_change_24h else None,
                     "volume_24h": float(r.volume_24h) if r.volume_24h else None,
                     "market_cap": float(r.market_cap) if r.market_cap else None,
+                    "spread_pct": float(r.spread_pct) if r.spread_pct is not None else None,
+                    "orderbook_depth_usdt": float(r.orderbook_depth_usdt) if r.orderbook_depth_usdt is not None else None,
                 } for r in meta_rows2}
 
                 filter_pass_count = 0
