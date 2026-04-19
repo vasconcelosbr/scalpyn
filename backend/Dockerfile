@@ -50,5 +50,5 @@ USER appuser
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD python -c "import os, urllib.request; urllib.request.urlopen('http://localhost:' + os.environ.get('PORT', '8080') + '/api/health')"
 
-# start.sh runs: alembic upgrade head → uvicorn
+# start.sh runs: alembic upgrade head → celery → uvicorn
 CMD ["/app/start.sh"]
