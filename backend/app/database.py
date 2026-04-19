@@ -35,7 +35,7 @@ def _resolve_db_url(url: str) -> tuple[str, dict]:
 _db_url, _connect_args = _resolve_db_url(settings.DATABASE_URL)
 
 # Fail fast on unreachable DB — asyncpg default is 60 s which is too long
-# for Cloud Run startup.  10 s is enough for Cloud SQL proxy sockets.
+# for Cloud Run startup.  15 s is enough for Cloud SQL proxy sockets.
 _connect_args.setdefault("timeout", 15)
 
 engine = create_async_engine(
