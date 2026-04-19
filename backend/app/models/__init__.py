@@ -10,6 +10,7 @@ from .custom_watchlist import CustomWatchlist
 from .pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
 from .ai_provider_key import AIProviderKey
 from .ai_skill import AiSkill
+from .backoffice import DecisionLog, AssetTrace, BackofficeAlert, PipelineMetric
 
 __all__ = [
     "User",
@@ -28,4 +29,8 @@ __all__ = [
     "PipelineWatchlistAsset",
     "AIProviderKey",
     "AiSkill",
+    "DecisionLog",
+    "AssetTrace",
+    "BackofficeAlert",
+    "PipelineMetric",
 ]
