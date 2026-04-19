@@ -738,6 +738,7 @@ async def _broadcast_scan_funnel(
     level: str,
     pool_total: int,
     with_metadata: int,
+    profile_candidates: int,
     after_profile_filter: int,
     after_blocking: int,
 ):
@@ -754,8 +755,9 @@ async def _broadcast_scan_funnel(
                 "pool_total":            pool_total,
                 "with_metadata":         with_metadata,
                 "no_metadata":           pool_total - with_metadata,
+                "profile_candidates":    profile_candidates,
                 "after_profile_filter":  after_profile_filter,
-                "rejected_by_profile":   max(0, with_metadata - after_profile_filter),
+                "rejected_by_profile":   max(0, profile_candidates - after_profile_filter),
                 "after_blocking":        after_blocking,
                 "blocked":               after_profile_filter - after_blocking,
             },
@@ -912,6 +914,7 @@ async def _run_pipeline_scan():
                     n_has_mcap, n_has_vol, n_has_spread, n_has_depth, n_has_ind,
                 )
                 assets_with_metadata = sum(1 for a in assets if a.get("_has_market_metadata"))
+                profile_candidate_count = len(assets)
 
                 # ── 3. Load profile config ────────────────────────────────────
                 profile_config: Optional[dict] = None
@@ -986,8 +989,7 @@ async def _run_pipeline_scan():
                         effective_level,
                         score_config=score_config,
                     )
-                    metadata_candidates_before_filter = assets_with_metadata
-                    profile_rejected = max(0, metadata_candidates_before_filter - len(passed))
+                    profile_rejected = max(0, profile_candidate_count - len(passed))
 
                     before_block = len(passed)
                     passed = [a for a in passed if not _is_blocked(a)]
@@ -1002,12 +1004,14 @@ async def _run_pipeline_scan():
                         "[PipelineScan] ═══ %s (%s) FUNNEL SUMMARY ═══\n"
                         "  Pool symbols:       %d\n"
                         "  With market data:   %d  (-%d no metadata)\n"
+                        "  Profile candidates: %d\n"
                         "  After profile filt: %d  (-%d rejected)\n"
                         "  After blocking:     %d  (-%d blocked)\n"
                         "  ═══════════════════════════",
                         wl.name, level,
                         len(symbols),
                         assets_with_metadata, len(symbols) - assets_with_metadata,
+                        profile_candidate_count,
                         before_block, profile_rejected,
                         len(passed), before_block - len(passed),
                     )
@@ -1017,6 +1021,7 @@ async def _run_pipeline_scan():
                         wl_id, wl.name, level,
                         pool_total=len(symbols),
                         with_metadata=assets_with_metadata,
+                        profile_candidates=profile_candidate_count,
                         after_profile_filter=before_block,
                         after_blocking=len(passed),
                     )
@@ -1025,6 +1030,7 @@ async def _run_pipeline_scan():
                         "watchlist": wl.name, "level": level,
                         "pool_total": len(symbols),
                         "with_metadata": assets_with_metadata,
+                        "profile_candidates": profile_candidate_count,
                         "after_profile_filter": before_block,
                         "after_blocking": len(passed),
                     })
@@ -1103,6 +1109,7 @@ async def _run_pipeline_scan():
                         wl_id, wl.name, level,
                         pool_total=len(symbols),
                         with_metadata=assets_with_metadata,
+                        profile_candidates=len(monitored),
                         after_profile_filter=len(monitored),
                         after_blocking=len(monitored),
                     )
@@ -1111,6 +1118,7 @@ async def _run_pipeline_scan():
                         "watchlist": wl.name, "level": level,
                         "pool_total": len(symbols),
                         "with_metadata": assets_with_metadata,
+                        "profile_candidates": len(monitored),
                         "after_profile_filter": len(monitored),
                         "after_blocking": len(monitored),
                     })
