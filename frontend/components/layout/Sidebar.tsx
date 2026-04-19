@@ -23,6 +23,13 @@ import {
   LayoutDashboard,
   Sliders,
   Sparkles,
+  Monitor,
+  Search,
+  ClipboardList,
+  AlertTriangle,
+  Database,
+  PlayCircle,
+  Users,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -36,6 +43,17 @@ const TRADING_ITEMS = [
   { name: 'Reports', href: '/reports', icon: FileText },
   { name: 'Pools', href: '/pools', icon: Layers },
   { name: 'Profiles', href: '/profiles', icon: Sliders },
+];
+
+const BACKOFFICE_ITEMS = [
+  { name: 'Exec Dashboard', href: '/dashboard', icon: BarChart2 },
+  { name: 'Operations', href: '/backoffice', icon: Monitor },
+  { name: 'Asset Trace', href: '/assets', icon: Search },
+  { name: 'Decision Log', href: '/decisions', icon: ClipboardList },
+  { name: 'Data Monitor', href: '/data', icon: Database },
+  { name: 'Alert Center', href: '/alerts', icon: AlertTriangle },
+  { name: 'Replay', href: '/replay', icon: PlayCircle },
+  { name: 'Admin', href: '/admin', icon: Users },
 ];
 
 const CONFIG_ITEMS = [
@@ -85,6 +103,12 @@ export function Sidebar() {
         {collapsed && <div className="h-4 border-b border-[var(--border-subtle)] mx-4 mb-2"></div>}
         <div className="flex flex-col">
           {TRADING_ITEMS.map((item) => <NavItem key={item.name} item={item} />)}
+        </div>
+
+        {!collapsed && <div className="nav-group-label mt-2">Back Office</div>}
+        {collapsed && <div className="h-4 border-b border-[var(--border-subtle)] mx-4 mb-2"></div>}
+        <div className="flex flex-col">
+          {BACKOFFICE_ITEMS.map((item) => <NavItem key={item.name} item={item} />)}
         </div>
 
         {!collapsed && <div className="nav-group-label mt-2">Configuration</div>}

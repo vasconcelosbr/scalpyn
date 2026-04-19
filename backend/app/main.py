@@ -17,6 +17,7 @@ from .api import (
     orders,
     analytics,
     reports,
+    backoffice,
     notifications,
     watchlist,
     watchlists,
@@ -105,6 +106,7 @@ app.include_router(profiles.router)
 # Analytics & Reports
 app.include_router(analytics.router)
 app.include_router(reports.router)
+app.include_router(backoffice.router)
 
 # Notifications
 app.include_router(notifications.router)
