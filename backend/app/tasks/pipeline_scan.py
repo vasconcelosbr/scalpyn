@@ -52,6 +52,21 @@ def _uses_pipeline_filters(level: Optional[str]) -> bool:
     return (level or "").upper() in {"L1", "L2", "L3"}
 
 
+def _placeholder_asset_without_market_data(symbol: str) -> dict:
+    """Build a minimal asset shell so monitoring boards can list symbols without metadata yet."""
+    return {
+        "symbol": symbol,
+        "name": symbol,
+        "price": None,
+        "change_24h": None,
+        "volume_24h": None,
+        "market_cap": None,
+        "spread_pct": None,
+        "orderbook_depth_usdt": None,
+        "indicators": {},
+    }
+
+
 def _get_redis():
     """Return a Redis client (soft dependency — returns None if unavailable)."""
     try:
@@ -891,26 +906,13 @@ async def _run_pipeline_scan():
                 # ── 4. Per-level evaluation ───────────────────────────────────
                 # Custom/source-pool watchlists are monitoring boards: they keep
                 # every pool asset visible while still computing live scores.
-                effective_level = level if _uses_pipeline_filters(level) else "CUSTOM"
+                effective_level = level if _uses_pipeline_filters(level) else "custom"
 
-                if effective_level == "CUSTOM":
+                if effective_level == "custom":
                     existing_symbols = {a.get("symbol") for a in assets}
                     missing_symbols = [sym for sym in symbols if sym not in existing_symbols]
                     if missing_symbols:
-                        assets.extend([
-                            {
-                                "symbol": sym,
-                                "name": sym,
-                                "price": None,
-                                "change_24h": None,
-                                "volume_24h": None,
-                                "market_cap": None,
-                                "spread_pct": None,
-                                "orderbook_depth_usdt": None,
-                                "indicators": {},
-                            }
-                            for sym in missing_symbols
-                        ])
+                        assets.extend([_placeholder_asset_without_market_data(sym) for sym in missing_symbols])
                         logger.info(
                             "[PipelineScan] %s (%s): appended %d symbols without market data so the monitoring board shows the full pool",
                             wl.name, level, len(missing_symbols),

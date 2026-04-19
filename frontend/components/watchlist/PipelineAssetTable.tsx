@@ -74,6 +74,8 @@ function fmtVolume(val: number | null | undefined): string {
   return `$${val.toFixed(0)}`;
 }
 
+// Backend sends market metadata columns with an "_meta:" prefix so they can share
+// one table schema with computed indicators without colliding with raw field names.
 function normalizeIndicatorKey(key: string): string {
   return key.startsWith('_meta:') ? key.slice(6) : key;
 }
@@ -246,6 +248,7 @@ function scoreBarColor(score: number) {
 function IndicatorCell({ column, value, rules }: { column: IndicatorColumn; value: any; rules: ScoreRule[] }) {
   const { text, cls, dot } = getIndicatorColor(column.key, value);
   const normalizedKey = normalizeIndicatorKey(column.key);
+  // Deduplicate alias candidates because meta columns may resolve to the same rule key.
   const rule = getRuleForIndicator(
     Array.from(new Set([column.field, column.key, normalizedKey])),
     rules,
@@ -409,13 +412,7 @@ export function PipelineAssetTable({
 
   const totalPts = (rules: ScoreRule[]) => rules.reduce((s, r) => s + r.points_possible, 0);
   const earnedPts = (rules: ScoreRule[]) => rules.reduce((s, r) => s + r.points_awarded, 0);
-  const visibleColumns = indicatorCols.length > 0
-    ? indicatorCols
-    : [
-        { key: '_meta:price_change_24h', label: '24h%', field: 'price_change_24h' },
-        { key: '_meta:volume_24h', label: 'Volume 24h', field: 'volume_24h' },
-        { key: '_meta:market_cap', label: 'Market Cap', field: 'market_cap' },
-      ];
+  const visibleColumns = indicatorCols;
 
   return (
     <div className="overflow-x-auto">

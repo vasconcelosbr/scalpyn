@@ -970,7 +970,7 @@ async def _resolve_and_persist(
 
     # Custom/source-pool watchlists are monitoring boards: score everything, but do
     # not hide rows via profile filters or blocking rules. L1/L2/L3 remain filtered.
-    effective_level = (wl.level or "custom").upper()
+    effective_level = wl.level if wl.level in ("L1", "L2", "L3") else "custom"
     should_apply_min_score = effective_level in ("L2", "L3")
     should_require_signal = effective_level == "L3"
 
@@ -1185,21 +1185,24 @@ async def get_watchlist_assets(
 
     assets = assets_result.scalars().all()
 
-    # Monitoring boards (custom/source-pool watchlists) should always reflect the
-    # full upstream pool, even if a previous scan persisted only a filtered subset.
+    # Monitoring boards (custom/source-pool watchlists) should refresh only when
+    # their persisted snapshot diverges from the current upstream symbol set.
     if not _uses_pipeline_filters(wl.level) and wl.auto_refresh:
         try:
-            await _resolve_and_persist(wl, user_id, db)
-            assets_result = await db.execute(
-                select(PipelineWatchlistAsset)
-                .where(
-                    PipelineWatchlistAsset.watchlist_id == watchlist_id,
-                    (PipelineWatchlistAsset.level_direction.is_(None)) |
-                    (PipelineWatchlistAsset.level_direction == "up"),
+            upstream_symbols = set(await _get_base_symbols(wl, user_id, db))
+            persisted_symbols = {a.symbol for a in assets}
+            if persisted_symbols != upstream_symbols:
+                await _resolve_and_persist(wl, user_id, db)
+                assets_result = await db.execute(
+                    select(PipelineWatchlistAsset)
+                    .where(
+                        PipelineWatchlistAsset.watchlist_id == watchlist_id,
+                        (PipelineWatchlistAsset.level_direction.is_(None)) |
+                        (PipelineWatchlistAsset.level_direction == "up"),
+                    )
+                    .order_by(PipelineWatchlistAsset.alpha_score.desc().nullslast())
                 )
-                .order_by(PipelineWatchlistAsset.alpha_score.desc().nullslast())
-            )
-            assets = assets_result.scalars().all()
+                assets = assets_result.scalars().all()
         except Exception as e:
             logger.warning("[Pipeline] Monitoring refresh failed for %s: %s", watchlist_id, e)
 
