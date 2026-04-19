@@ -763,7 +763,7 @@ async def _resolve_and_persist(
                 SET level_direction = 'down',
                     level_change_at = :now
                 WHERE watchlist_id = :wid
-                  AND (level_direction IS NULL OR level_direction NOT IN ('down'))
+                  AND level_direction IS DISTINCT FROM 'down'
             """),
             {"wid": str(wl.id), "now": now},
         )
