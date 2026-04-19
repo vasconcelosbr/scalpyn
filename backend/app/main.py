@@ -1,5 +1,6 @@
 """Scalpyn API — main FastAPI application."""
 
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,9 +34,13 @@ async def lifespan(app: FastAPI):
     import logging
     _log = logging.getLogger(__name__)
 
+    # Time-box DB init so a slow/unreachable DB never blocks the startup
+    # probe.  The health endpoint still works without the DB.
     try:
         _log.info("Initializing database schema...")
-        await init_db()
+        await asyncio.wait_for(init_db(), timeout=30)
+    except asyncio.TimeoutError:
+        _log.warning("Database initialization timed out after 30 s — continuing without schema sync")
     except Exception as e:
         _log.error("Database initialization error: %s", e)
 
@@ -43,8 +48,10 @@ async def lifespan(app: FastAPI):
         from sqlalchemy import text
         from .database import AsyncSessionLocal
         async with AsyncSessionLocal() as _sess:
-            await _sess.execute(text("SELECT 1"))
+            await asyncio.wait_for(_sess.execute(text("SELECT 1")), timeout=10)
         _log.info("DB connection pool warmed up successfully.")
+    except asyncio.TimeoutError:
+        _log.warning("DB warmup timed out after 10 s — will retry on first request")
     except Exception as e:
         _log.warning("DB warmup failed (will retry on first request): %s", e)
 
