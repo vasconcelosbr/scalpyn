@@ -18,6 +18,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from ..tasks.celery_app import celery_app
+from ..utils.pipeline_profile_filters import (
+    STRICT_META_FIELDS,
+    select_profile_filter_conditions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +34,7 @@ _DEFAULT_STALENESS_MINUTES = 30
 
 # Strict metadata fields — NULL means FAIL (not skip) in profile filters.
 # Used by diagnostic logging in _apply_level_filter.
-_DIAG_STRICT_META = frozenset({
-    "volume_24h", "market_cap", "price",
-    "change_24h", "change_24h_pct", "price_change_24h",
-    "spread_pct", "orderbook_depth_usdt",
-})
+_DIAG_STRICT_META = STRICT_META_FIELDS
 
 
 def _run_async(coro):
@@ -282,6 +282,7 @@ async def _fetch_market_data(db, symbols: list) -> list:
             "spread_pct":           float(row.spread_pct)             if row.spread_pct             is not None else None,
             "orderbook_depth_usdt": float(row.orderbook_depth_usdt)   if row.orderbook_depth_usdt   is not None else None,
             "indicators": indicators,
+            "_has_market_metadata": True,
             # Flatten numeric indicators for ProfileEngine filter evaluation
             **{k: v for k, v in indicators.items() if isinstance(v, (int, float, bool, str))},
         }
@@ -307,6 +308,43 @@ async def _fetch_market_data(db, symbols: list) -> list:
             asset["market_structure_score"] = float(score_row.market_structure_score) if score_row.market_structure_score else 0.0
             asset["momentum_score"]         = float(score_row.momentum_score)         if score_row.momentum_score         else 0.0
             asset["signal_score"]           = float(score_row.signal_score)           if score_row.signal_score           else 0.0
+
+        assets.append(asset)
+
+    for sym in sorted(missing_meta):
+        indicators = ind_map.get(sym, {})
+        score_row = score_map.get(sym)
+        asset = {
+            "symbol": sym,
+            "name": sym,
+            "price": None,
+            "change_24h": None,
+            "market_cap": None,
+            "volume_24h": None,
+            "spread_pct": None,
+            "orderbook_depth_usdt": None,
+            "indicators": indicators,
+            "_has_market_metadata": False,
+            **{k: v for k, v in indicators.items() if isinstance(v, (int, float, bool, str))},
+        }
+
+        if "atr_pct" in asset and "atr_percent" not in asset:
+            asset["atr_percent"] = asset["atr_pct"]
+
+        di_plus = asset.get("di_plus")
+        di_minus = asset.get("di_minus")
+        if di_plus is not None and di_minus is not None:
+            try:
+                asset["di_trend"] = float(di_plus) > float(di_minus)
+            except (TypeError, ValueError):
+                pass
+
+        if score_row:
+            asset["score"] = float(score_row.score) if score_row.score else 0.0
+            asset["liquidity_score"] = float(score_row.liquidity_score) if score_row.liquidity_score else 0.0
+            asset["market_structure_score"] = float(score_row.market_structure_score) if score_row.market_structure_score else 0.0
+            asset["momentum_score"] = float(score_row.momentum_score) if score_row.momentum_score else 0.0
+            asset["signal_score"] = float(score_row.signal_score) if score_row.signal_score else 0.0
 
         assets.append(asset)
 
@@ -722,7 +760,7 @@ async def _broadcast_scan_funnel(
                 "with_metadata":         with_metadata,
                 "no_metadata":           pool_total - with_metadata,
                 "after_profile_filter":  after_profile_filter,
-                "rejected_by_profile":   with_metadata - after_profile_filter,
+                "rejected_by_profile":   max(0, with_metadata - after_profile_filter),
                 "after_blocking":        after_blocking,
                 "blocked":               after_profile_filter - after_blocking,
             },
@@ -878,7 +916,7 @@ async def _run_pipeline_scan():
                     wl.name, level, len(assets),
                     n_has_mcap, n_has_vol, n_has_spread, n_has_depth, n_has_ind,
                 )
-                assets_with_metadata = len(assets)
+                assets_with_metadata = sum(1 for a in assets if a.get("_has_market_metadata"))
 
                 # ── 3. Load profile config ────────────────────────────────────
                 profile_config: Optional[dict] = None
@@ -922,7 +960,39 @@ async def _run_pipeline_scan():
                 from ..utils.blocking_rules import is_blocked as _is_blocked
 
                 if effective_level in ("L1", "L2"):
-                    passed, _ = _apply_level_filter(assets, profile_config, effective_level, score_config=score_config)
+                    profile_rejected = 0
+                    effective_profile_config = profile_config
+                    if profile_config:
+                        filter_cfg = (profile_config.get("filters") or {})
+                        selected = select_profile_filter_conditions(
+                            filter_cfg.get("conditions"),
+                            total_symbols=len(symbols),
+                            symbols_with_meta=assets_with_metadata,
+                        )
+                        if selected["relaxed_strict_meta"]:
+                            effective_profile_config = {
+                                **profile_config,
+                                "filters": {
+                                    **filter_cfg,
+                                    "conditions": selected["conditions"],
+                                },
+                            }
+                            logger.info(
+                                "[PipelineScan] %s (%s): sparse market data coverage %.1f%% (%d/%d) — "
+                                "ignoring %d strict meta conditions for this pass",
+                                wl.name, level,
+                                selected["coverage_ratio"] * 100,
+                                assets_with_metadata, len(symbols),
+                                len(selected["strict_meta_conditions"]),
+                            )
+
+                    passed, _ = _apply_level_filter(
+                        assets,
+                        effective_profile_config,
+                        effective_level,
+                        score_config=score_config,
+                    )
+                    profile_rejected = max(0, assets_with_metadata - len(passed))
 
                     before_block = len(passed)
                     passed = [a for a in passed if not _is_blocked(a)]
@@ -943,7 +1013,7 @@ async def _run_pipeline_scan():
                         wl.name, level,
                         len(symbols),
                         assets_with_metadata, len(symbols) - assets_with_metadata,
-                        before_block, assets_with_metadata - before_block,
+                        before_block, profile_rejected,
                         len(passed), before_block - len(passed),
                     )
 

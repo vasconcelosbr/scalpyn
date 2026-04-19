@@ -26,6 +26,10 @@ from ..database import get_db, AsyncSessionLocal
 from ..api.config import get_current_user_id
 from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
 from ..services.market_data_service import _is_etf_pair
+from ..utils.pipeline_profile_filters import (
+    STRICT_META_FIELDS,
+    select_profile_filter_conditions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +48,6 @@ def _passes_profile_filters(asset: Dict[str, Any], conditions: list, logic: str 
     This mirrors ProfileEngine._apply_filters behaviour so manual-refresh and
     Celery pipeline produce consistent results.
     """
-    _STRICT_META = frozenset({
-        "volume_24h", "market_cap", "price", "current_price",
-        "change_24h", "price_change_24h", "change_24h_pct",
-        "spread_pct", "orderbook_depth_usdt",
-    })
-
     if not conditions:
         return True
     results = []
@@ -73,7 +71,7 @@ def _passes_profile_filters(asset: Dict[str, Any], conditions: list, logic: str 
             # assets with unknown values from bypassing filters (e.g., "market_cap >= 5M").
             # Indicator fields (RSI, ADX, etc.) are SKIPPED when None since they may not
             # be computed yet and should not block the asset.
-            if field in _STRICT_META:
+            if field in STRICT_META_FIELDS:
                 results.append(False)
             continue
 
@@ -1040,35 +1038,36 @@ async def _resolve_and_persist(
     # If meta_map is empty (no market data in DB yet), skipping strict meta conditions
     # prevents the watchlist from being wiped on first run / before data collection.
     if _uses_pipeline_filters(wl.level) and wl.profile_id and assets_out and profile_config_full and p_conditions:
-        _STRICT_META_FIELDS = frozenset({
-            "volume_24h", "market_cap", "price", "current_price",
-            "change_24h", "price_change_24h", "change_24h_pct",
-            "spread_pct", "orderbook_depth_usdt",
-        })
-        # Check how many symbols actually have market data
         symbols_with_meta = sum(1 for s in base_symbols if meta_map.get(s))
-        # Only apply strict meta conditions when at least 10% of symbols have market data.
-        # If we have no meta data at all, skip meta conditions to prevent wiping the watchlist.
-        if symbols_with_meta == 0:
-            # No market data available — skip meta conditions, keep indicator-only conditions
-            non_meta_conds = [c for c in p_conditions if c.get("field") not in _STRICT_META_FIELDS]
-            if non_meta_conds:
+        selected = select_profile_filter_conditions(
+            p_conditions,
+            total_symbols=len(base_symbols),
+            symbols_with_meta=symbols_with_meta,
+        )
+        applicable_conditions = selected["conditions"]
+
+        if selected["relaxed_strict_meta"]:
+            if applicable_conditions:
                 before = len(assets_out)
-                assets_out = [a for a in assets_out if _passes_profile_filters(a, non_meta_conds, p_logic)]
+                assets_out = [a for a in assets_out if _passes_profile_filters(a, applicable_conditions, p_logic)]
                 logger.info(
-                    "Pipeline profile filter [%s / %s]: no meta data — applying indicator-only "
-                    "conditions (%d conditions): %d → %d assets",
-                    wl.name, wl.level, len(non_meta_conds), before, len(assets_out),
+                    "Pipeline profile filter [%s / %s]: sparse market data coverage %.1f%% "
+                    "(%d/%d) — applying %d non-meta conditions only: %d → %d assets",
+                    wl.name, wl.level, selected["coverage_ratio"] * 100,
+                    symbols_with_meta, len(base_symbols),
+                    len(applicable_conditions), before, len(assets_out),
                 )
             else:
                 logger.info(
-                    "Pipeline profile filter [%s / %s]: no market data available yet — "
-                    "skipping all meta conditions to preserve %d assets.",
-                    wl.name, wl.level, len(assets_out),
+                    "Pipeline profile filter [%s / %s]: sparse market data coverage %.1f%% "
+                    "(%d/%d) — skipping strict meta conditions to preserve %d assets.",
+                    wl.name, wl.level, selected["coverage_ratio"] * 100,
+                    symbols_with_meta, len(base_symbols),
+                    len(assets_out),
                 )
         else:
             before = len(assets_out)
-            assets_out = [a for a in assets_out if _passes_profile_filters(a, p_conditions, p_logic)]
+            assets_out = [a for a in assets_out if _passes_profile_filters(a, applicable_conditions, p_logic)]
             logger.info(
                 "Pipeline profile filter [%s / %s]: %d → %d assets (removed %d) "
                 "[%d/%d symbols had market data]",
