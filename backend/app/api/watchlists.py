@@ -754,6 +754,20 @@ async def _resolve_and_persist(
     """
     base_symbols = await _get_base_symbols(wl, user_id, db)
     if not base_symbols:
+        # No upstream symbols — mark all existing active assets as 'down'
+        # so the watchlist properly reflects the empty upstream state.
+        now = datetime.now(timezone.utc)
+        await db.execute(
+            text("""
+                UPDATE pipeline_watchlist_assets
+                SET level_direction = 'down',
+                    level_change_at = :now
+                WHERE watchlist_id = :wid
+                  AND (level_direction IS NULL OR level_direction NOT IN ('down'))
+            """),
+            {"wid": str(wl.id), "now": now},
+        )
+        await db.commit()
         return []
 
     # NOTE: filters_json on the watchlist is IGNORED at runtime.
