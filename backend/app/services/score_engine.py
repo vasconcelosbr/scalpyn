@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import logging
+import math
 import operator as op
 from typing import Dict, Any, List, Optional, Set
 
@@ -61,7 +62,7 @@ def _values_match(left: Any, right: Any) -> bool:
     if left == right:
         return True
     try:
-        return float(left) == float(right)
+        return math.isclose(float(left), float(right), rel_tol=1e-9, abs_tol=1e-9)
     except (TypeError, ValueError):
         return False
 
@@ -89,6 +90,13 @@ def resolve_profile_scoring_rules(
     global_rules: List[Dict[str, Any]],
     profile_config: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
+    """Resolve which global score rules should apply to a profile.
+
+    Profiles can explicitly reference canonical score rules via ``filters.conditions[].rule_id``.
+    When those explicit references are absent, this falls back to matching legacy free-form
+    filter conditions by field/operator/value against the global rules. If no explicit or
+    legacy match is found, the full global rule set remains active for backward compatibility.
+    """
     if not global_rules:
         return []
 

@@ -37,6 +37,8 @@ def _build_eval_data(metadata_row: Any | None, indicators: Dict[str, Any]) -> Di
         "price": float(metadata_row.price) if metadata_row.price is not None else 0.0,
         "volume_24h": float(metadata_row.volume_24h) if metadata_row.volume_24h is not None else 0.0,
         "market_cap": float(metadata_row.market_cap) if metadata_row.market_cap is not None else 0.0,
+        # Keep both aliases because profile/filter code paths still read either
+        # `change_24h` or `price_change_24h` depending on the caller.
         "change_24h": float(metadata_row.price_change_24h) if metadata_row.price_change_24h is not None else 0.0,
         "price_change_24h": float(metadata_row.price_change_24h) if metadata_row.price_change_24h is not None else 0.0,
         **(indicators or {}),
