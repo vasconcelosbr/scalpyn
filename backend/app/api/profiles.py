@@ -11,10 +11,32 @@ from ..database import get_db
 from ..models.profile import Profile, WatchlistProfile
 from .config import get_current_user_id
 from ..services.profile_engine import ProfileEngine
+from ..services.score_engine import hydrate_profile_scoring
+from ..services.config_service import config_service
+from ..services.seed_service import DEFAULT_SCORE
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/profiles", tags=["Profiles"])
+
+
+async def _hydrate_profile_config_with_global_score(
+    db: AsyncSession,
+    user_id: UUID,
+    profile_config: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    if not profile_config:
+        return profile_config
+
+    global_score_config = DEFAULT_SCORE
+    try:
+        cfg = await config_service.get_config(db, "score", user_id)
+        if cfg and (cfg.get("scoring_rules") or cfg.get("rules")):
+            global_score_config = cfg
+    except Exception as exc:
+        logger.debug("profiles: unable to load global score config: %s", exc)
+
+    return hydrate_profile_scoring(profile_config, global_score_config)
 
 
 def _profile_to_dict(profile: Profile) -> Dict[str, Any]:
@@ -218,7 +240,8 @@ async def test_profile(
         }
     
     # Run profile engine test
-    engine = ProfileEngine(profile.config)
+    hydrated_profile_config = await _hydrate_profile_config_with_global_score(db, user_id, profile.config)
+    engine = ProfileEngine(hydrated_profile_config)
     test_result = engine.test_profile(assets)
     
     return {
@@ -257,7 +280,8 @@ async def test_profile_config(
         }
     
     # Run profile engine test
-    engine = ProfileEngine(validated_config)
+    hydrated_profile_config = await _hydrate_profile_config_with_global_score(db, user_id, validated_config)
+    engine = ProfileEngine(hydrated_profile_config)
     test_result = engine.test_profile(assets)
     
     return {
@@ -422,6 +446,7 @@ def _validate_profile_config(config: Dict[str, Any]) -> Dict[str, Any]:
     scoring = config.get("scoring", {})
     weights = scoring.get("weights", {})
     validated["scoring"] = {
+        "enabled": scoring.get("enabled", True),
         "weights": {
             "liquidity": weights.get("liquidity", 25),
             "market_structure": weights.get("market_structure", 25),

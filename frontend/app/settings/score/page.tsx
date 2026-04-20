@@ -15,6 +15,44 @@ const INDICATORS = [
 ];
 
 const OPERATORS = ["<=", ">=", "<", ">", "=", "between", "ema9>ema50>ema200", "ema9>ema50", "ema50>ema200", "di+>di-", "di->di+", ">prev+", ">prev"];
+const CATEGORY_OPTIONS = [
+  { value: "liquidity", label: "liquidity" },
+  { value: "market_structure", label: "market structure" },
+  { value: "momentum", label: "momentum" },
+  { value: "signal", label: "signal" },
+];
+const DEFAULT_RULE_CATEGORIES: Record<string, string> = {
+  volume_spike: "liquidity",
+  volume_24h: "liquidity",
+  spread_pct: "liquidity",
+  orderbook_depth_usdt: "liquidity",
+  obv: "liquidity",
+  taker_ratio: "liquidity",
+  adx: "market_structure",
+  ema_trend: "market_structure",
+  atr: "market_structure",
+  atr_pct: "market_structure",
+  psar_trend: "market_structure",
+  bb_width: "market_structure",
+  di_plus: "market_structure",
+  di_minus: "market_structure",
+  di_trend: "market_structure",
+  rsi: "momentum",
+  macd: "momentum",
+  macd_signal: "momentum",
+  macd_histogram: "momentum",
+  stoch_k: "momentum",
+  stoch_d: "momentum",
+  zscore: "momentum",
+  vwap_distance_pct: "momentum",
+  ema9_distance_pct: "momentum",
+  adx_acceleration: "signal",
+  volume_delta: "signal",
+  funding_rate: "signal",
+  ema9_gt_ema50: "signal",
+  ema50_gt_ema200: "signal",
+  ema_full_alignment: "signal",
+};
 
 // Indicators where "between" range is the most common use-case
 const RANGE_INDICATORS = new Set(["rsi", "stoch_k", "stoch_d", "adx", "vwap_distance_pct", "bb_width", "ema9_distance_pct"]);
@@ -31,17 +69,15 @@ export default function ScoreEngineSettings() {
   useEffect(() => {
     if (config && Object.keys(config).length > 0) {
       setWeights(config.weights || weights);
-      setRules(config.scoring_rules || []);
+      setRules((config.scoring_rules || []).map((rule: any) => ({
+        ...rule,
+        category: rule.category || DEFAULT_RULE_CATEGORIES[rule.indicator] || "momentum",
+      })));
       setThresholds(config.thresholds || thresholds);
       setTopN(config.auto_select_top_n || 5);
       setMinScore(config.auto_select_min_score || 80);
     }
   }, [config]);
-
-  const weightSum = Object.values(weights).reduce((a, b) => a + b, 0);
-
-  // Total points across all scoring rules
-  const totalPoints = rules.reduce((sum, r) => sum + (Number(r.points) || 0), 0);
 
   const handleSave = async () => {
     setSaving(true);
@@ -55,7 +91,16 @@ export default function ScoreEngineSettings() {
   };
 
   const addRule = () => {
-    setRules([...rules, { id: `rule_${Date.now()}`, indicator: "rsi", operator: "between", min: 30, max: 60, value: null, points: 10 }]);
+    setRules([...rules, {
+      id: `rule_${Date.now()}`,
+      indicator: "rsi",
+      operator: "between",
+      min: 30,
+      max: 60,
+      value: null,
+      points: 10,
+      category: "momentum",
+    }]);
   };
 
   const removeRule = (id: string) => setRules(rules.filter((r) => r.id !== id));
@@ -88,39 +133,10 @@ export default function ScoreEngineSettings() {
         </button>
       </div>
 
-      {/* Weights */}
-      <div className="card">
-        <div className="card-header"><h3>Category Weights</h3></div>
-        <div className="card-body space-y-4">
-          {(["liquidity", "market_structure", "momentum", "signal"] as const).map((key) => (
-            <div key={key} className="flex items-center gap-4">
-              <span className="text-[13px] font-medium text-[var(--text-secondary)] w-40 capitalize">{key.replace("_", " ")}</span>
-              <input type="range" min={0} max={100} value={weights[key]} onChange={(e) => setWeights({ ...weights, [key]: parseInt(e.target.value) })} className="slider flex-1" />
-              <span className="data-value text-[14px] w-12 text-right">{weights[key]}%</span>
-            </div>
-          ))}
-          <div className={`text-[13px] font-semibold ${weightSum === 100 ? "text-[var(--color-profit)]" : "text-[var(--color-loss)]"}`}>
-            Total: {weightSum}% {weightSum !== 100 && "(must equal 100%)"}
-          </div>
-          {/* Preview bar */}
-          <div className="flex h-3 rounded-full overflow-hidden bg-[var(--bg-hover)]">
-            <div style={{ width: `${weights.liquidity}%` }} className="bg-blue-500" />
-            <div style={{ width: `${weights.market_structure}%` }} className="bg-purple-500" />
-            <div style={{ width: `${weights.momentum}%` }} className="bg-amber-500" />
-            <div style={{ width: `${weights.signal}%` }} className="bg-emerald-500" />
-          </div>
-        </div>
-      </div>
-
       {/* Scoring Rules */}
       <div className="card">
         <div className="card-header">
-          <div className="flex items-center gap-3">
-            <h3>Scoring Rules</h3>
-            <span className={`text-[12px] font-semibold px-2 py-0.5 rounded-full ${totalPoints <= 100 ? "bg-[var(--color-profit)]/15 text-[var(--color-profit)]" : "bg-[var(--color-loss)]/15 text-[var(--color-loss)]"}`}>
-              {totalPoints} / 100 pts
-            </span>
-          </div>
+          <h3>Scoring Rules</h3>
           <button onClick={addRule} className="btn btn-secondary text-[12px] px-3 py-1.5"><Plus className="w-3.5 h-3.5 mr-1" />Add Rule</button>
         </div>
         <div className="overflow-x-auto">
@@ -131,6 +147,7 @@ export default function ScoreEngineSettings() {
                 <th>Operator</th>
                 <th>Value / Range</th>
                 <th>Points</th>
+                <th>Category Weights</th>
                 <th className="w-10"></th>
               </tr>
             </thead>
@@ -150,6 +167,7 @@ export default function ScoreEngineSettings() {
                           : rule.operator;
                         updateRule(rule.id, "indicator", ind);
                         if (op !== rule.operator) updateRule(rule.id, "operator", op);
+                        updateRule(rule.id, "category", DEFAULT_RULE_CATEGORIES[ind] || rule.category || "momentum");
                       }}
                     >
                       {INDICATORS.map((i) => (
@@ -216,6 +234,19 @@ export default function ScoreEngineSettings() {
                   </td>
 
                   <td>
+                    <select
+                      className="input h-8 text-[13px] w-40"
+                      value={rule.category || DEFAULT_RULE_CATEGORIES[rule.indicator] || "momentum"}
+                      onChange={(e) => updateRule(rule.id, "category", e.target.value)}
+                      data-testid={`rule-category-${rule.id}`}
+                    >
+                      {CATEGORY_OPTIONS.map((category) => (
+                        <option key={category.value} value={category.value}>{category.label}</option>
+                      ))}
+                    </select>
+                  </td>
+
+                  <td>
                     <button
                       onClick={() => removeRule(rule.id)}
                       className="btn-icon w-7 h-7 flex items-center justify-center hover:text-[var(--color-loss)]"
@@ -227,7 +258,7 @@ export default function ScoreEngineSettings() {
               ))}
               {rules.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="text-center text-[var(--text-secondary)] text-[13px] py-6">
+                  <td colSpan={6} className="text-center text-[var(--text-secondary)] text-[13px] py-6">
                     No scoring rules. Click "Add Rule" to create one.
                   </td>
                 </tr>

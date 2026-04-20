@@ -3,10 +3,11 @@
 import { useState, useEffect, useMemo } from "react";
 import { ArrowLeft, Save, Play, ShieldOff, Zap, Plus, Trash2 } from "lucide-react";
 import { apiPost } from "@/lib/api";
-import { ConditionBuilder } from "./ConditionBuilder";
+import { ConditionBuilder, type ScoreRule } from "./ConditionBuilder";
 import { WeightSliders } from "./WeightSliders";
 import PresetIAButton from "./PresetIAButton";
 import ProfileRoleSelector, { ProfileRole } from "./ProfileRoleSelector";
+import { useConfig } from "@/hooks/useConfig";
 
 interface ProfileBuilderProps {
   profile?: any;
@@ -105,6 +106,7 @@ const DEFAULT_CONFIG = {
 type ActiveTab = "filters" | "scoring" | "signals" | "block_rules" | "entry_triggers";
 
 export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProps) {
+  const { config: globalScoreConfig } = useConfig("score");
   const [name, setName]                     = useState(profile?.name || "");
   const [description, setDescription]       = useState(profile?.description || "");
   const [config, setConfig]                 = useState<any>(() => ({
@@ -123,6 +125,27 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   );
   const [entryLogicPreview, setEntryLogicPreview] = useState(
     profile?.config?.entry_triggers?.logic_preview_text || ""
+  );
+
+  const scoreRules = useMemo<ScoreRule[]>(
+    () => ((globalScoreConfig?.scoring_rules as ScoreRule[] | undefined) || []).map((rule) => ({
+      ...rule,
+      category: rule.category || "",
+      points: Number(rule.points ?? 0),
+    })),
+    [globalScoreConfig]
+  );
+
+  const scoreRulePointsById = useMemo(
+    () => new Map(scoreRules.map((rule) => [rule.id, Number(rule.points ?? 0)])),
+    [scoreRules]
+  );
+
+  const filterPointsTotal = useMemo(
+    () => (config.filters?.conditions ?? []).reduce((sum: number, condition: Condition & { rule_id?: string; points?: number }) => {
+      return sum + Number(scoreRulePointsById.get(condition.rule_id || "") ?? condition.points ?? 0);
+    }, 0),
+    [config.filters?.conditions, scoreRulePointsById]
   );
 
   const handleSave = async () => {
@@ -496,7 +519,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="font-semibold text-[var(--text-primary)]">Filter Conditions</h3>
+                  <h3 className="font-semibold text-[var(--text-primary)]">Filter Conditions <span className="text-[12px] text-[var(--text-secondary)] font-medium">[{filterPointsTotal} / 100 pts]</span></h3>
                   <p className="text-[12px] text-[var(--text-secondary)]">Assets must pass these conditions to be included</p>
                 </div>
                 <select
@@ -514,6 +537,8 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                 onChange={(conditions) => updateFilters(conditions, config.filters?.logic ?? "AND")}
                 showRequired={false}
                 defaultTimeframe={config.default_timeframe || "5m"}
+                scoreRules={scoreRules}
+                showPoints
               />
             </div>
           )}

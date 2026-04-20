@@ -1,8 +1,10 @@
 """Score Engine — calculates Alpha Score dynamically from config rules and weights."""
 
+from copy import deepcopy
 import logging
+import math
 import operator as op
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 
 # ── Display labels per indicator name ─────────────────────────────────────────
 _IND_LABELS: Dict[str, str] = {
@@ -39,6 +41,98 @@ _IND_CATEGORY: Dict[str, str] = {
 }
 
 logger = logging.getLogger(__name__)
+_VALID_CATEGORIES: Set[str] = {"liquidity", "market_structure", "momentum", "signal", "other"}
+
+
+def _normalize_category(category: Any) -> Optional[str]:
+    if not isinstance(category, str):
+        return None
+    normalized = category.strip().lower().replace(" ", "_")
+    return normalized if normalized in _VALID_CATEGORIES else None
+
+
+def resolve_rule_category(rule: Dict[str, Any]) -> str:
+    normalized = _normalize_category(rule.get("category"))
+    if normalized:
+        return normalized
+    return _IND_CATEGORY.get(rule.get("indicator", ""), "other")
+
+
+def _values_match(left: Any, right: Any) -> bool:
+    if left == right:
+        return True
+    try:
+        return math.isclose(float(left), float(right), rel_tol=1e-9, abs_tol=1e-9)
+    except (TypeError, ValueError):
+        return False
+
+
+def _condition_matches_rule(condition: Dict[str, Any], rule: Dict[str, Any]) -> bool:
+    field = condition.get("field") or condition.get("indicator")
+    if field != rule.get("indicator"):
+        return False
+
+    condition_operator = condition.get("operator")
+    rule_operator = rule.get("operator")
+    if condition_operator and rule_operator and condition_operator != rule_operator:
+        return False
+
+    if rule_operator == "between":
+        return (
+            _values_match(condition.get("min"), rule.get("min"))
+            and _values_match(condition.get("max"), rule.get("max"))
+        )
+
+    return _values_match(condition.get("value"), rule.get("value"))
+
+
+def resolve_profile_scoring_rules(
+    global_rules: List[Dict[str, Any]],
+    profile_config: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Resolve which global score rules should apply to a profile.
+
+    Profiles can explicitly reference canonical score rules via ``filters.conditions[].rule_id``.
+    When those explicit references are absent, this falls back to matching legacy free-form
+    filter conditions by field/operator/value against the global rules. If no explicit or
+    legacy match is found, the full global rule set remains active for backward compatibility.
+    """
+    if not global_rules:
+        return []
+
+    if not profile_config:
+        return list(global_rules)
+
+    conditions = ((profile_config.get("filters") or {}).get("conditions") or [])
+    if not conditions:
+        return list(global_rules)
+
+    selected_rule_ids = {
+        str(cond.get("rule_id"))
+        for cond in conditions
+        if cond.get("rule_id")
+    }
+    if selected_rule_ids:
+        selected = [
+            rule for rule in global_rules
+            if str(rule.get("id")) in selected_rule_ids
+        ]
+        if selected:
+            return selected
+
+    matched_rules: List[Dict[str, Any]] = []
+    seen_ids: Set[str] = set()
+    for cond in conditions:
+        for rule in global_rules:
+            rule_id = str(rule.get("id"))
+            if rule_id in seen_ids:
+                continue
+            if _condition_matches_rule(cond, rule):
+                matched_rules.append(rule)
+                seen_ids.add(rule_id)
+                break
+
+    return matched_rules or list(global_rules)
 
 
 def merge_score_config(
@@ -54,7 +148,13 @@ def merge_score_config(
     This ensures every watchlist score respects the user-configured rules while
     honouring per-profile weight customisations (Alpha Score Weights).
     """
-    merged = dict(global_config)
+    merged = deepcopy(global_config)
+    global_rules = (
+        merged.get("scoring_rules")
+        or merged.get("rules")
+        or []
+    )
+    merged["scoring_rules"] = resolve_profile_scoring_rules(global_rules, profile_config)
 
     if not profile_config:
         return merged
@@ -70,6 +170,31 @@ def merge_score_config(
         merged["weights"] = profile_weights
 
     return merged
+
+
+def hydrate_profile_scoring(
+    profile_config: Optional[Dict[str, Any]],
+    global_score_config: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    if not profile_config:
+        return profile_config
+
+    hydrated = deepcopy(profile_config)
+    scoring_section = dict(hydrated.get("scoring") or {})
+    merged = merge_score_config(global_score_config or {}, hydrated)
+
+    scoring_section["weights"] = merged.get("weights", scoring_section.get("weights", {}))
+    scoring_section["rules"] = merged.get("scoring_rules") or merged.get("rules") or []
+    scoring_section["thresholds"] = merged.get(
+        "thresholds",
+        scoring_section.get("thresholds", {}),
+    )
+
+    if "enabled" in (profile_config.get("scoring") or {}):
+        scoring_section["enabled"] = (profile_config.get("scoring") or {}).get("enabled")
+
+    hydrated["scoring"] = scoring_section
+    return hydrated
 
 
 OPERATORS = {
@@ -171,7 +296,7 @@ class ScoreEngine:
             # Use _IND_CATEGORY as the single source of truth for which
             # category an indicator belongs to.  Default to "other" so that
             # unknown indicators are never silently dropped into a wrong bucket.
-            rule_category = _IND_CATEGORY.get(indicator_name, "other")
+            rule_category = resolve_rule_category(rule)
             if rule_category != category:
                 continue
 
@@ -328,7 +453,7 @@ class ScoreEngine:
                 "points_awarded": pts if passed else 0.0,
                 "points_possible": pts,
                 "condition_text": cond,
-                "category": _IND_CATEGORY.get(indicator, "other"),
+                "category": resolve_rule_category(rule),
             })
         return result
 

@@ -5,7 +5,6 @@ import { usePathname } from 'next/navigation';
 import { 
   BarChart2, 
   Settings, 
-  Activity, 
   Layers, 
   List, 
   Home,
@@ -58,7 +57,6 @@ const BACKOFFICE_ITEMS = [
 
 const CONFIG_ITEMS = [
   { name: 'General', href: '/settings/general', icon: Settings },
-  { name: 'Indicators', href: '/settings/indicators', icon: Activity },
   { name: 'Score Engine', href: '/settings/score', icon: Target },
   { name: 'Signal Rules', href: '/settings/signal', icon: Zap },
   { name: 'Block Rules', href: '/settings/block', icon: ShieldOff },

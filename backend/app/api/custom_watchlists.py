@@ -10,10 +10,32 @@ import logging
 from ..database import get_db
 from ..models.custom_watchlist import CustomWatchlist
 from .config import get_current_user_id
+from ..services.score_engine import hydrate_profile_scoring
+from ..services.config_service import config_service
+from ..services.seed_service import DEFAULT_SCORE
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/custom-watchlists", tags=["Custom Watchlists"])
+
+
+async def _hydrate_profile_config_with_global_score(
+    db: AsyncSession,
+    user_id: UUID,
+    profile_config: Dict[str, Any] | None,
+) -> Dict[str, Any] | None:
+    if not profile_config:
+        return profile_config
+
+    global_score_config = DEFAULT_SCORE
+    try:
+        cfg = await config_service.get_config(db, "score", user_id)
+        if cfg and (cfg.get("scoring_rules") or cfg.get("rules")):
+            global_score_config = cfg
+    except Exception as exc:
+        logger.debug("custom watchlists: unable to load global score config: %s", exc)
+
+    return hydrate_profile_scoring(profile_config, global_score_config)
 
 
 def _watchlist_to_dict(wl: CustomWatchlist) -> Dict[str, Any]:
@@ -307,6 +329,8 @@ async def get_watchlist_filtered(
     
     total_before = len(assets)
     
+    profile_config = await _hydrate_profile_config_with_global_score(db, user_id, profile_config)
+
     # Process through profile engine (apply filters only)
     engine = ProfileEngine(profile_config)
     filtered_assets = engine._apply_filters(assets)
@@ -429,6 +453,8 @@ async def get_watchlist_ranking(
             "assets": []
         }
     
+    profile_config = await _hydrate_profile_config_with_global_score(db, user_id, profile_config)
+
     # Process through profile engine
     engine = ProfileEngine(profile_config)
     
@@ -439,6 +465,7 @@ async def get_watchlist_ranking(
     scored_assets = []
     for asset in filtered:
         processed = engine._process_single_asset(asset, include_details=False)
+        components = (processed.get("score", {}) or {}).get("components", {})
         scored_assets.append({
             "symbol": processed.get("symbol"),
             "name": processed.get("name"),
@@ -448,10 +475,10 @@ async def get_watchlist_ranking(
             "market_cap": asset.get("market_cap"),
             "score": processed.get("score", {}).get("total_score", 0),
             "score_breakdown": {
-                "liquidity": processed.get("score", {}).get("liquidity", 0),
-                "market_structure": processed.get("score", {}).get("market_structure", 0),
-                "momentum": processed.get("score", {}).get("momentum", 0),
-                "signal": processed.get("score", {}).get("signal", 0),
+                "liquidity": components.get("liquidity_score", 0),
+                "market_structure": components.get("market_structure_score", 0),
+                "momentum": components.get("momentum_score", 0),
+                "signal": components.get("signal_score", 0),
             },
             "rating": _get_rating(processed.get("score", {}).get("total_score", 0))
         })
@@ -543,6 +570,8 @@ async def get_watchlist_signals(
             "signals": []
         }
     
+    profile_config = await _hydrate_profile_config_with_global_score(db, user_id, profile_config)
+
     # Process through profile engine
     engine = ProfileEngine(profile_config)
     result = engine.process_watchlist(assets, include_details=True)
