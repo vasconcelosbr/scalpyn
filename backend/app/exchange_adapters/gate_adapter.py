@@ -483,6 +483,13 @@ class GateAdapter(BaseExchangeAdapter):
             base_url=self._futures_url(),
         )
 
+    async def list_futures_positions(self) -> List[Dict[str, Any]]:
+        """GET /futures/usdt/positions → all open and historical position rows."""
+        return await self._request(
+            "GET", f"/futures/{self.SETTLE}/positions",
+            base_url=self._futures_url(),
+        )
+
     async def place_futures_order(
         self,
         contract:      str,

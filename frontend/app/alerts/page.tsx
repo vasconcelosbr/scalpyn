@@ -14,7 +14,7 @@ interface Alert {
 }
 
 interface AlertsResponse {
-  alerts: Alert[];
+  items: Alert[];
   total: number;
   page: number;
   per_page: number;
@@ -45,11 +45,11 @@ export default function AlertCenterPage() {
     try {
       const params = new URLSearchParams();
       if (status !== "all") params.set("status", status);
-      if (alertType !== "all") params.set("type", alertType);
+      if (alertType !== "all") params.set("alert_type", alertType);
       params.set("page", String(page));
       params.set("per_page", String(perPage));
       const data = await apiGet<AlertsResponse>(`/backoffice/alerts?${params.toString()}`);
-      setAlerts(data.alerts);
+      setAlerts(data.items ?? []);
       setTotal(data.total);
     } catch {
       setAlerts([]);

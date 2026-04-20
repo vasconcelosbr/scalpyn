@@ -7,7 +7,7 @@ import { apiGet } from "@/lib/api";
 interface DecisionEntry {
   id: string;
   trace_id: string;
-  time: string;
+  created_at: string;
   symbol: string;
   strategy: string;
   score: number;
@@ -324,7 +324,7 @@ function DecisionRow({ item, expanded, onToggle }: { item: DecisionEntry; expand
           )}
         </td>
         <td className="text-[var(--text-secondary)]">
-          {new Date(item.time).toLocaleString("en", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+          {new Date(item.created_at).toLocaleString("en", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
         </td>
         <td className="font-semibold">{item.symbol}</td>
         <td>

@@ -10,6 +10,15 @@ interface SimResult {
   notes: string[];
 }
 
+interface ReplayApiResponse {
+  result: {
+    original: { score: number; decision: string; latency_ms?: number };
+    replay: { score: number; decision: string; latency_ms?: number };
+    diff?: { score_delta?: number };
+  };
+  note?: string;
+}
+
 export default function ReplayPage() {
   const [symbol, setSymbol] = useState("");
   const [strategy, setStrategy] = useState("L1");
@@ -25,12 +34,24 @@ export default function ReplayPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await apiPost<SimResult>("/backoffice/replay/run", {
+      const response = await apiPost<ReplayApiResponse>("/backoffice/replay/run", {
         symbol: symbol.trim().toUpperCase(),
         strategy,
         params: { rsi_period: rsiPeriod, adx_period: adxPeriod, min_score: minScore },
       });
-      setResult(data);
+      setResult({
+        original: {
+          score: response.result.original.score,
+          decision: response.result.original.decision,
+          confidence: 0,
+        },
+        simulated: {
+          score: response.result.replay.score,
+          decision: response.result.replay.decision,
+          confidence: 0,
+        },
+        notes: response.note ? [response.note] : [],
+      });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Simulation failed");
       setResult(null);

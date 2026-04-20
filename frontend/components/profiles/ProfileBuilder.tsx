@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { ArrowLeft, Save, Play, RefreshCw, ShieldOff, Zap, Plus, Trash2 } from "lucide-react";
 import { apiPost } from "@/lib/api";
 import { ConditionBuilder } from "./ConditionBuilder";
@@ -87,6 +87,12 @@ const NO_TF_INDICATORS = new Set([
   "orderbook_pressure", "bid_ask_imbalance",
 ]);
 
+const BOOLEAN_TRIGGER_INDICATORS = new Set([
+  "ema9_gt_ema21",
+  "ema9_gt_ema50",
+  "ema_full_alignment",
+]);
+
 const DEFAULT_CONFIG = {
   default_timeframe: "5m",
   filters:       { logic: "AND", conditions: [] },
@@ -121,6 +127,9 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   const [saving, setSaving]                 = useState(false);
   const [scoringEnabled, setScoringEnabled] = useState(
     profile?.config?.scoring?.enabled !== false
+  );
+  const [entryLogicPreview, setEntryLogicPreview] = useState(
+    profile?.config?.entry_triggers?.logic_preview_text || ""
   );
 
   const handleSave = async () => {
@@ -230,6 +239,50 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   const updateEntryLogic = (logic: string) =>
     setConfig((c: any) => ({ ...c, entry_triggers: { ...c.entry_triggers, logic } }));
 
+  const buildEntryLogicPreview = (
+    conditions: EntryTrigger[],
+    defaultTimeframe: string,
+    logic: string,
+  ) => {
+    const describe = (trigger: EntryTrigger, requiredLabel = false) => {
+      const isBoolean = BOOLEAN_TRIGGER_INDICATORS.has(trigger.indicator);
+      const tf = NO_TF_INDICATORS.has(trigger.indicator) ? "" : ` (${trigger.timeframe || defaultTimeframe}${trigger.period ? `, P:${trigger.period}` : ""})`;
+      let conditionText = "";
+
+      if (isBoolean) {
+        conditionText = `= ${trigger.operator === "is_false" ? "False" : "True"}`;
+      } else if (trigger.operator === "between") {
+        conditionText = `between ${trigger.min} and ${trigger.max}`;
+      } else {
+        conditionText = `${trigger.operator} ${trigger.value}`;
+      }
+
+      return `  ${requiredLabel ? "[REQUIRED] " : ""}${trigger.indicator}${tf} ${conditionText}`.trimEnd();
+    };
+
+    const required = conditions.filter((t) => t.enabled && t.required);
+    const optional = conditions.filter((t) => t.enabled && !t.required);
+    const lines: string[] = ["IF ("];
+
+    if (required.length > 0) {
+      lines.push(required.map((trigger) => describe(trigger, true)).join("\n  AND\n"));
+    }
+
+    if (optional.length > 0) {
+      if (required.length > 0) lines.push("  AND");
+      lines.push("  (");
+      lines.push(optional.map((trigger) => describe(trigger)).join(`\n    ${logic}\n`));
+      lines.push("  )");
+    }
+
+    if (required.length === 0 && optional.length === 0) {
+      lines.push("  No active entry triggers");
+    }
+
+    lines.push(") → ALLOW TRADE ENTRY");
+    return lines.join("\n");
+  };
+
   // ── Normalização safety-net (frontend) ─────────────────────────────────────
   const normalizePresetConfig = (incoming: any): any => {
     const FIELD_ALIASES: Record<string, string> = {
@@ -288,6 +341,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
       } : { blocks: [] },
       entry_triggers: incoming.entry_triggers ? {
         logic: incoming.entry_triggers.logic || "AND",
+        logic_preview_text: incoming.entry_triggers.logic_preview_text,
         conditions: fixConditions(incoming.entry_triggers.conditions ?? []).map((c: any) => ({
           ...c,
           indicator: c.field || c.indicator || "rsi",
@@ -302,6 +356,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     if (result?.config) {
       const normalized = normalizePresetConfig(result.config);
       setConfig(normalized);
+      setEntryLogicPreview(normalized.entry_triggers?.logic_preview_text || "");
       if (normalized.scoring?.enabled !== undefined) {
         setScoringEnabled(normalized.scoring.enabled !== false);
       }
@@ -311,6 +366,15 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   const blocks: BlockRule[]           = config.block_rules?.blocks || [];
   const entryConditions: EntryTrigger[] = config.entry_triggers?.conditions || [];
   const entryLogic: string            = config.entry_triggers?.logic || "AND";
+  const autoEntryLogicPreview = useMemo(
+    () => buildEntryLogicPreview(entryConditions, config.default_timeframe || "5m", entryLogic),
+    [entryConditions, config.default_timeframe, entryLogic]
+  );
+
+  useEffect(() => {
+    const manualPreview = config.entry_triggers?.logic_preview_text;
+    setEntryLogicPreview(manualPreview || autoEntryLogicPreview);
+  }, [autoEntryLogicPreview, config.entry_triggers?.logic_preview_text]);
 
   const TABS: { key: ActiveTab; label: string; count?: number; icon?: React.ReactNode }[] = [
     { key: "filters",       label: "Filters",       count: config.filters?.conditions?.length ?? 0 },
@@ -736,39 +800,66 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                     <select
                       className="input h-8 text-[12px] w-36"
                       value={trig.indicator}
-                      onChange={(e) => updateTrigger(trig.id, "indicator", e.target.value)}
+                      onChange={(e) => {
+                        const indicator = e.target.value;
+                        updateTrigger(trig.id, "indicator", indicator);
+                        if (BOOLEAN_TRIGGER_INDICATORS.has(indicator)) {
+                          updateTrigger(trig.id, "operator", "is_true");
+                          updateTrigger(trig.id, "value", true);
+                          updateTrigger(trig.id, "min", undefined);
+                          updateTrigger(trig.id, "max", undefined);
+                        } else if (trig.operator === "is_true" || trig.operator === "is_false") {
+                          updateTrigger(trig.id, "operator", "<");
+                          updateTrigger(trig.id, "value", 60);
+                        }
+                      }}
                     >
                       {TRIGGER_INDICATORS.map((i) => (
                         <option key={i} value={i}>{i}</option>
                       ))}
                     </select>
-                    <select
-                      className="input h-8 text-[12px] w-20"
-                      value={trig.operator}
-                      onChange={(e) => {
-                        const op = e.target.value;
-                        if (op === "between") {
-                          const minVal = typeof trig.value === "number" ? trig.value : (parseFloat(trig.value) || 0);
-                          updateTrigger(trig.id, "operator", op);
-                          updateTrigger(trig.id, "min", minVal);
-                          updateTrigger(trig.id, "max", 100);
-                          updateTrigger(trig.id, "value", undefined);
-                        } else if (trig.operator === "between") {
-                          updateTrigger(trig.id, "operator", op);
-                          updateTrigger(trig.id, "value", trig.min ?? 0);
-                        } else {
-                          updateTrigger(trig.id, "operator", op);
-                        }
-                      }}
-                    >
-                      {[">", "<", ">=", "<=", "=", "!=", "between"].map((o) => (
-                        <option key={o} value={o}>{o === "between" ? "entre" : o}</option>
-                      ))}
-                    </select>
-                    {trig.operator === "between" ? (
+                    {BOOLEAN_TRIGGER_INDICATORS.has(trig.indicator) ? (
+                      <select
+                        className="input h-8 text-[12px] w-24"
+                        value={trig.operator === "is_false" ? "false" : "true"}
+                        onChange={(e) => {
+                          const booleanValue = e.target.value === "true";
+                          updateTrigger(trig.id, "operator", booleanValue ? "is_true" : "is_false");
+                          updateTrigger(trig.id, "value", booleanValue);
+                        }}
+                      >
+                        <option value="true">True</option>
+                        <option value="false">False</option>
+                      </select>
+                    ) : (
                       <>
-                        <input
-                          type="number"
+                        <select
+                          className="input h-8 text-[12px] w-20"
+                          value={trig.operator}
+                          onChange={(e) => {
+                            const op = e.target.value;
+                            if (op === "between") {
+                              const minVal = typeof trig.value === "number" ? trig.value : (parseFloat(trig.value) || 0);
+                              updateTrigger(trig.id, "operator", op);
+                              updateTrigger(trig.id, "min", minVal);
+                              updateTrigger(trig.id, "max", 100);
+                              updateTrigger(trig.id, "value", undefined);
+                            } else if (trig.operator === "between") {
+                              updateTrigger(trig.id, "operator", op);
+                              updateTrigger(trig.id, "value", trig.min ?? 0);
+                            } else {
+                              updateTrigger(trig.id, "operator", op);
+                            }
+                          }}
+                        >
+                          {[">", "<", ">=", "<=", "=", "!=", "between"].map((o) => (
+                            <option key={o} value={o}>{o === "between" ? "entre" : o}</option>
+                          ))}
+                        </select>
+                        {trig.operator === "between" ? (
+                       <>
+                         <input
+                           type="number"
                           className="input h-8 text-[12px] w-20 font-mono"
                           value={trig.min ?? 0}
                           onChange={(e) => {
@@ -787,18 +878,20 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                             updateTrigger(trig.id, "max", isNaN(num) ? (trig.max ?? 100) : num);
                           }}
                           placeholder="Max"
-                        />
+                         />
+                       </>
+                        ) : (
+                          <input
+                            type="text"
+                            className="input h-8 text-[12px] w-20 font-mono"
+                            value={trig.value ?? ""}
+                            onChange={(e) => {
+                              const num = parseFloat(e.target.value);
+                              updateTrigger(trig.id, "value", isNaN(num) ? e.target.value : num);
+                            }}
+                          />
+                        )}
                       </>
-                    ) : (
-                    <input
-                      type="text"
-                      className="input h-8 text-[12px] w-20 font-mono"
-                      value={trig.value ?? ""}
-                      onChange={(e) => {
-                        const num = parseFloat(e.target.value);
-                        updateTrigger(trig.id, "value", isNaN(num) ? e.target.value : num);
-                      }}
-                    />
                     )}
                     {/* Timeframe override */}
                     {!NO_TF_INDICATORS.has(trig.indicator) && (
@@ -859,30 +952,40 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
               {entryConditions.length > 0 && (
                 <div className="card bg-[var(--bg-base)]">
                   <div className="p-4">
-                    <p className="text-[11px] text-[var(--text-tertiary)] mb-2 font-semibold uppercase tracking-wider">Logic Preview</p>
-                    <pre className="text-[12px] font-mono text-[var(--text-secondary)] overflow-x-auto">
-{`IF (
-${entryConditions.filter(t => t.enabled && t.required).map(t => {
-  const tf = t.timeframe || config.default_timeframe || "5m";
-  const p = t.period ? `, P:${t.period}` : "";
-  const cond = t.operator === "between" ? `entre ${t.min} e ${t.max}` : `${t.operator} ${t.value}`;
-  return `  [REQUIRED] ${t.indicator} (${tf}${p}) ${cond}`;
-}).join("\n  AND\n")}${
-  entryConditions.filter(t => t.enabled && t.required).length > 0 &&
-  entryConditions.filter(t => t.enabled && !t.required).length > 0
-    ? "\n  AND ("
-    : ""
-}
-${entryConditions.filter(t => t.enabled && !t.required).map(t => {
-  const tf = t.timeframe || config.default_timeframe || "5m";
-  const p = t.period ? `, P:${t.period}` : "";
-  const cond = t.operator === "between" ? `entre ${t.min} e ${t.max}` : `${t.operator} ${t.value}`;
-  return `    ${t.indicator} (${tf}${p}) ${cond}`;
-}).join(`\n    ${entryLogic}\n`)}${
-  entryConditions.filter(t => t.enabled && !t.required).length > 0 ? "\n  )" : ""
-}
-) → ALLOW TRADE ENTRY`}
-                    </pre>
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <p className="text-[11px] text-[var(--text-tertiary)] font-semibold uppercase tracking-wider">Logic Preview</p>
+                      <button
+                        type="button"
+                        className="btn btn-secondary text-[11px] px-2.5 py-1"
+                        onClick={() => {
+                          setEntryLogicPreview(autoEntryLogicPreview);
+                          setConfig((c: any) => ({
+                            ...c,
+                            entry_triggers: {
+                              ...c.entry_triggers,
+                              logic_preview_text: undefined,
+                            },
+                          }));
+                        }}
+                      >
+                        Reset Auto
+                      </button>
+                    </div>
+                    <textarea
+                      className="input min-h-[220px] text-[12px] font-mono text-[var(--text-secondary)]"
+                      value={entryLogicPreview}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setEntryLogicPreview(value);
+                        setConfig((c: any) => ({
+                          ...c,
+                          entry_triggers: {
+                            ...c.entry_triggers,
+                            logic_preview_text: value,
+                          },
+                        }));
+                      }}
+                    />
                   </div>
                 </div>
               )}
