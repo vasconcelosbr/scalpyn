@@ -20,6 +20,7 @@ from typing import Optional
 from ..tasks.celery_app import celery_app
 from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
+    effective_pipeline_level,
     select_profile_filter_conditions,
 )
 
@@ -940,9 +941,21 @@ async def _run_pipeline_scan():
                     score_config = DEFAULT_SCORE
 
                 # ── 4. Per-level evaluation ───────────────────────────────────
-                # Custom/source-pool watchlists are monitoring boards: they keep
-                # every pool asset visible while still computing live scores.
-                effective_level = level if _uses_pipeline_filters(level) else "custom"
+                # Source-pool watchlists with profile filter conditions should be
+                # treated as L1 even if legacy data stored them as "custom".
+                # Pure custom boards without filter conditions remain monitoring
+                # boards and keep all pool assets visible.
+                effective_level = effective_pipeline_level(
+                    level,
+                    source_pool_id=wl.source_pool_id,
+                    profile_config=profile_config,
+                )
+                if effective_level == "L1" and not _uses_pipeline_filters(level):
+                    logger.info(
+                        "[PipelineScan] %s (%s): source-pool watchlist promoted to L1 so profile filter conditions are enforced.",
+                        wl.name,
+                        level,
+                    )
 
                 if effective_level == "custom":
                     existing_symbols = {a.get("symbol") for a in assets}
