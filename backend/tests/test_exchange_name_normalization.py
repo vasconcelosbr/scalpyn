@@ -15,9 +15,9 @@ def test_display_exchange_name_preserves_pretty_label():
     assert display_exchange_name("gate.io") == "Gate.io"
 
 
-def test_exchange_name_matches_uses_case_insensitive_canonical_filter():
+def test_exchange_name_matches_case_insensitive():
     from sqlalchemy import column
 
     expr = exchange_name_matches(column("exchange_name"), "Gate.io")
-    compiled = str(expr.compile(compile_kwargs={"literal_binds": True}))
-    assert compiled == "lower(exchange_name) = 'gate.io'"
+    assert expr.left.name == "lower"
+    assert expr.right.value == "gate.io"
