@@ -243,7 +243,13 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
       let conditionText = "";
 
       if (isBoolean) {
-        conditionText = `= ${trigger.operator === "is_false" ? "False" : "True"}`;
+        const booleanValue =
+          trigger.operator === "is_false" || trigger.value === false
+            ? "False"
+            : trigger.operator === "is_true" || trigger.value === true
+              ? "True"
+              : String(trigger.value ?? trigger.operator ?? "True");
+        conditionText = `= ${booleanValue}`;
       } else if (trigger.operator === "between") {
         conditionText = `between ${trigger.min} and ${trigger.max}`;
       } else {

@@ -30,6 +30,7 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
             return default
         return float(value)
     except (TypeError, ValueError):
+        logger.debug("Unable to convert value to float: %r", value)
         return default
 
 

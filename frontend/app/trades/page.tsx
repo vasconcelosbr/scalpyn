@@ -68,7 +68,7 @@ function formatDuration(seconds: number | null) {
   return `${Math.floor(seconds / 86400)}d ${Math.floor((seconds % 86400) / 3600)}h`;
 }
 
-function endOfDay(date: string) {
+function toEndOfDayIsoString(date: string) {
   return date ? `${date}T23:59:59.999999` : "";
 }
 
@@ -92,7 +92,7 @@ export default function TradesPage() {
     const params = new URLSearchParams({ limit: "500" });
     if (preset === "custom") {
       if (startDate) params.set("start_date", startDate);
-      if (endDate) params.set("end_date", endOfDay(endDate));
+      if (endDate) params.set("end_date", toEndOfDayIsoString(endDate));
     } else {
       params.set("period_days", preset);
     }
