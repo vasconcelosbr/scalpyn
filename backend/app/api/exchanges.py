@@ -52,7 +52,6 @@ async def add_exchange(payload: Dict[str, Any], db: AsyncSession = Depends(get_d
         existing_conn = result.scalars().first()
         
         if existing_conn:
-            existing_conn.exchange_name = exchange_name
             existing_conn.api_key_encrypted = encrypt(api_key.strip())
             existing_conn.api_secret_encrypted = encrypt(api_secret.strip())
             existing_conn.connection_status = "connected"

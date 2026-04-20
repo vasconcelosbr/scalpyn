@@ -24,7 +24,7 @@ def normalize_exchange_name(value: str) -> str:
 
 def display_exchange_name(value: str) -> str:
     normalized = normalize_exchange_name(value)
-    return _DISPLAY_EXCHANGE_NAMES.get(normalized, value)
+    return _DISPLAY_EXCHANGE_NAMES.get(normalized, normalized)
 
 
 def exchange_name_matches(column, value: str):
