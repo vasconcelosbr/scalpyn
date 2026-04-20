@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { ArrowLeft, Save, Play, RefreshCw, ShieldOff, Zap, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Save, Play, ShieldOff, Zap, Plus, Trash2 } from "lucide-react";
 import { apiPost } from "@/lib/api";
 import { ConditionBuilder } from "./ConditionBuilder";
 import { WeightSliders } from "./WeightSliders";
@@ -100,13 +100,6 @@ const DEFAULT_CONFIG = {
   signals:       { logic: "AND", conditions: [] },
   block_rules:   { blocks: [] },
   entry_triggers: { logic: "AND", conditions: [] },
-};
-
-const ROLE_TO_TYPE: Record<string, "L1" | "L2" | "L3"> = {
-  primary_filter:    "L1",
-  score_engine:      "L2",
-  acquisition_queue: "L3",
-  universe_filter:   "L1",
 };
 
 type ActiveTab = "filters" | "scoring" | "signals" | "block_rules" | "entry_triggers";

@@ -89,7 +89,6 @@ export default function TradesPage() {
   }, []);
 
   useEffect(() => {
-    setLoadingHistory(true);
     const params = new URLSearchParams({ limit: "500" });
     if (preset === "custom") {
       if (startDate) params.set("start_date", startDate);
@@ -144,9 +143,12 @@ export default function TradesPage() {
         <div className="card">
           <div className="card-body p-4 flex flex-wrap items-end gap-3">
             {(["7", "30", "90"] as const).map((value) => (
-              <button
-                key={value}
-                onClick={() => setPreset(value)}
+            <button
+              key={value}
+              onClick={() => {
+                setLoadingHistory(true);
+                setPreset(value);
+              }}
                 className={`px-3 py-1.5 rounded-[var(--radius-sm)] text-[12px] font-medium border ${
                   preset === value
                     ? "bg-[var(--accent-primary)] text-white border-[var(--accent-primary)]"
@@ -157,7 +159,10 @@ export default function TradesPage() {
               </button>
             ))}
             <button
-              onClick={() => setPreset("custom")}
+              onClick={() => {
+                setLoadingHistory(true);
+                setPreset("custom");
+              }}
               className={`px-3 py-1.5 rounded-[var(--radius-sm)] text-[12px] font-medium border ${
                 preset === "custom"
                   ? "bg-[var(--accent-primary)] text-white border-[var(--accent-primary)]"
@@ -174,6 +179,7 @@ export default function TradesPage() {
                   className="input h-9 text-[12px]"
                   value={startDate}
                   onChange={(event) => {
+                    setLoadingHistory(true);
                     setPreset("custom");
                     setStartDate(event.target.value);
                   }}
@@ -186,6 +192,7 @@ export default function TradesPage() {
                   className="input h-9 text-[12px]"
                   value={endDate}
                   onChange={(event) => {
+                    setLoadingHistory(true);
                     setPreset("custom");
                     setEndDate(event.target.value);
                   }}

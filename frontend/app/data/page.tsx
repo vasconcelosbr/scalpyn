@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { apiGet } from "@/lib/api";
-import { Activity, Clock, AlertTriangle, Gauge } from "lucide-react";
+import { Clock, AlertTriangle, Gauge } from "lucide-react";
 
 interface IntegrityData {
   feed_delay_seconds: number;

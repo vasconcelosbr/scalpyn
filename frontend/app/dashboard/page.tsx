@@ -192,7 +192,6 @@ export default function DashboardPage() {
                         axisLine={false}
                       />
                       <Tooltip
-                        formatter={(value: number) => formatCurrency(value)}
                         labelFormatter={(value) => String(value)}
                         contentStyle={{
                           background: "var(--bg-elevated)",
