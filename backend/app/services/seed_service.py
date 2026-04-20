@@ -31,9 +31,9 @@ DEFAULT_INDICATORS = {
 DEFAULT_SCORE = {
     "weights": {"liquidity": 25, "market_structure": 25, "momentum": 25, "signal": 25},
     "scoring_rules": [
-        {"id": "rsi_1", "indicator": "rsi", "operator": "<=", "value": 25, "points": 40},
-        {"id": "rsi_2", "indicator": "rsi", "operator": "<=", "value": 30, "points": 30},
-        {"id": "ema_trend_1", "indicator": "ema_trend", "operator": "ema9>ema50>ema200", "value": None, "points": 30}
+        {"id": "rsi_1", "indicator": "rsi", "operator": "<=", "value": 25, "points": 40, "category": "momentum"},
+        {"id": "rsi_2", "indicator": "rsi", "operator": "<=", "value": 30, "points": 30, "category": "momentum"},
+        {"id": "ema_trend_1", "indicator": "ema_trend", "operator": "ema9>ema50>ema200", "value": None, "points": 30, "category": "market_structure"}
     ],
     "thresholds": {"strong_buy": 80, "buy": 65, "neutral": 40},
     "auto_select_top_n": 5,

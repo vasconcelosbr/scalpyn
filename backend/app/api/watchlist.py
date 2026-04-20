@@ -3,16 +3,42 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
-from typing import Optional
+from typing import Any, Dict, Optional
 from uuid import UUID
 import logging
 
 from ..database import get_db
 from .config import get_current_user_id
+from ..services.config_service import config_service
+from ..services.score_engine import ScoreEngine
+from ..services.seed_service import DEFAULT_SCORE
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/watchlist", tags=["Watchlist"])
+
+
+async def _load_score_engine(db: AsyncSession, user_id: UUID) -> ScoreEngine:
+    score_config = DEFAULT_SCORE
+    try:
+        cfg = await config_service.get_config(db, "score", user_id)
+        if cfg and (cfg.get("scoring_rules") or cfg.get("rules")):
+            score_config = cfg
+    except Exception as exc:
+        logger.debug("watchlist: unable to load score config: %s", exc)
+    return ScoreEngine(score_config)
+
+
+def _build_eval_data(metadata_row: Any, indicators: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "symbol": metadata_row.symbol,
+        "price": float(metadata_row.price) if metadata_row.price is not None else 0.0,
+        "volume_24h": float(metadata_row.volume_24h) if metadata_row.volume_24h is not None else 0.0,
+        "market_cap": float(metadata_row.market_cap) if metadata_row.market_cap is not None else 0.0,
+        "change_24h": float(metadata_row.price_change_24h) if metadata_row.price_change_24h is not None else 0.0,
+        "price_change_24h": float(metadata_row.price_change_24h) if metadata_row.price_change_24h is not None else 0.0,
+        **(indicators or {}),
+    }
 
 
 @router.get("/")
@@ -22,17 +48,6 @@ async def get_watchlist(
 ):
     """Get all tracked symbols with latest score, indicators, and price data."""
     try:
-        # Get latest alpha scores
-        scores_query = text("""
-            SELECT DISTINCT ON (symbol)
-                symbol, score, liquidity_score, market_structure_score,
-                momentum_score, signal_score, components_json, time
-            FROM alpha_scores
-            ORDER BY symbol, time DESC
-        """)
-        scores_result = await db.execute(scores_query)
-        scores_rows = scores_result.fetchall()
-
         # Get latest indicators
         indicators_query = text("""
             SELECT DISTINCT ON (symbol)
@@ -52,27 +67,27 @@ async def get_watchlist(
         metadata_result = await db.execute(metadata_query)
         metadata_rows = metadata_result.fetchall()
 
-        # Build response
-        scores_map = {}
-        for row in scores_rows:
-            scores_map[row.symbol] = {
-                "score": float(row.score) if row.score else 0,
-                "liquidity_score": float(row.liquidity_score) if row.liquidity_score else 0,
-                "market_structure_score": float(row.market_structure_score) if row.market_structure_score else 0,
-                "momentum_score": float(row.momentum_score) if row.momentum_score else 0,
-                "signal_score": float(row.signal_score) if row.signal_score else 0,
-                "components": row.components_json,
-            }
-
         indicators_map = {}
         for row in indicators_rows:
             indicators_map[row.symbol] = row.indicators_json or {}
 
+        score_engine = await _load_score_engine(db, user_id)
         watchlist = []
         for row in metadata_rows:
             symbol = row.symbol
-            score_data = scores_map.get(symbol, {})
             inds = indicators_map.get(symbol, {})
+            score_result = score_engine.compute_alpha_score(_build_eval_data(row, inds))
+            components = score_result.get("components", {})
+            score_val = float(score_result.get("total_score", 0) or 0)
+            score_data = {
+                "score": score_val,
+                "liquidity_score": float(components.get("liquidity_score", 0) or 0),
+                "market_structure_score": float(components.get("market_structure_score", 0) or 0),
+                "momentum_score": float(components.get("momentum_score", 0) or 0),
+                "signal_score": float(components.get("signal_score", 0) or 0),
+                "classification": score_result.get("classification"),
+                "matched_rules": score_result.get("matched_rules", []),
+            }
 
             # Derive trend from indicators
             trend = "Range"
@@ -80,8 +95,6 @@ async def get_watchlist(
                 trend = "Bullish"
             elif score_data.get("score", 0) <= 30:
                 trend = "Bearish"
-
-            score_val = score_data.get("score", 0)
 
             watchlist.append({
                 "symbol": symbol,
@@ -121,26 +134,34 @@ async def get_symbol_detail(
         result = await db.execute(indicators_query, {"symbol": symbol})
         row = result.fetchone()
 
-        scores_query = text("""
-            SELECT score, liquidity_score, market_structure_score,
-                   momentum_score, signal_score, components_json, time
-            FROM alpha_scores
+        metadata_query = text("""
+            SELECT symbol, name, market_cap, volume_24h, price, price_change_24h, ranking
+            FROM market_metadata
             WHERE symbol = :symbol
-            ORDER BY time DESC LIMIT 1
+            LIMIT 1
         """)
-        score_result = await db.execute(scores_query, {"symbol": symbol})
-        score_row = score_result.fetchone()
+        metadata_result = await db.execute(metadata_query, {"symbol": symbol})
+        metadata_row = metadata_result.fetchone()
+
+        score_engine = await _load_score_engine(db, user_id)
+        indicators = row.indicators_json if row else {}
+        eval_data = _build_eval_data(metadata_row, indicators) if metadata_row else indicators
+        score = score_engine.compute_alpha_score(eval_data)
+        components = score.get("components", {})
 
         return {
             "symbol": symbol,
-            "indicators": row.indicators_json if row else {},
+            "indicators": indicators,
             "score": {
-                "total": float(score_row.score) if score_row else 0,
-                "liquidity": float(score_row.liquidity_score) if score_row and score_row.liquidity_score else 0,
-                "market_structure": float(score_row.market_structure_score) if score_row and score_row.market_structure_score else 0,
-                "momentum": float(score_row.momentum_score) if score_row and score_row.momentum_score else 0,
-                "signal": float(score_row.signal_score) if score_row and score_row.signal_score else 0,
-                "components": score_row.components_json if score_row else {},
+                "total": float(score.get("total_score", 0) or 0),
+                "liquidity": float(components.get("liquidity_score", 0) or 0),
+                "market_structure": float(components.get("market_structure_score", 0) or 0),
+                "momentum": float(components.get("momentum_score", 0) or 0),
+                "signal": float(components.get("signal_score", 0) or 0),
+                "components": {
+                    "classification": score.get("classification"),
+                    "matched_rules": score.get("matched_rules", []),
+                },
             },
             "updated_at": row.time.isoformat() if row else None,
         }
