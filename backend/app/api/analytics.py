@@ -8,6 +8,7 @@ from datetime import datetime, timezone, timedelta
 
 from ..database import get_db
 from ..services.analytics_service import analytics_service
+from ..services.portfolio_service import portfolio_service
 from .config import get_current_user_id
 
 router = APIRouter(prefix="/api/analytics", tags=["Analytics"])
@@ -43,3 +44,18 @@ async def get_daily_summary(
     user_id: UUID = Depends(get_current_user_id),
 ):
     return await analytics_service.get_daily_summary(db, user_id)
+
+
+@router.get("/dashboard")
+async def get_dashboard_overview(
+    days: int = Query(30, ge=1, le=365),
+    min_value_usdt: float = Query(10, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    return await portfolio_service.get_dashboard_overview(
+        db=db,
+        user_id=user_id,
+        days=days,
+        min_value_usdt=min_value_usdt,
+    )

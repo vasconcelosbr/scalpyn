@@ -2,12 +2,12 @@
 
 import { useState, useEffect } from "react";
 import { apiGet } from "@/lib/api";
-import { Activity, Clock, AlertTriangle, Gauge } from "lucide-react";
+import { Clock, AlertTriangle, Gauge } from "lucide-react";
 
 interface IntegrityData {
   feed_delay_seconds: number;
-  stale_symbols: number;
-  pipeline_latency_ms: number;
+  stale_symbols_count: number;
+  avg_pipeline_latency_ms: number;
 }
 
 function statusColor(level: "green" | "amber" | "red") {
@@ -39,8 +39,8 @@ function pipelineLatencyLevel(v: number): "green" | "amber" | "red" {
 function overallHealth(data: IntegrityData): "HEALTHY" | "DEGRADED" | "CRITICAL" {
   const levels = [
     feedDelayLevel(data.feed_delay_seconds),
-    staleSymbolsLevel(data.stale_symbols),
-    pipelineLatencyLevel(data.pipeline_latency_ms),
+    staleSymbolsLevel(data.stale_symbols_count),
+    pipelineLatencyLevel(data.avg_pipeline_latency_ms),
   ];
   if (levels.includes("red")) return "CRITICAL";
   if (levels.includes("amber")) return "DEGRADED";
@@ -152,7 +152,7 @@ export default function DataMonitorPage() {
 
             {/* Stale Symbols */}
             {(() => {
-              const level = staleSymbolsLevel(data.stale_symbols);
+              const level = staleSymbolsLevel(data.stale_symbols_count);
               const color = statusColor(level);
               return (
                 <div style={{
@@ -174,7 +174,7 @@ export default function DataMonitorPage() {
                     }} />
                   </div>
                   <div style={{ fontSize: 28, fontWeight: 700, color }}>
-                    {data.stale_symbols}
+                    {data.stale_symbols_count}
                     <span style={{ fontSize: 14, fontWeight: 400, color: "var(--text-tertiary)", marginLeft: 4 }}>symbols</span>
                   </div>
                 </div>
@@ -183,7 +183,7 @@ export default function DataMonitorPage() {
 
             {/* Pipeline Latency */}
             {(() => {
-              const level = pipelineLatencyLevel(data.pipeline_latency_ms);
+              const level = pipelineLatencyLevel(data.avg_pipeline_latency_ms);
               const color = statusColor(level);
               return (
                 <div style={{
@@ -205,7 +205,7 @@ export default function DataMonitorPage() {
                     }} />
                   </div>
                   <div style={{ fontSize: 28, fontWeight: 700, color }}>
-                    {data.pipeline_latency_ms.toFixed(0)}
+                    {data.avg_pipeline_latency_ms.toFixed(0)}
                     <span style={{ fontSize: 14, fontWeight: 400, color: "var(--text-tertiary)", marginLeft: 4 }}>ms</span>
                   </div>
                 </div>
