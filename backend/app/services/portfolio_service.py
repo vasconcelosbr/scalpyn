@@ -16,6 +16,7 @@ from ..exchange_adapters.gate_adapter import GateAdapter
 from ..models.exchange_connection import ExchangeConnection
 from ..models.trade import Trade
 from ..utils.encryption import decrypt
+from ..utils.exchange_names import exchange_name_matches
 from .analytics_service import analytics_service
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ class PortfolioService:
             select(ExchangeConnection)
             .where(
                 ExchangeConnection.user_id == user_id,
-                ExchangeConnection.exchange_name == "gate.io",
+                exchange_name_matches(ExchangeConnection.exchange_name, "gate.io"),
                 ExchangeConnection.is_active,
             )
             .order_by(ExchangeConnection.execution_priority.asc(), ExchangeConnection.created_at.asc())

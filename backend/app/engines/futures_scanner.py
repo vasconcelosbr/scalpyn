@@ -25,6 +25,7 @@ from ..models.exchange_connection import ExchangeConnection
 from ..models.config_profile import ConfigProfile
 from ..exchange_adapters.gate_adapter import GateAdapter
 from ..utils.encryption import decrypt
+from ..utils.exchange_names import exchange_name_matches
 from ..schemas.futures_engine_config import FuturesEngineConfig
 from ..scoring.layer_liquidity import fetch_and_score as score_l1
 from ..scoring.layer_structure import score_structure
@@ -587,7 +588,7 @@ async def build_futures_scanner(user_id: str) -> "FuturesScanner":
         exc_row = await db.execute(
             select(ExchangeConnection).where(
                 ExchangeConnection.user_id == user_id,
-                ExchangeConnection.exchange_name == "gate.io",
+                exchange_name_matches(ExchangeConnection.exchange_name, "gate.io"),
                 ExchangeConnection.is_active == True,
             )
         )
