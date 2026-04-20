@@ -29,7 +29,9 @@ async def _load_score_engine(db: AsyncSession, user_id: UUID) -> ScoreEngine:
     return ScoreEngine(score_config)
 
 
-def _build_eval_data(metadata_row: Any, indicators: Dict[str, Any]) -> Dict[str, Any]:
+def _build_eval_data(metadata_row: Any | None, indicators: Dict[str, Any]) -> Dict[str, Any]:
+    if metadata_row is None:
+        return dict(indicators or {})
     return {
         "symbol": metadata_row.symbol,
         "price": float(metadata_row.price) if metadata_row.price is not None else 0.0,

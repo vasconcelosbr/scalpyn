@@ -40,7 +40,7 @@ _IND_CATEGORY: Dict[str, str] = {
 }
 
 logger = logging.getLogger(__name__)
-_VALID_CATEGORIES: Set[str] = {"liquidity", "market_structure", "momentum", "signal"}
+_VALID_CATEGORIES: Set[str] = {"liquidity", "market_structure", "momentum", "signal", "other"}
 
 
 def _normalize_category(category: Any) -> Optional[str]:

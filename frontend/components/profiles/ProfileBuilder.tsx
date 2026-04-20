@@ -136,12 +136,16 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     [globalScoreConfig]
   );
 
+  const scoreRulePointsById = useMemo(
+    () => new Map(scoreRules.map((rule) => [rule.id, Number(rule.points ?? 0)])),
+    [scoreRules]
+  );
+
   const filterPointsTotal = useMemo(
     () => (config.filters?.conditions ?? []).reduce((sum: number, condition: Condition & { rule_id?: string; points?: number }) => {
-      const matchedRule = scoreRules.find((rule) => rule.id === condition.rule_id);
-      return sum + Number(matchedRule?.points ?? condition.points ?? 0);
+      return sum + Number(scoreRulePointsById.get(condition.rule_id || "") ?? condition.points ?? 0);
     }, 0),
-    [config.filters?.conditions, scoreRules]
+    [config.filters?.conditions, scoreRulePointsById]
   );
 
   const handleSave = async () => {
