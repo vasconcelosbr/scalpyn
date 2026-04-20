@@ -32,6 +32,7 @@ from ..exchange_adapters.gate_adapter import GateAdapter, InsufficientBalanceErr
 from ..services.feature_engine import FeatureEngine
 from ..services.score_engine import ScoreEngine
 from ..utils.encryption import decrypt
+from ..utils.exchange_names import exchange_name_matches
 from ..schemas.spot_engine_config import SpotEngineConfig
 from .spot_capital_manager import SpotCapitalManager
 from .spot_position_manager import SpotPositionManager
@@ -454,7 +455,7 @@ async def build_scanner_from_db(user_id: str) -> "SpotScanner":
         exc_row = await db.execute(
             select(ExchangeConnection).where(
                 ExchangeConnection.user_id == user_id,
-                ExchangeConnection.exchange_name == "gate.io",
+                exchange_name_matches(ExchangeConnection.exchange_name, "gate.io"),
                 ExchangeConnection.is_active == True,
             )
         )

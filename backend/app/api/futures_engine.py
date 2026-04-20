@@ -29,6 +29,7 @@ from ..models.config_profile import ConfigProfile
 from ..models.trade import Trade
 from ..schemas.futures_engine_config import FuturesEngineConfig
 from ..utils.encryption import decrypt
+from ..utils.exchange_names import exchange_name_matches
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +130,7 @@ async def engine_status(
         exc_row = await db.execute(
             select(ExchangeConnection).where(
                 ExchangeConnection.user_id == user_id,
-                ExchangeConnection.exchange_name == "gate.io",
+                exchange_name_matches(ExchangeConnection.exchange_name, "gate.io"),
                 ExchangeConnection.is_active == True,
             )
         )
