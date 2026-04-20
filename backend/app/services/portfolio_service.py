@@ -51,7 +51,7 @@ class PortfolioService:
             .where(
                 ExchangeConnection.user_id == user_id,
                 ExchangeConnection.exchange_name == "gate.io",
-                ExchangeConnection.is_active == True,  # noqa: E712
+                ExchangeConnection.is_active,
             )
             .order_by(ExchangeConnection.execution_priority.asc(), ExchangeConnection.created_at.asc())
             .limit(1)

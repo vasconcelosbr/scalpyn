@@ -215,7 +215,7 @@ export default function TradesPage() {
           <div className="metric-card">
             <div className="flex items-center gap-2 mb-2">
               <Wallet size={14} style={{ color: "var(--accent-primary)" }} />
-              <span className="label">Total P&amp;L</span>
+              <span className="label">Total P&L</span>
             </div>
             <div className={`data-value text-[24px] ${historySummary.total_pnl >= 0 ? "profit" : "loss"}`}>
               {formatCurrency(historySummary.total_pnl)}
@@ -249,7 +249,7 @@ export default function TradesPage() {
                     <th className="text-right">Current</th>
                     <th className="text-right">Quantity</th>
                     <th className="text-right">Value</th>
-                    <th className="text-right">P&amp;L</th>
+                    <th className="text-right">P&L</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -300,12 +300,12 @@ export default function TradesPage() {
               <thead>
                 <tr>
                   <th>Date</th>
-                  <th>Symbol &amp; Side</th>
+                  <th>Symbol & Side</th>
                   <th className="text-right">Entry</th>
                   <th className="text-right">Exit</th>
                   <th className="text-right">Holding</th>
                   <th className="text-right">Invested</th>
-                  <th className="text-right">Realized P&amp;L</th>
+                  <th className="text-right">Realized P&L</th>
                 </tr>
               </thead>
               <tbody>
