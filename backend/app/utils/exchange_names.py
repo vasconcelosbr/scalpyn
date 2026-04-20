@@ -1,4 +1,5 @@
 from sqlalchemy import func
+from sqlalchemy.sql.elements import ColumnElement
 
 
 _CANONICAL_EXCHANGE_NAMES = {
@@ -27,5 +28,5 @@ def display_exchange_name(value: str) -> str:
     return _DISPLAY_EXCHANGE_NAMES.get(normalized, normalized)
 
 
-def exchange_name_matches(column, value: str):
+def exchange_name_matches(column: ColumnElement[str], value: str) -> ColumnElement[bool]:
     return func.lower(column) == normalize_exchange_name(value)
