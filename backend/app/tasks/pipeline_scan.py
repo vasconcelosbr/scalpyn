@@ -950,12 +950,7 @@ async def _run_pipeline_scan():
                     source_pool_id=wl.source_pool_id,
                     profile_config=profile_config,
                 )
-                if (
-                    effective_level == "L1"
-                    and not _uses_pipeline_filters(level)
-                    and wl.source_pool_id
-                    and ((profile_config or {}).get("filters") or {}).get("conditions")
-                ):
+                if effective_level == "L1" and not _uses_pipeline_filters(level):
                     logger.info(
                         "[PipelineScan] %s (%s): source-pool watchlist promoted to L1 so profile filter conditions are enforced.",
                         wl.name,

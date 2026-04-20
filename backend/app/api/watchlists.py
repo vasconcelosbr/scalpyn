@@ -975,12 +975,7 @@ async def _resolve_and_persist(
         source_pool_id=wl.source_pool_id,
         profile_config=profile_config_full,
     )
-    if (
-        effective_level == "L1"
-        and not _uses_pipeline_filters(wl.level)
-        and wl.source_pool_id
-        and p_conditions
-    ):
+    if effective_level == "L1" and not _uses_pipeline_filters(wl.level):
         logger.info(
             "[Pipeline] %s (%s): source-pool watchlist promoted to L1 so profile filter conditions are enforced.",
             wl.name,
