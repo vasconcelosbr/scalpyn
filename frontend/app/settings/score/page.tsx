@@ -8,7 +8,7 @@ const INDICATORS = [
   "rsi", "adx", "ema_trend", "taker_ratio", "adx_acceleration",
   "volume_spike", "macd_signal", "macd_histogram",
   "di_plus", "di_minus", "di_trend", "spread_pct", "orderbook_depth_usdt",
-  "bb_width", "stoch_k", "stoch_d", "vwap_distance_pct",
+  "orderbook_pressure", "bid_ask_imbalance", "bb_width", "stoch_k", "stoch_d", "vwap_distance_pct",
   "volume_24h", "obv", "atr", "atr_pct", "psar_trend", "zscore",
   "volume_delta", "funding_rate", "ema9_distance_pct",
   "ema9_gt_ema50", "ema50_gt_ema200", "ema_full_alignment",
@@ -26,6 +26,8 @@ const DEFAULT_RULE_CATEGORIES: Record<string, string> = {
   volume_24h: "liquidity",
   spread_pct: "liquidity",
   orderbook_depth_usdt: "liquidity",
+  orderbook_pressure: "liquidity",
+  bid_ask_imbalance: "liquidity",
   obv: "liquidity",
   taker_ratio: "liquidity",
   adx: "market_structure",
@@ -103,10 +105,10 @@ export default function ScoreEngineSettings() {
     }]);
   };
 
-  const removeRule = (id: string) => setRules(rules.filter((r) => r.id !== id));
+  const removeRule = (id: string) => setRules((currentRules) => currentRules.filter((r) => r.id !== id));
 
   const updateRule = (id: string, field: string, value: any) => {
-    setRules(rules.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+    setRules((currentRules) => currentRules.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
   };
 
   // Parse numeric input, preserving zero
