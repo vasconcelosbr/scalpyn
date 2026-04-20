@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.api.watchlists import _extract_profile_indicator_fields, _uses_pipeline_filters
+from app.utils.pipeline_profile_filters import effective_pipeline_level
 
 
 def test_custom_watchlists_are_monitoring_boards():
@@ -16,6 +17,30 @@ def test_pipeline_levels_keep_filter_enforcement():
     assert _uses_pipeline_filters("L1") is True
     assert _uses_pipeline_filters("L2") is True
     assert _uses_pipeline_filters("L3") is True
+
+
+def test_source_pool_watchlist_with_profile_filters_is_promoted_to_l1():
+    profile_config = {
+        "filters": {
+            "conditions": [
+                {"field": "market_cap", "operator": ">=", "value": 10_000_000},
+            ]
+        }
+    }
+
+    assert effective_pipeline_level(
+        "custom",
+        source_pool_id="pool-123",
+        profile_config=profile_config,
+    ) == "L1"
+
+
+def test_source_pool_watchlist_without_profile_filters_remains_monitoring_board():
+    assert effective_pipeline_level(
+        "custom",
+        source_pool_id="pool-123",
+        profile_config={"filters": {"conditions": []}},
+    ) == "custom"
 
 
 def test_profile_indicator_columns_follow_profile_conditions_order():

@@ -28,6 +28,7 @@ from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsse
 from ..services.market_data_service import _is_etf_pair
 from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
+    effective_pipeline_level,
     select_profile_filter_conditions,
 )
 
@@ -966,9 +967,25 @@ async def _resolve_and_persist(
     profile_min_score: float = float(pf_cfg.get("min_score", 0))
     profile_require_signal: bool = bool(pf_cfg.get("require_signal", False))
 
-    # Custom/source-pool watchlists are monitoring boards: score everything, but do
-    # not hide rows via profile filters or blocking rules. L1/L2/L3 remain filtered.
-    effective_level = wl.level if wl.level in ("L1", "L2", "L3") else "custom"
+    # Source-pool watchlists with actual profile filter conditions must honor that
+    # profile even if legacy data stored them as "custom". Pure custom boards
+    # without filter conditions remain in monitoring mode.
+    effective_level = effective_pipeline_level(
+        wl.level,
+        source_pool_id=wl.source_pool_id,
+        profile_config=profile_config_full,
+    )
+    if (
+        effective_level == "L1"
+        and not _uses_pipeline_filters(wl.level)
+        and wl.source_pool_id
+        and p_conditions
+    ):
+        logger.info(
+            "[Pipeline] %s (%s): source-pool watchlist promoted to L1 so profile filter conditions are enforced.",
+            wl.name,
+            wl.level,
+        )
     should_apply_min_score = effective_level in ("L2", "L3")
     should_require_signal = effective_level == "L3"
 
@@ -1037,7 +1054,7 @@ async def _resolve_and_persist(
     # IMPORTANT: Only apply meta-based filters when market data is actually available.
     # If meta_map is empty (no market data in DB yet), skipping strict meta conditions
     # prevents the watchlist from being wiped on first run / before data collection.
-    if _uses_pipeline_filters(wl.level) and wl.profile_id and assets_out and profile_config_full and p_conditions:
+    if effective_level in ("L1", "L2", "L3") and wl.profile_id and assets_out and profile_config_full and p_conditions:
         symbols_with_meta = sum(1 for s in base_symbols if meta_map.get(s))
         selected = select_profile_filter_conditions(
             p_conditions,
@@ -1076,7 +1093,7 @@ async def _resolve_and_persist(
             )
 
     # ── Anti-bad-entry blocking: enforced only in the pipeline (L1/L2/L3) ───────
-    if _uses_pipeline_filters(wl.level) and assets_out:
+    if effective_level in ("L1", "L2", "L3") and assets_out:
         from ..utils.blocking_rules import is_blocked as _is_blocked
         before_block = len(assets_out)
         assets_out = [a for a in assets_out if not _is_blocked(a)]

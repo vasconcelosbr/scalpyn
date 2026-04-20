@@ -43,3 +43,30 @@ def select_profile_filter_conditions(
         "strict_meta_conditions": strict_meta_conditions,
         "non_meta_conditions": non_meta_conditions,
     }
+
+
+def effective_pipeline_level(
+    level: str | None,
+    *,
+    source_pool_id: Any = None,
+    profile_config: dict[str, Any] | None = None,
+) -> str:
+    """Resolve the effective pipeline level for filtering behaviour.
+
+    Explicit L1/L2/L3 levels are always respected.
+    Source-pool watchlists stored as "custom" are promoted to L1 only when
+    their associated profile actually defines filter conditions. This preserves
+    pure monitoring boards while ensuring pool/profile selection criteria are
+    honored.
+    """
+    normalized = (level or "").upper()
+    if normalized in {"L1", "L2", "L3"}:
+        return normalized
+
+    filter_conditions = (
+        ((profile_config or {}).get("filters") or {}).get("conditions") or []
+    )
+    if source_pool_id and filter_conditions:
+        return "L1"
+
+    return "custom"
