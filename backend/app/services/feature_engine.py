@@ -73,6 +73,8 @@ class FeatureEngine:
             results.update(self._calc_taker_ratio(df))
 
             # Derived: EMA trend alignment
+            if "ema9" in results and "ema21" in results:
+                results["ema9_gt_ema21"] = results["ema9"] > results["ema21"]
             if "ema9" in results and "ema50" in results:
                 results["ema9_gt_ema50"] = results["ema9"] > results["ema50"]
             if "ema50" in results and "ema200" in results:
@@ -82,11 +84,13 @@ class FeatureEngine:
                     results["ema9"] > results["ema50"] > results["ema200"]
                 )
 
-            # ATR as percentage of price
-            if "atr" in results and "close" in results:
-                results["atr_pct"] = round((results["atr"] / results["close"]) * 100, 4) if results["close"] > 0 else 0
-
             results["close"] = float(df["close"].iloc[-1])
+            results["price"] = results["close"]
+            # ATR as percentage of price
+            if "atr" in results:
+                results["atr_pct"] = round((results["atr"] / results["close"]) * 100, 4) if results["close"] > 0 else 0
+            if "atr_pct" in results:
+                results["atr_percent"] = results["atr_pct"]
 
             # Derived: EMA 9 distance as percentage of current price
             if "ema9" in results and results["close"] > 0 and results["ema9"] > 0:
@@ -146,7 +150,7 @@ class FeatureEngine:
         return result
 
     def _calc_ema(self, df: pd.DataFrame) -> Dict[str, Any]:
-        periods = self.config["ema"].get("periods", [9, 21, 50, 200])
+        periods = self.config["ema"].get("periods", [5, 9, 21, 50, 200])
         results = {}
         for p in periods:
             if len(df) >= p:

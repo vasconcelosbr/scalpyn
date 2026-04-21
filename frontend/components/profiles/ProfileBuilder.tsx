@@ -23,47 +23,83 @@ interface Condition {
   required?: boolean;
 }
 
+type RuleConditionType = "threshold" | "boolean" | "comparison";
+type RuleValue = string | number | boolean | null | undefined;
+
+interface RuleIndicatorOption {
+  value: string;
+  label: string;
+  kind: "number" | "boolean";
+}
+
+interface RuleCondition {
+  id: string;
+  type: RuleConditionType;
+  indicator?: string;
+  left?: string;
+  right?: string;
+  operator: string;
+  value?: RuleValue;
+  min?: number;
+  max?: number;
+}
+
 interface BlockRule {
   id: string;
   name: string;
   enabled: boolean;
-  indicator: string;
-  type: "threshold" | "range" | "condition";
-  operator?: string;
-  value?: number;
-  min?: number;
-  max?: number;
+  logic: "AND" | "OR";
+  conditions: RuleCondition[];
   reason?: string;
   timeframe?: string;
   period?: number;
 }
 
-interface EntryTrigger {
+interface EntryTrigger extends RuleCondition {
   id: string;
-  indicator: string;
-  operator: string;
-  value: any;
-  min?: number;
-  max?: number;
   required: boolean;
   enabled: boolean;
   timeframe?: string;
   period?: number;
 }
 
-const BLOCK_INDICATORS = [
-  "rsi", "adx", "atr_percent", "spread_pct", "volume_24h",
-  "ema_full_alignment", "bb_width", "funding_rate", "macd",
-  "stoch_k", "stoch_d", "di_plus", "di_minus",
+const RULE_INDICATORS: RuleIndicatorOption[] = [
+  { value: "price", label: "Price", kind: "number" },
+  { value: "ema5", label: "EMA 5", kind: "number" },
+  { value: "ema9", label: "EMA 9", kind: "number" },
+  { value: "ema21", label: "EMA 21", kind: "number" },
+  { value: "ema50", label: "EMA 50", kind: "number" },
+  { value: "ema200", label: "EMA 200", kind: "number" },
+  { value: "alpha_score", label: "Alpha Score", kind: "number" },
+  { value: "rsi", label: "RSI", kind: "number" },
+  { value: "adx", label: "ADX", kind: "number" },
+  { value: "macd", label: "MACD", kind: "number" },
+  { value: "macd_histogram", label: "MACD Histogram", kind: "number" },
+  { value: "volume_spike", label: "Volume Spike", kind: "number" },
+  { value: "taker_ratio", label: "Taker Ratio", kind: "number" },
+  { value: "volume_delta", label: "Volume Delta", kind: "number" },
+  { value: "orderbook_pressure", label: "Orderbook Pressure", kind: "number" },
+  { value: "bid_ask_imbalance", label: "Bid/Ask Imbalance", kind: "number" },
+  { value: "atr_percent", label: "ATR %", kind: "number" },
+  { value: "bb_width", label: "BB Width", kind: "number" },
+  { value: "spread_pct", label: "Spread %", kind: "number" },
+  { value: "zscore", label: "Z-Score", kind: "number" },
+  { value: "funding_rate", label: "Funding Rate", kind: "number" },
+  { value: "volume_24h", label: "Volume 24h", kind: "number" },
+  { value: "stoch_k", label: "Stoch %K", kind: "number" },
+  { value: "stoch_d", label: "Stoch %D", kind: "number" },
+  { value: "di_plus", label: "DI+", kind: "number" },
+  { value: "di_minus", label: "DI-", kind: "number" },
+  { value: "ema_full_alignment", label: "EMA Full Alignment", kind: "boolean" },
+  { value: "ema9_gt_ema21", label: "EMA9 > EMA21", kind: "boolean" },
+  { value: "ema9_gt_ema50", label: "EMA9 > EMA50", kind: "boolean" },
+  { value: "ema50_gt_ema200", label: "EMA50 > EMA200", kind: "boolean" },
 ];
 
-const TRIGGER_INDICATORS = [
-  "alpha_score", "rsi", "adx", "volume_spike", "macd", "macd_histogram",
-  "ema_full_alignment", "stoch_k", "stoch_d", "atr_percent",
-  "bb_width", "zscore", "di_plus", "di_minus", "volume_24h",
-  "taker_ratio", "ema9_gt_ema21", "ema9_gt_ema50",
-  "volume_delta", "orderbook_pressure", "bid_ask_imbalance",
-];
+const RULE_INDICATOR_MAP = new Map(RULE_INDICATORS.map((indicator) => [indicator.value, indicator]));
+const NUMERIC_RULE_INDICATORS = RULE_INDICATORS.filter((indicator) => indicator.kind === "number");
+const BOOLEAN_RULE_INDICATORS = RULE_INDICATORS.filter((indicator) => indicator.kind === "boolean");
+const BOOLEAN_RULE_INDICATOR_VALUES = new Set(BOOLEAN_RULE_INDICATORS.map((indicator) => indicator.value));
 
 const TIMEFRAME_OPTIONS = [
   { value: "1m",  label: "1m" },
@@ -79,19 +115,15 @@ const PERIOD_DEFAULTS: Record<string, number> = {
   atr_percent: 14, stoch_k: 14, stoch_d: 14,
   macd: 12, macd_histogram: 12, bb_width: 20,
   zscore: 20, volume_spike: 20, volume_delta: 20,
+  ema5: 5, ema9: 9, ema21: 21, ema50: 50, ema200: 200,
 };
 
 /** Indicators that should NOT show the timeframe selector (metadata / derived / scores) */
 const NO_TF_INDICATORS = new Set([
-  "alpha_score", "volume_24h", "spread_pct", "taker_ratio",
+  "alpha_score", "price", "volume_24h", "spread_pct", "taker_ratio",
   "ema_full_alignment", "ema9_gt_ema21", "ema9_gt_ema50",
-  "orderbook_pressure", "bid_ask_imbalance",
-]);
-
-const BOOLEAN_TRIGGER_INDICATORS = new Set([
-  "ema9_gt_ema21",
-  "ema9_gt_ema50",
-  "ema_full_alignment",
+  "ema50_gt_ema200", "orderbook_pressure", "bid_ask_imbalance",
+  "funding_rate",
 ]);
 
 const DEFAULT_CONFIG = {
@@ -105,16 +137,188 @@ const DEFAULT_CONFIG = {
 
 type ActiveTab = "filters" | "scoring" | "signals" | "block_rules" | "entry_triggers";
 
+const RULE_TYPE_OPTIONS: { value: RuleConditionType; label: string }[] = [
+  { value: "threshold", label: "Threshold" },
+  { value: "boolean", label: "Boolean" },
+  { value: "comparison", label: "Comparison" },
+];
+
+const COMPARISON_OPERATORS = [">", "<", ">=", "<=", "==", "!="];
+const THRESHOLD_OPERATORS = [">", "<", ">=", "<=", "==", "!=", "between"];
+
+function createRuleCondition(type: RuleConditionType = "threshold"): RuleCondition {
+  if (type === "comparison") {
+    return {
+      id: `cond_${Date.now()}`,
+      type,
+      left: "price",
+      operator: ">",
+      right: "ema9",
+    };
+  }
+
+  if (type === "boolean") {
+    return {
+      id: `cond_${Date.now()}`,
+      type,
+      indicator: "ema9_gt_ema21",
+      operator: "is_true",
+      value: true,
+    };
+  }
+
+  return {
+    id: `cond_${Date.now()}`,
+    type,
+    indicator: "rsi",
+    operator: "<",
+    value: 60,
+  };
+}
+
+function normalizeRuleCondition(raw: any): RuleCondition {
+  if (raw?.type === "comparison" || (raw?.left && raw?.right)) {
+    return {
+      id: raw?.id || `cond_${Date.now()}`,
+      type: "comparison",
+      left: raw?.left || "price",
+      operator: raw?.operator || ">",
+      right: raw?.right || "ema9",
+    };
+  }
+
+  const indicator = raw?.indicator || raw?.field || "rsi";
+  const inferredType: RuleConditionType =
+    raw?.type === "boolean" || BOOLEAN_RULE_INDICATOR_VALUES.has(indicator) || raw?.operator === "is_true" || raw?.operator === "is_false" || typeof raw?.value === "boolean"
+      ? "boolean"
+      : "threshold";
+
+  return {
+    id: raw?.id || `cond_${Date.now()}`,
+    type: inferredType,
+    indicator,
+    operator: raw?.operator || (inferredType === "boolean" ? "is_true" : "<"),
+    value:
+      inferredType === "boolean"
+        ? raw?.operator === "is_false"
+          ? false
+          : raw?.value ?? true
+        : raw?.operator === "between"
+          ? undefined
+          : raw?.value ?? 60,
+    min: raw?.min,
+    max: raw?.max,
+  };
+}
+
+function normalizeBlockRule(raw: any): BlockRule {
+  const id = raw?.id || `block_${Date.now()}`;
+  const base = {
+    id,
+    name: raw?.name || "New Block",
+    enabled: raw?.enabled !== false,
+    logic: (raw?.logic || "AND").toUpperCase() === "OR" ? "OR" as const : "AND" as const,
+    reason: raw?.reason || "",
+    timeframe: raw?.timeframe,
+    period: raw?.period,
+  };
+
+  if (Array.isArray(raw?.conditions) && raw.conditions.length > 0) {
+    return {
+      ...base,
+      conditions: raw.conditions.map(normalizeRuleCondition),
+    };
+  }
+
+  if (raw?.type === "range") {
+    return {
+      ...base,
+      logic: "OR",
+      conditions: [
+        {
+          id: `${id}_min`,
+          type: "threshold",
+          indicator: raw?.indicator || "rsi",
+          operator: "<",
+          value: raw?.min ?? 0,
+        },
+        {
+          id: `${id}_max`,
+          type: "threshold",
+          indicator: raw?.indicator || "rsi",
+          operator: ">",
+          value: raw?.max ?? 100,
+        },
+      ],
+    };
+  }
+
+  if (raw?.type === "condition" && typeof raw?.condition === "string") {
+    const match = raw.condition.match(/^([a-zA-Z0-9_]+)\s*([<>!=]=?|==)\s*([a-zA-Z0-9_]+)$/);
+    if (match) {
+      return {
+        ...base,
+        conditions: [
+          {
+            id: `${id}_cmp`,
+            type: "comparison",
+            left: match[1],
+            operator: match[2] === "=" ? "==" : match[2],
+            right: match[3],
+          },
+        ],
+      };
+    }
+  }
+
+  return {
+    ...base,
+    conditions: [
+      normalizeRuleCondition({
+        id: `${id}_legacy`,
+        type: raw?.type === "comparison" ? "comparison" : undefined,
+        indicator: raw?.indicator,
+        operator: raw?.operator,
+        value: raw?.value,
+        left: raw?.left,
+        right: raw?.right,
+      }),
+    ],
+  };
+}
+
+function normalizeEntryTrigger(raw: any): EntryTrigger {
+  const normalized = normalizeRuleCondition(raw);
+  return {
+    ...normalized,
+    id: raw?.id || normalized.id,
+    required: raw?.required || false,
+    enabled: raw?.enabled !== false,
+    timeframe: raw?.timeframe,
+    period: raw?.period,
+  };
+}
+
+function normalizeProfileConfig(rawConfig: any) {
+  return {
+    ...DEFAULT_CONFIG,
+    ...(rawConfig || {}),
+    block_rules: {
+      blocks: (rawConfig?.block_rules?.blocks || []).map(normalizeBlockRule),
+    },
+    entry_triggers: {
+      logic: rawConfig?.entry_triggers?.logic || "AND",
+      logic_preview_text: rawConfig?.entry_triggers?.logic_preview_text,
+      conditions: (rawConfig?.entry_triggers?.conditions || []).map(normalizeEntryTrigger),
+    },
+  };
+}
+
 export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProps) {
   const { config: globalScoreConfig } = useConfig("score");
   const [name, setName]                     = useState(profile?.name || "");
   const [description, setDescription]       = useState(profile?.description || "");
-  const [config, setConfig]                 = useState<any>(() => ({
-    ...DEFAULT_CONFIG,
-    ...(profile?.config || {}),
-    block_rules:   profile?.config?.block_rules   || { blocks: [] },
-    entry_triggers: profile?.config?.entry_triggers || { logic: "AND", conditions: [] },
-  }));
+  const [config, setConfig]                 = useState<any>(() => normalizeProfileConfig(profile?.config));
   const [profileRole, setProfileRole]       = useState<ProfileRole | null>(profile?.profile_role || null);
   const [activeTab, setActiveTab]           = useState<ActiveTab>("filters");
   const [testResult, setTestResult]         = useState<any>(null);
@@ -196,7 +400,14 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
         ...c.block_rules,
         blocks: [
           ...(c.block_rules?.blocks || []),
-          { id: `block_${Date.now()}`, name: "New Block", enabled: true, indicator: "rsi", type: "threshold", operator: ">", value: 80, reason: "" },
+          {
+            id: `block_${Date.now()}`,
+            name: "New Block",
+            enabled: true,
+            logic: "AND",
+            conditions: [createRuleCondition("comparison")],
+            reason: "",
+          },
         ],
       },
     }));
@@ -216,6 +427,53 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
       },
     }));
 
+  const addBlockCondition = (blockId: string) =>
+    setConfig((c: any) => ({
+      ...c,
+      block_rules: {
+        ...c.block_rules,
+        blocks: (c.block_rules?.blocks || []).map((block: BlockRule) => (
+          block.id === blockId
+            ? { ...block, conditions: [...(block.conditions || []), createRuleCondition("comparison")] }
+            : block
+        )),
+      },
+    }));
+
+  const updateBlockCondition = (blockId: string, conditionId: string, updates: Partial<RuleCondition>) =>
+    setConfig((c: any) => ({
+      ...c,
+      block_rules: {
+        ...c.block_rules,
+        blocks: (c.block_rules?.blocks || []).map((block: BlockRule) => (
+          block.id === blockId
+            ? {
+                ...block,
+                conditions: (block.conditions || []).map((condition) => (
+                  condition.id === conditionId ? { ...condition, ...updates } : condition
+                )),
+              }
+            : block
+        )),
+      },
+    }));
+
+  const removeBlockCondition = (blockId: string, conditionId: string) =>
+    setConfig((c: any) => ({
+      ...c,
+      block_rules: {
+        ...c.block_rules,
+        blocks: (c.block_rules?.blocks || []).map((block: BlockRule) => (
+          block.id === blockId
+            ? {
+                ...block,
+                conditions: (block.conditions || []).filter((condition) => condition.id !== conditionId),
+              }
+            : block
+        )),
+      },
+    }));
+
   // ── Entry Trigger helpers ───────────────────────────────────────────────────
   const addTrigger = () =>
     setConfig((c: any) => ({
@@ -224,7 +482,12 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
         ...c.entry_triggers,
         conditions: [
           ...(c.entry_triggers?.conditions || []),
-          { id: `entry_${Date.now()}`, indicator: "rsi", operator: "<", value: 60, required: false, enabled: true },
+          {
+            ...createRuleCondition("comparison"),
+            id: `entry_${Date.now()}`,
+            required: false,
+            enabled: true,
+          },
         ],
       },
     }));
@@ -258,22 +521,30 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     logic: string,
   ) => {
     const describe = (trigger: EntryTrigger, requiredLabel = false) => {
-      const isBoolean = BOOLEAN_TRIGGER_INDICATORS.has(trigger.indicator);
-      const tf = NO_TF_INDICATORS.has(trigger.indicator) ? "" : ` (${trigger.timeframe || defaultTimeframe}${trigger.period ? `, P:${trigger.period}` : ""})`;
+      const referenceIndicator = trigger.type === "comparison" ? trigger.left : trigger.indicator;
+      const tf = referenceIndicator && NO_TF_INDICATORS.has(referenceIndicator)
+        ? ""
+        : ` (${trigger.timeframe || defaultTimeframe}${trigger.period ? `, P:${trigger.period}` : ""})`;
       let conditionText = "";
 
-      if (isBoolean) {
+      if (trigger.type === "comparison") {
+        conditionText = `${trigger.left} ${trigger.operator} ${trigger.right}`;
+      } else if (trigger.type === "boolean") {
         const booleanValue =
           trigger.operator === "is_false" || trigger.value === false
             ? "False"
             : trigger.operator === "is_true" || trigger.value === true
               ? "True"
               : String(trigger.value ?? trigger.operator ?? "True");
-        conditionText = `= ${booleanValue}`;
+        conditionText = `${trigger.indicator}${tf} = ${booleanValue}`;
       } else if (trigger.operator === "between") {
         conditionText = `between ${trigger.min} and ${trigger.max}`;
       } else {
         conditionText = `${trigger.operator} ${trigger.value}`;
+      }
+
+      if (trigger.type === "comparison") {
+        return `  ${requiredLabel ? "[REQUIRED] " : ""}${conditionText}${tf}`.trimEnd();
       }
 
       return `  ${requiredLabel ? "[REQUIRED] " : ""}${trigger.indicator}${tf} ${conditionText}`.trimEnd();
@@ -338,10 +609,10 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
 
     const fixBlocks = (blocks: any[]): any[] => {
       if (!Array.isArray(blocks)) return [];
-      return blocks.map((b) => {
-        const indicator = FIELD_ALIASES[b.indicator || ""] || b.indicator || "rsi";
-        return { ...b, indicator };
-      });
+      return blocks.map((block) => normalizeBlockRule({
+        ...block,
+        indicator: FIELD_ALIASES[block.indicator || ""] || block.indicator,
+      }));
     };
 
     return {
@@ -361,7 +632,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
       entry_triggers: incoming.entry_triggers ? {
         logic: incoming.entry_triggers.logic || "AND",
         logic_preview_text: incoming.entry_triggers.logic_preview_text,
-        conditions: fixConditions(incoming.entry_triggers.conditions ?? []).map((c: any) => ({
+        conditions: fixConditions(incoming.entry_triggers.conditions ?? []).map((c: any) => normalizeEntryTrigger({
           ...c,
           indicator: c.field || c.indicator || "rsi",
           enabled: c.enabled !== false,
@@ -736,34 +1007,33 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="space-y-1">
-                          <label className="label text-[11px]">Indicator</label>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] text-[var(--text-secondary)]">Logic</span>
                           <select
-                            className="input h-8 text-[12px]"
-                            value={block.indicator}
-                            onChange={(e) => updateBlock(block.id, "indicator", e.target.value)}
+                            className="input h-8 w-20 text-[12px]"
+                            value={block.logic || "AND"}
+                            onChange={(e) => updateBlock(block.id, "logic", e.target.value)}
                           >
-                            {BLOCK_INDICATORS.map((i) => (
-                              <option key={i} value={i}>{i}</option>
-                            ))}
+                            <option value="AND">AND</option>
+                            <option value="OR">OR</option>
                           </select>
                         </div>
-                        <div className="space-y-1">
-                          <label className="label text-[11px]">Type</label>
-                          <select
-                            className="input h-8 text-[12px]"
-                            value={block.type}
-                            onChange={(e) => updateBlock(block.id, "type", e.target.value as BlockRule["type"])}
-                          >
-                            <option value="threshold">Threshold</option>
-                            <option value="range">Range</option>
-                          </select>
-                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-secondary text-[11px] px-2.5 py-1"
+                          onClick={() => addBlockCondition(block.id)}
+                        >
+                          <Plus className="w-3.5 h-3.5 mr-1" />
+                          Condition
+                        </button>
                       </div>
 
                       {/* Timeframe / Period overrides */}
-                      {!NO_TF_INDICATORS.has(block.indicator) && (
+                      {block.conditions.some((condition) => {
+                        const reference = condition.type === "comparison" ? condition.left : condition.indicator;
+                        return reference ? !NO_TF_INDICATORS.has(reference) : false;
+                      }) && (
                         <div className="grid grid-cols-2 gap-2">
                           <div className="space-y-1">
                             <label className="label text-[11px]">Timeframe</label>
@@ -778,63 +1048,159 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                               ))}
                             </select>
                           </div>
-                          {PERIOD_DEFAULTS[block.indicator] !== undefined && (
-                            <div className="space-y-1">
-                              <label className="label text-[11px]">Period</label>
-                              <input
-                                type="number"
-                                min={1}
-                                className="input h-8 text-[12px] font-mono"
-                                value={block.period ?? ""}
-                                onChange={(e) => {
-                                  const v = parseInt(e.target.value, 10);
-                                  updateBlock(block.id, "period", isNaN(v) ? undefined : v);
-                                }}
-                                placeholder={`${PERIOD_DEFAULTS[block.indicator]}`}
-                              />
-                            </div>
-                          )}
+                          <div className="text-[11px] text-[var(--text-tertiary)] flex items-end pb-2">
+                            Shared across this block rule
+                          </div>
                         </div>
                       )}
 
-                      {block.type === "threshold" && (
-                        <div className="flex items-center gap-2">
-                          <select
-                            className="input h-8 text-[12px] w-16"
-                            value={block.operator || ">"}
-                            onChange={(e) => updateBlock(block.id, "operator", e.target.value)}
-                          >
-                            {[">", "<", ">=", "<="].map((o) => (
-                              <option key={o} value={o}>{o}</option>
-                            ))}
-                          </select>
-                          <input
-                            type="number"
-                            className="input h-8 w-24 text-[12px] font-mono"
-                            value={block.value ?? 0}
-                            onChange={(e) => updateBlock(block.id, "value", parseFloat(e.target.value))}
-                          />
-                        </div>
-                      )}
+                      <div className="space-y-2">
+                        {block.conditions.map((condition) => (
+                          <div key={condition.id} className="flex items-center gap-2 flex-wrap rounded-md border border-[var(--border-subtle)] p-2">
+                            <select
+                              className="input h-8 text-[12px] min-w-[120px]"
+                              value={condition.type}
+                              onChange={(e) => {
+                                const nextCondition = createRuleCondition(e.target.value as RuleConditionType);
+                                updateBlockCondition(block.id, condition.id, {
+                                  type: nextCondition.type,
+                                  indicator: nextCondition.indicator,
+                                  left: nextCondition.left,
+                                  right: nextCondition.right,
+                                  operator: nextCondition.operator,
+                                  value: nextCondition.value,
+                                  min: nextCondition.min,
+                                  max: nextCondition.max,
+                                });
+                              }}
+                            >
+                              {RULE_TYPE_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </select>
 
-                      {block.type === "range" && (
-                        <div className="flex items-center gap-2 text-[12px]">
-                          <span className="text-[var(--text-secondary)]">Min</span>
-                          <input
-                            type="number"
-                            className="input h-8 w-20 text-[12px] font-mono"
-                            value={block.min ?? 0}
-                            onChange={(e) => updateBlock(block.id, "min", parseFloat(e.target.value))}
-                          />
-                          <span className="text-[var(--text-secondary)]">Max</span>
-                          <input
-                            type="number"
-                            className="input h-8 w-20 text-[12px] font-mono"
-                            value={block.max ?? 100}
-                            onChange={(e) => updateBlock(block.id, "max", parseFloat(e.target.value))}
-                          />
-                        </div>
-                      )}
+                            {condition.type === "comparison" ? (
+                              <>
+                                <select
+                                  className="input h-8 text-[12px] min-w-[120px]"
+                                  value={condition.left || "price"}
+                                  onChange={(e) => updateBlockCondition(block.id, condition.id, { left: e.target.value })}
+                                >
+                                  {NUMERIC_RULE_INDICATORS.map((indicator) => (
+                                    <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
+                                  ))}
+                                </select>
+                                <select
+                                  className="input h-8 text-[12px] w-20"
+                                  value={condition.operator}
+                                  onChange={(e) => updateBlockCondition(block.id, condition.id, { operator: e.target.value })}
+                                >
+                                  {COMPARISON_OPERATORS.map((operator) => (
+                                    <option key={operator} value={operator}>{operator}</option>
+                                  ))}
+                                </select>
+                                <select
+                                  className="input h-8 text-[12px] min-w-[120px]"
+                                  value={condition.right || "ema9"}
+                                  onChange={(e) => updateBlockCondition(block.id, condition.id, { right: e.target.value })}
+                                >
+                                  {NUMERIC_RULE_INDICATORS.map((indicator) => (
+                                    <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
+                                  ))}
+                                </select>
+                              </>
+                            ) : condition.type === "boolean" ? (
+                              <>
+                                <select
+                                  className="input h-8 text-[12px] min-w-[140px]"
+                                  value={condition.indicator || "ema9_gt_ema21"}
+                                  onChange={(e) => updateBlockCondition(block.id, condition.id, { indicator: e.target.value })}
+                                >
+                                  {BOOLEAN_RULE_INDICATORS.map((indicator) => (
+                                    <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
+                                  ))}
+                                </select>
+                                <select
+                                  className="input h-8 text-[12px] w-24"
+                                  value={condition.operator === "is_false" ? "false" : "true"}
+                                  onChange={(e) => {
+                                    const booleanValue = e.target.value === "true";
+                                    updateBlockCondition(block.id, condition.id, {
+                                      operator: booleanValue ? "is_true" : "is_false",
+                                      value: booleanValue,
+                                    });
+                                  }}
+                                >
+                                  <option value="true">True</option>
+                                  <option value="false">False</option>
+                                </select>
+                              </>
+                            ) : (
+                              <>
+                                <select
+                                  className="input h-8 text-[12px] min-w-[140px]"
+                                  value={condition.indicator || "rsi"}
+                                  onChange={(e) => updateBlockCondition(block.id, condition.id, { indicator: e.target.value })}
+                                >
+                                  {NUMERIC_RULE_INDICATORS.map((indicator) => (
+                                    <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
+                                  ))}
+                                </select>
+                                <select
+                                  className="input h-8 text-[12px] w-24"
+                                  value={condition.operator}
+                                  onChange={(e) => {
+                                    const operator = e.target.value;
+                                    updateBlockCondition(block.id, condition.id, {
+                                      operator,
+                                      value: operator === "between" ? undefined : condition.value ?? 0,
+                                      min: operator === "between" ? Number(condition.value ?? condition.min ?? 0) : undefined,
+                                      max: operator === "between" ? Number(condition.max ?? 100) : undefined,
+                                    });
+                                  }}
+                                >
+                                  {THRESHOLD_OPERATORS.map((operator) => (
+                                    <option key={operator} value={operator}>{operator === "between" ? "between" : operator}</option>
+                                  ))}
+                                </select>
+                                {condition.operator === "between" ? (
+                                  <>
+                                    <input
+                                      type="number"
+                                      className="input h-8 w-20 text-[12px] font-mono"
+                                      value={condition.min ?? 0}
+                                      onChange={(e) => updateBlockCondition(block.id, condition.id, { min: parseFloat(e.target.value) || 0 })}
+                                      placeholder="Min"
+                                    />
+                                    <input
+                                      type="number"
+                                      className="input h-8 w-20 text-[12px] font-mono"
+                                      value={condition.max ?? 100}
+                                      onChange={(e) => updateBlockCondition(block.id, condition.id, { max: parseFloat(e.target.value) || 0 })}
+                                      placeholder="Max"
+                                    />
+                                  </>
+                                ) : (
+                                  <input
+                                    type="number"
+                                    className="input h-8 w-24 text-[12px] font-mono"
+                                    value={typeof condition.value === "number" ? condition.value : Number(condition.value ?? 0)}
+                                    onChange={(e) => updateBlockCondition(block.id, condition.id, { value: parseFloat(e.target.value) || 0 })}
+                                  />
+                                )}
+                              </>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => removeBlockCondition(block.id, condition.id)}
+                              className="btn-icon w-7 h-7 flex items-center justify-center hover:text-[var(--color-loss)] ml-auto"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
 
                       <input
                         type="text"
@@ -894,56 +1260,104 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                         ? "border-[var(--border-default)] bg-[var(--bg-surface)]"
                         : "border-[var(--border-subtle)] bg-[var(--bg-base)] opacity-60"
                     }`}
-                  >
-                    <div
-                      className={`toggle ${trig.enabled ? "active" : ""}`}
-                      onClick={() => updateTrigger(trig.id, "enabled", !trig.enabled)}
                     >
-                      <div className="knob" />
-                    </div>
+                      <div
+                        className={`toggle ${trig.enabled ? "active" : ""}`}
+                        onClick={() => updateTrigger(trig.id, "enabled", !trig.enabled)}
+                      >
+                        <div className="knob" />
+                      </div>
                     <select
-                      className="input h-8 text-[12px] w-36"
-                      value={trig.indicator}
+                      className="input h-8 text-[12px] w-32"
+                      value={trig.type}
                       onChange={(e) => {
-                        const indicator = e.target.value;
-                        updateTrigger(trig.id, "indicator", indicator);
-                        if (BOOLEAN_TRIGGER_INDICATORS.has(indicator)) {
-                          updateTrigger(trig.id, "operator", "is_true");
-                          updateTrigger(trig.id, "value", true);
-                          updateTrigger(trig.id, "min", undefined);
-                          updateTrigger(trig.id, "max", undefined);
-                        } else if (trig.operator === "is_true" || trig.operator === "is_false") {
-                          updateTrigger(trig.id, "operator", "<");
-                          updateTrigger(trig.id, "value", 60);
-                        }
+                        const nextCondition = createRuleCondition(e.target.value as RuleConditionType);
+                        updateTrigger(trig.id, "type", nextCondition.type);
+                        updateTrigger(trig.id, "indicator", nextCondition.indicator);
+                        updateTrigger(trig.id, "left", nextCondition.left);
+                        updateTrigger(trig.id, "right", nextCondition.right);
+                        updateTrigger(trig.id, "operator", nextCondition.operator);
+                        updateTrigger(trig.id, "value", nextCondition.value);
+                        updateTrigger(trig.id, "min", nextCondition.min);
+                        updateTrigger(trig.id, "max", nextCondition.max);
                       }}
                     >
-                      {TRIGGER_INDICATORS.map((i) => (
-                        <option key={i} value={i}>{i}</option>
+                      {RULE_TYPE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
-                    {BOOLEAN_TRIGGER_INDICATORS.has(trig.indicator) ? (
-                      <select
-                        className="input h-8 text-[12px] w-24"
-                        value={trig.operator === "is_false" ? "false" : "true"}
-                        onChange={(e) => {
-                          const booleanValue = e.target.value === "true";
-                          updateTrigger(trig.id, "operator", booleanValue ? "is_true" : "is_false");
-                          updateTrigger(trig.id, "value", booleanValue);
-                        }}
-                      >
-                        <option value="true">True</option>
-                        <option value="false">False</option>
-                      </select>
+                    {trig.type === "comparison" ? (
+                      <>
+                        <select
+                          className="input h-8 text-[12px] w-36"
+                          value={trig.left || "price"}
+                          onChange={(e) => updateTrigger(trig.id, "left", e.target.value)}
+                        >
+                          {NUMERIC_RULE_INDICATORS.map((indicator) => (
+                            <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
+                          ))}
+                        </select>
+                        <select
+                          className="input h-8 text-[12px] w-20"
+                          value={trig.operator}
+                          onChange={(e) => updateTrigger(trig.id, "operator", e.target.value)}
+                        >
+                          {COMPARISON_OPERATORS.map((operator) => (
+                            <option key={operator} value={operator}>{operator}</option>
+                          ))}
+                        </select>
+                        <select
+                          className="input h-8 text-[12px] w-36"
+                          value={trig.right || "ema9"}
+                          onChange={(e) => updateTrigger(trig.id, "right", e.target.value)}
+                        >
+                          {NUMERIC_RULE_INDICATORS.map((indicator) => (
+                            <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
+                          ))}
+                        </select>
+                      </>
+                    ) : trig.type === "boolean" ? (
+                      <>
+                        <select
+                          className="input h-8 text-[12px] w-36"
+                          value={trig.indicator || "ema9_gt_ema21"}
+                          onChange={(e) => updateTrigger(trig.id, "indicator", e.target.value)}
+                        >
+                          {BOOLEAN_RULE_INDICATORS.map((indicator) => (
+                            <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
+                          ))}
+                        </select>
+                        <select
+                          className="input h-8 text-[12px] w-24"
+                          value={trig.operator === "is_false" ? "false" : "true"}
+                          onChange={(e) => {
+                            const booleanValue = e.target.value === "true";
+                            updateTrigger(trig.id, "operator", booleanValue ? "is_true" : "is_false");
+                            updateTrigger(trig.id, "value", booleanValue);
+                          }}
+                        >
+                          <option value="true">True</option>
+                          <option value="false">False</option>
+                        </select>
+                      </>
                     ) : (
                       <>
+                        <select
+                          className="input h-8 text-[12px] w-36"
+                          value={trig.indicator || "rsi"}
+                          onChange={(e) => updateTrigger(trig.id, "indicator", e.target.value)}
+                        >
+                          {NUMERIC_RULE_INDICATORS.map((indicator) => (
+                            <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
+                          ))}
+                        </select>
                         <select
                           className="input h-8 text-[12px] w-20"
                           value={trig.operator}
                           onChange={(e) => {
                             const op = e.target.value;
                             if (op === "between") {
-                              const minVal = typeof trig.value === "number" ? trig.value : (parseFloat(trig.value) || 0);
+                              const minVal = typeof trig.value === "number" ? trig.value : (parseFloat(String(trig.value ?? 0)) || 0);
                               updateTrigger(trig.id, "operator", op);
                               updateTrigger(trig.id, "min", minVal);
                               updateTrigger(trig.id, "max", 100);
@@ -951,44 +1365,46 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                             } else if (trig.operator === "between") {
                               updateTrigger(trig.id, "operator", op);
                               updateTrigger(trig.id, "value", trig.min ?? 0);
+                              updateTrigger(trig.id, "min", undefined);
+                              updateTrigger(trig.id, "max", undefined);
                             } else {
                               updateTrigger(trig.id, "operator", op);
                             }
                           }}
                         >
-                          {[">", "<", ">=", "<=", "=", "!=", "between"].map((o) => (
-                            <option key={o} value={o}>{o === "between" ? "entre" : o}</option>
+                          {THRESHOLD_OPERATORS.map((operator) => (
+                            <option key={operator} value={operator}>{operator === "between" ? "entre" : operator}</option>
                           ))}
                         </select>
                         {trig.operator === "between" ? (
-                       <>
-                         <input
-                           type="number"
-                          className="input h-8 text-[12px] w-20 font-mono"
-                          value={trig.min ?? 0}
-                          onChange={(e) => {
-                            const num = parseFloat(e.target.value);
-                            updateTrigger(trig.id, "min", isNaN(num) ? 0 : num);
-                          }}
-                          placeholder="Min"
-                        />
-                        <span className="text-[11px] text-[var(--text-secondary)] font-medium">e</span>
-                        <input
-                          type="number"
-                          className="input h-8 text-[12px] w-20 font-mono"
-                          value={trig.max ?? 100}
-                          onChange={(e) => {
-                            const num = parseFloat(e.target.value);
-                            updateTrigger(trig.id, "max", isNaN(num) ? (trig.max ?? 100) : num);
-                          }}
-                          placeholder="Max"
-                         />
-                       </>
+                          <>
+                            <input
+                              type="number"
+                              className="input h-8 text-[12px] w-20 font-mono"
+                              value={trig.min ?? 0}
+                              onChange={(e) => {
+                                const num = parseFloat(e.target.value);
+                                updateTrigger(trig.id, "min", isNaN(num) ? 0 : num);
+                              }}
+                              placeholder="Min"
+                            />
+                            <span className="text-[11px] text-[var(--text-secondary)] font-medium">e</span>
+                            <input
+                              type="number"
+                              className="input h-8 text-[12px] w-20 font-mono"
+                              value={trig.max ?? 100}
+                              onChange={(e) => {
+                                const num = parseFloat(e.target.value);
+                                updateTrigger(trig.id, "max", isNaN(num) ? (trig.max ?? 100) : num);
+                              }}
+                              placeholder="Max"
+                            />
+                          </>
                         ) : (
                           <input
                             type="text"
                             className="input h-8 text-[12px] w-20 font-mono"
-                            value={trig.value ?? ""}
+                            value={String(trig.value ?? "")}
                             onChange={(e) => {
                               const num = parseFloat(e.target.value);
                               updateTrigger(trig.id, "value", isNaN(num) ? e.target.value : num);
@@ -998,7 +1414,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                       </>
                     )}
                     {/* Timeframe override */}
-                    {!NO_TF_INDICATORS.has(trig.indicator) && (
+                    {!NO_TF_INDICATORS.has((trig.type === "comparison" ? trig.left : trig.indicator) || "") && (
                       <select
                         className="input h-8 text-[11px] w-[68px]"
                         value={trig.timeframe || ""}
@@ -1012,7 +1428,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                       </select>
                     )}
                     {/* Period override */}
-                    {PERIOD_DEFAULTS[trig.indicator] !== undefined && (
+                    {trig.type !== "comparison" && PERIOD_DEFAULTS[trig.indicator || ""] !== undefined && (
                       <input
                         type="number"
                         min={1}
@@ -1022,8 +1438,8 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                           const v = parseInt(e.target.value, 10);
                           updateTrigger(trig.id, "period", isNaN(v) ? undefined : v);
                         }}
-                        placeholder={`P:${PERIOD_DEFAULTS[trig.indicator]}`}
-                        title={`Period (default: ${PERIOD_DEFAULTS[trig.indicator]})`}
+                        placeholder={`P:${PERIOD_DEFAULTS[trig.indicator || ""]}`}
+                        title={`Period (default: ${PERIOD_DEFAULTS[trig.indicator || ""]})`}
                       />
                     )}
                     <label className="flex items-center gap-1.5 text-[12px] cursor-pointer">

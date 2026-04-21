@@ -8,6 +8,8 @@ import logging
 import operator as _op
 from typing import Dict, Any, List
 
+from .rule_engine import RuleEngine
+
 logger = logging.getLogger(__name__)
 
 _CMP = {
@@ -21,6 +23,7 @@ class BlockEngine:
     def __init__(self, block_config: Dict[str, Any]):
         self.config = block_config
         self.blocks = block_config.get("blocks", [])
+        self.rule_engine = RuleEngine()
 
     def evaluate(self, indicators: Dict[str, Any]) -> Dict[str, Any]:
         """Check all block conditions.
@@ -44,6 +47,13 @@ class BlockEngine:
 
             block_id = block.get("id", "?")
             block_name = block.get("name", block_id)
+            if block.get("conditions"):
+                is_triggered, reason = self._evaluate_block_group(block, indicators)
+                if is_triggered:
+                    triggered.append(block_name)
+                    details[block_id] = reason
+                continue
+
             block_type = block.get("type", "threshold")
             indicator = block.get("indicator", "")
 
@@ -99,6 +109,39 @@ class BlockEngine:
             "details": details,
         }
 
+    def _evaluate_block_group(self, block: Dict[str, Any], indicators: Dict[str, Any]) -> tuple[bool, str]:
+        logic = str(block.get("logic", "AND")).upper()
+        conditions = block.get("conditions", [])
+        evaluated: List[tuple[bool, Dict[str, Any], Dict[str, Any]]] = []
+
+        for condition in conditions:
+            passed, detail = self.rule_engine.evaluate_condition(condition, indicators, field_key="indicator")
+            evaluated.append((passed, detail, condition))
+
+        if logic == "OR":
+            is_triggered = any(passed for passed, _, _ in evaluated)
+        else:
+            is_triggered = bool(evaluated) and all(passed for passed, _, _ in evaluated)
+
+        if not is_triggered:
+            return False, ""
+
+        matched_conditions = [
+            self._describe_group_condition(condition, detail)
+            for passed, detail, condition in evaluated
+            if passed
+        ]
+        return True, "Matched: " + "; ".join(matched_conditions)
+
+    @staticmethod
+    def _describe_group_condition(condition: Dict[str, Any], detail: Dict[str, Any]) -> str:
+        if condition.get("type") == "comparison":
+            return f"{condition.get('left')} {condition.get('operator')} {condition.get('right')}"
+        return (
+            f"{condition.get('indicator')} {condition.get('operator')} "
+            f"{condition.get('value', detail.get('target'))}"
+        )
+
     def _evaluate_string_condition(self, block: Dict, indicators: Dict) -> bool:
         condition = block.get("condition", "")
         if condition == "ema9<ema50":
@@ -123,12 +166,17 @@ class BlockEngine:
                 "failed_required": list[str],
             }
         """
-        entry_triggers = self.config.get("entry_triggers", [])
+        raw_entry_triggers = self.config.get("entry_triggers", [])
+        if isinstance(raw_entry_triggers, dict):
+            entry_triggers = raw_entry_triggers.get("conditions", [])
+            logic = raw_entry_triggers.get("logic", self.config.get("entry_logic", "AND"))
+        else:
+            entry_triggers = raw_entry_triggers
+            logic = self.config.get("entry_logic", "AND")
         if not entry_triggers:
             # No entry triggers configured → allow by default
             return {"allowed": True, "matched": [], "failed_required": []}
 
-        logic = self.config.get("entry_logic", "AND")
         eval_data = {**indicators, "alpha_score": alpha_score}
 
         enabled = [t for t in entry_triggers if t.get("enabled", True)]
@@ -159,45 +207,10 @@ class BlockEngine:
         elif logic == "OR":
             allowed = len(optional_matched) > 0
         else:
-            allowed = len(optional_matched) > 0  # AND: at least one optional
+            allowed = len(optional_matched) == len(optional)
 
         return {"allowed": allowed, "matched": matched, "failed_required": []}
 
     def _eval_trigger(self, cond: Dict[str, Any], data: Dict[str, Any]) -> bool:
-        indicator = cond.get("indicator", "")
-        operator_str = cond.get("operator", "")
-        target = cond.get("value")
-
-        actual = data.get(indicator)
-        if actual is None:
-            return False
-
-        # Handle "between" operator (range check)
-        if operator_str == "between":
-            try:
-                actual_f = float(actual)
-                min_val = float(cond.get("min", 0))
-                max_val = float(cond.get("max", 0))
-                if min_val > max_val:
-                    logger.warning("between trigger %s: min (%s) > max (%s), swapping",
-                                   indicator, min_val, max_val)
-                    min_val, max_val = max_val, min_val
-                return min_val <= actual_f <= max_val
-            except (ValueError, TypeError):
-                return False
-
-        if isinstance(target, str):
-            if operator_str == "=":
-                return str(actual) == target
-            if operator_str == "!=":
-                return str(actual) != target
-            return False
-
-        try:
-            actual_f = float(actual)
-            target_f = float(target) if target is not None else 0.0
-        except (ValueError, TypeError):
-            return False
-
-        op_func = _CMP.get(operator_str)
-        return op_func(actual_f, target_f) if op_func else False
+        passed, _ = self.rule_engine.evaluate_condition(cond, data, field_key="indicator")
+        return passed

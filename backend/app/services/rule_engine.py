@@ -104,7 +104,7 @@ class RuleEngine:
                 result, detail = self._evaluate_single_condition(cond, data)
             
             details.append(detail)
-            cond_id = cond.get("id", cond.get("field", "unknown"))
+            cond_id = cond.get("id", cond.get("field") or cond.get("left") or "unknown")
             
             if result:
                 matched.append(cond_id)
@@ -127,6 +127,22 @@ class RuleEngine:
             "failed": failed,
             "details": details
         }
+
+    def evaluate_condition(
+        self,
+        condition: Dict[str, Any],
+        data: Dict[str, Any],
+        field_key: str = "field",
+    ) -> tuple[bool, Dict[str, Any]]:
+        """Evaluate a single condition with optional field alias support."""
+        normalized = dict(condition)
+        if (
+            field_key != "field"
+            and "field" not in normalized
+            and normalized.get("type") != "comparison"
+        ):
+            normalized["field"] = normalized.get(field_key, "")
+        return self._evaluate_single_condition(normalized, data)
     
     def _evaluate_single_condition(
         self,
@@ -139,25 +155,44 @@ class RuleEngine:
         Returns:
             (passed: bool, detail: dict)
         """
+        condition_type = (condition.get("type") or "threshold").lower()
         field = condition.get("field", "")
         operator_str = condition.get("operator", "==")
-        target_value = condition.get("value")
-        
-        # Get actual value from data (support nested fields with dot notation)
-        actual_value = self._get_nested_value(data, field)
-        
-        detail = {
-            "field": field,
-            "operator": operator_str,
-            "target": target_value,
-            "actual": actual_value,
-            "passed": False
-        }
-        
-        # Handle missing data
-        if actual_value is None:
-            detail["reason"] = "field_not_found"
-            return False, detail
+        if condition_type == "comparison":
+            left_field = condition.get("left", "")
+            right_field = condition.get("right", "")
+            actual_value = self._get_nested_value(data, left_field)
+            target_value = self._get_nested_value(data, right_field)
+            detail = {
+                "type": "comparison",
+                "left": left_field,
+                "right": right_field,
+                "operator": operator_str,
+                "target": target_value,
+                "actual": actual_value,
+                "passed": False,
+            }
+            if actual_value is None or target_value is None:
+                detail["reason"] = "operand_not_found"
+                return False, detail
+        else:
+            target_value = condition.get("value")
+
+            # Get actual value from data (support nested fields with dot notation)
+            actual_value = self._get_nested_value(data, field)
+
+            detail = {
+                "field": field,
+                "operator": operator_str,
+                "target": target_value,
+                "actual": actual_value,
+                "passed": False
+            }
+
+            # Handle missing data
+            if actual_value is None:
+                detail["reason"] = "field_not_found"
+                return False, detail
         
         # Evaluate based on operator
         try:

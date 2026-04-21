@@ -210,7 +210,11 @@ class ProfileEngine:
         self.signal_engine = SignalEngine(signal_config)
 
         # Block engine
-        self.block_engine = BlockEngine(self.block_rules_config)
+        self.block_engine = BlockEngine({
+            **self.block_rules_config,
+            "entry_triggers": self.entry_triggers_config.get("conditions", []),
+            "entry_logic": self.entry_triggers_config.get("logic", "AND"),
+        })
 
     def _convert_signal_conditions(self, conditions: List[Dict]) -> List[Dict]:
         """Convert profile signal conditions to SignalEngine format."""
