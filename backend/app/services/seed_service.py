@@ -85,6 +85,14 @@ DEFAULT_UNIVERSE = {
     "refresh_interval_hours": 24
 }
 
+DEFAULT_DECISION_LOG = {
+    "page_size": 50,
+    "max_page_size": 200,
+    "client_buffer_size": 200,
+    "max_displayed_metrics": 16,
+    "realtime_highlight_ms": 3000,
+}
+
 async def seed_user_defaults(db: AsyncSession, user_id: UUID) -> None:
     # Check if config exists
     query = select(ConfigProfile).where(ConfigProfile.user_id == user_id)
@@ -99,3 +107,4 @@ async def seed_user_defaults(db: AsyncSession, user_id: UUID) -> None:
         await config_service.update_config(db, 'risk', user_id, DEFAULT_RISK, user_id, change_description="System Seed Reset")
         await config_service.update_config(db, 'strategy', user_id, DEFAULT_STRATEGY, user_id, change_description="System Seed Reset")
         await config_service.update_config(db, 'universe', user_id, DEFAULT_UNIVERSE, user_id, change_description="System Seed Reset")
+        await config_service.update_config(db, 'decision_log', user_id, DEFAULT_DECISION_LOG, user_id, change_description="System Seed Reset")

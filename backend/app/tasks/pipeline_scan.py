@@ -609,7 +609,7 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
 def _evaluate_l3_decisions(
     assets: list,
     profile_config: Optional[dict],
-    level: str,
+    strategy_level: str,
     score_config: Optional[dict] = None,
 ) -> list[dict]:
     from ..services.profile_engine import ProfileEngine
@@ -632,7 +632,7 @@ def _evaluate_l3_decisions(
     for asset in assets:
         started_at = datetime.now(timezone.utc)
         processed = engine.evaluate_asset(asset)
-        latency_ms = max(1, int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000))
+        latency_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
         score = (processed.get("score") or {}).get("total_score", 0)
         decision = "BLOCK"
         l3_pass = False
@@ -647,7 +647,7 @@ def _evaluate_l3_decisions(
 
         decisions.append({
             "symbol": asset.get("symbol"),
-            "strategy": level,
+            "strategy": strategy_level,
             "timeframe": timeframe,
             "score": score,
             "decision": decision,

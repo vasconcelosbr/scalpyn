@@ -27,10 +27,6 @@ class DecisionLog(Base):
     metrics = Column(JSONB, nullable=True)
     latency_ms = Column(Integer, nullable=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=True)
-    signal = Column(String(50), nullable=True)
-    confidence = Column(Float, nullable=True)
-    payload_json = Column(JSONB, nullable=True)
-    trace_id = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 

@@ -317,12 +317,15 @@ async def get_decisions(
                     "id": str(r.id),
                     "symbol": r.symbol,
                     "strategy": r.strategy,
+                    "timeframe": r.timeframe,
                     "score": r.score,
-                    "signal": r.signal,
-                    "confidence": r.confidence,
                     "decision": r.decision,
-                    "payload_json": r.payload_json,
-                    "trace_id": r.trace_id,
+                    "l1_pass": r.l1_pass,
+                    "l2_pass": r.l2_pass,
+                    "l3_pass": r.l3_pass,
+                    "reasons": r.reasons,
+                    "metrics": r.metrics,
+                    "latency_ms": r.latency_ms,
                     "created_at": _serialize_dt(r.created_at),
                 }
                 for r in rows
@@ -363,11 +366,23 @@ async def export_decisions(
 
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["id", "symbol", "strategy", "score", "signal", "confidence", "decision", "trace_id", "created_at"])
+        writer.writerow([
+            "id",
+            "symbol",
+            "strategy",
+            "timeframe",
+            "score",
+            "decision",
+            "l1_pass",
+            "l2_pass",
+            "l3_pass",
+            "latency_ms",
+            "created_at",
+        ])
         for r in rows:
             writer.writerow([
-                str(r.id), r.symbol, r.strategy, r.score, r.signal,
-                r.confidence, r.decision, r.trace_id, _serialize_dt(r.created_at),
+                str(r.id), r.symbol, r.strategy, r.timeframe, r.score,
+                r.decision, r.l1_pass, r.l2_pass, r.l3_pass, r.latency_ms, _serialize_dt(r.created_at),
             ])
 
         output.seek(0)

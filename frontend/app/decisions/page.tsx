@@ -19,6 +19,13 @@ interface DecisionsResponse {
   next_cursor: string | null;
 }
 
+interface DecisionLogConfig {
+  page_size?: number;
+  client_buffer_size?: number;
+  max_displayed_metrics?: number;
+  realtime_highlight_ms?: number;
+}
+
 type Filters = {
   startDate: string;
   endDate: string;
@@ -42,7 +49,7 @@ const DEFAULT_FILTERS: Filters = {
 const INPUT_CLASS =
   "rounded-[var(--radius-sm)] border border-[var(--border-default)] bg-[var(--bg-input)] px-3 py-1.5 text-[12px] text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-tertiary)] focus:border-[var(--accent-primary)]";
 
-function buildParams(filters: Filters, cursor?: string | null) {
+function buildParams(filters: Filters, config?: DecisionLogConfig | null, cursor?: string | null) {
   const params = new URLSearchParams();
   if (filters.startDate) params.set("start_date", filters.startDate);
   if (filters.endDate) params.set("end_date", filters.endDate);
@@ -51,7 +58,7 @@ function buildParams(filters: Filters, cursor?: string | null) {
   params.set("score_min", filters.scoreMin || "0");
   params.set("score_max", filters.scoreMax || "100");
   params.set("decision", filters.decision);
-  params.set("limit", "50");
+  if (config?.page_size) params.set("limit", String(config.page_size));
   if (cursor) params.set("cursor", cursor);
   return params.toString();
 }
@@ -99,6 +106,7 @@ export default function DecisionsPage() {
   const [appliedFilters, setAppliedFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [items, setItems] = useState<DecisionItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [config, setConfig] = useState<DecisionLogConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -113,7 +121,7 @@ export default function DecisionsPage() {
       setter(true);
       if (!append) setError(null);
       try {
-        const response = await apiGet<DecisionsResponse>(`/decisions?${buildParams(currentFilters, cursor)}`);
+        const response = await apiGet<DecisionsResponse>(`/decisions?${buildParams(currentFilters, config, cursor)}`);
         setItems((prev) => {
           if (!append) return response.items;
           const seen = new Set(prev.map((item) => item.id));
@@ -130,27 +138,39 @@ export default function DecisionsPage() {
         setter(false);
       }
     },
-    []
+    [config]
   );
 
   useEffect(() => {
+    void apiGet<{ data?: DecisionLogConfig }>("/config/decision_log")
+      .then((response) => setConfig(response.data ?? {}))
+      .catch(() => setConfig({}));
+  }, []);
+
+  useEffect(() => {
+    if (config === null) return;
     void fetchDecisions(appliedFilters);
-  }, [appliedFilters, fetchDecisions]);
+  }, [appliedFilters, config, fetchDecisions]);
 
   useEffect(() => {
     if (lastMessage?.type !== "decision.created" || !lastMessage.data) return;
     const incoming = lastMessage.data;
     if (!matchesFilters(incoming, appliedFilters)) return;
 
-    setItems((prev) => [incoming, ...prev.filter((item) => item.id !== incoming.id)].slice(0, 200));
+    setItems((prev) => {
+      const next = [incoming, ...prev.filter((item) => item.id !== incoming.id)];
+      return config?.client_buffer_size ? next.slice(0, config.client_buffer_size) : next;
+    });
     setHighlightedIds((prev) => [...prev.filter((id) => id !== incoming.id), incoming.id]);
+
+    if (!config?.realtime_highlight_ms) return;
 
     const timer = window.setTimeout(() => {
       setHighlightedIds((prev) => prev.filter((id) => id !== incoming.id));
-    }, 3000);
+    }, config.realtime_highlight_ms);
 
     return () => window.clearTimeout(timer);
-  }, [appliedFilters, lastMessage]);
+  }, [appliedFilters, config, lastMessage]);
 
   const symbolOptions = useMemo(
     () => Array.from(new Set(items.map((item) => item.symbol))).sort(),
@@ -170,7 +190,7 @@ export default function DecisionsPage() {
 
   const downloadCsv = async () => {
     const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
-    const response = await fetch(`/api/decisions/export?${buildParams(appliedFilters)}`, {
+    const response = await fetch(`/api/decisions/export?${buildParams(appliedFilters, config)}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
     if (!response.ok) return;
@@ -338,6 +358,7 @@ export default function DecisionsPage() {
                   <DecisionRow
                     key={item.id}
                     item={item}
+                    config={config}
                     expanded={expandedId === item.id}
                     highlighted={highlightedIds.includes(item.id)}
                     onToggle={() => setExpandedId((prev) => (prev === item.id ? null : item.id))}
@@ -375,11 +396,13 @@ function FilterField({ label, children }: { label: string; children: ReactNode }
 
 function DecisionRow({
   item,
+  config,
   expanded,
   highlighted,
   onToggle,
 }: {
   item: DecisionItem;
+  config: DecisionLogConfig | null;
   expanded: boolean;
   highlighted: boolean;
   onToggle: () => void;
@@ -416,7 +439,7 @@ function DecisionRow({
       {expanded && (
         <tr>
           <td colSpan={10} className="!p-0">
-            <DetailPanel item={item} />
+            <DetailPanel item={item} config={config} />
           </td>
         </tr>
       )}
@@ -424,7 +447,7 @@ function DecisionRow({
   );
 }
 
-function DetailPanel({ item }: { item: DecisionItem }) {
+function DetailPanel({ item, config }: { item: DecisionItem; config: DecisionLogConfig | null }) {
   const reasons = Object.entries(item.reasons ?? {});
   const metrics = Object.entries(item.metrics ?? {});
 
@@ -457,7 +480,7 @@ function DetailPanel({ item }: { item: DecisionItem }) {
           <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">Metrics</p>
           <div className="space-y-1 text-[12px]">
             {metrics.length > 0 ? (
-              metrics.slice(0, 16).map(([key, value]) => (
+              metrics.slice(0, config?.max_displayed_metrics).map(([key, value]) => (
                 <div key={key} className="flex justify-between gap-3 rounded border border-[var(--border-default)] bg-[var(--bg-input)] px-2 py-1">
                   <span className="text-[var(--text-secondary)]">{key}</span>
                   <span className="font-mono text-[var(--text-primary)]">{formatMetricValue(value)}</span>

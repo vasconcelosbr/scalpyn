@@ -18,6 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models.backoffice import DecisionLog
+from ..services.config_service import config_service
+from ..services.seed_service import DEFAULT_DECISION_LOG
 from .config import get_current_user_id
 
 logger = logging.getLogger(__name__)
@@ -116,6 +118,17 @@ def _serialize_item(row: DecisionLog) -> dict[str, Any]:
     }
 
 
+async def _get_decision_log_settings(db: AsyncSession, user_id: UUID) -> dict[str, Any]:
+    try:
+        config = await config_service.get_config(db, "decision_log", user_id)
+    except Exception:
+        config = {}
+    return {
+        **DEFAULT_DECISION_LOG,
+        **(config if isinstance(config, dict) else {}),
+    }
+
+
 def _build_filters(
     *,
     user_id: UUID,
@@ -163,11 +176,15 @@ async def _fetch_decisions(
     score_min: Optional[float],
     score_max: Optional[float],
     decision: Optional[str],
-    limit: int,
+    limit: Optional[int],
     cursor: Optional[str],
+    settings: dict[str, Any],
 ) -> dict[str, Any]:
     normalized_decision = _sanitize_decision(decision)
-    safe_limit = max(1, min(limit, 200))
+    default_limit = int(settings.get("page_size") or DEFAULT_DECISION_LOG["page_size"])
+    max_limit = int(settings.get("max_page_size") or DEFAULT_DECISION_LOG["max_page_size"])
+    requested_limit = limit if limit is not None else default_limit
+    safe_limit = max(1, min(requested_limit, max_limit))
     filters = _build_filters(
         user_id=user_id,
         start_date=start_date,
@@ -216,7 +233,7 @@ async def get_decisions(
     score_min: float = Query(0, ge=0, le=100),
     score_max: float = Query(100, ge=0, le=100),
     decision: str = Query("ALL"),
-    limit: int = Query(50, ge=1, le=200),
+    limit: Optional[int] = Query(None, ge=1),
     cursor: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
@@ -224,6 +241,7 @@ async def get_decisions(
     try:
         if score_min > score_max:
             raise HTTPException(status_code=422, detail="score_min cannot be greater than score_max")
+        settings = await _get_decision_log_settings(db, user_id)
         return await _fetch_decisions(
             db,
             user_id=user_id,
@@ -236,6 +254,7 @@ async def get_decisions(
             decision=decision,
             limit=limit,
             cursor=cursor,
+            settings=settings,
         )
     except HTTPException:
         raise
