@@ -207,6 +207,8 @@ class BlockEngine:
         elif logic == "OR":
             allowed = len(optional_matched) > 0
         else:
+            # Relational entry logic uses strict AND semantics: every enabled
+            # optional condition in the group must pass.
             allowed = len(optional_matched) == len(optional)
 
         return {"allowed": allowed, "matched": matched, "failed_required": []}

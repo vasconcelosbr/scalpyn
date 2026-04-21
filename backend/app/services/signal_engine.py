@@ -66,6 +66,8 @@ class SignalEngine:
         matched.extend(optional_matched)
 
         if self.logic == "AND":
+            # Relational entry logic uses strict AND semantics: every enabled
+            # optional condition in the group must pass.
             signal = len(optional_matched) == len(optional_conditions)
         elif self.logic == "OR":
             signal = len(optional_matched) > 0 or len(optional_conditions) == 0
