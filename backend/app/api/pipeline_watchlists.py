@@ -324,7 +324,7 @@ async def get_pipeline_assets(
                 _CP.config_type == "score",
             ).order_by(_CP.updated_at.desc()).limit(1)
         )).scalars().first()
-        sc = (_cp_row.config_json if _cp_row else None) or DEFAULT_SCORE
+        sc = _cp_row.config_json if _cp_row and _cp_row.config_json else DEFAULT_SCORE
         se = ScoreEngine(merge_score_config(sc, profile_config))
     except Exception as exc:
         logger.warning("pipeline assets: score engine init failed [%s]: %s", type(exc).__name__, exc)
@@ -352,7 +352,7 @@ async def get_pipeline_assets(
         fresh_score = (
             float(score_result.get("total_score"))
             if score_result and score_result.get("total_score") is not None
-            else stored_score
+            else stored_score if stored_score is not None else 0.0
         )
         eval_dict["score"] = fresh_score
 
@@ -410,7 +410,9 @@ async def get_pipeline_assets(
             "volume_24h":       eval_dict["volume_24h"],
             "market_cap":       eval_dict["market_cap"],
             "alpha_score":      fresh_score,
-            "score_classification": score_result.get("classification") if score_result else None,
+            "score_classification": (
+                score_result.get("classification") if score_result else "no_data"
+            ),
             "entered_at":       r.entered_at.isoformat()  if r.entered_at       else None,
             "level_direction":  r.level_direction,
             "previous_level":   r.previous_level,

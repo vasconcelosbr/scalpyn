@@ -231,10 +231,7 @@ function getStatus(score: number, classification?: string | null, blocked: boole
   if (classification === 'avoid' || classification === 'no_data') {
     return { label: 'WEAK', cls: 'text-[#F87171]', dot: 'bg-[#F87171]' };
   }
-  if (score >= 75) return { label: 'STRONG', cls: 'text-[#34D399]', dot: 'bg-[#34D399]' };
-  if (score >= 60) return { label: 'GOOD',   cls: 'text-[#4ADE80]', dot: 'bg-[#4ADE80]' };
-  if (score >= 40) return { label: 'MIXED',  cls: 'text-[#FBBF24]', dot: 'bg-[#FBBF24]' };
-  return               { label: 'WEAK',   cls: 'text-[#F87171]', dot: 'bg-[#F87171]' };
+  return { label: score > 0 ? 'SCORED' : 'WEAK', cls: 'text-[#94A3B8]', dot: 'bg-[#94A3B8]' };
 }
 
 function getWeaknesses(rules: ScoreRule[]): string {
@@ -250,6 +247,7 @@ function scoreBarColor(score: number, classification?: string | null, blocked: b
   if (status.label === 'STRONG') return '#34D399';
   if (status.label === 'GOOD') return '#4ADE80';
   if (status.label === 'MIXED') return '#FBBF24';
+  if (status.label === 'SCORED') return '#94A3B8';
   return '#F87171';
 }
 

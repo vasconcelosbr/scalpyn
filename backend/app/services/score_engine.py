@@ -323,7 +323,7 @@ class ScoreEngine:
             if rule_category != category:
                 continue
 
-            points = float(rule.get("points") or 0)
+            points = float(rule.get("points") if rule.get("points") is not None else 0)
             possible_points += points
             if self._evaluate_rule(rule, indicators):
                 earned_points += points
