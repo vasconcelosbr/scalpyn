@@ -495,12 +495,10 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     : null;
 
   const loadAssets = useCallback(async (
-    options: boolean | { triggerParentRefresh?: boolean; silent?: boolean } = {}
+    { triggerParentRefresh = false, silent = false }: { triggerParentRefresh?: boolean; silent?: boolean } = {}
   ) => {
-    const normalized = typeof options === 'boolean'
-      ? { triggerParentRefresh: options, silent: false }
-      : options;
-    const { triggerParentRefresh = false, silent = false } = normalized;
+    // Drop overlapping refreshes for the same expanded board so polling,
+    // manual refresh, and parent-triggered reloads do not race each other.
     if (assetsRequestInFlight.current) return;
     assetsRequestInFlight.current = true;
     if (!silent) setLoadingAssets(true);
