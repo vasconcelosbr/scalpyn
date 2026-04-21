@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime, Float, Integer, Text, ForeignKey
+from sqlalchemy import BigInteger, Column, String, Boolean, DateTime, Float, Integer, Text, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 import uuid
 from datetime import datetime, timezone
@@ -6,18 +6,31 @@ from ..database import Base
 
 
 class DecisionLog(Base):
-    __tablename__ = 'decision_logs'
+    __tablename__ = 'decisions_log'
+    __table_args__ = (
+        Index("idx_decisions_symbol", "symbol"),
+        Index("idx_decisions_created_at", "created_at"),
+        Index("idx_decisions_score", "score"),
+        Index("idx_decisions_decision", "decision"),
+    )
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    symbol = Column(String(50), nullable=False, index=True)
-    strategy = Column(String(20), nullable=False)
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    symbol = Column(String(20), nullable=False)
+    strategy = Column(String(50), nullable=False)
+    timeframe = Column(String(10), nullable=True)
     score = Column(Float, nullable=True)
+    decision = Column(String(10), nullable=False)
+    l1_pass = Column(Boolean, nullable=True)
+    l2_pass = Column(Boolean, nullable=True)
+    l3_pass = Column(Boolean, nullable=True)
+    reasons = Column(JSONB, nullable=True)
+    metrics = Column(JSONB, nullable=True)
+    latency_ms = Column(Integer, nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=True)
     signal = Column(String(50), nullable=True)
     confidence = Column(Float, nullable=True)
-    decision = Column(String(20), nullable=True)
     payload_json = Column(JSONB, nullable=True)
     trace_id = Column(String(64), nullable=True, index=True)
-    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 

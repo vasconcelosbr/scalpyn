@@ -183,7 +183,7 @@ export default function BackofficePage() {
       apiGet<IntegrityData>("/backoffice/data/integrity"),
       apiGet<{ items: PipelineMetrics[] }>("/backoffice/pipeline/metrics?per_page=1"),
       apiGet<{ items: Alert[] }>("/backoffice/alerts?status=active&per_page=5"),
-      apiGet<{ items: Decision[] }>("/backoffice/decisions?decision=approved&per_page=5"),
+      apiGet<{ items: Decision[] }>("/decisions?decision=ALLOW&limit=5"),
     ]).then(([intRes, pipeRes, alertRes, decRes]) => {
       if (intRes.status === "fulfilled") setIntegrity(intRes.value);
       if (pipeRes.status === "fulfilled") {

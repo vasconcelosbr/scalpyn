@@ -12,6 +12,7 @@ from .api import (
     config as config_api,
     pools,
     exchanges,
+    decisions,
     market,
     trades,
     orders,
@@ -84,6 +85,7 @@ app.add_middleware(
 # Auth & Config
 app.include_router(auth.router)
 app.include_router(config_api.router)
+app.include_router(decisions.router)
 
 # Market Data & Watchlist
 app.include_router(market.router)

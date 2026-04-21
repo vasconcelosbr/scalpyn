@@ -21,6 +21,7 @@ class ConnectionManager:
             "market": set(),
             "signals": set(),
             "trades": set(),
+            "decisions": set(),
         }
 
     async def connect(self, websocket: WebSocket, channel: str):
@@ -92,6 +93,19 @@ async def ws_trades(websocket: WebSocket):
         manager.disconnect(websocket, "trades")
 
 
+@router.websocket("/ws/decisions")
+async def ws_decisions(websocket: WebSocket):
+    """Stream real-time decision log updates."""
+    await manager.connect(websocket, "decisions")
+    try:
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, "decisions")
+
+
 async def broadcast_price_update(symbol: str, price: float, change_24h: float, score: float):
     """Called by market data tasks to push updates to connected clients."""
     await manager.broadcast("market", {
@@ -121,5 +135,14 @@ async def broadcast_trade_event(event_type: str, trade_data: dict):
     await manager.broadcast("trades", {
         "type": event_type,
         **trade_data,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+async def broadcast_decision_created(decision_data: dict):
+    """Called by the pipeline to push a new persisted decision."""
+    await manager.broadcast("decisions", {
+        "type": "decision.created",
+        "data": decision_data,
         "ts": datetime.now(timezone.utc).isoformat(),
     })

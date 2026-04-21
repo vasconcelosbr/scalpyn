@@ -14,6 +14,7 @@ For each active user:
 import asyncio
 import json
 import logging
+from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -540,6 +541,179 @@ def _evaluate_l3_signals(assets: list, profile_config: Optional[dict], score_con
         return fallback
 
 
+def _jsonable(value):
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, tuple):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _decision_reason_map(processed: dict, has_signal_conditions: bool) -> dict:
+    reasons: dict[str, str] = {}
+
+    for rule in processed.get("_evaluation", {}).get("score_matched_rules", []):
+        indicator = rule.get("indicator")
+        if indicator:
+            reasons[indicator] = "OK"
+
+    signal = processed.get("signal", {})
+    for matched in signal.get("matched_conditions", []):
+        reasons[str(matched)] = "OK"
+    for failed in signal.get("failed_required", []):
+        reasons[str(failed)] = "FAIL"
+
+    entry = processed.get("entry", {})
+    for matched in entry.get("matched", []):
+        reasons[str(matched)] = "OK"
+    for failed in entry.get("failed_required", []):
+        reasons[str(failed)] = "FAIL"
+
+    if processed.get("blocked"):
+        reasons["block_rules"] = "FAIL"
+    if processed.get("passed_filter") is False:
+        for failed in processed.get("filter_failed", []):
+            reasons[str(failed)] = "FAIL"
+    if not has_signal_conditions and processed.get("passed_filter"):
+        reasons.setdefault("scoring_fallback", "OK")
+
+    if not reasons:
+        reasons["pipeline"] = "OK" if processed.get("passed_filter") else "FAIL"
+    return reasons
+
+
+def _decision_metrics(asset: dict, processed: dict) -> dict:
+    score = processed.get("score", {}) or {}
+    metrics = {
+        **(asset.get("indicators") or {}),
+        "price": asset.get("price"),
+        "change_24h": asset.get("change_24h"),
+        "volume_24h": asset.get("volume_24h"),
+        "market_cap": asset.get("market_cap"),
+        "score_components": score.get("components", {}),
+        "score_classification": score.get("classification"),
+        "signal_direction": processed.get("signal", {}).get("direction"),
+    }
+    return _jsonable(metrics)
+
+
+def _evaluate_l3_decisions(
+    assets: list,
+    profile_config: Optional[dict],
+    level: str,
+    score_config: Optional[dict] = None,
+) -> list[dict]:
+    from ..services.profile_engine import ProfileEngine
+    from ..services.score_engine import ScoreEngine, merge_score_config
+
+    engine = ProfileEngine(profile_config)
+    if score_config:
+        merged = merge_score_config(score_config, profile_config)
+        engine.score_engine = ScoreEngine(merged)
+
+    sig_conditions = (
+        (profile_config or {}).get("entry_triggers", {}).get("conditions")
+        or (profile_config or {}).get("signals", {}).get("conditions")
+        or []
+    )
+    has_signal_conditions = bool(sig_conditions)
+    timeframe = (profile_config or {}).get("default_timeframe", "5m")
+
+    decisions: list[dict] = []
+    for asset in assets:
+        started_at = datetime.now(timezone.utc)
+        processed = engine.evaluate_asset(asset)
+        latency_ms = max(1, int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000))
+        score = (processed.get("score") or {}).get("total_score", 0)
+        decision = "BLOCK"
+        l3_pass = False
+
+        if not processed.get("blocked") and processed.get("passed_filter", False):
+            if has_signal_conditions:
+                l3_pass = bool(processed.get("signal", {}).get("triggered"))
+                decision = "ALLOW" if l3_pass else "BLOCK"
+            else:
+                l3_pass = True
+                decision = "ALLOW"
+
+        decisions.append({
+            "symbol": asset.get("symbol"),
+            "strategy": level,
+            "timeframe": timeframe,
+            "score": score,
+            "decision": decision,
+            "l1_pass": True,
+            "l2_pass": True,
+            "l3_pass": l3_pass,
+            "reasons": _decision_reason_map(processed, has_signal_conditions),
+            "metrics": _decision_metrics(asset, processed),
+            "latency_ms": latency_ms,
+            "created_at": datetime.now(timezone.utc),
+            "_processed": processed,
+            "_asset": asset,
+        })
+
+    return decisions
+
+
+async def _persist_decision_logs(db, user_id, decisions: list[dict]):
+    from ..models.backoffice import DecisionLog
+
+    if not decisions:
+        return []
+
+    rows = [
+        DecisionLog(
+            symbol=decision["symbol"],
+            strategy=decision["strategy"],
+            timeframe=decision.get("timeframe"),
+            score=decision.get("score"),
+            decision=decision["decision"],
+            l1_pass=decision.get("l1_pass"),
+            l2_pass=decision.get("l2_pass"),
+            l3_pass=decision.get("l3_pass"),
+            reasons=decision.get("reasons"),
+            metrics=decision.get("metrics"),
+            latency_ms=decision.get("latency_ms"),
+            user_id=user_id,
+            created_at=decision.get("created_at"),
+        )
+        for decision in decisions
+    ]
+    db.add_all(rows)
+    await db.flush()
+
+    payloads = []
+    for row in rows:
+        payload = {
+            "id": row.id,
+            "symbol": row.symbol,
+            "strategy": row.strategy,
+            "timeframe": row.timeframe,
+            "score": row.score,
+            "decision": row.decision,
+            "l1_pass": row.l1_pass,
+            "l2_pass": row.l2_pass,
+            "l3_pass": row.l3_pass,
+            "reasons": row.reasons or {},
+            "metrics": row.metrics or {},
+            "latency_ms": row.latency_ms,
+            "created_at": row.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+        logger.info("[Decision] %s | score=%s | %s", row.symbol, round(float(row.score or 0), 2), row.decision)
+        payloads.append(payload)
+    return payloads
+
+
 async def _run_staleness_only(db, watchlist_id: str, filters_json: dict | None = None):
     """Run ONLY staleness expiry + cleanup — no active/down marking.
 
@@ -1052,10 +1226,35 @@ async def _run_pipeline_scan():
                     await _update_last_scanned(db, wl_id)
 
                 elif effective_level == "L3":
-                    signals = _evaluate_l3_signals(assets, profile_config, score_config=score_config)
+                    decisions = _evaluate_l3_decisions(
+                        assets,
+                        profile_config,
+                        level,
+                        score_config=score_config,
+                    )
+                    signals = [
+                        {
+                            "symbol": decision["symbol"],
+                            "score": decision.get("score", 0),
+                            "price": decision["_asset"].get("price", 0),
+                            "change_24h": decision["_asset"].get("change_24h", 0),
+                            "volume_24h": decision["_asset"].get("volume_24h"),
+                            "market_cap": decision["_asset"].get("market_cap"),
+                            "matched_conditions": decision["_processed"].get("signal", {}).get("matched_conditions", []),
+                        }
+                        for decision in decisions
+                        if decision["decision"] == "ALLOW"
+                    ]
 
                     before_block = len(signals)
-                    signals = [s for s in signals if not _is_blocked(s)]
+                    blocked_symbols = {signal["symbol"] for signal in signals if _is_blocked(signal)}
+                    signals = [signal for signal in signals if signal["symbol"] not in blocked_symbols]
+                    if blocked_symbols:
+                        for decision in decisions:
+                            if decision["symbol"] in blocked_symbols:
+                                decision["decision"] = "BLOCK"
+                                decision["l3_pass"] = False
+                                decision["reasons"]["anti_bad_entry"] = "FAIL"
                     if before_block != len(signals):
                         logger.info(
                             "[PipelineScan] %s (L3): anti-bad-entry removed %d/%d signals",
@@ -1080,8 +1279,15 @@ async def _run_pipeline_scan():
                     new_syms    = sorted(current_set - prior_set)
 
                     _save_signals(redis, wl_id, current_set)
+                    decision_payloads = await _persist_decision_logs(db, wl.user_id, decisions)
                     await _upsert_assets(db, wl_id, signals, filters_json)
                     await _update_last_scanned(db, wl_id)
+
+                    if decision_payloads:
+                        from ..api.websocket import broadcast_decision_created
+
+                        for payload in decision_payloads:
+                            await broadcast_decision_created(payload)
 
                     if new_syms:
                         stats["new_signals"] += len(new_syms)
