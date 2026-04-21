@@ -231,6 +231,7 @@ async def get_pipeline_assets(
     # ── 2. Profile → filter conditions ───────────────────────────────────────
     filter_conditions: List[Dict] = []
     filter_logic: str = "AND"
+    profile_config: Optional[Dict[str, Any]] = None
     # Columns come from Filter conditions ONLY (not Signals), per new contract.
     # Signals conditions continue to be used for signal evaluation but not
     # for deriving dynamic watchlist columns.
@@ -243,6 +244,7 @@ async def get_pipeline_assets(
 
         if prof and prof.config:
             cfg = prof.config
+            profile_config = cfg
             filter_cfg = cfg.get("filters", {}) or {}
             filter_conditions = filter_cfg.get("conditions", [])
             filter_logic = filter_cfg.get("logic", "AND")
@@ -312,7 +314,7 @@ async def get_pipeline_assets(
     se = None
     try:
         from ..models.config_profile import ConfigProfile as _CP
-        from ..services.score_engine import ScoreEngine
+        from ..services.score_engine import ScoreEngine, merge_score_config
         from ..services.seed_service import DEFAULT_SCORE
         # Prefer watchlist owner's config (same path as pipeline_scan)
         _cp_row = (await db.execute(
@@ -322,26 +324,8 @@ async def get_pipeline_assets(
                 _CP.config_type == "score",
             ).order_by(_CP.updated_at.desc()).limit(1)
         )).scalars().first()
-        sc = _cp_row.config_json if _cp_row else None
-        # Fall back to profile's scoring config if no global config exists
-        if not sc or not (sc.get("scoring_rules") or sc.get("rules")):
-            # Load the profile config to get scoring section (fix: variable was previously undefined)
-            _profile_for_score = None
-            if wl.profile_id:
-                _profile_for_score_row = (await db.execute(
-                    select(Profile).where(Profile.id == wl.profile_id)
-                )).scalars().first()
-                if _profile_for_score_row:
-                    _profile_for_score = _profile_for_score_row.config
-            if _profile_for_score:
-                scoring_section = _profile_for_score.get("scoring", {})
-                _rules = scoring_section.get("scoring_rules") or scoring_section.get("rules")
-                if _rules:
-                    sc = {
-                        "scoring_rules": _rules,
-                        "weights": scoring_section.get("weights", {}),
-                    }
-        se = ScoreEngine(sc if sc else DEFAULT_SCORE)
+        sc = _cp_row.config_json if _cp_row and _cp_row.config_json else DEFAULT_SCORE
+        se = ScoreEngine(merge_score_config(sc, profile_config))
     except Exception as exc:
         logger.warning("pipeline assets: score engine init failed [%s]: %s", type(exc).__name__, exc)
 
@@ -352,6 +336,7 @@ async def get_pipeline_assets(
     for r in rows:
         sym = r.symbol
         ind_data = ind_map.get(sym, {})
+        stored_score = float(r.alpha_score) if r.alpha_score is not None else None
 
         # Build evaluation dict (meta fields + live indicator fields)
         eval_dict: Dict[str, Any] = {
@@ -360,9 +345,29 @@ async def get_pipeline_assets(
             "price":              float(r.current_price)    if r.current_price    is not None else None,
             "change_24h":         float(r.price_change_24h) if r.price_change_24h is not None else None,
             "price_change_24h":   float(r.price_change_24h) if r.price_change_24h is not None else None,
-            "score":              float(r.alpha_score)      if r.alpha_score      is not None else None,
             **ind_data,
         }
+
+        score_result = se.compute_alpha_score(eval_dict) if se else None
+        fresh_score = (
+            float(score_result.get("total_score"))
+            if score_result and score_result.get("total_score") is not None
+            else stored_score if stored_score is not None else 0.0
+        )
+        eval_dict["score"] = fresh_score
+
+        if (
+            stored_score is not None
+            and fresh_score is not None
+            and abs(stored_score - fresh_score) >= 0.1
+        ):
+            logger.debug(
+                "pipeline assets: score drift watchlist=%s symbol=%s stored=%.2f fresh=%.2f",
+                wl_id,
+                sym,
+                stored_score,
+                fresh_score,
+            )
 
         # Re-evaluate profile filter at query time.
         # STRICT fields (market_cap, volume_24h, etc.): always evaluated — None → FAIL.
@@ -389,7 +394,7 @@ async def get_pipeline_assets(
             "_meta:volume_24h":  eval_dict["volume_24h"],
             "_meta:price":       eval_dict["price"],
             "_meta:change_24h":  eval_dict["change_24h"],
-            "_meta:score":       eval_dict["score"],
+            "_meta:score":       fresh_score,
         }
         indicators.update(ind_data)
 
@@ -404,7 +409,10 @@ async def get_pipeline_assets(
             "price_change_24h": eval_dict["change_24h"],
             "volume_24h":       eval_dict["volume_24h"],
             "market_cap":       eval_dict["market_cap"],
-            "alpha_score":      eval_dict["score"],
+            "alpha_score":      fresh_score,
+            "score_classification": (
+                score_result.get("classification") if score_result else "no_data"
+            ),
             "entered_at":       r.entered_at.isoformat()  if r.entered_at       else None,
             "level_direction":  r.level_direction,
             "previous_level":   r.previous_level,
@@ -413,6 +421,13 @@ async def get_pipeline_assets(
             "score_rules":      score_rules,
         })
 
+    assets.sort(
+        key=lambda asset: (
+            asset["alpha_score"] is None,
+            -asset["alpha_score"] if asset["alpha_score"] is not None else 0,
+        )
+    )
+
     return {
         "watchlist_id":      str(wl_id),
         "watchlist_name":    wl.name,
@@ -420,6 +435,7 @@ async def get_pipeline_assets(
         "asset_count":       len(assets),
         "assets":            assets,
         "profile_indicators": profile_indicators,
+        "score_thresholds":  se.thresholds if se else None,
         # Alpha Score is visible only at L2 (Stage 2) and L3 (Stage 3).
         # POOL/custom (Stage 0) and L1 (Stage 1) are filter-only stages.
         "show_score":        show_score,

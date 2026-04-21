@@ -21,6 +21,8 @@ export interface ScoreRule {
   category: string;
 }
 
+type IndicatorValue = number | boolean | string | null | undefined;
+
 export interface PipelineAssetWithScore {
   id: string;
   symbol: string;
@@ -32,8 +34,9 @@ export interface PipelineAssetWithScore {
   level_direction: string | null;
   blocked: boolean;
   block_reasons: string[];
-  indicators: Record<string, any>;
+  indicators: Record<string, IndicatorValue>;
   score_rules: ScoreRule[];
+  score_classification?: string | null;
 }
 
 export interface IndicatorColumn {
@@ -81,7 +84,7 @@ function normalizeIndicatorKey(key: string): string {
 }
 
 /** Color-coded indicator cell value + emoji dot */
-function getIndicatorColor(key: string, value: any): { text: string; cls: string; dot: string } {
+function getIndicatorColor(key: string, value: IndicatorValue): { text: string; cls: string; dot: string } {
   if (value == null) return { text: '—', cls: 'text-[#4B5563]', dot: '' };
   const normalizedKey = normalizeIndicatorKey(key);
 
@@ -185,7 +188,7 @@ function getIndicatorColor(key: string, value: any): { text: string; cls: string
   }
 }
 
-function fmtIndValue(key: string, value: any): string {
+function fmtIndValue(key: string, value: IndicatorValue): string {
   if (value == null) return '—';
   const normalizedKey = normalizeIndicatorKey(key);
   if (typeof value === 'boolean') {
@@ -220,12 +223,15 @@ function getRuleForIndicator(keys: string[], rules: ScoreRule[]): ScoreRule | un
   return r;
 }
 
-function getStatus(score: number, blocked: boolean = false) {
+function getStatus(score: number, classification?: string | null, blocked: boolean = false) {
   if (blocked) return { label: 'BLOCKED', cls: 'text-[#F87171]', dot: 'bg-[#F87171]' };
-  if (score >= 75) return { label: 'STRONG', cls: 'text-[#34D399]', dot: 'bg-[#34D399]' };
-  if (score >= 60) return { label: 'GOOD',   cls: 'text-[#4ADE80]', dot: 'bg-[#4ADE80]' };
-  if (score >= 40) return { label: 'MIXED',  cls: 'text-[#FBBF24]', dot: 'bg-[#FBBF24]' };
-  return               { label: 'WEAK',   cls: 'text-[#F87171]', dot: 'bg-[#F87171]' };
+  if (classification === 'strong_buy') return { label: 'STRONG', cls: 'text-[#34D399]', dot: 'bg-[#34D399]' };
+  if (classification === 'buy') return { label: 'GOOD', cls: 'text-[#4ADE80]', dot: 'bg-[#4ADE80]' };
+  if (classification === 'neutral') return { label: 'MIXED', cls: 'text-[#FBBF24]', dot: 'bg-[#FBBF24]' };
+  if (classification === 'avoid' || classification === 'no_data') {
+    return { label: 'WEAK', cls: 'text-[#F87171]', dot: 'bg-[#F87171]' };
+  }
+  return { label: score > 0 ? 'SCORED' : 'WEAK', cls: 'text-[#94A3B8]', dot: 'bg-[#94A3B8]' };
 }
 
 function getWeaknesses(rules: ScoreRule[]): string {
@@ -236,16 +242,18 @@ function getWeaknesses(rules: ScoreRule[]): string {
   return failed.map(r => r.label).join(' · ');
 }
 
-function scoreBarColor(score: number) {
-  if (score >= 75) return '#34D399';
-  if (score >= 60) return '#4ADE80';
-  if (score >= 40) return '#FBBF24';
+function scoreBarColor(score: number, classification?: string | null, blocked: boolean = false) {
+  const status = getStatus(score, classification, blocked);
+  if (status.label === 'STRONG') return '#34D399';
+  if (status.label === 'GOOD') return '#4ADE80';
+  if (status.label === 'MIXED') return '#FBBF24';
+  if (status.label === 'SCORED') return '#94A3B8';
   return '#F87171';
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function IndicatorCell({ column, value, rules }: { column: IndicatorColumn; value: any; rules: ScoreRule[] }) {
+function IndicatorCell({ column, value, rules }: { column: IndicatorColumn; value: IndicatorValue; rules: ScoreRule[] }) {
   const { text, cls, dot } = getIndicatorColor(column.key, value);
   const normalizedKey = normalizeIndicatorKey(column.key);
   // Deduplicate alias candidates because meta columns may resolve to the same rule key.
@@ -263,8 +271,16 @@ function IndicatorCell({ column, value, rules }: { column: IndicatorColumn; valu
   );
 }
 
-function ScoreBar({ score }: { score: number }) {
-  const color = scoreBarColor(score);
+function ScoreBar({
+  score,
+  classification,
+  blocked = false,
+}: {
+  score: number;
+  classification?: string | null;
+  blocked?: boolean;
+}) {
+  const color = scoreBarColor(score, classification, blocked);
   return (
     <div className="flex items-center gap-2 min-w-[110px]">
       <div className="relative flex-1 h-1.5 bg-[#1A2035] rounded-full overflow-hidden">
@@ -289,7 +305,17 @@ const CATEGORY_LABELS: Record<string, string> = {
   liquidity: 'Liquidez', signal: 'Sinal', other: 'Outros',
 };
 
-function DrilldownPanel({ rules, score }: { rules: ScoreRule[]; score: number }) {
+function DrilldownPanel({
+  rules,
+  score,
+  classification,
+  blocked = false,
+}: {
+  rules: ScoreRule[];
+  score: number;
+  classification?: string | null;
+  blocked?: boolean;
+}) {
   const totalPossible = rules.reduce((s, r) => s + r.points_possible, 0);
   const totalAwarded  = rules.reduce((s, r) => s + r.points_awarded, 0);
 
@@ -315,11 +341,11 @@ function DrilldownPanel({ rules, score }: { rules: ScoreRule[]; score: number })
             className="h-full rounded-full transition-all duration-700"
             style={{
               width: `${totalPossible > 0 ? (totalAwarded / totalPossible) * 100 : 0}%`,
-              backgroundColor: scoreBarColor(score),
+              backgroundColor: scoreBarColor(score, classification, blocked),
             }}
           />
         </div>
-        <span className="text-xs font-semibold" style={{ color: scoreBarColor(score) }}>
+        <span className="text-xs font-semibold" style={{ color: scoreBarColor(score, classification, blocked) }}>
           {score.toFixed(1)}
         </span>
       </div>
@@ -440,7 +466,8 @@ export function PipelineAssetTable({
             const rules     = asset.score_rules ?? [];
             const isBlocked = asset.blocked ?? false;
             const blockReasons = asset.block_reasons ?? [];
-            const status    = getStatus(score, isBlocked);
+            const classification = asset.score_classification;
+            const status    = getStatus(score, classification, isBlocked);
             const weakness  = getWeaknesses(rules);
             const isExpanded = expandedRow === asset.symbol;
             const effectiveDir = liveDirections[asset.symbol] ?? asset.level_direction;
@@ -448,9 +475,9 @@ export function PipelineAssetTable({
             const hasDivergence =
               rules.some(r => r.indicator === 'macd_histogram' && !r.passed) && score >= 65;
             const hasVolSpike =
-              (asset.indicators?.['volume_spike'] ?? 0) > 2.5;
+              Number(asset.indicators?.['volume_spike'] ?? 0) > 2.5;
             const hasHighADX =
-              (asset.indicators?.['adx'] ?? 0) > 40;
+              Number(asset.indicators?.['adx'] ?? 0) > 40;
 
             const rowAlert = isBlocked        ? 'border-l-2 border-l-[#F87171]/60'
                            : hasDivergence    ? 'border-l-2 border-l-[#FBBF24]/60'
@@ -459,7 +486,7 @@ export function PipelineAssetTable({
                            : '';
 
             const getColumnValue = (column: IndicatorColumn) => {
-              const topLevelValue = (asset as unknown as Record<string, any>)[column.field];
+              const topLevelValue = (asset as unknown as Record<string, unknown>)[column.field] as IndicatorValue;
               return asset.indicators?.[column.key]
                 ?? asset.indicators?.[normalizeIndicatorKey(column.key)]
                 ?? asset.indicators?.[column.field]
@@ -515,7 +542,7 @@ export function PipelineAssetTable({
                    {/* Score bar — hidden for Stage 0 (POOL/custom) and Stage 1 (L1) */}
                   {showScore && (
                     <td className="px-3 py-2.5">
-                      <ScoreBar score={score} />
+                      <ScoreBar score={score} classification={classification} blocked={isBlocked} />
                     </td>
                   )}
 
@@ -546,7 +573,12 @@ export function PipelineAssetTable({
                 {isExpanded && (
                   <tr className="border-b border-[#1A2035]">
                     <td colSpan={2 + (showScore ? 1 : 0) + 1 + visibleColumns.length} className="p-0">
-                      <DrilldownPanel rules={rules} score={score} />
+                      <DrilldownPanel
+                        rules={rules}
+                        score={score}
+                        classification={classification}
+                        blocked={isBlocked}
+                      />
                     </td>
                   </tr>
                 )}
