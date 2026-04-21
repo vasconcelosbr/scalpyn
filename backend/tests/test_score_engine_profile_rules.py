@@ -26,9 +26,43 @@ def test_score_engine_uses_rule_level_category_from_config():
     result = engine.compute_alpha_score({"rsi": 25})
     breakdown = engine.get_full_breakdown({"rsi": 25})
 
-    assert result["components"]["liquidity_score"] == 25
+    assert result["total_score"] == 100
+    assert result["components"]["liquidity_score"] == 100
     assert result["components"]["momentum_score"] == 0
     assert breakdown[0]["category"] == "liquidity"
+
+
+def test_score_engine_normalizes_points_within_category():
+    config = {
+        "weights": {"liquidity": 0, "market_structure": 0, "momentum": 100, "signal": 0},
+        "scoring_rules": [
+            {"id": "rsi_1", "indicator": "rsi", "operator": "<=", "value": 30, "points": 10, "category": "momentum"},
+            {"id": "macd_1", "indicator": "macd", "operator": ">", "value": 0, "points": 10, "category": "momentum"},
+        ],
+    }
+
+    engine = ScoreEngine(config)
+    result = engine.compute_alpha_score({"rsi": 25, "macd": -1})
+
+    assert result["components"]["momentum_score"] == 50
+    assert result["total_score"] == 50
+    assert result["classification"] == "neutral"
+
+
+def test_score_engine_ignores_inactive_categories_in_weight_denominator():
+    config = {
+        "weights": {"liquidity": 25, "market_structure": 25, "momentum": 25, "signal": 25},
+        "scoring_rules": [
+            {"id": "rsi_1", "indicator": "rsi", "operator": "<=", "value": 30, "points": 10, "category": "momentum"},
+        ],
+    }
+
+    engine = ScoreEngine(config)
+    result = engine.compute_alpha_score({"rsi": 25})
+
+    assert result["components"]["momentum_score"] == 100
+    assert result["total_score"] == 100
+    assert result["classification"] == "strong_buy"
 
 
 def test_merge_score_config_respects_profile_selected_rule_ids():

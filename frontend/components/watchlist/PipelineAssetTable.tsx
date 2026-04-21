@@ -34,6 +34,7 @@ export interface PipelineAssetWithScore {
   block_reasons: string[];
   indicators: Record<string, any>;
   score_rules: ScoreRule[];
+  score_classification?: string | null;
 }
 
 export interface IndicatorColumn {
@@ -220,8 +221,14 @@ function getRuleForIndicator(keys: string[], rules: ScoreRule[]): ScoreRule | un
   return r;
 }
 
-function getStatus(score: number, blocked: boolean = false) {
+function getStatus(score: number, classification?: string | null, blocked: boolean = false) {
   if (blocked) return { label: 'BLOCKED', cls: 'text-[#F87171]', dot: 'bg-[#F87171]' };
+  if (classification === 'strong_buy') return { label: 'STRONG', cls: 'text-[#34D399]', dot: 'bg-[#34D399]' };
+  if (classification === 'buy') return { label: 'GOOD', cls: 'text-[#4ADE80]', dot: 'bg-[#4ADE80]' };
+  if (classification === 'neutral') return { label: 'MIXED', cls: 'text-[#FBBF24]', dot: 'bg-[#FBBF24]' };
+  if (classification === 'avoid' || classification === 'no_data') {
+    return { label: 'WEAK', cls: 'text-[#F87171]', dot: 'bg-[#F87171]' };
+  }
   if (score >= 75) return { label: 'STRONG', cls: 'text-[#34D399]', dot: 'bg-[#34D399]' };
   if (score >= 60) return { label: 'GOOD',   cls: 'text-[#4ADE80]', dot: 'bg-[#4ADE80]' };
   if (score >= 40) return { label: 'MIXED',  cls: 'text-[#FBBF24]', dot: 'bg-[#FBBF24]' };
@@ -236,10 +243,11 @@ function getWeaknesses(rules: ScoreRule[]): string {
   return failed.map(r => r.label).join(' · ');
 }
 
-function scoreBarColor(score: number) {
-  if (score >= 75) return '#34D399';
-  if (score >= 60) return '#4ADE80';
-  if (score >= 40) return '#FBBF24';
+function scoreBarColor(score: number, classification?: string | null, blocked: boolean = false) {
+  const status = getStatus(score, classification, blocked);
+  if (status.label === 'STRONG') return '#34D399';
+  if (status.label === 'GOOD') return '#4ADE80';
+  if (status.label === 'MIXED') return '#FBBF24';
   return '#F87171';
 }
 
@@ -263,8 +271,16 @@ function IndicatorCell({ column, value, rules }: { column: IndicatorColumn; valu
   );
 }
 
-function ScoreBar({ score }: { score: number }) {
-  const color = scoreBarColor(score);
+function ScoreBar({
+  score,
+  classification,
+  blocked = false,
+}: {
+  score: number;
+  classification?: string | null;
+  blocked?: boolean;
+}) {
+  const color = scoreBarColor(score, classification, blocked);
   return (
     <div className="flex items-center gap-2 min-w-[110px]">
       <div className="relative flex-1 h-1.5 bg-[#1A2035] rounded-full overflow-hidden">
@@ -289,7 +305,17 @@ const CATEGORY_LABELS: Record<string, string> = {
   liquidity: 'Liquidez', signal: 'Sinal', other: 'Outros',
 };
 
-function DrilldownPanel({ rules, score }: { rules: ScoreRule[]; score: number }) {
+function DrilldownPanel({
+  rules,
+  score,
+  classification,
+  blocked = false,
+}: {
+  rules: ScoreRule[];
+  score: number;
+  classification?: string | null;
+  blocked?: boolean;
+}) {
   const totalPossible = rules.reduce((s, r) => s + r.points_possible, 0);
   const totalAwarded  = rules.reduce((s, r) => s + r.points_awarded, 0);
 
@@ -315,11 +341,11 @@ function DrilldownPanel({ rules, score }: { rules: ScoreRule[]; score: number })
             className="h-full rounded-full transition-all duration-700"
             style={{
               width: `${totalPossible > 0 ? (totalAwarded / totalPossible) * 100 : 0}%`,
-              backgroundColor: scoreBarColor(score),
+              backgroundColor: scoreBarColor(score, classification, blocked),
             }}
           />
         </div>
-        <span className="text-xs font-semibold" style={{ color: scoreBarColor(score) }}>
+        <span className="text-xs font-semibold" style={{ color: scoreBarColor(score, classification, blocked) }}>
           {score.toFixed(1)}
         </span>
       </div>
@@ -440,7 +466,8 @@ export function PipelineAssetTable({
             const rules     = asset.score_rules ?? [];
             const isBlocked = asset.blocked ?? false;
             const blockReasons = asset.block_reasons ?? [];
-            const status    = getStatus(score, isBlocked);
+            const classification = asset.score_classification;
+            const status    = getStatus(score, classification, isBlocked);
             const weakness  = getWeaknesses(rules);
             const isExpanded = expandedRow === asset.symbol;
             const effectiveDir = liveDirections[asset.symbol] ?? asset.level_direction;
@@ -515,7 +542,7 @@ export function PipelineAssetTable({
                    {/* Score bar — hidden for Stage 0 (POOL/custom) and Stage 1 (L1) */}
                   {showScore && (
                     <td className="px-3 py-2.5">
-                      <ScoreBar score={score} />
+                      <ScoreBar score={score} classification={classification} blocked={isBlocked} />
                     </td>
                   )}
 
@@ -546,7 +573,12 @@ export function PipelineAssetTable({
                 {isExpanded && (
                   <tr className="border-b border-[#1A2035]">
                     <td colSpan={2 + (showScore ? 1 : 0) + 1 + visibleColumns.length} className="p-0">
-                      <DrilldownPanel rules={rules} score={score} />
+                      <DrilldownPanel
+                        rules={rules}
+                        score={score}
+                        classification={classification}
+                        blocked={isBlocked}
+                      />
                     </td>
                   </tr>
                 )}

@@ -251,50 +251,55 @@ class ScoreEngine:
         if not indicators:
             return {"total_score": 0, "classification": "no_data", "components": {}}
 
-        # Evaluate all scoring rules to get raw points per category
-        liquidity_pts = self._evaluate_category_rules(indicators, "liquidity")
-        market_structure_pts = self._evaluate_category_rules(indicators, "market_structure")
-        momentum_pts = self._evaluate_category_rules(indicators, "momentum")
-        signal_pts = self._evaluate_category_rules(indicators, "signal")
+        category_summaries = {
+            category: self._evaluate_category_rules(indicators, category)
+            for category in ("liquidity", "market_structure", "momentum", "signal")
+        }
 
-        # Normalize each category to 0-100 scale
-        liquidity_score = min(100, liquidity_pts)
-        market_structure_score = min(100, market_structure_pts)
-        momentum_score = min(100, momentum_pts)
-        signal_score = min(100, signal_pts)
+        component_scores = {
+            category: (
+                round(min(100.0, (summary["earned_points"] / summary["possible_points"]) * 100), 2)
+                if summary["possible_points"] > 0
+                else 0.0
+            )
+            for category, summary in category_summaries.items()
+        }
 
-        # Apply weights (weights should sum to 100)
+        # Apply weights only to categories that have active scoring rules.
         w = self.weights
-        total_weight = w.get("liquidity", 25) + w.get("market_structure", 25) + w.get("momentum", 25) + w.get("signal", 25)
-        if total_weight == 0:
-            total_weight = 100
+        weighted_categories = [
+            category for category, summary in category_summaries.items()
+            if summary["possible_points"] > 0
+        ]
+        total_weight = sum(w.get(category, 25) for category in weighted_categories)
 
-        total_score = (
-            liquidity_score * w.get("liquidity", 25) +
-            market_structure_score * w.get("market_structure", 25) +
-            momentum_score * w.get("momentum", 25) +
-            signal_score * w.get("signal", 25)
-        ) / total_weight
+        if total_weight > 0:
+            total_score = sum(
+                component_scores[category] * w.get(category, 25)
+                for category in weighted_categories
+            ) / total_weight
+        else:
+            total_score = 0.0
 
         total_score = round(min(100, max(0, total_score)), 2)
 
         # Classification
-        classification = self._classify(total_score)
+        classification = self._classify(total_score) if total_weight > 0 else "no_data"
 
         return {
             "total_score": total_score,
             "classification": classification,
             "components": {
-                "liquidity_score": round(liquidity_score, 2),
-                "market_structure_score": round(market_structure_score, 2),
-                "momentum_score": round(momentum_score, 2),
-                "signal_score": round(signal_score, 2),
+                "liquidity_score": component_scores["liquidity"],
+                "market_structure_score": component_scores["market_structure"],
+                "momentum_score": component_scores["momentum"],
+                "signal_score": component_scores["signal"],
             },
             "matched_rules": self._get_matched_rules(indicators),
         }
 
-    def _evaluate_category_rules(self, indicators: Dict[str, Any], category: str) -> float:
-        """Evaluate scoring rules and sum points.
+    def _evaluate_category_rules(self, indicators: Dict[str, Any], category: str) -> Dict[str, float]:
+        """Evaluate scoring rules and summarize earned vs. possible points.
 
         Each rule is assigned to exactly ONE category based on _IND_CATEGORY
         (the canonical mapping).  This prevents double-counting — e.g. an
@@ -307,10 +312,10 @@ class ScoreEngine:
         - momentum: rsi, macd, macd_signal, macd_histogram, stoch_k, stoch_d, zscore, vwap_distance_pct
         - signal: adx_acceleration, volume_delta, funding_rate, ema9_gt_ema50, ema50_gt_ema200, ema_full_alignment
         """
-        points = 0.0
+        earned_points = 0.0
+        possible_points = 0.0
 
         for rule in self.rules:
-            indicator_name = rule.get("indicator", "")
             # Use _IND_CATEGORY as the single source of truth for which
             # category an indicator belongs to.  Default to "other" so that
             # unknown indicators are never silently dropped into a wrong bucket.
@@ -318,11 +323,15 @@ class ScoreEngine:
             if rule_category != category:
                 continue
 
-            matched = self._evaluate_rule(rule, indicators)
-            if matched:
-                points += rule.get("points", 0)
+            points = float(rule.get("points", 0) or 0)
+            possible_points += points
+            if self._evaluate_rule(rule, indicators):
+                earned_points += points
 
-        return points
+        return {
+            "earned_points": earned_points,
+            "possible_points": possible_points,
+        }
 
     def _evaluate_rule(self, rule: Dict[str, Any], indicators: Dict[str, Any]) -> bool:
         """Evaluate a single scoring rule against indicator values."""
