@@ -419,7 +419,12 @@ async def get_pipeline_assets(
             "score_rules":      score_rules,
         })
 
-    assets.sort(key=lambda asset: (asset["alpha_score"] is None, -(asset["alpha_score"] or 0)))
+    assets.sort(
+        key=lambda asset: (
+            asset["alpha_score"] is None,
+            -asset["alpha_score"] if asset["alpha_score"] is not None else 0,
+        )
+    )
 
     return {
         "watchlist_id":      str(wl_id),
