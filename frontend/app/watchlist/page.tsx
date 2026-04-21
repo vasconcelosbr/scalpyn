@@ -114,6 +114,8 @@ function fmtChange(n: number | null) {
   return `${sign}${n.toFixed(2)}%`;
 }
 
+const WATCHLIST_POLL_MS = 60_000;
+
 /** Relative time label (e.g. "2m ago", "1h ago") */
 function timeAgo(isoStr: string | null | undefined): string {
   if (!isoStr) return '—';
@@ -464,10 +466,11 @@ interface WatchlistRowProps {
   onEdit: (wl: PipelineWatchlist) => void;
   onDelete: (id: string) => void;
   onRefreshed: () => void;
+  refreshTick: number;
   liveDirections?: Record<string, string>;
 }
 
-function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, onRefreshed, liveDirections = {} }: WatchlistRowProps) {
+function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, onRefreshed, refreshTick, liveDirections = {} }: WatchlistRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [assets, setAssets] = useState<PipelineAsset[]>([]);
   const [indicatorCols, setIndicatorCols] = useState<IndicatorColumn[]>([]);
@@ -479,6 +482,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
   const [refreshing, setRefreshing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const assetsRequestInFlight = useRef(false);
 
   const sourceName = wl.source_pool_id
     ? pools.find((p) => p.id === wl.source_pool_id)?.name ?? 'Pool'
@@ -490,8 +494,14 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     ? (profiles.find((p) => p.id === wl.profile_id)?.name ?? wl.profile_name ?? 'Profile')
     : null;
 
-  const loadAssets = useCallback(async (triggerParentRefresh = false) => {
-    setLoadingAssets(true);
+  const loadAssets = useCallback(async (
+    { triggerParentRefresh = false, silent = false }: { triggerParentRefresh?: boolean; silent?: boolean } = {}
+  ) => {
+    // Drop overlapping refreshes for the same expanded board so polling,
+    // manual refresh, and parent-triggered reloads do not race each other.
+    if (assetsRequestInFlight.current) return;
+    assetsRequestInFlight.current = true;
+    if (!silent) setLoadingAssets(true);
     try {
       const data = await apiFetch<{ assets: PipelineAsset[]; profile_indicators?: IndicatorColumn[]; show_score?: boolean }>(`/watchlists/${wl.id}/assets`);
       // Always render highest alpha_score first
@@ -510,20 +520,29 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     } catch {
       // ignore
     } finally {
-      setLoadingAssets(false);
+      assetsRequestInFlight.current = false;
+      if (!silent) setLoadingAssets(false);
     }
   }, [wl.id, onRefreshed]);
 
   useEffect(() => {
-    if (expanded) loadAssets(true);
+    if (expanded) {
+      void loadAssets({ triggerParentRefresh: true });
+    }
   }, [expanded, loadAssets]);
+
+  useEffect(() => {
+    if (expanded && wl.auto_refresh && refreshTick > 0) {
+      void loadAssets({ silent: true });
+    }
+  }, [expanded, wl.auto_refresh, refreshTick, loadAssets]);
 
   async function handleRefresh() {
     setRefreshing(true);
     setRefreshError(null);
     try {
       await apiFetch(`/watchlists/${wl.id}/refresh`, { method: 'POST' });
-      await loadAssets();
+      await loadAssets({ silent: true });
       onRefreshed();
     } catch (err: any) {
       setRefreshError(err?.message ?? 'Failed to refresh watchlist assets. Check source pool configuration.');
@@ -659,6 +678,7 @@ function PipelineTab() {
   const [loading, setLoading] = useState(true);
   const [modalWl, setModalWl] = useState<Partial<PipelineWatchlist> | null>(null);
   const [showModal, setShowModal] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
 
   // ── Live level-change highlights (transient, 3s per symbol) ──────────────
   const [liveDirections, setLiveDirections] = useState<Record<string, string>>({});
@@ -714,6 +734,14 @@ function PipelineTab() {
   const loadSilent = useCallback(() => load(true), [load]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setRefreshTick((tick) => tick + 1);
+      void loadSilent();
+    }, WATCHLIST_POLL_MS);
+    return () => window.clearInterval(interval);
+  }, [loadSilent]);
 
   function openCreate() { setModalWl({}); setShowModal(true); }
   function openEdit(wl: PipelineWatchlist) { setModalWl(wl); setShowModal(true); }
@@ -807,6 +835,7 @@ function PipelineTab() {
                       onEdit={openEdit}
                       onDelete={handleDelete}
                       onRefreshed={loadSilent}
+                      refreshTick={refreshTick}
                       liveDirections={liveDirections}
                     />
                   ))}
@@ -831,6 +860,7 @@ function PipelineTab() {
                     onEdit={openEdit}
                     onDelete={handleDelete}
                     onRefreshed={loadSilent}
+                    refreshTick={refreshTick}
                   />
                 ))}
               </div>

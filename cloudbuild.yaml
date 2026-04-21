@@ -34,6 +34,12 @@ steps:
       - '8080'
       - '--timeout'
       - '300'
+      # Cloud Run normally throttles CPU / scales to zero between requests.
+      # This service embeds Celery worker + beat, so one warm instance with
+      # always-on CPU is required for recurring pipeline scans to keep running.
+      - '--min-instances'
+      - '1'
+      - '--no-cpu-throttling'
       - '--cpu-boost'
       - '--memory'
       - '2Gi'
