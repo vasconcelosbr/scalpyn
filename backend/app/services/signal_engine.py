@@ -1,14 +1,11 @@
 """Signal Engine — evaluates trading entry conditions based on config rules."""
 
 import logging
-import operator as op
 from typing import Dict, Any, List
 
-logger = logging.getLogger(__name__)
+from .rule_engine import RuleEngine
 
-OPERATORS = {
-    "<=": op.le, ">=": op.ge, "<": op.lt, ">": op.gt, "=": op.eq, "!=": op.ne,
-}
+logger = logging.getLogger(__name__)
 
 
 class SignalEngine:
@@ -18,6 +15,7 @@ class SignalEngine:
         self.config = signal_config
         self.logic = signal_config.get("logic", "AND")
         self.conditions = signal_config.get("conditions", [])
+        self.rule_engine = RuleEngine()
 
     def evaluate(self, indicators: Dict[str, Any], alpha_score: float) -> Dict[str, Any]:
         """Evaluate all signal conditions.
@@ -68,10 +66,10 @@ class SignalEngine:
         matched.extend(optional_matched)
 
         if self.logic == "AND":
-            # All required pass (already checked) + at least one optional pass
-            signal = len(optional_matched) > 0 or len(optional_conditions) == 0
+            # Relational entry logic uses strict AND semantics: every enabled
+            # optional condition in the group must pass.
+            signal = len(optional_matched) == len(optional_conditions)
         elif self.logic == "OR":
-            # All required pass + any optional pass
             signal = len(optional_matched) > 0 or len(optional_conditions) == 0
         else:
             signal = False
@@ -87,31 +85,8 @@ class SignalEngine:
         }
 
     def _evaluate_condition(self, cond: Dict[str, Any], data: Dict[str, Any]) -> bool:
-        indicator = cond.get("indicator", "")
-        operator_str = cond.get("operator", "")
-        target = cond.get("value")
-
-        actual = data.get(indicator)
-        if actual is None:
-            return False
-
-        # String comparison
-        if isinstance(target, str):
-            if operator_str == "=":
-                return str(actual) == target
-            elif operator_str == "!=":
-                return str(actual) != target
-            return False
-
-        # Numeric comparison
-        try:
-            actual = float(actual)
-            target = float(target) if target is not None else 0
-        except (ValueError, TypeError):
-            return False
-
-        op_func = OPERATORS.get(operator_str)
-        return op_func(actual, target) if op_func else False
+        passed, _ = self.rule_engine.evaluate_condition(cond, data, field_key="indicator")
+        return passed
 
     def _infer_direction(self, data: Dict[str, Any]) -> str:
         """Infer trade direction from indicators."""

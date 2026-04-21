@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_INDICATORS = {
     "rsi": {"enabled": True, "period": 14},
     "adx": {"enabled": True, "period": 14},
-    "ema": {"enabled": True, "periods": [9, 21, 50, 200]},
+    "ema": {"enabled": True, "periods": [5, 9, 21, 50, 200]},
     "atr": {"enabled": True, "period": 14},
     "macd": {"enabled": True, "fast": 12, "slow": 26, "signal": 9},
     "vwap": {"enabled": True, "reset_period": "daily"},
