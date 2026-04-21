@@ -10,6 +10,7 @@ export type WSChannel =
   | "market"
   | "signals"
   | "trades"
+  | "decisions"
   | "positions"
   | "alerts"
   | "engine"
@@ -75,6 +76,27 @@ export interface PriceUpdateMessage extends WSMessage {
   price: number;
   change_24h: number;
   score: number;
+}
+
+export interface DecisionItem {
+  id: number;
+  symbol: string;
+  strategy: string;
+  timeframe?: string | null;
+  score?: number | null;
+  decision: "ALLOW" | "BLOCK";
+  l1_pass?: boolean | null;
+  l2_pass?: boolean | null;
+  l3_pass?: boolean | null;
+  reasons?: Record<string, unknown>;
+  metrics?: Record<string, unknown>;
+  latency_ms?: number | null;
+  created_at: string;
+}
+
+export interface DecisionCreatedMessage extends WSMessage {
+  type: "decision.created";
+  data: DecisionItem;
 }
 
 export type AlertSeverity = "info" | "warning" | "critical" | "emergency";
