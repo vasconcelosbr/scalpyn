@@ -454,6 +454,9 @@ def _validate_profile_config(config: Dict[str, Any]) -> Dict[str, Any]:
             "signal": weights.get("signal", 25)
         },
         "rules": scoring.get("rules", []),
+        # New: explicit list of global scoring rule IDs activated for this profile
+        # (set via the Scoring tab, decoupled from filter conditions)
+        "selected_rule_ids": scoring.get("selected_rule_ids", []),
         "thresholds": scoring.get("thresholds", {
             "strong_buy": 80,
             "buy": 65,

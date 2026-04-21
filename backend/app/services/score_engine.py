@@ -92,10 +92,14 @@ def resolve_profile_scoring_rules(
 ) -> List[Dict[str, Any]]:
     """Resolve which global score rules should apply to a profile.
 
-    Profiles can explicitly reference canonical score rules via ``filters.conditions[].rule_id``.
-    When those explicit references are absent, this falls back to matching legacy free-form
-    filter conditions by field/operator/value against the global rules. If no explicit or
-    legacy match is found, the full global rule set remains active for backward compatibility.
+    Priority order (first non-empty wins):
+    1. ``scoring.selected_rule_ids`` — explicit list of rule IDs chosen in the
+       Scoring tab of the profile editor (new contract, decoupled from Filters).
+    2. ``filters.conditions[].rule_id`` — legacy coupling where filter conditions
+       referenced global rules; kept for backward compatibility.
+    3. Free-form field/operator/value match against global rules — for even
+       older profiles that pre-date rule IDs in conditions.
+    4. Full global rule set — fallback when no match is found.
     """
     if not global_rules:
         return []
@@ -103,9 +107,19 @@ def resolve_profile_scoring_rules(
     if not profile_config:
         return list(global_rules)
 
+    # ── 1. New: scoring.selected_rule_ids ────────────────────────────────────
+    scoring_section = profile_config.get("scoring") or {}
+    selected_ids_new = scoring_section.get("selected_rule_ids") or []
+    if selected_ids_new:
+        selected = [
+            rule for rule in global_rules
+            if str(rule.get("id")) in {str(rid) for rid in selected_ids_new}
+        ]
+        if selected:
+            return selected
+
+    # ── 2. Legacy: filters.conditions[].rule_id ───────────────────────────────
     conditions = ((profile_config.get("filters") or {}).get("conditions") or [])
-    if not conditions:
-        return list(global_rules)
 
     selected_rule_ids = {
         str(cond.get("rule_id"))
@@ -120,6 +134,10 @@ def resolve_profile_scoring_rules(
         if selected:
             return selected
 
+    if not conditions:
+        return list(global_rules)
+
+    # ── 3. Legacy: field/operator/value matching ──────────────────────────────
     matched_rules: List[Dict[str, Any]] = []
     seen_ids: Set[str] = set()
     for cond in conditions:
