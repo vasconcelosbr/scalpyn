@@ -427,7 +427,9 @@ async def toggle_watchlist_profile(
 
 def _validate_profile_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """Validate and normalize profile configuration."""
-    validated = {}
+    validated = {
+        "default_timeframe": config.get("default_timeframe", "5m")
+    }
 
     # Validate filters
     filters = config.get("filters", {})
