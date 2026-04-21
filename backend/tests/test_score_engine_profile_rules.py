@@ -118,3 +118,9 @@ def test_validate_profile_config_preserves_scoring_enabled_toggle():
     validated = _validate_profile_config({"scoring": {"enabled": False}})
 
     assert validated["scoring"]["enabled"] is False
+
+
+def test_validate_profile_config_preserves_default_timeframe():
+    validated = _validate_profile_config({"default_timeframe": "15m"})
+
+    assert validated["default_timeframe"] == "15m"
