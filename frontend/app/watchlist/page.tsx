@@ -471,6 +471,10 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
   const [expanded, setExpanded] = useState(false);
   const [assets, setAssets] = useState<PipelineAsset[]>([]);
   const [indicatorCols, setIndicatorCols] = useState<IndicatorColumn[]>([]);
+  // Alpha Score visibility: false for POOL/custom (Stage 0) and L1 (Stage 1)
+  const [showScore, setShowScore] = useState<boolean>(
+    ['L2', 'L3'].includes((wl.level || '').toUpperCase())
+  );
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -489,13 +493,17 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
   const loadAssets = useCallback(async (triggerParentRefresh = false) => {
     setLoadingAssets(true);
     try {
-      const data = await apiFetch<{ assets: PipelineAsset[]; profile_indicators?: IndicatorColumn[] }>(`/watchlists/${wl.id}/assets`);
+      const data = await apiFetch<{ assets: PipelineAsset[]; profile_indicators?: IndicatorColumn[]; show_score?: boolean }>(`/watchlists/${wl.id}/assets`);
       // Always render highest alpha_score first
       const sorted = [...(data.assets ?? [])].sort(
         (a, b) => (b.alpha_score ?? 0) - (a.alpha_score ?? 0)
       );
       setAssets(sorted);
       setIndicatorCols(data.profile_indicators ?? []);
+      // Use API-provided show_score flag; fall back to level-based heuristic
+      if (data.show_score !== undefined) {
+        setShowScore(data.show_score);
+      }
       if (triggerParentRefresh && data.assets.length > 0) {
         onRefreshed();
       }
@@ -633,6 +641,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
               onRefresh={handleRefresh}
               refreshing={refreshing}
               liveDirections={liveDirections}
+              showScore={showScore}
             />
           )}
         </div>

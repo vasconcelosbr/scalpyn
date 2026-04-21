@@ -385,12 +385,14 @@ export function PipelineAssetTable({
   onRefresh,
   refreshing,
   liveDirections = {},
+  showScore = true,
 }: {
   assets: PipelineAssetWithScore[];
   indicatorCols?: IndicatorColumn[];
   onRefresh: () => void;
   refreshing: boolean;
   liveDirections?: Record<string, string>;
+  showScore?: boolean;
 }) {
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
 
@@ -421,7 +423,9 @@ export function PipelineAssetTable({
           <tr className="border-b border-[#1A2035] bg-[#060810] sticky top-0">
             <th className="w-8 px-2 py-2.5" />
             <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium">Symbol</th>
-            <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[130px]">Score</th>
+            {showScore && (
+              <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[130px]">Score</th>
+            )}
             {visibleColumns.map((col) => (
               <th key={col.key} className="px-3 py-2.5 text-right text-[#4B5563] font-medium whitespace-nowrap">
                 {col.label}
@@ -500,7 +504,7 @@ export function PipelineAssetTable({
                         </span>
                       )}
                     </div>
-                    {rules.length > 0 && (
+                    {showScore && rules.length > 0 && (
                       <div className="mt-0.5 text-[10px] text-[#334155]">
                         {earnedPts(rules).toFixed(0)}/{totalPts(rules).toFixed(0)} pts
                         {weakness ? ` · ${weakness}` : ''}
@@ -508,10 +512,12 @@ export function PipelineAssetTable({
                     )}
                   </td>
 
-                  {/* Score bar */}
-                  <td className="px-3 py-2.5">
-                    <ScoreBar score={score} />
-                  </td>
+                   {/* Score bar — hidden for Stage 0 (POOL/custom) and Stage 1 (L1) */}
+                  {showScore && (
+                    <td className="px-3 py-2.5">
+                      <ScoreBar score={score} />
+                    </td>
+                  )}
 
                   {/* Dynamic indicator columns from the profile */}
                   {visibleColumns.map((col) => (
@@ -539,7 +545,7 @@ export function PipelineAssetTable({
                 {/* Drilldown row */}
                 {isExpanded && (
                   <tr className="border-b border-[#1A2035]">
-                    <td colSpan={4 + visibleColumns.length} className="p-0">
+                    <td colSpan={2 + (showScore ? 1 : 0) + 1 + visibleColumns.length} className="p-0">
                       <DrilldownPanel rules={rules} score={score} />
                     </td>
                   </tr>

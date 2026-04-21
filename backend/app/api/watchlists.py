@@ -251,7 +251,13 @@ def _uses_pipeline_filters(level: Optional[str]) -> bool:
 def _extract_profile_indicator_fields(profile_config: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
     """
     Extract the ordered list of unique indicator fields referenced in a profile's
-    filters + signals conditions.
+    filter conditions (Filters tab only — not Signals).
+
+    Watchlist columns are driven exclusively by the Filter Conditions defined in
+    the profile, so users can see the values of every field they are filtering on.
+    Signal/entry-trigger conditions are not included because they apply at a
+    different stage of the pipeline.
+
     Returns [{"key": "_meta:volume_24h", "label": "Volume 24h", "field": "volume_24h"}, ...]
     """
     if not profile_config:
@@ -275,12 +281,8 @@ def _extract_profile_indicator_fields(profile_config: Optional[Dict[str, Any]]) 
                 "field": field,
             })
 
-    # Collect from filters
+    # Collect from Filter Conditions ONLY (not Signals)
     for cond in profile_config.get("filters", {}).get("conditions", []):
-        _add(cond.get("field", ""))
-
-    # Collect from signals
-    for cond in profile_config.get("signals", {}).get("conditions", []):
         _add(cond.get("field", ""))
 
     # Auto-expand EMA columns: if any EMA field is referenced in the profile,
@@ -1435,6 +1437,8 @@ async def get_watchlist_assets(
         "assets":             enriched,
         "total":              len(enriched),
         "profile_indicators": profile_indicators,  # [{key, label, field}, ...]
+        # Alpha Score visible only at L2 (Stage 2) and L3 (Stage 3).
+        "show_score":         (wl.level or "").upper() in {"L2", "L3"},
     }
 
 

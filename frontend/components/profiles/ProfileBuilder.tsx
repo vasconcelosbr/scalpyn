@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { ArrowLeft, Save, Play, ShieldOff, Zap, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Save, Play, ShieldOff, Zap, Plus, Trash2, Target } from "lucide-react";
 import { apiPost } from "@/lib/api";
 import { ConditionBuilder, type ScoreRule } from "./ConditionBuilder";
 import { WeightSliders } from "./WeightSliders";
@@ -136,18 +136,6 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     [globalScoreConfig]
   );
 
-  const scoreRulePointsById = useMemo(
-    () => new Map(scoreRules.map((rule) => [rule.id, Number(rule.points ?? 0)])),
-    [scoreRules]
-  );
-
-  const filterPointsTotal = useMemo(
-    () => (config.filters?.conditions ?? []).reduce((sum: number, condition: Condition & { rule_id?: string; points?: number }) => {
-      return sum + Number(scoreRulePointsById.get(condition.rule_id || "") ?? condition.points ?? 0);
-    }, 0),
-    [config.filters?.conditions, scoreRulePointsById]
-  );
-
   const handleSave = async () => {
     if (!name.trim()) { alert("Profile name is required"); return; }
     setSaving(true);
@@ -185,6 +173,15 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
 
   const updateWeights  = (weights: any) =>
     setConfig((c: any) => ({ ...c, scoring: { ...c.scoring, weights } }));
+
+  const toggleScoringRuleId = (ruleId: string) =>
+    setConfig((c: any) => {
+      const current: string[] = c.scoring?.selected_rule_ids ?? [];
+      const next = current.includes(ruleId)
+        ? current.filter((id: string) => id !== ruleId)
+        : [...current, ruleId];
+      return { ...c, scoring: { ...c.scoring, selected_rule_ids: next } };
+    });
 
   const toggleScoringEnabled = (enabled: boolean) => {
     setScoringEnabled(enabled);
@@ -519,8 +516,8 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="font-semibold text-[var(--text-primary)]">Filter Conditions <span className="text-[12px] text-[var(--text-secondary)] font-medium">[{filterPointsTotal} / 100 pts]</span></h3>
-                  <p className="text-[12px] text-[var(--text-secondary)]">Assets must pass these conditions to be included</p>
+                  <h3 className="font-semibold text-[var(--text-primary)]">Filter Conditions</h3>
+                  <p className="text-[12px] text-[var(--text-secondary)]">Assets must pass these binary conditions to be included. Scoring rules are configured in the Scoring tab.</p>
                 </div>
                 <select
                   className="input w-24"
@@ -538,47 +535,130 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                 showRequired={false}
                 defaultTimeframe={config.default_timeframe || "5m"}
                 scoreRules={scoreRules}
-                showPoints
               />
             </div>
           )}
 
           {/* ── SCORING ── */}
           {activeTab === "scoring" && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="font-semibold text-[var(--text-primary)]">Alpha Score Weights</h3>
-                  <p className="text-[12px] text-[var(--text-secondary)]">Customize how the Alpha Score is calculated</p>
-                </div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <span className="text-[12px] text-[var(--text-secondary)]">
-                    {scoringEnabled ? "Enabled" : "Disabled"}
-                  </span>
-                  <div
-                    className={`relative w-10 h-5 rounded-full transition-colors ${
-                      scoringEnabled ? "bg-[var(--accent-primary)]" : "bg-[var(--bg-secondary)]"
-                    }`}
-                    onClick={() => toggleScoringEnabled(!scoringEnabled)}
-                  >
-                    <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                      scoringEnabled ? "translate-x-5" : "translate-x-0.5"
-                    }`} />
+            <div className="space-y-6">
+              {/* Score Engine Configuration — rule selection */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-semibold text-[var(--text-primary)]">Score Engine Configuration</h3>
+                    <p className="text-[12px] text-[var(--text-secondary)]">
+                      Select which global scoring rules apply to this profile. Unselected rules will not affect the Alpha Score.
+                      {scoreRules.length === 0 && " (Configure scoring rules in Settings → Score Engine)"}
+                    </p>
                   </div>
-                </label>
-              </div>
-              {scoringEnabled ? (
-                <WeightSliders
-                  weights={config.scoring?.weights ?? { liquidity: 25, market_structure: 25, momentum: 25, signal: 25 }}
-                  onChange={updateWeights}
-                />
-              ) : (
-                <div className="p-8 text-center bg-[var(--bg-secondary)] rounded-lg">
-                  <p className="text-[var(--text-tertiary)] text-[13px]">
-                    Alpha Score Weights are disabled. Default weights will be used.
-                  </p>
                 </div>
-              )}
+                {scoreRules.length > 0 ? (
+                  <div className="space-y-1.5" data-testid="scoring-rule-selection">
+                    {scoreRules.map((rule) => {
+                      const selectedIds: string[] = config.scoring?.selected_rule_ids ?? [];
+                      const isExplicitlySelected = selectedIds.includes(rule.id);
+                      return (
+                        <div
+                          key={rule.id}
+                          className={`flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
+                            isExplicitlySelected
+                              ? "bg-[var(--accent-primary)]/8 border-[var(--accent-primary)]/30"
+                              : selectedIds.length > 0
+                              ? "bg-[var(--bg-secondary)] border-[var(--border-subtle)] opacity-50"
+                              : "bg-[var(--bg-secondary)] border-[var(--border-subtle)]"
+                          }`}
+                          onClick={() => toggleScoringRuleId(rule.id)}
+                          data-testid={`scoring-rule-toggle-${rule.id}`}
+                        >
+                          <div className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 ${
+                            isExplicitlySelected
+                              ? "bg-[var(--accent-primary)] border-[var(--accent-primary)]"
+                              : "border-[var(--border-default)]"
+                          }`}>
+                            {isExplicitlySelected && (
+                              <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                              </svg>
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-[13px] font-medium text-[var(--text-primary)]">
+                              {rule.indicator}
+                            </span>
+                            <span className="text-[11px] text-[var(--text-tertiary)] ml-2">
+                              {rule.operator} {rule.min != null && rule.max != null ? `${rule.min}–${rule.max}` : rule.value ?? ""}
+                            </span>
+                          </div>
+                          <span className="text-[11px] text-[var(--text-tertiary)] capitalize shrink-0">
+                            {(rule.category || "").replace("_", " ")}
+                          </span>
+                          <span className="text-[12px] font-mono font-semibold text-[var(--accent-primary)] shrink-0">
+                            {rule.points} pts
+                          </span>
+                        </div>
+                      );
+                    })}
+                    {(config.scoring?.selected_rule_ids ?? []).length > 0 && (
+                      <button
+                        className="text-[11px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] mt-1"
+                        onClick={() => setConfig((c: any) => ({ ...c, scoring: { ...c.scoring, selected_rule_ids: [] } }))}
+                        data-testid="scoring-rules-clear-selection"
+                      >
+                        Clear selection (use all rules)
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-4 text-center bg-[var(--bg-secondary)] rounded-lg border border-dashed border-[var(--border-subtle)]">
+                    <Target className="w-6 h-6 text-[var(--text-tertiary)] mx-auto mb-2" />
+                    <p className="text-[12px] text-[var(--text-tertiary)]">
+                      No global scoring rules configured. Go to{" "}
+                      <a href="/settings/score" className="text-[var(--accent-primary)] hover:underline">
+                        Settings → Score Engine
+                      </a>{" "}
+                      to add scoring rules.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Alpha Score Weights */}
+              <div className="space-y-3 pt-4 border-t border-[var(--border-subtle)]">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-semibold text-[var(--text-primary)]">Alpha Score Weights</h3>
+                    <p className="text-[12px] text-[var(--text-secondary)]">Customize how the Alpha Score categories are weighted</p>
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <span className="text-[12px] text-[var(--text-secondary)]">
+                      {scoringEnabled ? "Enabled" : "Disabled"}
+                    </span>
+                    <div
+                      className={`relative w-10 h-5 rounded-full transition-colors ${
+                        scoringEnabled ? "bg-[var(--accent-primary)]" : "bg-[var(--bg-secondary)]"
+                      }`}
+                      onClick={() => toggleScoringEnabled(!scoringEnabled)}
+                    >
+                      <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                        scoringEnabled ? "translate-x-5" : "translate-x-0.5"
+                      }`} />
+                    </div>
+                  </label>
+                </div>
+                {scoringEnabled ? (
+                  <WeightSliders
+                    weights={config.scoring?.weights ?? { liquidity: 25, market_structure: 25, momentum: 25, signal: 25 }}
+                    onChange={updateWeights}
+                  />
+                ) : (
+                  <div className="p-8 text-center bg-[var(--bg-secondary)] rounded-lg">
+                    <p className="text-[var(--text-tertiary)] text-[13px]">
+                      Alpha Score Weights are disabled. Default weights will be used.
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

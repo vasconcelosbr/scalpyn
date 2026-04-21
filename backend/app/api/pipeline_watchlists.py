@@ -11,7 +11,7 @@ Endpoints:
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -231,7 +231,10 @@ async def get_pipeline_assets(
     # ── 2. Profile → filter conditions ───────────────────────────────────────
     filter_conditions: List[Dict] = []
     filter_logic: str = "AND"
-    profile_cond_fields: set = set()
+    # Columns come from Filter conditions ONLY (not Signals), per new contract.
+    # Signals conditions continue to be used for signal evaluation but not
+    # for deriving dynamic watchlist columns.
+    profile_filter_fields: List[str] = []  # preserves insertion order for column display
 
     if wl.profile_id:
         prof = (await db.execute(
@@ -244,12 +247,17 @@ async def get_pipeline_assets(
             filter_conditions = filter_cfg.get("conditions", [])
             filter_logic = filter_cfg.get("logic", "AND")
 
-            all_conds: List[Dict] = list(filter_conditions)
-            all_conds += (cfg.get("signals", {}) or {}).get("conditions", [])
-            for cond in all_conds:
+            # Only use filter fields for column definitions
+            seen_filter_fields: Set[str] = set()
+            for cond in filter_conditions:
                 f = cond.get("field", "")
-                if f:
-                    profile_cond_fields.add(f)
+                if f and f not in seen_filter_fields:
+                    profile_filter_fields.append(f)
+                    seen_filter_fields.add(f)
+
+    # Alpha Score visibility: show only for L2 and L3 (Stage 2 and Stage 3).
+    # POOL/custom (Stage 0) and L1 (Stage 1) are pure filter stages.
+    show_score = (wl.level or "").upper() in {"L2", "L3"}
 
     # ── 3. Fetch FULL indicator data from DB ──────────────────────────────────
     ind_map: Dict[str, Dict] = {}
@@ -285,23 +293,17 @@ async def get_pipeline_assets(
             logger.warning("pipeline assets: indicator fetch failed: %s", exc)
 
     # ── 3b. Build dynamic column definitions ─────────────────────────────────
+    # Columns are derived from Filter Conditions only (preserving order).
     profile_indicators: List[Dict[str, str]] = []
     seen_cols: set = set()
 
-    for field in sorted(profile_cond_fields):
+    for field in profile_filter_fields:
         if field in _META_FIELDS:
             m = _META_FIELDS[field]
             profile_indicators.append({"key": m["key"], "label": m["label"], "field": field})
         else:
             label = _INDICATOR_LABELS.get(field, field.upper())
             profile_indicators.append({"key": field, "label": label, "field": field})
-        seen_cols.add(field)
-
-    for field in sorted(all_ind_keys):
-        if field in seen_cols or field in _META_FIELDS:
-            continue
-        label = _INDICATOR_LABELS.get(field, field.replace("_", " ").title())
-        profile_indicators.append({"key": field, "label": label, "field": field})
         seen_cols.add(field)
 
     # ── 3c. Load score engine for per-asset rule breakdown ────────────────────
@@ -418,6 +420,9 @@ async def get_pipeline_assets(
         "asset_count":       len(assets),
         "assets":            assets,
         "profile_indicators": profile_indicators,
+        # Alpha Score is visible only at L2 (Stage 2) and L3 (Stage 3).
+        # POOL/custom (Stage 0) and L1 (Stage 1) are filter-only stages.
+        "show_score":        show_score,
     }
 
 
