@@ -21,6 +21,8 @@ export interface ScoreRule {
   category: string;
 }
 
+type IndicatorValue = number | boolean | string | null | undefined;
+
 export interface PipelineAssetWithScore {
   id: string;
   symbol: string;
@@ -32,7 +34,7 @@ export interface PipelineAssetWithScore {
   level_direction: string | null;
   blocked: boolean;
   block_reasons: string[];
-  indicators: Record<string, any>;
+  indicators: Record<string, IndicatorValue>;
   score_rules: ScoreRule[];
   score_classification?: string | null;
 }
@@ -82,7 +84,7 @@ function normalizeIndicatorKey(key: string): string {
 }
 
 /** Color-coded indicator cell value + emoji dot */
-function getIndicatorColor(key: string, value: any): { text: string; cls: string; dot: string } {
+function getIndicatorColor(key: string, value: IndicatorValue): { text: string; cls: string; dot: string } {
   if (value == null) return { text: '—', cls: 'text-[#4B5563]', dot: '' };
   const normalizedKey = normalizeIndicatorKey(key);
 
@@ -186,7 +188,7 @@ function getIndicatorColor(key: string, value: any): { text: string; cls: string
   }
 }
 
-function fmtIndValue(key: string, value: any): string {
+function fmtIndValue(key: string, value: IndicatorValue): string {
   if (value == null) return '—';
   const normalizedKey = normalizeIndicatorKey(key);
   if (typeof value === 'boolean') {
@@ -253,7 +255,7 @@ function scoreBarColor(score: number, classification?: string | null, blocked: b
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function IndicatorCell({ column, value, rules }: { column: IndicatorColumn; value: any; rules: ScoreRule[] }) {
+function IndicatorCell({ column, value, rules }: { column: IndicatorColumn; value: IndicatorValue; rules: ScoreRule[] }) {
   const { text, cls, dot } = getIndicatorColor(column.key, value);
   const normalizedKey = normalizeIndicatorKey(column.key);
   // Deduplicate alias candidates because meta columns may resolve to the same rule key.
@@ -475,9 +477,9 @@ export function PipelineAssetTable({
             const hasDivergence =
               rules.some(r => r.indicator === 'macd_histogram' && !r.passed) && score >= 65;
             const hasVolSpike =
-              (asset.indicators?.['volume_spike'] ?? 0) > 2.5;
+              Number(asset.indicators?.['volume_spike'] ?? 0) > 2.5;
             const hasHighADX =
-              (asset.indicators?.['adx'] ?? 0) > 40;
+              Number(asset.indicators?.['adx'] ?? 0) > 40;
 
             const rowAlert = isBlocked        ? 'border-l-2 border-l-[#F87171]/60'
                            : hasDivergence    ? 'border-l-2 border-l-[#FBBF24]/60'
@@ -486,7 +488,7 @@ export function PipelineAssetTable({
                            : '';
 
             const getColumnValue = (column: IndicatorColumn) => {
-              const topLevelValue = (asset as unknown as Record<string, any>)[column.field];
+              const topLevelValue = (asset as unknown as Record<string, unknown>)[column.field] as IndicatorValue;
               return asset.indicators?.[column.key]
                 ?? asset.indicators?.[normalizeIndicatorKey(column.key)]
                 ?? asset.indicators?.[column.field]
