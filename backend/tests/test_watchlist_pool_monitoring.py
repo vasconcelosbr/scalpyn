@@ -1,11 +1,14 @@
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.api.watchlists import (
+    _is_upstream_scan_newer,
     _extract_profile_indicator_fields,
     _passes_profile_filters,
+    _should_refresh_for_upstream_delta,
     _uses_pipeline_filters,
 )
 from app.utils.pipeline_profile_filters import effective_pipeline_level
@@ -93,6 +96,35 @@ def test_show_score_visible_for_l2_and_l3():
     """Stage 2 (L2) and Stage 3 (L3) must show Alpha Score."""
     assert _make_level_wl_show_score("L2") is True
     assert _make_level_wl_show_score("L3") is True
+
+
+def test_monitoring_boards_refresh_on_any_upstream_symbol_delta():
+    assert _should_refresh_for_upstream_delta(
+        persisted_symbols={"BTC_USDT"},
+        upstream_symbols={"BTC_USDT", "ETH_USDT"},
+        exact_match=True,
+    ) is True
+
+
+def test_pipeline_levels_refresh_only_when_persisted_symbol_is_no_longer_upstream():
+    assert _should_refresh_for_upstream_delta(
+        persisted_symbols={"BTC_USDT"},
+        upstream_symbols={"BTC_USDT", "ETH_USDT"},
+        exact_match=False,
+    ) is False
+    assert _should_refresh_for_upstream_delta(
+        # OFC_USDT mirrors the reported ghost symbol that should be evicted.
+        persisted_symbols={"BTC_USDT", "OFC_USDT"},
+        upstream_symbols={"BTC_USDT"},
+        exact_match=False,
+    ) is True
+
+
+def test_child_snapshot_refreshes_when_parent_scan_is_newer():
+    now = datetime.now(timezone.utc)
+    assert _is_upstream_scan_newer(now, now - timedelta(minutes=1)) is True
+    assert _is_upstream_scan_newer(now, now) is False
+    assert _is_upstream_scan_newer(None, now - timedelta(minutes=1)) is False
 
 
 def test_scoring_selected_rule_ids_takes_priority_over_filter_rule_ids():
@@ -217,4 +249,3 @@ def test_profile_engine_apply_filters_lenient_passes_no_indicator_asset():
     asset_no_ind = {"symbol": "PEPE_USDT", "indicators": {}}
     result = engine._apply_filters([asset_no_ind])  # default strict_indicators=False
     assert len(result) == 1, "Lenient mode should not reject asset with missing indicators"
-
