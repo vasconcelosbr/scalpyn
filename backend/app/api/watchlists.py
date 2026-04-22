@@ -765,7 +765,11 @@ async def _load_watchlist_profile_config(
     wl: PipelineWatchlist,
     db: AsyncSession,
 ) -> Optional[Dict[str, Any]]:
-    """Load the watchlist profile config when one is attached."""
+    """Load the attached profile config for a watchlist.
+
+    Returns ``None`` when the watchlist has no profile or when the referenced
+    profile no longer exists; otherwise returns the profile ``config`` dict.
+    """
     if not wl.profile_id:
         return None
 
@@ -782,7 +786,12 @@ async def _load_active_watchlist_assets(
     watchlist_id: UUID,
     db: AsyncSession,
 ) -> List[PipelineWatchlistAsset]:
-    """Load active assets for a watchlist snapshot."""
+    """Load active assets for a watchlist snapshot.
+
+    Active assets are rows whose ``level_direction`` is ``NULL`` or ``"up"``.
+    Results are ordered by descending alpha score so the API and UI keep the
+    highest-ranked assets first while still returning unrated rows last.
+    """
     assets_result = await db.execute(
         select(PipelineWatchlistAsset)
         .where(
@@ -807,6 +816,11 @@ def _should_refresh_for_upstream_delta(
     refreshes on any addition or removal. Filtered pipeline levels are expected to
     be subsets of their upstream universe, so `exact_match=False` only refreshes
     when a persisted symbol no longer exists upstream.
+
+    Args:
+        persisted_symbols: Active symbols currently stored for the watchlist.
+        upstream_symbols: Symbols currently available from the watchlist source.
+        exact_match: True for monitoring boards, False for filtered L1/L2/L3 stages.
     """
     if exact_match:
         return persisted_symbols != upstream_symbols
@@ -817,7 +831,12 @@ def _is_upstream_scan_newer(
     parent_last_scanned_at: Optional[datetime],
     child_last_scanned_at: Optional[datetime],
 ) -> bool:
-    """True when the upstream watchlist was scanned after its child snapshot."""
+    """True when the upstream watchlist was scanned after its child snapshot.
+
+    ``None`` for the parent means there is no known upstream scan yet. ``None``
+    for the child means the child snapshot has never been refreshed and should
+    therefore be considered stale as soon as the parent has a scan timestamp.
+    """
     return bool(
         parent_last_scanned_at and (
             child_last_scanned_at is None or parent_last_scanned_at > child_last_scanned_at
@@ -834,7 +853,16 @@ async def _auto_refresh_watchlist_assets_if_needed(
     db: AsyncSession,
     depth: int = 0,
 ) -> List[PipelineWatchlistAsset]:
-    """Repair stale pipeline snapshots before returning assets to the UI."""
+    """Repair stale pipeline snapshots before returning assets to the UI.
+
+    Args:
+        wl: Watchlist being served.
+        assets: Current active snapshot rows for ``wl``.
+        effective_level: Resolved stage name ("custom", "L1", "L2", or "L3").
+        user_id: Owner used to validate upstream watchlist lookups.
+        db: Async database session.
+        depth: Current recursion depth, capped by ``MAX_WATCHLIST_AUTO_REFRESH_DEPTH``.
+    """
     if not wl.auto_refresh or depth > MAX_WATCHLIST_AUTO_REFRESH_DEPTH:
         return assets
 
