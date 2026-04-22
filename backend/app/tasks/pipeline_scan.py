@@ -1271,6 +1271,8 @@ async def _run_pipeline_scan():
                             wl.name, level, len(missing_symbols),
                         )
                     await _replace_rejection_snapshot(db, wl_id, wl.user_id, wl.profile_id, [])
+
+                if effective_level in ("POOL", "L1", "L2"):
                     effective_profile_config = profile_config
                     selected_filter_conditions = None
                     if profile_config:
