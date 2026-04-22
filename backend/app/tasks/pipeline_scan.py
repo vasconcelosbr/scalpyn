@@ -571,10 +571,17 @@ def _jsonable(value):
 def _decision_reason_map(processed: dict, has_signal_conditions: bool) -> dict:
     reasons: dict[str, str] = {}
 
-    for rule in processed.get("_evaluation", {}).get("score_matched_rules", []):
-        indicator = rule.get("indicator")
-        if indicator:
-            reasons[indicator] = "OK"
+    evaluation = processed.get("_evaluation") or {}
+    for rule in evaluation.get("score_matched_rules") or []:
+        reason_key = None
+        if isinstance(rule, dict):
+            reason_key = rule.get("indicator") or rule.get("id")
+        elif isinstance(rule, str):
+            reason_key = rule
+        elif rule is not None:
+            reason_key = str(rule)
+        if reason_key:
+            reasons[str(reason_key)] = "OK"
 
     signal = processed.get("signal", {})
     for matched in signal.get("matched_conditions", []):
