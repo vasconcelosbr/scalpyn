@@ -1222,7 +1222,7 @@ async def _run_pipeline_scan():
                             "[PipelineScan] %s (%s): appended %d symbols without market data so the monitoring board shows the full pool",
                             wl.name, level, len(missing_symbols),
                         )
-                    await _replace_rejection_snapshot(db, wl_id, user_id, wl.profile_id, [])
+                    await _replace_rejection_snapshot(db, wl_id, wl.user_id, wl.profile_id, [])
 
                 if effective_level in ("POOL", "L1", "L2"):
                     effective_profile_config = profile_config
@@ -1272,7 +1272,7 @@ async def _run_pipeline_scan():
                         apply_profile_filters=False,
                     )
                     profile_rejected = len(rejected_rows)
-                    await _replace_rejection_snapshot(db, wl_id, user_id, wl.profile_id, rejected_rows)
+                    await _replace_rejection_snapshot(db, wl_id, wl.user_id, wl.profile_id, rejected_rows)
 
                     # ── FUNNEL SUMMARY ────────────────────────────────────────
                     logger.info(
@@ -1320,7 +1320,7 @@ async def _run_pipeline_scan():
                         stage=effective_level,
                         profile_id=str(wl.profile_id) if wl.profile_id else None,
                     )
-                    await _replace_rejection_snapshot(db, wl_id, user_id, wl.profile_id, rejected_rows)
+                    await _replace_rejection_snapshot(db, wl_id, wl.user_id, wl.profile_id, rejected_rows)
                     decisions = _evaluate_l3_decisions(
                         profile_passed,
                         profile_config,
