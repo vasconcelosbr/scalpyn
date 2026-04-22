@@ -578,7 +578,7 @@ def _decision_reason_map(processed: dict, has_signal_conditions: bool) -> dict:
             reason_key = rule.get("indicator") or rule.get("id")
         elif isinstance(rule, str):
             reason_key = rule
-        elif rule is not None:
+        elif isinstance(rule, (int, float, bool)):
             reason_key = str(rule)
         if reason_key:
             reasons[str(reason_key)] = "OK"
