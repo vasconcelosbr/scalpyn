@@ -760,6 +760,127 @@ async def _get_base_symbols(
     return []
 
 
+async def _load_watchlist_profile_config(
+    wl: PipelineWatchlist,
+    db: AsyncSession,
+) -> Optional[Dict[str, Any]]:
+    """Load the watchlist profile config when one is attached."""
+    if not wl.profile_id:
+        return None
+
+    from ..models.profile import Profile
+
+    prof_result = await db.execute(
+        select(Profile).where(Profile.id == wl.profile_id)
+    )
+    prof = prof_result.scalars().first()
+    return prof.config if prof else None
+
+
+async def _load_active_watchlist_assets(
+    watchlist_id: UUID,
+    db: AsyncSession,
+) -> List[PipelineWatchlistAsset]:
+    """Load active assets for a watchlist snapshot."""
+    assets_result = await db.execute(
+        select(PipelineWatchlistAsset)
+        .where(
+            PipelineWatchlistAsset.watchlist_id == watchlist_id,
+            (PipelineWatchlistAsset.level_direction.is_(None)) |
+            (PipelineWatchlistAsset.level_direction == "up"),
+        )
+        .order_by(PipelineWatchlistAsset.alpha_score.desc().nullslast())
+    )
+    return assets_result.scalars().all()
+
+
+def _should_refresh_for_upstream_delta(
+    *,
+    persisted_symbols: set[str],
+    upstream_symbols: set[str],
+    exact_match: bool,
+) -> bool:
+    """Decide whether a persisted snapshot drifted from its upstream source."""
+    if exact_match:
+        return persisted_symbols != upstream_symbols
+    return not persisted_symbols.issubset(upstream_symbols)
+
+
+def _is_upstream_scan_newer(
+    parent_last_scanned_at: Optional[datetime],
+    child_last_scanned_at: Optional[datetime],
+) -> bool:
+    """True when the upstream watchlist was scanned after its child snapshot."""
+    return bool(
+        parent_last_scanned_at and (
+            child_last_scanned_at is None or parent_last_scanned_at > child_last_scanned_at
+        )
+    )
+
+
+async def _auto_refresh_watchlist_assets_if_needed(
+    wl: PipelineWatchlist,
+    assets: List[PipelineWatchlistAsset],
+    *,
+    effective_level: str,
+    user_id: UUID,
+    db: AsyncSession,
+    depth: int = 0,
+) -> List[PipelineWatchlistAsset]:
+    """Repair stale pipeline snapshots before returning assets to the UI."""
+    if not wl.auto_refresh or depth > 5:
+        return assets
+
+    parent = None
+    if wl.source_watchlist_id:
+        parent_result = await db.execute(
+            select(PipelineWatchlist).where(
+                PipelineWatchlist.id == wl.source_watchlist_id,
+                PipelineWatchlist.user_id == user_id,
+            )
+        )
+        parent = parent_result.scalars().first()
+        if parent and parent.auto_refresh:
+            parent_assets = await _load_active_watchlist_assets(parent.id, db)
+            parent_profile_config = await _load_watchlist_profile_config(parent, db)
+            parent_effective_level = effective_pipeline_level(
+                parent.level,
+                source_pool_id=parent.source_pool_id,
+                profile_config=parent_profile_config,
+            )
+            await _auto_refresh_watchlist_assets_if_needed(
+                parent,
+                parent_assets,
+                effective_level=parent_effective_level,
+                user_id=user_id,
+                db=db,
+                depth=depth + 1,
+            )
+            await db.refresh(parent)
+
+    should_refresh = not assets
+    if not should_refresh:
+        persisted_symbols = {a.symbol for a in assets}
+        upstream_symbols = set(await _get_base_symbols(wl, user_id, db, depth=depth))
+        should_refresh = _should_refresh_for_upstream_delta(
+            persisted_symbols=persisted_symbols,
+            upstream_symbols=upstream_symbols,
+            exact_match=effective_level == "custom",
+        )
+        if (
+            not should_refresh
+            and parent
+            and _is_upstream_scan_newer(parent.last_scanned_at, wl.last_scanned_at)
+        ):
+            should_refresh = True
+
+    if not should_refresh:
+        return assets
+
+    await _resolve_and_persist(wl, user_id, db)
+    return await _load_active_watchlist_assets(wl.id, db)
+
+
 async def _resolve_and_persist(
     wl: PipelineWatchlist,
     user_id: UUID,
@@ -1195,70 +1316,25 @@ async def get_watchlist_assets(
     if not wl:
         raise HTTPException(status_code=404, detail="Watchlist not found")
 
-    # Active assets: level_direction IS NULL (set by Celery scan) or 'up' (manual refresh)
-    # 'down' means the asset no longer passes the pipeline filter
-    assets_result = await db.execute(
-        select(PipelineWatchlistAsset)
-        .where(
-            PipelineWatchlistAsset.watchlist_id == watchlist_id,
-            (PipelineWatchlistAsset.level_direction.is_(None)) |
-            (PipelineWatchlistAsset.level_direction == "up"),
-        )
-        .order_by(PipelineWatchlistAsset.alpha_score.desc().nullslast())
+    profile_config = await _load_watchlist_profile_config(wl, db)
+    effective_level = effective_pipeline_level(
+        wl.level,
+        source_pool_id=wl.source_pool_id,
+        profile_config=profile_config,
     )
+    assets = await _load_active_watchlist_assets(watchlist_id, db)
 
-    assets = assets_result.scalars().all()
-
-    # Monitoring boards (custom/source-pool watchlists) should refresh only when
-    # their persisted snapshot diverges from the current upstream symbol set.
-    if not _uses_pipeline_filters(wl.level) and wl.auto_refresh:
+    if wl.auto_refresh:
         try:
-            upstream_symbols = set(await _get_base_symbols(wl, user_id, db))
-            persisted_symbols = {a.symbol for a in assets}
-            if persisted_symbols != upstream_symbols:
-                await _resolve_and_persist(wl, user_id, db)
-                assets_result = await db.execute(
-                    select(PipelineWatchlistAsset)
-                    .where(
-                        PipelineWatchlistAsset.watchlist_id == watchlist_id,
-                        (PipelineWatchlistAsset.level_direction.is_(None)) |
-                        (PipelineWatchlistAsset.level_direction == "up"),
-                    )
-                    .order_by(PipelineWatchlistAsset.alpha_score.desc().nullslast())
-                )
-                assets = assets_result.scalars().all()
-        except Exception as e:
-            logger.warning("[Pipeline] Monitoring refresh failed for %s: %s", watchlist_id, e)
-
-    # Auto-resolve on first open when there are no saved assets
-    if not assets and wl.auto_refresh:
-        try:
-            await _resolve_and_persist(wl, user_id, db)
-            assets_result2 = await db.execute(
-                select(PipelineWatchlistAsset)
-                .where(
-                    PipelineWatchlistAsset.watchlist_id == watchlist_id,
-                    (PipelineWatchlistAsset.level_direction.is_(None)) |
-                    (PipelineWatchlistAsset.level_direction == "up"),
-                )
-                .order_by(PipelineWatchlistAsset.alpha_score.desc().nullslast())
+            assets = await _auto_refresh_watchlist_assets_if_needed(
+                wl,
+                assets,
+                effective_level=effective_level,
+                user_id=user_id,
+                db=db,
             )
-            assets = assets_result2.scalars().all()
         except Exception as e:
-            logger.warning("[Pipeline] Auto-resolve failed for %s: %s", watchlist_id, e)
-
-    # ── Load profile to derive dynamic indicator column schema ────────────────
-    profile_config: Optional[Dict[str, Any]] = None
-    if wl.profile_id:
-        from ..models.profile import Profile
-        prof_result = await db.execute(
-            select(Profile).where(Profile.id == wl.profile_id)
-        )
-        prof = prof_result.scalars().first()
-        if prof:
-            # .config always holds filters/signals conditions; preset_ia_config is IA metadata only
-            # (regime, macro_risk, analysis_summary) — never use it for indicator extraction
-            profile_config = prof.config
+            logger.warning("[Pipeline] Auto-refresh snapshot failed for %s: %s", watchlist_id, e)
 
     profile_indicators = _extract_profile_indicator_fields(profile_config)
 
