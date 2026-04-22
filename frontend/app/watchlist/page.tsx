@@ -80,11 +80,31 @@ interface Pool {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const LEVEL_COLORS: Record<string, string> = {
+  POOL: 'bg-[#3A3117] text-[#FBBF24] border border-[#D97706]/35',
   L1: 'bg-[#1A2744] text-[#60A5FA] border border-[#2563EB]/40',
   L2: 'bg-[#1A3A2A] text-[#34D399] border border-[#059669]/40',
   L3: 'bg-[#3A1A2A] text-[#F472B6] border border-[#DB2777]/40',
   custom: 'bg-[#1E1E28] text-[#94A3B8] border border-[#334155]/40',
 };
+
+const WATCHLIST_LEVEL_OPTIONS = [
+  { value: 'POOL', label: 'POOL — Universe filter' },
+  { value: 'L1', label: 'L1 — All pool assets' },
+  { value: 'L2', label: 'L2 — Score filtered' },
+  { value: 'L3', label: 'L3 — Signal + score' },
+  { value: 'custom', label: 'Custom' },
+] as const;
+
+function resolveWatchlistLevel(
+  wl: Pick<PipelineWatchlist, 'level' | 'source_pool_id' | 'profile_id'> | undefined,
+  profiles: Profile[],
+) {
+  const normalized = (wl?.level || '').toUpperCase();
+  if (['POOL', 'L1', 'L2', 'L3'].includes(normalized)) return normalized;
+  const profile = profiles.find((item) => item.id === wl?.profile_id);
+  const filterConditions = profile?.config?.filters?.conditions ?? [];
+  return wl?.source_pool_id && filterConditions.length > 0 ? 'POOL' : 'custom';
+}
 
 function LevelBadge({ level }: { level: string }) {
   const cls = LEVEL_COLORS[level] ?? LEVEL_COLORS.custom;
@@ -271,7 +291,7 @@ function ProfilePreview({ profile }: { profile: Profile }) {
 function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: ModalProps) {
   const isNew = !wl?.id;
   const [name, setName] = useState(wl?.name ?? '');
-  const [level, setLevel] = useState(wl?.level ?? 'custom');
+  const [level, setLevel] = useState(isNew ? 'POOL' : resolveWatchlistLevel(wl, profiles));
   const [sourcePoolId, setSourcePoolId] = useState(wl?.source_pool_id ?? '');
   const [sourceWatchlistId, setSourceWatchlistId] = useState(wl?.source_watchlist_id ?? '');
   const [profileId, setProfileId] = useState(wl?.profile_id ?? '');
@@ -345,16 +365,15 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
               onChange={(e) => handleLevelChange(e.target.value)}
               data-testid="watchlist-level-select"
             >
-              <option value="L1">L1 — All pool assets</option>
-              <option value="L2">L2 — Score filtered</option>
-              <option value="L3">L3 — Signal + score</option>
-              <option value="custom">Custom</option>
+              {WATCHLIST_LEVEL_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
             </select>
           </div>
 
           {/* Source Pool */}
           <div>
-            <label className="block text-xs text-[#64748B] mb-1">Source Pool <span className="text-[#4B5563]">(para L1)</span></label>
+            <label className="block text-xs text-[#64748B] mb-1">Source Pool <span className="text-[#4B5563]">(para POOL)</span></label>
             <select
               className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
               value={sourcePoolId}
@@ -370,7 +389,7 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
 
           {/* Source Watchlist */}
           <div>
-            <label className="block text-xs text-[#64748B] mb-1">Source Watchlist <span className="text-[#4B5563]">(para L2 / L3)</span></label>
+            <label className="block text-xs text-[#64748B] mb-1">Source Watchlist <span className="text-[#4B5563]">(para L1 / L2 / L3)</span></label>
             <select
               className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
               value={sourceWatchlistId}
@@ -380,7 +399,7 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
             >
               <option value="">— None —</option>
               {otherWatchlists.map((w) => (
-                <option key={w.id} value={w.id}>[{w.level}] {w.name}</option>
+                <option key={w.id} value={w.id}>[{resolveWatchlistLevel(w, profiles)}] {w.name}</option>
               ))}
             </select>
             {sourcePoolId && (
@@ -478,6 +497,7 @@ interface WatchlistRowProps {
 }
 
 function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, onRefreshed, refreshTick, liveDirections = {} }: WatchlistRowProps) {
+  const displayLevel = resolveWatchlistLevel(wl, profiles);
   const [expanded, setExpanded] = useState(false);
   const [detailTab, setDetailTab] = useState<WatchlistDetailTab>('approved');
   const [assets, setAssets] = useState<PipelineAsset[]>([]);
@@ -486,7 +506,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
   const [indicatorCols, setIndicatorCols] = useState<IndicatorColumn[]>([]);
   // Alpha Score visibility: false for POOL/custom (Stage 0) and L1 (Stage 1)
   const [showScore, setShowScore] = useState<boolean>(
-    ['L2', 'L3'].includes((wl.level || '').toUpperCase())
+    ['L2', 'L3'].includes(displayLevel)
   );
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [loadingRejected, setLoadingRejected] = useState(false);
@@ -590,7 +610,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
         <span className="text-[#4B5563] transition-transform" style={{ transform: expanded ? 'rotate(0)' : 'rotate(-90deg)' }}>
           <ChevronDown size={16} />
         </span>
-        <LevelBadge level={wl.level} />
+        <LevelBadge level={displayLevel} />
         <span className="text-sm font-medium text-[#E2E8F0] flex-1">{wl.name}</span>
         <span className="text-xs text-[#4B5563]">from {sourceName}</span>
         {/* Freshness indicator */}
@@ -819,8 +839,8 @@ function PipelineTab() {
     setWatchlists((prev) => prev.filter((w) => w.id !== id));
   }
 
-  const byLevel = (level: string) => watchlists.filter((w) => w.level === level);
-  const customWls = watchlists.filter((w) => !['L1', 'L2', 'L3'].includes(w.level));
+  const byLevel = (level: string) => watchlists.filter((w) => resolveWatchlistLevel(w, profiles) === level);
+  const customWls = watchlists.filter((w) => resolveWatchlistLevel(w, profiles) === 'custom');
 
   return (
     <div className="space-y-6">
@@ -859,7 +879,7 @@ function PipelineTab() {
         </div>
       ) : (
         <div className="space-y-6">
-          {(['L1', 'L2', 'L3'] as const).map((lvl) => {
+          {(['POOL', 'L1', 'L2', 'L3'] as const).map((lvl) => {
             const lvlWls = byLevel(lvl);
             if (lvlWls.length === 0) return null;
             const totalAssets = lvlWls.reduce((sum, w) => sum + (w.asset_count ?? 0), 0);

@@ -25,6 +25,8 @@ from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
     effective_pipeline_level,
     select_profile_filter_conditions,
+    uses_pipeline_filters,
+    WATCHLIST_STAGE_ORDER,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,8 +54,8 @@ def _run_async(coro):
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
 def _uses_pipeline_filters(level: Optional[str]) -> bool:
-    """Only L1/L2/L3 are filter-enforced pipeline stages."""
-    return (level or "").upper() in {"L1", "L2", "L3"}
+    """Only POOL/L1/L2/L3 are filter-enforced pipeline stages."""
+    return uses_pipeline_filters(level)
 
 
 def _placeholder_asset_without_market_data(symbol: str) -> dict:
@@ -1024,6 +1026,28 @@ async def _run_pipeline_scan():
             logger.debug("[PipelineScan] No pipeline watchlists with auto_refresh — skipping.")
             return stats
 
+        profile_ids = {wl.profile_id for wl in wl_rows if wl.profile_id}
+        profile_config_map = {}
+        if profile_ids:
+            profile_rows = (await db.execute(
+                select(Profile).where(Profile.id.in_(profile_ids))
+            )).scalars().all()
+            profile_config_map = {row.id: row.config for row in profile_rows}
+
+        wl_rows.sort(
+            key=lambda wl: (
+                WATCHLIST_STAGE_ORDER.get(
+                    effective_pipeline_level(
+                        wl.level,
+                        source_pool_id=wl.source_pool_id,
+                        profile_config=profile_config_map.get(wl.profile_id),
+                    ),
+                    len(WATCHLIST_STAGE_ORDER),
+                ),
+                wl.created_at or datetime.min.replace(tzinfo=timezone.utc),
+            )
+        )
+
         logger.info("[PipelineScan] Processing %d pipeline watchlists…", len(wl_rows))
 
         for wl in wl_rows:
@@ -1174,7 +1198,7 @@ async def _run_pipeline_scan():
 
                 # ── 4. Per-level evaluation ───────────────────────────────────
                 # Source-pool watchlists with profile filter conditions should be
-                # treated as L1 even if legacy data stored them as "custom".
+                # treated as POOL even if legacy data stored them as "custom".
                 # Pure custom boards without filter conditions remain monitoring
                 # boards and keep all pool assets visible.
                 effective_level = effective_pipeline_level(
@@ -1182,9 +1206,9 @@ async def _run_pipeline_scan():
                     source_pool_id=wl.source_pool_id,
                     profile_config=profile_config,
                 )
-                if effective_level == "L1" and not _uses_pipeline_filters(level):
+                if effective_level == "POOL" and not _uses_pipeline_filters(level):
                     logger.info(
-                        "[PipelineScan] %s (%s): source-pool watchlist promoted to L1 so profile filter conditions are enforced.",
+                        "[PipelineScan] %s (%s): source-pool watchlist promoted to POOL so universe filter conditions are enforced.",
                         wl.name,
                         level,
                     )
@@ -1200,7 +1224,7 @@ async def _run_pipeline_scan():
                         )
                     await _replace_rejection_snapshot(db, wl_id, user_id, wl.profile_id, [])
 
-                if effective_level in ("L1", "L2"):
+                if effective_level in ("POOL", "L1", "L2"):
                     effective_profile_config = profile_config
                     selected_filter_conditions = None
                     if profile_config:

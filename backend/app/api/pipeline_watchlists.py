@@ -126,9 +126,9 @@ async def create_pipeline_watchlist(
 
     Body fields:
       name                (str, required)
-      level               "L1" | "L2" | "L3"
-      source_pool_id      UUID of a Pool   (L1 sources from Pool)
-      source_watchlist_id UUID of another PipelineWatchlist (L2/L3)
+      level               "POOL" | "L1" | "L2" | "L3"
+      source_pool_id      UUID of a Pool   (POOL sources from Pool)
+      source_watchlist_id UUID of another PipelineWatchlist (L1/L2/L3)
       profile_id          UUID of a Profile to apply
       auto_refresh        bool (default true)
       filters_json        {} (DEPRECATED — filtering is driven by the profile)
@@ -137,9 +137,9 @@ async def create_pipeline_watchlist(
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
 
-    level = (payload.get("level") or "L1").upper()
-    if level not in ("L1", "L2", "L3"):
-        raise HTTPException(status_code=400, detail="level must be L1, L2 or L3")
+    level = (payload.get("level") or "POOL").upper()
+    if level not in ("POOL", "L1", "L2", "L3"):
+        raise HTTPException(status_code=400, detail="level must be POOL, L1, L2 or L3")
 
     wl = PipelineWatchlist(
         user_id=user_id,

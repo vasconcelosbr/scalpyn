@@ -1,6 +1,17 @@
 from typing import Any
 
 
+WATCHLIST_LEVELS = ("POOL", "L1", "L2", "L3", "custom")
+PIPELINE_FILTER_LEVELS = frozenset({"POOL", "L1", "L2", "L3"})
+WATCHLIST_STAGE_ORDER = {
+    "POOL": 0,
+    "L1": 1,
+    "L2": 2,
+    "L3": 3,
+    "custom": 4,
+}
+
+
 STRICT_META_FIELDS = frozenset({
     "volume_24h",
     "market_cap",
@@ -14,6 +25,11 @@ STRICT_META_FIELDS = frozenset({
 })
 
 STRICT_META_MIN_COVERAGE_RATIO = 0.10
+
+
+def uses_pipeline_filters(level: str | None) -> bool:
+    """True when the level is a real pipeline filter stage."""
+    return (level or "").upper() in PIPELINE_FILTER_LEVELS
 
 
 def select_profile_filter_conditions(
@@ -53,20 +69,20 @@ def effective_pipeline_level(
 ) -> str:
     """Resolve the effective pipeline level for filtering behaviour.
 
-    Explicit L1/L2/L3 levels are always respected.
-    Source-pool watchlists stored as "custom" are promoted to L1 only when
+    Explicit POOL/L1/L2/L3 levels are always respected.
+    Source-pool watchlists stored as "custom" are promoted to POOL only when
     their associated profile actually defines filter conditions. This preserves
     pure monitoring boards while ensuring pool/profile selection criteria are
     honored.
     """
     normalized = (level or "").upper()
-    if normalized in {"L1", "L2", "L3"}:
+    if normalized in PIPELINE_FILTER_LEVELS:
         return normalized
 
     filter_conditions = (
         ((profile_config or {}).get("filters") or {}).get("conditions") or []
     )
     if source_pool_id and filter_conditions:
-        return "L1"
+        return "POOL"
 
     return "custom"

@@ -25,7 +25,7 @@ class PipelineWatchlist(Base):
         nullable=False,
     )
     name = Column(String(100), nullable=False)
-    level = Column(String(10), nullable=False, default='custom')  # L1 / L2 / L3 / custom
+    level = Column(String(10), nullable=False, default='custom')  # POOL / L1 / L2 / L3 / custom
 
     # Source — one of these must be set
     source_pool_id = Column(
