@@ -24,6 +24,7 @@ from ..services.pipeline_rejections import evaluate_rejections
 from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
     effective_pipeline_level,
+    order_pipeline_watchlists_for_scan,
     select_profile_filter_conditions,
 )
 
@@ -1019,6 +1020,7 @@ async def _run_pipeline_scan():
         wl_rows = (await db.execute(
             select(PipelineWatchlist).where(PipelineWatchlist.auto_refresh == True)
         )).scalars().all()
+        wl_rows = order_pipeline_watchlists_for_scan(wl_rows)
 
         if not wl_rows:
             logger.debug("[PipelineScan] No pipeline watchlists with auto_refresh — skipping.")

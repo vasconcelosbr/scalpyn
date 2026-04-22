@@ -1,6 +1,7 @@
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -11,7 +12,10 @@ from app.api.watchlists import (
     _should_refresh_for_upstream_delta,
     _uses_pipeline_filters,
 )
-from app.utils.pipeline_profile_filters import effective_pipeline_level
+from app.utils.pipeline_profile_filters import (
+    effective_pipeline_level,
+    order_pipeline_watchlists_for_scan,
+)
 from app.services.score_engine import resolve_profile_scoring_rules
 from app.services.profile_engine import ProfileEngine
 
@@ -125,6 +129,39 @@ def test_child_snapshot_refreshes_when_parent_scan_is_newer():
     assert _is_upstream_scan_newer(now, now - timedelta(minutes=1)) is True
     assert _is_upstream_scan_newer(now, now) is False
     assert _is_upstream_scan_newer(None, now - timedelta(minutes=1)) is False
+
+
+def test_pipeline_scan_orders_parents_before_children():
+    now = datetime.now(timezone.utc)
+    pool = SimpleNamespace(id="pool", level="custom", source_watchlist_id=None, created_at=now)
+    l1 = SimpleNamespace(id="l1", level="L1", source_watchlist_id="pool", created_at=now + timedelta(seconds=1))
+    l2 = SimpleNamespace(id="l2", level="L2", source_watchlist_id="l1", created_at=now + timedelta(seconds=2))
+    l3 = SimpleNamespace(id="l3", level="L3", source_watchlist_id="l2", created_at=now + timedelta(seconds=3))
+
+    ordered = order_pipeline_watchlists_for_scan([l3, l2, pool, l1])
+
+    assert [wl.id for wl in ordered] == ["pool", "l1", "l2", "l3"]
+
+
+def test_pipeline_scan_keeps_siblings_stable_after_parent():
+    now = datetime.now(timezone.utc)
+    parent = SimpleNamespace(id="parent", level="custom", source_watchlist_id=None, created_at=now)
+    first_child = SimpleNamespace(
+        id="first-child",
+        level="L1",
+        source_watchlist_id="parent",
+        created_at=now + timedelta(seconds=1),
+    )
+    second_child = SimpleNamespace(
+        id="second-child",
+        level="L1",
+        source_watchlist_id="parent",
+        created_at=now + timedelta(seconds=2),
+    )
+
+    ordered = order_pipeline_watchlists_for_scan([second_child, parent, first_child])
+
+    assert [wl.id for wl in ordered] == ["parent", "first-child", "second-child"]
 
 
 def test_scoring_selected_rule_ids_takes_priority_over_filter_rule_ids():
