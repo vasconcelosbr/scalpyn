@@ -106,15 +106,10 @@ def order_pipeline_watchlists_for_scan(
             return created_at
         return datetime.min.replace(tzinfo=timezone.utc)
 
-    def _level_rank(wl: Any) -> int:
-        normalized = (getattr(wl, "level", "") or "").upper()
-        return {"CUSTOM": 0, "L1": 1, "L2": 2, "L3": 3}.get(normalized, 99)
-
     return sorted(
         items,
         key=lambda wl: (
             _depth(wl),
-            _level_rank(wl),
             _created_at_value(wl),
             str(getattr(wl, "id", "")),
         ),
