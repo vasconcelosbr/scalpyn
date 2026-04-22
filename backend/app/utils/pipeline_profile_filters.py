@@ -1,5 +1,9 @@
+import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Protocol
+
+
+logger = logging.getLogger(__name__)
 
 
 STRICT_META_FIELDS = frozenset({
@@ -15,6 +19,12 @@ STRICT_META_FIELDS = frozenset({
 })
 
 STRICT_META_MIN_COVERAGE_RATIO = 0.10
+
+
+class PipelineWatchlistLike(Protocol):
+    id: Any
+    source_watchlist_id: Any
+    created_at: datetime | None
 
 
 def select_profile_filter_conditions(
@@ -74,8 +84,8 @@ def effective_pipeline_level(
 
 
 def order_pipeline_watchlists_for_scan(
-    watchlists: list[Any] | None,
-) -> list[Any]:
+    watchlists: list[PipelineWatchlistLike] | None,
+) -> list[PipelineWatchlistLike]:
     """Sort watchlists so upstream sources are scanned before dependents."""
     items = list(watchlists or [])
     if len(items) < 2:
@@ -85,11 +95,15 @@ def order_pipeline_watchlists_for_scan(
     visiting: set[Any] = set()
     memo: dict[Any, int] = {}
 
-    def _depth(wl: Any) -> int:
+    def _depth(wl: PipelineWatchlistLike) -> int:
         wl_id = getattr(wl, "id", None)
         if wl_id in memo:
             return memo[wl_id]
         if wl_id in visiting:
+            logger.warning(
+                "Cycle detected while ordering pipeline watchlists for scan: %s",
+                wl_id,
+            )
             return 0
 
         visiting.add(wl_id)
@@ -100,7 +114,7 @@ def order_pipeline_watchlists_for_scan(
         memo[wl_id] = depth
         return depth
 
-    def _created_at_value(wl: Any) -> datetime:
+    def _created_at_value(wl: PipelineWatchlistLike) -> datetime:
         created_at = getattr(wl, "created_at", None)
         if isinstance(created_at, datetime):
             return created_at

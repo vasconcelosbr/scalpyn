@@ -164,6 +164,18 @@ def test_pipeline_scan_keeps_siblings_stable_after_parent():
     assert [wl.id for wl in ordered] == ["parent", "first-child", "second-child"]
 
 
+def test_pipeline_scan_logs_cycle_and_returns_stable_order(caplog):
+    now = datetime.now(timezone.utc)
+    a = SimpleNamespace(id="a", level="L1", source_watchlist_id="b", created_at=now)
+    b = SimpleNamespace(id="b", level="L2", source_watchlist_id="a", created_at=now + timedelta(seconds=1))
+
+    with caplog.at_level("WARNING"):
+        ordered = order_pipeline_watchlists_for_scan([b, a])
+
+    assert {wl.id for wl in ordered} == {"a", "b"}
+    assert "Cycle detected while ordering pipeline watchlists for scan" in caplog.text
+
+
 def test_scoring_selected_rule_ids_takes_priority_over_filter_rule_ids():
     """scoring.selected_rule_ids (new contract) resolves before filters.conditions[].rule_id."""
     global_rules = [
