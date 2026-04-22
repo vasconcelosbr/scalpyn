@@ -74,26 +74,25 @@ async def _fetch_market_caps_async() -> dict:
         )
         cmc_row = cmc_row_res.scalars().first()
 
-        if not cmc_row:
+        market_caps: dict[str, float] = {}
+        if cmc_row:
+            try:
+                raw = bytes(cmc_row.api_key_encrypted) if isinstance(cmc_row.api_key_encrypted, memoryview) else cmc_row.api_key_encrypted
+                cmc_key = decrypt_value(raw).strip()
+                market_caps = await fetch_cmc_market_caps(requested_bases, cmc_key)
+            except Exception as exc:
+                stats["error"] = "cmc_fetch_failed"
+                logger.error("Failed to fetch market caps from CoinMarketCap: %s", exc)
+        else:
             stats["error"] = "cmc_key_missing"
-            logger.warning("CoinMarketCap key not configured; market cap refresh skipped.")
-            return stats
-
-        try:
-            raw = bytes(cmc_row.api_key_encrypted) if isinstance(cmc_row.api_key_encrypted, memoryview) else cmc_row.api_key_encrypted
-            cmc_key = decrypt_value(raw).strip()
-            market_caps = await fetch_cmc_market_caps(requested_bases, cmc_key)
-        except Exception as exc:
-            stats["error"] = "cmc_fetch_failed"
-            logger.error("Failed to fetch market caps from CoinMarketCap: %s", exc)
-            return stats
+            logger.warning("CoinMarketCap key not configured; using Gate.io fallback only.")
 
         missing_bases = {base for base in requested_bases if base not in market_caps}
         if missing_bases:
             gate_caps = await _fetch_from_gate(missing_bases)
             if gate_caps:
                 market_caps.update(gate_caps)
-                stats["source"] = "coinmarketcap+gate.io-fallback"
+                stats["source"] = "gate.io" if not cmc_row else "coinmarketcap+gate.io-fallback"
                 logger.info(
                     "Gate.io fallback filled %d/%d missing market caps.",
                     len([base for base in missing_bases if base in gate_caps]),
@@ -101,7 +100,7 @@ async def _fetch_market_caps_async() -> dict:
                 )
 
         if not market_caps:
-            stats["error"] = "no_data"
+            stats["error"] = "no_data" if cmc_row else stats["error"]
             return stats
 
         # 3. Update market_metadata

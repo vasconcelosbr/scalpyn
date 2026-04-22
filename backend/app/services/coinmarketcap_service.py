@@ -64,17 +64,25 @@ async def fetch_market_caps(symbols: list[str], api_key: str) -> dict[str, float
     async with httpx.AsyncClient(timeout=15.0) as client:
         for start in range(0, len(normalized_symbols), CMC_BATCH_SIZE):
             batch = normalized_symbols[start:start + CMC_BATCH_SIZE]
-            response = await client.get(
-                CMC_QUOTES_URL,
-                headers=headers,
-                params={
-                    "symbol": ",".join(batch),
-                    "convert": "USD",
-                    "skip_invalid": "true",
-                },
-            )
-            response.raise_for_status()
-            result.update(extract_market_caps(response.json()))
+            try:
+                response = await client.get(
+                    CMC_QUOTES_URL,
+                    headers=headers,
+                    params={
+                        "symbol": ",".join(batch),
+                        "convert": "USD",
+                        "skip_invalid": "true",
+                    },
+                )
+                response.raise_for_status()
+                result.update(extract_market_caps(response.json()))
+            except Exception as exc:
+                logger.warning(
+                    "CoinMarketCap batch failed for %d symbols (sample: %s): %s",
+                    len(batch),
+                    batch[:5],
+                    exc,
+                )
 
     logger.info(
         "CoinMarketCap: fetched market caps for %d/%d requested symbols.",

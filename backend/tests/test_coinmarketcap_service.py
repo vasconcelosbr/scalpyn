@@ -67,7 +67,7 @@ def test_fetch_market_caps_batches_requests(monkeypatch):
                 }
             )
 
-    monkeypatch.setattr(coinmarketcap_service.httpx, "AsyncClient", lambda timeout: FakeAsyncClient())
+    monkeypatch.setattr(coinmarketcap_service.httpx, "AsyncClient", lambda **kwargs: FakeAsyncClient())
 
     symbols = [f"COIN{i}_USDT" for i in range(coinmarketcap_service.CMC_BATCH_SIZE + 1)]
     result = asyncio.run(coinmarketcap_service.fetch_market_caps(symbols, "test-key"))
