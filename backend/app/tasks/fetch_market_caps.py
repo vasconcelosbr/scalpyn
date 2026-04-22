@@ -69,8 +69,8 @@ async def _fetch_market_caps_async() -> dict:
     async with AsyncSessionLocal() as db:
         mm_symbols = await _get_distinct_symbols(db, "market_metadata")
         pwa_symbols = await _get_distinct_symbols(db, "pipeline_watchlist_assets")
-        all_pairs = sorted(set(mm_symbols) | set(pwa_symbols))
-        requested_bases = sorted({_base_from_pair(symbol_pair) for symbol_pair in all_pairs if symbol_pair})
+        all_pairs = set(mm_symbols) | set(pwa_symbols)
+        requested_bases = list({_base_from_pair(symbol_pair) for symbol_pair in all_pairs if symbol_pair})
         used_cmc = False
         used_gate = False
 

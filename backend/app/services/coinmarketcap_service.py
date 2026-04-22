@@ -37,6 +37,7 @@ def extract_market_caps(payload: dict[str, Any]) -> dict[str, float]:
     result: dict[str, float] = {}
 
     for symbol, raw_entries in (payload.get("data") or {}).items():
+        # CMC may return either a single object or a list when multiple assets share a symbol.
         entries = raw_entries if isinstance(raw_entries, list) else [raw_entries]
         for entry in entries:
             market_cap = ((entry or {}).get("quote") or {}).get("USD", {}).get("market_cap")
