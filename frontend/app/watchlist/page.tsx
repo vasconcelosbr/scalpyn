@@ -96,7 +96,7 @@ const WATCHLIST_LEVEL_OPTIONS = [
 ] as const;
 
 function resolveWatchlistLevel(
-  wl: Pick<PipelineWatchlist, 'level' | 'source_pool_id' | 'profile_id'> | undefined,
+  wl: Partial<Pick<PipelineWatchlist, 'level' | 'source_pool_id' | 'profile_id'>> | undefined,
   profiles: Profile[],
 ) {
   const normalized = (wl?.level || '').toUpperCase();
