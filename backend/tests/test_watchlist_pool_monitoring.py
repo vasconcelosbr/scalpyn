@@ -113,6 +113,7 @@ def test_pipeline_levels_refresh_only_when_persisted_symbol_is_no_longer_upstrea
         exact_match=False,
     ) is False
     assert _should_refresh_for_upstream_delta(
+        # OFC_USDT mirrors the reported ghost symbol that should be evicted.
         persisted_symbols={"BTC_USDT", "OFC_USDT"},
         upstream_symbols={"BTC_USDT"},
         exact_match=False,

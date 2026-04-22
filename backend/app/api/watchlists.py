@@ -35,6 +35,7 @@ from ..utils.pipeline_profile_filters import (
 logger = logging.getLogger(__name__)
 
 GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/spot/tickers"
+MAX_WATCHLIST_AUTO_REFRESH_DEPTH = 5
 
 
 def _passes_profile_filters(
@@ -684,7 +685,7 @@ async def _get_base_symbols(
         bypass the pipeline; the parent is temporarily empty after a filter tightening).
       If the parent was NEVER populated → cascade up (initial bootstrap scenario).
     """
-    if depth > 5:
+    if depth > MAX_WATCHLIST_AUTO_REFRESH_DEPTH:
         logger.warning("Pipeline resolution depth exceeded for wl %s", wl.id)
         return []
 
@@ -800,7 +801,13 @@ def _should_refresh_for_upstream_delta(
     upstream_symbols: set[str],
     exact_match: bool,
 ) -> bool:
-    """Decide whether a persisted snapshot drifted from its upstream source."""
+    """Decide whether a persisted snapshot drifted from its upstream source.
+
+    Monitoring boards must exactly mirror their source set, so `exact_match=True`
+    refreshes on any addition or removal. Filtered pipeline levels are expected to
+    be subsets of their upstream universe, so `exact_match=False` only refreshes
+    when a persisted symbol no longer exists upstream.
+    """
     if exact_match:
         return persisted_symbols != upstream_symbols
     return not persisted_symbols.issubset(upstream_symbols)
@@ -828,10 +835,11 @@ async def _auto_refresh_watchlist_assets_if_needed(
     depth: int = 0,
 ) -> List[PipelineWatchlistAsset]:
     """Repair stale pipeline snapshots before returning assets to the UI."""
-    if not wl.auto_refresh or depth > 5:
+    if not wl.auto_refresh or depth > MAX_WATCHLIST_AUTO_REFRESH_DEPTH:
         return assets
 
     parent = None
+    parent_assets: List[PipelineWatchlistAsset] = []
     if wl.source_watchlist_id:
         parent_result = await db.execute(
             select(PipelineWatchlist).where(
@@ -848,7 +856,7 @@ async def _auto_refresh_watchlist_assets_if_needed(
                 source_pool_id=parent.source_pool_id,
                 profile_config=parent_profile_config,
             )
-            await _auto_refresh_watchlist_assets_if_needed(
+            parent_assets = await _auto_refresh_watchlist_assets_if_needed(
                 parent,
                 parent_assets,
                 effective_level=parent_effective_level,
@@ -861,7 +869,11 @@ async def _auto_refresh_watchlist_assets_if_needed(
     should_refresh = not assets
     if not should_refresh:
         persisted_symbols = {a.symbol for a in assets}
-        upstream_symbols = set(await _get_base_symbols(wl, user_id, db, depth=depth))
+        upstream_symbols = (
+            {a.symbol for a in parent_assets}
+            if parent is not None
+            else set(await _get_base_symbols(wl, user_id, db, depth=depth))
+        )
         should_refresh = _should_refresh_for_upstream_delta(
             persisted_symbols=persisted_symbols,
             upstream_symbols=upstream_symbols,
