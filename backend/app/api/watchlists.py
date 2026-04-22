@@ -37,17 +37,27 @@ logger = logging.getLogger(__name__)
 GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/spot/tickers"
 
 
-def _passes_profile_filters(asset: Dict[str, Any], conditions: list, logic: str = "AND") -> bool:
+def _passes_profile_filters(
+    asset: Dict[str, Any],
+    conditions: list,
+    logic: str = "AND",
+    strict_indicators: bool = False,
+) -> bool:
     """Evaluate profile filter conditions against a pipeline asset.
 
     Meta fields (market_cap, volume_24h, price, change %, spread, depth) are
     STRICT: if the value is None the condition FAILS.  This prevents assets with
     unknown market-cap from slipping through a 'market_cap >= 500M' gate.
 
-    Indicator fields (rsi, adx, atr_pct, …) are LENIENT: if the indicator is not
-    present in the asset dict the condition is SKIPPED (not counted as a fail).
-    This mirrors ProfileEngine._apply_filters behaviour so manual-refresh and
-    Celery pipeline produce consistent results.
+    Indicator fields (rsi, adx, atr_pct, …) are LENIENT by default: if the
+    indicator is not present in the asset dict the condition is SKIPPED (not
+    counted as a fail).  This mirrors ProfileEngine._apply_filters behaviour so
+    manual-refresh and Celery pipeline produce consistent results.
+
+    When ``strict_indicators=True`` (pipeline stage mode) indicator conditions
+    with missing data are also treated as FAIL.  This prevents assets that have
+    never had indicators computed from bypassing EMA/RSI/ADX conditions and
+    incorrectly appearing in L1/L2/L3 pipeline stages.
     """
     if not conditions:
         return True
@@ -70,9 +80,10 @@ def _passes_profile_filters(asset: Dict[str, Any], conditions: list, logic: str 
         if actual is None:
             # Strict meta fields (market_cap, volume_24h, etc.) FAIL when None to prevent
             # assets with unknown values from bypassing filters (e.g., "market_cap >= 5M").
-            # Indicator fields (RSI, ADX, etc.) are SKIPPED when None since they may not
-            # be computed yet and should not block the asset.
-            if field in STRICT_META_FIELDS:
+            # Indicator fields (RSI, ADX, etc.) are SKIPPED when None by default, but
+            # FAIL when strict_indicators=True (pipeline stage mode) to prevent assets
+            # with no computed indicators from bypassing EMA/RSI/ADX conditions.
+            if field in STRICT_META_FIELDS or strict_indicators:
                 results.append(False)
             continue
 
@@ -1063,7 +1074,7 @@ async def _resolve_and_persist(
         if selected["relaxed_strict_meta"]:
             if applicable_conditions:
                 before = len(assets_out)
-                assets_out = [a for a in assets_out if _passes_profile_filters(a, applicable_conditions, p_logic)]
+                assets_out = [a for a in assets_out if _passes_profile_filters(a, applicable_conditions, p_logic, strict_indicators=True)]
                 logger.info(
                     "Pipeline profile filter [%s / %s]: sparse market data coverage %.1f%% "
                     "(%d/%d) — applying %d non-meta conditions only: %d → %d assets",
@@ -1081,7 +1092,7 @@ async def _resolve_and_persist(
                 )
         else:
             before = len(assets_out)
-            assets_out = [a for a in assets_out if _passes_profile_filters(a, applicable_conditions, p_logic)]
+            assets_out = [a for a in assets_out if _passes_profile_filters(a, applicable_conditions, p_logic, strict_indicators=True)]
             logger.info(
                 "Pipeline profile filter [%s / %s]: %d → %d assets (removed %d) "
                 "[%d/%d symbols had market data]",

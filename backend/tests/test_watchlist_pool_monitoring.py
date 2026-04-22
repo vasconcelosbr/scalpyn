@@ -3,9 +3,14 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.api.watchlists import _extract_profile_indicator_fields, _uses_pipeline_filters
+from app.api.watchlists import (
+    _extract_profile_indicator_fields,
+    _passes_profile_filters,
+    _uses_pipeline_filters,
+)
 from app.utils.pipeline_profile_filters import effective_pipeline_level
 from app.services.score_engine import resolve_profile_scoring_rules
+from app.services.profile_engine import ProfileEngine
 
 
 def test_custom_watchlists_are_monitoring_boards():
@@ -133,4 +138,83 @@ def test_scoring_selected_rule_ids_empty_falls_back_to_filter_rule_ids():
 
     resolved = resolve_profile_scoring_rules(global_rules, profile_config)
     assert [r["id"] for r in resolved] == ["rsi_1"]
+
+
+# ── strict_indicators tests ───────────────────────────────────────────────────
+
+_EMA_CONDITIONS = [
+    {"field": "ema9_gt_ema50", "operator": "==", "value": True},
+]
+
+_VOLUME_CONDITIONS = [
+    {"field": "volume_24h", "operator": ">=", "value": 500_000},
+]
+
+_MIXED_CONDITIONS = _VOLUME_CONDITIONS + _EMA_CONDITIONS
+
+
+def test_passes_profile_filters_lenient_skips_missing_indicator():
+    """Default (strict_indicators=False): missing indicator condition is skipped → asset passes."""
+    asset = {"symbol": "PEPE_USDT", "volume_24h": 12_000_000}  # no ema9_gt_ema50
+    assert _passes_profile_filters(asset, _EMA_CONDITIONS) is True
+
+
+def test_passes_profile_filters_strict_fails_missing_indicator():
+    """strict_indicators=True: missing indicator condition FAILS → asset rejected."""
+    asset = {"symbol": "PEPE_USDT", "volume_24h": 12_000_000}  # no ema9_gt_ema50
+    assert _passes_profile_filters(asset, _EMA_CONDITIONS, strict_indicators=True) is False
+
+
+def test_passes_profile_filters_strict_passes_when_indicator_present_and_true():
+    """strict_indicators=True: asset with bullish indicator passes."""
+    asset = {"symbol": "BTC_USDT", "volume_24h": 1_000_000, "ema9_gt_ema50": True}
+    assert _passes_profile_filters(asset, _MIXED_CONDITIONS, strict_indicators=True) is True
+
+
+def test_passes_profile_filters_strict_fails_when_indicator_present_and_false():
+    """strict_indicators=True: asset with bearish indicator fails."""
+    asset = {"symbol": "BTC_USDT", "volume_24h": 1_000_000, "ema9_gt_ema50": False}
+    assert _passes_profile_filters(asset, _MIXED_CONDITIONS, strict_indicators=True) is False
+
+
+def test_profile_engine_apply_filters_strict_rejects_no_indicator_asset():
+    """_apply_filters(strict_indicators=True): asset with no indicator data fails indicator condition."""
+    profile_config = {
+        "filters": {
+            "conditions": [{"field": "ema9_gt_ema50", "operator": "==", "value": True}],
+            "logic": "AND",
+        }
+    }
+    engine = ProfileEngine(profile_config)
+    asset_no_ind = {"symbol": "PEPE_USDT", "indicators": {}}
+    result = engine._apply_filters([asset_no_ind], strict_indicators=True)
+    assert result == [], "Asset without indicators should be rejected in strict pipeline mode"
+
+
+def test_profile_engine_apply_filters_strict_passes_bullish_asset():
+    """_apply_filters(strict_indicators=True): asset with bullish EMA passes."""
+    profile_config = {
+        "filters": {
+            "conditions": [{"field": "ema9_gt_ema50", "operator": "==", "value": True}],
+            "logic": "AND",
+        }
+    }
+    engine = ProfileEngine(profile_config)
+    asset_bullish = {"symbol": "BTC_USDT", "indicators": {"ema9_gt_ema50": True}}
+    result = engine._apply_filters([asset_bullish], strict_indicators=True)
+    assert len(result) == 1, "Bullish asset should pass strict pipeline filter"
+
+
+def test_profile_engine_apply_filters_lenient_passes_no_indicator_asset():
+    """_apply_filters(strict_indicators=False, default): asset with no indicators is NOT rejected."""
+    profile_config = {
+        "filters": {
+            "conditions": [{"field": "ema9_gt_ema50", "operator": "==", "value": True}],
+            "logic": "AND",
+        }
+    }
+    engine = ProfileEngine(profile_config)
+    asset_no_ind = {"symbol": "PEPE_USDT", "indicators": {}}
+    result = engine._apply_filters([asset_no_ind])  # default strict_indicators=False
+    assert len(result) == 1, "Lenient mode should not reject asset with missing indicators"
 

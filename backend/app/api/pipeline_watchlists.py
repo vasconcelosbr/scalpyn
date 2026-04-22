@@ -580,7 +580,7 @@ async def debug_pipeline_watchlist(
                 engine = ProfileEngine(profile_config)
                 conditions = (profile_config.get("filters", {}) or {}).get("conditions", [])
                 for asset in assets:
-                    passed = engine._apply_filters([asset])
+                    passed = engine._apply_filters([asset], strict_indicators=True)
                     if passed:
                         filter_pass_count += 1
                     else:

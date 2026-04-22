@@ -433,8 +433,16 @@ def _apply_level_filter(
                 {k: f"{v}/{len(assets)}" for k, v in sorted(rejection_counts.items(), key=lambda x: -x[1])},
             )
 
-    # Apply structural filters
-    filtered = engine._apply_filters(assets) if apply_profile_filters else list(assets)
+    # Apply structural filters.
+    # strict_indicators=True: assets with missing indicator data FAIL indicator
+    # conditions rather than skipping them.  This prevents assets that have never
+    # had indicators computed (e.g. newly-added pool coins) from bypassing EMA /
+    # RSI / ADX conditions and incorrectly appearing in pipeline stages.
+    filtered = (
+        engine._apply_filters(assets, strict_indicators=True)
+        if apply_profile_filters
+        else list(assets)
+    )
 
     if apply_profile_filters:
         logger.info(
