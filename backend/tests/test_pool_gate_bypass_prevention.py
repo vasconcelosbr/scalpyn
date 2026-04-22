@@ -165,7 +165,7 @@ def test_pool_gatekeeper_itself_is_not_gated():
 
 def test_l1_and_l2_both_gated_when_pool_gatekeeper_exists():
     """Both L1 (source_pool_id) and L2 (source_pool_id, same pool) get the
-    gate enforced.  This covers deeper mis-configurations."""
+    gate enforced.  This covers deeper misconfigurations."""
     wl_rows = [
         {
             "id": POOL_WL_ID,
