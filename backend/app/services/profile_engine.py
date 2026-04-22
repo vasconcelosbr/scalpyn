@@ -387,7 +387,11 @@ class ProfileEngine:
             indicators = {k: v for k, v in asset.items() if k not in ["symbol", "name"]}
         return {**asset, **indicators}
 
-    def _apply_filters(self, assets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _apply_filters(
+        self,
+        assets: List[Dict[str, Any]],
+        strict_indicators: bool = False,
+    ) -> List[Dict[str, Any]]:
         """Apply L1 filter conditions to assets.
 
         Strict enforcement for market metadata fields (market_cap, volume_24h,
@@ -397,6 +401,11 @@ class ProfileEngine:
 
         Lenient evaluation is preserved for technical indicator fields (RSI, ADX,
         etc.) that may not be computed yet — those are skipped when absent.
+
+        When ``strict_indicators=True`` (pipeline stage mode) indicator conditions
+        with missing data are also treated as FAIL.  This prevents assets that
+        have never had indicators computed from bypassing EMA/RSI/ADX conditions
+        and incorrectly appearing in L1/L2/L3 pipeline stages.
         """
         filter_conditions = self.filters_config.get("conditions", [])
         filter_logic = self.filters_config.get("logic", "AND")
@@ -405,7 +414,8 @@ class ProfileEngine:
             return assets
 
         # Market-data fields must always be evaluated (None → FAIL, not skip).
-        # Indicator fields remain lenient (None → skip condition).
+        # Indicator fields remain lenient (None → skip condition) unless
+        # strict_indicators=True, in which case they also FAIL when absent.
         _STRICT_META = frozenset({
             "volume_24h", "market_cap", "price",
             "change_24h", "change_24h_pct", "price_change_24h",
@@ -423,6 +433,7 @@ class ProfileEngine:
                 if "group" in c
                 or c.get("field") in _STRICT_META          # always evaluate meta fields
                 or base_data.get(c.get("field")) is not None   # skip only missing indicators
+                or strict_indicators                           # strict: include missing indicators
             ]
             if not applicable:
                 result.append(asset)
