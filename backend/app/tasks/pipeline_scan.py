@@ -782,6 +782,8 @@ async def _replace_rejection_snapshot(
     profile_id,
     rows: list[dict],
 ):
+    from sqlalchemy import text
+
     await db.execute(
         text("DELETE FROM pipeline_watchlist_rejections WHERE watchlist_id = :wid"),
         {"wid": watchlist_id},
