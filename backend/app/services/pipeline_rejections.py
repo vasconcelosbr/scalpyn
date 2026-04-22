@@ -274,7 +274,7 @@ def evaluate_rejections(
         if failed_trace is None and filter_logic == "OR" and filter_results and not any(
             item["status"] == "PASS" for item in filter_results
         ):
-            failed_trace = next((item for item in filter_results if item["status"] == "FAIL"), filter_results[0])
+            failed_trace = next((item for item in filter_results if item["status"] == "FAIL"), None)
 
         if failed_trace is None:
             approved.append(asset)

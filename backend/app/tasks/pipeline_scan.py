@@ -1235,6 +1235,9 @@ async def _run_pipeline_scan():
                         effective_profile_config,
                         effective_level,
                         score_config=score_config,
+                        # Block rules + filters are already applied above via
+                        # evaluate_rejections so this pass only computes scores
+                        # and enforces downstream score-based gates.
                         apply_profile_filters=False,
                     )
                     profile_rejected = len(rejected_rows)

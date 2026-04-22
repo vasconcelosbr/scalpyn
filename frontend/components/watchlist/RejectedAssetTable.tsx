@@ -38,7 +38,10 @@ export interface RejectedMetrics {
 function fmtValue(value: unknown): string {
   if (value == null) return "—";
   if (typeof value === "number") {
-    return Math.abs(value) >= 100 ? value.toFixed(1) : Math.abs(value) >= 1 ? value.toFixed(2) : value.toFixed(4);
+    const abs = Math.abs(value);
+    if (abs >= 100) return value.toFixed(1);
+    if (abs >= 1) return value.toFixed(2);
+    return value.toFixed(4);
   }
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "string") return value;
@@ -171,12 +174,13 @@ export function RejectedAssetTable({
             <tbody>
               {filtered.map((item) => {
                 const palette = rowPalette(item.failed_type);
-                const isExpanded = expandedRow === `${item.symbol}-${item.failed_type}`;
+                const rowKey = `${item.symbol}-${item.failed_type}-${item.timestamp ?? "na"}`;
+                const isExpanded = expandedRow === rowKey;
                 return (
-                  <Fragment key={`${item.symbol}-${item.failed_type}`}>
+                  <Fragment key={rowKey}>
                     <tr
                       className={`cursor-pointer border-b border-[#1A2035]/60 hover:bg-[#0D1118] ${palette.row}`}
-                      onClick={() => setExpandedRow(isExpanded ? null : `${item.symbol}-${item.failed_type}`)}
+                      onClick={() => setExpandedRow(isExpanded ? null : rowKey)}
                     >
                       <td className="px-2 py-2.5 text-[#334155]">
                         {isExpanded ? <ChevronDown size={13} className="text-[#60A5FA]" /> : <ChevronRight size={13} />}
@@ -236,7 +240,7 @@ function TraceSection({ title, items }: { title: string; items: RejectedTraceIte
                   : "border-[#7F1D1D]/25 bg-[#150A0A] text-[#FCA5A5]"
                 : "border-[#1E2433] bg-[#06080E] text-[#64748B]";
           return (
-            <div key={`${item.indicator}-${index}`} className={`rounded-lg border px-3 py-2 text-xs ${cls}`}>
+            <div key={index} className={`rounded-lg border px-3 py-2 text-xs ${cls}`}>
               <div className="flex items-center justify-between gap-3">
                 <span className="font-semibold">{item.indicator}</span>
                 <span className="font-mono text-[10px]">{item.status}</span>

@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/spot/tickers"
 MAX_WATCHLIST_AUTO_REFRESH_DEPTH = 5
+_PROFILE_STRING_INDICATORS = {"macd_signal", "psar_trend", "ema_align_label"}
 
 
 def _passes_profile_filters(
@@ -1244,7 +1245,10 @@ async def _resolve_and_persist(
         }
         # Merge indicator values (skip non-scalar) for profile filter evaluation
         for k, v in ind.items():
-            if isinstance(v, (int, float, bool, str)) and k not in asset_entry:
+            if (
+                (isinstance(v, (int, float, bool)) or (isinstance(v, str) and k in _PROFILE_STRING_INDICATORS))
+                and k not in asset_entry
+            ):
                 asset_entry[k] = v
         candidate_assets.append(asset_entry)
 
@@ -1698,6 +1702,7 @@ async def get_pipeline_rejected(
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
+    """Compatibility alias for the product contract; canonical route is /api/watchlists/{id}/rejected."""
     result = await db.execute(
         select(PipelineWatchlist).where(
             PipelineWatchlist.id == watchlist_id,
