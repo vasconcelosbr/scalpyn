@@ -7,7 +7,7 @@ from .order import Order
 from .notification import NotificationSetting
 from .profile import Profile, WatchlistProfile
 from .custom_watchlist import CustomWatchlist
-from .pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
+from .pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset, PipelineWatchlistRejection
 from .ai_provider_key import AIProviderKey
 from .ai_skill import AiSkill
 from .backoffice import DecisionLog, AssetTrace, BackofficeAlert, PipelineMetric
@@ -27,6 +27,7 @@ __all__ = [
     "CustomWatchlist",
     "PipelineWatchlist",
     "PipelineWatchlistAsset",
+    "PipelineWatchlistRejection",
     "AIProviderKey",
     "AiSkill",
     "DecisionLog",

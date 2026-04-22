@@ -24,8 +24,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db, AsyncSessionLocal
 from ..api.config import get_current_user_id
-from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
+from ..models.pipeline_watchlist import (
+    PipelineWatchlist,
+    PipelineWatchlistAsset,
+    PipelineWatchlistRejection,
+)
 from ..services.market_data_service import _is_etf_pair
+from ..services.pipeline_rejections import evaluate_rejections, rejection_metrics
 from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
     effective_pipeline_level,
@@ -126,6 +131,7 @@ def _passes_profile_filters(
     return all(results) if logic.upper() == "AND" else any(results)
 
 router = APIRouter(prefix="/api/watchlists", tags=["Pipeline Watchlists"])
+pipeline_router = APIRouter(prefix="/api/pipeline", tags=["Pipeline Watchlists"])
 
 
 async def _seed_market_metadata_bg(symbols: List[str]) -> None:
@@ -804,6 +810,34 @@ async def _load_active_watchlist_assets(
     return assets_result.scalars().all()
 
 
+async def _replace_rejection_snapshot(
+    wl: PipelineWatchlist,
+    rows: List[Dict[str, Any]],
+    db: AsyncSession,
+) -> None:
+    await db.execute(
+        text("DELETE FROM pipeline_watchlist_rejections WHERE watchlist_id = :wid"),
+        {"wid": str(wl.id)},
+    )
+    for row in rows:
+        db.add(
+            PipelineWatchlistRejection(
+                watchlist_id=wl.id,
+                user_id=wl.user_id,
+                profile_id=wl.profile_id,
+                symbol=row["symbol"],
+                stage=row["stage"],
+                failed_type=row["failed_type"],
+                failed_indicator=row["failed_indicator"],
+                condition_text=row["condition"],
+                current_value=row.get("current_value"),
+                expected_value=row.get("expected"),
+                evaluation_trace=row.get("evaluation_trace") or [],
+                recorded_at=datetime.now(timezone.utc),
+            )
+        )
+
+
 def _should_refresh_for_upstream_delta(
     *,
     persisted_symbols: set[str],
@@ -944,6 +978,10 @@ async def _resolve_and_persist(
                   AND level_direction IS DISTINCT FROM 'down'
             """),
             {"wid": str(wl.id), "now": now},
+        )
+        await db.execute(
+            text("DELETE FROM pipeline_watchlist_rejections WHERE watchlist_id = :wid"),
+            {"wid": str(wl.id)},
         )
         await db.commit()
         return []
@@ -1183,19 +1221,10 @@ async def _resolve_and_persist(
             signal_status[sym] = True
 
     now = datetime.now(timezone.utc)
-    assets_out: List[Dict[str, Any]] = []
+    candidate_assets: List[Dict[str, Any]] = []
 
     for symbol in base_symbols:
         alpha = live_score_map.get(symbol, 0.0)
-
-        # Apply profile-level min_score gate (only when scoring data exists
-        # AND the level warrants it — L1/custom never gate on min_score).
-        if scoring_data_available:
-            if should_apply_min_score and profile_min_score and alpha < profile_min_score:
-                continue
-            # Signal check from profile (only for L3)
-            if should_require_signal and profile_require_signal and not signal_status.get(symbol, True):
-                continue
 
         meta = meta_map.get(symbol, {})
         ind = ind_map.get(symbol, {})
@@ -1215,33 +1244,46 @@ async def _resolve_and_persist(
         }
         # Merge indicator values (skip non-scalar) for profile filter evaluation
         for k, v in ind.items():
-            if isinstance(v, (int, float, bool)) and k not in asset_entry:
+            if isinstance(v, (int, float, bool, str)) and k not in asset_entry:
                 asset_entry[k] = v
-        assets_out.append(asset_entry)
+        candidate_assets.append(asset_entry)
+
+    assets_out = list(candidate_assets)
+    rejected_rows: List[Dict[str, Any]] = []
 
     # Apply profile filter conditions (market_cap, volume_24h, Change 24h%, etc.)
     # IMPORTANT: Only apply meta-based filters when market data is actually available.
     # If meta_map is empty (no market data in DB yet), skipping strict meta conditions
     # prevents the watchlist from being wiped on first run / before data collection.
-    if effective_level in ("L1", "L2", "L3") and wl.profile_id and assets_out and profile_config_full and p_conditions:
+    if effective_level in ("L1", "L2", "L3") and wl.profile_id and assets_out and profile_config_full:
+        applicable_conditions = list(p_conditions)
+        selected = None
         symbols_with_meta = sum(1 for s in base_symbols if meta_map.get(s))
-        selected = select_profile_filter_conditions(
-            p_conditions,
-            total_symbols=len(base_symbols),
-            symbols_with_meta=symbols_with_meta,
-        )
-        applicable_conditions = selected["conditions"]
 
-        if selected["relaxed_strict_meta"]:
+        if p_conditions:
+            selected = select_profile_filter_conditions(
+                p_conditions,
+                total_symbols=len(base_symbols),
+                symbols_with_meta=symbols_with_meta,
+            )
+            applicable_conditions = selected["conditions"]
+
+        approved_after_rules, rejected_rows = evaluate_rejections(
+            assets_out,
+            profile_config=profile_config_full,
+            stage=effective_level,
+            profile_id=str(wl.profile_id) if wl.profile_id else None,
+            selected_filter_conditions=applicable_conditions,
+        )
+
+        if selected and selected["relaxed_strict_meta"]:
             if applicable_conditions:
-                before = len(assets_out)
-                assets_out = [a for a in assets_out if _passes_profile_filters(a, applicable_conditions, p_logic, strict_indicators=True)]
                 logger.info(
                     "Pipeline profile filter [%s / %s]: sparse market data coverage %.1f%% "
                     "(%d/%d) — applying %d non-meta conditions only: %d → %d assets",
                     wl.name, wl.level, selected["coverage_ratio"] * 100,
                     symbols_with_meta, len(base_symbols),
-                    len(applicable_conditions), before, len(assets_out),
+                    len(applicable_conditions), len(assets_out), len(approved_after_rules),
                 )
             else:
                 logger.info(
@@ -1249,33 +1291,37 @@ async def _resolve_and_persist(
                     "(%d/%d) — skipping strict meta conditions to preserve %d assets.",
                     wl.name, wl.level, selected["coverage_ratio"] * 100,
                     symbols_with_meta, len(base_symbols),
-                    len(assets_out),
+                    len(approved_after_rules),
                 )
         else:
-            before = len(assets_out)
-            assets_out = [a for a in assets_out if _passes_profile_filters(a, applicable_conditions, p_logic, strict_indicators=True)]
             logger.info(
-                "Pipeline profile filter [%s / %s]: %d → %d assets (removed %d) "
+                "Pipeline profile rules [%s / %s]: %d → %d assets (rejected %d) "
                 "[%d/%d symbols had market data]",
-                wl.name, wl.level, before, len(assets_out), before - len(assets_out),
+                wl.name, wl.level, len(assets_out), len(approved_after_rules), len(rejected_rows),
                 symbols_with_meta, len(base_symbols),
             )
 
-    # ── Anti-bad-entry blocking: enforced only in the pipeline (L1/L2/L3) ───────
-    if effective_level in ("L1", "L2", "L3") and assets_out:
-        from ..utils.blocking_rules import is_blocked as _is_blocked
-        before_block = len(assets_out)
-        assets_out = [a for a in assets_out if not _is_blocked(a)]
-        if before_block != len(assets_out):
-            logger.info(
-                "[Pipeline] %s (%s): anti-bad-entry removed %d/%d assets on refresh",
-                wl.name, wl.level, before_block - len(assets_out), before_block,
-            )
-    elif assets_out:
+        assets_out = approved_after_rules
+
+    # Apply score/signal gates after the profile block/filter decision path.
+    if scoring_data_available and assets_out:
+        gated_assets: List[Dict[str, Any]] = []
+        for asset in assets_out:
+            alpha = asset.get("alpha_score") or 0.0
+            if should_apply_min_score and profile_min_score and alpha < profile_min_score:
+                continue
+            if should_require_signal and profile_require_signal and not signal_status.get(asset["symbol"], True):
+                continue
+            gated_assets.append(asset)
+        assets_out = gated_assets
+
+    if effective_level not in ("L1", "L2", "L3") and assets_out:
         logger.info(
             "[Pipeline] %s (%s): monitoring mode enabled — keeping all %d pool assets visible.",
             wl.name, wl.level, len(assets_out),
         )
+
+    await _replace_rejection_snapshot(wl, rejected_rows, db)
 
     # Detect level transitions & upsert
     existing_result = await db.execute(
@@ -1567,6 +1613,101 @@ async def get_watchlist_assets(
         # Alpha Score visible only at L2 (Stage 2) and L3 (Stage 3).
         "show_score":         (wl.level or "").upper() in {"L2", "L3"},
     }
+
+
+async def _get_watchlist_rejections_payload(
+    wl: PipelineWatchlist,
+    user_id: UUID,
+    db: AsyncSession,
+) -> Dict[str, Any]:
+    profile_config = await _load_watchlist_profile_config(wl, db)
+    effective_level = effective_pipeline_level(
+        wl.level,
+        source_pool_id=wl.source_pool_id,
+        profile_config=profile_config,
+    )
+    assets = await _load_active_watchlist_assets(wl.id, db)
+
+    if wl.auto_refresh:
+        try:
+            await _auto_refresh_watchlist_assets_if_needed(
+                wl,
+                assets,
+                effective_level=effective_level,
+                user_id=user_id,
+                db=db,
+            )
+        except Exception as exc:
+            logger.warning("[Pipeline] Auto-refresh rejection snapshot failed for %s: %s", wl.id, exc)
+
+    rows = (await db.execute(
+        select(PipelineWatchlistRejection)
+        .where(PipelineWatchlistRejection.watchlist_id == wl.id)
+        .order_by(PipelineWatchlistRejection.recorded_at.desc(), PipelineWatchlistRejection.symbol.asc())
+    )).scalars().all()
+
+    items = [
+        {
+            "symbol": row.symbol,
+            "stage": row.stage,
+            "profile_id": str(row.profile_id) if row.profile_id else None,
+            "failed_type": row.failed_type,
+            "failed_indicator": row.failed_indicator,
+            "condition": row.condition_text,
+            "current_value": row.current_value,
+            "expected": row.expected_value,
+            "timestamp": row.recorded_at.isoformat().replace("+00:00", "Z") if row.recorded_at else None,
+            "evaluation_trace": row.evaluation_trace or [],
+        }
+        for row in rows
+    ]
+    metrics = rejection_metrics(items)
+    metrics["approved_count"] = len(await _load_active_watchlist_assets(wl.id, db))
+    metrics["available_indicators"] = sorted({item["failed_indicator"] for item in items if item.get("failed_indicator")})
+    metrics["stages"] = sorted({item["stage"] for item in items if item.get("stage")})
+
+    return {
+        "watchlist_id": str(wl.id),
+        "profile_id": str(wl.profile_id) if wl.profile_id else None,
+        "items": items,
+        "metrics": metrics,
+    }
+
+
+@router.get("/{watchlist_id}/rejected")
+async def get_watchlist_rejected(
+    watchlist_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(PipelineWatchlist).where(
+            PipelineWatchlist.id == watchlist_id,
+            PipelineWatchlist.user_id == user_id,
+        )
+    )
+    wl = result.scalars().first()
+    if not wl:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    return await _get_watchlist_rejections_payload(wl, user_id, db)
+
+
+@pipeline_router.get("/rejected")
+async def get_pipeline_rejected(
+    watchlist_id: UUID,
+    user_id: UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(PipelineWatchlist).where(
+            PipelineWatchlist.id == watchlist_id,
+            PipelineWatchlist.user_id == user_id,
+        )
+    )
+    wl = result.scalars().first()
+    if not wl:
+        raise HTTPException(status_code=404, detail="Watchlist not found")
+    return await _get_watchlist_rejections_payload(wl, user_id, db)
 
 
 async def _cascade_refresh(wl_id: UUID, user_id: UUID, db: AsyncSession, depth: int = 0) -> None:

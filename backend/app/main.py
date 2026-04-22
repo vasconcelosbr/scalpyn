@@ -91,6 +91,7 @@ app.include_router(decisions.router)
 app.include_router(market.router)
 app.include_router(watchlist.router)
 app.include_router(watchlists.router)
+app.include_router(watchlists.pipeline_router)
 app.include_router(custom_watchlists.router)
 
 # Trading

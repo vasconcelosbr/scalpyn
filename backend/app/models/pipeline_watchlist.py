@@ -1,10 +1,10 @@
 """Pipeline Watchlist models — 4-level institutional funnel system.
 
-Tables: pipeline_watchlists, pipeline_watchlist_assets
+Tables: pipeline_watchlists, pipeline_watchlist_assets, pipeline_watchlist_rejections
 These are NEW tables and do NOT conflict with existing custom_watchlists.
 """
 
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Numeric
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Numeric, Text
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 import uuid
 from datetime import datetime, timezone
@@ -102,3 +102,37 @@ class PipelineWatchlistAsset(Base):
     previous_level = Column(String(10), nullable=True)
     level_change_at = Column(DateTime(timezone=True), nullable=True)
     level_direction = Column(String(4), nullable=True)   # "up" or "down"
+
+
+class PipelineWatchlistRejection(Base):
+    """Current rejection snapshot for a pipeline watchlist symbol."""
+    __tablename__ = 'pipeline_watchlist_rejections'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    watchlist_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey('pipeline_watchlists.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey('users.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    profile_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey('profiles.id', ondelete='SET NULL'),
+        nullable=True,
+    )
+    symbol = Column(String(20), nullable=False)
+    stage = Column(String(10), nullable=False)
+    failed_type = Column(String(20), nullable=False)
+    failed_indicator = Column(String(255), nullable=False)
+    condition_text = Column(Text, nullable=False)
+    current_value = Column(JSONB, nullable=True)
+    expected_value = Column(String(255), nullable=True)
+    evaluation_trace = Column(JSONB, nullable=True, default=list)
+    recorded_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
