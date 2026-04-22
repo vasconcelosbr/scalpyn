@@ -12,7 +12,7 @@ class Profile(Base):
     Profile represents a complete strategy configuration.
     
     Contains:
-    - Filters (L1): Asset filtering conditions
+    - Filters (POOL/L1): Universe and primary filtering conditions
     - Scoring: Custom Alpha Score weights
     - Signals: Entry condition definitions
     """

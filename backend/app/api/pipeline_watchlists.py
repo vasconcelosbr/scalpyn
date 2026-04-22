@@ -24,6 +24,7 @@ from ..models.profile import Profile
 from ..models.pool import Pool
 from .config import get_current_user_id
 from ..services.rule_engine import RuleEngine
+from ..utils.pipeline_profile_filters import normalize_watchlist_level, PIPELINE_FILTER_LEVELS
 
 logger = logging.getLogger(__name__)
 
@@ -126,9 +127,9 @@ async def create_pipeline_watchlist(
 
     Body fields:
       name                (str, required)
-      level               "L1" | "L2" | "L3"
-      source_pool_id      UUID of a Pool   (L1 sources from Pool)
-      source_watchlist_id UUID of another PipelineWatchlist (L2/L3)
+      level               "POOL" | "L1" | "L2" | "L3"
+      source_pool_id      UUID of a Pool   (POOL sources from Pool)
+      source_watchlist_id UUID of another PipelineWatchlist (L1/L2/L3)
       profile_id          UUID of a Profile to apply
       auto_refresh        bool (default true)
       filters_json        {} (DEPRECATED — filtering is driven by the profile)
@@ -137,9 +138,12 @@ async def create_pipeline_watchlist(
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
 
-    level = (payload.get("level") or "L1").upper()
-    if level not in ("L1", "L2", "L3"):
-        raise HTTPException(status_code=400, detail="level must be L1, L2 or L3")
+    try:
+        level = normalize_watchlist_level(payload.get("level", "L1"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="level must be POOL, L1, L2 or L3")
+    if level not in PIPELINE_FILTER_LEVELS:
+        raise HTTPException(status_code=400, detail="level must be POOL, L1, L2 or L3")
 
     wl = PipelineWatchlist(
         user_id=user_id,

@@ -35,6 +35,9 @@ from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
     effective_pipeline_level,
     select_profile_filter_conditions,
+    normalize_watchlist_level,
+    uses_pipeline_filters,
+    WATCHLIST_STAGE_ORDER,
 )
 
 logger = logging.getLogger(__name__)
@@ -263,8 +266,8 @@ FIELD_LABELS: Dict[str, str] = {
 
 
 def _uses_pipeline_filters(level: Optional[str]) -> bool:
-    """Only L1/L2/L3 enforce profile filters; custom pool watchlists are monitoring boards."""
-    return (level or "").upper() in {"L1", "L2", "L3"}
+    """Only POOL/L1/L2/L3 enforce profile filters; custom boards are monitoring boards."""
+    return uses_pipeline_filters(level)
 
 
 def _extract_profile_indicator_fields(profile_config: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
@@ -562,7 +565,10 @@ async def create_watchlist(
         except ValueError:
             return None
 
-    level = payload.get("level", "custom")
+    try:
+        level = normalize_watchlist_level(payload.get("level", "custom"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="level must be POOL, L1, L2, L3 or custom")
     # filters_json is kept for backward compatibility but IGNORED at runtime.
     # All filtering is driven exclusively by the associated profile.
     filters = payload.get("filters_json") or {}
@@ -614,7 +620,11 @@ async def update_watchlist(
     if "name" in payload:
         wl.name = payload["name"].strip() or wl.name
     if "level" in payload:
-        wl.level = payload["level"]
+        try:
+            next_level = normalize_watchlist_level(payload["level"])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="level must be POOL, L1, L2, L3 or custom")
+        wl.level = next_level
     if "source_pool_id" in payload:
         wl.source_pool_id = _to_uuid(payload["source_pool_id"])
     if "source_watchlist_id" in payload:
@@ -855,7 +865,7 @@ def _should_refresh_for_upstream_delta(
     Args:
         persisted_symbols: Active symbols currently stored for the watchlist.
         upstream_symbols: Symbols currently available from the watchlist source.
-        exact_match: True for monitoring boards, False for filtered L1/L2/L3 stages.
+        exact_match: True for monitoring boards, False for filtered POOL/L1/L2/L3 stages.
     """
     if exact_match:
         return persisted_symbols != upstream_symbols
@@ -893,7 +903,7 @@ async def _auto_refresh_watchlist_assets_if_needed(
     Args:
         wl: Watchlist being served.
         assets: Current active snapshot rows for ``wl``.
-        effective_level: Resolved stage name ("custom", "L1", "L2", or "L3").
+        effective_level: Resolved stage name ("custom", "POOL", "L1", "L2", or "L3").
         user_id: Owner used to validate upstream watchlist lookups.
         db: Async database session.
         depth: Current recursion depth, capped by ``MAX_WATCHLIST_AUTO_REFRESH_DEPTH``.
@@ -990,7 +1000,7 @@ async def _resolve_and_persist(
     # NOTE: filters_json on the watchlist is IGNORED at runtime.
     # All filtering criteria (min_score, require_signal, market_cap, volume, etc.)
     # come exclusively from the associated Profile (profile.config.filters.conditions).
-    # The watchlist is purely an organisational grouping (L1/L2/L3) + profile reference.
+    # The watchlist is purely an organisational grouping (POOL/L1/L2/L3) + profile reference.
 
     # Fetch market metadata for these symbols (include liquidity columns so profile
     # filter conditions on spread_pct / orderbook_depth_usdt can be evaluated).
@@ -1181,16 +1191,17 @@ async def _resolve_and_persist(
     profile_require_signal: bool = bool(pf_cfg.get("require_signal", False))
 
     # Source-pool watchlists with actual profile filter conditions must honor that
-    # profile even if legacy data stored them as "custom". Pure custom boards
-    # without filter conditions remain in monitoring mode.
+    # profile even if legacy data stored them as "custom". Those legacy boards are
+    # treated as POOL (Stage 0). Pure custom boards without filter conditions remain
+    # in monitoring mode.
     effective_level = effective_pipeline_level(
         wl.level,
         source_pool_id=wl.source_pool_id,
         profile_config=profile_config_full,
     )
-    if effective_level == "L1" and not _uses_pipeline_filters(wl.level):
+    if effective_level == "POOL" and not _uses_pipeline_filters(wl.level):
         logger.info(
-            "[Pipeline] %s (%s): source-pool watchlist promoted to L1 so profile filter conditions are enforced.",
+            "[Pipeline] %s (%s): source-pool watchlist promoted to POOL so universe filter conditions are enforced.",
             wl.name,
             wl.level,
         )
@@ -1259,7 +1270,7 @@ async def _resolve_and_persist(
     # IMPORTANT: Only apply meta-based filters when market data is actually available.
     # If meta_map is empty (no market data in DB yet), skipping strict meta conditions
     # prevents the watchlist from being wiped on first run / before data collection.
-    if effective_level in ("L1", "L2", "L3") and wl.profile_id and assets_out and profile_config_full:
+    if effective_level in ("POOL", "L1", "L2", "L3") and wl.profile_id and assets_out and profile_config_full:
         applicable_conditions = list(p_conditions)
         selected = None
         symbols_with_meta = sum(1 for s in base_symbols if meta_map.get(s))
@@ -1319,7 +1330,7 @@ async def _resolve_and_persist(
             gated_assets.append(asset)
         assets_out = gated_assets
 
-    if effective_level not in ("L1", "L2", "L3") and assets_out:
+    if not _uses_pipeline_filters(effective_level) and assets_out:
         logger.info(
             "[Pipeline] %s (%s): monitoring mode enabled — keeping all %d pool assets visible.",
             wl.name, wl.level, len(assets_out),
@@ -1668,7 +1679,10 @@ async def _get_watchlist_rejections_payload(
     metrics = rejection_metrics(items)
     metrics["approved_count"] = len(await _load_active_watchlist_assets(wl.id, db))
     metrics["available_indicators"] = sorted({item["failed_indicator"] for item in items if item.get("failed_indicator")})
-    metrics["stages"] = sorted({item["stage"] for item in items if item.get("stage")})
+    metrics["stages"] = sorted(
+        {item["stage"] for item in items if item.get("stage")},
+        key=lambda stage: WATCHLIST_STAGE_ORDER.get(stage, len(WATCHLIST_STAGE_ORDER)),
+    )
 
     return {
         "watchlist_id": str(wl.id),
@@ -1887,7 +1901,7 @@ async def refresh_watchlist(
 
     assets = await _resolve_and_persist(wl, user_id, db)
 
-    # Cascade refresh to downstream watchlists (L1 → L2 → L3)
+    # Cascade refresh to downstream watchlists (POOL → L1 → L2 → L3)
     await _cascade_refresh(watchlist_id, user_id, db)
 
     return {"refreshed": True, "asset_count": len(assets)}
@@ -1902,7 +1916,7 @@ async def create_default_pipeline(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Auto-create L1 / L2 / L3 watchlists linked to a given pool_id.
+    Auto-create POOL / L1 / L2 / L3 watchlists linked to a given pool_id.
     Called when user creates their first pool and clicks 'Discover Assets'.
     Idempotent: skips creation if same-named watchlist already exists for this pool.
     """
@@ -1933,9 +1947,14 @@ async def create_default_pipeline(
         created.append(_wl_to_dict(wl))
         return wl
 
+    pool_watchlist = await _get_or_create(
+        "POOL Universe", "POOL",
+        source_pool_id=pool_uuid,
+        filters_json={},
+    )
     l1 = await _get_or_create(
         "L1 Assets", "L1",
-        source_pool_id=pool_uuid,
+        source_watchlist_id=pool_watchlist.id,
         filters_json={},
     )
     l2 = await _get_or_create(
