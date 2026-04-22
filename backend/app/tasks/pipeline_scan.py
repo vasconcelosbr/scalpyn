@@ -17,8 +17,10 @@ import logging
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from uuid import uuid4
 
 from ..tasks.celery_app import celery_app
+from ..services.pipeline_rejections import evaluate_rejections
 from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
     effective_pipeline_level,
@@ -764,6 +766,47 @@ async def _run_staleness_only(db, watchlist_id: str, filters_json: dict | None =
     await db.commit()
 
 
+async def _replace_rejection_snapshot(
+    db,
+    watchlist_id: str,
+    user_id,
+    profile_id,
+    rows: list[dict],
+):
+    await db.execute(
+        text("DELETE FROM pipeline_watchlist_rejections WHERE watchlist_id = :wid"),
+        {"wid": watchlist_id},
+    )
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        await db.execute(text("""
+            INSERT INTO pipeline_watchlist_rejections (
+                id, watchlist_id, user_id, profile_id, symbol, stage,
+                failed_type, failed_indicator, condition_text, current_value,
+                expected_value, evaluation_trace, recorded_at
+            )
+            VALUES (
+                :id, :watchlist_id, :user_id, :profile_id, :symbol, :stage,
+                :failed_type, :failed_indicator, :condition_text, CAST(:current_value AS jsonb),
+                :expected_value, CAST(:evaluation_trace AS jsonb), :recorded_at
+            )
+        """), {
+            "id": str(uuid4()),
+            "watchlist_id": watchlist_id,
+            "user_id": str(user_id),
+            "profile_id": str(profile_id) if profile_id else None,
+            "symbol": row["symbol"],
+            "stage": row["stage"],
+            "failed_type": row["failed_type"],
+            "failed_indicator": row["failed_indicator"],
+            "condition_text": row["condition"],
+            "current_value": json.dumps(_jsonable(row.get("current_value"))),
+            "expected_value": row.get("expected"),
+            "evaluation_trace": json.dumps(_jsonable(row.get("evaluation_trace") or [])),
+            "recorded_at": now,
+        })
+
+
 # ─── DB upsert ────────────────────────────────────────────────────────────────
 
 async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict | None = None):
@@ -1148,12 +1191,11 @@ async def _run_pipeline_scan():
                             "[PipelineScan] %s (%s): appended %d symbols without market data so the monitoring board shows the full pool",
                             wl.name, level, len(missing_symbols),
                         )
-
-                # Remove assets blocked by anti-bad-entry rules (shared utility)
-                from ..utils.blocking_rules import is_blocked as _is_blocked
+                    await _replace_rejection_snapshot(db, wl_id, user_id, wl.profile_id, [])
 
                 if effective_level in ("L1", "L2"):
                     effective_profile_config = profile_config
+                    selected_filter_conditions = None
                     if profile_config:
                         filter_cfg = (profile_config.get("filters") or {})
                         selected = select_profile_filter_conditions(
@@ -1169,6 +1211,7 @@ async def _run_pipeline_scan():
                                     "conditions": selected["conditions"],
                                 },
                             }
+                            selected_filter_conditions = selected["conditions"]
                             logger.info(
                                 "[PipelineScan] %s (%s): sparse market data coverage %.1f%% (%d/%d) — "
                                 "ignoring %d strict meta conditions for this pass",
@@ -1177,22 +1220,28 @@ async def _run_pipeline_scan():
                                 assets_with_metadata, len(symbols),
                                 len(selected["strict_meta_conditions"]),
                             )
+                        else:
+                            selected_filter_conditions = selected["conditions"]
 
-                    passed, _ = _apply_level_filter(
+                    profile_passed, rejected_rows = evaluate_rejections(
                         assets,
+                        profile_config=effective_profile_config,
+                        stage=effective_level,
+                        profile_id=str(wl.profile_id) if wl.profile_id else None,
+                        selected_filter_conditions=selected_filter_conditions,
+                    )
+                    passed, _ = _apply_level_filter(
+                        profile_passed,
                         effective_profile_config,
                         effective_level,
                         score_config=score_config,
+                        # Block rules + filters are already applied above via
+                        # evaluate_rejections so this pass only computes scores
+                        # and enforces downstream score-based gates.
+                        apply_profile_filters=False,
                     )
-                    profile_rejected = max(0, profile_candidate_count - len(passed))
-
-                    before_block = len(passed)
-                    passed = [a for a in passed if not _is_blocked(a)]
-                    if before_block != len(passed):
-                        logger.info(
-                            "[PipelineScan] %s (%s): anti-bad-entry removed %d/%d assets",
-                            wl.name, level, before_block - len(passed), before_block,
-                        )
+                    profile_rejected = len(rejected_rows)
+                    await _replace_rejection_snapshot(db, wl_id, user_id, wl.profile_id, rejected_rows)
 
                     # ── FUNNEL SUMMARY ────────────────────────────────────────
                     logger.info(
@@ -1200,15 +1249,15 @@ async def _run_pipeline_scan():
                         "  Pool symbols:       %d\n"
                         "  With market data:   %d  (-%d no metadata)\n"
                         "  Profile candidates: %d\n"
-                        "  After profile filt: %d  (-%d rejected)\n"
-                        "  After blocking:     %d  (-%d blocked)\n"
+                        "  After profile rules:%d  (-%d rejected)\n"
+                        "  After score gate:   %d\n"
                         "  ═══════════════════════════",
                         wl.name, level,
                         len(symbols),
                         assets_with_metadata, len(symbols) - assets_with_metadata,
                         profile_candidate_count,
-                        before_block, profile_rejected,
-                        len(passed), before_block - len(passed),
+                        len(profile_passed), profile_rejected,
+                        len(passed),
                     )
 
                     # Broadcast funnel stats for frontend diagnostic panel
@@ -1217,7 +1266,7 @@ async def _run_pipeline_scan():
                         pool_total=len(symbols),
                         with_metadata=assets_with_metadata,
                         profile_candidates=profile_candidate_count,
-                        after_profile_filter=before_block,
+                        after_profile_filter=len(profile_passed),
                         after_blocking=len(passed),
                     )
 
@@ -1226,7 +1275,7 @@ async def _run_pipeline_scan():
                         "pool_total": len(symbols),
                         "with_metadata": assets_with_metadata,
                         "profile_candidates": profile_candidate_count,
-                        "after_profile_filter": before_block,
+                        "after_profile_filter": len(profile_passed),
                         "after_blocking": len(passed),
                     })
 
@@ -1234,8 +1283,15 @@ async def _run_pipeline_scan():
                     await _update_last_scanned(db, wl_id)
 
                 elif effective_level == "L3":
-                    decisions = _evaluate_l3_decisions(
+                    profile_passed, rejected_rows = evaluate_rejections(
                         assets,
+                        profile_config=profile_config,
+                        stage=effective_level,
+                        profile_id=str(wl.profile_id) if wl.profile_id else None,
+                    )
+                    await _replace_rejection_snapshot(db, wl_id, user_id, wl.profile_id, rejected_rows)
+                    decisions = _evaluate_l3_decisions(
+                        profile_passed,
                         profile_config,
                         level,
                         score_config=score_config,
@@ -1254,31 +1310,16 @@ async def _run_pipeline_scan():
                         if decision["decision"] == "ALLOW"
                     ]
 
-                    before_block = len(signals)
-                    blocked_symbols = {signal["symbol"] for signal in signals if _is_blocked(signal)}
-                    signals = [signal for signal in signals if signal["symbol"] not in blocked_symbols]
-                    if blocked_symbols:
-                        for decision in decisions:
-                            if decision["symbol"] in blocked_symbols:
-                                decision["decision"] = "BLOCK"
-                                decision["l3_pass"] = False
-                                decision["reasons"]["anti_bad_entry"] = "FAIL"
-                    if before_block != len(signals):
-                        logger.info(
-                            "[PipelineScan] %s (L3): anti-bad-entry removed %d/%d signals",
-                            wl.name, before_block - len(signals), before_block,
-                        )
-
                     logger.info(
                         "[PipelineScan] ═══ %s (L3) FUNNEL SUMMARY ═══\n"
                         "  From upstream:      %d\n"
                         "  With market data:   %d\n"
+                        "  Rejected by rules:  %d\n"
                         "  After signals:      %d\n"
-                        "  After blocking:     %d\n"
                         "  ═══════════════════════════",
                         wl.name,
                         len(symbols), assets_with_metadata,
-                        before_block, len(signals),
+                        len(rejected_rows), len(signals),
                     )
 
                     # ── 5. Detect new signals ─────────────────────────────────

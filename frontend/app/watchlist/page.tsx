@@ -7,6 +7,11 @@ import {
   type IndicatorColumn,
   type PipelineAssetWithScore,
 } from '@/components/watchlist/PipelineAssetTable';
+import {
+  RejectedAssetTable,
+  type RejectedAssetItem,
+  type RejectedMetrics,
+} from '@/components/watchlist/RejectedAssetTable';
 import { apiFetch } from '@/lib/api';
 import { useWebSocket, getCurrentUserId } from '@/hooks/useWebSocket';
 import {
@@ -64,6 +69,8 @@ interface PipelineAsset extends PipelineAssetWithScore {
   previous_level: string | null;
   level_change_at: string | null;
 }
+
+type WatchlistDetailTab = 'approved' | 'rejected';
 
 interface Pool {
   id: string;
@@ -472,13 +479,17 @@ interface WatchlistRowProps {
 
 function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, onRefreshed, refreshTick, liveDirections = {} }: WatchlistRowProps) {
   const [expanded, setExpanded] = useState(false);
+  const [detailTab, setDetailTab] = useState<WatchlistDetailTab>('approved');
   const [assets, setAssets] = useState<PipelineAsset[]>([]);
+  const [rejectedItems, setRejectedItems] = useState<RejectedAssetItem[]>([]);
+  const [rejectedMetrics, setRejectedMetrics] = useState<RejectedMetrics | null>(null);
   const [indicatorCols, setIndicatorCols] = useState<IndicatorColumn[]>([]);
   // Alpha Score visibility: false for POOL/custom (Stage 0) and L1 (Stage 1)
   const [showScore, setShowScore] = useState<boolean>(
     ['L2', 'L3'].includes((wl.level || '').toUpperCase())
   );
   const [loadingAssets, setLoadingAssets] = useState(false);
+  const [loadingRejected, setLoadingRejected] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -502,13 +513,19 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     if (assetsRequestInFlight.current) return;
     assetsRequestInFlight.current = true;
     if (!silent) setLoadingAssets(true);
+    if (!silent) setLoadingRejected(true);
     try {
-      const data = await apiFetch<{ assets: PipelineAsset[]; profile_indicators?: IndicatorColumn[]; show_score?: boolean }>(`/watchlists/${wl.id}/assets`);
+      const [data, rejected] = await Promise.all([
+        apiFetch<{ assets: PipelineAsset[]; profile_indicators?: IndicatorColumn[]; show_score?: boolean }>(`/watchlists/${wl.id}/assets`),
+        apiFetch<{ items: RejectedAssetItem[]; metrics: RejectedMetrics }>(`/pipeline/rejected?watchlist_id=${wl.id}`),
+      ]);
       // Always render highest alpha_score first
       const sorted = [...(data.assets ?? [])].sort(
         (a, b) => (b.alpha_score ?? 0) - (a.alpha_score ?? 0)
       );
       setAssets(sorted);
+      setRejectedItems(rejected.items ?? []);
+      setRejectedMetrics(rejected.metrics ?? null);
       setIndicatorCols(data.profile_indicators ?? []);
       // Use API-provided show_score flag; fall back to level-based heuristic
       if (data.show_score !== undefined) {
@@ -522,6 +539,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     } finally {
       assetsRequestInFlight.current = false;
       if (!silent) setLoadingAssets(false);
+      if (!silent) setLoadingRejected(false);
     }
   }, [wl.id, onRefreshed]);
 
@@ -643,17 +661,43 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
       {/* Asset table */}
       {expanded && (
         <div className="border-t border-[#1E2433]">
+          <div className="flex items-center gap-2 border-b border-[#1E2433] px-4 py-3">
+            <button
+              type="button"
+              onClick={() => setDetailTab('approved')}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                detailTab === 'approved'
+                  ? 'bg-[#1E2433] text-[#E2E8F0]'
+                  : 'text-[#64748B] hover:text-[#94A3B8]'
+              }`}
+            >
+              Approved
+              <span className="ml-1 text-[#4B5563]">{assets.length}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setDetailTab('rejected')}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                detailTab === 'rejected'
+                  ? 'bg-[#1E2433] text-[#E2E8F0]'
+                  : 'text-[#64748B] hover:text-[#94A3B8]'
+              }`}
+            >
+              Rejected
+              <span className="ml-1 text-[#4B5563]">{rejectedMetrics?.total_rejected ?? rejectedItems.length}</span>
+            </button>
+          </div>
           {refreshError && (
             <div className="px-4 py-2 text-xs text-red-400 bg-red-400/10">
               Refresh error: {refreshError}
             </div>
           )}
-          {loadingAssets ? (
+          {detailTab === 'approved' && loadingAssets ? (
             <div className="px-4 py-6 text-center text-sm text-[#4B5563] flex items-center justify-center gap-2">
               <RefreshCw size={13} className="animate-spin" />
               Loading assets…
             </div>
-          ) : (
+          ) : detailTab === 'approved' ? (
             <PipelineAssetTable
               assets={assets}
               indicatorCols={indicatorCols}
@@ -661,6 +705,12 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
               refreshing={refreshing}
               liveDirections={liveDirections}
               showScore={showScore}
+            />
+          ) : (
+            <RejectedAssetTable
+              items={rejectedItems}
+              metrics={rejectedMetrics}
+              loading={loadingRejected}
             />
           )}
         </div>
