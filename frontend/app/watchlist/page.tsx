@@ -303,12 +303,34 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
 
   function handleLevelChange(newLevel: string) {
     setLevel(newLevel);
+    if (newLevel === 'POOL') {
+      setSourceWatchlistId('');
+    } else if (newLevel === 'L1' || newLevel === 'L2' || newLevel === 'L3') {
+      setSourcePoolId('');
+    }
   }
 
   const otherWatchlists = watchlists.filter((w) => w.id !== wl?.id);
+  const sourceConfigError = (() => {
+    if (level === 'POOL') {
+      if (!sourcePoolId) return 'POOL exige Source Pool.';
+      if (sourceWatchlistId) return 'POOL não aceita Source Watchlist.';
+      return null;
+    }
+    if (level === 'L1' || level === 'L2' || level === 'L3') {
+      if (!sourceWatchlistId) return `${level} exige Source Watchlist.`;
+      if (sourcePoolId) return `${level} não aceita Source Pool.`;
+      return null;
+    }
+    return null;
+  })();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (sourceConfigError) {
+      setSaveError(sourceConfigError);
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -458,6 +480,9 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
           {saveError && (
             <p className="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">{saveError}</p>
           )}
+          {!saveError && sourceConfigError && (
+            <p className="text-xs text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded-lg px-3 py-2">{sourceConfigError}</p>
+          )}
 
           <div className="flex gap-3 pt-2">
             <button
@@ -469,7 +494,7 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
             </button>
             <button
               type="submit"
-              disabled={saving || !name.trim()}
+              disabled={saving || !name.trim() || !!sourceConfigError}
               className="flex-1 px-4 py-2 rounded-lg bg-[#3B82F6] text-sm font-medium text-white hover:bg-[#2563EB] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               data-testid="watchlist-save-btn"
             >

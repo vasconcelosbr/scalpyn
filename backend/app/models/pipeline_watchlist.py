@@ -102,6 +102,7 @@ class PipelineWatchlistAsset(Base):
     previous_level = Column(String(10), nullable=True)
     level_change_at = Column(DateTime(timezone=True), nullable=True)
     level_direction = Column(String(4), nullable=True)   # "up" or "down"
+    execution_id = Column(UUID(as_uuid=True), nullable=True)
 
 
 class PipelineWatchlistRejection(Base):
@@ -132,6 +133,7 @@ class PipelineWatchlistRejection(Base):
     current_value = Column(JSONB, nullable=True)
     expected_value = Column(String(255), nullable=True)
     evaluation_trace = Column(JSONB, nullable=True, default=list)
+    execution_id = Column(UUID(as_uuid=True), nullable=True)
     recorded_at = Column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

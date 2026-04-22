@@ -47,6 +47,31 @@ MAX_WATCHLIST_AUTO_REFRESH_DEPTH = 5
 _PROFILE_STRING_INDICATORS = {"macd_signal", "psar_trend", "ema_align_label"}
 
 
+def _normalize_and_validate_watchlist_sources(
+    *,
+    level: str,
+    source_pool_id: Optional[UUID],
+    source_watchlist_id: Optional[UUID],
+) -> tuple[Optional[UUID], Optional[UUID]]:
+    normalized = normalize_watchlist_level(level)
+
+    if normalized == "POOL":
+        if source_watchlist_id is not None:
+            raise HTTPException(status_code=400, detail="POOL watchlist cannot define source_watchlist_id")
+        if source_pool_id is None:
+            raise HTTPException(status_code=400, detail="POOL watchlist requires source_pool_id")
+        return source_pool_id, None
+
+    if normalized in {"L1", "L2", "L3"}:
+        if source_pool_id is not None:
+            raise HTTPException(status_code=400, detail=f"{normalized} watchlist cannot define source_pool_id")
+        if source_watchlist_id is None:
+            raise HTTPException(status_code=400, detail=f"{normalized} watchlist requires source_watchlist_id")
+        return None, source_watchlist_id
+
+    return source_pool_id, source_watchlist_id
+
+
 def _passes_profile_filters(
     asset: Dict[str, Any],
     conditions: list,
@@ -572,13 +597,20 @@ async def create_watchlist(
     # filters_json is kept for backward compatibility but IGNORED at runtime.
     # All filtering is driven exclusively by the associated profile.
     filters = payload.get("filters_json") or {}
+    source_pool_id = _to_uuid(payload.get("source_pool_id"))
+    source_watchlist_id = _to_uuid(payload.get("source_watchlist_id"))
+    source_pool_id, source_watchlist_id = _normalize_and_validate_watchlist_sources(
+        level=level,
+        source_pool_id=source_pool_id,
+        source_watchlist_id=source_watchlist_id,
+    )
 
     wl = PipelineWatchlist(
         user_id=user_id,
         name=name,
         level=level,
-        source_pool_id=_to_uuid(payload.get("source_pool_id")),
-        source_watchlist_id=_to_uuid(payload.get("source_watchlist_id")),
+        source_pool_id=source_pool_id,
+        source_watchlist_id=source_watchlist_id,
         profile_id=_to_uuid(payload.get("profile_id")),
         auto_refresh=payload.get("auto_refresh", True),
         filters_json=filters,
@@ -624,11 +656,20 @@ async def update_watchlist(
             next_level = normalize_watchlist_level(payload["level"])
         except ValueError:
             raise HTTPException(status_code=400, detail="level must be POOL, L1, L2, L3 or custom")
-        wl.level = next_level
-    if "source_pool_id" in payload:
-        wl.source_pool_id = _to_uuid(payload["source_pool_id"])
-    if "source_watchlist_id" in payload:
-        wl.source_watchlist_id = _to_uuid(payload["source_watchlist_id"])
+    else:
+        next_level = wl.level
+    next_source_pool_id = _to_uuid(payload["source_pool_id"]) if "source_pool_id" in payload else wl.source_pool_id
+    next_source_watchlist_id = (
+        _to_uuid(payload["source_watchlist_id"]) if "source_watchlist_id" in payload else wl.source_watchlist_id
+    )
+    next_source_pool_id, next_source_watchlist_id = _normalize_and_validate_watchlist_sources(
+        level=next_level,
+        source_pool_id=next_source_pool_id,
+        source_watchlist_id=next_source_watchlist_id,
+    )
+    wl.level = next_level
+    wl.source_pool_id = next_source_pool_id
+    wl.source_watchlist_id = next_source_watchlist_id
     if "profile_id" in payload:
         wl.profile_id = _to_uuid(payload["profile_id"])
     if "auto_refresh" in payload:
@@ -716,28 +757,37 @@ async def _get_base_symbols(
             return s[:-4] + "_USDT"
         return s
 
-    if wl.source_pool_id:
-        # Terminal source: return ALL pool coins. Filtering happens in _resolve_and_persist.
-        result = await db.execute(
-            text("""
-                SELECT symbol FROM pool_coins
-                WHERE pool_id = :pool_id AND is_active = TRUE
-            """),
-            {"pool_id": str(wl.source_pool_id)},
-        )
-        raw_symbols = [row.symbol for row in result.fetchall()]
-        # Normalize symbols to BTC_USDT format so market_metadata lookups work
-        normalized = list(dict.fromkeys(_normalize_sym(s) for s in raw_symbols))
-        logger.debug(
-            "[GetBaseSymbols] Pool %s: %d raw coins → %d normalized symbols",
-            wl.source_pool_id, len(raw_symbols), len(normalized),
-        )
-        return normalized
+    normalized_level = normalize_watchlist_level(wl.level)
+    source_pool_id = wl.source_pool_id
+    source_watchlist_id = wl.source_watchlist_id
 
-    if wl.source_watchlist_id:
+    if normalized_level in {"L1", "L2", "L3"} and source_pool_id and source_watchlist_id:
+        logger.warning(
+            {
+                "type": "INVALID_SOURCE_CONFIG",
+                "watchlist_id": str(wl.id),
+                "level": normalized_level,
+                "message": "Both source_pool_id and source_watchlist_id set; prioritizing source_watchlist_id.",
+            }
+        )
+        source_pool_id = None
+    elif normalized_level in {"L1", "L2", "L3"} and source_pool_id and not source_watchlist_id:
+        logger.warning(
+            {
+                "type": "INVALID_SOURCE_CONFIG",
+                "watchlist_id": str(wl.id),
+                "level": normalized_level,
+                "message": "source_pool_id is invalid for L1/L2/L3; returning empty upstream.",
+            }
+        )
+        return []
+    elif normalized_level == "POOL" and source_watchlist_id:
+        source_watchlist_id = None
+
+    if source_watchlist_id:
         result = await db.execute(
             select(PipelineWatchlist).where(
-                PipelineWatchlist.id == wl.source_watchlist_id,
+                PipelineWatchlist.id == source_watchlist_id,
                 PipelineWatchlist.user_id == user_id,
             )
         )
@@ -774,6 +824,24 @@ async def _get_base_symbols(
 
             # Parent never populated → recurse (first-run bootstrap)
             return await _get_base_symbols(parent, user_id, db, depth + 1)
+
+    if source_pool_id:
+        # Terminal source: return ALL pool coins. Filtering happens in _resolve_and_persist.
+        result = await db.execute(
+            text("""
+                SELECT symbol FROM pool_coins
+                WHERE pool_id = :pool_id AND is_active = TRUE
+            """),
+            {"pool_id": str(source_pool_id)},
+        )
+        raw_symbols = [row.symbol for row in result.fetchall()]
+        # Normalize symbols to BTC_USDT format so market_metadata lookups work
+        normalized = list(dict.fromkeys(_normalize_sym(s) for s in raw_symbols))
+        logger.debug(
+            "[GetBaseSymbols] Pool %s: %d raw coins → %d normalized symbols",
+            source_pool_id, len(raw_symbols), len(normalized),
+        )
+        return normalized
 
     return []
 
