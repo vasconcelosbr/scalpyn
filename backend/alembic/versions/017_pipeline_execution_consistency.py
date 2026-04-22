@@ -21,22 +21,27 @@ def upgrade() -> None:
 
     # Defensive data normalization for legacy inconsistent configs:
     # For L1/L2/L3, migrate source_pool_id → source_watchlist_id when possible.
+    # Uses DISTINCT ON + JOIN instead of LATERAL to avoid "invalid reference to
+    # FROM-clause entry for table 'child'" in PostgreSQL UPDATE...FROM LATERAL.
     op.execute(
         """
-        UPDATE pipeline_watchlists child
-        SET source_watchlist_id = parent.id
-        FROM LATERAL (
-            SELECT pw.id
-            FROM pipeline_watchlists pw
-            WHERE pw.user_id = child.user_id
-              AND pw.source_pool_id = child.source_pool_id
-              AND UPPER(pw.level) = 'POOL'
-            ORDER BY pw.created_at ASC
-            LIMIT 1
-        ) AS parent
-        WHERE UPPER(child.level) IN ('L1', 'L2', 'L3')
-          AND child.source_pool_id IS NOT NULL
-          AND child.source_watchlist_id IS NULL
+        UPDATE pipeline_watchlists
+        SET source_watchlist_id = parent_lookup.parent_id
+        FROM (
+            SELECT DISTINCT ON (c.id)
+                c.id          AS child_id,
+                pw.id         AS parent_id
+            FROM pipeline_watchlists c
+            JOIN pipeline_watchlists pw
+                ON  pw.user_id        = c.user_id
+                AND pw.source_pool_id = c.source_pool_id
+                AND UPPER(pw.level)   = 'POOL'
+            WHERE UPPER(c.level) IN ('L1', 'L2', 'L3')
+              AND c.source_pool_id       IS NOT NULL
+              AND c.source_watchlist_id  IS NULL
+            ORDER BY c.id, pw.created_at ASC
+        ) AS parent_lookup
+        WHERE pipeline_watchlists.id = parent_lookup.child_id
         """
     )
 
