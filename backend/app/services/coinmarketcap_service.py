@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Iterable
 
 import httpx
@@ -13,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 CMC_QUOTES_URL = "https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/latest"
 CMC_BATCH_SIZE = 100
+_PAIR_SUFFIX_RE = re.compile(r"(?:_USDT|USDT)$")
 
 
 def normalize_market_cap_symbols(symbols: Iterable[str]) -> list[str]:
@@ -21,7 +23,7 @@ def normalize_market_cap_symbols(symbols: Iterable[str]) -> list[str]:
     seen: set[str] = set()
 
     for symbol in symbols:
-        base = (symbol or "").upper().replace("_USDT", "").replace("USDT", "").strip()
+        base = _PAIR_SUFFIX_RE.sub("", (symbol or "").upper().strip())
         if not base or is_leveraged_base(base) or base in seen:
             continue
         normalized.append(base)

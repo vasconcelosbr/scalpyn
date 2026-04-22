@@ -58,7 +58,13 @@ async def _fetch_market_caps_async() -> dict:
     from ..models.ai_provider_key import AIProviderKey
     from ..services.ai_keys_service import decrypt_value
 
-    stats = {"source": "coinmarketcap", "updated_metadata": 0, "updated_pipeline": 0, "error": None}
+    stats = {
+        "source": "coinmarketcap",
+        "updated_metadata": 0,
+        "updated_pipeline": 0,
+        "error": None,
+        "warning": None,
+    }
 
     async with AsyncSessionLocal() as db:
         mm_symbols = await _get_distinct_symbols(db, "market_metadata")
@@ -81,10 +87,10 @@ async def _fetch_market_caps_async() -> dict:
                 cmc_key = decrypt_value(raw).strip()
                 market_caps = await fetch_cmc_market_caps(requested_bases, cmc_key)
             except Exception as exc:
-                stats["error"] = "cmc_fetch_failed"
+                stats["warning"] = "cmc_fetch_failed"
                 logger.error("Failed to fetch market caps from CoinMarketCap: %s", exc)
         else:
-            stats["error"] = "cmc_key_missing"
+            stats["warning"] = "cmc_key_missing"
             logger.warning("CoinMarketCap key not configured; using Gate.io fallback only.")
 
         missing_bases = {base for base in requested_bases if base not in market_caps}
@@ -100,7 +106,7 @@ async def _fetch_market_caps_async() -> dict:
                 )
 
         if not market_caps:
-            stats["error"] = "no_data" if cmc_row else stats["error"]
+            stats["error"] = "no_data"
             return stats
 
         # 3. Update market_metadata

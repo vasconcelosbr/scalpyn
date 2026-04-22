@@ -17,7 +17,10 @@ def test_normalize_market_cap_symbols_strips_pairs_and_dedupes():
         "",
     ]
 
-    assert coinmarketcap_service.normalize_market_cap_symbols(symbols) == ["BTC", "ETH"]
+    normalized = coinmarketcap_service.normalize_market_cap_symbols(symbols)
+
+    assert normalized == ["BTC", "ETH"]
+    assert "TON2L" not in normalized
 
 
 def test_extract_market_caps_accepts_dict_and_list_payloads():
