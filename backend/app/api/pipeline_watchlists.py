@@ -24,6 +24,7 @@ from ..models.profile import Profile
 from ..models.pool import Pool
 from .config import get_current_user_id
 from ..services.rule_engine import RuleEngine
+from ..utils.pipeline_profile_filters import normalize_watchlist_level, PIPELINE_FILTER_LEVELS
 
 logger = logging.getLogger(__name__)
 
@@ -137,8 +138,11 @@ async def create_pipeline_watchlist(
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
 
-    level = (payload.get("level") or "POOL").upper()
-    if level not in ("POOL", "L1", "L2", "L3"):
+    try:
+        level = normalize_watchlist_level(payload.get("level", "L1"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="level must be POOL, L1, L2 or L3")
+    if level not in PIPELINE_FILTER_LEVELS:
         raise HTTPException(status_code=400, detail="level must be POOL, L1, L2 or L3")
 
     wl = PipelineWatchlist(

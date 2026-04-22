@@ -291,7 +291,7 @@ function ProfilePreview({ profile }: { profile: Profile }) {
 function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: ModalProps) {
   const isNew = !wl?.id;
   const [name, setName] = useState(wl?.name ?? '');
-  const [level, setLevel] = useState(isNew ? 'POOL' : resolveWatchlistLevel(wl, profiles));
+  const [level, setLevel] = useState(isNew ? 'custom' : resolveWatchlistLevel(wl, profiles));
   const [sourcePoolId, setSourcePoolId] = useState(wl?.source_pool_id ?? '');
   const [sourceWatchlistId, setSourceWatchlistId] = useState(wl?.source_watchlist_id ?? '');
   const [profileId, setProfileId] = useState(wl?.profile_id ?? '');

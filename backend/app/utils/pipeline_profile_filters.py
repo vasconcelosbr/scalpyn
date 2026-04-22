@@ -32,6 +32,15 @@ def uses_pipeline_filters(level: str | None) -> bool:
     return (level or "").upper() in PIPELINE_FILTER_LEVELS
 
 
+def normalize_watchlist_level(level: Any, *, default: str = "custom") -> str:
+    """Normalize persisted/user-provided watchlist levels."""
+    raw_level = str(level or default).strip()
+    normalized = "custom" if raw_level.lower() == "custom" else raw_level.upper()
+    if normalized not in WATCHLIST_LEVELS:
+        raise ValueError(f"Invalid watchlist level: {level}")
+    return normalized
+
+
 def select_profile_filter_conditions(
     conditions: list[dict[str, Any]] | None,
     *,

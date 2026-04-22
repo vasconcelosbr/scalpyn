@@ -35,8 +35,8 @@ from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
     effective_pipeline_level,
     select_profile_filter_conditions,
+    normalize_watchlist_level,
     uses_pipeline_filters,
-    WATCHLIST_LEVELS,
     WATCHLIST_STAGE_ORDER,
 )
 
@@ -565,9 +565,9 @@ async def create_watchlist(
         except ValueError:
             return None
 
-    raw_level = str(payload.get("level", "custom") or "custom").strip()
-    level = "custom" if raw_level.lower() == "custom" else raw_level.upper()
-    if level not in WATCHLIST_LEVELS:
+    try:
+        level = normalize_watchlist_level(payload.get("level", "custom"))
+    except ValueError:
         raise HTTPException(status_code=400, detail="level must be POOL, L1, L2, L3 or custom")
     # filters_json is kept for backward compatibility but IGNORED at runtime.
     # All filtering is driven exclusively by the associated profile.
@@ -620,9 +620,9 @@ async def update_watchlist(
     if "name" in payload:
         wl.name = payload["name"].strip() or wl.name
     if "level" in payload:
-        raw_level = str(payload["level"] or "custom").strip()
-        next_level = "custom" if raw_level.lower() == "custom" else raw_level.upper()
-        if next_level not in WATCHLIST_LEVELS:
+        try:
+            next_level = normalize_watchlist_level(payload["level"])
+        except ValueError:
             raise HTTPException(status_code=400, detail="level must be POOL, L1, L2, L3 or custom")
         wl.level = next_level
     if "source_pool_id" in payload:
