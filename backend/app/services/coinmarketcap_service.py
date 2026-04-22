@@ -65,7 +65,8 @@ async def fetch_market_caps(symbols: list[str], api_key: str) -> dict[str, float
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         for start in range(0, len(normalized_symbols), CMC_BATCH_SIZE):
-            batch = normalized_symbols[start:start + CMC_BATCH_SIZE]
+            end = start + CMC_BATCH_SIZE
+            batch = normalized_symbols[start:end]
             try:
                 response = await client.get(
                     CMC_QUOTES_URL,

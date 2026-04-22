@@ -71,6 +71,8 @@ async def _fetch_market_caps_async() -> dict:
         pwa_symbols = await _get_distinct_symbols(db, "pipeline_watchlist_assets")
         all_pairs = sorted(set(mm_symbols) | set(pwa_symbols))
         requested_bases = sorted({_base_from_pair(symbol_pair) for symbol_pair in all_pairs if symbol_pair})
+        used_cmc = False
+        used_gate = False
 
         cmc_row_res = await db.execute(
             select(AIProviderKey).where(
@@ -86,6 +88,7 @@ async def _fetch_market_caps_async() -> dict:
                 raw = bytes(cmc_row.api_key_encrypted) if isinstance(cmc_row.api_key_encrypted, memoryview) else cmc_row.api_key_encrypted
                 cmc_key = decrypt_value(raw).strip()
                 market_caps = await fetch_cmc_market_caps(requested_bases, cmc_key)
+                used_cmc = bool(market_caps)
             except Exception as exc:
                 stats["warning"] = "cmc_fetch_failed"
                 logger.error("Failed to fetch market caps from CoinMarketCap: %s", exc)
@@ -93,12 +96,12 @@ async def _fetch_market_caps_async() -> dict:
             stats["warning"] = "cmc_key_missing"
             logger.warning("CoinMarketCap key not configured; using Gate.io fallback only.")
 
-        missing_bases = {base for base in requested_bases if base not in market_caps}
+        missing_bases = set(requested_bases) - set(market_caps)
         if missing_bases:
             gate_caps = await _fetch_from_gate(missing_bases)
             if gate_caps:
                 market_caps.update(gate_caps)
-                stats["source"] = "gate.io" if not cmc_row else "coinmarketcap+gate.io-fallback"
+                used_gate = True
                 logger.info(
                     "Gate.io fallback filled %d/%d missing market caps.",
                     len([base for base in missing_bases if base in gate_caps]),
@@ -108,6 +111,13 @@ async def _fetch_market_caps_async() -> dict:
         if not market_caps:
             stats["error"] = "no_data"
             return stats
+
+        if used_cmc and used_gate:
+            stats["source"] = "coinmarketcap+gate.io-fallback"
+        elif used_gate:
+            stats["source"] = "gate.io"
+        else:
+            stats["source"] = "coinmarketcap"
 
         # 3. Update market_metadata
         for symbol_pair in mm_symbols:
