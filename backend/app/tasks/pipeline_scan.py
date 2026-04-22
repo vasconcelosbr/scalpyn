@@ -578,10 +578,10 @@ def _decision_reason_map(processed: dict, has_signal_conditions: bool) -> dict:
             reason_key = rule.get("indicator") or rule.get("id")
         elif isinstance(rule, str):
             reason_key = rule
-        elif isinstance(rule, (int, float, bool)):
+        elif isinstance(rule, (int, float)):
             reason_key = str(rule)
-        if reason_key:
-            reasons[str(reason_key)] = "OK"
+        if isinstance(reason_key, str) and reason_key:
+            reasons[reason_key] = "OK"
 
     signal = processed.get("signal", {})
     for matched in signal.get("matched_conditions", []):
