@@ -1050,6 +1050,23 @@ async def _run_pipeline_scan():
 
         logger.info("[PipelineScan] Processing %d pipeline watchlists…", len(wl_rows))
 
+        # Build a mapping of (user_id, source_pool_id) → POOL-watchlist ID.
+        # When an L1/L2/L3 watchlist shares the same source_pool_id as a
+        # POOL-stage watchlist it must not bypass the POOL rejection gate.
+        # The POOL watchlist is always sorted first, so its pipeline_watchlist_assets
+        # will already be updated by the time downstream watchlists run.
+        pool_wl_id_map: dict[tuple[str, str], str] = {}
+        for _wl in wl_rows:
+            if not _wl.source_pool_id:
+                continue
+            _eff = effective_pipeline_level(
+                _wl.level,
+                source_pool_id=_wl.source_pool_id,
+                profile_config=profile_config_map.get(_wl.profile_id),
+            )
+            if _eff == "POOL":
+                pool_wl_id_map[(str(_wl.user_id), str(_wl.source_pool_id))] = str(_wl.id)
+
         for wl in wl_rows:
             try:
                 stats["watchlists"] += 1
@@ -1068,21 +1085,52 @@ async def _run_pipeline_scan():
                     return s
 
                 if wl.source_pool_id:
-                    # Pool origin: use pool_coins
                     from ..utils.symbol_filters import filter_real_assets
-                    coin_rows = (await db.execute(
-                        select(PoolCoin).where(
-                            PoolCoin.pool_id == wl.source_pool_id,
-                            PoolCoin.is_active == True,
-                        )
-                    )).scalars().all()
-                    # Normalize symbols to BTC_USDT format (market_metadata uses underscores)
-                    raw_syms = [_normalize_sym(c.symbol) for c in coin_rows]
-                    symbols = filter_real_assets(raw_syms)
-                    logger.info(
-                        "[PipelineScan] %s (%s): pool %s → %d raw coins → %d after leveraged-token filter",
-                        wl.name, level, wl.source_pool_id, len(raw_syms), len(symbols),
+                    # Determine if a separate POOL-stage watchlist exists for this
+                    # (user, pool) pair.  When it does, this watchlist is NOT the
+                    # POOL gatekeeper itself, so we must honour the POOL-approved
+                    # set instead of reading all raw pool coins — otherwise coins
+                    # that were rejected at POOL level would still enter L1/L2/L3.
+                    _pre_eff = effective_pipeline_level(
+                        level,
+                        source_pool_id=wl.source_pool_id,
+                        profile_config=profile_config_map.get(wl.profile_id),
                     )
+                    _pool_gate_wl_id = (
+                        pool_wl_id_map.get((str(wl.user_id), str(wl.source_pool_id)))
+                        if _pre_eff != "POOL"
+                        else None
+                    )
+                    if _pool_gate_wl_id:
+                        # Use only POOL-approved assets so that POOL rejections are
+                        # respected by all downstream watchlists sharing the pool.
+                        from sqlalchemy import text as _text
+                        gate_rows = (await db.execute(_text("""
+                            SELECT symbol FROM pipeline_watchlist_assets
+                            WHERE watchlist_id = :wid
+                              AND (level_direction IS NULL OR level_direction = 'up')
+                        """), {"wid": _pool_gate_wl_id})).fetchall()
+                        symbols = filter_real_assets([_normalize_sym(r.symbol) for r in gate_rows])
+                        logger.info(
+                            "[PipelineScan] %s (%s): using %d POOL-approved symbols "
+                            "from watchlist %s (POOL gate enforced — bypassing raw pool read)",
+                            wl.name, level, len(symbols), _pool_gate_wl_id,
+                        )
+                    else:
+                        # No upstream POOL gate — read directly from pool_coins.
+                        coin_rows = (await db.execute(
+                            select(PoolCoin).where(
+                                PoolCoin.pool_id == wl.source_pool_id,
+                                PoolCoin.is_active == True,
+                            )
+                        )).scalars().all()
+                        # Normalize symbols to BTC_USDT format (market_metadata uses underscores)
+                        raw_syms = [_normalize_sym(c.symbol) for c in coin_rows]
+                        symbols = filter_real_assets(raw_syms)
+                        logger.info(
+                            "[PipelineScan] %s (%s): pool %s → %d raw coins → %d after leveraged-token filter",
+                            wl.name, level, wl.source_pool_id, len(raw_syms), len(symbols),
+                        )
 
                 elif wl.source_watchlist_id:
                     # Upstream watchlist: use only ACTIVE pipeline_watchlist_assets
