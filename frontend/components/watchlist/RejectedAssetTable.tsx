@@ -3,6 +3,8 @@
 import { Fragment, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
+const DECISION_SUMMARY_INDICATOR_LIMIT = 3;
+
 export interface DecisionTraceItem {
   type: "filter" | "block_rule";
   indicator: string;
@@ -67,7 +69,7 @@ function itemPalette(status: "approved" | "rejected") {
 
 function summarizeIndicator(item: WatchlistDecisionItem): string {
   if (item.failed_indicators.length > 0) return item.failed_indicators.join(", ");
-  return item.details.indicators.slice(0, 3).join(", ") || "—";
+  return item.details.indicators.slice(0, DECISION_SUMMARY_INDICATOR_LIMIT).join(", ") || "—";
 }
 
 function metricTopIndicator(items: WatchlistDecisionItem[]): string {

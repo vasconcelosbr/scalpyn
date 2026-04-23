@@ -579,6 +579,12 @@ def _normalize_decision_snapshot(
     }
 
 
+def _iso_utc(value: Optional[datetime]) -> Optional[str]:
+    if value is None:
+        return None
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 # ── CRUD ───────────────────────────────────────────────────────────────────────
 
 @router.get("/")
@@ -1838,7 +1844,7 @@ async def get_watchlist_assets(
             status="approved",
             stage=wl.level,
             profile_id=str(wl.profile_id) if wl.profile_id else None,
-            timestamp=asset.refreshed_at.isoformat().replace("+00:00", "Z") if getattr(asset, "refreshed_at", None) else None,
+            timestamp=_iso_utc(getattr(asset, "refreshed_at", None)),
             snapshot=asset.analysis_snapshot,
         )
         for asset in assets
@@ -1892,7 +1898,7 @@ async def _get_watchlist_rejections_payload(
                 status="rejected",
                 stage=row.stage,
                 profile_id=str(row.profile_id) if row.profile_id else None,
-                timestamp=row.recorded_at.isoformat().replace("+00:00", "Z") if row.recorded_at else None,
+                timestamp=_iso_utc(row.recorded_at),
                 snapshot=row.analysis_snapshot,
             ),
             "failed_type": row.failed_type,
