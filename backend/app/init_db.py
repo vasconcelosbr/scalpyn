@@ -1,15 +1,16 @@
 import asyncio
 import logging
+from typing import Union
 from .database import engine, Base
 from .models import *  # This ensures all models are registered
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-async def ensure_pipeline_execution_tracking_schema(db) -> None:
+async def ensure_pipeline_execution_tracking_schema(db: Union[AsyncSession, AsyncConnection]) -> None:
     """Ensure runtime-added pipeline execution_id columns exist on older schemas."""
     await db.execute(text("""
         ALTER TABLE pipeline_watchlist_assets
