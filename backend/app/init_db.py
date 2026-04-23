@@ -28,6 +28,19 @@ async def init_db():
             logger.info("Added 'autopilot_enabled' column to pools table (or already exists)")
         except Exception as e:
             logger.warning(f"Could not add 'autopilot_enabled' column: {e}")
+
+        try:
+            await conn.execute(text("""
+                ALTER TABLE pipeline_watchlist_assets
+                ADD COLUMN IF NOT EXISTS execution_id UUID;
+            """))
+            await conn.execute(text("""
+                ALTER TABLE pipeline_watchlist_rejections
+                ADD COLUMN IF NOT EXISTS execution_id UUID;
+            """))
+            logger.info("Ensured pipeline execution tracking columns exist")
+        except Exception as e:
+            logger.warning(f"Could not add pipeline execution tracking columns: {e}")
         
         # Ensure profiles and watchlist_profiles tables exist with all columns
         try:

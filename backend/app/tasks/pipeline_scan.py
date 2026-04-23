@@ -60,6 +60,20 @@ def _uses_pipeline_filters(level: Optional[str]) -> bool:
     return uses_pipeline_filters(level)
 
 
+async def _ensure_pipeline_execution_tracking_schema(db) -> None:
+    """Backfill execution_id columns when app code deploys ahead of Alembic."""
+    from sqlalchemy import text
+
+    await db.execute(text("""
+        ALTER TABLE pipeline_watchlist_assets
+        ADD COLUMN IF NOT EXISTS execution_id UUID;
+    """))
+    await db.execute(text("""
+        ALTER TABLE pipeline_watchlist_rejections
+        ADD COLUMN IF NOT EXISTS execution_id UUID;
+    """))
+
+
 def _log_pipeline_event(
     *,
     level: str,
@@ -1223,6 +1237,8 @@ async def _run_pipeline_scan():
     stats = {"watchlists": 0, "new_signals": 0, "errors": 0, "funnels": [], "execution_id": execution_id}
 
     async with AsyncSessionLocal() as db:
+        await _ensure_pipeline_execution_tracking_schema(db)
+
         # Load all pipeline watchlists with auto_refresh=true
         wl_rows = (await db.execute(
             select(PipelineWatchlist).where(PipelineWatchlist.auto_refresh == True)
