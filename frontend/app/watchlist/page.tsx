@@ -284,7 +284,7 @@ function ProfilePreview({ profile }: { profile: Profile }) {
 
 function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: ModalProps) {
   const isNew = !wl?.id;
-  const existingFilters = wl?.filters_json ?? {};
+  const existingFilters = wl?.filters_json || {};
   const [name, setName] = useState(wl?.name ?? '');
   const [level, setLevel] = useState(isNew ? 'custom' : resolveWatchlistLevel(wl, profiles));
   const [sourcePoolId, setSourcePoolId] = useState(wl?.source_pool_id ?? '');
@@ -483,8 +483,11 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
           </div>
 
           <div>
-            <label className="block text-xs text-[#64748B] mb-1">Minimum Score Filter</label>
+            <label htmlFor="watchlist-minimum-score-input" className="block text-xs text-[#64748B] mb-1">
+              Minimum Score Filter
+            </label>
             <input
+              id="watchlist-minimum-score-input"
               type="number"
               min={ALPHA_SCORE_FILTER_RANGE.min}
               max={ALPHA_SCORE_FILTER_RANGE.max}
