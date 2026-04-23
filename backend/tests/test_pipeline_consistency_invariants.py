@@ -9,6 +9,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.tasks.pipeline_scan import _intersect_with_upstream, _normalize_sources_for_scan
 from app.api.watchlists import _normalize_and_validate_watchlist_sources
+from app.utils.pipeline_profile_filters import (
+    expected_upstream_watchlist_level,
+    resolve_pipeline_dependency,
+)
 
 
 def test_rejected_pool_asset_never_appears_in_l1_l2_l3():
@@ -89,3 +93,59 @@ def test_api_validation_rejects_invalid_source_for_levels():
             source_watchlist_id=uuid4(),
         )
 
+
+def test_expected_upstream_levels_follow_pipeline_chain():
+    assert expected_upstream_watchlist_level("POOL") is None
+    assert expected_upstream_watchlist_level("L1") == "POOL"
+    assert expected_upstream_watchlist_level("L2") == "L1"
+    assert expected_upstream_watchlist_level("L3") == "L2"
+
+
+def test_l1_dependency_uses_explicit_pool_parent():
+    resolved = resolve_pipeline_dependency(
+        level="L1",
+        source_watchlist_id="pool-watchlist",
+        source_watchlist_level="POOL",
+    )
+
+    assert resolved["source_pool_id"] is None
+    assert resolved["source_watchlist_id"] == "pool-watchlist"
+    assert resolved["resolution"] == "direct_watchlist"
+    assert resolved["error"] is None
+
+
+def test_l1_dependency_falls_back_to_pool_gatekeeper():
+    resolved = resolve_pipeline_dependency(
+        level="L1",
+        source_pool_id="pool-1",
+        pool_gate_watchlist_id="pool-watchlist",
+    )
+
+    assert resolved["source_pool_id"] is None
+    assert resolved["source_watchlist_id"] == "pool-watchlist"
+    assert resolved["resolution"] == "implicit_pool_gate"
+    assert resolved["error"] is None
+
+
+def test_l1_dependency_requires_pool_watchlist_when_no_gatekeeper_exists():
+    resolved = resolve_pipeline_dependency(
+        level="L1",
+        source_pool_id="pool-1",
+    )
+
+    assert resolved["source_pool_id"] is None
+    assert resolved["source_watchlist_id"] is None
+    assert resolved["expected_upstream_level"] == "POOL"
+    assert resolved["error"] == "missing_upstream_watchlist"
+
+
+def test_l2_dependency_rejects_wrong_parent_stage():
+    resolved = resolve_pipeline_dependency(
+        level="L2",
+        source_watchlist_id="pool-watchlist",
+        source_watchlist_level="POOL",
+    )
+
+    assert resolved["source_watchlist_id"] is None
+    assert resolved["expected_upstream_level"] == "L1"
+    assert resolved["error"] == "invalid_upstream_level"

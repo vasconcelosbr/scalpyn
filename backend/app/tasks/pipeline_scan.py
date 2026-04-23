@@ -24,6 +24,7 @@ from ..services.pipeline_rejections import evaluate_rejections
 from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
     effective_pipeline_level,
+    resolve_pipeline_dependency,
     select_profile_filter_conditions,
     uses_pipeline_filters,
     WATCHLIST_STAGE_ORDER,
@@ -82,6 +83,43 @@ def _log_pipeline_event(
         payload["symbol"] = symbol
     payload.update(extra)
     logger.error(payload)
+
+
+def _log_stage_processing_summary(
+    *,
+    level: str,
+    input_count: int,
+    approved_count: int,
+    rejected_count: int,
+    watchlist_id: str,
+    execution_id: str,
+) -> None:
+    if level == "POOL":
+        logger.info("[POOL] scanned: %d assets", input_count)
+        logger.info("[POOL] approved: %d", approved_count)
+        return
+
+    if level == "L1":
+        total_processed = approved_count + rejected_count
+        logger.info("[L1] input received: %d assets", input_count)
+        logger.info("[L1] approved: %d", approved_count)
+        logger.info("[L1] rejected: %d", rejected_count)
+        logger.info("[L1] total processed: %d", total_processed)
+        if total_processed != input_count:
+            message = (
+                f"Asset count mismatch: processed {total_processed} "
+                f"but received {input_count}"
+            )
+            _log_pipeline_event(
+                level=level,
+                execution_id=execution_id,
+                event_type="PIPELINE_INCONSISTENCY",
+                watchlist_id=watchlist_id,
+                expected=input_count,
+                actual=total_processed,
+                reason="processed_count_mismatch",
+                message=message,
+            )
 
 
 def _normalize_sources_for_scan(
@@ -1272,13 +1310,18 @@ async def _run_pipeline_scan():
         )
 
         stage_buckets: dict[str, list] = {stage: [] for stage in (*_PIPELINE_EXECUTION_ORDER, "custom")}
+        effective_level_map: dict[str, str] = {}
+        pool_gate_watchlist_map: dict[tuple[str, str], str] = {}
         for _wl in wl_rows:
             _eff = effective_pipeline_level(
                 _wl.level,
                 source_pool_id=_wl.source_pool_id,
                 profile_config=profile_config_map.get(_wl.profile_id),
             )
+            effective_level_map[str(_wl.id)] = _eff
             stage_buckets.setdefault(_eff, []).append(_wl)
+            if _eff == "POOL" and _wl.source_pool_id:
+                pool_gate_watchlist_map[(str(_wl.user_id), str(_wl.source_pool_id))] = str(_wl.id)
 
         for stage in (*_PIPELINE_EXECUTION_ORDER, "custom"):
             for wl in stage_buckets.get(stage, []):
@@ -1294,13 +1337,49 @@ async def _run_pipeline_scan():
                     )
                     filters_json = wl.filters_json or {}
 
-                    source_pool_id, source_watchlist_id = _normalize_sources_for_scan(
-                        level=effective_level,
-                        watchlist_id=wl_id,
-                        source_pool_id=str(wl.source_pool_id) if wl.source_pool_id else None,
-                        source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
-                        execution_id=execution_id,
+                    source_watchlist_level = (
+                        effective_level_map.get(str(wl.source_watchlist_id))
+                        if wl.source_watchlist_id
+                        else None
                     )
+                    pool_gate_watchlist_id = None
+                    if effective_level == "L1" and wl.source_pool_id:
+                        pool_gate_watchlist_id = pool_gate_watchlist_map.get(
+                            (str(wl.user_id), str(wl.source_pool_id))
+                        )
+                        if pool_gate_watchlist_id == wl_id:
+                            pool_gate_watchlist_id = None
+                    dependency = resolve_pipeline_dependency(
+                        level=effective_level,
+                        source_pool_id=wl.source_pool_id,
+                        source_watchlist_id=wl.source_watchlist_id,
+                        source_watchlist_level=source_watchlist_level,
+                        pool_gate_watchlist_id=pool_gate_watchlist_id,
+                    )
+                    source_pool_id = dependency["source_pool_id"]
+                    source_watchlist_id = dependency["source_watchlist_id"]
+                    if dependency["error"]:
+                        logger.error(
+                            {
+                                "type": "INVALID_SOURCE_CONFIG",
+                                "watchlist_id": wl_id,
+                                "level": effective_level,
+                                "execution_id": execution_id,
+                                "message": "Missing explicit upstream dependency for pipeline stage.",
+                                "expected_upstream_level": dependency["expected_upstream_level"],
+                                "source_pool_id": str(wl.source_pool_id) if wl.source_pool_id else None,
+                                "source_watchlist_id": str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+                                "source_watchlist_level": source_watchlist_level,
+                                "error": dependency["error"],
+                            }
+                        )
+                    elif dependency["resolution"] == "implicit_pool_gate":
+                        logger.info(
+                            "[PipelineScan] %s (%s): resolved legacy POOL dependency via watchlist %s",
+                            wl.name,
+                            effective_level,
+                            source_watchlist_id,
+                        )
 
                     def _normalize_sym(s: str) -> str:
                         s = s.upper().strip()
@@ -1424,6 +1503,14 @@ async def _run_pipeline_scan():
                             stage=effective_level,
                             profile_id=str(wl.profile_id) if wl.profile_id else None,
                             selected_filter_conditions=selected_filter_conditions,
+                        )
+                        _log_stage_processing_summary(
+                            level=effective_level,
+                            input_count=len(symbols),
+                            approved_count=len(profile_passed),
+                            rejected_count=len(rejected_rows),
+                            watchlist_id=wl_id,
+                            execution_id=execution_id,
                         )
                         passed, _ = _apply_level_filter(
                             profile_passed,
