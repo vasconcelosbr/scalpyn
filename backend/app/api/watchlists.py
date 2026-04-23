@@ -831,14 +831,21 @@ async def _get_base_symbols(
         if active_assets:
             return [_normalize_sym(a.symbol) for a in active_assets]
 
-        ever_populated = (await db.execute(
+        asset_history = (await db.execute(
             text("SELECT 1 FROM pipeline_watchlist_assets WHERE watchlist_id = :wid LIMIT 1"),
             {"wid": str(parent.id)},
         )).fetchone()
+        rejection_history = (await db.execute(
+            text("SELECT 1 FROM pipeline_watchlist_rejections WHERE watchlist_id = :wid LIMIT 1"),
+            {"wid": str(parent.id)},
+        )).fetchone()
 
-        if ever_populated:
+        if _has_persisted_watchlist_decisions(
+            has_asset_history=bool(asset_history),
+            has_rejection_history=bool(rejection_history),
+        ):
             logger.info(
-                "[GetBaseSymbols] Parent %s was populated before but has 0 active assets. "
+                "[GetBaseSymbols] Parent %s already has a persisted decision snapshot but 0 active assets. "
                 "Returning [] to preserve cascade integrity.",
                 parent.name,
             )
@@ -868,6 +875,15 @@ async def _get_base_symbols(
         return normalized
 
     return []
+
+
+def _has_persisted_watchlist_decisions(
+    *,
+    has_asset_history: bool,
+    has_rejection_history: bool,
+) -> bool:
+    """True when a watchlist was already evaluated, even if nothing was approved."""
+    return has_asset_history or has_rejection_history
 
 
 async def _load_watchlist_profile_config(

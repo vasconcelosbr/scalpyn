@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.api.watchlists import (
+    _has_persisted_watchlist_decisions,
     _is_upstream_scan_newer,
     _extract_profile_indicator_fields,
     _normalize_decision_snapshot,
@@ -156,6 +157,20 @@ def test_pipeline_levels_refresh_only_when_persisted_symbol_is_no_longer_upstrea
         upstream_symbols={"BTC_USDT"},
         exact_match=False,
     ) is True
+
+
+def test_rejected_only_parent_snapshot_still_counts_as_persisted_decision_state():
+    assert _has_persisted_watchlist_decisions(
+        has_asset_history=False,
+        has_rejection_history=True,
+    ) is True
+
+
+def test_parent_without_assets_or_rejections_is_treated_as_never_populated():
+    assert _has_persisted_watchlist_decisions(
+        has_asset_history=False,
+        has_rejection_history=False,
+    ) is False
 
 
 def test_child_snapshot_refreshes_when_parent_scan_is_newer():
