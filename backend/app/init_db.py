@@ -10,8 +10,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-async def ensure_pipeline_execution_tracking_schema(db: Union[AsyncSession, AsyncConnection]) -> None:
-    """Ensure runtime-added pipeline execution_id columns exist on older schemas."""
+async def backfill_execution_tracking_columns(db: Union[AsyncSession, AsyncConnection]) -> None:
+    """Add missing pipeline execution_id columns; caller owns transaction commit."""
     await db.execute(text("""
         ALTER TABLE pipeline_watchlist_assets
         ADD COLUMN IF NOT EXISTS execution_id UUID;
@@ -20,9 +20,6 @@ async def ensure_pipeline_execution_tracking_schema(db: Union[AsyncSession, Asyn
         ALTER TABLE pipeline_watchlist_rejections
         ADD COLUMN IF NOT EXISTS execution_id UUID;
     """))
-
-    if isinstance(db, AsyncSession):
-        await db.commit()
 
 
 async def init_db():
@@ -48,7 +45,7 @@ async def init_db():
             logger.warning(f"Could not add 'autopilot_enabled' column: {e}")
 
         try:
-            await ensure_pipeline_execution_tracking_schema(conn)
+            await backfill_execution_tracking_columns(conn)
             logger.info("Ensured pipeline execution tracking columns exist")
         except Exception as e:
             logger.warning(f"Could not add pipeline execution tracking columns: {e}")
