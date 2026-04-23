@@ -130,6 +130,12 @@ function fmtChange(n: number | null) {
 }
 
 const WATCHLIST_POLL_MS = 60_000;
+// Alpha score is normalized platform-wide to the 0-100 range.
+const ALPHA_SCORE_FILTER_RANGE = {
+  min: 0,
+  max: 100,
+  step: 0.1,
+} as const;
 
 /** Relative time label (e.g. "2m ago", "1h ago") */
 function timeAgo(isoStr: string | null | undefined): string {
@@ -328,8 +334,17 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
     try {
       const normalizedMinimumScore = minimumScoreFilter.trim();
       const parsedMinimumScore = normalizedMinimumScore === '' ? null : Number.parseFloat(normalizedMinimumScore);
-      if (parsedMinimumScore !== null && (Number.isNaN(parsedMinimumScore) || parsedMinimumScore < 0 || parsedMinimumScore > 100)) {
-        setSaveError('Minimum Score Filter must be between 0 and 100.');
+      if (
+        parsedMinimumScore !== null &&
+        (
+          Number.isNaN(parsedMinimumScore) ||
+          parsedMinimumScore < ALPHA_SCORE_FILTER_RANGE.min ||
+          parsedMinimumScore > ALPHA_SCORE_FILTER_RANGE.max
+        )
+      ) {
+        setSaveError(
+          `Minimum Score Filter must be between ${ALPHA_SCORE_FILTER_RANGE.min} and ${ALPHA_SCORE_FILTER_RANGE.max}.`,
+        );
         setSaving(false);
         return;
       }
@@ -471,9 +486,9 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
             <label className="block text-xs text-[#64748B] mb-1">Minimum Score Filter</label>
             <input
               type="number"
-              min={0}
-              max={100}
-              step={0.1}
+              min={ALPHA_SCORE_FILTER_RANGE.min}
+              max={ALPHA_SCORE_FILTER_RANGE.max}
+              step={ALPHA_SCORE_FILTER_RANGE.step}
               inputMode="decimal"
               className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
               value={minimumScoreFilter}
