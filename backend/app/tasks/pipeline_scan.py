@@ -60,20 +60,6 @@ def _uses_pipeline_filters(level: Optional[str]) -> bool:
     return uses_pipeline_filters(level)
 
 
-async def _ensure_pipeline_execution_tracking_schema(db) -> None:
-    """Backfill execution_id columns when app code deploys ahead of Alembic."""
-    from sqlalchemy import text
-
-    await db.execute(text("""
-        ALTER TABLE pipeline_watchlist_assets
-        ADD COLUMN IF NOT EXISTS execution_id UUID;
-    """))
-    await db.execute(text("""
-        ALTER TABLE pipeline_watchlist_rejections
-        ADD COLUMN IF NOT EXISTS execution_id UUID;
-    """))
-
-
 def _log_pipeline_event(
     *,
     level: str,
@@ -1226,6 +1212,7 @@ async def _broadcast_scan_funnel(
 
 async def _run_pipeline_scan():
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
+    from ..init_db import ensure_pipeline_execution_tracking_schema
     from ..models.pipeline_watchlist import PipelineWatchlist
     from ..models.pool import PoolCoin
     from ..models.profile import Profile

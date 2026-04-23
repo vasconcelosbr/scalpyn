@@ -7,6 +7,22 @@ from sqlalchemy import text
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+async def ensure_pipeline_execution_tracking_schema(db) -> None:
+    await db.execute(text("""
+        ALTER TABLE pipeline_watchlist_assets
+        ADD COLUMN IF NOT EXISTS execution_id UUID;
+    """))
+    await db.execute(text("""
+        ALTER TABLE pipeline_watchlist_rejections
+        ADD COLUMN IF NOT EXISTS execution_id UUID;
+    """))
+
+    commit = getattr(db, "commit", None)
+    if callable(commit):
+        await commit()
+
+
 async def init_db():
     logger.info("Initializing database schema...")
     async with engine.begin() as conn:
@@ -30,14 +46,7 @@ async def init_db():
             logger.warning(f"Could not add 'autopilot_enabled' column: {e}")
 
         try:
-            await conn.execute(text("""
-                ALTER TABLE pipeline_watchlist_assets
-                ADD COLUMN IF NOT EXISTS execution_id UUID;
-            """))
-            await conn.execute(text("""
-                ALTER TABLE pipeline_watchlist_rejections
-                ADD COLUMN IF NOT EXISTS execution_id UUID;
-            """))
+            await ensure_pipeline_execution_tracking_schema(conn)
             logger.info("Ensured pipeline execution tracking columns exist")
         except Exception as e:
             logger.warning(f"Could not add pipeline execution tracking columns: {e}")
