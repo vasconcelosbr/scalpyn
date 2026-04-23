@@ -135,3 +135,62 @@ def test_rejection_metrics_group_by_indicator_and_block_rate():
     assert metrics["block_rule_count"] == 1
     assert metrics["block_rule_rate"] == 33.3
     assert metrics["top_indicator"] == "RSI"
+
+
+def test_approved_assets_receive_normalized_analysis_snapshot():
+    profile_config = {
+        "filters": {
+            "logic": "AND",
+            "conditions": [
+                {"field": "volume_24h", "operator": ">=", "value": 1_000_000},
+            ],
+        },
+        "block_rules": {"blocks": []},
+    }
+
+    approved, rejected = evaluate_rejections(
+        [{"symbol": "SOL_USDT", "volume_24h": 2_500_000}],
+        profile_config=profile_config,
+        stage="L1",
+        profile_id="profile-approved",
+    )
+
+    assert rejected == []
+    snapshot = approved[0]["analysis_snapshot"]
+    assert snapshot["status"] == "approved"
+    assert snapshot["details"] is not None
+    assert snapshot["details"]["filters"][0]["status"] == "PASS"
+    assert snapshot["details"]["evaluation_trace"][0]["status"] == "PASS"
+    assert snapshot["failed_indicators"] == []
+    assert snapshot["conditions"] == ["Volume 24h >= 1000000"]
+    assert snapshot["current_values"]["Volume 24h"] == 2_500_000
+    assert snapshot["expected_values"]["Volume 24h"] == "1000000"
+
+
+def test_rejected_assets_expose_normalized_details_contract():
+    profile_config = {
+        "filters": {
+            "logic": "AND",
+            "conditions": [
+                {"field": "rsi", "operator": "<", "value": 55},
+            ],
+        },
+        "block_rules": {"blocks": []},
+    }
+
+    approved, rejected = evaluate_rejections(
+        [{"symbol": "XRP_USDT", "rsi": 62}],
+        profile_config=profile_config,
+        stage="L2",
+        profile_id="profile-rejected",
+    )
+
+    assert approved == []
+    item = rejected[0]
+    assert item["status"] == "rejected"
+    assert item["details"] is not None
+    assert item["details"]["filters"][0]["status"] == "FAIL"
+    assert item["details"]["conditions"] == ["RSI < 55"]
+    assert item["failed_indicators"] == ["RSI"]
+    assert item["current_values"]["RSI"] == 62
+    assert item["expected_values"]["RSI"] == "55"

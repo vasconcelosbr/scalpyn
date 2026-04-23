@@ -183,23 +183,121 @@ def _evaluate_block_rule(
     }
 
 
-def _build_asset_evaluation_trace(
-    rule_engine: RuleEngine,
-    asset: Dict[str, Any],
+def _build_decision_details(trace: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    normalized_trace = [jsonable_value(item) for item in trace]
+    indicators: List[str] = []
+    conditions: List[str] = []
+    current_values: Dict[str, Any] = {}
+    expected_values: Dict[str, Any] = {}
+
+    for item in normalized_trace:
+        indicator = str(item.get("indicator") or "Unknown")
+        if indicator not in indicators:
+            indicators.append(indicator)
+
+        condition = str(item.get("condition") or "")
+        if condition and condition not in conditions:
+            conditions.append(condition)
+
+        current_values[indicator] = item.get("current_value")
+        expected_values[indicator] = item.get("expected")
+
+    return {
+        "filters": [item for item in normalized_trace if item.get("type") == "filter"],
+        "indicators": indicators,
+        "conditions": conditions,
+        "current_values": current_values,
+        "expected_values": expected_values,
+        "evaluation_trace": normalized_trace,
+    }
+
+
+def build_analysis_snapshot(
+    *,
+    symbol: str,
+    stage: str,
+    profile_id: Optional[str],
+    status: str,
+    trace: Sequence[Dict[str, Any]],
+    timestamp: str,
+) -> Dict[str, Any]:
+    details = _build_decision_details(trace)
+    failed_indicators = [
+        str(item.get("indicator") or "Unknown")
+        for item in details["evaluation_trace"]
+        if item.get("status") == "FAIL"
+    ]
+    return {
+        "symbol": symbol,
+        "stage": stage,
+        "profile_id": profile_id,
+        "status": status,
+        "failed_indicators": failed_indicators,
+        "conditions": details["conditions"],
+        "current_values": details["current_values"],
+        "expected_values": details["expected_values"],
+        "details": details,
+        "timestamp": timestamp,
+    }
+
+
+def evaluate_rejections(
+    assets: Sequence[Dict[str, Any]],
     *,
     profile_config: Optional[Dict[str, Any]],
     selected_filter_conditions: Optional[Sequence[Dict[str, Any]]] = None,
-) -> tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    if not assets:
+        return [], []
+
     profile_config = profile_config or {}
-    filters_all = list((profile_config.get("filters") or {}).get("conditions", []) or [])
-    selected_filters = list(selected_filter_conditions) if selected_filter_conditions is not None else list(filters_all)
-    filter_logic = str((profile_config.get("filters") or {}).get("logic", "AND")).upper()
-    filter_logic_keys = {id(item) for item in selected_filters}
+    rule_engine = RuleEngine()
     block_rules = [
         block
         for block in ((profile_config.get("block_rules") or {}).get("blocks", []) or [])
         if block.get("enabled", True)
     ]
+    filters = list(selected_filter_conditions) if selected_filter_conditions is not None else list(
+        ((profile_config.get("filters") or {}).get("conditions", []) or [])
+    )
+    timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def _normalized_trace_item(item: Dict[str, Any]) -> Dict[str, Any]:
+        trace_item = {
+            "type": item["type"],
+            "name": item.get("indicator") or item.get("name") or "Unknown",
+            "indicator": item.get("indicator") or item.get("name") or "Unknown",
+            "condition": item.get("condition"),
+            "expected": item.get("expected"),
+            "current_value": jsonable_value(item.get("current_value")),
+            "status": item["status"],
+        }
+        return trace_item
+
+    def _skipped_block_rule(block: Dict[str, Any]) -> Dict[str, Any]:
+        name = block.get("name") or "Unnamed Block"
+        return _normalized_trace_item(
+            {
+                "type": "block_rule",
+                "indicator": name,
+                "condition": block.get("reason") or name,
+                "expected": block.get("reason"),
+                "current_value": None,
+                "status": "SKIPPED",
+            }
+        )
+
+    def _skipped_filter(condition: Dict[str, Any]) -> Dict[str, Any]:
+        return _normalized_trace_item(
+            {
+                "type": "filter",
+                "indicator": _condition_indicator(condition, field_key="field"),
+                "condition": format_condition_text(condition, field_key="field"),
+                "expected": format_expected(condition),
+                "current_value": None,
+                "status": "SKIPPED",
+            }
+        )
 
     trace: List[Dict[str, Any]] = []
     failed_trace: Optional[Dict[str, Any]] = None
@@ -297,22 +395,61 @@ def evaluate_rejections(
     rule_engine = RuleEngine()
     approved: List[Dict[str, Any]] = []
     rejected: List[Dict[str, Any]] = []
-    timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     for asset in assets:
-        symbol = asset.get("symbol")
-        trace, failed_trace = _build_asset_evaluation_trace(
-            rule_engine,
-            asset,
-            profile_config=profile_config,
-            selected_filter_conditions=selected_filter_conditions,
-        )
+        symbol = str(asset.get("symbol") or "")
+        trace: List[Dict[str, Any]] = []
+        failed_trace: Optional[Dict[str, Any]] = None
+
+        for index, block in enumerate(block_rules):
+            block_trace = _normalized_trace_item(_evaluate_block_rule(rule_engine, asset, block))
+            trace.append(block_trace)
+            if block_trace["status"] == "FAIL":
+                failed_trace = block_trace
+                for remaining_block in block_rules[index + 1:]:
+                    trace.append(_skipped_block_rule(remaining_block))
+                for condition in filters:
+                    trace.append(_skipped_filter(condition))
+                break
+
+        if failed_trace is None:
+            for index, condition in enumerate(filters):
+                filter_trace = _normalized_trace_item(_evaluate_filter(rule_engine, asset, condition))
+                trace.append(filter_trace)
+                if filter_trace["status"] == "FAIL":
+                    failed_trace = filter_trace
+                    for remaining_condition in filters[index + 1:]:
+                        trace.append(_skipped_filter(remaining_condition))
+                    break
+
         json_trace = jsonable_value(trace)
 
         if failed_trace is None:
-            approved.append({**asset, "evaluation_trace": json_trace})
+            approved.append(
+                {
+                    **asset,
+                    "symbol": symbol,
+                    "evaluation_trace": json_trace,
+                    "analysis_snapshot": build_analysis_snapshot(
+                        symbol=symbol,
+                        stage=stage,
+                        profile_id=profile_id,
+                        status="approved",
+                        trace=json_trace,
+                        timestamp=timestamp,
+                    ),
+                }
+            )
             continue
 
+        analysis_snapshot = build_analysis_snapshot(
+            symbol=symbol,
+            stage=stage,
+            profile_id=profile_id,
+            status="rejected",
+            trace=json_trace,
+            timestamp=timestamp,
+        )
         rejected.append(
             {
                 "symbol": symbol,
@@ -320,11 +457,18 @@ def evaluate_rejections(
                 "profile_id": profile_id,
                 "failed_type": failed_trace["type"],
                 "failed_indicator": failed_trace["indicator"],
-                "condition": failed_trace["condition"],
-                "current_value": jsonable_value(failed_trace.get("current_value")),
+                "condition": failed_trace.get("condition"),
+                "current_value": failed_trace.get("current_value"),
                 "expected": failed_trace.get("expected"),
                 "timestamp": timestamp,
                 "evaluation_trace": json_trace,
+                "status": analysis_snapshot["status"],
+                "details": analysis_snapshot["details"],
+                "failed_indicators": analysis_snapshot["failed_indicators"],
+                "conditions": analysis_snapshot["conditions"],
+                "current_values": analysis_snapshot["current_values"],
+                "expected_values": analysis_snapshot["expected_values"],
+                "analysis_snapshot": analysis_snapshot,
             }
         )
 

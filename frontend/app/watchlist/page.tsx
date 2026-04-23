@@ -3,14 +3,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { WatchlistTable } from '@/components/watchlist/WatchlistTable';
 import {
-  PipelineAssetTable,
-  type IndicatorColumn,
-  type PipelineAssetWithScore,
-} from '@/components/watchlist/PipelineAssetTable';
-import {
-  RejectedAssetTable,
+  WatchlistDecisionTable,
   type RejectedAssetItem,
-  type RejectedMetrics,
 } from '@/components/watchlist/RejectedAssetTable';
 import { apiFetch } from '@/lib/api';
 import { useWebSocket, getCurrentUserId } from '@/hooks/useWebSocket';
@@ -19,7 +13,6 @@ import {
   RefreshCw,
   Trash2,
   ChevronDown,
-  ChevronRight,
   Settings,
   Layers,
   Zap,
@@ -36,11 +29,11 @@ interface Profile {
   description?: string;
   profile_role?: string | null;
   config?: {
-    filters?:        { conditions?: any[] };
-    signals?:        { conditions?: any[] };
-    entry_triggers?: { conditions?: any[] };
+    filters?:        { conditions?: unknown[] };
+    signals?:        { conditions?: unknown[] };
+    entry_triggers?: { conditions?: unknown[] };
     scoring?:        { weights?: Record<string, number> };
-    block_rules?:    { blocks?: any[] };
+    block_rules?:    { blocks?: Array<{ enabled?: boolean }> };
   };
 }
 
@@ -55,19 +48,11 @@ interface PipelineWatchlist {
   profile_id: string | null;
   profile_name?: string | null;
   auto_refresh: boolean;
-  filters_json: Record<string, any>;
+  filters_json: Record<string, unknown>;
   last_scanned_at: string | null;
   created_at: string | null;
   updated_at: string | null;
   asset_count: number;
-}
-
-interface PipelineAsset extends PipelineAssetWithScore {
-  watchlist_id: string;
-  entered_at: string | null;
-  refreshed_at: string | null;
-  previous_level: string | null;
-  level_change_at: string | null;
 }
 
 type WatchlistDetailTab = 'approved' | 'rejected';
@@ -226,7 +211,7 @@ function ProfilePreview({ profile }: { profile: Profile }) {
   const filterCount  = profile.config?.filters?.conditions?.length ?? 0;
   const signalCount  = profile.config?.signals?.conditions?.length ?? 0;
   const triggerCount = profile.config?.entry_triggers?.conditions?.length ?? 0;
-  const blockCount   = profile.config?.block_rules?.blocks?.filter((b: any) => b.enabled)?.length ?? 0;
+  const blockCount   = profile.config?.block_rules?.blocks?.filter((b) => b.enabled)?.length ?? 0;
   const weights      = profile.config?.scoring?.weights ?? {};
 
   return (
@@ -345,8 +330,8 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
         auto_refresh: autoRefresh,
         filters_json: {},
       });
-    } catch (err: any) {
-      setSaveError(err?.message ?? 'Failed to save watchlist settings. Please try again.');
+    } catch (err: unknown) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save watchlist settings. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -525,14 +510,8 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
   const displayLevel = resolveWatchlistLevel(wl, profiles);
   const [expanded, setExpanded] = useState(false);
   const [detailTab, setDetailTab] = useState<WatchlistDetailTab>('approved');
-  const [assets, setAssets] = useState<PipelineAsset[]>([]);
+  const [approvedItems, setApprovedItems] = useState<RejectedAssetItem[]>([]);
   const [rejectedItems, setRejectedItems] = useState<RejectedAssetItem[]>([]);
-  const [rejectedMetrics, setRejectedMetrics] = useState<RejectedMetrics | null>(null);
-  const [indicatorCols, setIndicatorCols] = useState<IndicatorColumn[]>([]);
-  // Alpha Score visibility: false for POOL/custom (Stage 0) and L1 (Stage 1)
-  const [showScore, setShowScore] = useState<boolean>(
-    ['L2', 'L3'].includes(displayLevel)
-  );
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [loadingRejected, setLoadingRejected] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -561,22 +540,12 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     if (!silent) setLoadingRejected(true);
     try {
       const [data, rejected] = await Promise.all([
-        apiFetch<{ assets: PipelineAsset[]; profile_indicators?: IndicatorColumn[]; show_score?: boolean }>(`/watchlists/${wl.id}/assets`),
-        apiFetch<{ items: RejectedAssetItem[]; metrics: RejectedMetrics }>(`/pipeline/rejected?watchlist_id=${wl.id}`),
+        apiFetch<{ approved_items: RejectedAssetItem[]; total: number }>(`/watchlists/${wl.id}/assets`),
+        apiFetch<{ items: RejectedAssetItem[] }>(`/pipeline/rejected?watchlist_id=${wl.id}`),
       ]);
-      // Always render highest alpha_score first
-      const sorted = [...(data.assets ?? [])].sort(
-        (a, b) => (b.alpha_score ?? 0) - (a.alpha_score ?? 0)
-      );
-      setAssets(sorted);
+      setApprovedItems(data.approved_items ?? []);
       setRejectedItems(rejected.items ?? []);
-      setRejectedMetrics(rejected.metrics ?? null);
-      setIndicatorCols(data.profile_indicators ?? []);
-      // Use API-provided show_score flag; fall back to level-based heuristic
-      if (data.show_score !== undefined) {
-        setShowScore(data.show_score);
-      }
-      if (triggerParentRefresh && data.assets.length > 0) {
+      if (triggerParentRefresh && (data.approved_items?.length ?? 0) > 0) {
         onRefreshed();
       }
     } catch {
@@ -607,8 +576,8 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
       await apiFetch(`/watchlists/${wl.id}/refresh`, { method: 'POST' });
       await loadAssets({ silent: true });
       onRefreshed();
-    } catch (err: any) {
-      setRefreshError(err?.message ?? 'Failed to refresh watchlist assets. Check source pool configuration.');
+    } catch (err: unknown) {
+      setRefreshError(err instanceof Error ? err.message : 'Failed to refresh watchlist assets. Check source pool configuration.');
     } finally {
       setRefreshing(false);
     }
@@ -715,9 +684,9 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
                   ? 'bg-[#1E2433] text-[#E2E8F0]'
                   : 'text-[#64748B] hover:text-[#94A3B8]'
               }`}
-            >
-              Approved
-              <span className="ml-1 text-[#4B5563]">{assets.length}</span>
+              >
+                Approved
+              <span className="ml-1 text-[#4B5563]">{approvedItems.length}</span>
             </button>
             <button
               type="button"
@@ -727,9 +696,9 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
                   ? 'bg-[#1E2433] text-[#E2E8F0]'
                   : 'text-[#64748B] hover:text-[#94A3B8]'
               }`}
-            >
-              Rejected
-              <span className="ml-1 text-[#4B5563]">{rejectedMetrics?.total_rejected ?? rejectedItems.length}</span>
+              >
+                Rejected
+              <span className="ml-1 text-[#4B5563]">{rejectedItems.length}</span>
             </button>
           </div>
           {refreshError && (
@@ -740,22 +709,19 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
           {detailTab === 'approved' && loadingAssets ? (
             <div className="px-4 py-6 text-center text-sm text-[#4B5563] flex items-center justify-center gap-2">
               <RefreshCw size={13} className="animate-spin" />
-              Loading assets…
+              Loading approved decisions…
             </div>
           ) : detailTab === 'approved' ? (
-            <PipelineAssetTable
-              assets={assets}
-              indicatorCols={indicatorCols}
-              onRefresh={handleRefresh}
-              refreshing={refreshing}
-              liveDirections={liveDirections}
-              showScore={showScore}
+            <WatchlistDecisionTable
+              items={approvedItems}
+              loading={loadingAssets}
+              emptyMessage="No approved assets for the current filters."
             />
           ) : (
-            <RejectedAssetTable
+            <WatchlistDecisionTable
               items={rejectedItems}
-              metrics={rejectedMetrics}
               loading={loadingRejected}
+              emptyMessage="No rejected assets for the current filters."
             />
           )}
         </div>

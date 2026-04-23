@@ -531,8 +531,62 @@ def _asset_to_dict(a: PipelineWatchlistAsset, indicators: Optional[Dict[str, Any
         "level_direction":  a.level_direction,
         "blocked":          _blocked,
         "block_reasons":    block_reasons,
+        "analysis_snapshot": a.analysis_snapshot or {},
         "indicators": ind_out,
     }
+
+
+def _empty_decision_details() -> Dict[str, Any]:
+    return {
+        "filters": [],
+        "indicators": [],
+        "conditions": [],
+        "current_values": {},
+        "expected_values": {},
+        "evaluation_trace": [],
+    }
+
+
+def _normalize_decision_snapshot(
+    *,
+    symbol: str,
+    status: str,
+    stage: Optional[str],
+    profile_id: Optional[str],
+    timestamp: Optional[str],
+    snapshot: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    raw_snapshot = snapshot or {}
+    raw_details = raw_snapshot.get("details") if isinstance(raw_snapshot.get("details"), dict) else {}
+    details = {
+        **_empty_decision_details(),
+        **raw_details,
+    }
+    details["filters"] = list(details.get("filters") or [])
+    details["indicators"] = list(details.get("indicators") or [])
+    details["conditions"] = list(details.get("conditions") or [])
+    details["current_values"] = dict(details.get("current_values") or {})
+    details["expected_values"] = dict(details.get("expected_values") or {})
+    details["evaluation_trace"] = list(details.get("evaluation_trace") or [])
+
+    return {
+        "symbol": symbol,
+        "status": raw_snapshot.get("status") or status,
+        "stage": raw_snapshot.get("stage") or stage,
+        "profile_id": raw_snapshot.get("profile_id") or profile_id,
+        "failed_indicators": list(raw_snapshot.get("failed_indicators") or []),
+        "conditions": list(raw_snapshot.get("conditions") or details["conditions"]),
+        "current_values": dict(raw_snapshot.get("current_values") or details["current_values"]),
+        "expected_values": dict(raw_snapshot.get("expected_values") or details["expected_values"]),
+        "details": details,
+        "timestamp": raw_snapshot.get("timestamp") or timestamp,
+    }
+
+
+def _iso_utc(value: Optional[datetime]) -> Optional[str]:
+    if value is None:
+        return None
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 # ── CRUD ───────────────────────────────────────────────────────────────────────
@@ -972,6 +1026,7 @@ async def _replace_rejection_snapshot(
                 current_value=row.get("current_value"),
                 expected_value=row.get("expected"),
                 evaluation_trace=row.get("evaluation_trace") or [],
+                analysis_snapshot=row.get("analysis_snapshot") or {},
                 recorded_at=datetime.now(timezone.utc),
             )
         )
@@ -1523,6 +1578,7 @@ async def _resolve_and_persist(
             row.market_cap       = asset_data["market_cap"]
             row.alpha_score      = asset_data["alpha_score"]
             row.refreshed_at     = now
+            row.analysis_snapshot = asset_data.get("analysis_snapshot") or {}
             # Re-activate asset if it was previously marked as "down"
             if row.level_direction == "down":
                 row.level_direction = "up"
@@ -1542,6 +1598,7 @@ async def _resolve_and_persist(
                 refreshed_at=now,
                 level_direction="up",
                 level_change_at=now,
+                analysis_snapshot=asset_data.get("analysis_snapshot") or {},
             )
             db.add(row)
             asset_data["level_direction"] = "up"
@@ -1793,42 +1850,23 @@ async def get_watchlist_assets(
             meta=meta_map.get(a.symbol),
             override_score=score_override.get(a.symbol),
         )
-
-        evaluation_trace: List[Dict[str, Any]] = []
-        if effective_level in ("L1", "L2", "L3") and wl.profile_id and profile_config:
-            trace_eval_data: Dict[str, Any] = {
-                "symbol": a.symbol,
-                "price": enriched_asset.get("current_price"),
-                "current_price": enriched_asset.get("current_price"),
-                "volume_24h": enriched_asset.get("volume_24h"),
-                "market_cap": enriched_asset.get("market_cap"),
-                "change_24h": enriched_asset.get("price_change_24h"),
-                "price_change_24h": enriched_asset.get("price_change_24h"),
-                "spread_pct": meta_map.get(a.symbol, {}).get("spread_pct"),
-                "orderbook_depth_usdt": meta_map.get(a.symbol, {}).get("orderbook_depth_usdt"),
-                "alpha_score": enriched_asset.get("alpha_score"),
-            }
-            trace_eval_data.update(enriched_asset.get("indicators") or {})
-            applicable_trace_conditions = [
-                condition
-                for condition in selected_trace_conditions
-                if "group" in condition
-                or trace_eval_data.get(condition.get("field")) is not None
-                or condition.get("field", "") in STRICT_META_FIELDS
-            ]
-            evaluation_trace = build_asset_evaluation_trace(
-                trace_eval_data,
-                profile_config=profile_config,
-                selected_filter_conditions=applicable_trace_conditions,
-            )
-
-        enriched.append({
-            **enriched_asset,
-            "evaluation_trace": evaluation_trace,
-        })
+        for a in assets
+    ]
+    approved_items = [
+        _normalize_decision_snapshot(
+            symbol=asset.symbol,
+            status="approved",
+            stage=wl.level,
+            profile_id=str(wl.profile_id) if wl.profile_id else None,
+            timestamp=_iso_utc(getattr(asset, "refreshed_at", None)),
+            snapshot=asset.analysis_snapshot,
+        )
+        for asset in assets
+    ]
 
     return {
         "assets":             enriched,
+        "approved_items":     approved_items,
         "total":              len(enriched),
         "profile_indicators": profile_indicators,  # [{key, label, field}, ...]
         # Alpha Score visible only at L2 (Stage 2) and L3 (Stage 3).
@@ -1869,15 +1907,19 @@ async def _get_watchlist_rejections_payload(
 
     items = [
         {
-            "symbol": row.symbol,
-            "stage": row.stage,
-            "profile_id": str(row.profile_id) if row.profile_id else None,
+            **_normalize_decision_snapshot(
+                symbol=row.symbol,
+                status="rejected",
+                stage=row.stage,
+                profile_id=str(row.profile_id) if row.profile_id else None,
+                timestamp=_iso_utc(row.recorded_at),
+                snapshot=row.analysis_snapshot,
+            ),
             "failed_type": row.failed_type,
             "failed_indicator": row.failed_indicator,
             "condition": row.condition_text,
             "current_value": row.current_value,
             "expected": row.expected_value,
-            "timestamp": row.recorded_at.isoformat().replace("+00:00", "Z") if row.recorded_at else None,
             "evaluation_trace": row.evaluation_trace or [],
         }
         for row in rows
