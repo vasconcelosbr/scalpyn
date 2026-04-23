@@ -364,7 +364,7 @@ def evaluate_rejections(
                 "stage": stage,
                 "profile_id": profile_id,
                 "failed_type": failed_trace["type"],
-                "failed_indicator": failed_trace["name"],
+                "failed_indicator": failed_trace["indicator"],
                 "condition": failed_trace.get("condition"),
                 "current_value": failed_trace.get("current_value"),
                 "expected": failed_trace.get("expected"),
