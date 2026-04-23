@@ -69,11 +69,40 @@ def test_filter_failure_trace_preserves_profile_order_and_stop_point():
     assert [item["status"] for item in rejected[0]["evaluation_trace"]] == ["PASS", "FAIL", "SKIPPED"]
 
 
+def test_approved_assets_include_full_pass_trace():
 def test_pool_stage_rejections_are_labeled_as_pool():
     profile_config = {
         "filters": {
             "logic": "AND",
             "conditions": [
+                {"field": "volume_24h", "operator": ">=", "value": 1_000_000},
+                {"field": "rsi", "operator": "<", "value": 65},
+            ],
+        },
+        "block_rules": {
+            "blocks": [
+                {
+                    "id": "block_overbought",
+                    "name": "Overbought RSI",
+                    "logic": "AND",
+                    "conditions": [
+                        {"indicator": "rsi", "operator": ">", "value": 75},
+                    ],
+                }
+            ]
+        },
+    }
+
+    approved, rejected = evaluate_rejections(
+        [{"symbol": "SOL_USDT", "volume_24h": 5_000_000, "rsi": 58}],
+        profile_config=profile_config,
+        stage="L2",
+        profile_id="profile-3",
+    )
+
+    assert rejected == []
+    assert len(approved) == 1
+    assert [item["status"] for item in approved[0]["evaluation_trace"]] == ["PASS", "PASS", "PASS"]
                 {"field": "market_cap", "operator": ">=", "value": 1_000_000_000},
             ],
         },

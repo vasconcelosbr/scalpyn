@@ -30,7 +30,11 @@ from ..models.pipeline_watchlist import (
     PipelineWatchlistRejection,
 )
 from ..services.market_data_service import _is_etf_pair
-from ..services.pipeline_rejections import evaluate_rejections, rejection_metrics
+from ..services.pipeline_rejections import (
+    build_asset_evaluation_trace,
+    evaluate_rejections,
+    rejection_metrics,
+)
 from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
     effective_pipeline_level,
@@ -1772,15 +1776,56 @@ async def get_watchlist_assets(
             except Exception as _e:
                 logger.debug("[Pipeline] On-demand orderbook fetch error: %s", _e)
 
-    enriched = [
-        _asset_to_dict(
+    trace_filter_conditions = list(((profile_config or {}).get("filters") or {}).get("conditions") or [])
+    selected_trace_conditions = trace_filter_conditions
+    if effective_level in ("L1", "L2", "L3") and wl.profile_id and trace_filter_conditions:
+        selected_trace_conditions = select_profile_filter_conditions(
+            trace_filter_conditions,
+            total_symbols=len(symbols),
+            symbols_with_meta=sum(1 for symbol in symbols if meta_map.get(symbol)),
+        )["conditions"]
+
+    enriched = []
+    for a in assets:
+        enriched_asset = _asset_to_dict(
             a,
             indicators=ind_map.get(a.symbol),
             meta=meta_map.get(a.symbol),
             override_score=score_override.get(a.symbol),
         )
-        for a in assets
-    ]
+
+        evaluation_trace: List[Dict[str, Any]] = []
+        if effective_level in ("L1", "L2", "L3") and wl.profile_id and profile_config:
+            trace_eval_data: Dict[str, Any] = {
+                "symbol": a.symbol,
+                "price": enriched_asset.get("current_price"),
+                "current_price": enriched_asset.get("current_price"),
+                "volume_24h": enriched_asset.get("volume_24h"),
+                "market_cap": enriched_asset.get("market_cap"),
+                "change_24h": enriched_asset.get("price_change_24h"),
+                "price_change_24h": enriched_asset.get("price_change_24h"),
+                "spread_pct": meta_map.get(a.symbol, {}).get("spread_pct"),
+                "orderbook_depth_usdt": meta_map.get(a.symbol, {}).get("orderbook_depth_usdt"),
+                "alpha_score": enriched_asset.get("alpha_score"),
+            }
+            trace_eval_data.update(enriched_asset.get("indicators") or {})
+            applicable_trace_conditions = [
+                condition
+                for condition in selected_trace_conditions
+                if "group" in condition
+                or trace_eval_data.get(condition.get("field")) is not None
+                or condition.get("field", "") in STRICT_META_FIELDS
+            ]
+            evaluation_trace = build_asset_evaluation_trace(
+                trace_eval_data,
+                profile_config=profile_config,
+                selected_filter_conditions=applicable_trace_conditions,
+            )
+
+        enriched.append({
+            **enriched_asset,
+            "evaluation_trace": evaluation_trace,
+        })
 
     return {
         "assets":             enriched,

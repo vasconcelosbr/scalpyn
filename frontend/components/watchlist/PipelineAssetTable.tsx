@@ -2,6 +2,7 @@
 
 import { Fragment, useState } from 'react';
 import { ChevronDown, ChevronRight, CheckCircle2, XCircle, RefreshCw } from 'lucide-react';
+import { EvaluationTraceBreakdown, type EvaluationTraceItem } from './EvaluationTraceBreakdown';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ export interface PipelineAssetWithScore {
   indicators: Record<string, IndicatorValue>;
   score_rules: ScoreRule[];
   score_classification?: string | null;
+  evaluation_trace?: EvaluationTraceItem[];
 }
 
 export interface IndicatorColumn {
@@ -310,11 +312,13 @@ function DrilldownPanel({
   score,
   classification,
   blocked = false,
+  evaluationTrace = [],
 }: {
   rules: ScoreRule[];
   score: number;
   classification?: string | null;
   blocked?: boolean;
+  evaluationTrace?: EvaluationTraceItem[];
 }) {
   const totalPossible = rules.reduce((s, r) => s + r.points_possible, 0);
   const totalAwarded  = rules.reduce((s, r) => s + r.points_awarded, 0);
@@ -398,6 +402,15 @@ function DrilldownPanel({
         <p className="text-xs text-[#334155] text-center py-2">
           Sem regras de scoring configuradas — configure em Settings → Score.
         </p>
+      )}
+
+      {evaluationTrace.length > 0 && (
+        <div className="mt-4 space-y-3">
+          <div className="text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider">
+            Profile Evaluation
+          </div>
+          <EvaluationTraceBreakdown items={evaluationTrace} />
+        </div>
       )}
     </div>
   );
@@ -578,6 +591,7 @@ export function PipelineAssetTable({
                         score={score}
                         classification={classification}
                         blocked={isBlocked}
+                        evaluationTrace={asset.evaluation_trace ?? []}
                       />
                     </td>
                   </tr>

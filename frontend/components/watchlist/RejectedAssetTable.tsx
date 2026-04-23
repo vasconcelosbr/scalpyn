@@ -2,15 +2,13 @@
 
 import { Fragment, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import {
+  EvaluationTraceBreakdown,
+  formatEvaluationTraceValue,
+  type EvaluationTraceItem,
+} from "./EvaluationTraceBreakdown";
 
-export interface RejectedTraceItem {
-  type: "filter" | "block_rule";
-  indicator: string;
-  condition: string;
-  expected?: string | null;
-  current_value?: unknown;
-  status: "PASS" | "FAIL" | "SKIPPED";
-}
+export type RejectedTraceItem = EvaluationTraceItem;
 
 export interface RejectedAssetItem {
   symbol: string;
@@ -36,17 +34,7 @@ export interface RejectedMetrics {
 }
 
 function fmtValue(value: unknown): string {
-  if (value == null) return "—";
-  if (typeof value === "number") {
-    const abs = Math.abs(value);
-    if (abs >= 100) return value.toFixed(1);
-    if (abs >= 1) return value.toFixed(2);
-    return value.toFixed(4);
-  }
-  if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value === "string") return value;
-  if (Array.isArray(value) || typeof value === "object") return JSON.stringify(value);
-  return String(value);
+  return formatEvaluationTraceValue(value);
 }
 
 function rowPalette(type: "filter" | "block_rule") {
@@ -201,16 +189,10 @@ export function RejectedAssetTable({
                     {isExpanded && (
                       <tr className="border-b border-[#1A2035] bg-[#06080E]">
                         <td colSpan={9} className="p-4">
-                          <div className="grid gap-4 lg:grid-cols-2">
-                            <TraceSection
-                              title="Block Rules"
-                              items={item.evaluation_trace.filter((trace) => trace.type === "block_rule")}
-                            />
-                            <TraceSection
-                              title="Filters"
-                              items={item.evaluation_trace.filter((trace) => trace.type === "filter")}
-                            />
-                          </div>
+                          <EvaluationTraceBreakdown
+                            items={item.evaluation_trace}
+                            emptyMessage="No rules configured."
+                          />
                         </td>
                       </tr>
                     )}
@@ -221,40 +203,6 @@ export function RejectedAssetTable({
           </table>
         </div>
       )}
-    </div>
-  );
-}
-
-function TraceSection({ title, items }: { title: string; items: RejectedTraceItem[] }) {
-  return (
-    <div className="rounded-xl border border-[#1E2433] bg-[#0A0B10] p-4">
-      <div className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[#4B5563]">{title}</div>
-      <div className="space-y-2">
-        {items.map((item, index) => {
-          const cls =
-            item.status === "PASS"
-              ? "border-[#14532D]/40 bg-[#061E14] text-[#86EFAC]"
-              : item.status === "FAIL"
-                ? item.type === "block_rule"
-                  ? "border-[#6B21A8]/40 bg-[#1A0A2A] text-[#D8B4FE]"
-                  : "border-[#7F1D1D]/25 bg-[#150A0A] text-[#FCA5A5]"
-                : "border-[#1E2433] bg-[#06080E] text-[#64748B]";
-          return (
-            <div key={index} className={`rounded-lg border px-3 py-2 text-xs ${cls}`}>
-              <div className="flex items-center justify-between gap-3">
-                <span className="font-semibold">{item.indicator}</span>
-                <span className="font-mono text-[10px]">{item.status}</span>
-              </div>
-              <div className="mt-1 text-[#CBD5E1]">{item.condition}</div>
-              <div className="mt-1 flex flex-wrap gap-3 text-[11px]">
-                <span>Current: <span className="font-mono">{fmtValue(item.current_value)}</span></span>
-                <span>Expected: <span className="font-mono">{item.expected ?? "—"}</span></span>
-              </div>
-            </div>
-          );
-        })}
-        {items.length === 0 && <div className="text-xs text-[#4B5563]">No rules configured.</div>}
-      </div>
     </div>
   );
 }
