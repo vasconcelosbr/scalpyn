@@ -34,6 +34,8 @@ from ..services.pipeline_rejections import evaluate_rejections, rejection_metric
 from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
     effective_pipeline_level,
+    expected_upstream_watchlist_level,
+    resolve_pipeline_dependency,
     select_profile_filter_conditions,
     normalize_watchlist_level,
     uses_pipeline_filters,
@@ -758,88 +760,52 @@ async def _get_base_symbols(
         return s
 
     normalized_level = normalize_watchlist_level(wl.level)
-    source_pool_id = wl.source_pool_id
-    source_watchlist_id = wl.source_watchlist_id
-
-    if normalized_level in {"L1", "L2", "L3"} and source_pool_id and source_watchlist_id:
-        logger.warning(
-            {
-                "type": "INVALID_SOURCE_CONFIG",
-                "watchlist_id": str(wl.id),
-                "level": normalized_level,
-                "message": "Both source_pool_id and source_watchlist_id set; prioritizing source_watchlist_id.",
-            }
-        )
-        source_pool_id = None
-    elif normalized_level in {"L1", "L2", "L3"} and source_pool_id and not source_watchlist_id:
-        logger.warning(
-            {
-                "type": "INVALID_SOURCE_CONFIG",
-                "watchlist_id": str(wl.id),
-                "level": normalized_level,
-                "message": "source_pool_id is invalid for L1/L2/L3; returning empty upstream.",
-            }
-        )
-        return []
-    elif normalized_level == "POOL" and source_watchlist_id:
-        source_watchlist_id = None
-
-    if source_watchlist_id:
-        result = await db.execute(
-            select(PipelineWatchlist).where(
-                PipelineWatchlist.id == source_watchlist_id,
-                PipelineWatchlist.user_id == user_id,
+    parent = await _resolve_upstream_watchlist(wl, user_id, db)
+    if parent:
+        active_assets = (await db.execute(
+            select(PipelineWatchlistAsset).where(
+                PipelineWatchlistAsset.watchlist_id == parent.id,
+                (PipelineWatchlistAsset.level_direction.is_(None)) |
+                (PipelineWatchlistAsset.level_direction == "up"),
             )
-        )
-        parent = result.scalars().first()
-        if parent:
-            # Active (in or neutral direction) assets from the parent
-            active_assets = (await db.execute(
-                select(PipelineWatchlistAsset).where(
-                    PipelineWatchlistAsset.watchlist_id == parent.id,
-                    (PipelineWatchlistAsset.level_direction.is_(None)) |
-                    (PipelineWatchlistAsset.level_direction == "up"),
-                )
-            )).scalars().all()
+        )).scalars().all()
 
-            if active_assets:
-                return [_normalize_sym(a.symbol) for a in active_assets]
+        if active_assets:
+            return [_normalize_sym(a.symbol) for a in active_assets]
 
-            # No active assets right now. Check if parent was EVER populated.
-            # If yes → parent filtered everything out legitimately → return [].
-            # If no  → parent never ran → cascade up to bootstrap.
-            ever_populated = (await db.execute(
-                text("SELECT 1 FROM pipeline_watchlist_assets WHERE watchlist_id = :wid LIMIT 1"),
-                {"wid": str(parent.id)},
-            )).fetchone()
+        ever_populated = (await db.execute(
+            text("SELECT 1 FROM pipeline_watchlist_assets WHERE watchlist_id = :wid LIMIT 1"),
+            {"wid": str(parent.id)},
+        )).fetchone()
 
-            if ever_populated:
-                # Parent was populated before but all assets exited — respect the filter
-                logger.info(
-                    "[GetBaseSymbols] Parent %s was populated before but has 0 active assets. "
-                    "Returning [] to preserve cascade integrity.",
-                    parent.name,
-                )
-                return []
+        if ever_populated:
+            logger.info(
+                "[GetBaseSymbols] Parent %s was populated before but has 0 active assets. "
+                "Returning [] to preserve cascade integrity.",
+                parent.name,
+            )
+            return []
 
-            # Parent never populated → recurse (first-run bootstrap)
-            return await _get_base_symbols(parent, user_id, db, depth + 1)
+        return await _get_base_symbols(parent, user_id, db, depth + 1)
 
-    if source_pool_id:
+    if expected_upstream_watchlist_level(normalized_level):
+        return []
+
+    if wl.source_pool_id:
         # Terminal source: return ALL pool coins. Filtering happens in _resolve_and_persist.
         result = await db.execute(
             text("""
                 SELECT symbol FROM pool_coins
                 WHERE pool_id = :pool_id AND is_active = TRUE
             """),
-            {"pool_id": str(source_pool_id)},
+            {"pool_id": str(wl.source_pool_id)},
         )
         raw_symbols = [row.symbol for row in result.fetchall()]
         # Normalize symbols to BTC_USDT format so market_metadata lookups work
         normalized = list(dict.fromkeys(_normalize_sym(s) for s in raw_symbols))
         logger.debug(
             "[GetBaseSymbols] Pool %s: %d raw coins → %d normalized symbols",
-            source_pool_id, len(raw_symbols), len(normalized),
+            wl.source_pool_id, len(raw_symbols), len(normalized),
         )
         return normalized
 
@@ -865,6 +831,96 @@ async def _load_watchlist_profile_config(
     )
     prof = prof_result.scalars().first()
     return prof.config if prof else None
+
+
+async def _resolve_upstream_watchlist(
+    wl: PipelineWatchlist,
+    user_id: UUID,
+    db: AsyncSession,
+) -> Optional[PipelineWatchlist]:
+    profile_config = await _load_watchlist_profile_config(wl, db)
+    effective_level = effective_pipeline_level(
+        wl.level,
+        source_pool_id=wl.source_pool_id,
+        profile_config=profile_config,
+    )
+    expected_level = expected_upstream_watchlist_level(effective_level)
+    if not expected_level:
+        return None
+
+    parent = None
+    parent_effective_level = None
+    if wl.source_watchlist_id:
+        parent_result = await db.execute(
+            select(PipelineWatchlist).where(
+                PipelineWatchlist.id == wl.source_watchlist_id,
+                PipelineWatchlist.user_id == user_id,
+            )
+        )
+        parent = parent_result.scalars().first()
+        if parent:
+            parent_profile_config = await _load_watchlist_profile_config(parent, db)
+            parent_effective_level = effective_pipeline_level(
+                parent.level,
+                source_pool_id=parent.source_pool_id,
+                profile_config=parent_profile_config,
+            )
+
+    pool_gatekeeper = None
+    if effective_level == "L1" and wl.source_pool_id:
+        candidates = (await db.execute(
+            select(PipelineWatchlist)
+            .where(
+                PipelineWatchlist.user_id == user_id,
+                PipelineWatchlist.source_pool_id == wl.source_pool_id,
+                PipelineWatchlist.id != wl.id,
+            )
+            .order_by(PipelineWatchlist.created_at.asc())
+        )).scalars().all()
+        for candidate in candidates:
+            candidate_profile_config = await _load_watchlist_profile_config(candidate, db)
+            candidate_level = effective_pipeline_level(
+                candidate.level,
+                source_pool_id=candidate.source_pool_id,
+                profile_config=candidate_profile_config,
+            )
+            if candidate_level == "POOL":
+                pool_gatekeeper = candidate
+                break
+
+    dependency = resolve_pipeline_dependency(
+        level=effective_level,
+        source_pool_id=wl.source_pool_id,
+        source_watchlist_id=wl.source_watchlist_id,
+        source_watchlist_level=parent_effective_level,
+        pool_gate_watchlist_id=pool_gatekeeper.id if pool_gatekeeper else None,
+    )
+    if dependency["error"]:
+        logger.error(
+            {
+                "type": "INVALID_SOURCE_CONFIG",
+                "watchlist_id": str(wl.id),
+                "level": effective_level,
+                "message": "Missing explicit upstream dependency for pipeline stage.",
+                "expected_upstream_level": dependency["expected_upstream_level"],
+                "source_pool_id": str(wl.source_pool_id) if wl.source_pool_id else None,
+                "source_watchlist_id": str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+                "source_watchlist_level": parent_effective_level,
+                "error": dependency["error"],
+            }
+        )
+        return None
+
+    if dependency["resolution"] == "implicit_pool_gate" and pool_gatekeeper:
+        logger.info(
+            "[Pipeline] %s (%s): resolved legacy POOL dependency via watchlist %s",
+            wl.name,
+            effective_level,
+            pool_gatekeeper.id,
+        )
+        return pool_gatekeeper
+
+    return parent
 
 
 async def _load_active_watchlist_assets(
@@ -915,6 +971,42 @@ async def _replace_rejection_snapshot(
                 recorded_at=datetime.now(timezone.utc),
             )
         )
+
+
+def _log_watchlist_processing_summary(
+    *,
+    level: str,
+    input_count: int,
+    approved_count: int,
+    rejected_count: int,
+    watchlist_id: UUID,
+) -> None:
+    if level == "POOL":
+        logger.info("[POOL] scanned: %d assets", input_count)
+        logger.info("[POOL] approved: %d", approved_count)
+        return
+
+    if level == "L1":
+        total_processed = approved_count + rejected_count
+        logger.info("[L1] input received: %d assets", input_count)
+        logger.info("[L1] approved: %d", approved_count)
+        logger.info("[L1] rejected: %d", rejected_count)
+        logger.info("[L1] total processed: %d", total_processed)
+        if total_processed != input_count:
+            message = (
+                f"Asset count mismatch: processed {total_processed} "
+                f"but received {input_count}"
+            )
+            logger.error(
+                {
+                    "type": "PIPELINE_INCONSISTENCY",
+                    "watchlist_id": str(watchlist_id),
+                    "level": level,
+                    "expected": input_count,
+                    "actual": total_processed,
+                    "message": message,
+                }
+            )
 
 
 def _should_refresh_for_upstream_delta(
@@ -981,14 +1073,8 @@ async def _auto_refresh_watchlist_assets_if_needed(
 
     parent = None
     parent_assets: List[PipelineWatchlistAsset] = []
-    if wl.source_watchlist_id:
-        parent_result = await db.execute(
-            select(PipelineWatchlist).where(
-                PipelineWatchlist.id == wl.source_watchlist_id,
-                PipelineWatchlist.user_id == user_id,
-            )
-        )
-        parent = parent_result.scalars().first()
+    if expected_upstream_watchlist_level(effective_level):
+        parent = await _resolve_upstream_watchlist(wl, user_id, db)
         if parent and parent.auto_refresh:
             parent_assets = await _load_active_watchlist_assets(parent.id, db)
             parent_profile_config = await _load_watchlist_profile_config(parent, db)
@@ -1357,6 +1443,13 @@ async def _resolve_and_persist(
             stage=effective_level,
             profile_id=str(wl.profile_id) if wl.profile_id else None,
             selected_filter_conditions=applicable_conditions,
+        )
+        _log_watchlist_processing_summary(
+            level=effective_level,
+            input_count=len(base_symbols),
+            approved_count=len(approved_after_rules),
+            rejected_count=len(rejected_rows),
+            watchlist_id=wl.id,
         )
 
         if selected and selected["relaxed_strict_meta"]:
@@ -1801,6 +1894,7 @@ async def _cascade_refresh(wl_id: UUID, user_id: UUID, db: AsyncSession, depth: 
     """Cascade refresh to all watchlists that use this one as their source."""
     if depth > 3:
         return
+    parent = await db.get(PipelineWatchlist, wl_id)
     children_result = await db.execute(
         select(PipelineWatchlist).where(
             PipelineWatchlist.source_watchlist_id == wl_id,
@@ -1808,8 +1902,28 @@ async def _cascade_refresh(wl_id: UUID, user_id: UUID, db: AsyncSession, depth: 
             PipelineWatchlist.auto_refresh == True,
         )
     )
-    children = children_result.scalars().all()
-    for child in children:
+    children = {child.id: child for child in children_result.scalars().all()}
+    if parent:
+        parent_profile_config = await _load_watchlist_profile_config(parent, db)
+        parent_effective_level = effective_pipeline_level(
+            parent.level,
+            source_pool_id=parent.source_pool_id,
+            profile_config=parent_profile_config,
+        )
+        if parent_effective_level == "POOL" and parent.source_pool_id:
+            legacy_children_result = await db.execute(
+                select(PipelineWatchlist).where(
+                    PipelineWatchlist.user_id == user_id,
+                    PipelineWatchlist.auto_refresh == True,
+                    PipelineWatchlist.source_watchlist_id.is_(None),
+                    PipelineWatchlist.source_pool_id == parent.source_pool_id,
+                    func.upper(PipelineWatchlist.level) == "L1",
+                )
+            )
+            for child in legacy_children_result.scalars().all():
+                if child.id != parent.id:
+                    children[child.id] = child
+    for child in children.values():
         try:
             await _resolve_and_persist(child, user_id, db)
             await _cascade_refresh(child.id, user_id, db, depth + 1)
