@@ -330,6 +330,7 @@ def _build_asset_evaluation_trace(
         item["status"] == "PASS" for item in filter_results
     ):
         failed_trace = next((item for item in filter_results if item["status"] == "FAIL"), None)
+        return trace, failed_trace
 
     return trace, failed_trace
 
