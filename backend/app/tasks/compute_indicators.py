@@ -128,7 +128,11 @@ async def _compute_5m_async():
                 """), {"symbol": symbol})
                 rows = ohlcv_result.fetchall()
 
-                if len(rows) < 14:  # minimum candles for indicator validity
+                if len(rows) < 50:  # ADX(14) needs 2×period rows; 50 is a safe warm-up floor
+                    logger.debug(
+                        "Skipping 5m indicator computation for %s: only %d candles (need ≥50)",
+                        symbol, len(rows),
+                    )
                     continue
 
                 df = pd.DataFrame([{

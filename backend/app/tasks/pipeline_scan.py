@@ -492,6 +492,60 @@ async def _fetch_market_data(db, symbols: list) -> list:
     return assets
 
 
+# ─── core indicator completeness guard ───────────────────────────────────────
+
+#: Indicators that must be non-null for an asset to advance in the pipeline.
+#: If any of these is None/missing the asset is quarantined at the data-load
+#: stage, before any profile filter or scoring is applied.
+_REQUIRED_CORE_INDICATORS: tuple[str, ...] = ("adx", "rsi", "macd")
+
+
+def _filter_incomplete_indicators(assets: list) -> tuple[list, list]:
+    """Separate assets into (complete, incomplete) based on core indicator presence.
+
+    An asset is *incomplete* if any of the required core indicators (ADX, RSI,
+    MACD) is ``None`` or absent from its indicator dict.  Incomplete assets are
+    excluded from the pipeline and logged so the issue is visible in production
+    logs without raising an exception.
+
+    Returns
+    -------
+    complete : list
+        Assets where all core indicators are non-null.
+    incomplete : list
+        Assets with at least one null core indicator (quarantined).
+    """
+    complete: list = []
+    incomplete: list = []
+
+    for asset in assets:
+        indicators = asset.get("indicators", {})
+        missing = [
+            ind for ind in _REQUIRED_CORE_INDICATORS
+            if indicators.get(ind) is None
+        ]
+        if missing:
+            incomplete.append(asset)
+            logger.warning(
+                "[PipelineScan] QUARANTINED %s — core indicators null: %s "
+                "(asset will not advance until indicators are fully computed)",
+                asset.get("symbol", "?"),
+                missing,
+            )
+        else:
+            complete.append(asset)
+
+    if incomplete:
+        logger.info(
+            "[PipelineScan] Core indicator guard: %d/%d assets quarantined "
+            "(null ADX/RSI/MACD). Sample: %s",
+            len(incomplete), len(assets),
+            [a.get("symbol") for a in incomplete[:10]],
+        )
+
+    return complete, incomplete
+
+
 # ─── level evaluators ─────────────────────────────────────────────────────────
 
 def _check_condition_would_fail(cond: dict, actual_value) -> bool:
@@ -1450,6 +1504,17 @@ async def _run_pipeline_scan():
                         await _run_staleness_only(db, wl_id, filters_json, execution_id=execution_id)
                         await _update_last_scanned(db, wl_id)
                         continue
+
+                    # Mandatory core-indicator completeness guard.
+                    # Assets with null ADX, RSI, or MACD are quarantined here and
+                    # never allowed to advance to any pipeline stage (POOL → L3).
+                    assets, quarantined = _filter_incomplete_indicators(assets)
+                    if quarantined and effective_level in {"POOL", "L1", "L2", "L3"}:
+                        logger.info(
+                            "[PipelineScan] %s (%s): %d asset(s) quarantined for null core indicators "
+                            "and excluded from this scan cycle.",
+                            wl.name, effective_level, len(quarantined),
+                        )
 
                     assets_with_metadata = sum(1 for a in assets if a.get("_has_market_metadata"))
                     profile_candidate_count = len(assets)
