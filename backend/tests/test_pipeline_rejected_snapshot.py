@@ -70,6 +70,7 @@ def test_filter_failure_trace_preserves_profile_order_and_stop_point():
 
 
 def test_approved_assets_include_full_pass_trace():
+def test_pool_stage_rejections_are_labeled_as_pool():
     profile_config = {
         "filters": {
             "logic": "AND",
@@ -102,6 +103,24 @@ def test_approved_assets_include_full_pass_trace():
     assert rejected == []
     assert len(approved) == 1
     assert [item["status"] for item in approved[0]["evaluation_trace"]] == ["PASS", "PASS", "PASS"]
+                {"field": "market_cap", "operator": ">=", "value": 1_000_000_000},
+            ],
+        },
+        "block_rules": {"blocks": []},
+    }
+
+    approved, rejected = evaluate_rejections(
+        [{"symbol": "DOGE_USDT", "market_cap": 950_000_000}],
+        profile_config=profile_config,
+        stage="POOL",
+        profile_id="profile-3",
+    )
+
+    assert approved == []
+    assert len(rejected) == 1
+    assert rejected[0]["stage"] == "POOL"
+    assert rejected[0]["failed_indicator"] == "Market Cap"
+    assert rejected[0]["evaluation_trace"][0]["status"] == "FAIL"
 
 
 def test_rejection_metrics_group_by_indicator_and_block_rate():

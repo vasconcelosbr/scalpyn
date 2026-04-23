@@ -1,11 +1,26 @@
 import asyncio
 import logging
+from typing import Union
 from .database import engine, Base
 from .models import *  # This ensures all models are registered
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+async def backfill_execution_tracking_columns(db: Union[AsyncSession, AsyncConnection]) -> None:
+    """Add missing pipeline execution_id columns; caller owns transaction commit."""
+    await db.execute(text("""
+        ALTER TABLE pipeline_watchlist_assets
+        ADD COLUMN IF NOT EXISTS execution_id UUID;
+    """))
+    await db.execute(text("""
+        ALTER TABLE pipeline_watchlist_rejections
+        ADD COLUMN IF NOT EXISTS execution_id UUID;
+    """))
+
 
 async def init_db():
     logger.info("Initializing database schema...")
@@ -28,6 +43,12 @@ async def init_db():
             logger.info("Added 'autopilot_enabled' column to pools table (or already exists)")
         except Exception as e:
             logger.warning(f"Could not add 'autopilot_enabled' column: {e}")
+
+        try:
+            await backfill_execution_tracking_columns(conn)
+            logger.info("Ensured pipeline execution tracking columns exist")
+        except Exception as e:
+            logger.warning(f"Could not add pipeline execution tracking columns: {e}")
         
         # Ensure profiles and watchlist_profiles tables exist with all columns
         try:

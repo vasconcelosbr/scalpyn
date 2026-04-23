@@ -11,7 +11,10 @@ from app.api.watchlists import (
     _should_refresh_for_upstream_delta,
     _uses_pipeline_filters,
 )
-from app.utils.pipeline_profile_filters import effective_pipeline_level
+from app.utils.pipeline_profile_filters import (
+    WATCHLIST_LEVELS,
+    effective_pipeline_level,
+)
 from app.services.score_engine import resolve_profile_scoring_rules
 from app.services.profile_engine import ProfileEngine
 
@@ -23,12 +26,17 @@ def test_custom_watchlists_are_monitoring_boards():
 
 
 def test_pipeline_levels_keep_filter_enforcement():
+    assert _uses_pipeline_filters("POOL") is True
     assert _uses_pipeline_filters("L1") is True
     assert _uses_pipeline_filters("L2") is True
     assert _uses_pipeline_filters("L3") is True
 
 
-def test_source_pool_watchlist_with_profile_filters_is_promoted_to_l1():
+def test_watchlist_levels_include_pool_before_l1():
+    assert WATCHLIST_LEVELS == ("POOL", "L1", "L2", "L3", "custom")
+
+
+def test_source_pool_watchlist_with_profile_filters_is_promoted_to_pool():
     profile_config = {
         "filters": {
             "conditions": [
@@ -41,7 +49,7 @@ def test_source_pool_watchlist_with_profile_filters_is_promoted_to_l1():
         "custom",
         source_pool_id="pool-123",
         profile_config=profile_config,
-    ) == "L1"
+    ) == "POOL"
 
 
 def test_source_pool_watchlist_without_profile_filters_remains_monitoring_board():
@@ -86,6 +94,7 @@ def _make_level_wl_show_score(level: str) -> bool:
 
 def test_show_score_hidden_for_pool_and_l1():
     """Stage 0 (custom/pool) and Stage 1 (L1) must not show Alpha Score."""
+    assert _make_level_wl_show_score("POOL") is False
     assert _make_level_wl_show_score("custom") is False
     assert _make_level_wl_show_score("Custom") is False
     assert _make_level_wl_show_score("L1") is False

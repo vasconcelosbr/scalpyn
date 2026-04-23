@@ -16,7 +16,7 @@ import json
 import logging
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 from uuid import uuid4
 
 from ..tasks.celery_app import celery_app
@@ -24,7 +24,10 @@ from ..services.pipeline_rejections import evaluate_rejections
 from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
     effective_pipeline_level,
+    resolve_pipeline_dependency,
     select_profile_filter_conditions,
+    uses_pipeline_filters,
+    WATCHLIST_STAGE_ORDER,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,6 +38,8 @@ _REDIS_PREFIX = "spe:pipeline:"   # Redis key prefix per watchlist
 # window are automatically marked 'down'.  Override per-watchlist via
 # filters_json.staleness_minutes (GUI-editable).
 _DEFAULT_STALENESS_MINUTES = 30
+_PIPELINE_EXECUTION_TRACKING_SCHEMA_READY = False
+_PIPELINE_EXECUTION_TRACKING_SCHEMA_LOCK = asyncio.Lock()
 
 # Strict metadata fields — NULL means FAIL (not skip) in profile filters.
 # Used by diagnostic logging in _apply_level_filter.
@@ -51,9 +56,146 @@ def _run_async(coro):
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
+_PIPELINE_EXECUTION_ORDER = ("POOL", "L1", "L2", "L3")
+
 def _uses_pipeline_filters(level: Optional[str]) -> bool:
-    """Only L1/L2/L3 are filter-enforced pipeline stages."""
-    return (level or "").upper() in {"L1", "L2", "L3"}
+    """Only POOL/L1/L2/L3 are filter-enforced pipeline stages."""
+    return uses_pipeline_filters(level)
+
+
+def _log_pipeline_event(
+    *,
+    level: str,
+    execution_id: str,
+    event_type: str,
+    watchlist_id: Optional[str] = None,
+    symbol: Optional[str] = None,
+    **extra: Any,
+) -> None:
+    payload: dict[str, Any] = {
+        "type": event_type,
+        "level": level,
+        "execution_id": execution_id,
+    }
+    if watchlist_id:
+        payload["watchlist_id"] = watchlist_id
+    if symbol:
+        payload["symbol"] = symbol
+    payload.update(extra)
+    logger.error(payload)
+
+
+def _log_stage_processing_summary(
+    *,
+    level: str,
+    input_count: int,
+    approved_count: int,
+    rejected_count: int,
+    watchlist_id: str,
+    execution_id: str,
+) -> None:
+    if level == "POOL":
+        logger.info("[POOL] scanned: %d assets", input_count)
+        logger.info("[POOL] approved: %d", approved_count)
+        return
+
+    if level == "L1":
+        total_processed = approved_count + rejected_count
+        logger.info("[L1] input received: %d assets", input_count)
+        logger.info("[L1] approved: %d", approved_count)
+        logger.info("[L1] rejected: %d", rejected_count)
+        logger.info("[L1] total processed: %d", total_processed)
+        if total_processed != input_count:
+            message = (
+                f"Asset count mismatch: processed {total_processed} "
+                f"but received {input_count}"
+            )
+            _log_pipeline_event(
+                level=level,
+                execution_id=execution_id,
+                event_type="PIPELINE_INCONSISTENCY",
+                watchlist_id=watchlist_id,
+                expected=input_count,
+                actual=total_processed,
+                reason="processed_count_mismatch",
+                message=message,
+            )
+
+
+def _normalize_sources_for_scan(
+    *,
+    level: str,
+    watchlist_id: str,
+    source_pool_id: Optional[str],
+    source_watchlist_id: Optional[str],
+    execution_id: str,
+) -> tuple[Optional[str], Optional[str]]:
+    normalized_level = (level or "").upper()
+    pool_id = str(source_pool_id) if source_pool_id else None
+    watchlist_source_id = str(source_watchlist_id) if source_watchlist_id else None
+
+    if normalized_level in {"L1", "L2", "L3"} and pool_id and watchlist_source_id:
+        logger.warning(
+            {
+                "type": "INVALID_SOURCE_CONFIG",
+                "watchlist_id": watchlist_id,
+                "level": normalized_level,
+                "execution_id": execution_id,
+                "message": "Both source_pool_id and source_watchlist_id set; prioritizing source_watchlist_id.",
+            }
+        )
+        pool_id = None
+    elif normalized_level in {"L1", "L2", "L3"} and pool_id and not watchlist_source_id:
+        logger.warning(
+            {
+                "type": "INVALID_SOURCE_CONFIG",
+                "watchlist_id": watchlist_id,
+                "level": normalized_level,
+                "execution_id": execution_id,
+                "message": "source_pool_id is not allowed for L1/L2/L3; ignoring source_pool_id.",
+            }
+        )
+        pool_id = None
+    elif normalized_level == "POOL" and watchlist_source_id:
+        logger.warning(
+            {
+                "type": "INVALID_SOURCE_CONFIG",
+                "watchlist_id": watchlist_id,
+                "level": normalized_level,
+                "execution_id": execution_id,
+                "message": "source_watchlist_id is not allowed for POOL; ignoring source_watchlist_id.",
+            }
+        )
+        watchlist_source_id = None
+
+    return pool_id, watchlist_source_id
+
+
+def _intersect_with_upstream(
+    *,
+    symbols: list[str],
+    upstream_symbols: set[str],
+    level: str,
+    watchlist_id: str,
+    execution_id: str,
+) -> list[str]:
+    if not upstream_symbols:
+        return []
+
+    pruned: list[str] = []
+    for symbol in symbols:
+        if symbol in upstream_symbols:
+            pruned.append(symbol)
+            continue
+        _log_pipeline_event(
+            level=level,
+            execution_id=execution_id,
+            event_type="PIPELINE_VIOLATION",
+            watchlist_id=watchlist_id,
+            symbol=symbol,
+            reason="symbol_not_in_upstream",
+        )
+    return pruned
 
 
 def _placeholder_asset_without_market_data(symbol: str) -> dict:
@@ -731,7 +873,12 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
     return payloads
 
 
-async def _run_staleness_only(db, watchlist_id: str, filters_json: dict | None = None):
+async def _run_staleness_only(
+    db,
+    watchlist_id: str,
+    filters_json: dict | None = None,
+    execution_id: Optional[str] = None,
+):
     """Run ONLY staleness expiry + cleanup — no active/down marking.
 
     Called when a pipeline scan cannot fetch market data, so we don't want to
@@ -746,13 +893,14 @@ async def _run_staleness_only(db, watchlist_id: str, filters_json: dict | None =
     stale_result = await db.execute(text("""
         UPDATE pipeline_watchlist_assets
         SET level_direction = 'down',
-            level_change_at = :now
+            level_change_at = :now,
+            execution_id = :execution_id
         WHERE watchlist_id = :wid
           AND level_direction IS NULL
           AND refreshed_at IS NOT NULL
           AND refreshed_at < :cutoff
         RETURNING symbol
-    """), {"wid": watchlist_id, "now": now, "cutoff": staleness_cutoff})
+    """), {"wid": watchlist_id, "now": now, "cutoff": staleness_cutoff, "execution_id": execution_id})
     stale_rows = stale_result.fetchall()
     if stale_rows:
         logger.info(
@@ -779,7 +927,10 @@ async def _replace_rejection_snapshot(
     user_id,
     profile_id,
     rows: list[dict],
+    execution_id: Optional[str] = None,
 ):
+    from sqlalchemy import text
+
     await db.execute(
         text("DELETE FROM pipeline_watchlist_rejections WHERE watchlist_id = :wid"),
         {"wid": watchlist_id},
@@ -790,12 +941,12 @@ async def _replace_rejection_snapshot(
             INSERT INTO pipeline_watchlist_rejections (
                 id, watchlist_id, user_id, profile_id, symbol, stage,
                 failed_type, failed_indicator, condition_text, current_value,
-                expected_value, evaluation_trace, recorded_at
+                expected_value, evaluation_trace, recorded_at, execution_id
             )
             VALUES (
                 :id, :watchlist_id, :user_id, :profile_id, :symbol, :stage,
                 :failed_type, :failed_indicator, :condition_text, CAST(:current_value AS jsonb),
-                :expected_value, CAST(:evaluation_trace AS jsonb), :recorded_at
+                :expected_value, CAST(:evaluation_trace AS jsonb), :recorded_at, :execution_id
             )
         """), {
             "id": str(uuid4()),
@@ -811,12 +962,19 @@ async def _replace_rejection_snapshot(
             "expected_value": row.get("expected"),
             "evaluation_trace": json.dumps(_jsonable(row.get("evaluation_trace") or [])),
             "recorded_at": now,
+            "execution_id": execution_id,
         })
 
 
 # ─── DB upsert ────────────────────────────────────────────────────────────────
 
-async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict | None = None):
+async def _upsert_assets(
+    db,
+    watchlist_id: str,
+    assets: list,
+    filters_json: dict | None = None,
+    execution_id: Optional[str] = None,
+):
     """Upsert current pipeline_watchlist_assets snapshot for a watchlist.
 
     Symbols in `assets` → INSERT or UPDATE (level_direction stays/becomes NULL).
@@ -835,11 +993,11 @@ async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict
             await db.execute(text("""
                 INSERT INTO pipeline_watchlist_assets
                     (id, watchlist_id, symbol, current_price, price_change_24h,
-                     volume_24h, market_cap, alpha_score, entered_at, refreshed_at,
-                     level_direction)
+                      volume_24h, market_cap, alpha_score, entered_at, refreshed_at,
+                      level_direction, execution_id)
                 VALUES
                     (gen_random_uuid(), :wid, :sym, :price, :chg,
-                     :vol, :mc, :score, :now, :now, NULL)
+                     :vol, :mc, :score, :now, :now, NULL, :execution_id)
                 ON CONFLICT (watchlist_id, symbol)
                 DO UPDATE SET
                     current_price    = EXCLUDED.current_price,
@@ -848,7 +1006,8 @@ async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict
                     market_cap       = EXCLUDED.market_cap,
                     alpha_score      = EXCLUDED.alpha_score,
                     refreshed_at     = EXCLUDED.refreshed_at,
-                    level_direction  = NULL
+                    level_direction  = NULL,
+                    execution_id     = EXCLUDED.execution_id
             """), {
                 "wid":   watchlist_id,
                 "sym":   a["symbol"],
@@ -858,6 +1017,7 @@ async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict
                 "mc":    a.get("market_cap"),
                 "score": a.get("_score", a.get("score")),
                 "now":   now,
+                "execution_id": execution_id,
             })
 
         # Mark symbols that are no longer passing as 'down'
@@ -866,12 +1026,13 @@ async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict
             text("""
                 UPDATE pipeline_watchlist_assets
                 SET level_direction = 'down',
-                    level_change_at = :now
+                    level_change_at = :now,
+                    execution_id = :execution_id
                 WHERE watchlist_id = :wid
                   AND NOT (symbol = ANY(:active_syms))
                   AND (level_direction IS NULL OR level_direction != 'down')
             """),
-            {"wid": watchlist_id, "now": now, "active_syms": active_syms},
+            {"wid": watchlist_id, "now": now, "active_syms": active_syms, "execution_id": execution_id},
         )
 
     else:
@@ -879,10 +1040,11 @@ async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict
         await db.execute(text("""
             UPDATE pipeline_watchlist_assets
             SET level_direction = 'down',
-                level_change_at = :now
+                level_change_at = :now,
+                execution_id = :execution_id
             WHERE watchlist_id = :wid
               AND (level_direction IS NULL OR level_direction != 'down')
-        """), {"wid": watchlist_id, "now": now})
+        """), {"wid": watchlist_id, "now": now, "execution_id": execution_id})
 
     # Expire assets that have exceeded max_stay_minutes (GUI-configurable per watchlist)
     max_stay = (filters_json or {}).get("max_stay_minutes")
@@ -891,11 +1053,12 @@ async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict
         await db.execute(text("""
             UPDATE pipeline_watchlist_assets
             SET level_direction = 'down',
-                level_change_at = :now
+                level_change_at = :now,
+                execution_id = :execution_id
             WHERE watchlist_id = :wid
               AND level_direction IS NULL
               AND entered_at < :cutoff
-        """), {"wid": watchlist_id, "now": now, "cutoff": cutoff})
+        """), {"wid": watchlist_id, "now": now, "cutoff": cutoff, "execution_id": execution_id})
 
     # Staleness expiry: assets not re-confirmed by a pipeline scan within
     # staleness_minutes (default 30 min) are marked 'down'.
@@ -906,13 +1069,14 @@ async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict
     stale_result = await db.execute(text("""
         UPDATE pipeline_watchlist_assets
         SET level_direction = 'down',
-            level_change_at = :now
+            level_change_at = :now,
+            execution_id = :execution_id
         WHERE watchlist_id = :wid
           AND level_direction IS NULL
           AND refreshed_at IS NOT NULL
           AND refreshed_at < :cutoff
         RETURNING symbol
-    """), {"wid": watchlist_id, "now": now, "cutoff": staleness_cutoff})
+    """), {"wid": watchlist_id, "now": now, "cutoff": staleness_cutoff, "execution_id": execution_id})
     stale_rows = stale_result.fetchall()
     if stale_rows:
         logger.info(
@@ -930,6 +1094,88 @@ async def _upsert_assets(db, watchlist_id: str, assets: list, filters_json: dict
     """), {"wid": watchlist_id})
 
     await db.commit()
+
+
+async def validate_pipeline_integrity(
+    db,
+    *,
+    wl_rows: list,
+    profile_config_map: dict,
+    execution_id: str,
+) -> dict[str, Any]:
+    from sqlalchemy import text
+
+    if not wl_rows:
+        return {"violations": 0, "corrected": 0}
+
+    watchlist_ids = [str(wl.id) for wl in wl_rows]
+    active_rows = (await db.execute(
+        text("""
+            SELECT watchlist_id::text AS watchlist_id, symbol
+            FROM pipeline_watchlist_assets
+            WHERE watchlist_id::text = ANY(:watchlist_ids)
+              AND (level_direction IS NULL OR level_direction = 'up')
+        """),
+        {"watchlist_ids": watchlist_ids},
+    )).fetchall()
+
+    symbols_by_watchlist: dict[str, set[str]] = {wid: set() for wid in watchlist_ids}
+    for row in active_rows:
+        symbols_by_watchlist.setdefault(row.watchlist_id, set()).add(row.symbol)
+
+    wl_map = {str(wl.id): wl for wl in wl_rows}
+    violations = 0
+    corrected = 0
+    for wl_id, wl in wl_map.items():
+        wl_level = effective_pipeline_level(
+            wl.level,
+            source_pool_id=wl.source_pool_id,
+            profile_config=profile_config_map.get(wl.profile_id),
+        )
+        if wl_level not in {"L1", "L2", "L3"}:
+            continue
+
+        parent_id = str(wl.source_watchlist_id) if wl.source_watchlist_id else None
+        if not parent_id:
+            continue
+        parent_symbols = symbols_by_watchlist.get(parent_id, set())
+        child_symbols = symbols_by_watchlist.get(wl_id, set())
+        invalid_symbols = sorted(child_symbols - parent_symbols)
+        if not invalid_symbols:
+            continue
+
+        for symbol in invalid_symbols:
+            _log_pipeline_event(
+                level=wl_level,
+                execution_id=execution_id,
+                event_type="PIPELINE_VIOLATION",
+                watchlist_id=wl_id,
+                symbol=symbol,
+                reason="integrity_check_not_in_upstream",
+            )
+        violations += len(invalid_symbols)
+
+        await db.execute(
+            text("""
+                UPDATE pipeline_watchlist_assets
+                SET level_direction = 'down',
+                    level_change_at = :now,
+                    execution_id = :execution_id
+                WHERE watchlist_id::text = :watchlist_id
+                  AND symbol = ANY(:symbols)
+                  AND (level_direction IS NULL OR level_direction = 'up')
+            """),
+            {
+                "now": datetime.now(timezone.utc),
+                "execution_id": execution_id,
+                "watchlist_id": wl_id,
+                "symbols": invalid_symbols,
+            },
+        )
+        corrected += len(invalid_symbols)
+
+    await db.commit()
+    return {"violations": violations, "corrected": corrected}
 
 
 # ─── WebSocket broadcast ──────────────────────────────────────────────────────
@@ -1006,15 +1252,26 @@ async def _broadcast_scan_funnel(
 
 async def _run_pipeline_scan():
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
+    from ..init_db import backfill_execution_tracking_columns
     from ..models.pipeline_watchlist import PipelineWatchlist
-    from ..models.pool import Pool, PoolCoin
+    from ..models.pool import PoolCoin
     from ..models.profile import Profile
-    from sqlalchemy import select
+    from sqlalchemy import select, text
+    from ..utils.symbol_filters import filter_real_assets
 
     redis = _get_redis()
-    stats = {"watchlists": 0, "new_signals": 0, "errors": 0, "funnels": []}
+    execution_id = str(uuid4())
+    stats = {"watchlists": 0, "new_signals": 0, "errors": 0, "funnels": [], "execution_id": execution_id}
 
     async with AsyncSessionLocal() as db:
+        global _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY
+        if not _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY:
+            async with _PIPELINE_EXECUTION_TRACKING_SCHEMA_LOCK:
+                if not _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY:
+                    await backfill_execution_tracking_columns(db)
+                    await db.commit()
+                    _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY = True
+
         # Load all pipeline watchlists with auto_refresh=true
         wl_rows = (await db.execute(
             select(PipelineWatchlist).where(PipelineWatchlist.auto_refresh == True)
@@ -1024,279 +1281,298 @@ async def _run_pipeline_scan():
             logger.debug("[PipelineScan] No pipeline watchlists with auto_refresh — skipping.")
             return stats
 
-        logger.info("[PipelineScan] Processing %d pipeline watchlists…", len(wl_rows))
+        profile_ids = {wl.profile_id for wl in wl_rows if wl.profile_id}
+        profile_config_map = {}
+        if profile_ids:
+            profile_rows = (await db.execute(
+                select(Profile).where(Profile.id.in_(profile_ids))
+            )).scalars().all()
+            profile_config_map = {row.id: row.config for row in profile_rows}
 
-        for wl in wl_rows:
-            try:
-                stats["watchlists"] += 1
-                wl_id = str(wl.id)
-                level = (wl.level or "L1").upper()
-                filters_json = wl.filters_json or {}
+        wl_rows.sort(
+            key=lambda wl: (
+                WATCHLIST_STAGE_ORDER.get(
+                    effective_pipeline_level(
+                        wl.level,
+                        source_pool_id=wl.source_pool_id,
+                        profile_config=profile_config_map.get(wl.profile_id),
+                    ),
+                    len(WATCHLIST_STAGE_ORDER),
+                ),
+                wl.created_at or datetime.min.replace(tzinfo=timezone.utc),
+            )
+        )
 
-                # ── 1. Resolve symbol universe ────────────────────────────────
-                symbols: list[str] = []
+        logger.info(
+            "[PipelineScan] Processing %d pipeline watchlists… execution_id=%s",
+            len(wl_rows),
+            execution_id,
+        )
 
-                def _normalize_sym(s: str) -> str:
-                    """Normalize symbol to BTC_USDT format (add underscore if missing)."""
-                    s = s.upper().strip()
-                    if "_" not in s and s.endswith("USDT"):
-                        return s[:-4] + "_USDT"
-                    return s
+        stage_buckets: dict[str, list] = {stage: [] for stage in (*_PIPELINE_EXECUTION_ORDER, "custom")}
+        effective_level_map: dict[str, str] = {}
+        pool_gate_watchlist_map: dict[tuple[str, str], str] = {}
+        for _wl in wl_rows:
+            _eff = effective_pipeline_level(
+                _wl.level,
+                source_pool_id=_wl.source_pool_id,
+                profile_config=profile_config_map.get(_wl.profile_id),
+            )
+            effective_level_map[str(_wl.id)] = _eff
+            stage_buckets.setdefault(_eff, []).append(_wl)
+            if _eff == "POOL" and _wl.source_pool_id:
+                pool_gate_watchlist_map[(str(_wl.user_id), str(_wl.source_pool_id))] = str(_wl.id)
 
-                if wl.source_pool_id:
-                    # Pool origin: use pool_coins
-                    from ..utils.symbol_filters import filter_real_assets
-                    coin_rows = (await db.execute(
-                        select(PoolCoin).where(
-                            PoolCoin.pool_id == wl.source_pool_id,
-                            PoolCoin.is_active == True,
+        for stage in (*_PIPELINE_EXECUTION_ORDER, "custom"):
+            for wl in stage_buckets.get(stage, []):
+                try:
+                    stats["watchlists"] += 1
+                    wl_id = str(wl.id)
+                    level = (wl.level or "L1").upper()
+                    profile_config = profile_config_map.get(wl.profile_id) if wl.profile_id else None
+                    effective_level = effective_pipeline_level(
+                        level,
+                        source_pool_id=wl.source_pool_id,
+                        profile_config=profile_config,
+                    )
+                    filters_json = wl.filters_json or {}
+
+                    source_watchlist_level = (
+                        effective_level_map.get(str(wl.source_watchlist_id))
+                        if wl.source_watchlist_id
+                        else None
+                    )
+                    pool_gate_watchlist_id = None
+                    if effective_level == "L1" and wl.source_pool_id:
+                        pool_gate_watchlist_id = pool_gate_watchlist_map.get(
+                            (str(wl.user_id), str(wl.source_pool_id))
                         )
-                    )).scalars().all()
-                    # Normalize symbols to BTC_USDT format (market_metadata uses underscores)
-                    raw_syms = [_normalize_sym(c.symbol) for c in coin_rows]
-                    symbols = filter_real_assets(raw_syms)
-                    logger.info(
-                        "[PipelineScan] %s (%s): pool %s → %d raw coins → %d after leveraged-token filter",
-                        wl.name, level, wl.source_pool_id, len(raw_syms), len(symbols),
+                        if pool_gate_watchlist_id == wl_id:
+                            pool_gate_watchlist_id = None
+                    dependency = resolve_pipeline_dependency(
+                        level=effective_level,
+                        source_pool_id=wl.source_pool_id,
+                        source_watchlist_id=wl.source_watchlist_id,
+                        source_watchlist_level=source_watchlist_level,
+                        pool_gate_watchlist_id=pool_gate_watchlist_id,
                     )
+                    source_pool_id = dependency["source_pool_id"]
+                    source_watchlist_id = dependency["source_watchlist_id"]
+                    if dependency["error"]:
+                        logger.error(
+                            {
+                                "type": "INVALID_SOURCE_CONFIG",
+                                "watchlist_id": wl_id,
+                                "level": effective_level,
+                                "execution_id": execution_id,
+                                "message": "Missing explicit upstream dependency for pipeline stage.",
+                                "expected_upstream_level": dependency["expected_upstream_level"],
+                                "source_pool_id": str(wl.source_pool_id) if wl.source_pool_id else None,
+                                "source_watchlist_id": str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+                                "source_watchlist_level": source_watchlist_level,
+                                "error": dependency["error"],
+                            }
+                        )
+                    elif dependency["resolution"] == "implicit_pool_gate":
+                        logger.info(
+                            "[PipelineScan] %s (%s): resolved legacy POOL dependency via watchlist %s",
+                            wl.name,
+                            effective_level,
+                            source_watchlist_id,
+                        )
 
-                elif wl.source_watchlist_id:
-                    # Upstream watchlist: use only ACTIVE pipeline_watchlist_assets
-                    # ('down' assets are stale — excluded to prevent ghost data in L2/L3)
-                    from sqlalchemy import text
-                    from ..utils.symbol_filters import filter_real_assets
-                    asset_rows = (await db.execute(text("""
-                        SELECT symbol FROM pipeline_watchlist_assets
-                        WHERE watchlist_id = :wid
-                          AND (level_direction IS NULL OR level_direction = 'up')
-                        ORDER BY alpha_score DESC NULLS LAST
-                    """), {"wid": str(wl.source_watchlist_id)})).fetchall()
-                    symbols = filter_real_assets([_normalize_sym(r.symbol) for r in asset_rows])
-                    logger.info(
-                        "[PipelineScan] %s (%s): upstream watchlist %s → %d symbols",
-                        wl.name, level, wl.source_watchlist_id, len(symbols),
-                    )
+                    def _normalize_sym(s: str) -> str:
+                        s = s.upper().strip()
+                        if "_" not in s and s.endswith("USDT"):
+                            return s[:-4] + "_USDT"
+                        return s
 
-                if not symbols:
-                    # L1 fallback: when no source is configured, use all
-                    # active coins across the user's pools as the scan universe.
-                    if level == "L1" and not wl.source_pool_id and not wl.source_watchlist_id:
-                        from ..utils.symbol_filters import filter_real_assets as _filt
-                        all_coins = (await db.execute(
-                            select(PoolCoin)
-                            .join(Pool, PoolCoin.pool_id == Pool.id)
-                            .where(
-                                Pool.user_id == wl.user_id,
-                                Pool.is_active == True,
+                    symbols: list[str] = []
+                    upstream_symbols: set[str] = set()
+
+                    if source_watchlist_id:
+                        upstream_rows = (await db.execute(text("""
+                            SELECT symbol
+                            FROM pipeline_watchlist_assets
+                            WHERE watchlist_id = :wid
+                              AND (level_direction IS NULL OR level_direction = 'up')
+                            ORDER BY alpha_score DESC NULLS LAST
+                        """), {"wid": source_watchlist_id})).fetchall()
+                        symbols = filter_real_assets([_normalize_sym(r.symbol) for r in upstream_rows])
+                        upstream_symbols = set(symbols)
+                        logger.info(
+                            "[PipelineScan] %s (%s): upstream watchlist %s → %d symbols",
+                            wl.name, effective_level, source_watchlist_id, len(symbols),
+                        )
+                    elif source_pool_id:
+                        coin_rows = (await db.execute(
+                            select(PoolCoin).where(
+                                PoolCoin.pool_id == source_pool_id,
                                 PoolCoin.is_active == True,
                             )
                         )).scalars().all()
-                        symbols = _filt([c.symbol for c in all_coins])
-                        if symbols:
-                            logger.info(
-                                "[PipelineScan] %s (L1): no source configured — using "
-                                "%d coins from all user pools as fallback universe.",
-                                wl.name, len(symbols),
-                            )
-
-                if not symbols:
-                    logger.info(
-                        "[PipelineScan] %s (%s): no symbols from upstream — "
-                        "running staleness check on existing assets.",
-                        wl.name, level,
-                    )
-                    await _run_staleness_only(db, wl_id, filters_json)
-                    await _update_last_scanned(db, wl_id)
-                    continue
-
-                # ── 2. Fetch market data ──────────────────────────────────────
-                assets = await _fetch_market_data(db, symbols)
-                if assets is None:
-                    logger.warning("[PipelineScan] %s (%s): market data fetch error — running staleness check.", wl.name, level)
-                    await _run_staleness_only(db, wl_id, filters_json)
-                    await _update_last_scanned(db, wl_id)
-                    continue
-                if not assets:
-                    logger.warning(
-                        "[PipelineScan] %s (%s): no market data found for %d requested symbols "
-                        "(sample: %s) — running staleness check on existing assets.",
-                        wl.name, level, len(symbols), symbols[:5],
-                    )
-                    # Don't wipe immediately, but DO run staleness expiry so
-                    # assets that haven't been refreshed in staleness_minutes
-                    # get marked 'down' instead of lingering forever.
-                    await _run_staleness_only(db, wl_id, filters_json)
-                    await _update_last_scanned(db, wl_id)
-                    continue
-
-                logger.info(
-                    "[PipelineScan] %s (%s) FUNNEL: %d pool symbols → %d with market_metadata (%d lost)",
-                    wl.name, level, len(symbols), len(assets), len(symbols) - len(assets),
-                )
-
-                # Quick data quality summary for diagnostics
-                n_has_mcap = sum(1 for a in assets if a.get("market_cap") is not None)
-                n_has_vol = sum(1 for a in assets if a.get("volume_24h") is not None)
-                n_has_spread = sum(1 for a in assets if a.get("spread_pct") is not None)
-                n_has_depth = sum(1 for a in assets if a.get("orderbook_depth_usdt") is not None)
-                n_has_ind = sum(1 for a in assets if a.get("indicators"))
-                logger.info(
-                    "[PipelineScan] %s (%s) DATA COVERAGE of %d assets: "
-                    "market_cap=%d, volume_24h=%d, spread_pct=%d, depth=%d, indicators=%d",
-                    wl.name, level, len(assets),
-                    n_has_mcap, n_has_vol, n_has_spread, n_has_depth, n_has_ind,
-                )
-                assets_with_metadata = sum(1 for a in assets if a.get("_has_market_metadata"))
-                profile_candidate_count = len(assets)
-
-                # ── 3. Load profile config ────────────────────────────────────
-                profile_config: Optional[dict] = None
-                if wl.profile_id:
-                    prof = (await db.execute(
-                        select(Profile).where(Profile.id == wl.profile_id)
-                    )).scalars().first()
-                    if prof:
-                        # .config always holds filters/signals conditions; preset_ia_config is IA metadata only
-                        profile_config = prof.config
-
-                # ── 3b. Load global score config (/settings/score) ────────────
-                # This ensures Alpha Score respects the user's configured scoring rules.
-                score_config: Optional[dict] = None
-                try:
-                    from ..services.config_service import config_service
-                    from ..services.seed_service import DEFAULT_SCORE
-                    score_config = await config_service.get_config(db, "score", wl.user_id)
-                    if not score_config:
-                        score_config = DEFAULT_SCORE
-                except Exception:
-                    from ..services.seed_service import DEFAULT_SCORE
-                    score_config = DEFAULT_SCORE
-
-                # ── 4. Per-level evaluation ───────────────────────────────────
-                # Source-pool watchlists with profile filter conditions should be
-                # treated as L1 even if legacy data stored them as "custom".
-                # Pure custom boards without filter conditions remain monitoring
-                # boards and keep all pool assets visible.
-                effective_level = effective_pipeline_level(
-                    level,
-                    source_pool_id=wl.source_pool_id,
-                    profile_config=profile_config,
-                )
-                if effective_level == "L1" and not _uses_pipeline_filters(level):
-                    logger.info(
-                        "[PipelineScan] %s (%s): source-pool watchlist promoted to L1 so profile filter conditions are enforced.",
-                        wl.name,
-                        level,
-                    )
-
-                if effective_level == "custom":
-                    existing_symbols = {a.get("symbol") for a in assets}
-                    missing_symbols = [sym for sym in symbols if sym not in existing_symbols]
-                    if missing_symbols:
-                        assets.extend([_placeholder_asset_without_market_data(sym) for sym in missing_symbols])
+                        symbols = filter_real_assets([_normalize_sym(c.symbol) for c in coin_rows])
+                        upstream_symbols = set(symbols)
                         logger.info(
-                            "[PipelineScan] %s (%s): appended %d symbols without market data so the monitoring board shows the full pool",
-                            wl.name, level, len(missing_symbols),
+                            "[PipelineScan] %s (%s): pool %s → %d symbols",
+                            wl.name, effective_level, source_pool_id, len(symbols),
                         )
-                    await _replace_rejection_snapshot(db, wl_id, user_id, wl.profile_id, [])
 
-                if effective_level in ("L1", "L2"):
-                    effective_profile_config = profile_config
-                    selected_filter_conditions = None
-                    if profile_config:
-                        filter_cfg = (profile_config.get("filters") or {})
-                        selected = select_profile_filter_conditions(
-                            filter_cfg.get("conditions"),
-                            total_symbols=len(symbols),
-                            symbols_with_meta=assets_with_metadata,
+                    if effective_level in {"L1", "L2", "L3"}:
+                        symbols = _intersect_with_upstream(
+                            symbols=symbols,
+                            upstream_symbols=upstream_symbols,
+                            level=effective_level,
+                            watchlist_id=wl_id,
+                            execution_id=execution_id,
                         )
-                        if selected["relaxed_strict_meta"]:
-                            effective_profile_config = {
-                                **profile_config,
-                                "filters": {
-                                    **filter_cfg,
-                                    "conditions": selected["conditions"],
-                                },
-                            }
-                            selected_filter_conditions = selected["conditions"]
-                            logger.info(
-                                "[PipelineScan] %s (%s): sparse market data coverage %.1f%% (%d/%d) — "
-                                "ignoring %d strict meta conditions for this pass",
-                                wl.name, level,
-                                selected["coverage_ratio"] * 100,
-                                assets_with_metadata, len(symbols),
-                                len(selected["strict_meta_conditions"]),
+                        assert set(symbols).issubset(upstream_symbols)
+
+                    if not symbols:
+                        logger.info(
+                            "[PipelineScan] %s (%s): no symbols from upstream — running staleness check.",
+                            wl.name, effective_level,
+                        )
+                        await _run_staleness_only(db, wl_id, filters_json, execution_id=execution_id)
+                        await _update_last_scanned(db, wl_id)
+                        continue
+
+                    assets = await _fetch_market_data(db, symbols)
+                    if assets is None or not assets:
+                        logger.warning(
+                            "[PipelineScan] %s (%s): no market data available — running staleness check.",
+                            wl.name, effective_level,
+                        )
+                        await _run_staleness_only(db, wl_id, filters_json, execution_id=execution_id)
+                        await _update_last_scanned(db, wl_id)
+                        continue
+
+                    assets_with_metadata = sum(1 for a in assets if a.get("_has_market_metadata"))
+                    profile_candidate_count = len(assets)
+
+                    score_config: Optional[dict] = None
+                    try:
+                        from ..services.config_service import config_service
+                        from ..services.seed_service import DEFAULT_SCORE
+                        score_config = await config_service.get_config(db, "score", wl.user_id)
+                        if not score_config:
+                            score_config = DEFAULT_SCORE
+                    except Exception:
+                        from ..services.seed_service import DEFAULT_SCORE
+                        score_config = DEFAULT_SCORE
+
+                    if effective_level == "custom":
+                        existing_symbols = {a.get("symbol") for a in assets}
+                        missing_symbols = [sym for sym in symbols if sym not in existing_symbols]
+                        if missing_symbols:
+                            assets.extend([_placeholder_asset_without_market_data(sym) for sym in missing_symbols])
+                        monitored, _ = _apply_level_filter(
+                            assets,
+                            profile_config,
+                            effective_level,
+                            score_config=score_config,
+                            apply_profile_filters=False,
+                        )
+                        await _replace_rejection_snapshot(
+                            db, wl_id, wl.user_id, wl.profile_id, [], execution_id=execution_id
+                        )
+                        await _upsert_assets(db, wl_id, monitored, filters_json, execution_id=execution_id)
+                        await _update_last_scanned(db, wl_id)
+                        continue
+
+                    if effective_level in ("POOL", "L1", "L2"):
+                        effective_profile_config = profile_config
+                        selected_filter_conditions = None
+                        if profile_config:
+                            filter_cfg = (profile_config.get("filters") or {})
+                            selected = select_profile_filter_conditions(
+                                filter_cfg.get("conditions"),
+                                total_symbols=len(symbols),
+                                symbols_with_meta=assets_with_metadata,
                             )
-                        else:
                             selected_filter_conditions = selected["conditions"]
+                            if selected["relaxed_strict_meta"]:
+                                effective_profile_config = {
+                                    **profile_config,
+                                    "filters": {**filter_cfg, "conditions": selected["conditions"]},
+                                }
 
-                    profile_passed, rejected_rows = evaluate_rejections(
-                        assets,
-                        profile_config=effective_profile_config,
-                        stage=effective_level,
-                        profile_id=str(wl.profile_id) if wl.profile_id else None,
-                        selected_filter_conditions=selected_filter_conditions,
-                    )
-                    passed, _ = _apply_level_filter(
-                        profile_passed,
-                        effective_profile_config,
-                        effective_level,
-                        score_config=score_config,
-                        # Block rules + filters are already applied above via
-                        # evaluate_rejections so this pass only computes scores
-                        # and enforces downstream score-based gates.
-                        apply_profile_filters=False,
-                    )
-                    profile_rejected = len(rejected_rows)
-                    await _replace_rejection_snapshot(db, wl_id, user_id, wl.profile_id, rejected_rows)
+                        profile_passed, rejected_rows = evaluate_rejections(
+                            assets,
+                            profile_config=effective_profile_config,
+                            stage=effective_level,
+                            profile_id=str(wl.profile_id) if wl.profile_id else None,
+                            selected_filter_conditions=selected_filter_conditions,
+                        )
+                        _log_stage_processing_summary(
+                            level=effective_level,
+                            input_count=len(symbols),
+                            approved_count=len(profile_passed),
+                            rejected_count=len(rejected_rows),
+                            watchlist_id=wl_id,
+                            execution_id=execution_id,
+                        )
+                        passed, _ = _apply_level_filter(
+                            profile_passed,
+                            effective_profile_config,
+                            effective_level,
+                            score_config=score_config,
+                            apply_profile_filters=False,
+                        )
+                        await _replace_rejection_snapshot(
+                            db,
+                            wl_id,
+                            wl.user_id,
+                            wl.profile_id,
+                            rejected_rows,
+                            execution_id=execution_id,
+                        )
 
-                    # ── FUNNEL SUMMARY ────────────────────────────────────────
-                    logger.info(
-                        "[PipelineScan] ═══ %s (%s) FUNNEL SUMMARY ═══\n"
-                        "  Pool symbols:       %d\n"
-                        "  With market data:   %d  (-%d no metadata)\n"
-                        "  Profile candidates: %d\n"
-                        "  After profile rules:%d  (-%d rejected)\n"
-                        "  After score gate:   %d\n"
-                        "  ═══════════════════════════",
-                        wl.name, level,
-                        len(symbols),
-                        assets_with_metadata, len(symbols) - assets_with_metadata,
-                        profile_candidate_count,
-                        len(profile_passed), profile_rejected,
-                        len(passed),
-                    )
+                        if effective_level in {"L1", "L2"}:
+                            normalized_passed = []
+                            for asset in passed:
+                                symbol = asset.get("symbol")
+                                if symbol in upstream_symbols:
+                                    normalized_passed.append(asset)
+                                else:
+                                    _log_pipeline_event(
+                                        level=effective_level,
+                                        execution_id=execution_id,
+                                        event_type="PIPELINE_VIOLATION",
+                                        watchlist_id=wl_id,
+                                        symbol=symbol,
+                                        reason="persist_not_in_upstream",
+                                    )
+                            passed = normalized_passed
+                            assert {a.get("symbol") for a in passed}.issubset(upstream_symbols)
 
-                    # Broadcast funnel stats for frontend diagnostic panel
-                    await _broadcast_scan_funnel(
-                        wl_id, wl.name, level,
-                        pool_total=len(symbols),
-                        with_metadata=assets_with_metadata,
-                        profile_candidates=profile_candidate_count,
-                        after_profile_filter=len(profile_passed),
-                        after_blocking=len(passed),
-                    )
+                        await _broadcast_scan_funnel(
+                            wl_id, wl.name, effective_level,
+                            pool_total=len(symbols),
+                            with_metadata=assets_with_metadata,
+                            profile_candidates=profile_candidate_count,
+                            after_profile_filter=len(profile_passed),
+                            after_blocking=len(passed),
+                        )
+                        await _upsert_assets(db, wl_id, passed, filters_json, execution_id=execution_id)
+                        await _update_last_scanned(db, wl_id)
+                        continue
 
-                    stats["funnels"].append({
-                        "watchlist": wl.name, "level": level,
-                        "pool_total": len(symbols),
-                        "with_metadata": assets_with_metadata,
-                        "profile_candidates": profile_candidate_count,
-                        "after_profile_filter": len(profile_passed),
-                        "after_blocking": len(passed),
-                    })
-
-                    await _upsert_assets(db, wl_id, passed, filters_json)
-                    await _update_last_scanned(db, wl_id)
-
-                elif effective_level == "L3":
+                    # L3
                     profile_passed, rejected_rows = evaluate_rejections(
                         assets,
                         profile_config=profile_config,
                         stage=effective_level,
                         profile_id=str(wl.profile_id) if wl.profile_id else None,
                     )
-                    await _replace_rejection_snapshot(db, wl_id, user_id, wl.profile_id, rejected_rows)
+                    await _replace_rejection_snapshot(
+                        db,
+                        wl_id,
+                        wl.user_id,
+                        wl.profile_id,
+                        rejected_rows,
+                        execution_id=execution_id,
+                    )
                     decisions = _evaluate_l3_decisions(
                         profile_passed,
                         profile_config,
@@ -1316,41 +1592,39 @@ async def _run_pipeline_scan():
                         for decision in decisions
                         if decision["decision"] == "ALLOW"
                     ]
+                    normalized_signals = []
+                    for asset in signals:
+                        symbol = asset.get("symbol")
+                        if symbol in upstream_symbols:
+                            normalized_signals.append(asset)
+                        else:
+                            _log_pipeline_event(
+                                level="L3",
+                                execution_id=execution_id,
+                                event_type="PIPELINE_VIOLATION",
+                                watchlist_id=wl_id,
+                                symbol=symbol,
+                                reason="persist_not_in_upstream",
+                            )
+                    signals = normalized_signals
+                    assert {a.get("symbol") for a in signals}.issubset(upstream_symbols)
 
-                    logger.info(
-                        "[PipelineScan] ═══ %s (L3) FUNNEL SUMMARY ═══\n"
-                        "  From upstream:      %d\n"
-                        "  With market data:   %d\n"
-                        "  Rejected by rules:  %d\n"
-                        "  After signals:      %d\n"
-                        "  ═══════════════════════════",
-                        wl.name,
-                        len(symbols), assets_with_metadata,
-                        len(rejected_rows), len(signals),
-                    )
-
-                    # ── 5. Detect new signals ─────────────────────────────────
                     current_set = {s["symbol"] for s in signals}
-                    prior_set   = _prior_signals(redis, wl_id)
-                    new_syms    = sorted(current_set - prior_set)
+                    prior_set = _prior_signals(redis, wl_id)
+                    new_syms = sorted(current_set - prior_set)
 
                     _save_signals(redis, wl_id, current_set)
                     decision_payloads = await _persist_decision_logs(db, wl.user_id, decisions)
-                    await _upsert_assets(db, wl_id, signals, filters_json)
+                    await _upsert_assets(db, wl_id, signals, filters_json, execution_id=execution_id)
                     await _update_last_scanned(db, wl_id)
 
                     if decision_payloads:
                         from ..api.websocket import broadcast_decision_created
-
                         for payload in decision_payloads:
                             await broadcast_decision_created(payload)
 
                     if new_syms:
                         stats["new_signals"] += len(new_syms)
-                        logger.info(
-                            "[PipelineScan] 🚨 New L3 signals in %s: %s",
-                            wl.name, new_syms,
-                        )
                         await _broadcast_pipeline_update(
                             watchlist_id=wl_id,
                             watchlist_name=wl.name,
@@ -1359,52 +1633,17 @@ async def _run_pipeline_scan():
                             all_signals=signals,
                         )
 
-                else:
-                    monitored, _ = _apply_level_filter(
-                        assets,
-                        profile_config,
-                        effective_level,
-                        score_config=score_config,
-                        apply_profile_filters=False,
-                    )
+                except Exception as exc:
+                    logger.exception("[PipelineScan] Error processing watchlist %s: %s", wl.name, exc)
+                    stats["errors"] += 1
+                    continue
 
-                    logger.info(
-                        "[PipelineScan] ═══ %s (%s) MONITOR SUMMARY ═══\n"
-                        "  Pool symbols:       %d\n"
-                        "  With market data:   %d  (-%d no metadata)\n"
-                        "  Visible in board:   %d\n"
-                        "  ═══════════════════════════",
-                        wl.name, level,
-                        len(symbols),
-                        assets_with_metadata, len(symbols) - assets_with_metadata,
-                        len(monitored),
-                    )
-
-                    await _broadcast_scan_funnel(
-                        wl_id, wl.name, level,
-                        pool_total=len(symbols),
-                        with_metadata=assets_with_metadata,
-                        profile_candidates=len(monitored),
-                        after_profile_filter=len(monitored),
-                        after_blocking=len(monitored),
-                    )
-
-                    stats["funnels"].append({
-                        "watchlist": wl.name, "level": level,
-                        "pool_total": len(symbols),
-                        "with_metadata": assets_with_metadata,
-                        "profile_candidates": len(monitored),
-                        "after_profile_filter": len(monitored),
-                        "after_blocking": len(monitored),
-                    })
-
-                    await _upsert_assets(db, wl_id, monitored, filters_json)
-                    await _update_last_scanned(db, wl_id)
-
-            except Exception as exc:
-                logger.exception("[PipelineScan] Error processing watchlist %s: %s", wl.name, exc)
-                stats["errors"] += 1
-                continue
+        stats["integrity"] = await validate_pipeline_integrity(
+            db,
+            wl_rows=wl_rows,
+            profile_config_map=profile_config_map,
+            execution_id=execution_id,
+        )
 
     logger.info(
         "[PipelineScan] Done — watchlists=%d  new_signals=%d  errors=%d",

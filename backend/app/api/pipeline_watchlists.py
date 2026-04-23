@@ -24,8 +24,36 @@ from ..models.profile import Profile
 from ..models.pool import Pool
 from .config import get_current_user_id
 from ..services.rule_engine import RuleEngine
+from ..utils.pipeline_profile_filters import normalize_watchlist_level, PIPELINE_FILTER_LEVELS
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_pipeline_sources(
+    *,
+    level: str,
+    source_pool_id: Optional[str],
+    source_watchlist_id: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    normalized = normalize_watchlist_level(level, default="L1")
+    pool = source_pool_id or None
+    upstream = source_watchlist_id or None
+
+    if normalized == "POOL":
+        if upstream:
+            raise HTTPException(status_code=400, detail="POOL watchlist cannot define source_watchlist_id")
+        if not pool:
+            raise HTTPException(status_code=400, detail="POOL watchlist requires source_pool_id")
+        return pool, None
+
+    if normalized in {"L1", "L2", "L3"}:
+        if pool:
+            raise HTTPException(status_code=400, detail=f"{normalized} watchlist cannot define source_pool_id")
+        if not upstream:
+            raise HTTPException(status_code=400, detail=f"{normalized} watchlist requires source_watchlist_id")
+        return None, upstream
+
+    return pool, upstream
 
 router = APIRouter(prefix="/api/watchlists", tags=["Pipeline Watchlists"])
 
@@ -126,9 +154,9 @@ async def create_pipeline_watchlist(
 
     Body fields:
       name                (str, required)
-      level               "L1" | "L2" | "L3"
-      source_pool_id      UUID of a Pool   (L1 sources from Pool)
-      source_watchlist_id UUID of another PipelineWatchlist (L2/L3)
+      level               "POOL" | "L1" | "L2" | "L3"
+      source_pool_id      UUID of a Pool   (POOL sources from Pool)
+      source_watchlist_id UUID of another PipelineWatchlist (L1/L2/L3)
       profile_id          UUID of a Profile to apply
       auto_refresh        bool (default true)
       filters_json        {} (DEPRECATED — filtering is driven by the profile)
@@ -137,16 +165,24 @@ async def create_pipeline_watchlist(
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
 
-    level = (payload.get("level") or "L1").upper()
-    if level not in ("L1", "L2", "L3"):
-        raise HTTPException(status_code=400, detail="level must be L1, L2 or L3")
+    try:
+        level = normalize_watchlist_level(payload.get("level", "L1"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="level must be POOL, L1, L2 or L3")
+    if level not in PIPELINE_FILTER_LEVELS:
+        raise HTTPException(status_code=400, detail="level must be POOL, L1, L2 or L3")
+    source_pool_id, source_watchlist_id = _validate_pipeline_sources(
+        level=level,
+        source_pool_id=payload.get("source_pool_id"),
+        source_watchlist_id=payload.get("source_watchlist_id"),
+    )
 
     wl = PipelineWatchlist(
         user_id=user_id,
         name=name,
         level=level,
-        source_pool_id=payload.get("source_pool_id"),
-        source_watchlist_id=payload.get("source_watchlist_id"),
+        source_pool_id=source_pool_id,
+        source_watchlist_id=source_watchlist_id,
         profile_id=payload.get("profile_id"),
         auto_refresh=payload.get("auto_refresh", True),
         filters_json=payload.get("filters_json", {}),
@@ -176,8 +212,29 @@ async def update_pipeline_watchlist(
 ):
     wl = await _get_own_wl(db, wl_id, user_id)
 
-    for field in ("name", "level", "source_pool_id", "source_watchlist_id",
-                  "profile_id", "auto_refresh", "filters_json"):
+    next_level = wl.level
+    if "level" in payload:
+        try:
+            next_level = normalize_watchlist_level(payload["level"], default="L1")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="level must be POOL, L1, L2 or L3")
+        if next_level not in PIPELINE_FILTER_LEVELS:
+            raise HTTPException(status_code=400, detail="level must be POOL, L1, L2 or L3")
+
+    next_source_pool_id = payload.get("source_pool_id") if "source_pool_id" in payload else wl.source_pool_id
+    next_source_watchlist_id = (
+        payload.get("source_watchlist_id") if "source_watchlist_id" in payload else wl.source_watchlist_id
+    )
+    next_source_pool_id, next_source_watchlist_id = _validate_pipeline_sources(
+        level=next_level,
+        source_pool_id=next_source_pool_id,
+        source_watchlist_id=next_source_watchlist_id,
+    )
+
+    wl.level = next_level
+    wl.source_pool_id = next_source_pool_id
+    wl.source_watchlist_id = next_source_watchlist_id
+    for field in ("name", "profile_id", "auto_refresh", "filters_json"):
         if field in payload:
             setattr(wl, field, payload[field])
 
