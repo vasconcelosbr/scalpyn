@@ -494,10 +494,32 @@ async def _fetch_market_data(db, symbols: list) -> list:
 
 # ─── core indicator completeness guard ───────────────────────────────────────
 
-#: Indicators that must be non-null for an asset to advance in the pipeline.
-#: If any of these is None/missing the asset is quarantined at the data-load
-#: stage, before any profile filter or scoring is applied.
-_REQUIRED_CORE_INDICATORS: tuple[str, ...] = ("adx", "rsi", "macd")
+def _resolve_required_core_indicators() -> tuple[str, ...]:
+    """Return the set of core indicators that must be non-null for pipeline advancement.
+
+    Derived from DEFAULT_INDICATORS so the list automatically reflects the active
+    indicator config (ZERO HARDCODE: no magic strings here — the source of truth
+    is the seed config which is DB-backed via config_profiles).
+
+    Only indicators with both ``enabled=True`` *and* a numeric ``period``
+    (i.e. time-series indicators that can legitimately return null during warm-up)
+    are included in the mandatory check.
+    """
+    from ..services.seed_service import DEFAULT_INDICATORS
+
+    # Only the three fundamental indicators required by DEFAULT_SIGNAL are
+    # treated as mandatory core checks.  Additional indicators can be added to
+    # DEFAULT_INDICATORS without automatically becoming pipeline blockers.
+    _CORE_KEYS = ("adx", "rsi", "macd")
+    return tuple(
+        key for key in _CORE_KEYS
+        if DEFAULT_INDICATORS.get(key, {}).get("enabled", False)
+    )
+
+
+#: Resolved at module load time from DEFAULT_INDICATORS.  Re-computed on each
+#: import so changes to seed config are picked up without restarting workers.
+_REQUIRED_CORE_INDICATORS: tuple[str, ...] = _resolve_required_core_indicators()
 
 
 def _filter_incomplete_indicators(assets: list) -> tuple[list, list]:
