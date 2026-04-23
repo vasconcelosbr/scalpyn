@@ -105,8 +105,19 @@ async def _compute_5m_async():
 
     logger.info("Starting 5m indicator computation...")
 
-    engine = FeatureEngine(DEFAULT_INDICATORS)
+    indicators_config = DEFAULT_INDICATORS
+    engine = FeatureEngine(indicators_config)
     computed = 0
+
+    # Derive minimum candle warm-up from the active indicator config so the
+    # threshold automatically scales when periods are changed in the DB config.
+    # ADX(period) needs 2×period candles (two sequential rolling windows).
+    # RSI(period) needs period+1; MACD needs its slow-EMA period.
+    # We take the maximum of these derived requirements.
+    _adx_p  = indicators_config.get("adx",  {}).get("period", 14)
+    _rsi_p  = indicators_config.get("rsi",  {}).get("period", 14)
+    _slow_p = indicators_config.get("macd", {}).get("slow",   26)
+    min_candles_5m = max(_adx_p * 2, _rsi_p + 1, _slow_p)
 
     async with AsyncSessionLocal() as db:
         # Only symbols that have recent 5m candles
@@ -128,7 +139,12 @@ async def _compute_5m_async():
                 """), {"symbol": symbol})
                 rows = ohlcv_result.fetchall()
 
-                if len(rows) < 14:  # minimum candles for indicator validity
+                if len(rows) < min_candles_5m:
+                    logger.debug(
+                        "Skipping 5m indicator computation for %s: only %d candles "
+                        "(need ≥%d derived from indicator periods: adx=%d, rsi=%d, macd_slow=%d)",
+                        symbol, len(rows), min_candles_5m, _adx_p, _rsi_p, _slow_p,
+                    )
                     continue
 
                 df = pd.DataFrame([{

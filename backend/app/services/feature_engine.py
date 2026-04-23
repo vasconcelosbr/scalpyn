@@ -145,6 +145,13 @@ class FeatureEngine:
             "di_plus": round(float(plus_di.iloc[-1]), 2) if pd.notna(plus_di.iloc[-1]) else None,
             "di_minus": round(float(minus_di.iloc[-1]), 2) if pd.notna(minus_di.iloc[-1]) else None,
         }
+        if not pd.notna(adx_val):
+            min_required = period * 2  # two sequential rolling(period) windows
+            logger.warning(
+                "ADX returned null — insufficient candles for period=%d "
+                "(have %d rows, need ≥%d for two rolling windows).",
+                period, len(df), min_required,
+            )
         if adx_prev is not None and pd.notna(adx_val):
             result["adx_acceleration"] = round(float(adx_val) - float(adx_prev), 2)
         return result
