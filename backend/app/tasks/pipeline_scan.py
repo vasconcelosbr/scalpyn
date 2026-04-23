@@ -941,12 +941,13 @@ async def _replace_rejection_snapshot(
             INSERT INTO pipeline_watchlist_rejections (
                 id, watchlist_id, user_id, profile_id, symbol, stage,
                 failed_type, failed_indicator, condition_text, current_value,
-                expected_value, evaluation_trace, recorded_at, execution_id
+                expected_value, evaluation_trace, analysis_snapshot, recorded_at, execution_id
             )
             VALUES (
                 :id, :watchlist_id, :user_id, :profile_id, :symbol, :stage,
                 :failed_type, :failed_indicator, :condition_text, CAST(:current_value AS jsonb),
-                :expected_value, CAST(:evaluation_trace AS jsonb), :recorded_at, :execution_id
+                :expected_value, CAST(:evaluation_trace AS jsonb), CAST(:analysis_snapshot AS jsonb),
+                :recorded_at, :execution_id
             )
         """), {
             "id": str(uuid4()),
@@ -961,6 +962,7 @@ async def _replace_rejection_snapshot(
             "current_value": json.dumps(_jsonable(row.get("current_value"))),
             "expected_value": row.get("expected"),
             "evaluation_trace": json.dumps(_jsonable(row.get("evaluation_trace") or [])),
+            "analysis_snapshot": json.dumps(_jsonable(row.get("analysis_snapshot") or {})),
             "recorded_at": now,
             "execution_id": execution_id,
         })
@@ -994,10 +996,10 @@ async def _upsert_assets(
                 INSERT INTO pipeline_watchlist_assets
                     (id, watchlist_id, symbol, current_price, price_change_24h,
                       volume_24h, market_cap, alpha_score, entered_at, refreshed_at,
-                      level_direction, execution_id)
+                      level_direction, analysis_snapshot, execution_id)
                 VALUES
                     (gen_random_uuid(), :wid, :sym, :price, :chg,
-                     :vol, :mc, :score, :now, :now, NULL, :execution_id)
+                     :vol, :mc, :score, :now, :now, NULL, CAST(:analysis_snapshot AS jsonb), :execution_id)
                 ON CONFLICT (watchlist_id, symbol)
                 DO UPDATE SET
                     current_price    = EXCLUDED.current_price,
@@ -1007,6 +1009,7 @@ async def _upsert_assets(
                     alpha_score      = EXCLUDED.alpha_score,
                     refreshed_at     = EXCLUDED.refreshed_at,
                     level_direction  = NULL,
+                    analysis_snapshot = EXCLUDED.analysis_snapshot,
                     execution_id     = EXCLUDED.execution_id
             """), {
                 "wid":   watchlist_id,
@@ -1016,6 +1019,7 @@ async def _upsert_assets(
                 "vol":   a.get("volume_24h"),
                 "mc":    a.get("market_cap"),
                 "score": a.get("_score", a.get("score")),
+                "analysis_snapshot": json.dumps(_jsonable(a.get("analysis_snapshot") or {})),
                 "now":   now,
                 "execution_id": execution_id,
             })
@@ -1587,6 +1591,7 @@ async def _run_pipeline_scan():
                             "change_24h": decision["_asset"].get("change_24h", 0),
                             "volume_24h": decision["_asset"].get("volume_24h"),
                             "market_cap": decision["_asset"].get("market_cap"),
+                            "analysis_snapshot": decision["_asset"].get("analysis_snapshot") or {},
                             "matched_conditions": decision["_processed"].get("signal", {}).get("matched_conditions", []),
                         }
                         for decision in decisions

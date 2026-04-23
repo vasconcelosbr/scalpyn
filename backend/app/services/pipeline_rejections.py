@@ -183,6 +183,64 @@ def _evaluate_block_rule(
     }
 
 
+def _build_details(trace: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    normalized_trace = [jsonable_value(item) for item in trace]
+    indicators: List[str] = []
+    conditions: List[str] = []
+    current_values: Dict[str, Any] = {}
+    expected_values: Dict[str, Any] = {}
+
+    for item in normalized_trace:
+        indicator = str(item.get("indicator") or "Unknown")
+        if indicator not in indicators:
+            indicators.append(indicator)
+
+        condition = str(item.get("condition") or "")
+        if condition and condition not in conditions:
+            conditions.append(condition)
+
+        current_values[indicator] = item.get("current_value")
+        expected_values[indicator] = item.get("expected")
+
+    return {
+        "filters": [item for item in normalized_trace if item.get("type") == "filter"],
+        "indicators": indicators,
+        "conditions": conditions,
+        "current_values": current_values,
+        "expected_values": expected_values,
+        "evaluation_trace": normalized_trace,
+    }
+
+
+def build_analysis_snapshot(
+    *,
+    symbol: str,
+    stage: str,
+    profile_id: Optional[str],
+    status: str,
+    trace: Sequence[Dict[str, Any]],
+    timestamp: str,
+) -> Dict[str, Any]:
+    details = _build_details(trace)
+    failed_indicators = [
+        str(item.get("indicator") or "Unknown")
+        for item in details["evaluation_trace"]
+        if item.get("status") == "FAIL"
+    ]
+    return {
+        "symbol": symbol,
+        "stage": stage,
+        "profile_id": profile_id,
+        "status": status,
+        "failed_indicators": failed_indicators,
+        "conditions": details["conditions"],
+        "current_values": details["current_values"],
+        "expected_values": details["expected_values"],
+        "details": details,
+        "timestamp": timestamp,
+    }
+
+
 def evaluate_rejections(
     assets: Sequence[Dict[str, Any]],
     *,
@@ -277,9 +335,29 @@ def evaluate_rejections(
             failed_trace = next((item for item in filter_results if item["status"] == "FAIL"), None)
 
         if failed_trace is None:
-            approved.append(asset)
+            approved.append(
+                {
+                    **asset,
+                    "analysis_snapshot": build_analysis_snapshot(
+                        symbol=str(symbol or ""),
+                        stage=stage,
+                        profile_id=profile_id,
+                        status="approved",
+                        trace=trace,
+                        timestamp=timestamp,
+                    ),
+                }
+            )
             continue
 
+        analysis_snapshot = build_analysis_snapshot(
+            symbol=str(symbol or ""),
+            stage=stage,
+            profile_id=profile_id,
+            status="rejected",
+            trace=trace,
+            timestamp=timestamp,
+        )
         rejected.append(
             {
                 "symbol": symbol,
@@ -292,6 +370,13 @@ def evaluate_rejections(
                 "expected": failed_trace.get("expected"),
                 "timestamp": timestamp,
                 "evaluation_trace": jsonable_value(trace),
+                "status": analysis_snapshot["status"],
+                "details": analysis_snapshot["details"],
+                "failed_indicators": analysis_snapshot["failed_indicators"],
+                "conditions": analysis_snapshot["conditions"],
+                "current_values": analysis_snapshot["current_values"],
+                "expected_values": analysis_snapshot["expected_values"],
+                "analysis_snapshot": analysis_snapshot,
             }
         )
 

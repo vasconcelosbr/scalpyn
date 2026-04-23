@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app.api.watchlists import (
     _is_upstream_scan_newer,
     _extract_profile_indicator_fields,
+    _normalize_decision_snapshot,
     _passes_profile_filters,
     _should_refresh_for_upstream_delta,
     _uses_pipeline_filters,
@@ -105,6 +106,34 @@ def test_show_score_visible_for_l2_and_l3():
     """Stage 2 (L2) and Stage 3 (L3) must show Alpha Score."""
     assert _make_level_wl_show_score("L2") is True
     assert _make_level_wl_show_score("L3") is True
+
+
+def test_normalized_decision_snapshot_fills_required_details_shape():
+    item = _normalize_decision_snapshot(
+        symbol="BTC_USDT",
+        status="approved",
+        stage="L1",
+        profile_id="profile-1",
+        timestamp="2026-04-23T00:00:00Z",
+        snapshot={
+            "status": "approved",
+            "details": {
+                "filters": [{"type": "filter", "indicator": "RSI", "condition": "RSI < 70", "status": "PASS"}],
+                "indicators": ["RSI"],
+                "conditions": ["RSI < 70"],
+                "current_values": {"RSI": 61},
+                "expected_values": {"RSI": "70"},
+                "evaluation_trace": [{"type": "filter", "indicator": "RSI", "condition": "RSI < 70", "status": "PASS"}],
+            },
+        },
+    )
+
+    assert item["status"] == "approved"
+    assert item["details"]["filters"][0]["status"] == "PASS"
+    assert item["failed_indicators"] == []
+    assert item["conditions"] == ["RSI < 70"]
+    assert item["current_values"]["RSI"] == 61
+    assert item["expected_values"]["RSI"] == "70"
 
 
 def test_monitoring_boards_refresh_on_any_upstream_symbol_delta():
