@@ -291,7 +291,7 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
   const [sourceWatchlistId, setSourceWatchlistId] = useState(wl?.source_watchlist_id ?? '');
   const [profileId, setProfileId] = useState(wl?.profile_id ?? '');
   const [autoRefresh, setAutoRefresh] = useState(wl?.auto_refresh ?? true);
-  const [minimumScoreFilter, setMinimumScoreFilter] = useState(
+  const [minAlphaScoreFilter, setMinAlphaScoreFilter] = useState(
     typeof existingFilters.min_alpha_score === 'number' ? existingFilters.min_alpha_score.toString() : '',
   );
   const [saving, setSaving] = useState(false);
@@ -332,8 +332,8 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
     setSaving(true);
     setSaveError(null);
     try {
-      const normalizedMinimumScore = minimumScoreFilter.trim();
-      const parsedMinimumScore = normalizedMinimumScore === '' ? null : Number.parseFloat(normalizedMinimumScore);
+      const trimmedMinAlphaScore = minAlphaScoreFilter.trim();
+      const parsedMinimumScore = trimmedMinAlphaScore === '' ? null : Number.parseFloat(trimmedMinAlphaScore);
       if (
         parsedMinimumScore !== null &&
         (
@@ -494,8 +494,8 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
               step={ALPHA_SCORE_FILTER_RANGE.step}
               inputMode="decimal"
               className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
-              value={minimumScoreFilter}
-              onChange={(e) => setMinimumScoreFilter(e.target.value)}
+              value={minAlphaScoreFilter}
+              onChange={(e) => setMinAlphaScoreFilter(e.target.value)}
               placeholder="Ex: 60.0"
               data-testid="watchlist-minimum-score-input"
             />
