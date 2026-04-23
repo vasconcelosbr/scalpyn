@@ -1844,14 +1844,44 @@ async def get_watchlist_assets(
 
     enriched = []
     for a in assets:
+        indicators = ind_map.get(a.symbol)
+        meta = meta_map.get(a.symbol)
         enriched_asset = _asset_to_dict(
             a,
-            indicators=ind_map.get(a.symbol),
-            meta=meta_map.get(a.symbol),
+            indicators=indicators,
+            meta=meta,
             override_score=score_override.get(a.symbol),
         )
-        for a in assets
-    ]
+        normalized_snapshot = _normalize_decision_snapshot(
+            symbol=a.symbol,
+            status="approved",
+            stage=wl.level,
+            profile_id=str(wl.profile_id) if wl.profile_id else None,
+            timestamp=_iso_utc(getattr(a, "refreshed_at", None)),
+            snapshot=a.analysis_snapshot,
+        )
+        evaluation_trace = normalized_snapshot["details"]["evaluation_trace"]
+        if not evaluation_trace and profile_config:
+            trace_asset = {
+                "symbol": a.symbol,
+                "price": enriched_asset.get("current_price"),
+                "current_price": enriched_asset.get("current_price"),
+                "price_change_24h": enriched_asset.get("price_change_24h"),
+                "change_24h": enriched_asset.get("price_change_24h"),
+                "volume_24h": enriched_asset.get("volume_24h"),
+                "market_cap": enriched_asset.get("market_cap"),
+                "spread_pct": (meta or {}).get("spread_pct"),
+                "orderbook_depth_usdt": (meta or {}).get("orderbook_depth_usdt"),
+                "alpha_score": enriched_asset.get("alpha_score"),
+                **(indicators or {}),
+            }
+            evaluation_trace = build_asset_evaluation_trace(
+                trace_asset,
+                profile_config=profile_config,
+                selected_filter_conditions=selected_trace_conditions,
+            )
+        enriched_asset["evaluation_trace"] = evaluation_trace
+        enriched.append(enriched_asset)
     approved_items = [
         _normalize_decision_snapshot(
             symbol=asset.symbol,
