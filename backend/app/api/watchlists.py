@@ -30,7 +30,11 @@ from ..models.pipeline_watchlist import (
     PipelineWatchlistRejection,
 )
 from ..services.market_data_service import _is_etf_pair
-from ..services.pipeline_rejections import evaluate_rejections, rejection_metrics
+from ..services.pipeline_rejections import (
+    build_asset_evaluation_trace,
+    evaluate_rejections,
+    rejection_metrics,
+)
 from ..utils.pipeline_profile_filters import (
     STRICT_META_FIELDS,
     effective_pipeline_level,
@@ -1829,8 +1833,18 @@ async def get_watchlist_assets(
             except Exception as _e:
                 logger.debug("[Pipeline] On-demand orderbook fetch error: %s", _e)
 
-    enriched = [
-        _asset_to_dict(
+    trace_filter_conditions = list(((profile_config or {}).get("filters") or {}).get("conditions") or [])
+    selected_trace_conditions = trace_filter_conditions
+    if effective_level in ("L1", "L2", "L3") and wl.profile_id and trace_filter_conditions:
+        selected_trace_conditions = select_profile_filter_conditions(
+            trace_filter_conditions,
+            total_symbols=len(symbols),
+            symbols_with_meta=sum(1 for symbol in symbols if meta_map.get(symbol)),
+        )["conditions"]
+
+    enriched = []
+    for a in assets:
+        enriched_asset = _asset_to_dict(
             a,
             indicators=ind_map.get(a.symbol),
             meta=meta_map.get(a.symbol),

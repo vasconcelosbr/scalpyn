@@ -245,8 +245,6 @@ def evaluate_rejections(
     assets: Sequence[Dict[str, Any]],
     *,
     profile_config: Optional[Dict[str, Any]],
-    stage: str,
-    profile_id: Optional[str],
     selected_filter_conditions: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     if not assets:
@@ -301,6 +299,100 @@ def evaluate_rejections(
             }
         )
 
+    trace: List[Dict[str, Any]] = []
+    failed_trace: Optional[Dict[str, Any]] = None
+    stopped = False
+
+    for block in block_rules:
+        if stopped:
+            trace.append(
+                {
+                    "type": "block_rule",
+                    "indicator": block.get("name") or "Unnamed Block",
+                    "condition": block.get("reason") or block.get("name") or "Skipped",
+                    "expected": block.get("reason") or None,
+                    "current_value": None,
+                    "status": "SKIPPED",
+                }
+            )
+            continue
+        block_trace = _evaluate_block_rule(rule_engine, asset, block)
+        trace.append(block_trace)
+        if block_trace.get("triggered"):
+            failed_trace = block_trace
+            stopped = True
+
+    filter_results: List[Dict[str, Any]] = []
+    for condition in filters_all:
+        if stopped:
+            trace.append(
+                {
+                    "type": "filter",
+                    "indicator": _condition_indicator(condition, field_key="field"),
+                    "condition": format_condition_text(condition, field_key="field"),
+                    "expected": format_expected(condition),
+                    "current_value": None,
+                    "status": "SKIPPED",
+                }
+            )
+            continue
+
+        if id(condition) not in filter_logic_keys:
+            trace.append(
+                {
+                    "type": "filter",
+                    "indicator": _condition_indicator(condition, field_key="field"),
+                    "condition": format_condition_text(condition, field_key="field"),
+                    "expected": format_expected(condition),
+                    "current_value": None,
+                    "status": "SKIPPED",
+                }
+            )
+            continue
+
+        filter_trace = _evaluate_filter(rule_engine, asset, condition)
+        trace.append(filter_trace)
+        filter_results.append(filter_trace)
+        if filter_logic != "OR" and filter_trace["status"] == "FAIL":
+            failed_trace = filter_trace
+            stopped = True
+
+    if failed_trace is None and filter_logic == "OR" and filter_results and not any(
+        item["status"] == "PASS" for item in filter_results
+    ):
+        failed_trace = next((item for item in filter_results if item["status"] == "FAIL"), None)
+
+    return trace, failed_trace
+
+
+def build_asset_evaluation_trace(
+    asset: Dict[str, Any],
+    *,
+    profile_config: Optional[Dict[str, Any]],
+    selected_filter_conditions: Optional[Sequence[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    trace, _ = _build_asset_evaluation_trace(
+        RuleEngine(),
+        asset,
+        profile_config=profile_config,
+        selected_filter_conditions=selected_filter_conditions,
+    )
+    return jsonable_value(trace)
+
+
+def evaluate_rejections(
+    assets: Sequence[Dict[str, Any]],
+    *,
+    profile_config: Optional[Dict[str, Any]],
+    stage: str,
+    profile_id: Optional[str],
+    selected_filter_conditions: Optional[Sequence[Dict[str, Any]]] = None,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Return (approved_assets, rejection_logs) for the profile block/filter gates."""
+    if not assets:
+        return [], []
+
+    rule_engine = RuleEngine()
     approved: List[Dict[str, Any]] = []
     rejected: List[Dict[str, Any]] = []
 

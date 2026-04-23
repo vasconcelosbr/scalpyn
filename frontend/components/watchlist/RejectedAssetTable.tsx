@@ -2,6 +2,11 @@
 
 import { Fragment, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import {
+  EvaluationTraceBreakdown,
+  formatEvaluationTraceValue,
+  type EvaluationTraceItem,
+} from "./EvaluationTraceBreakdown";
 
 const DECISION_SUMMARY_INDICATOR_LIMIT = 3;
 
@@ -40,17 +45,7 @@ export type RejectedTraceItem = DecisionTraceItem;
 export type RejectedAssetItem = WatchlistDecisionItem;
 
 function fmtValue(value: unknown): string {
-  if (value == null) return "—";
-  if (typeof value === "number") {
-    const abs = Math.abs(value);
-    if (abs >= 100) return value.toFixed(1);
-    if (abs >= 1) return value.toFixed(2);
-    return value.toFixed(4);
-  }
-  if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value === "string") return value;
-  if (Array.isArray(value) || typeof value === "object") return JSON.stringify(value);
-  return String(value);
+  return formatEvaluationTraceValue(value);
 }
 
 function itemPalette(status: "approved" | "rejected") {
