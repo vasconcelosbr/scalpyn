@@ -67,9 +67,15 @@ function itemPalette(status: "approved" | "rejected") {
       };
 }
 
-function summarizeIndicator(item: WatchlistDecisionItem): string {
+function summarizeIndicators(item: WatchlistDecisionItem): string {
   if (item.failed_indicators.length > 0) return item.failed_indicators.join(", ");
   return item.details.indicators.slice(0, DECISION_SUMMARY_INDICATOR_LIMIT).join(", ") || "—";
+}
+
+function summarizeConditions(item: WatchlistDecisionItem): string {
+  if (item.details.conditions.length === 0) return "—";
+  if (item.details.conditions.length === 1) return item.details.conditions[0];
+  return `${item.details.conditions[0]} +${item.details.conditions.length - 1}`;
 }
 
 function metricTopIndicator(items: WatchlistDecisionItem[]): string {
@@ -213,8 +219,8 @@ export function WatchlistDecisionTable({
                           {item.status}
                         </span>
                       </td>
-                      <td className={`px-3 py-2.5 font-medium ${palette.accent}`}>{summarizeIndicator(item)}</td>
-                      <td className="px-3 py-2.5 text-[#CBD5E1]">{item.details.conditions.length}</td>
+                      <td className={`px-3 py-2.5 font-medium ${palette.accent}`}>{summarizeIndicators(item)}</td>
+                      <td className="px-3 py-2.5 text-[#CBD5E1]">{summarizeConditions(item)}</td>
                       <td className="px-3 py-2.5 text-[#64748B]">{item.timestamp ? new Date(item.timestamp).toLocaleString() : "—"}</td>
                     </tr>
                     {isExpanded && (

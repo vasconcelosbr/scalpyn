@@ -183,7 +183,7 @@ def _evaluate_block_rule(
     }
 
 
-def _build_details(trace: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+def _build_decision_details(trace: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     normalized_trace = [jsonable_value(item) for item in trace]
     indicators: List[str] = []
     conditions: List[str] = []
@@ -221,7 +221,7 @@ def build_analysis_snapshot(
     trace: Sequence[Dict[str, Any]],
     timestamp: str,
 ) -> Dict[str, Any]:
-    details = _build_details(trace)
+    details = _build_decision_details(trace)
     failed_indicators = [
         str(item.get("indicator") or "Unknown")
         for item in details["evaluation_trace"]
