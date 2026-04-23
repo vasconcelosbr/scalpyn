@@ -70,7 +70,6 @@ def test_filter_failure_trace_preserves_profile_order_and_stop_point():
 
 
 def test_approved_assets_include_full_pass_trace():
-def test_pool_stage_rejections_are_labeled_as_pool():
     profile_config = {
         "filters": {
             "logic": "AND",
@@ -103,6 +102,13 @@ def test_pool_stage_rejections_are_labeled_as_pool():
     assert rejected == []
     assert len(approved) == 1
     assert [item["status"] for item in approved[0]["evaluation_trace"]] == ["PASS", "PASS", "PASS"]
+
+
+def test_pool_stage_rejections_are_labeled_as_pool():
+    profile_config = {
+        "filters": {
+            "logic": "AND",
+            "conditions": [
                 {"field": "market_cap", "operator": ">=", "value": 1_000_000_000},
             ],
         },
