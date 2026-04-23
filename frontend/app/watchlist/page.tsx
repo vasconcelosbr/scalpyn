@@ -48,7 +48,10 @@ interface PipelineWatchlist {
   profile_id: string | null;
   profile_name?: string | null;
   auto_refresh: boolean;
-  filters_json: Record<string, unknown>;
+  filters_json: {
+    min_alpha_score?: number;
+    [key: string]: unknown;
+  };
   last_scanned_at: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -275,12 +278,16 @@ function ProfilePreview({ profile }: { profile: Profile }) {
 
 function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: ModalProps) {
   const isNew = !wl?.id;
+  const existingFilters = wl?.filters_json ?? {};
   const [name, setName] = useState(wl?.name ?? '');
   const [level, setLevel] = useState(isNew ? 'custom' : resolveWatchlistLevel(wl, profiles));
   const [sourcePoolId, setSourcePoolId] = useState(wl?.source_pool_id ?? '');
   const [sourceWatchlistId, setSourceWatchlistId] = useState(wl?.source_watchlist_id ?? '');
   const [profileId, setProfileId] = useState(wl?.profile_id ?? '');
   const [autoRefresh, setAutoRefresh] = useState(wl?.auto_refresh ?? true);
+  const [minimumScoreFilter, setMinimumScoreFilter] = useState(
+    typeof existingFilters.min_alpha_score === 'number' ? existingFilters.min_alpha_score.toString() : '',
+  );
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -319,8 +326,19 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
     setSaving(true);
     setSaveError(null);
     try {
-      // NOTE: filters_json is no longer used for filtering at runtime.
-      // All filtering is driven exclusively by the associated profile.
+      const normalizedMinimumScore = minimumScoreFilter.trim();
+      const parsedMinimumScore = normalizedMinimumScore === '' ? null : Number.parseFloat(normalizedMinimumScore);
+      if (parsedMinimumScore !== null && (Number.isNaN(parsedMinimumScore) || parsedMinimumScore < 0 || parsedMinimumScore > 100)) {
+        setSaveError('Minimum Score Filter must be between 0 and 100.');
+        setSaving(false);
+        return;
+      }
+      const nextFilters = { ...existingFilters };
+      if (parsedMinimumScore === null) {
+        delete nextFilters.min_alpha_score;
+      } else {
+        nextFilters.min_alpha_score = parsedMinimumScore;
+      }
       await onSave({
         name,
         level,
@@ -328,7 +346,7 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
         source_watchlist_id: sourceWatchlistId || null,
         profile_id: profileId || null,
         auto_refresh: autoRefresh,
-        filters_json: {},
+        filters_json: nextFilters,
       });
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : 'Failed to save watchlist settings. Please try again.');
@@ -449,8 +467,21 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
             )}
           </div>
 
-          {/* NOTE: min_score and require_signal filters have been moved to the Profile.
-              All filtering criteria are now controlled exclusively via the associated profile. */}
+          <div>
+            <label className="block text-xs text-[#64748B] mb-1">Minimum Score Filter</label>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={0.1}
+              inputMode="decimal"
+              className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
+              value={minimumScoreFilter}
+              onChange={(e) => setMinimumScoreFilter(e.target.value)}
+              placeholder="Ex: 60.0"
+              data-testid="watchlist-minimum-score-input"
+            />
+          </div>
 
           <label className="flex items-center gap-2 cursor-pointer">
             <input
