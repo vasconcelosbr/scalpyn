@@ -362,15 +362,24 @@ function SkeletonBar() {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function EngineStatusBar({ profile }: EngineStatusBarProps) {
-  const { isRunning, isPaused, positions, capital, balance, isLoading, pauseEngine, resumeEngine } =
+  const { isRunning, isPaused, positions, capital, balance, isLoading, startEngine, pauseEngine, resumeEngine } =
     useEngineStatus(profile);
 
-  const [actionLoading, setActionLoading] = useState<'pause' | 'resume' | null>(null);
+  const [actionLoading, setActionLoading] = useState<'start' | 'pause' | 'resume' | null>(null);
 
   const engineState = resolveEngineState(isRunning, isPaused);
   const stateCfg = STATE_CONFIG[engineState];
 
   if (isLoading) return <SkeletonBar />;
+
+  async function handleStart() {
+    setActionLoading('start');
+    try {
+      await startEngine();
+    } finally {
+      setActionLoading(null);
+    }
+  }
 
   async function handlePause() {
     setActionLoading('pause');
@@ -470,7 +479,7 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
           flexShrink: 0,
         }}
       >
-        {/* Pause / Resume toggle */}
+        {/* Pause / Resume / Start toggle */}
         {engineState === 'running' ? (
           <button
             type="button"
@@ -502,7 +511,19 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
             <Play size={13} />
             {actionLoading === 'resume' ? 'Resuming…' : 'Resume'}
           </button>
-        ) : null}
+        ) : (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleStart}
+            disabled={actionLoading !== null}
+            style={{ gap: '6px', fontSize: '12px', padding: '6px 12px', height: '32px' }}
+            aria-label="Start engine"
+          >
+            <Play size={13} />
+            {actionLoading === 'start' ? 'Starting…' : 'Start Engine'}
+          </button>
+        )}
 
         {/* View positions link */}
         <Link
