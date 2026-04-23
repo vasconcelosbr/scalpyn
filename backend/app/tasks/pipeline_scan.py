@@ -37,6 +37,8 @@ _REDIS_PREFIX = "spe:pipeline:"   # Redis key prefix per watchlist
 # window are automatically marked 'down'.  Override per-watchlist via
 # filters_json.staleness_minutes (GUI-editable).
 _DEFAULT_STALENESS_MINUTES = 30
+_PIPELINE_EXECUTION_TRACKING_SCHEMA_READY = False
+_PIPELINE_EXECUTION_TRACKING_SCHEMA_LOCK = asyncio.Lock()
 
 # Strict metadata fields — NULL means FAIL (not skip) in profile filters.
 # Used by diagnostic logging in _apply_level_filter.
@@ -1212,6 +1214,7 @@ async def _broadcast_scan_funnel(
 
 async def _run_pipeline_scan():
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
+    from ..init_db import backfill_execution_tracking_columns
     from ..models.pipeline_watchlist import PipelineWatchlist
     from ..models.pool import PoolCoin
     from ..models.profile import Profile
@@ -1223,6 +1226,14 @@ async def _run_pipeline_scan():
     stats = {"watchlists": 0, "new_signals": 0, "errors": 0, "funnels": [], "execution_id": execution_id}
 
     async with AsyncSessionLocal() as db:
+        global _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY
+        if not _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY:
+            async with _PIPELINE_EXECUTION_TRACKING_SCHEMA_LOCK:
+                if not _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY:
+                    await backfill_execution_tracking_columns(db)
+                    await db.commit()
+                    _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY = True
+
         # Load all pipeline watchlists with auto_refresh=true
         wl_rows = (await db.execute(
             select(PipelineWatchlist).where(PipelineWatchlist.auto_refresh == True)
