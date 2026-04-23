@@ -16,8 +16,15 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("pipeline_watchlist_assets", sa.Column("execution_id", UUID(as_uuid=True), nullable=True))
-    op.add_column("pipeline_watchlist_rejections", sa.Column("execution_id", UUID(as_uuid=True), nullable=True))
+    # Use IF NOT EXISTS to guard against columns already added by init_db backfill.
+    op.execute(sa.text("""
+        ALTER TABLE pipeline_watchlist_assets
+            ADD COLUMN IF NOT EXISTS execution_id UUID;
+    """))
+    op.execute(sa.text("""
+        ALTER TABLE pipeline_watchlist_rejections
+            ADD COLUMN IF NOT EXISTS execution_id UUID;
+    """))
 
     # Defensive data normalization for legacy inconsistent configs:
     # For L1/L2/L3, migrate source_pool_id → source_watchlist_id when possible.

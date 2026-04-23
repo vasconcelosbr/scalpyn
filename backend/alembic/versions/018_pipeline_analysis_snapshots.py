@@ -16,16 +16,15 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "pipeline_watchlist_assets",
-        sa.Column("analysis_snapshot", JSONB(), nullable=True, server_default=sa.text("'{}'::jsonb")),
-    )
-    op.add_column(
-        "pipeline_watchlist_rejections",
-        sa.Column("analysis_snapshot", JSONB(), nullable=True, server_default=sa.text("'{}'::jsonb")),
-    )
-    op.execute(sa.text("ALTER TABLE pipeline_watchlist_assets ALTER COLUMN analysis_snapshot DROP DEFAULT"))
-    op.execute(sa.text("ALTER TABLE pipeline_watchlist_rejections ALTER COLUMN analysis_snapshot DROP DEFAULT"))
+    # Use IF NOT EXISTS to guard against columns already present from create_all or backfill.
+    op.execute(sa.text("""
+        ALTER TABLE pipeline_watchlist_assets
+            ADD COLUMN IF NOT EXISTS analysis_snapshot JSONB;
+    """))
+    op.execute(sa.text("""
+        ALTER TABLE pipeline_watchlist_rejections
+            ADD COLUMN IF NOT EXISTS analysis_snapshot JSONB;
+    """))
 
 
 def downgrade() -> None:

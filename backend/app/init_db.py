@@ -49,6 +49,30 @@ async def init_db():
             logger.info("Ensured pipeline execution tracking columns exist")
         except Exception as e:
             logger.warning(f"Could not add pipeline execution tracking columns: {e}")
+
+        # Ensure pipeline staleness-tracking and analysis columns exist on existing tables.
+        # These are added by migrations 013/018 but may be absent if those migrations
+        # failed (e.g., blocked by a DuplicateColumnError in an earlier migration).
+        try:
+            await conn.execute(text("""
+                ALTER TABLE pipeline_watchlists
+                    ADD COLUMN IF NOT EXISTS last_scanned_at TIMESTAMPTZ;
+            """))
+            await conn.execute(text("""
+                ALTER TABLE pipeline_watchlist_assets
+                    ADD COLUMN IF NOT EXISTS refreshed_at TIMESTAMPTZ;
+            """))
+            await conn.execute(text("""
+                ALTER TABLE pipeline_watchlist_assets
+                    ADD COLUMN IF NOT EXISTS analysis_snapshot JSONB;
+            """))
+            await conn.execute(text("""
+                ALTER TABLE pipeline_watchlist_rejections
+                    ADD COLUMN IF NOT EXISTS analysis_snapshot JSONB;
+            """))
+            logger.info("Ensured pipeline staleness and analysis_snapshot columns exist")
+        except Exception as e:
+            logger.warning(f"Could not add pipeline staleness/analysis columns: {e}")
         
         # Ensure profiles and watchlist_profiles tables exist with all columns
         try:
