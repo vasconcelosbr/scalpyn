@@ -3,12 +3,14 @@ import logging
 from .database import engine, Base
 from .models import *  # This ensures all models are registered
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 async def ensure_pipeline_execution_tracking_schema(db) -> None:
+    """Ensure runtime-added pipeline execution_id columns exist on older schemas."""
     await db.execute(text("""
         ALTER TABLE pipeline_watchlist_assets
         ADD COLUMN IF NOT EXISTS execution_id UUID;
@@ -18,9 +20,8 @@ async def ensure_pipeline_execution_tracking_schema(db) -> None:
         ADD COLUMN IF NOT EXISTS execution_id UUID;
     """))
 
-    commit = getattr(db, "commit", None)
-    if callable(commit):
-        await commit()
+    if isinstance(db, AsyncSession):
+        await db.commit()
 
 
 async def init_db():

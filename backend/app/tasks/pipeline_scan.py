@@ -1224,7 +1224,7 @@ async def _run_pipeline_scan():
     stats = {"watchlists": 0, "new_signals": 0, "errors": 0, "funnels": [], "execution_id": execution_id}
 
     async with AsyncSessionLocal() as db:
-        await _ensure_pipeline_execution_tracking_schema(db)
+        await ensure_pipeline_execution_tracking_schema(db)
 
         # Load all pipeline watchlists with auto_refresh=true
         wl_rows = (await db.execute(
