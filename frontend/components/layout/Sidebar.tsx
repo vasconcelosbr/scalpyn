@@ -29,6 +29,8 @@ import {
   Database,
   PlayCircle,
   Users,
+  Activity,
+  CandlestickChart,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -38,6 +40,8 @@ const OVERVIEW_ITEMS = [
 ];
 
 const TRADING_ITEMS = [
+  { name: 'Spot', href: '/trading-desk/spot', icon: Activity },
+  { name: 'Futures', href: '/trading-desk/futures', icon: CandlestickChart },
   { name: 'Trades & P&L', href: '/trades', icon: TrendingUp },
   { name: 'Reports', href: '/reports', icon: FileText },
   { name: 'Pools', href: '/pools', icon: Layers },
