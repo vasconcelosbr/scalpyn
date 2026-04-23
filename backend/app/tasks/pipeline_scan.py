@@ -1509,11 +1509,21 @@ async def _run_pipeline_scan():
                         assert set(symbols).issubset(upstream_symbols)
 
                     if not symbols:
-                        logger.info(
-                            "[PipelineScan] %s (%s): no symbols from upstream — running staleness check.",
-                            wl.name, effective_level,
-                        )
-                        await _run_staleness_only(db, wl_id, filters_json, execution_id=execution_id)
+                        if source_watchlist_id:
+                            # Upstream watchlist was consulted and approved 0 symbols.
+                            # Immediately clear all active assets in this stage so the
+                            # downstream reflects the upstream's 0-approved state.
+                            logger.info(
+                                "[PipelineScan] %s (%s): upstream watchlist %s approved 0 symbols — clearing active assets.",
+                                wl.name, effective_level, source_watchlist_id,
+                            )
+                            await _upsert_assets(db, wl_id, [], filters_json, execution_id=execution_id)
+                        else:
+                            logger.info(
+                                "[PipelineScan] %s (%s): no symbols from upstream — running staleness check.",
+                                wl.name, effective_level,
+                            )
+                            await _run_staleness_only(db, wl_id, filters_json, execution_id=execution_id)
                         await _update_last_scanned(db, wl_id)
                         continue
 
