@@ -291,7 +291,7 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
   const [sourceWatchlistId, setSourceWatchlistId] = useState(wl?.source_watchlist_id ?? '');
   const [profileId, setProfileId] = useState(wl?.profile_id ?? '');
   const [autoRefresh, setAutoRefresh] = useState(wl?.auto_refresh ?? true);
-  const [minAlphaScoreFilter, setMinAlphaScoreFilter] = useState(
+  const [minAlphaScore, setMinAlphaScore] = useState(
     typeof existingFilters.min_alpha_score === 'number' ? existingFilters.min_alpha_score.toString() : '',
   );
   const [saving, setSaving] = useState(false);
@@ -332,14 +332,14 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
     setSaving(true);
     setSaveError(null);
     try {
-      const trimmedMinAlphaScore = minAlphaScoreFilter.trim();
-      const parsedMinimumScore = trimmedMinAlphaScore === '' ? null : Number.parseFloat(trimmedMinAlphaScore);
+      const trimmedMinAlphaScore = minAlphaScore.trim();
+      const parsedMinAlphaScore = trimmedMinAlphaScore === '' ? null : Number.parseFloat(trimmedMinAlphaScore);
       if (
-        parsedMinimumScore !== null &&
+        parsedMinAlphaScore !== null &&
         (
-          Number.isNaN(parsedMinimumScore) ||
-          parsedMinimumScore < ALPHA_SCORE_FILTER_RANGE.min ||
-          parsedMinimumScore > ALPHA_SCORE_FILTER_RANGE.max
+          Number.isNaN(parsedMinAlphaScore) ||
+          parsedMinAlphaScore < ALPHA_SCORE_FILTER_RANGE.min ||
+          parsedMinAlphaScore > ALPHA_SCORE_FILTER_RANGE.max
         )
       ) {
         setSaveError(
@@ -349,10 +349,10 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
         return;
       }
       const nextFilters = { ...existingFilters };
-      if (parsedMinimumScore === null) {
+      if (parsedMinAlphaScore === null) {
         delete nextFilters.min_alpha_score;
       } else {
-        nextFilters.min_alpha_score = parsedMinimumScore;
+        nextFilters.min_alpha_score = parsedMinAlphaScore;
       }
       await onSave({
         name,
@@ -494,11 +494,17 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
               step={ALPHA_SCORE_FILTER_RANGE.step}
               inputMode="decimal"
               className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
-              value={minAlphaScoreFilter}
-              onChange={(e) => setMinAlphaScoreFilter(e.target.value)}
+              value={minAlphaScore}
+              onChange={(e) => setMinAlphaScore(e.target.value)}
               placeholder="Ex: 60.0"
               data-testid="watchlist-minimum-score-input"
+              aria-describedby="watchlist-minimum-score-help"
+              aria-invalid={!!saveError && saveError.includes('Minimum Score Filter')}
+              aria-errormessage={saveError && saveError.includes('Minimum Score Filter') ? 'watchlist-minimum-score-error' : undefined}
             />
+            <p id="watchlist-minimum-score-help" className="mt-1 text-[10px] text-[#4B5563]">
+              Optional. Leave empty to disable this filter. Valid range: {ALPHA_SCORE_FILTER_RANGE.min} to {ALPHA_SCORE_FILTER_RANGE.max}.
+            </p>
           </div>
 
           <label className="flex items-center gap-2 cursor-pointer">
@@ -512,7 +518,12 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
           </label>
 
           {saveError && (
-            <p className="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">{saveError}</p>
+            <p
+              id={saveError.includes('Minimum Score Filter') ? 'watchlist-minimum-score-error' : undefined}
+              className="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2"
+            >
+              {saveError}
+            </p>
           )}
           {!saveError && sourceConfigError && (
             <p className="text-xs text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded-lg px-3 py-2">{sourceConfigError}</p>
