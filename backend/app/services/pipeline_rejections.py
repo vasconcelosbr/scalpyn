@@ -329,7 +329,7 @@ def build_analysis_snapshot(
 
 
 def _normalized_trace_item(item: Dict[str, Any]) -> Dict[str, Any]:
-    return {
+    normalized: Dict[str, Any] = {
         "type": item["type"],
         "name": item.get("indicator") or item.get("name") or "Unknown",
         "indicator": item.get("indicator") or item.get("name") or "Unknown",
@@ -338,6 +338,12 @@ def _normalized_trace_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "current_value": jsonable_value(item.get("current_value")),
         "status": item["status"],
     }
+    # Preserve the SKIPPED reason so frontend traces can explain why a
+    # rule was undecidable (indicator_not_available vs indicator_invalid_value).
+    reason = item.get("reason")
+    if reason:
+        normalized["reason"] = reason
+    return normalized
 
 
 def _skipped_block_rule(block: Dict[str, Any]) -> Dict[str, Any]:

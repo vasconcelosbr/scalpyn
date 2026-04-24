@@ -350,6 +350,50 @@ def test_pipeline_entry_trigger_emits_skipped_with_reason():
     assert payload["reason"] == "indicator_not_available"
 
 
+def test_normalized_trace_item_preserves_skipped_reason():
+    """The serialized evaluation_trace must keep the SKIPPED reason."""
+    from app.services.pipeline_rejections import (
+        _evaluate_block_rule,
+        _evaluate_entry_trigger,
+        _evaluate_signal_condition,
+        _normalized_trace_item,
+    )
+    from app.services.rule_engine import RuleEngine
+
+    rule_engine = RuleEngine()
+    cond = {"indicator": "taker_ratio", "operator": ">=", "value": 1.05}
+
+    # Entry trigger SKIPPED → reason survives normalization.
+    raw = _evaluate_entry_trigger(rule_engine, {"taker_ratio": 0}, cond)
+    normalized = _normalized_trace_item(raw)
+    assert normalized["status"] == "SKIPPED"
+    assert normalized["reason"] == "indicator_invalid_value"
+
+    # Block rule SKIPPED → reason survives normalization.
+    block = {
+        "id": "tr",
+        "name": "Weak Taker Ratio",
+        "logic": "AND",
+        "conditions": [cond],
+    }
+    raw = _evaluate_block_rule(rule_engine, {}, block)
+    normalized = _normalized_trace_item(raw)
+    assert normalized["status"] == "SKIPPED"
+    assert normalized["reason"] == "indicator_not_available"
+
+    # Signal condition SKIPPED → reason survives normalization.
+    raw = _evaluate_signal_condition(rule_engine, {"taker_ratio": 0}, cond)
+    normalized = _normalized_trace_item(raw)
+    assert normalized["status"] == "SKIPPED"
+    assert normalized["reason"] == "indicator_invalid_value"
+
+    # PASS items must NOT acquire a spurious reason field.
+    raw = _evaluate_entry_trigger(rule_engine, {"taker_ratio": 1.5}, cond)
+    normalized = _normalized_trace_item(raw)
+    assert normalized["status"] == "PASS"
+    assert "reason" not in normalized
+
+
 # ── Entry triggers ───────────────────────────────────────────────────────────
 
 
