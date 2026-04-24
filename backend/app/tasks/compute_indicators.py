@@ -44,6 +44,22 @@ def _run_async(coro):
         loop.close()
 
 
+async def _load_market_metadata_map(db) -> dict:
+    metadata_result = await db.execute(text("""
+        SELECT symbol, price, volume_24h, spread_pct, orderbook_depth_usdt
+        FROM market_metadata
+    """))
+    return {
+        row.symbol: {
+            "price": float(row.price) if row.price is not None else None,
+            "volume_24h": float(row.volume_24h) if row.volume_24h is not None else None,
+            "spread_pct": float(row.spread_pct) if row.spread_pct is not None else None,
+            "orderbook_depth_usdt": float(row.orderbook_depth_usdt) if row.orderbook_depth_usdt is not None else None,
+        }
+        for row in metadata_result.fetchall()
+    }
+
+
 def _derive_min_candles(indicators_config: dict, timeframe: str) -> int:
     ema_periods = indicators_config.get("ema", {}).get("periods", [])
     stochastic = indicators_config.get("stochastic", {})
@@ -85,19 +101,7 @@ async def _compute_async():
             WHERE time > now() - interval '7 days'
         """))
         symbols = [row.symbol for row in symbols_result.fetchall()]
-        metadata_result = await db.execute(text("""
-            SELECT symbol, price, volume_24h, spread_pct, orderbook_depth_usdt
-            FROM market_metadata
-        """))
-        metadata_map = {
-            row.symbol: {
-                "price": float(row.price) if row.price is not None else None,
-                "volume_24h": float(row.volume_24h) if row.volume_24h is not None else None,
-                "spread_pct": float(row.spread_pct) if row.spread_pct is not None else None,
-                "orderbook_depth_usdt": float(row.orderbook_depth_usdt) if row.orderbook_depth_usdt is not None else None,
-            }
-            for row in metadata_result.fetchall()
-        }
+        metadata_map = await _load_market_metadata_map(db)
 
         for symbol in symbols:
             try:
@@ -217,19 +221,7 @@ async def _compute_5m_async():
               AND time > now() - interval '2 hours'
         """))
         symbols = [row.symbol for row in symbols_result.fetchall()]
-        metadata_result = await db.execute(text("""
-            SELECT symbol, price, volume_24h, spread_pct, orderbook_depth_usdt
-            FROM market_metadata
-        """))
-        metadata_map = {
-            row.symbol: {
-                "price": float(row.price) if row.price is not None else None,
-                "volume_24h": float(row.volume_24h) if row.volume_24h is not None else None,
-                "spread_pct": float(row.spread_pct) if row.spread_pct is not None else None,
-                "orderbook_depth_usdt": float(row.orderbook_depth_usdt) if row.orderbook_depth_usdt is not None else None,
-            }
-            for row in metadata_result.fetchall()
-        }
+        metadata_map = await _load_market_metadata_map(db)
 
         for symbol in symbols:
             try:

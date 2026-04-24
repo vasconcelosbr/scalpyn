@@ -26,6 +26,15 @@ DEFAULT_INDICATORS = {
     "volume_metrics": {"enabled": True, "min_coverage_hours": 23.5},
     "volume_spike": {"enabled": True, "lookback": 20},
     "taker_ratio": {"enabled": True, "lookback": 20},
+    "market_data_fallback": {
+        "orderbook_depth_levels": 10,
+        "ticker_cache_ttl_seconds": 5,
+        "orderbook_cache_ttl_seconds": 5,
+        "trades_cache_ttl_seconds": 1,
+        "binance_trade_limit": 500,
+        "max_cache_entries": 1000,
+        "confidence_scores": {"gate": 0.7, "binance": 0.9, "mixed": 0.85},
+    },
     "orderbook_imbalance": {"enabled": False, "depth_levels": 10},
     "funding_rate": {"enabled": True},
     "btc_dominance": {"enabled": False}

@@ -21,11 +21,6 @@ GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/spot/tickers"
 GATE_ORDERBOOK_URL = "https://api.gateio.ws/api/v4/spot/order_book"
 GATE_FUNDING_URL = "https://api.gateio.ws/api/v4/futures/usdt/funding_rate"
 
-_DEFAULT_BINANCE_TRADE_LIMIT = 500
-_ORDERBOOK_CACHE_TTL_SECONDS = 5.0
-_TRADES_CACHE_TTL_SECONDS = 1.0
-_TICKER_CACHE_TTL_SECONDS = 5.0
-
 
 @dataclass
 class MarketDataNormalized:
@@ -84,6 +79,12 @@ class MarketDataService:
         self._cache: Dict[str, tuple[float, Any]] = {}
 
     @staticmethod
+    def _fallback_config() -> Dict[str, Any]:
+        from .seed_service import DEFAULT_INDICATORS
+
+        return DEFAULT_INDICATORS.get("market_data_fallback", {})
+
+    @staticmethod
     def normalize_symbol(symbol: str) -> str:
         raw = str(symbol or "").upper().strip().replace("-", "/").replace("_", "/")
         if "/" in raw:
@@ -128,6 +129,7 @@ class MarketDataService:
         return True
 
     def _get_cached(self, cache_key: str, ttl_seconds: float) -> Any:
+        self._purge_expired_cache()
         cached = self._cache.get(cache_key)
         if not cached:
             return None
@@ -138,8 +140,29 @@ class MarketDataService:
         return payload
 
     def _set_cache(self, cache_key: str, payload: Any) -> Any:
+        self._purge_expired_cache()
         self._cache[cache_key] = (time.monotonic(), payload)
+        max_entries = int(self._fallback_config().get("max_cache_entries", 1000))
+        while len(self._cache) > max_entries:
+            oldest_key = min(self._cache, key=lambda key: self._cache[key][0])
+            self._cache.pop(oldest_key, None)
         return payload
+
+    def _purge_expired_cache(self) -> None:
+        cfg = self._fallback_config()
+        ttl_by_prefix = {
+            "binance:ticker:": float(cfg.get("ticker_cache_ttl_seconds", 5)),
+            "binance:orderbook:": float(cfg.get("orderbook_cache_ttl_seconds", 5)),
+            "binance:trades:": float(cfg.get("trades_cache_ttl_seconds", 1)),
+        }
+        now = time.monotonic()
+        expired_keys = []
+        for key, (created_at, _) in self._cache.items():
+            ttl_seconds = next((ttl for prefix, ttl in ttl_by_prefix.items() if key.startswith(prefix)), None)
+            if ttl_seconds is not None and (now - created_at) > ttl_seconds:
+                expired_keys.append(key)
+        for key in expired_keys:
+            self._cache.pop(key, None)
 
     def _record_indicator(
         self,
@@ -174,13 +197,9 @@ class MarketDataService:
             return unique_sources.pop()
         return "mixed"
 
-    @staticmethod
-    def _confidence_score(source: str) -> float:
-        return {
-            "gate": 0.7,
-            "binance": 0.9,
-            "mixed": 0.85,
-        }.get(source, 0.7)
+    def _confidence_score(self, source: str) -> float:
+        scores = self._fallback_config().get("confidence_scores", {})
+        return float(scores.get(source, scores.get("gate", 0.7)))
 
     async def _fetch_gate_ticker(self, symbol: str) -> Optional[Dict[str, Any]]:
         pair = self.to_gate_symbol(symbol)
@@ -212,7 +231,10 @@ class MarketDataService:
 
     async def _fetch_binance_ticker(self, symbol: str) -> Optional[Dict[str, Any]]:
         cache_key = f"binance:ticker:{self.to_binance_symbol(symbol)}"
-        cached = self._get_cached(cache_key, _TICKER_CACHE_TTL_SECONDS)
+        cached = self._get_cached(
+            cache_key,
+            float(self._fallback_config().get("ticker_cache_ttl_seconds", 5)),
+        )
         if cached is not None:
             return cached
         try:
@@ -224,7 +246,10 @@ class MarketDataService:
 
     async def _fetch_binance_orderbook(self, symbol: str, depth: int) -> Optional[Dict[str, Any]]:
         cache_key = f"binance:orderbook:{self.to_binance_symbol(symbol)}:{depth}"
-        cached = self._get_cached(cache_key, _ORDERBOOK_CACHE_TTL_SECONDS)
+        cached = self._get_cached(
+            cache_key,
+            float(self._fallback_config().get("orderbook_cache_ttl_seconds", 5)),
+        )
         if cached is not None:
             return cached
         try:
@@ -234,9 +259,13 @@ class MarketDataService:
             logger.debug("Failed to fetch Binance orderbook for %s: %s", symbol, exc)
             return None
 
-    async def _fetch_binance_trades(self, symbol: str, limit: int = _DEFAULT_BINANCE_TRADE_LIMIT) -> List[Dict[str, Any]]:
+    async def _fetch_binance_trades(self, symbol: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        limit = int(limit or self._fallback_config().get("binance_trade_limit", 500))
         cache_key = f"binance:trades:{self.to_binance_symbol(symbol)}:{limit}"
-        cached = self._get_cached(cache_key, _TRADES_CACHE_TTL_SECONDS)
+        cached = self._get_cached(
+            cache_key,
+            float(self._fallback_config().get("trades_cache_ttl_seconds", 1)),
+        )
         if cached is not None:
             return cached
         try:
@@ -379,6 +408,7 @@ class MarketDataService:
             }
         Returns empty dict on failure.
         """
+        depth = depth or int(self._fallback_config().get("orderbook_depth_levels", 10))
         normalized = await self.fetch_normalized_market_data(
             symbol,
             existing_data=None,
@@ -413,6 +443,7 @@ class MarketDataService:
         depth: int = 10,
         include_taker: bool = True,
     ) -> MarketDataNormalized:
+        depth = depth or int(self._fallback_config().get("orderbook_depth_levels", 10))
         normalized_symbol = self.normalize_symbol(symbol)
         normalized = MarketDataNormalized(symbol=normalized_symbol)
         existing_data = existing_data or {}
@@ -514,8 +545,9 @@ class MarketDataService:
             )
 
         if include_taker:
+            trade_limit = int(self._fallback_config().get("binance_trade_limit", 500))
             taker_metrics = self._extract_taker_metrics(
-                await self._fetch_binance_trades(normalized_symbol, _DEFAULT_BINANCE_TRADE_LIMIT)
+                await self._fetch_binance_trades(normalized_symbol, trade_limit)
             )
             self._record_indicator(
                 normalized,
