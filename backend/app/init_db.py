@@ -1,3 +1,17 @@
+"""
+Schema bootstrap for the Scalpyn backend.
+
+Migration policy:
+  - CRITICAL blocks (columns/tables referenced by SQLAlchemy ORM models)
+    log at error-level WITH stack trace and re-raise. Failure aborts
+    startup so Cloud Run never serves traffic with a schema mismatch
+    (which would surface as opaque "Database error" 503s on every
+    `select(Model)`).
+  - BEST-EFFORT blocks (raw-SQL tables, env-specific extensions like
+    TimescaleDB hypertables, optional analytics columns) log at
+    warning-level and continue. Each such block is annotated inline
+    with WHY it is non-fatal.
+"""
 import asyncio
 import logging
 from typing import Union
