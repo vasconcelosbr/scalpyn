@@ -24,6 +24,7 @@ async def _load_market_cap_map(
     db: AsyncSession,
     symbols: set[str],
 ) -> dict[str, float]:
+    """Return the latest known market caps for the requested symbols."""
     if not symbols:
         return {}
 
