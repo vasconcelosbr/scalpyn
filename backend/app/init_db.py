@@ -128,9 +128,30 @@ async def init_db():
               high DECIMAL(20,8),
               low DECIMAL(20,8),
               close DECIMAL(20,8),
-              volume DECIMAL(20,4)
+              volume DECIMAL(20,4),
+              quote_volume DECIMAL(20,4)
             );
         """))
+        try:
+            await conn.execute(text("""
+                ALTER TABLE ohlcv
+                  ADD COLUMN IF NOT EXISTS quote_volume DECIMAL(20,4);
+            """))
+            await conn.execute(text("""
+                DELETE FROM ohlcv a
+                USING ohlcv b
+                WHERE a.ctid < b.ctid
+                  AND a.time = b.time
+                  AND a.symbol = b.symbol
+                  AND a.exchange = b.exchange
+                  AND a.timeframe = b.timeframe;
+            """))
+            await conn.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS ix_ohlcv_symbol_exchange_timeframe_time
+                ON ohlcv (symbol, exchange, timeframe, time);
+            """))
+        except Exception as e:
+            logger.warning(f"Could not backfill/dedupe ohlcv quote_volume index: {e}")
         # Indicators
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS indicators (

@@ -18,7 +18,8 @@ class FeatureEngine:
         """Calculate all enabled indicators for the given OHLCV DataFrame.
 
         Args:
-            df: DataFrame with columns [open, high, low, close, volume] indexed by time.
+            df: DataFrame with columns [open, high, low, close, volume]
+                and optional [time, quote_volume].
 
         Returns:
             Dictionary of indicator_name -> value (latest value).
@@ -66,6 +67,8 @@ class FeatureEngine:
             if self.config.get("volume_delta", {}).get("enabled"):
                 results.update(self._calc_volume_delta(df))
 
+            results.update(self._calc_volume_metrics(df))
+
             # Derived: volume spike (always useful)
             results.update(self._calc_volume_spike(df))
 
@@ -104,6 +107,64 @@ class FeatureEngine:
         return results
 
     # ── Individual indicator calculations ──────────────────────────
+
+    @staticmethod
+    def _base_volume(df: pd.DataFrame) -> pd.Series:
+        if "volume" in df.columns:
+            return pd.to_numeric(df["volume"], errors="coerce").fillna(0.0)
+        if "base_volume" in df.columns:
+            return pd.to_numeric(df["base_volume"], errors="coerce").fillna(0.0)
+        return pd.Series(np.zeros(len(df)), index=df.index, dtype=float)
+
+    def _quote_volume(self, df: pd.DataFrame) -> pd.Series:
+        if "quote_volume" in df.columns:
+            return pd.to_numeric(df["quote_volume"], errors="coerce").fillna(0.0)
+        base_volume = self._base_volume(df)
+        closes = pd.to_numeric(df["close"], errors="coerce").fillna(0.0)
+        return base_volume * closes
+
+    def _calc_volume_metrics(self, df: pd.DataFrame) -> Dict[str, Any]:
+        base_volume = self._base_volume(df)
+        quote_volume = self._quote_volume(df)
+
+        result: Dict[str, Any] = {
+            "volume_last_candle_base": round(float(base_volume.iloc[-1]), 8),
+            "volume_last_candle_usdt": round(float(quote_volume.iloc[-1]), 8),
+        }
+
+        if "time" not in df.columns:
+            return result
+
+        times = pd.to_datetime(df["time"], utc=True, errors="coerce")
+        if times.isna().all():
+            return result
+
+        valid_times = times.dropna()
+        if len(valid_times) < 2:
+            return result
+
+        interval = valid_times.diff().dropna().median()
+        if pd.isna(interval) or interval <= pd.Timedelta(0):
+            return result
+
+        window_end = valid_times.iloc[-1]
+        window_start = window_end - pd.Timedelta(hours=24) + interval
+        window_mask = times >= window_start
+        window_times = valid_times[valid_times >= window_start]
+        coverage_hours = (
+            ((window_end - window_times.iloc[0]) + interval).total_seconds() / 3600
+            if not window_times.empty else 0.0
+        )
+
+        result["volume_24h_candles"] = int(window_mask.sum())
+        result["volume_24h_coverage_hours"] = round(float(coverage_hours), 4)
+
+        if coverage_hours < 23.5:
+            return result
+
+        result["volume_24h_base"] = round(float(base_volume.loc[window_mask].sum()), 8)
+        result["volume_24h_usdt"] = round(float(quote_volume.loc[window_mask].sum()), 8)
+        return result
 
     def _calc_rsi(self, df: pd.DataFrame) -> Dict[str, Any]:
         period = self.config["rsi"].get("period", 14)
@@ -197,8 +258,9 @@ class FeatureEngine:
 
     def _calc_vwap(self, df: pd.DataFrame) -> Dict[str, Any]:
         typical_price = (df["high"] + df["low"] + df["close"]) / 3
-        cumulative_tp_vol = (typical_price * df["volume"]).cumsum()
-        cumulative_vol = df["volume"].cumsum()
+        volume = self._base_volume(df)
+        cumulative_tp_vol = (typical_price * volume).cumsum()
+        cumulative_vol = volume.cumsum()
         vwap = cumulative_tp_vol / cumulative_vol.replace(0, np.nan)
         val = vwap.iloc[-1]
         close = df["close"].iloc[-1]
@@ -225,7 +287,7 @@ class FeatureEngine:
         }
 
     def _calc_obv(self, df: pd.DataFrame) -> Dict[str, Any]:
-        obv = (np.sign(df["close"].diff()) * df["volume"]).fillna(0).cumsum()
+        obv = (np.sign(df["close"].diff()) * self._base_volume(df)).fillna(0).cumsum()
         return {"obv": round(float(obv.iloc[-1]), 2)}
 
     def _calc_bollinger(self, df: pd.DataFrame) -> Dict[str, Any]:
@@ -303,15 +365,16 @@ class FeatureEngine:
     def _calc_volume_delta(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Approximated volume delta using candle direction."""
         direction = np.sign(df["close"] - df["open"])
-        delta = (direction * df["volume"]).iloc[-1]
+        delta = (direction * self._base_volume(df)).iloc[-1]
         return {"volume_delta": round(float(delta), 2) if pd.notna(delta) else 0}
 
     def _calc_volume_spike(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Volume relative to 20-period average."""
-        avg_vol = df["volume"].rolling(window=20).mean()
+        volume = self._base_volume(df)
+        avg_vol = volume.rolling(window=20).mean()
         val = avg_vol.iloc[-1]
         if pd.notna(val) and val > 0:
-            spike = df["volume"].iloc[-1] / val
+            spike = volume.iloc[-1] / val
             return {"volume_spike": round(float(spike), 2)}
         return {"volume_spike": 1.0}
 
@@ -323,11 +386,12 @@ class FeatureEngine:
         """
         lookback = min(20, len(df))
         recent = df.tail(lookback)
-        if recent.empty or recent["volume"].sum() == 0:
+        volume = self._base_volume(recent)
+        if recent.empty or volume.sum() == 0:
             return {"taker_ratio": 0.5}
 
         bullish_mask = recent["close"] >= recent["open"]
-        buy_volume = recent.loc[bullish_mask, "volume"].sum()
-        total_volume = recent["volume"].sum()
+        buy_volume = volume.loc[bullish_mask].sum()
+        total_volume = volume.sum()
         ratio = buy_volume / total_volume if total_volume > 0 else 0.5
         return {"taker_ratio": round(float(ratio), 4)}
