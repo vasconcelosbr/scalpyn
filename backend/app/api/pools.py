@@ -3,17 +3,43 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from typing import Dict, Any, List
 from uuid import UUID
 
 from ..database import get_db
 from ..models.pool import Pool, PoolCoin
 from .config import get_current_user_id
+from ..services.pool_selection import (
+    apply_pool_discovery_filters,
+    extract_profile_discovery_thresholds,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/pools", tags=["Pools"])
+
+
+async def _load_market_cap_map(
+    db: AsyncSession,
+    symbols: set[str],
+) -> dict[str, float]:
+    if not symbols:
+        return {}
+
+    rows = (await db.execute(
+        text("""
+            SELECT symbol, market_cap
+            FROM market_metadata
+            WHERE symbol = ANY(:symbols)
+        """),
+        {"symbols": list(symbols)},
+    )).fetchall()
+    return {
+        row.symbol: float(row.market_cap)
+        for row in rows
+        if row.market_cap is not None
+    }
 
 
 def _pool_to_dict(pool: Pool, asset_count: int = 0) -> Dict[str, Any]:
@@ -365,26 +391,9 @@ async def discover_pool_assets(
         profile = profile_result.scalars().first()
         if profile and profile.config:
             logger.info(f"[Discovery] Using profile {profile.id} ({profile.name}) filters for pool {pool_id}")
-
-            # Extract filter conditions from profile
-            filters = profile.config.get("filters", {})
-            conditions = filters.get("conditions", [])
-
-            for cond in conditions:
-                field = cond.get("field", "")
-                operator = cond.get("operator", ">")
-                value = cond.get("value", 0)
-
-                # Map profile filter fields to discovery criteria
-                if field in ["volume_24h", "volume_24h_usd"]:
-                    if operator in [">", ">="]:
-                        min_volume = max(min_volume, float(value))
-                        profile_applied = True
-                elif field in ["market_cap", "market_cap_usd"]:
-                    if operator in [">", ">="]:
-                        min_market_cap = max(min_market_cap, float(value))
-                        profile_applied = True
-
+            min_volume, min_market_cap, profile_applied = extract_profile_discovery_thresholds(
+                profile.config,
+            )
             logger.info(f"[Discovery] Profile filters: min_volume={min_volume}, min_market_cap={min_market_cap}")
 
     # ── 2. Fetch universe from Gate.io (public endpoints) ─────────────────────
@@ -466,9 +475,7 @@ async def discover_pool_assets(
         logger.error(f"Gate.io discovery failed for pool {pool_id}: {e}")
         raise HTTPException(status_code=502, detail=f"Gate.io API error: {e}")
 
-    # ── 3. Apply volume filter ────────────────────────────────────────────────
-    pre_volume_count = len(universe_symbols)
-    post_volume_count = pre_volume_count
+    # ── 3. Apply pool selection filters ───────────────────────────────────────
     if min_volume > 0:
         # For futures, need a separate ticker fetch; for spot vol_map is pre-built
         if market_type == "futures":
@@ -484,33 +491,59 @@ async def discover_pool_assets(
                 logger.warning(f"Futures ticker fetch failed, skipping volume filter: {e}")
                 vol_map = {}
 
-        if vol_map:
-            universe_symbols = {
-                s for s in universe_symbols
-                if vol_map.get(s, 0) >= min_volume
-            }
-            post_volume_count = len(universe_symbols)
-            logger.info(
-                "[Discovery] Volume filter (>= $%s): %d → %d assets",
-                f"{min_volume:,.0f}", pre_volume_count, post_volume_count,
+    market_cap_map = {}
+    if min_market_cap > 0:
+        market_cap_map = await _load_market_cap_map(db, universe_symbols)
+        if not market_cap_map:
+            logger.warning(
+                "[Discovery] market cap filter configured (>= $%s) but market_metadata has no coverage for pool %s",
+                f"{min_market_cap:,.0f}",
+                pool_id,
             )
 
-    # ── Apply max_assets cap (user-configurable, 0 = no limit) ──────────────
-    pre_cap_count = len(universe_symbols)
-    if max_assets > 0 and len(universe_symbols) > max_assets:
-        universe_symbols = set(sorted(universe_symbols)[:max_assets])
+    selection = apply_pool_discovery_filters(
+        universe_symbols,
+        vol_map=vol_map,
+        market_cap_map=market_cap_map,
+        min_volume=min_volume,
+        min_market_cap=min_market_cap,
+        max_assets=max_assets,
+    )
+    universe_symbols = selection["symbols"]
+
+    if min_volume > 0 and vol_map:
+        logger.info(
+            "[Discovery] Volume filter (>= $%s): %d → %d assets",
+            f"{min_volume:,.0f}",
+            selection["pre_volume_count"],
+            selection["post_volume_count"],
+        )
+    if min_market_cap > 0 and market_cap_map:
+        logger.info(
+            "[Discovery] Market cap filter (>= $%s): %d → %d assets",
+            f"{min_market_cap:,.0f}",
+            selection["pre_market_cap_count"],
+            selection["post_market_cap_count"],
+        )
+    if max_assets > 0 and selection["pre_cap_count"] > len(universe_symbols):
         logger.info(
             "[Discovery] max_assets cap: %d → %d assets",
-            pre_cap_count, len(universe_symbols),
+            selection["pre_cap_count"],
+            len(universe_symbols),
         )
 
     found = len(universe_symbols)
     raw_count = len(raw_tickers) if market_type != "futures" else len(raw_pairs)
     logger.info(
         "[Discovery] Pool %s final discovery: %d assets "
-        "(raw=%d, post-filter=%d, post-volume=%d, post-cap=%d)",
-        pool_id, found, raw_count, pre_volume_count,
-        post_volume_count, found,
+        "(raw=%d, post-filter=%d, post-volume=%d, post-market-cap=%d, post-cap=%d)",
+        pool_id,
+        found,
+        raw_count,
+        selection["pre_volume_count"],
+        selection["post_volume_count"],
+        selection["post_market_cap_count"],
+        found,
     )
 
     # ── 4. Load existing pool coins ───────────────────────────────────────────

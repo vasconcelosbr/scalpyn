@@ -11,6 +11,7 @@ from app.api.watchlists import (
     _normalize_decision_snapshot,
     _passes_profile_filters,
     _should_refresh_for_upstream_delta,
+    _watchlist_requires_exact_upstream_sync,
     _uses_pipeline_filters,
 )
 from app.utils.pipeline_profile_filters import (
@@ -156,6 +157,15 @@ def test_pipeline_levels_refresh_only_when_persisted_symbol_is_no_longer_upstrea
         persisted_symbols={"BTC_USDT", "OFC_USDT"},
         upstream_symbols={"BTC_USDT"},
         exact_match=False,
+    ) is True
+
+
+def test_pool_watchlists_refresh_on_any_upstream_symbol_delta():
+    assert _watchlist_requires_exact_upstream_sync("POOL") is True
+    assert _should_refresh_for_upstream_delta(
+        persisted_symbols={"BTC_USDT"},
+        upstream_symbols={"BTC_USDT", "ETH_USDT"},
+        exact_match=_watchlist_requires_exact_upstream_sync("POOL"),
     ) is True
 
 
