@@ -416,10 +416,14 @@ class ProfileEngine:
         # Market-data fields must always be evaluated (None → FAIL, not skip).
         # Indicator fields remain lenient (None → skip condition) unless
         # strict_indicators=True, in which case they also FAIL when absent.
+        # orderbook_depth_usdt is intentionally excluded: it requires a per-symbol
+        # API call that can fail silently (rate limit, thin market, exchange error).
+        # When absent, it is treated as UNKNOWN and the filter is skipped rather
+        # than rejecting the asset — see pipeline_profile_filters.STRICT_META_FIELDS.
         _STRICT_META = frozenset({
             "volume_24h", "market_cap", "price",
             "change_24h", "change_24h_pct", "price_change_24h",
-            "spread_pct", "orderbook_depth_usdt",
+            "spread_pct",
         })
 
         result = []

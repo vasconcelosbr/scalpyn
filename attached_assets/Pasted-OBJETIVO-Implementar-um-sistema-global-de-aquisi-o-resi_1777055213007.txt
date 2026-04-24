@@ -1,0 +1,234 @@
+OBJETIVO
+Implementar um sistema global de aquisição resiliente de dados para TODOS os indicadores que dependem de fontes externas (Gate, Binance, etc.), eliminando falhas silenciosas, evitando bloqueios indevidos e padronizando fallback, cache e tratamento de ausência.
+
+---
+
+PROBLEMA ATUAL
+
+* Falhas de API são silenciosas (except pass)
+* Indicadores ficam NULL
+* NULL é tratado como FAIL em alguns casos
+* Não há retry, fallback ou cache consistente
+* Cada indicador implementa lógica diferente (ou nenhuma)
+
+---
+
+PRINCÍPIO GLOBAL (OBRIGATÓRIO)
+
+Ausência de dado ≠ condição de mercado
+
+Todo indicador externo deve seguir o mesmo fluxo:
+
+1. Fonte primária
+2. Retry controlado
+3. Fonte secundária (fallback)
+4. Cache recente
+5. Estado UNKNOWN (não FAIL)
+
+---
+
+ESCOPO
+
+Aplicar a:
+
+* orderbook_depth
+* taker_ratio / order flow
+* volume externo
+* funding rate
+* open interest
+* qualquer dado vindo de API
+
+---
+
+FASE 1 — CRIAR CAMADA UNIFICADA
+
+Criar módulo:
+
+backend/app/services/resilient_data_service.py
+
+Função base:
+
+```python
+async def fetch_with_resilience(
+    key,
+    primary_fn,
+    fallback_fn=None,
+    cache_ttl=10
+):
+```
+
+---
+
+FASE 2 — FLUXO PADRÃO (OBRIGATÓRIO)
+
+Implementar lógica:
+
+```python
+# 1. tentar fonte primária
+try:
+    data = await primary_fn()
+    if data:
+        cache.set(key, data)
+        return data, "primary"
+except Exception as e:
+    log.warning(...)
+
+# 2. retry curto
+retry até 2x com backoff leve
+
+# 3. fallback
+if fallback_fn:
+    try:
+        data = await fallback_fn()
+        if data:
+            cache.set(key, data)
+            return data, "fallback"
+    except Exception:
+        log.warning(...)
+
+# 4. cache
+if cache.exists(key):
+    return cache.get(key), "cache"
+
+# 5. unknown
+return None, "unknown"
+```
+
+---
+
+FASE 3 — PADRONIZAR RETRY
+
+* máximo: 2 tentativas
+* delay: 200–500ms
+* sem retry infinito
+
+---
+
+FASE 4 — CACHE GLOBAL
+
+* TTL padrão: 5–15s (dependendo do indicador)
+* chave por símbolo + indicador
+
+Exemplo:
+depth:ADA/USDT
+taker:ADA/USDT
+
+---
+
+FASE 5 — PADRONIZAR OUTPUT
+
+Todos os indicadores devem retornar:
+
+```json
+{
+  "value": ...,
+  "source": "primary | fallback | cache | unknown",
+  "timestamp": ...
+}
+```
+
+---
+
+FASE 6 — REMOVER FALHAS SILENCIOSAS
+
+Substituir TODOS:
+
+```python
+except Exception:
+    pass
+```
+
+Por:
+
+```python
+except Exception as e:
+    log.warning(f"[DATA_FAIL] key={key} error={e}")
+```
+
+---
+
+FASE 7 — REMOVER INDICADORES NÃO DETERMINÍSTICOS DO STRICT
+
+Indicadores externos NÃO devem estar em `_STRICT_META`
+
+Exemplos:
+
+* orderbook_depth
+* taker data
+* funding rate
+* open interest
+
+---
+
+FASE 8 — TRATAMENTO DE AUSÊNCIA
+
+Padronizar:
+
+* None → UNKNOWN
+* NÃO → FAIL
+
+FAIL deve ser apenas:
+
+* valor inválido
+* condição de mercado ruim
+
+---
+
+FASE 9 — INTEGRAÇÃO COM PIPELINE
+
+feature_engine / compute_indicators devem:
+
+* consumir apenas `.value`
+* opcionalmente usar `.source` para auditoria
+
+---
+
+FASE 10 — LOG GLOBAL
+
+Adicionar logs padronizados:
+
+```text
+[DATA_PRIMARY_OK]
+[DATA_RETRY]
+[DATA_FALLBACK]
+[DATA_CACHE_USED]
+[DATA_UNKNOWN]
+```
+
+---
+
+FASE 11 — CONTROLE DE PERFORMANCE
+
+* evitar chamadas duplicadas no mesmo ciclo
+* rate limit por exchange
+* priorizar cache
+
+---
+
+RESULTADO ESPERADO
+
+* sistema resiliente a falhas de API
+* indicadores nunca quebram pipeline
+* ausência de dado não bloqueia decisões
+* comportamento consistente entre indicadores
+
+---
+
+CRITÉRIO DE SUCESSO
+
+* redução massiva de NULL
+* nenhum FAIL causado por ausência
+* logs completos e auditáveis
+* fallback funcionando em todos os indicadores
+
+---
+
+IMPORTANTE
+
+* NÃO misturar fontes no mesmo cálculo
+* NÃO usar retry infinito
+* NÃO tratar ausência como erro
+
+---
+
+FIM

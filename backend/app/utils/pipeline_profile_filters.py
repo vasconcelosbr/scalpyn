@@ -26,7 +26,10 @@ STRICT_META_FIELDS = frozenset({
     "change_24h_pct",
     "price_change_24h",
     "spread_pct",
-    "orderbook_depth_usdt",
+    # orderbook_depth_usdt intentionally excluded: it requires a per-symbol
+    # API call that can fail (rate limit, thin market, exchange error).
+    # When absent the field is UNKNOWN, not FAIL — the filter is skipped rather
+    # than rejecting the asset. See resilient_data_service.py.
 })
 
 STRICT_META_MIN_COVERAGE_RATIO = 0.10

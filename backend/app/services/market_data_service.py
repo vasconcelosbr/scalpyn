@@ -13,6 +13,7 @@ import pandas as pd
 from ..exchange_adapters.binance_adapter import BinanceAdapter
 from ..utils.gate_market_data import parse_gate_spot_candle
 from ..utils.symbol_filters import is_excluded_asset, is_leveraged_base
+from .resilient_data_service import fetch_with_resilience
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +204,8 @@ class MarketDataService:
 
     async def _fetch_gate_ticker(self, symbol: str) -> Optional[Dict[str, Any]]:
         pair = self.to_gate_symbol(symbol)
-        try:
+
+        async def _primary() -> Optional[Dict[str, Any]]:
             async with httpx.AsyncClient(timeout=8) as client:
                 resp = await client.get(GATE_TICKERS_URL, params={"currency_pair": pair})
                 resp.raise_for_status()
@@ -211,13 +213,18 @@ class MarketDataService:
                 if isinstance(payload, list):
                     return payload[0] if payload else None
                 return payload
-        except Exception as exc:
-            logger.debug("Failed to fetch Gate ticker for %s: %s", symbol, exc)
-            return None
+
+        result, _source = await fetch_with_resilience(
+            f"ticker:gate:{symbol}",
+            _primary,
+            cache_ttl=15,
+        )
+        return result
 
     async def _fetch_gate_orderbook(self, symbol: str, depth: int) -> Optional[Dict[str, Any]]:
         pair = self.to_gate_symbol(symbol)
-        try:
+
+        async def _primary() -> Optional[Dict[str, Any]]:
             async with httpx.AsyncClient(timeout=8) as client:
                 resp = await client.get(
                     GATE_ORDERBOOK_URL,
@@ -225,9 +232,13 @@ class MarketDataService:
                 )
                 resp.raise_for_status()
                 return resp.json()
-        except Exception as exc:
-            logger.debug("Failed to fetch Gate orderbook for %s: %s", symbol, exc)
-            return None
+
+        result, _source = await fetch_with_resilience(
+            f"depth:gate:{symbol}:{depth}",
+            _primary,
+            cache_ttl=30,
+        )
+        return result
 
     async def _fetch_binance_ticker(self, symbol: str) -> Optional[Dict[str, Any]]:
         cache_key = f"binance:ticker:{self.to_binance_symbol(symbol)}"
@@ -241,7 +252,7 @@ class MarketDataService:
             payload = await self._binance.get_tickers(symbols=[self.to_binance_symbol(symbol)])
             return self._set_cache(cache_key, payload[0] if payload else None)
         except Exception as exc:
-            logger.debug("Failed to fetch Binance ticker for %s: %s", symbol, exc)
+            logger.warning("[DATA_PRIMARY_FAIL] key=ticker:binance:%s error=%s", symbol, exc)
             return None
 
     async def _fetch_binance_orderbook(self, symbol: str, depth: int) -> Optional[Dict[str, Any]]:
@@ -256,7 +267,7 @@ class MarketDataService:
             payload = await self._binance.get_orderbook(self.to_binance_symbol(symbol), depth=depth)
             return self._set_cache(cache_key, payload)
         except Exception as exc:
-            logger.debug("Failed to fetch Binance orderbook for %s: %s", symbol, exc)
+            logger.warning("[DATA_PRIMARY_FAIL] key=depth:binance:%s:%d error=%s", symbol, depth, exc)
             return None
 
     async def _fetch_binance_trades(self, symbol: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -272,7 +283,7 @@ class MarketDataService:
             payload = await self._binance.get_recent_trades(self.to_binance_symbol(symbol), limit=limit)
             return self._set_cache(cache_key, payload)
         except Exception as exc:
-            logger.debug("Failed to fetch Binance trades for %s: %s", symbol, exc)
+            logger.warning("[DATA_PRIMARY_FAIL] key=trades:binance:%s error=%s", symbol, exc)
             return []
 
     def _extract_gate_ticker_metrics(self, ticker: Optional[Dict[str, Any]]) -> Dict[str, Optional[float]]:
@@ -318,7 +329,8 @@ class MarketDataService:
                 "spread_pct": round((best_ask - best_bid) / best_ask * 100, 4),
                 "orderbook_depth_usdt": round(bid_depth + ask_depth, 8),
             }
-        except Exception:
+        except Exception as exc:
+            logger.warning("[DATA_FAIL] _extract_orderbook_metrics parse error: %s", exc)
             return {}
 
     def _extract_taker_metrics(self, trades: List[Dict[str, Any]]) -> Dict[str, Optional[float]]:

@@ -244,7 +244,12 @@ async def _collect_5m_async():
                     "ts":    datetime.now(timezone.utc),
                 })
 
-                # Fetch orderbook metrics (spread + depth) and update market_metadata
+                # Fetch orderbook metrics (spread + depth) and update market_metadata.
+                # Non-blocking: failure here must never abort 5m OHLCV collection.
+                # fetch_orderbook_metrics internally retries (Gate → Binance fallback)
+                # via resilient_data_service; missing depth lands as NULL in DB, which
+                # the pipeline treats as UNKNOWN (not FAIL) since orderbook_depth_usdt
+                # is no longer in STRICT_META.
                 try:
                     ob = await market_data_service.fetch_orderbook_metrics(symbol, depth=10)
                     if ob:
@@ -261,8 +266,17 @@ async def _collect_5m_async():
                             "depth":  ob.get("orderbook_depth_usdt"),
                             "ts":     datetime.now(timezone.utc),
                         })
-                except Exception:
-                    pass  # non-blocking — orderbook metrics are best-effort
+                    else:
+                        logger.warning(
+                            "[DATA_UNKNOWN] orderbook metrics unavailable for %s "
+                            "(Gate + Binance both failed — depth will be NULL this cycle)",
+                            symbol,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "[DATA_FAIL] orderbook upsert failed for %s: %s",
+                        symbol, exc,
+                    )
 
                 collected += 1
             except Exception as e:
