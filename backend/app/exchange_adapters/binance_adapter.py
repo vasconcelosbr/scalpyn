@@ -11,7 +11,12 @@ logger = logging.getLogger(__name__)
 
 
 class BinanceAdapter(BaseExchangeAdapter):
-    """Lightweight Binance spot adapter for public market-data endpoints."""
+    """Lightweight Binance spot adapter for public market-data endpoints.
+
+    The base adapter contract requires api_key/api_secret constructor arguments;
+    they are retained here for interface compatibility and future authenticated
+    extensions, but current fallback usage only calls public endpoints.
+    """
 
     SPOT_BASE = "https://api.binance.com/api/v3"
 

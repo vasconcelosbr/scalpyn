@@ -454,7 +454,7 @@ class MarketDataService:
         )
         existing_volume_base = self._as_float(existing_data.get("volume_24h_base"))
         if existing_volume_base is None and existing_price and existing_volume_quote:
-            existing_volume_base = existing_volume_quote / existing_price if existing_price > 0 else None
+            existing_volume_base = existing_volume_quote / existing_price
         existing_spread = self._as_float(existing_data.get("spread_pct"))
         existing_depth = self._as_float(existing_data.get("orderbook_depth_usdt"))
 
