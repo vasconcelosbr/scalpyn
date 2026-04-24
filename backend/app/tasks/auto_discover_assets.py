@@ -9,7 +9,8 @@ from sqlalchemy import text
 from ..tasks.celery_app import celery_app
 from ..services.pool_selection import (
     apply_pool_discovery_filters,
-    extract_profile_discovery_thresholds,
+    load_market_cap_map,
+    load_profile_discovery_thresholds,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,6 @@ def _run_async(coro):
 async def _discover_async():
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..models.pool import Pool, PoolCoin
-    from ..models.profile import Profile
     from ..exchange_adapters.gate_adapter import GateAdapter
     from sqlalchemy import select
 
@@ -58,13 +58,10 @@ async def _discover_async():
                 min_market_cap = 0.0
 
                 if pool.profile_id:
-                    profile = (await db.execute(
-                        select(Profile).where(Profile.id == pool.profile_id)
-                    )).scalars().first()
-                    if profile and profile.config:
-                        min_volume, min_market_cap, _ = extract_profile_discovery_thresholds(
-                            profile.config,
-                        )
+                    min_volume, min_market_cap, _ = await load_profile_discovery_thresholds(
+                        db,
+                        pool.profile_id,
+                    )
                 if min_volume <= 0:
                     min_volume = float(overrides.get("min_volume_24h", 0) or 0)
 
@@ -149,16 +146,7 @@ async def _discover_async():
 
                 market_cap_map = {}
                 if min_market_cap > 0:
-                    market_cap_rows = (await db.execute(text("""
-                        SELECT symbol, market_cap
-                        FROM market_metadata
-                        WHERE symbol = ANY(:symbols)
-                    """), {"symbols": list(universe_symbols)})).fetchall()
-                    market_cap_map = {
-                        row.symbol: float(row.market_cap)
-                        for row in market_cap_rows
-                        if row.market_cap is not None
-                    }
+                    market_cap_map = await load_market_cap_map(db, universe_symbols)
 
                 selection = apply_pool_discovery_filters(
                     universe_symbols,

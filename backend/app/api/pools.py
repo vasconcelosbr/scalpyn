@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, text
+from sqlalchemy import select, func
 from typing import Dict, Any, List
 from uuid import UUID
 
@@ -13,34 +13,12 @@ from .config import get_current_user_id
 from ..services.pool_selection import (
     apply_pool_discovery_filters,
     extract_profile_discovery_thresholds,
+    load_market_cap_map,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/pools", tags=["Pools"])
-
-
-async def _load_market_cap_map(
-    db: AsyncSession,
-    symbols: set[str],
-) -> dict[str, float]:
-    """Return the latest known market caps for the requested symbols."""
-    if not symbols:
-        return {}
-
-    rows = (await db.execute(
-        text("""
-            SELECT symbol, market_cap
-            FROM market_metadata
-            WHERE symbol = ANY(:symbols)
-        """),
-        {"symbols": list(symbols)},
-    )).fetchall()
-    return {
-        row.symbol: float(row.market_cap)
-        for row in rows
-        if row.market_cap is not None
-    }
 
 
 def _pool_to_dict(pool: Pool, asset_count: int = 0) -> Dict[str, Any]:
@@ -390,12 +368,12 @@ async def discover_pool_assets(
         profile_query = select(Profile).where(Profile.id == pool.profile_id)
         profile_result = await db.execute(profile_query)
         profile = profile_result.scalars().first()
-        if profile and profile.config:
+        if profile:
             logger.info(f"[Discovery] Using profile {profile.id} ({profile.name}) filters for pool {pool_id}")
-            min_volume, min_market_cap, profile_applied = extract_profile_discovery_thresholds(
-                profile.config,
-            )
-            logger.info(f"[Discovery] Profile filters: min_volume={min_volume}, min_market_cap={min_market_cap}")
+        min_volume, min_market_cap, profile_applied = extract_profile_discovery_thresholds(
+            profile.config if profile else None,
+        )
+        logger.info(f"[Discovery] Profile filters: min_volume={min_volume}, min_market_cap={min_market_cap}")
 
     # ── 2. Fetch universe from Gate.io (public endpoints) ─────────────────────
     from ..utils.symbol_filters import is_excluded_asset, is_leveraged_token
@@ -494,7 +472,7 @@ async def discover_pool_assets(
 
     market_cap_map = {}
     if min_market_cap > 0:
-        market_cap_map = await _load_market_cap_map(db, universe_symbols)
+        market_cap_map = await load_market_cap_map(db, universe_symbols)
         if not market_cap_map:
             logger.warning(
                 "[Discovery] market cap filter configured (>= $%s) but market_metadata has no coverage for pool %s",

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
 
 def extract_profile_discovery_thresholds(
     profile_config: dict[str, Any] | None,
@@ -31,6 +34,48 @@ def extract_profile_discovery_thresholds(
             profile_applied = True
 
     return min_volume, min_market_cap, profile_applied
+
+
+async def load_profile_discovery_thresholds(
+    db: AsyncSession,
+    profile_id: Any,
+) -> tuple[float, float, bool]:
+    """Load discovery thresholds from the linked profile, if one exists."""
+    if not profile_id:
+        return 0.0, 0.0, False
+
+    from ..models.profile import Profile
+
+    profile = (await db.execute(
+        select(Profile).where(Profile.id == profile_id)
+    )).scalars().first()
+    if not profile or not profile.config:
+        return 0.0, 0.0, False
+
+    return extract_profile_discovery_thresholds(profile.config)
+
+
+async def load_market_cap_map(
+    db: AsyncSession,
+    symbols: set[str],
+) -> dict[str, float]:
+    """Return the latest known market caps for ``symbols`` from ``market_metadata``."""
+    if not symbols:
+        return {}
+
+    rows = (await db.execute(
+        text("""
+            SELECT symbol, market_cap
+            FROM market_metadata
+            WHERE symbol = ANY(:symbols)
+        """),
+        {"symbols": list(symbols)},
+    )).fetchall()
+    return {
+        row.symbol: float(row.market_cap)
+        for row in rows
+        if row.market_cap is not None
+    }
 
 
 def apply_pool_discovery_filters(
@@ -75,7 +120,14 @@ def apply_pool_discovery_filters(
 
     pre_cap_count = len(filtered_symbols)
     if max_assets > 0 and len(filtered_symbols) > max_assets:
-        filtered_symbols = set(sorted(filtered_symbols)[:max_assets])
+        filtered_symbols = set(sorted(
+            filtered_symbols,
+            key=lambda symbol: (
+                -float((vol_map or {}).get(symbol, 0) or 0),
+                -float((market_cap_map or {}).get(symbol, 0) or 0),
+                symbol,
+            ),
+        )[:max_assets])
 
     return {
         "symbols": filtered_symbols,
