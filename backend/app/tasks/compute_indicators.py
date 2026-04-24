@@ -61,21 +61,28 @@ async def _load_market_metadata_map(db) -> dict:
 
 
 async def _upsert_market_metadata_snapshot(db, symbol: str, results: dict, updated_at: datetime) -> None:
+    # NOTE: `volume_24h` is intentionally NOT written here. The canonical 24h
+    # quote volume comes from the Gate.io spot ticker (`quote_volume`) and is
+    # owned by `collect_market_data` (both `_collect_all_async` and the
+    # `_collect_5m_async` backup ticker pathway). The candle-aggregated value
+    # produced by FeatureEngine is exposed separately as
+    # `volume_24h_usdt_aggregated` inside `indicators_json` for diagnostics —
+    # it must NOT overwrite the canonical column because OHLCV gaps make it
+    # systematically undercount (e.g. SOL/USDT showing ~$60M instead of
+    # several hundred million).
     await db.execute(text("""
         INSERT INTO market_metadata (
-            symbol, price, volume_24h, spread_pct, orderbook_depth_usdt, last_updated
+            symbol, price, spread_pct, orderbook_depth_usdt, last_updated
         )
-        VALUES (:symbol, :price, :volume_24h, :spread_pct, :orderbook_depth_usdt, :updated)
+        VALUES (:symbol, :price, :spread_pct, :orderbook_depth_usdt, :updated)
         ON CONFLICT (symbol) DO UPDATE SET
             price = COALESCE(:price, market_metadata.price),
-            volume_24h = COALESCE(:volume_24h, market_metadata.volume_24h),
             spread_pct = COALESCE(:spread_pct, market_metadata.spread_pct),
             orderbook_depth_usdt = COALESCE(:orderbook_depth_usdt, market_metadata.orderbook_depth_usdt),
             last_updated = :updated
     """), {
         "symbol": symbol,
         "price": results.get("price"),
-        "volume_24h": results.get("volume_24h_usdt"),
         "spread_pct": results.get("spread_pct"),
         "orderbook_depth_usdt": results.get("orderbook_depth_usdt"),
         "updated": updated_at,
@@ -161,10 +168,11 @@ async def _compute_async():
                     continue
 
                 logger.debug(
-                    "Indicator volume audit %s[1h]: last_base=%s last_usdt=%s agg24h_usdt=%s coverage_h=%s candles_24h=%s",
+                    "Indicator volume audit %s[1h]: last_base=%s last_usdt=%s agg24h_usdt=%s ticker24h_usdt=%s coverage_h=%s candles_24h=%s",
                     symbol,
                     results.get("volume_last_candle_base"),
                     results.get("volume_last_candle_usdt"),
+                    results.get("volume_24h_usdt_aggregated"),
                     results.get("volume_24h_usdt"),
                     results.get("volume_24h_coverage_hours"),
                     results.get("volume_24h_candles"),
@@ -270,10 +278,11 @@ async def _compute_5m_async():
                     continue
 
                 logger.debug(
-                    "Indicator volume audit %s[5m]: last_base=%s last_usdt=%s agg24h_usdt=%s coverage_h=%s candles_24h=%s",
+                    "Indicator volume audit %s[5m]: last_base=%s last_usdt=%s agg24h_usdt=%s ticker24h_usdt=%s coverage_h=%s candles_24h=%s",
                     symbol,
                     results.get("volume_last_candle_base"),
                     results.get("volume_last_candle_usdt"),
+                    results.get("volume_24h_usdt_aggregated"),
                     results.get("volume_24h_usdt"),
                     results.get("volume_24h_coverage_hours"),
                     results.get("volume_24h_candles"),

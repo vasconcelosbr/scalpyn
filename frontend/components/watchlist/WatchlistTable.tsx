@@ -770,7 +770,12 @@ export function WatchlistTable() {
                 <th className="text-right">Live Price</th>
                 <th className="text-right">24h %</th>
                 <th className="text-right">Market Cap</th>
-                <th className="text-right">Volume</th>
+                <th
+                  className="text-right"
+                  title="24h quote volume reported by the Gate.io spot ticker (single venue, not aggregated across exchanges)."
+                >
+                  Volume
+                </th>
                 <th>Trend</th>
                 <th>
                   <button
