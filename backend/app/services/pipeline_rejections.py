@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from .indicator_validity import RuleStatus
 from .rule_engine import RuleEngine
 
 FIELD_LABELS: Dict[str, str] = {
@@ -137,14 +138,14 @@ def _evaluate_entry_trigger(
     asset: Dict[str, Any],
     condition: Dict[str, Any],
 ) -> Dict[str, Any]:
-    passed, detail = rule_engine.evaluate_condition(condition, asset, field_key="indicator")
+    status, detail = rule_engine.evaluate_condition_status(condition, asset, field_key="indicator")
     return {
         "type": "entry_trigger",
         "indicator": _condition_indicator(condition, field_key="indicator"),
         "condition": format_condition_text(condition, field_key="indicator"),
         "expected": format_expected(condition),
         "current_value": _detail_actual(detail),
-        "status": "PASS" if passed else "FAIL",
+        "status": status.value,
     }
 
 
@@ -154,14 +155,14 @@ def _evaluate_signal_condition(
     condition: Dict[str, Any],
 ) -> Dict[str, Any]:
     field_key = "indicator" if condition.get("indicator") else "field"
-    passed, detail = rule_engine.evaluate_condition(condition, asset, field_key=field_key)
+    status, detail = rule_engine.evaluate_condition_status(condition, asset, field_key=field_key)
     return {
         "type": "signal",
         "indicator": _condition_indicator(condition, field_key=field_key),
         "condition": format_condition_text(condition, field_key=field_key),
         "expected": format_expected(condition),
         "current_value": _detail_actual(detail),
-        "status": "PASS" if passed else "FAIL",
+        "status": status.value,
     }
 
 
@@ -175,10 +176,12 @@ def _evaluate_block_rule(
     details: List[Dict[str, Any]] = []
 
     for condition in conditions:
-        passed, detail = rule_engine.evaluate_condition(condition, asset, field_key="indicator")
+        status, detail = rule_engine.evaluate_condition_status(
+            condition, asset, field_key="indicator"
+        )
         details.append(
             {
-                "passed": passed,
+                "status": status,
                 "condition": condition,
                 "detail": detail,
             }
@@ -191,11 +194,29 @@ def _evaluate_block_rule(
             "condition": block.get("name") or "Unnamed Block",
             "expected": block.get("reason") or None,
             "current_value": None,
-            "status": "PASS",
+            "status": RuleStatus.PASS.value,
             "triggered": False,
         }
 
-    triggered = any(item["passed"] for item in details) if logic == "OR" else all(item["passed"] for item in details)
+    # Aggregate per-condition tristate into a block-level tristate using the
+    # same semantics as BlockEngine._evaluate_block_group:
+    #   - AND with any SKIPPED → block SKIPPED.
+    #   - OR with all SKIPPED  → block SKIPPED.
+    #   - Otherwise the block is decided by the non-SKIPPED conditions.
+    statuses = [item["status"] for item in details]
+    if logic == "OR":
+        decided = [s for s in statuses if s != RuleStatus.SKIPPED]
+        if not decided:
+            block_status = RuleStatus.SKIPPED
+        else:
+            block_status = RuleStatus.PASS if any(s == RuleStatus.PASS for s in decided) else RuleStatus.FAIL
+    else:
+        if any(s == RuleStatus.SKIPPED for s in statuses):
+            block_status = RuleStatus.SKIPPED
+        else:
+            block_status = RuleStatus.PASS if all(s == RuleStatus.PASS for s in statuses) else RuleStatus.FAIL
+
+    triggered = block_status == RuleStatus.PASS
     indicator = block.get("name") or _condition_indicator(details[0]["condition"], field_key="indicator")
     actual_payload = {
         _condition_indicator(item["condition"], field_key="indicator"): _detail_actual(item["detail"])
@@ -205,13 +226,22 @@ def _evaluate_block_rule(
         format_condition_text(item["condition"], field_key="indicator")
         for item in details
     )
+    # External callers (build_asset_evaluation_trace) treat status=="FAIL"
+    # as "this block triggered → reject the asset". We keep that contract:
+    # a SKIPPED block is reported as SKIPPED so the asset is NOT rejected.
+    if block_status == RuleStatus.PASS:
+        external_status = "FAIL"  # block triggered, asset must be rejected
+    elif block_status == RuleStatus.FAIL:
+        external_status = "PASS"  # block did not trigger, asset is fine
+    else:
+        external_status = RuleStatus.SKIPPED.value
     return {
         "type": "block_rule",
         "indicator": indicator,
         "condition": condition_text,
         "expected": block.get("reason") or condition_text,
         "current_value": actual_payload if len(actual_payload) > 1 else next(iter(actual_payload.values()), None),
-        "status": "FAIL" if triggered else "PASS",
+        "status": external_status,
         "triggered": triggered,
     }
 

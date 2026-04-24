@@ -5,6 +5,8 @@ import operator as op
 from typing import Dict, Any, List, Optional, Union
 from enum import Enum
 
+from .indicator_validity import RuleStatus, SkipReason, is_valid, log_skipped
+
 logger = logging.getLogger(__name__)
 
 
@@ -144,6 +146,34 @@ class RuleEngine:
             normalized["field"] = normalized.get(field_key, "")
         return self._evaluate_single_condition(normalized, data)
     
+    def evaluate_condition_status(
+        self,
+        condition: Dict[str, Any],
+        data: Dict[str, Any],
+        field_key: str = "field",
+    ) -> tuple[RuleStatus, Dict[str, Any]]:
+        """Evaluate a single condition and return a tristate status.
+
+        Unlike :meth:`evaluate_condition`, this method distinguishes between
+        a logical FAIL (data is valid but the rule failed) and a SKIPPED
+        result (the indicator is missing/invalid and the rule cannot be
+        evaluated).
+        """
+        normalized = dict(condition)
+        if (
+            field_key != "field"
+            and "field" not in normalized
+            and normalized.get("type") != "comparison"
+        ):
+            normalized["field"] = normalized.get(field_key, "")
+        _, detail = self._evaluate_single_condition(normalized, data)
+        status_value = detail.get("status", RuleStatus.FAIL.value)
+        try:
+            status = RuleStatus(status_value)
+        except ValueError:
+            status = RuleStatus.FAIL
+        return status, detail
+
     def _evaluate_single_condition(
         self,
         condition: Dict[str, Any],
@@ -151,9 +181,14 @@ class RuleEngine:
     ) -> tuple:
         """
         Evaluate a single condition.
-        
+
         Returns:
-            (passed: bool, detail: dict)
+            (passed: bool, detail: dict). The detail dict always includes a
+            ``status`` field with one of "PASS", "FAIL", or "SKIPPED".
+            ``passed`` is True only when status == "PASS"; SKIPPED returns
+            False so legacy callers continue to short-circuit, while still
+            being able to inspect ``detail["status"]`` to distinguish the
+            two.
         """
         condition_type = (condition.get("type") or "threshold").lower()
         field = condition.get("field", "")
@@ -171,9 +206,17 @@ class RuleEngine:
                 "target": target_value,
                 "actual": actual_value,
                 "passed": False,
+                "status": RuleStatus.FAIL.value,
             }
-            if actual_value is None or target_value is None:
-                detail["reason"] = "operand_not_found"
+            left_ok, left_reason = is_valid(actual_value, left_field)
+            right_ok, right_reason = is_valid(target_value, right_field)
+            if not left_ok or not right_ok:
+                reason = left_reason if not left_ok else right_reason
+                detail["reason"] = (reason or SkipReason.INDICATOR_NOT_AVAILABLE).value
+                detail["status"] = RuleStatus.SKIPPED.value
+                missing_field = left_field if not left_ok else right_field
+                missing_value = actual_value if not left_ok else target_value
+                log_skipped(missing_field, missing_value, reason or SkipReason.INDICATOR_NOT_AVAILABLE)
                 return False, detail
         else:
             target_value = condition.get("value")
@@ -186,21 +229,26 @@ class RuleEngine:
                 "operator": operator_str,
                 "target": target_value,
                 "actual": actual_value,
-                "passed": False
+                "passed": False,
+                "status": RuleStatus.FAIL.value,
             }
 
-            # Handle missing data
-            if actual_value is None:
-                detail["reason"] = "field_not_found"
+            valid, reason = is_valid(actual_value, field)
+            if not valid:
+                detail["reason"] = (reason or SkipReason.INDICATOR_NOT_AVAILABLE).value
+                detail["status"] = RuleStatus.SKIPPED.value
+                log_skipped(field, actual_value, reason or SkipReason.INDICATOR_NOT_AVAILABLE)
                 return False, detail
-        
+
         # Evaluate based on operator
         try:
             result = self._apply_operator(operator_str, actual_value, target_value, condition)
             detail["passed"] = result
+            detail["status"] = RuleStatus.PASS.value if result else RuleStatus.FAIL.value
             return result, detail
         except Exception as e:
             detail["reason"] = f"evaluation_error: {str(e)}"
+            detail["status"] = RuleStatus.FAIL.value
             return False, detail
     
     def _get_nested_value(self, data: Dict[str, Any], field: str) -> Any:
