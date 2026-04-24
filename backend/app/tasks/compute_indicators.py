@@ -84,7 +84,13 @@ async def _upsert_market_metadata_snapshot(db, symbol: str, results: dict, updat
 
 
 def _derive_min_candles(indicators_config: dict, timeframe: str) -> int:
-    ema_periods = indicators_config.get("ema", {}).get("periods", [])
+    # EMA periods are intentionally excluded from the min-candle gate.
+    # pandas ewm() produces values for any series length (converging with more
+    # data); including max(ema_periods)=200 would gate the entire 5m pipeline
+    # behind 24h of data, preventing ATR/RSI/ADX from being computed for coins
+    # that have been tracked for only a few hours.
+    # We still query up to 288 candles (see query_limit_5m) when available so
+    # EMA200 accuracy is preserved for coins with a longer history.
     stochastic = indicators_config.get("stochastic", {})
 
     required = [
@@ -95,7 +101,6 @@ def _derive_min_candles(indicators_config: dict, timeframe: str) -> int:
         indicators_config.get("atr", {}).get("period", 0),
         indicators_config.get("bollinger", {}).get("period", 0),
         indicators_config.get("zscore", {}).get("lookback", 0),
-        max(ema_periods) if ema_periods else 0,
         _calc_stochastic_warmup(stochastic),
         _calc_volume_lookback(indicators_config),
         48 if timeframe == "5m" else 24,
