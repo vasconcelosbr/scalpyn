@@ -139,7 +139,7 @@ def _evaluate_entry_trigger(
     condition: Dict[str, Any],
 ) -> Dict[str, Any]:
     status, detail = rule_engine.evaluate_condition_status(condition, asset, field_key="indicator")
-    return {
+    payload: Dict[str, Any] = {
         "type": "entry_trigger",
         "indicator": _condition_indicator(condition, field_key="indicator"),
         "condition": format_condition_text(condition, field_key="indicator"),
@@ -147,6 +147,9 @@ def _evaluate_entry_trigger(
         "current_value": _detail_actual(detail),
         "status": status.value,
     }
+    if status == RuleStatus.SKIPPED and isinstance(detail, dict) and detail.get("reason"):
+        payload["reason"] = detail["reason"]
+    return payload
 
 
 def _evaluate_signal_condition(
@@ -156,7 +159,7 @@ def _evaluate_signal_condition(
 ) -> Dict[str, Any]:
     field_key = "indicator" if condition.get("indicator") else "field"
     status, detail = rule_engine.evaluate_condition_status(condition, asset, field_key=field_key)
-    return {
+    payload: Dict[str, Any] = {
         "type": "signal",
         "indicator": _condition_indicator(condition, field_key=field_key),
         "condition": format_condition_text(condition, field_key=field_key),
@@ -164,6 +167,9 @@ def _evaluate_signal_condition(
         "current_value": _detail_actual(detail),
         "status": status.value,
     }
+    if status == RuleStatus.SKIPPED and isinstance(detail, dict) and detail.get("reason"):
+        payload["reason"] = detail["reason"]
+    return payload
 
 
 def _evaluate_block_rule(
@@ -216,6 +222,21 @@ def _evaluate_block_rule(
         else:
             block_status = RuleStatus.PASS if all(s == RuleStatus.PASS for s in statuses) else RuleStatus.FAIL
 
+    skip_reason: Optional[str] = None
+    if block_status == RuleStatus.SKIPPED:
+        # Preserve the most informative reason — invalid_value beats
+        # not_available so traders can tell when an indicator was present
+        # but implausible (e.g. taker_ratio == 0).
+        seen_reasons = [
+            item["detail"].get("reason")
+            for item in details
+            if item["status"] == RuleStatus.SKIPPED and isinstance(item.get("detail"), dict)
+        ]
+        if "indicator_invalid_value" in seen_reasons:
+            skip_reason = "indicator_invalid_value"
+        else:
+            skip_reason = next((r for r in seen_reasons if r), "indicator_not_available")
+
     triggered = block_status == RuleStatus.PASS
     indicator = block.get("name") or _condition_indicator(details[0]["condition"], field_key="indicator")
     actual_payload = {
@@ -235,7 +256,7 @@ def _evaluate_block_rule(
         external_status = "PASS"  # block did not trigger, asset is fine
     else:
         external_status = RuleStatus.SKIPPED.value
-    return {
+    payload: Dict[str, Any] = {
         "type": "block_rule",
         "indicator": indicator,
         "condition": condition_text,
@@ -244,6 +265,9 @@ def _evaluate_block_rule(
         "status": external_status,
         "triggered": triggered,
     }
+    if external_status == RuleStatus.SKIPPED.value and skip_reason:
+        payload["reason"] = skip_reason
+    return payload
 
 
 def _build_decision_details(trace: Sequence[Dict[str, Any]]) -> Dict[str, Any]:

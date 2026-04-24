@@ -11,6 +11,7 @@ rules, entry triggers, signals) applies the same definition.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from enum import Enum
@@ -96,10 +97,18 @@ def is_valid(value: Any, indicator_name: Optional[str] = None) -> Tuple[bool, Op
 
 
 def log_skipped(indicator: str, value: Any, reason: SkipReason) -> None:
-    """Emit a single-line structured log when a rule is skipped."""
-    logger.info(
-        '{"indicator": "%s", "value": %r, "status": "SKIPPED", "reason": "%s"}',
-        indicator,
-        value,
-        reason.value,
-    )
+    """Emit a single-line structured JSON log when a rule is skipped."""
+    if isinstance(value, float) and math.isnan(value):
+        json_value: Any = "NaN"
+    elif value is None or isinstance(value, (str, int, float, bool)):
+        json_value = value
+    else:
+        json_value = repr(value)
+    payload = {
+        "event": "indicator_skipped",
+        "indicator": indicator,
+        "value": json_value,
+        "status": RuleStatus.SKIPPED.value,
+        "reason": reason.value,
+    }
+    logger.info(json.dumps(payload, default=str))

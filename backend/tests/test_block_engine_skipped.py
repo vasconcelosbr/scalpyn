@@ -206,11 +206,148 @@ def test_block_group_or_with_partial_missing_data_decides_on_remaining():
     assert "Either" in result["triggered_blocks"]
 
     # both missing → SKIPPED, never blocks.
-    result = engine.evaluate({})
-    # empty indicators short-circuits to no_data; use a different key instead.
     result = engine.evaluate({"unrelated": 1})
     assert result["blocked"] is False
     assert "Either" in result["skipped_blocks"]
+
+
+def test_empty_indicator_payload_does_not_block():
+    """Missing indicator data must NEVER block trades — every block is SKIPPED."""
+    engine = BlockEngine(
+        {
+            "blocks": [
+                {
+                    "id": "tr",
+                    "name": "Weak Taker Ratio",
+                    "indicator": "taker_ratio",
+                    "type": "threshold",
+                    "operator": ">=",
+                    "value": 1.05,
+                },
+                {
+                    "id": "rsi",
+                    "name": "Overbought RSI",
+                    "indicator": "rsi",
+                    "type": "threshold",
+                    "operator": "<",
+                    "value": 70,
+                },
+            ]
+        }
+    )
+    for payload in ({}, None):
+        result = engine.evaluate(payload)
+        assert result["blocked"] is False, payload
+        # No spurious "no_data" pseudo-block in the triggered list.
+        assert result["triggered_blocks"] == []
+        assert set(result["skipped_blocks"]) == {"Weak Taker Ratio", "Overbought RSI"}
+        assert result["skipped_details"]["tr"] == "indicator_not_available"
+        assert result["skipped_details"]["rsi"] == "indicator_not_available"
+
+
+def test_block_group_skip_reason_preserves_invalid_value():
+    """Grouped block must preserve indicator_invalid_value, not collapse to not_available."""
+    engine = BlockEngine(
+        {
+            "blocks": [
+                {
+                    "id": "grp",
+                    "name": "Combo",
+                    "logic": "AND",
+                    "conditions": [
+                        # rsi present and valid
+                        {"indicator": "rsi", "operator": ">", "value": 70},
+                        # taker_ratio present but implausible (zero)
+                        {"indicator": "taker_ratio", "operator": ">=", "value": 1.05},
+                    ],
+                }
+            ]
+        }
+    )
+    result = engine.evaluate({"rsi": 80, "taker_ratio": 0})
+    assert result["blocked"] is False
+    assert "Combo" in result["skipped_blocks"]
+    assert result["skipped_details"]["grp"] == "indicator_invalid_value"
+
+
+def test_block_group_skip_reason_falls_back_to_not_available():
+    engine = BlockEngine(
+        {
+            "blocks": [
+                {
+                    "id": "grp",
+                    "name": "Combo",
+                    "logic": "AND",
+                    "conditions": [
+                        {"indicator": "rsi", "operator": ">", "value": 70},
+                        {"indicator": "adx", "operator": ">", "value": 20},  # missing
+                    ],
+                }
+            ]
+        }
+    )
+    result = engine.evaluate({"rsi": 80})
+    assert "Combo" in result["skipped_blocks"]
+    assert result["skipped_details"]["grp"] == "indicator_not_available"
+
+
+def test_pipeline_block_rule_emits_skipped_with_reason():
+    """pipeline_rejections._evaluate_block_rule must surface SKIPPED + reason."""
+    from app.services.pipeline_rejections import _evaluate_block_rule
+    from app.services.rule_engine import RuleEngine
+
+    rule_engine = RuleEngine()
+
+    # Implausible indicator → SKIPPED with indicator_invalid_value.
+    block = {
+        "id": "tr",
+        "name": "Weak Taker Ratio",
+        "logic": "AND",
+        "conditions": [
+            {"indicator": "taker_ratio", "operator": ">=", "value": 1.05},
+        ],
+    }
+    payload = _evaluate_block_rule(rule_engine, {"taker_ratio": 0}, block)
+    assert payload["status"] == "SKIPPED"
+    assert payload["triggered"] is False
+    assert payload["reason"] == "indicator_invalid_value"
+
+    # Missing indicator → SKIPPED with indicator_not_available.
+    payload = _evaluate_block_rule(rule_engine, {"rsi": 50}, block)
+    assert payload["status"] == "SKIPPED"
+    assert payload["triggered"] is False
+    assert payload["reason"] == "indicator_not_available"
+
+    # In `_evaluate_block_rule`, a block triggers when its conditions
+    # evaluate True (the rule is the "danger" pattern). Here the
+    # condition is `taker_ratio >= 1.05`, so:
+    #   taker_ratio=1.5 → condition True → block triggers → status FAIL.
+    payload = _evaluate_block_rule(rule_engine, {"taker_ratio": 1.5}, block)
+    assert payload["status"] == "FAIL"
+    assert payload["triggered"] is True
+    assert "reason" not in payload
+
+    #   taker_ratio=0.8 → condition False → block does not trigger → PASS.
+    payload = _evaluate_block_rule(rule_engine, {"taker_ratio": 0.8}, block)
+    assert payload["status"] == "PASS"
+    assert payload["triggered"] is False
+    assert "reason" not in payload
+
+
+def test_pipeline_entry_trigger_emits_skipped_with_reason():
+    from app.services.pipeline_rejections import _evaluate_entry_trigger
+    from app.services.rule_engine import RuleEngine
+
+    rule_engine = RuleEngine()
+    cond = {"indicator": "taker_ratio", "operator": ">=", "value": 1.05}
+
+    payload = _evaluate_entry_trigger(rule_engine, {"taker_ratio": 0}, cond)
+    assert payload["status"] == "SKIPPED"
+    assert payload["reason"] == "indicator_invalid_value"
+
+    payload = _evaluate_entry_trigger(rule_engine, {}, cond)
+    assert payload["status"] == "SKIPPED"
+    assert payload["reason"] == "indicator_not_available"
 
 
 # ── Entry triggers ───────────────────────────────────────────────────────────

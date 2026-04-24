@@ -24,6 +24,27 @@ _CMP = {
 }
 
 
+def _aggregate_skip_reason(evaluated: List[tuple]) -> str:
+    """Pick the most informative skip reason from a list of evaluated conditions.
+
+    "indicator_invalid_value" wins over "indicator_not_available" so we
+    never lose the fact that an indicator was actually present but
+    implausible (e.g. taker_ratio == 0).
+    """
+    seen: List[str] = []
+    for status, detail, _ in evaluated:
+        if status != RuleStatus.SKIPPED:
+            continue
+        reason = detail.get("reason") if isinstance(detail, dict) else None
+        if reason:
+            seen.append(reason)
+    if SkipReason.INDICATOR_INVALID_VALUE.value in seen:
+        return SkipReason.INDICATOR_INVALID_VALUE.value
+    if seen:
+        return seen[0]
+    return SkipReason.INDICATOR_NOT_AVAILABLE.value
+
+
 class BlockEngine:
     """Evaluates blocking conditions from config. If ANY enabled block triggers, trade is blocked.
 
@@ -49,14 +70,13 @@ class BlockEngine:
                 "skipped_details":  {block_id: reason for skipped blocks},
             }
         """
-        if not indicators:
-            return {
-                "blocked": True,
-                "triggered_blocks": ["no_data"],
-                "skipped_blocks": [],
-                "details": {"no_data": "No indicator data available"},
-                "skipped_details": {},
-            }
+        # Missing indicator data must NEVER block trades. Per the SKIPPED
+        # policy every indicator-driven block whose input is unavailable
+        # is reported as SKIPPED instead of triggered. We normalise an
+        # empty payload to an empty dict and let the per-block validity
+        # checks below mark each block as SKIPPED with the proper reason.
+        if indicators is None:
+            indicators = {}
 
         triggered: List[str] = []
         skipped: List[str] = []
@@ -175,11 +195,11 @@ class BlockEngine:
         if logic == "OR":
             decided = [item for item in evaluated if item[0] != RuleStatus.SKIPPED]
             if not decided:
-                return RuleStatus.SKIPPED, SkipReason.INDICATOR_NOT_AVAILABLE.value
+                return RuleStatus.SKIPPED, _aggregate_skip_reason(evaluated)
             is_triggered = any(status == RuleStatus.PASS for status, _, _ in decided)
         else:  # AND
             if any(status == RuleStatus.SKIPPED for status, _, _ in evaluated):
-                return RuleStatus.SKIPPED, SkipReason.INDICATOR_NOT_AVAILABLE.value
+                return RuleStatus.SKIPPED, _aggregate_skip_reason(evaluated)
             is_triggered = all(status == RuleStatus.PASS for status, _, _ in evaluated)
 
         if not is_triggered:
