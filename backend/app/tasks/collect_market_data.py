@@ -312,6 +312,53 @@ async def _collect_5m_async():
         except Exception as e:
             logger.debug("5m: backup ticker fetch failed (non-blocking): %s", e)
 
+        # Per-symbol stale-check fallback. Catches symbols missing from the
+        # batch tickers response (rare/long-tail pairs) or whose volume_24h
+        # is older than 10 minutes — we re-fetch individually from the Gate
+        # spot ticker endpoint so the canonical volume column never drifts.
+        try:
+            stale_rows = (await db.execute(text("""
+                SELECT symbol
+                FROM market_metadata
+                WHERE symbol = ANY(:syms)
+                  AND (
+                        volume_24h IS NULL
+                     OR last_updated < now() - interval '10 minutes'
+                  )
+            """), {"syms": symbols})).fetchall()
+            stale_syms = [r.symbol for r in stale_rows]
+            if stale_syms:
+                logger.info("5m: per-symbol Gate ticker fallback for %d stale symbols", len(stale_syms))
+                refreshed = 0
+                for sym in stale_syms:
+                    try:
+                        ticker = await market_data_service._fetch_gate_ticker(sym)
+                        if not ticker:
+                            continue
+                        price = float(ticker.get("last", 0) or 0)
+                        volume = float(ticker.get("quote_volume", 0) or 0)
+                        if price <= 0 or volume <= 0:
+                            continue
+                        await db.execute(text("""
+                            UPDATE market_metadata
+                            SET price = :price,
+                                volume_24h = :volume,
+                                last_updated = :ts
+                            WHERE symbol = :sym
+                        """), {
+                            "sym":    sym,
+                            "price":  price,
+                            "volume": volume,
+                            "ts":     datetime.now(timezone.utc),
+                        })
+                        refreshed += 1
+                    except Exception as se:
+                        logger.debug("5m: per-symbol fallback failed for %s: %s", sym, se)
+                        continue
+                logger.info("5m: per-symbol Gate ticker fallback refreshed %d symbols", refreshed)
+        except Exception as e:
+            logger.debug("5m: per-symbol stale-check skipped (non-blocking): %s", e)
+
         await db.commit()
 
     logger.info(f"5m collection complete: {collected} symbols")

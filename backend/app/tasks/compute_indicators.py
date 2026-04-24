@@ -61,15 +61,9 @@ async def _load_market_metadata_map(db) -> dict:
 
 
 async def _upsert_market_metadata_snapshot(db, symbol: str, results: dict, updated_at: datetime) -> None:
-    # NOTE: `volume_24h` is intentionally NOT written here. The canonical 24h
-    # quote volume comes from the Gate.io spot ticker (`quote_volume`) and is
-    # owned by `collect_market_data` (both `_collect_all_async` and the
-    # `_collect_5m_async` backup ticker pathway). The candle-aggregated value
-    # produced by FeatureEngine is exposed separately as
-    # `volume_24h_usdt_aggregated` inside `indicators_json` for diagnostics —
-    # it must NOT overwrite the canonical column because OHLCV gaps make it
-    # systematically undercount (e.g. SOL/USDT showing ~$60M instead of
-    # several hundred million).
+    # `volume_24h` is owned by collect_market_data (Gate.io ticker). We write
+    # only price/spread/depth here; the candle-aggregated figure is kept in
+    # indicators_json as `volume_24h_usdt_aggregated` for diagnostics.
     await db.execute(text("""
         INSERT INTO market_metadata (
             symbol, price, spread_pct, orderbook_depth_usdt, last_updated

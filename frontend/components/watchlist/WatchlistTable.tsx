@@ -774,7 +774,7 @@ export function WatchlistTable() {
                   className="text-right"
                   title="24h quote volume reported by the Gate.io spot ticker (single venue, not aggregated across exchanges)."
                 >
-                  Volume
+                  Vol 24h (Gate)
                 </th>
                 <th>Trend</th>
                 <th>

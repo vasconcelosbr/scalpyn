@@ -177,12 +177,8 @@ class FeatureEngine:
             )
             return result
 
-        # Aggregated values from OHLCV candles. These are diagnostic only and
-        # MUST NOT be persisted to `market_metadata.volume_24h` — that column
-        # is owned by the Gate.io ticker pathway in `collect_market_data`.
-        # OHLCV gaps make this sum systematically undercount real exchange
-        # volume, so the suffix `_aggregated` is intentional to prevent
-        # accidental reuse as the canonical figure.
+        # Diagnostic-only candle sums. The canonical 24h volume comes from the
+        # Gate.io ticker; these can undercount when OHLCV has gaps.
         result["volume_24h_base_aggregated"] = round(float(base_volume.loc[window_mask].sum()), 8)
         result["volume_24h_usdt_aggregated"] = round(float(quote_volume.loc[window_mask].sum()), 8)
         return result
@@ -419,12 +415,7 @@ class FeatureEngine:
         return {"taker_ratio": round(float(ratio), 4)}
 
     def _apply_market_data_overrides(self, market_data: Dict[str, Any]) -> Dict[str, Any]:
-        # `volume_24h_base` / `volume_24h_usdt` come from the canonical Gate.io
-        # ticker (`base_volume` / `quote_volume`) via
-        # `MarketDataService.to_indicator_payload()`. They are kept distinct
-        # from the FeatureEngine's `_aggregated` outputs so the canonical
-        # exchange-reported figures remain the source of truth for liquidity
-        # scoring and downstream consumers.
+        # Canonical ticker values from MarketDataService override candle sums.
         overrides: Dict[str, Any] = {}
         for key in (
             "volume_24h_base",
