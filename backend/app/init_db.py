@@ -26,33 +26,54 @@ async def init_db():
     logger.info("Initializing database schema...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        
-        # Add missing columns to existing tables (migrations)
+
+        # ─────────────────────────────────────────────────────────────────────
+        # CRITICAL migrations: each block below adds columns/tables that the
+        # SQLAlchemy ORM declares on its models. If any of these silently
+        # fails on production (as happened with Trade Sync columns), every
+        # `select(Model)` query expands to columns that don't exist and the
+        # global DB handler returns an opaque "Database error" 503.
+        #
+        # Therefore: log errors at error-level WITH stack trace AND re-raise,
+        # so Cloud Run aborts startup on schema mismatches instead of serving
+        # broken responses. `IF NOT EXISTS` keeps these blocks idempotent on
+        # successful runs.
+        # ─────────────────────────────────────────────────────────────────────
+
         try:
             await conn.execute(text("""
                 ALTER TABLE pools ADD COLUMN IF NOT EXISTS overrides JSONB DEFAULT '{}';
             """))
-            logger.info("Added 'overrides' column to pools table (or already exists)")
-        except Exception as e:
-            logger.warning(f"Could not add 'overrides' column: {e}")
-
-        try:
             await conn.execute(text("""
                 ALTER TABLE pools ADD COLUMN IF NOT EXISTS autopilot_enabled BOOLEAN NOT NULL DEFAULT false;
             """))
-            logger.info("Added 'autopilot_enabled' column to pools table (or already exists)")
+            logger.info("Ensured pools.overrides and pools.autopilot_enabled columns exist")
         except Exception as e:
-            logger.warning(f"Could not add 'autopilot_enabled' column: {e}")
+            logger.error(
+                "FATAL: failed to add overrides/autopilot_enabled columns to pools "
+                "(both are ORM-referenced by Pool model). Aborting startup. Error: %s",
+                e,
+                exc_info=True,
+            )
+            raise
 
         try:
             await backfill_execution_tracking_columns(conn)
             logger.info("Ensured pipeline execution tracking columns exist")
         except Exception as e:
-            logger.warning(f"Could not add pipeline execution tracking columns: {e}")
+            logger.error(
+                "FATAL: failed to add pipeline execution_id columns "
+                "(ORM-referenced by PipelineWatchlistAssets/Rejections). "
+                "Aborting startup. Error: %s",
+                e,
+                exc_info=True,
+            )
+            raise
 
-        # Ensure pipeline staleness-tracking and analysis columns exist on existing tables.
-        # These are added by migrations 013/018 but may be absent if those migrations
-        # failed (e.g., blocked by a DuplicateColumnError in an earlier migration).
+        # Ensure pipeline staleness-tracking and analysis columns exist on
+        # existing tables. These are added by migrations 013/018 but may be
+        # absent if those migrations failed (e.g., blocked by a
+        # DuplicateColumnError in an earlier migration).
         try:
             await conn.execute(text("""
                 ALTER TABLE pipeline_watchlists
@@ -72,9 +93,17 @@ async def init_db():
             """))
             logger.info("Ensured pipeline staleness and analysis_snapshot columns exist")
         except Exception as e:
-            logger.warning(f"Could not add pipeline staleness/analysis columns: {e}")
-        
-        # Ensure profiles and watchlist_profiles tables exist with all columns
+            logger.error(
+                "FATAL: failed to add pipeline staleness/analysis columns "
+                "(ORM-referenced by PipelineWatchlist models). "
+                "Aborting startup. Error: %s",
+                e,
+                exc_info=True,
+            )
+            raise
+
+        # Ensure profiles and watchlist_profiles tables exist with all
+        # columns. These tables back the AI Skills + strategy profile UIs.
         try:
             await conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS profiles (
@@ -105,7 +134,8 @@ async def init_db():
                 ALTER TABLE watchlist_profiles 
                 ADD COLUMN IF NOT EXISTS profile_type VARCHAR(10) DEFAULT 'L2';
             """))
-            # Drop old unique constraint and add new one
+            # Drop old unique constraint and add new one (best-effort —
+            # constraint may not exist yet on fresh DBs).
             try:
                 await conn.execute(text("""
                     ALTER TABLE watchlist_profiles DROP CONSTRAINT IF EXISTS watchlist_profiles_user_id_watchlist_id_key;
@@ -114,7 +144,14 @@ async def init_db():
                 pass
             logger.info("Profiles tables created or already exist")
         except Exception as e:
-            logger.warning(f"Could not create profiles tables: {e}")
+            logger.error(
+                "FATAL: failed to create/migrate profiles + watchlist_profiles "
+                "tables (required by AI Skills feature). "
+                "Aborting startup. Error: %s",
+                e,
+                exc_info=True,
+            )
+            raise
         
         # Create TimescaleDB hypertables if they don't exist
         # OHLCV
