@@ -287,11 +287,7 @@ function TraceSection({ title, items }: { title: string; items: DecisionTraceIte
                 : item.status === "FAIL"
                   ? item.type === "block_rule"
                     ? "border-[#6B21A8]/40 bg-[#1A0A2A] text-[#D8B4FE]"
-                    : item.type === "entry_trigger"
-                      ? "border-[#1E40AF]/40 bg-[#060E28] text-[#93C5FD]"
-                      : item.type === "signal"
-                        ? "border-[#78350F]/40 bg-[#1C1206] text-[#FCD34D]"
-                        : "border-[#7F1D1D]/25 bg-[#150A0A] text-[#FCA5A5]"
+                    : "border-[#7F1D1D]/25 bg-[#150A0A] text-[#FCA5A5]"
                   : "border-[#1E2433] bg-[#06080E] text-[#64748B]";
           return (
             <div key={index} className={`rounded-lg border px-3 py-2 text-xs ${cls}`}>
