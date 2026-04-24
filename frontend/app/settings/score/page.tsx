@@ -5,12 +5,13 @@ import { Save, RefreshCw, Plus, Trash2 } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
 
 const INDICATORS = [
-  "rsi", "adx", "ema_trend", "taker_ratio", "adx_acceleration",
-  "volume_spike", "macd_signal", "macd_histogram",
+  "rsi", "adx", "ema_trend", "adx_acceleration",
+  "taker_ratio", "buy_pressure", "taker_buy_volume", "taker_sell_volume",
+  "volume_spike", "volume_delta", "macd_signal", "macd_histogram",
   "di_plus", "di_minus", "di_trend", "spread_pct", "orderbook_depth_usdt",
   "orderbook_pressure", "bid_ask_imbalance", "bb_width", "stoch_k", "stoch_d", "vwap_distance_pct",
   "volume_24h", "obv", "atr", "atr_pct", "psar_trend", "zscore",
-  "volume_delta", "funding_rate", "ema9_distance_pct",
+  "funding_rate", "ema9_distance_pct",
   "ema9_gt_ema50", "ema50_gt_ema200", "ema_full_alignment",
 ];
 
@@ -29,7 +30,10 @@ const DEFAULT_RULE_CATEGORIES: Record<string, string> = {
   orderbook_pressure: "liquidity",
   bid_ask_imbalance: "liquidity",
   obv: "liquidity",
-  taker_ratio: "liquidity",
+  buy_pressure: "liquidity",        // buy/(buy+sell), [0, 1]
+  taker_buy_volume: "liquidity",
+  taker_sell_volume: "liquidity",
+  taker_ratio: "signal",            // buy/sell, [0, ∞) — threshold > 1 meaningful
   adx: "market_structure",
   ema_trend: "market_structure",
   atr: "market_structure",
@@ -163,7 +167,6 @@ export default function ScoreEngineSettings() {
                       value={rule.indicator}
                       onChange={(e) => {
                         const ind = e.target.value;
-                        // Auto-switch to "between" for range indicators
                         const op = RANGE_INDICATORS.has(ind) && rule.operator === "between" ? "between"
                           : RANGE_INDICATORS.has(ind) && !["<=",">=","<",">","=","between"].includes(rule.operator) ? "between"
                           : rule.operator;
@@ -268,6 +271,14 @@ export default function ScoreEngineSettings() {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Order flow indicator reference */}
+      <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-hover)] px-4 py-3 text-[12px] text-[var(--text-secondary)] space-y-1">
+        <span className="font-semibold text-[var(--text-primary)]">Order flow indicator reference:&nbsp;</span>
+        <span><code className="font-mono text-[var(--color-profit)]">taker_ratio</code> = buy_vol / sell_vol &nbsp;→&nbsp; range 0–∞, equilibrium&nbsp;≈&nbsp;1.0 &nbsp;(example threshold: taker_ratio &gt; 1.2)</span>
+        <span className="px-2 text-[var(--border-subtle)]">|</span>
+        <span><code className="font-mono text-blue-400">buy_pressure</code> = buy_vol / (buy+sell) &nbsp;→&nbsp; range 0–1, equilibrium = 0.5 &nbsp;(example threshold: buy_pressure &gt; 0.6)</span>
       </div>
 
       {/* Thresholds */}

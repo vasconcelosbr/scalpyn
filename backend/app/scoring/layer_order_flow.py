@@ -2,12 +2,27 @@
 
 Taker buy/sell ratio, funding rate, open interest changes, liquidations, whale activity.
 All thresholds from ScoringFuturesConfig (zero hardcode).
+
+Contracts:
+  buy_pressure = taker_buy_volume / (taker_buy_volume + taker_sell_volume)  → [0, 1]
+  taker_ratio  = taker_buy_volume / max(taker_sell_volume, 1e-9)            → [0, ∞)
+
+Source: Gate.io futures trades endpoint (real individual trade data, last 60s window).
+No fallback via long_short_account_ratio. No hard-coded 0.5 default.
+If no trade data → buy_pressure = None → taker component scores neutral (2.0 pts).
 """
 
+import logging
+import time
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ..schemas.futures_engine_config import ScoringFuturesConfig
+
+logger = logging.getLogger(__name__)
+
+FUTURES_TRADE_WINDOW_SECONDS = 60
+FUTURES_TRADE_LIMIT = 500
 
 
 @dataclass
@@ -23,48 +38,51 @@ class L5Result:
 
 
 def score_order_flow(
-    taker_buy_ratio: float,     # buy_volume / total_volume (0-1), 0.5 = neutral
-    funding_rate: float,        # current funding rate (e.g. 0.0001 = 0.01%)
-    oi_change_pct: float,       # OI change in last 4h as % (e.g. 5 = +5%)
-    liq_longs_24h_usdt: float,  # liquidated longs in USD last 24h
-    liq_shorts_24h_usdt: float, # liquidated shorts in USD last 24h
-    whale_buys_usdt: float,     # large buy transactions > threshold in USD (recent period)
-    whale_sells_usdt: float,    # large sell transactions > threshold in USD
-    trade_direction: str,       # "long" | "short"
+    buy_pressure: Optional[float],  # buy_volume / (buy+sell), [0, 1], None if unavailable
+    funding_rate: float,            # current funding rate (e.g. 0.0001 = 0.01%)
+    oi_change_pct: float,           # OI change in last 4h as % (e.g. 5 = +5%)
+    liq_longs_24h_usdt: float,      # liquidated longs in USD last 24h
+    liq_shorts_24h_usdt: float,     # liquidated shorts in USD last 24h
+    whale_buys_usdt: float,         # large buy transactions > threshold in USD
+    whale_sells_usdt: float,        # large sell transactions > threshold in USD
+    trade_direction: str,           # "long" | "short"
     cfg: ScoringFuturesConfig,
+    taker_ratio: Optional[float] = None,  # buy / sell, [0, ∞), informational
 ) -> L5Result:
-    """
-    Calculate L5 Order Flow score.
-    """
+    """Calculate L5 Order Flow score."""
     ext_pos = cfg.l5_funding_extreme_positive
     ext_neg = cfg.l5_funding_extreme_negative
 
-    # ── Taker ratio (0-5) ─────────────────────────────────────────────────────
-    # taker_buy_ratio: 0.5 = neutral, >0.6 = bullish flow, <0.4 = bearish flow
-    taker_imbalance = taker_buy_ratio - 0.5   # -0.5 to +0.5
+    # ── Taker / buy pressure (0-5) ────────────────────────────────────────────
+    # buy_pressure: 0.5 = neutral, >0.6 = bullish flow, <0.4 = bearish flow.
+    # If buy_pressure is None (no trade data available) → neutral score (2.0).
+    if buy_pressure is None:
+        taker_pts = 2.0   # neutral — no data, no penalty and no boost
+    else:
+        taker_imbalance = buy_pressure - 0.5   # maps [0, 1] → [-0.5, +0.5]
 
-    if trade_direction == "long":
-        if taker_imbalance >= 0.15:
-            taker_pts = 5.0   # strong buying pressure
-        elif taker_imbalance >= 0.05:
-            taker_pts = 3.5
-        elif taker_imbalance >= -0.05:
-            taker_pts = 2.0   # neutral
-        elif taker_imbalance >= -0.15:
-            taker_pts = 1.0
-        else:
-            taker_pts = 0.0   # dominant selling
-    else:  # short
-        if taker_imbalance <= -0.15:
-            taker_pts = 5.0
-        elif taker_imbalance <= -0.05:
-            taker_pts = 3.5
-        elif taker_imbalance <= 0.05:
-            taker_pts = 2.0
-        elif taker_imbalance <= 0.15:
-            taker_pts = 1.0
-        else:
-            taker_pts = 0.0
+        if trade_direction == "long":
+            if taker_imbalance >= 0.15:
+                taker_pts = 5.0   # strong buying pressure
+            elif taker_imbalance >= 0.05:
+                taker_pts = 3.5
+            elif taker_imbalance >= -0.05:
+                taker_pts = 2.0   # neutral
+            elif taker_imbalance >= -0.15:
+                taker_pts = 1.0
+            else:
+                taker_pts = 0.0   # dominant selling
+        else:  # short
+            if taker_imbalance <= -0.15:
+                taker_pts = 5.0
+            elif taker_imbalance <= -0.05:
+                taker_pts = 3.5
+            elif taker_imbalance <= 0.05:
+                taker_pts = 2.0
+            elif taker_imbalance <= 0.15:
+                taker_pts = 1.0
+            else:
+                taker_pts = 0.0
 
     # ── Funding rate (0-5) ────────────────────────────────────────────────────
     if funding_rate > ext_pos:
@@ -76,42 +94,31 @@ def score_order_flow(
 
     if trade_direction == "long":
         if funding_direction == "BALANCED" and funding_rate >= 0:
-            funding_pts = 4.0   # paying but not excessive — longs not crowded
+            funding_pts = 4.0
         elif funding_direction == "BALANCED" and funding_rate < 0:
-            funding_pts = 5.0   # collecting funding — shorts crowded → long favorable
+            funding_pts = 5.0
         elif funding_direction == "SHORT_CROWDED":
-            funding_pts = 5.0   # shorts extremely crowded → contrarian long
+            funding_pts = 5.0
         elif funding_direction == "LONG_CROWDED":
-            # Positive funding hurts longs (paying + longs crowded)
-            # the more extreme, the worse
-            if funding_rate > ext_pos * 2:
-                funding_pts = 0.0
-            else:
-                funding_pts = 1.5
+            funding_pts = 0.0 if funding_rate > ext_pos * 2 else 1.5
         else:
             funding_pts = 2.5
     else:  # short
         if funding_direction == "BALANCED" and funding_rate <= 0:
             funding_pts = 4.0
         elif funding_direction == "BALANCED" and funding_rate > 0:
-            funding_pts = 5.0   # longs paying → short collecting
+            funding_pts = 5.0
         elif funding_direction == "LONG_CROWDED":
             funding_pts = 5.0
         elif funding_direction == "SHORT_CROWDED":
-            if funding_rate < ext_neg * 2:
-                funding_pts = 0.0
-            else:
-                funding_pts = 1.5
+            funding_pts = 0.0 if funding_rate < ext_neg * 2 else 1.5
         else:
             funding_pts = 2.5
 
     # ── Open Interest change (0-4) ────────────────────────────────────────────
-    # OI rising + price rising = longs building = bullish (for long)
-    # OI rising + price falling = shorts building = bearish (for short)
-    # OI falling = position unwinding (less conviction)
     if trade_direction == "long":
         if oi_change_pct >= 5:
-            oi_pts = 4.0    # strong OI build = conviction
+            oi_pts = 4.0
         elif oi_change_pct >= 2:
             oi_pts = 3.0
         elif oi_change_pct >= 0:
@@ -119,7 +126,7 @@ def score_order_flow(
         elif oi_change_pct >= -2:
             oi_pts = 1.0
         else:
-            oi_pts = 0.0    # OI dropping = longs leaving
+            oi_pts = 0.0
     else:
         if oi_change_pct <= -2:
             oi_pts = 4.0
@@ -133,14 +140,12 @@ def score_order_flow(
             oi_pts = 0.0
 
     # ── Liquidation data (0-3) ────────────────────────────────────────────────
-    # Recent liquidations of the opposing side = fuel for our direction
     total_liq = liq_longs_24h_usdt + liq_shorts_24h_usdt
     if total_liq > 0:
         liq_ratio = (
             liq_longs_24h_usdt / total_liq if trade_direction == "short"
             else liq_shorts_24h_usdt / total_liq
         )
-        # High liq_ratio = opposing side getting wrecked = good for our direction
         if liq_ratio >= 0.7:
             liq_pts = 3.0
         elif liq_ratio >= 0.6:
@@ -171,7 +176,7 @@ def score_order_flow(
             else:
                 whale_pts = 0.0
     else:
-        whale_pts = 0.0   # no data
+        whale_pts = 0.0
 
     total = round(taker_pts + funding_pts + oi_pts + liq_pts + whale_pts, 2)
     total = min(20.0, total)
@@ -185,7 +190,8 @@ def score_order_flow(
         whale_score=whale_pts,
         funding_direction=funding_direction,
         details={
-            "taker_buy_ratio":       round(taker_buy_ratio, 3),
+            "buy_pressure":          round(buy_pressure, 3) if buy_pressure is not None else None,
+            "taker_ratio":           round(taker_ratio,  4) if taker_ratio  is not None else None,
             "funding_rate":          funding_rate,
             "oi_change_pct":         round(oi_change_pct, 2),
             "liq_longs_24h_usdt":    liq_longs_24h_usdt,
@@ -203,44 +209,67 @@ async def fetch_order_flow_data(
     adapter,
     cfg: ScoringFuturesConfig,
 ) -> dict:
-    """
-    Fetch all order flow data points from Gate.io for L5 scoring.
+    """Fetch all order flow data points from Gate.io for L5 scoring.
+
+    Uses real futures trade data for buy_pressure / taker_ratio.
+    No fallback via long_short_account_ratio or hard-coded defaults.
     Returns raw dict with all inputs for score_order_flow().
     """
     # Contract info (funding rate)
     try:
-        info       = await adapter.get_contract_info(contract)
-        funding    = float(info.get("funding_rate", 0) or 0)
+        info    = await adapter.get_contract_info(contract)
+        funding = float(info.get("funding_rate", 0) or 0)
     except Exception:
-        funding    = 0.0
+        funding = 0.0
 
-    # Contract stats (OI, long/short ratio)
+    # Contract stats (OI only — no longer used for taker proxy)
     try:
         stats     = await adapter.get_contract_stats(contract, interval="4h", limit=2)
         oi_now    = float((stats[0] if stats else {}).get("open_interest_usdt", 0) or 0)
         oi_prev   = float((stats[1] if len(stats) > 1 else {}).get("open_interest_usdt", oi_now) or oi_now)
         oi_change = ((oi_now - oi_prev) / oi_prev * 100) if oi_prev > 0 else 0.0
-
-        ls_ratio  = float((stats[0] if stats else {}).get("long_short_account_ratio", 0.5) or 0.5)
-        taker_buy = ls_ratio  # proxy: long/short account ratio ≈ buy pressure
     except Exception:
         oi_change = 0.0
-        taker_buy = 0.5
 
-    # Tickers for volume (taker ratio proxy via volume_24h_buy / volume_24h)
+    # Real futures trade aggregation for taker metrics
+    buy_pressure: Optional[float] = None
+    taker_ratio:  Optional[float] = None
     try:
-        tickers   = await adapter.get_tickers(symbols=[contract], market="futures")
-        ticker    = tickers[0] if tickers else {}
-        vol_buy   = float(ticker.get("volume_24h_buy",  0) or 0)
-        vol_total = float(ticker.get("volume_24h",      1) or 1)
-        if vol_buy > 0 and vol_total > 0:
-            taker_buy = vol_buy / vol_total
-    except Exception:
-        pass
+        trades = await adapter._request(
+            "GET", f"/futures/{adapter.SETTLE}/trades",
+            params={"contract": contract, "limit": str(FUTURES_TRADE_LIMIT)},
+            base_url=adapter.FUTURES_BASE,
+        )
+        if trades:
+            cutoff = time.time() - FUTURES_TRADE_WINDOW_SECONDS
+            buy_vol  = 0.0
+            sell_vol = 0.0
+            for t in trades:
+                ts = float(t.get("create_time", 0) or 0)
+                if ts < cutoff:
+                    continue
+                size = float(t.get("size", 0) or 0)
+                if size > 0:
+                    buy_vol  += size
+                elif size < 0:
+                    sell_vol += abs(size)
+
+            total_vol = buy_vol + sell_vol
+            if total_vol > 0:
+                buy_pressure = round(buy_vol / total_vol, 6)         # [0, 1]
+                taker_ratio  = round(buy_vol / max(sell_vol, 1e-9), 6)  # [0, ∞)
+
+                if taker_ratio < 0.1 or taker_ratio > 10:
+                    logger.warning(
+                        "[L5] taker_ratio out of normal range for %s: %.4f",
+                        contract, taker_ratio,
+                    )
+    except Exception as exc:
+        logger.warning("[L5] failed to fetch futures trades for %s: %s", contract, exc)
 
     # Liquidations
     try:
-        liq_data = await adapter._request(
+        liq_data   = await adapter._request(
             "GET", f"/futures/{adapter.SETTLE}/liq_orders",
             params={"contract": contract, "limit": "100"},
             base_url=adapter.FUTURES_BASE,
@@ -256,11 +285,12 @@ async def fetch_order_flow_data(
         liq_shorts = 0.0
 
     return {
-        "taker_buy_ratio":       taker_buy,
+        "buy_pressure":          buy_pressure,
+        "taker_ratio":           taker_ratio,
         "funding_rate":          funding,
         "oi_change_pct":         oi_change,
         "liq_longs_24h_usdt":    liq_longs,
         "liq_shorts_24h_usdt":   liq_shorts,
-        "whale_buys_usdt":       0.0,   # Gate.io doesn't have direct whale API
+        "whale_buys_usdt":       0.0,
         "whale_sells_usdt":      0.0,
     }

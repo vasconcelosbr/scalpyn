@@ -1,0 +1,230 @@
+OBJETIVO
+Refatorar definitivamente o tratamento de “taker_ratio”, estabelecendo contratos claros de dados, separando conceitos (ratio vs proporção), garantindo disponibilidade no pipeline e alinhando backend, score engine e frontend.
+
+---
+
+PRINCÍPIOS (OBRIGATÓRIOS)
+
+1. Cada indicador tem:
+
+   * nome único
+   * definição formal
+   * fórmula única
+   * faixa de valores conhecida
+
+2. Nenhum campo pode existir no frontend sem ser produzido no backend.
+
+3. Nenhum indicador pode mudar de significado via fallback.
+
+---
+
+FASE 1 — PADRONIZAÇÃO DE NOMES
+
+Substituir:
+
+* taker_ratio (ambíguo)
+
+Por:
+
+* taker_ratio → **buy/sell (0 → ∞)**
+* buy_pressure → **buy/(buy+sell) (0 → 1)**
+
+Regra:
+
+* NÃO usar mais taker_buy_ratio
+* NÃO usar nomes ambíguos
+
+---
+
+FASE 2 — NOVA DEFINIÇÃO OFICIAL
+
+Implementar:
+
+```python
+taker_buy_volume   # base asset
+taker_sell_volume  # base asset
+
+taker_ratio  = taker_buy_volume / max(taker_sell_volume, 1e-9)
+buy_pressure = taker_buy_volume / max(taker_buy_volume + taker_sell_volume, 1e-9)
+```
+
+---
+
+FASE 3 — FONTE DE DADOS (UNIFICADA)
+
+Fonte única:
+
+* Binance trades (WebSocket ou REST recente)
+
+Remover:
+
+* Gate ticker volume_24h_buy como fonte de taker
+* fallback via long_short_account_ratio
+* fallback fixo 0.5
+
+Regra:
+
+* se não houver trades → indicador = NULL
+
+---
+
+FASE 4 — NOVO PIPELINE DE ORDER FLOW
+
+Criar módulo dedicado:
+
+backend/app/services/order_flow_service.py
+
+Responsável por:
+
+* capturar trades Binance
+* agregar por janela (ex: 60s, 1m)
+* calcular:
+
+  * taker_buy_volume
+  * taker_sell_volume
+  * taker_ratio
+  * buy_pressure
+  * volume_delta
+
+---
+
+FASE 5 — INTEGRAÇÃO COM FEATURE ENGINE
+
+No feature_engine:
+
+* NÃO recalcular taker_ratio
+* apenas consumir do order_flow_service
+
+Adicionar ao output:
+
+```json
+{
+  "taker_ratio": ...,
+  "buy_pressure": ...,
+  "volume_delta": ...,
+  "taker_buy_volume": ...,
+  "taker_sell_volume": ...
+}
+```
+
+---
+
+FASE 6 — REMOÇÃO DE AMBIGUIDADES
+
+Eliminar completamente:
+
+* taker_buy_ratio
+* qualquer uso de:
+
+  * volume_24h_buy
+  * long_short_account_ratio como proxy
+
+---
+
+FASE 7 — SCORE ENGINE (CORREÇÃO CRÍTICA)
+
+Atualizar:
+
+* remover “taker_ratio” antigo
+* suportar:
+
+  * taker_ratio (novo)
+  * buy_pressure
+
+Validar:
+
+```python
+if indicator not in indicators:
+    return False  # ou erro explícito
+```
+
+---
+
+FASE 8 — FRONTEND (ALINHAMENTO)
+
+Atualizar dropdown:
+
+ANTES:
+
+* taker_ratio (ambíguo)
+
+DEPOIS:
+
+* taker_ratio (buy/sell)
+* buy_pressure (0–1)
+
+Adicionar tooltip:
+
+* taker_ratio: "buy volume / sell volume"
+* buy_pressure: "buy / (buy + sell)"
+
+---
+
+FASE 9 — JANELA TEMPORAL PADRÃO
+
+Definir:
+
+* janela fixa (ex: 60s ou 1m)
+* nunca usar “últimos N trades” sem tempo
+
+---
+
+FASE 10 — RASTREABILIDADE
+
+Cada indicador deve incluir:
+
+```json
+{
+  "value": ...,
+  "source": "binance_trades",
+  "window": "60s",
+  "timestamp": ...
+}
+```
+
+---
+
+FASE 11 — VALIDAÇÃO
+
+Regras:
+
+* taker_ratio < 0.1 ou > 10 → flag
+* buy_pressure fora de [0,1] → erro
+* volumes negativos → erro
+
+---
+
+FASE 12 — COMPATIBILIDADE
+
+* manter L5 funcionando, mas migrar gradualmente
+* não quebrar outras métricas
+
+---
+
+RESULTADO ESPERADO
+
+* indicador com definição clara
+* sem ambiguidade semântica
+* disponível em todo pipeline
+* coerente com thresholds
+* utilizável no ScoreEngine e frontend
+
+---
+
+CRITÉRIO DE SUCESSO
+
+* taker_ratio > 1 passa a ocorrer naturalmente
+* regras no frontend funcionam corretamente
+* nenhum indicador “fantasma”
+* nenhuma sobrescrita ou fallback oculto
+
+---
+
+IMPORTANTE
+
+* remover definitivamente proxies conceituais
+* garantir que “taker_ratio” signifique sempre a mesma coisa em todo o sistema
+
+---
+
+FIM

@@ -107,6 +107,7 @@ async def _compute_async():
     from ..services.feature_engine import FeatureEngine
     from ..services.market_data_service import market_data_service
     from ..services.seed_service import DEFAULT_INDICATORS
+    from ..services.order_flow_service import get_order_flow_data
 
     logger.info("Starting indicator computation...")
 
@@ -154,7 +155,7 @@ async def _compute_async():
                     symbol,
                     existing_data=metadata_map.get(symbol),
                 )
-                # Calculate indicators
+                # Calculate OHLCV-based indicators
                 results = engine.calculate(df, market_data=market_data)
                 if not results:
                     continue
@@ -168,6 +169,14 @@ async def _compute_async():
                     results.get("volume_24h_coverage_hours"),
                     results.get("volume_24h_candles"),
                 )
+
+                # Merge real order flow data (taker_ratio, buy_pressure — 60s trade window)
+                of_data = await get_order_flow_data(symbol, window_seconds=60)
+                results.update({k: v for k, v in of_data.items() if v is not None or k in {
+                    "taker_ratio", "buy_pressure", "volume_delta",
+                    "taker_buy_volume", "taker_sell_volume",
+                }})
+
 
                 now = datetime.now(timezone.utc)
                 await _upsert_market_metadata_snapshot(db, symbol, results, now)
@@ -208,6 +217,7 @@ async def _compute_5m_async():
     from ..services.feature_engine import FeatureEngine
     from ..services.market_data_service import market_data_service
     from ..services.seed_service import DEFAULT_INDICATORS
+    from ..services.order_flow_service import get_order_flow_data
 
     logger.info("Starting 5m indicator computation...")
 
@@ -268,6 +278,13 @@ async def _compute_5m_async():
                     results.get("volume_24h_coverage_hours"),
                     results.get("volume_24h_candles"),
                 )
+
+                # Merge real order flow data (taker_ratio, buy_pressure — 60s trade window)
+                of_data = await get_order_flow_data(symbol, window_seconds=60)
+                results.update({k: v for k, v in of_data.items() if v is not None or k in {
+                    "taker_ratio", "buy_pressure", "volume_delta",
+                    "taker_buy_volume", "taker_sell_volume",
+                }})
 
                 now = datetime.now(timezone.utc)
                 await _upsert_market_metadata_snapshot(db, symbol, results, now)

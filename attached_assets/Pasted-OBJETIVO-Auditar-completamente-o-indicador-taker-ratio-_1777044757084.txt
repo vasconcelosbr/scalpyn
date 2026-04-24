@@ -1,0 +1,190 @@
+OBJETIVO
+Auditar completamente o indicador “taker_ratio”, incluindo definição conceitual, fórmula implementada, dados de entrada e uso no sistema.
+
+NÃO corrigir. NÃO propor melhorias. APENAS LEVANTAR E COMPARAR.
+
+---
+
+FASE 1 — DEFINIÇÃO CONCEITUAL
+
+1. Identificar como o sistema DEFINE “taker_ratio”:
+
+* descrição no código (docstring, comentários)
+* nome interno vs significado real
+
+2. Responder:
+
+* o sistema trata como:
+  (A) razão buy/sell
+  (B) proporção buy/(buy+sell)
+  (C) outro formato
+
+---
+
+FASE 2 — FÓRMULA IMPLEMENTADA (OBRIGATÓRIO)
+
+1. Localizar no código:
+
+* arquivo
+* função
+
+2. Copiar EXATAMENTE a fórmula usada:
+
+Exemplo esperado:
+taker_ratio = ...
+
+3. Identificar:
+
+* variáveis utilizadas
+* tratamento de divisão por zero
+
+---
+
+FASE 3 — FAIXA DE VALORES
+
+Com base na fórmula, determinar:
+
+* intervalo possível (ex: 0–1, 0–∞)
+* comportamento em cenários extremos:
+
+  * só compra
+  * só venda
+  * equilíbrio
+
+---
+
+FASE 4 — COMPARAÇÃO COM PADRÃO DE MERCADO
+
+Comparar a fórmula encontrada com:
+
+Padrão 1 (mercado):
+taker_ratio = buy / sell
+
+Padrão 2 (proporção):
+buy_pressure = buy / (buy + sell)
+
+Responder:
+
+* qual padrão o sistema segue?
+* o nome “taker_ratio” está correto?
+
+---
+
+FASE 5 — DADOS DE ENTRADA
+
+1. Origem dos dados:
+
+* endpoint
+* exchange
+
+2. Variáveis:
+
+* taker_buy_volume
+* taker_sell_volume
+
+3. Unidade:
+
+* base asset ou USDT
+
+---
+
+FASE 6 — JANELA DE CÁLCULO
+
+Determinar:
+
+* período utilizado:
+
+  * últimos N trades?
+  * intervalo fixo (ex: 60s)?
+  * candle?
+
+* consistência temporal:
+
+  * os dados pertencem ao mesmo intervalo?
+
+---
+
+FASE 7 — VALOR REAL ATUAL
+
+Exibir:
+
+* taker_buy_volume
+* taker_sell_volume
+* fórmula aplicada
+* taker_ratio final
+
+---
+
+FASE 8 — USO NO SISTEMA
+
+Mapear:
+
+* onde o indicador é utilizado (L1, L2, L3)
+* thresholds aplicados
+
+Exemplo:
+taker_ratio > 1.05
+
+---
+
+FASE 9 — COERÊNCIA ENTRE FÓRMULA E USO
+
+Responder objetivamente:
+
+* o threshold é compatível com a fórmula?
+* o range da métrica permite atingir o threshold?
+
+---
+
+FASE 10 — CONCLUSÃO TÉCNICA (SEM CORREÇÃO)
+
+Responder:
+
+* há inconsistência entre:
+
+  * definição
+  * fórmula
+  * uso?
+
+* classificar:
+
+  * correto
+  * parcialmente correto
+  * incorreto
+
+---
+
+FORMATO DE SAÍDA
+
+1. DEFINIÇÃO
+2. FÓRMULA
+3. RANGE
+4. COMPARAÇÃO COM MERCADO
+5. DADOS DE ENTRADA
+6. JANELA
+7. VALOR REAL
+8. USO
+9. COERÊNCIA
+10. CONCLUSÃO
+
+---
+
+REGRAS
+
+* NÃO sugerir correção
+* NÃO alterar código
+* NÃO otimizar
+
+---
+
+CRITÉRIO DE SUCESSO
+
+* entender exatamente o que o sistema está calculando
+* identificar se o nome e o uso fazem sentido
+* eliminar qualquer ambiguidade conceitual
+
+---
+
+RESULTADO ESPERADO
+
+Base sólida para correção precisa e definitiva na próxima etapa.

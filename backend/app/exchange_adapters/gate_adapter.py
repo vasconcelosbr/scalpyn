@@ -650,6 +650,24 @@ class GateAdapter(BaseExchangeAdapter):
             raise GateAPIError(r.status_code, "PUBLIC_ERROR", r.text[:300])
         return r.json()
 
+    async def get_spot_trades(
+        self,
+        currency_pair: str,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """
+        GET /spot/trades (public) — recent trades for a spot pair.
+
+        Returns list of dicts with keys:
+            id, create_time, create_time_ms, currency_pair, side ("buy"|"sell"),
+            amount (base asset qty), price (USDT).
+        """
+        pair = self._normalize_symbol(currency_pair)
+        return await self._public_get(
+            f"{self.SPOT_BASE}/spot/trades",
+            params={"currency_pair": pair, "limit": str(limit)},
+        )
+
     async def list_spot_pairs(self) -> List[Dict[str, Any]]:
         """
         GET /spot/currency_pairs (public) → all spot trading pairs.

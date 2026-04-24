@@ -8,7 +8,10 @@ from typing import Dict, Any, List, Optional, Set
 
 # ── Display labels per indicator name ─────────────────────────────────────────
 _IND_LABELS: Dict[str, str] = {
-    "rsi": "RSI", "volume_spike": "Vol Spike", "taker_ratio": "Taker Ratio",
+    "rsi": "RSI", "volume_spike": "Vol Spike",
+    "taker_ratio": "Taker Ratio (buy/sell)",
+    "buy_pressure": "Buy Pressure (0-1)",
+    "taker_buy_volume": "Taker Buy Vol", "taker_sell_volume": "Taker Sell Vol",
     "adx": "ADX", "macd_histogram": "MACD Hist", "macd": "MACD",
     "macd_signal": "MACD Signal", "ema9_gt_ema50": "EMA 9>50",
     "ema50_gt_ema200": "EMA 50>200", "ema_full_alignment": "EMA Trend",
@@ -18,14 +21,19 @@ _IND_LABELS: Dict[str, str] = {
     "obv": "OBV", "vwap_distance_pct": "VWAP%", "stoch_k": "Stoch%K",
     "stoch_d": "Stoch%D", "bb_width": "BB Width", "volume_24h": "Vol 24h",
     "zscore": "Z-Score", "psar_trend": "PSAR", "atr_pct": "ATR%", "atr": "ATR",
-    "ema9_distance_pct": "EMA9 Dist%",
+    "ema9_distance_pct": "EMA9 Dist%", "volume_delta": "Vol Delta",
 }
 
 # ── Category per indicator name ────────────────────────────────────────────────
+# taker_ratio  = buy / sell          → [0, ∞)  → lives in "signal" (threshold > 1)
+# buy_pressure = buy / (buy + sell)  → [0, 1]  → lives in "liquidity" (threshold > 0.5)
 _IND_CATEGORY: Dict[str, str] = {
     "volume_spike": "liquidity", "volume_24h": "liquidity",
     "spread_pct": "liquidity", "orderbook_depth_usdt": "liquidity",
-    "obv": "liquidity", "taker_ratio": "liquidity",
+    "obv": "liquidity",
+    "buy_pressure": "liquidity",          # buy/(buy+sell), [0, 1]
+    "taker_buy_volume": "liquidity",
+    "taker_sell_volume": "liquidity",
     "adx": "market_structure", "ema_trend": "market_structure",
     "atr": "market_structure", "atr_pct": "market_structure",
     "psar_trend": "market_structure", "bb_width": "market_structure",
@@ -35,6 +43,7 @@ _IND_CATEGORY: Dict[str, str] = {
     "macd_histogram": "momentum", "stoch_k": "momentum",
     "stoch_d": "momentum", "zscore": "momentum", "vwap_distance_pct": "momentum",
     "ema9_distance_pct": "momentum",
+    "taker_ratio": "signal",              # buy/sell, [0, ∞), threshold > 1 meaningful
     "adx_acceleration": "signal", "volume_delta": "signal",
     "funding_rate": "signal", "ema9_gt_ema50": "signal",
     "ema50_gt_ema200": "signal", "ema_full_alignment": "signal",
@@ -307,10 +316,15 @@ class ScoreEngine:
         ``signal``.
 
         Rules are mapped to categories by indicator type:
-        - liquidity: volume_spike, volume_24h, spread_pct, orderbook_depth_usdt, obv, taker_ratio
+        - liquidity:        volume_spike, volume_24h, spread_pct, orderbook_depth_usdt, obv,
+                            buy_pressure (buy/(buy+sell), 0-1), taker_buy_volume, taker_sell_volume
         - market_structure: adx, ema_trend, atr, atr_pct, psar_trend, bb_width, di_plus, di_minus, di_trend
-        - momentum: rsi, macd, macd_signal, macd_histogram, stoch_k, stoch_d, zscore, vwap_distance_pct
-        - signal: adx_acceleration, volume_delta, funding_rate, ema9_gt_ema50, ema50_gt_ema200, ema_full_alignment
+        - momentum:         rsi, macd, macd_signal, macd_histogram, stoch_k, stoch_d, zscore, vwap_distance_pct
+        - signal:           taker_ratio (buy/sell, 0-∞), adx_acceleration, volume_delta, funding_rate,
+                            ema9_gt_ema50, ema50_gt_ema200, ema_full_alignment
+
+        buy_pressure  = buy / (buy + sell)  → [0, 1],  equilibrium = 0.5
+        taker_ratio   = buy / sell          → [0, ∞),  equilibrium ≈ 1.0
         """
         earned_points = 0.0
         possible_points = 0.0
