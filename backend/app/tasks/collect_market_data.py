@@ -112,11 +112,15 @@ async def _collect_all_async():
                     if price > 0:
                         await db.execute(text("""
                             INSERT INTO market_metadata
-                                (symbol, price, price_change_24h, volume_24h, spread_pct, last_updated)
-                            VALUES (:symbol, :price, :change, :volume, :spread, :updated)
+                                (symbol, price, price_change_24h, volume_24h,
+                                 spread_pct, last_updated, volume_24h_updated_at)
+                            VALUES (:symbol, :price, :change, :volume, :spread,
+                                    :updated, :updated)
                             ON CONFLICT (symbol) DO UPDATE SET
                                 price = :price, price_change_24h = :change,
-                                volume_24h = :volume, spread_pct = :spread, last_updated = :updated
+                                volume_24h = :volume, spread_pct = :spread,
+                                last_updated = :updated,
+                                volume_24h_updated_at = :updated
                         """), {
                             "symbol": symbol,
                             "price":  price,
@@ -287,14 +291,17 @@ async def _collect_5m_async():
                         spread = market_data_service.compute_spread_from_ticker(ticker)
                         await db.execute(text("""
                             INSERT INTO market_metadata
-                                (symbol, price, price_change_24h, volume_24h, spread_pct, last_updated)
-                            VALUES (:symbol, :price, :change, :volume, :spread, :updated)
+                                (symbol, price, price_change_24h, volume_24h,
+                                 spread_pct, last_updated, volume_24h_updated_at)
+                            VALUES (:symbol, :price, :change, :volume, :spread,
+                                    :updated, :updated)
                             ON CONFLICT (symbol) DO UPDATE SET
                                 price = :price,
                                 price_change_24h = :change,
                                 volume_24h = :volume,
                                 spread_pct = :spread,
-                                last_updated = :updated
+                                last_updated = :updated,
+                                volume_24h_updated_at = :updated
                         """), {
                             "symbol": pair,
                             "price":  price,
@@ -312,10 +319,11 @@ async def _collect_5m_async():
         except Exception as e:
             logger.debug("5m: backup ticker fetch failed (non-blocking): %s", e)
 
-        # Per-symbol stale-check fallback. Catches symbols missing from the
-        # batch tickers response (rare/long-tail pairs) or whose volume_24h
-        # is older than 10 minutes — we re-fetch individually from the Gate
-        # spot ticker endpoint so the canonical volume column never drifts.
+        # Per-symbol Gate ticker fallback for long-tail pairs missing from the
+        # batch endpoint. Staleness is checked against `volume_24h_updated_at`
+        # (written only by ticker writers) — NOT `last_updated`, which is
+        # touched by price/orderbook seeds in this same task and would
+        # otherwise mask stale volume figures.
         try:
             stale_rows = (await db.execute(text("""
                 SELECT symbol
@@ -323,7 +331,8 @@ async def _collect_5m_async():
                 WHERE symbol = ANY(:syms)
                   AND (
                         volume_24h IS NULL
-                     OR last_updated < now() - interval '10 minutes'
+                     OR volume_24h_updated_at IS NULL
+                     OR volume_24h_updated_at < now() - interval '10 minutes'
                   )
             """), {"syms": symbols})).fetchall()
             stale_syms = [r.symbol for r in stale_rows]
@@ -343,7 +352,8 @@ async def _collect_5m_async():
                             UPDATE market_metadata
                             SET price = :price,
                                 volume_24h = :volume,
-                                last_updated = :ts
+                                last_updated = :ts,
+                                volume_24h_updated_at = :ts
                             WHERE symbol = :sym
                         """), {
                             "sym":    sym,

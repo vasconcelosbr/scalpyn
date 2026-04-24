@@ -211,7 +211,8 @@ async def init_db():
             await conn.execute(text("""
                 ALTER TABLE market_metadata
                   ADD COLUMN IF NOT EXISTS spread_pct DECIMAL(10,4),
-                  ADD COLUMN IF NOT EXISTS orderbook_depth_usdt DECIMAL(20,2);
+                  ADD COLUMN IF NOT EXISTS orderbook_depth_usdt DECIMAL(20,2),
+                  ADD COLUMN IF NOT EXISTS volume_24h_updated_at TIMESTAMPTZ;
             """))
         except Exception as e:
             logger.warning(f"Could not add liquidity columns to market_metadata: {e}")
