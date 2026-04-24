@@ -386,7 +386,7 @@ export default function AddCryptosModal({
                   <th className="text-right">Preço</th>
                   <th className="text-right">24h %</th>
                   <th className="text-right">Market Cap</th>
-                  <th className="text-right">Volume 24h</th>
+                  <th className="text-right" title="Volume 24h em USDT (ticker spot Gate.io). Não inclui futuros perpétuos nem outras exchanges.">Vol 24h (Gate Spot)</th>
                 </tr>
               </thead>
               <tbody>

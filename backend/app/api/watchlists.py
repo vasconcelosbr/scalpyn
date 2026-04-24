@@ -266,7 +266,7 @@ FIELD_MAP: Dict[str, str] = {
 
 # Human-readable labels
 FIELD_LABELS: Dict[str, str] = {
-    "_meta:volume_24h":    "Volume 24h",
+    "_meta:volume_24h":    "Vol 24h (Gate Spot)",
     "_meta:market_cap":    "Market Cap",
     "_meta:price_change_24h": "24h%",
     "atr_pct":             "ATR%",
@@ -311,13 +311,13 @@ def _extract_profile_indicator_fields(profile_config: Optional[Dict[str, Any]]) 
     Signal/entry-trigger conditions are not included because they apply at a
     different stage of the pipeline.
 
-    Returns [{"key": "_meta:volume_24h", "label": "Volume 24h", "field": "volume_24h"}, ...]
+    Returns [{"key": "_meta:volume_24h", "label": "Vol 24h (Gate Spot)", "field": "volume_24h"}, ...]
     """
     if not profile_config:
         # Default columns when no profile is assigned
         return [
             {"key": "_meta:price_change_24h", "label": "24h%",       "field": "price_change_24h"},
-            {"key": "_meta:volume_24h",       "label": "Volume 24h", "field": "volume_24h"},
+            {"key": "_meta:volume_24h",       "label": "Vol 24h (Gate Spot)", "field": "volume_24h"},
             {"key": "_meta:market_cap",       "label": "Market Cap", "field": "market_cap"},
         ]
 

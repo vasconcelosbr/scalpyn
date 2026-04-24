@@ -772,9 +772,9 @@ export function WatchlistTable() {
                 <th className="text-right">Market Cap</th>
                 <th
                   className="text-right"
-                  title="24h quote volume reported by the Gate.io spot ticker (single venue, not aggregated across exchanges)."
+                  title="Volume 24h em USDT reportado pelo ticker spot da Gate.io. Não inclui futuros perpétuos (que costumam ter volume 5–7× maior) nem outras exchanges."
                 >
-                  Vol 24h (Gate)
+                  Vol 24h (Gate Spot)
                 </th>
                 <th>Trend</th>
                 <th>
