@@ -206,7 +206,13 @@ async def init_db():
               last_updated TIMESTAMPTZ
             );
         """))
-        # Add liquidity columns to market_metadata if they don't exist (migration)
+        # Add liquidity columns to market_metadata if they don't exist (migration).
+        # Note on freshness columns:
+        #   - `last_updated` is generic metadata freshness — touched by ANY
+        #     write (price seed, orderbook, indicators, ticker).
+        #   - `volume_24h_updated_at` is volume-specific freshness — written
+        #     ONLY by ticker-based writers in `collect_market_data`. Use this
+        #     column when checking whether `volume_24h` itself is stale.
         try:
             await conn.execute(text("""
                 ALTER TABLE market_metadata
