@@ -11,7 +11,7 @@ import {
 const DECISION_SUMMARY_INDICATOR_LIMIT = 3;
 
 export interface DecisionTraceItem {
-  type: "filter" | "block_rule";
+  type: "filter" | "block_rule" | "entry_trigger" | "signal";
   indicator: string;
   condition: string;
   expected?: string | null;
@@ -230,6 +230,14 @@ export function WatchlistDecisionTable({
                               title="Filters"
                               items={item.details.evaluation_trace.filter((trace) => trace.type === "filter")}
                             />
+                            <TraceSection
+                              title="Entry Triggers"
+                              items={item.details.evaluation_trace.filter((trace) => trace.type === "entry_trigger")}
+                            />
+                            <TraceSection
+                              title="Signals"
+                              items={item.details.evaluation_trace.filter((trace) => trace.type === "signal")}
+                            />
                           </div>
                         </td>
                       </tr>
@@ -279,7 +287,11 @@ function TraceSection({ title, items }: { title: string; items: DecisionTraceIte
                 : item.status === "FAIL"
                   ? item.type === "block_rule"
                     ? "border-[#6B21A8]/40 bg-[#1A0A2A] text-[#D8B4FE]"
-                    : "border-[#7F1D1D]/25 bg-[#150A0A] text-[#FCA5A5]"
+                    : item.type === "entry_trigger"
+                      ? "border-[#1E40AF]/40 bg-[#060E28] text-[#93C5FD]"
+                      : item.type === "signal"
+                        ? "border-[#78350F]/40 bg-[#1C1206] text-[#FCD34D]"
+                        : "border-[#7F1D1D]/25 bg-[#150A0A] text-[#FCA5A5]"
                   : "border-[#1E2433] bg-[#06080E] text-[#64748B]";
           return (
             <div key={index} className={`rounded-lg border px-3 py-2 text-xs ${cls}`}>

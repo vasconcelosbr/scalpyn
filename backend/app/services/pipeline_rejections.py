@@ -132,6 +132,39 @@ def _evaluate_filter(
     }
 
 
+def _evaluate_entry_trigger(
+    rule_engine: RuleEngine,
+    asset: Dict[str, Any],
+    condition: Dict[str, Any],
+) -> Dict[str, Any]:
+    passed, detail = rule_engine.evaluate_condition(condition, asset, field_key="indicator")
+    return {
+        "type": "entry_trigger",
+        "indicator": _condition_indicator(condition, field_key="indicator"),
+        "condition": format_condition_text(condition, field_key="indicator"),
+        "expected": format_expected(condition),
+        "current_value": _detail_actual(detail),
+        "status": "PASS" if passed else "FAIL",
+    }
+
+
+def _evaluate_signal_condition(
+    rule_engine: RuleEngine,
+    asset: Dict[str, Any],
+    condition: Dict[str, Any],
+) -> Dict[str, Any]:
+    field_key = "indicator" if condition.get("indicator") else "field"
+    passed, detail = rule_engine.evaluate_condition(condition, asset, field_key=field_key)
+    return {
+        "type": "signal",
+        "indicator": _condition_indicator(condition, field_key=field_key),
+        "condition": format_condition_text(condition, field_key=field_key),
+        "expected": format_expected(condition),
+        "current_value": _detail_actual(detail),
+        "status": "PASS" if passed else "FAIL",
+    }
+
+
 def _evaluate_block_rule(
     rule_engine: RuleEngine,
     asset: Dict[str, Any],
@@ -301,6 +334,17 @@ def _build_asset_evaluation_trace(
     )
     filter_logic = str(filters_config.get("logic", "AND")).upper()
 
+    entry_triggers = [
+        cond
+        for cond in ((profile_config.get("entry_triggers") or {}).get("conditions", []) or [])
+        if cond.get("enabled", True)
+    ]
+    signal_conditions = [
+        cond
+        for cond in ((profile_config.get("signals") or {}).get("conditions", []) or [])
+        if cond.get("enabled", True)
+    ]
+
     trace: List[Dict[str, Any]] = []
     failed_trace: Optional[Dict[str, Any]] = None
 
@@ -313,6 +357,10 @@ def _build_asset_evaluation_trace(
                 trace.append(_skipped_block_rule(remaining_block))
             for condition in filters:
                 trace.append(_skipped_filter(condition))
+            for condition in entry_triggers:
+                trace.append(_normalized_trace_item(_evaluate_entry_trigger(rule_engine, asset, condition)))
+            for condition in signal_conditions:
+                trace.append(_normalized_trace_item(_evaluate_signal_condition(rule_engine, asset, condition)))
             return trace, failed_trace
 
     filter_results: List[Dict[str, Any]] = []
@@ -324,13 +372,26 @@ def _build_asset_evaluation_trace(
             failed_trace = filter_trace
             for remaining_condition in filters[index + 1:]:
                 trace.append(_skipped_filter(remaining_condition))
+            for condition in entry_triggers:
+                trace.append(_normalized_trace_item(_evaluate_entry_trigger(rule_engine, asset, condition)))
+            for condition in signal_conditions:
+                trace.append(_normalized_trace_item(_evaluate_signal_condition(rule_engine, asset, condition)))
             return trace, failed_trace
 
     if filter_logic == "OR" and filter_results and not any(
         item["status"] == "PASS" for item in filter_results
     ):
         failed_trace = next((item for item in filter_results if item["status"] == "FAIL"), None)
+        for condition in entry_triggers:
+            trace.append(_normalized_trace_item(_evaluate_entry_trigger(rule_engine, asset, condition)))
+        for condition in signal_conditions:
+            trace.append(_normalized_trace_item(_evaluate_signal_condition(rule_engine, asset, condition)))
         return trace, failed_trace
+
+    for condition in entry_triggers:
+        trace.append(_normalized_trace_item(_evaluate_entry_trigger(rule_engine, asset, condition)))
+    for condition in signal_conditions:
+        trace.append(_normalized_trace_item(_evaluate_signal_condition(rule_engine, asset, condition)))
 
     return trace, failed_trace
 

@@ -1,7 +1,7 @@
 'use client';
 
 export interface EvaluationTraceItem {
-  type: 'filter' | 'block_rule';
+  type: 'filter' | 'block_rule' | 'entry_trigger' | 'signal';
   indicator: string;
   condition: string;
   expected?: string | null;
@@ -32,11 +32,15 @@ export function EvaluationTraceBreakdown({
 }) {
   const blockRules = items.filter((item) => item.type === 'block_rule');
   const filters = items.filter((item) => item.type === 'filter');
+  const entryTriggers = items.filter((item) => item.type === 'entry_trigger');
+  const signals = items.filter((item) => item.type === 'signal');
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <TraceSection title="Block Rules" items={blockRules} emptyMessage={emptyMessage} />
       <TraceSection title="Filters" items={filters} emptyMessage={emptyMessage} />
+      <TraceSection title="Entry Triggers" items={entryTriggers} emptyMessage={emptyMessage} />
+      <TraceSection title="Signals" items={signals} emptyMessage={emptyMessage} />
     </div>
   );
 }
@@ -64,7 +68,11 @@ function TraceSection({
                 : item.status === 'FAIL'
                   ? item.type === 'block_rule'
                     ? 'border-[#6B21A8]/40 bg-[#1A0A2A] text-[#D8B4FE]'
-                    : 'border-[#7F1D1D]/25 bg-[#150A0A] text-[#FCA5A5]'
+                    : item.type === 'entry_trigger'
+                      ? 'border-[#1E40AF]/40 bg-[#060E28] text-[#93C5FD]'
+                      : item.type === 'signal'
+                        ? 'border-[#78350F]/40 bg-[#1C1206] text-[#FCD34D]'
+                        : 'border-[#7F1D1D]/25 bg-[#150A0A] text-[#FCA5A5]'
                   : 'border-[#1E2433] bg-[#06080E] text-[#64748B]';
 
           return (
