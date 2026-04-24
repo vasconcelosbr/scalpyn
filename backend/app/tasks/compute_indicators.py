@@ -46,7 +46,7 @@ def _run_async(coro):
 
 async def _load_market_metadata_map(db) -> dict:
     metadata_result = await db.execute(text("""
-        SELECT symbol, price, volume_24h, spread_pct, orderbook_depth_usdt
+        SELECT symbol, price, volume_24h, spread_pct, orderbook_depth_usdt, last_updated
         FROM market_metadata
     """))
     return {
@@ -55,6 +55,7 @@ async def _load_market_metadata_map(db) -> dict:
             "volume_24h": float(row.volume_24h) if row.volume_24h is not None else None,
             "spread_pct": float(row.spread_pct) if row.spread_pct is not None else None,
             "orderbook_depth_usdt": float(row.orderbook_depth_usdt) if row.orderbook_depth_usdt is not None else None,
+            "last_updated": row.last_updated,
         }
         for row in metadata_result.fetchall()
     }
@@ -75,7 +76,7 @@ async def _upsert_market_metadata_snapshot(db, symbol: str, results: dict, updat
     """), {
         "symbol": symbol,
         "price": results.get("price"),
-        "volume_24h": results.get("volume_24h_usdt"),
+        "volume_24h": results.get("volume_24h_final", results.get("volume_24h_usdt")),
         "spread_pct": results.get("spread_pct"),
         "orderbook_depth_usdt": results.get("orderbook_depth_usdt"),
         "updated": updated_at,
@@ -113,7 +114,7 @@ async def _compute_async():
     indicators_config = DEFAULT_INDICATORS  # System defaults for centralized computation
     engine = FeatureEngine(indicators_config)
     min_candles_1h = _derive_min_candles(indicators_config, "1h")
-    query_limit_1h = max(200, min_candles_1h)
+    query_limit_1h = max(300, min_candles_1h)
     computed = 0
 
     async with AsyncSessionLocal() as db:
@@ -164,7 +165,7 @@ async def _compute_async():
                     symbol,
                     results.get("volume_last_candle_base"),
                     results.get("volume_last_candle_usdt"),
-                    results.get("volume_24h_usdt"),
+                    results.get("volume_24h_final", results.get("volume_24h_usdt")),
                     results.get("volume_24h_coverage_hours"),
                     results.get("volume_24h_candles"),
                 )

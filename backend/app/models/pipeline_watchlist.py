@@ -86,7 +86,7 @@ class PipelineWatchlistAsset(Base):
     # Live data (updated via WebSocket / refresh)
     current_price = Column(Numeric(20, 8), nullable=True)
     price_change_24h = Column(Numeric(8, 4), nullable=True)
-    volume_24h = Column(Numeric(20, 2), nullable=True)
+    volume_24h = Column(Numeric(20, 8), nullable=True)
     market_cap = Column(Numeric(20, 2), nullable=True)
 
     # Calculated score (from profile)

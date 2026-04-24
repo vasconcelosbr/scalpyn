@@ -44,7 +44,7 @@ async def _collect_all_async():
     async with AsyncSessionLocal() as db:
         for symbol in symbols[:50]:  # Limit to avoid rate limits
             try:
-                df = await market_data_service.fetch_ohlcv(symbol, "1h", limit=100)
+                df = await market_data_service.fetch_ohlcv(symbol, "1h", limit=300)
                 if df is None or df.empty:
                     continue
 

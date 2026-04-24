@@ -1,5 +1,6 @@
 """Market Data Service — centralized collection from exchanges into TimescaleDB."""
 
+import asyncio
 import logging
 import math
 import time
@@ -37,19 +38,26 @@ class MarketDataNormalized:
     source: str = "gate"
     confidence_score: Optional[float] = None
     source_map: Dict[str, str] = field(default_factory=dict)
+    timestamp_map: Dict[str, datetime] = field(default_factory=dict)
+    flags: List[str] = field(default_factory=list)
+    snapshot_consistent: bool = True
+    max_timestamp_diff_seconds: Optional[float] = None
 
     def to_indicator_payload(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "market_data_symbol": self.symbol,
             "market_data_source": self.source,
             "market_data_confidence": self.confidence_score,
+            "snapshot_consistent": self.snapshot_consistent,
         }
+        if self.max_timestamp_diff_seconds is not None:
+            payload["max_timestamp_diff_seconds"] = round(float(self.max_timestamp_diff_seconds), 6)
         if self.price is not None:
             payload["price"] = round(float(self.price), 8)
         if self.volume_base is not None:
-            payload["volume_24h_base"] = round(float(self.volume_base), 8)
+            payload["volume_24h_ticker_base"] = round(float(self.volume_base), 8)
         if self.volume_quote is not None:
-            payload["volume_24h_usdt"] = round(float(self.volume_quote), 8)
+            payload["volume_24h_ticker_usdt"] = round(float(self.volume_quote), 8)
         if self.orderbook_depth is not None:
             payload["orderbook_depth_usdt"] = round(float(self.orderbook_depth), 8)
         if self.spread_pct is not None:
@@ -61,8 +69,52 @@ class MarketDataNormalized:
         if self.taker_ratio is not None:
             payload["taker_ratio"] = round(float(self.taker_ratio), 8)
         if self.volume_delta is not None:
-            payload["volume_delta"] = round(float(self.volume_delta), 8)
+            payload["volume_delta_trades"] = round(float(self.volume_delta), 8)
+        orderbook_source = self.source_map.get("orderbook_depth_usdt")
+        if orderbook_source:
+            payload["orderbook_depth_source"] = "binance" if orderbook_source.startswith("binance") else "gate"
+        if self.flags:
+            payload["data_quality_flags"] = sorted(set(self.flags))
+        indicator_trace: Dict[str, Dict[str, Any]] = {}
+        for indicator, source in self.source_map.items():
+            value = self._indicator_value(indicator)
+            if value is None:
+                continue
+            indicator_trace[indicator] = {
+                "value": self._round_indicator_value(indicator, value),
+                "source": source,
+                "timestamp": self._serialize_timestamp(self.timestamp_map.get(indicator)),
+            }
+        if indicator_trace:
+            payload["indicator_trace"] = indicator_trace
         return payload
+
+    def _indicator_value(self, indicator: str) -> Optional[float]:
+        mapping = {
+            "price": self.price,
+            "volume_24h_ticker_base": self.volume_base,
+            "volume_24h_ticker_usdt": self.volume_quote,
+            "orderbook_depth_usdt": self.orderbook_depth,
+            "spread_pct": self.spread_pct,
+            "taker_buy_volume": self.taker_buy_volume,
+            "taker_sell_volume": self.taker_sell_volume,
+            "taker_ratio": self.taker_ratio,
+            "volume_delta_trades": self.volume_delta,
+        }
+        return mapping.get(indicator)
+
+    @staticmethod
+    def _round_indicator_value(indicator: str, value: float) -> float:
+        digits = {
+            "spread_pct": 4,
+        }.get(indicator, 8)
+        return round(float(value), digits)
+
+    @staticmethod
+    def _serialize_timestamp(timestamp: Optional[datetime]) -> Optional[str]:
+        if timestamp is None:
+            return None
+        return timestamp.astimezone(timezone.utc).isoformat()
 
 
 def _is_etf_pair(currency_pair: str) -> bool:
@@ -116,15 +168,15 @@ class MarketDataService:
         parsed = self._as_float(value)
         if parsed is None:
             return False
-        if indicator in {"price", "volume_24h_base", "volume_24h_usdt", "orderbook_depth_usdt"}:
+        if indicator in {"price", "volume_24h_ticker_base", "volume_24h_ticker_usdt", "orderbook_depth_usdt"}:
             return parsed > 0
         if indicator == "spread_pct":
             return 0 <= parsed < 100
         if indicator == "taker_ratio":
-            return 0 <= parsed <= 1
+            return 0.2 <= parsed <= 5
         if indicator in {"taker_buy_volume", "taker_sell_volume"}:
             return parsed >= 0
-        if indicator == "volume_delta":
+        if indicator == "volume_delta_trades":
             return True
         return True
 
@@ -172,25 +224,59 @@ class MarketDataService:
         source: str,
         indicator: str,
         reason: Optional[str] = None,
+        captured_at: Optional[datetime] = None,
     ) -> None:
         if not self.is_valid_data(indicator, value):
+            self._flag_invalid_value(data, indicator, value)
             return
         if getattr(data, attribute) is not None:
             return
         setattr(data, attribute, float(value))
         data.source_map[indicator] = source
-        if source != "gate":
+        data.timestamp_map[indicator] = captured_at or self._snapshot_now()
+        if self._canonical_source(source) != "gate":
             logger.info(
                 "[DATA_SOURCE] symbol=%s indicator=%s source=%s reason=%s",
                 data.symbol,
                 indicator,
-                f"{source}_fallback" if source == "binance" else source,
+                f"{source}_fallback" if self._canonical_source(source) == "binance" else source,
                 reason or "fallback_applied",
             )
 
     @staticmethod
+    def _snapshot_now() -> datetime:
+        return datetime.now(timezone.utc)
+
+    @staticmethod
+    def _canonical_source(source: str) -> str:
+        if not source:
+            return "gate"
+        if source.startswith("binance"):
+            return "binance"
+        if source.startswith("gate"):
+            return "gate"
+        return source
+
+    @staticmethod
+    def _flag_invalid_value(data: MarketDataNormalized, indicator: str, value: Any) -> None:
+        parsed = MarketDataService._as_float(value)
+        if parsed is None:
+            data.flags.append(f"{indicator}_missing")
+            return
+        if indicator == "taker_ratio":
+            data.flags.append("taker_ratio_out_of_range")
+        elif indicator in {"volume_24h_ticker_base", "volume_24h_ticker_usdt"} and parsed <= 0:
+            data.flags.append(f"{indicator}_non_positive")
+        elif indicator == "orderbook_depth_usdt" and parsed <= 0:
+            data.flags.append("orderbook_depth_non_positive")
+
+    @staticmethod
     def _collapse_source(source_map: Dict[str, str]) -> str:
-        unique_sources = {source for source in source_map.values() if source}
+        unique_sources = {
+            MarketDataService._canonical_source(source)
+            for source in source_map.values()
+            if source
+        }
         if not unique_sources:
             return "gate"
         if len(unique_sources) == 1:
@@ -335,13 +421,17 @@ class MarketDataService:
             else:
                 taker_buy_volume += qty
         total_volume = taker_buy_volume + taker_sell_volume
-        ratio = taker_buy_volume / total_volume if total_volume > 0 else None
-        return {
+        ratio = taker_buy_volume / max(taker_sell_volume, 1e-9) if total_volume > 0 else None
+        payload: Dict[str, Any] = {
             "taker_buy_volume": taker_buy_volume,
             "taker_sell_volume": taker_sell_volume,
-            "taker_ratio": ratio,
-            "volume_delta": taker_buy_volume - taker_sell_volume if total_volume > 0 else 0.0,
+            "volume_delta_trades": taker_buy_volume - taker_sell_volume if total_volume > 0 else 0.0,
         }
+        if ratio is not None and self.is_valid_data("taker_ratio", ratio):
+            payload["taker_ratio"] = ratio
+        else:
+            payload["flags"] = ["taker_ratio_out_of_range"] if ratio is not None else []
+        return payload
 
     async def fetch_ohlcv(
         self, symbol: str, timeframe: str = "1h", limit: int = 200,
@@ -421,8 +511,15 @@ class MarketDataService:
         if normalized.orderbook_depth is not None:
             payload["orderbook_depth_usdt"] = round(float(normalized.orderbook_depth), 8)
         if payload:
-            payload["market_data_source"] = normalized.source_map.get("orderbook_depth_usdt", normalized.source)
+            payload["market_data_source"] = self._canonical_source(
+                normalized.source_map.get("orderbook_depth_usdt", normalized.source)
+            )
             payload["market_data_confidence"] = normalized.confidence_score
+            payload["orderbook_depth_source"] = (
+                "binance"
+                if str(normalized.source_map.get("orderbook_depth_usdt", "")).startswith("binance")
+                else "gate"
+            )
         return payload
 
     def compute_spread_from_ticker(self, ticker: Dict[str, Any]) -> Optional[float]:
@@ -446,147 +543,151 @@ class MarketDataService:
         depth = depth or int(self._fallback_config().get("orderbook_depth_levels", 10))
         normalized_symbol = self.normalize_symbol(symbol)
         normalized = MarketDataNormalized(symbol=normalized_symbol)
-        existing_data = existing_data or {}
+        _ = existing_data
+        trade_limit = int(self._fallback_config().get("binance_trade_limit", 500))
 
-        existing_price = self._as_float(existing_data.get("price"))
-        existing_volume_quote = self._as_float(
-            existing_data.get("volume_24h_usdt", existing_data.get("volume_24h"))
+        async def _fetch_with_timestamp(coro):
+            payload = await coro
+            return payload, self._snapshot_now()
+
+        coroutines = [
+            _fetch_with_timestamp(self._fetch_gate_ticker(normalized_symbol)),
+            _fetch_with_timestamp(self._fetch_gate_orderbook(normalized_symbol, depth)),
+            _fetch_with_timestamp(self._fetch_binance_orderbook(normalized_symbol, depth)),
+        ]
+        if include_taker:
+            coroutines.append(_fetch_with_timestamp(self._fetch_binance_trades(normalized_symbol, trade_limit)))
+
+        results = await asyncio.gather(*coroutines)
+        gate_ticker, gate_ticker_ts = results[0]
+        gate_orderbook, gate_orderbook_ts = results[1]
+        binance_orderbook, binance_orderbook_ts = results[2]
+        trades, trades_ts = results[3] if include_taker else ([], None)
+
+        gate_metrics = self._extract_gate_ticker_metrics(gate_ticker)
+        self._record_indicator(normalized, "price", gate_metrics.get("price"), "gate_ticker", "price", captured_at=gate_ticker_ts)
+        self._record_indicator(
+            normalized,
+            "volume_base",
+            gate_metrics.get("volume_24h_base"),
+            "gate_ticker",
+            "volume_24h_ticker_base",
+            captured_at=gate_ticker_ts,
         )
-        existing_volume_base = self._as_float(existing_data.get("volume_24h_base"))
-        if existing_volume_base is None and existing_price and existing_volume_quote:
-            existing_volume_base = existing_volume_quote / existing_price
-        existing_spread = self._as_float(existing_data.get("spread_pct"))
-        existing_depth = self._as_float(existing_data.get("orderbook_depth_usdt"))
+        self._record_indicator(
+            normalized,
+            "volume_quote",
+            gate_metrics.get("volume_24h_usdt"),
+            "gate_ticker",
+            "volume_24h_ticker_usdt",
+            captured_at=gate_ticker_ts,
+        )
+        self._record_indicator(
+            normalized,
+            "spread_pct",
+            gate_metrics.get("spread_pct"),
+            "gate_ticker",
+            "spread_pct",
+            captured_at=gate_ticker_ts,
+        )
 
-        self._record_indicator(normalized, "price", existing_price, "gate", "price")
-        self._record_indicator(normalized, "volume_quote", existing_volume_quote, "gate", "volume_24h_usdt")
-        self._record_indicator(normalized, "volume_base", existing_volume_base, "gate", "volume_24h_base")
-        self._record_indicator(normalized, "spread_pct", existing_spread, "gate", "spread_pct")
-        self._record_indicator(normalized, "orderbook_depth", existing_depth, "gate", "orderbook_depth_usdt")
-
-        gate_ticker = None
-        if not self.is_valid_data("price", normalized.price) or not self.is_valid_data("volume_24h_usdt", normalized.volume_quote):
-            gate_ticker = await self._fetch_gate_ticker(normalized_symbol)
-            gate_metrics = self._extract_gate_ticker_metrics(gate_ticker)
-            self._record_indicator(normalized, "price", gate_metrics.get("price"), "gate", "price")
-            self._record_indicator(normalized, "volume_base", gate_metrics.get("volume_24h_base"), "gate", "volume_24h_base")
-            self._record_indicator(normalized, "volume_quote", gate_metrics.get("volume_24h_usdt"), "gate", "volume_24h_usdt")
-            self._record_indicator(normalized, "spread_pct", gate_metrics.get("spread_pct"), "gate", "spread_pct")
-
-        if not self.is_valid_data("volume_24h_usdt", normalized.volume_quote):
-            binance_ticker = self._extract_binance_ticker_metrics(await self._fetch_binance_ticker(normalized_symbol))
-            self._record_indicator(
-                normalized,
-                "price",
-                binance_ticker.get("price"),
-                "binance",
-                "price",
-                reason="missing_from_gate",
-            )
-            self._record_indicator(
-                normalized,
-                "volume_base",
-                binance_ticker.get("volume_24h_base"),
-                "binance",
-                "volume_24h_base",
-                reason="missing_from_gate",
-            )
-            self._record_indicator(
-                normalized,
-                "volume_quote",
-                binance_ticker.get("volume_24h_usdt"),
-                "binance",
-                "volume_24h_usdt",
-                reason="missing_from_gate",
-            )
-            self._record_indicator(
-                normalized,
-                "spread_pct",
-                binance_ticker.get("spread_pct"),
-                "binance",
-                "spread_pct",
-                reason="missing_from_gate",
-            )
+        gate_book_metrics = self._extract_orderbook_metrics(gate_orderbook, depth)
+        self._record_indicator(
+            normalized,
+            "orderbook_depth",
+            gate_book_metrics.get("orderbook_depth_usdt"),
+            "gate_orderbook",
+            "orderbook_depth_usdt",
+            captured_at=gate_orderbook_ts,
+        )
+        self._record_indicator(
+            normalized,
+            "spread_pct",
+            gate_book_metrics.get("spread_pct"),
+            "gate_orderbook",
+            "spread_pct",
+            captured_at=gate_orderbook_ts,
+        )
 
         if not self.is_valid_data("orderbook_depth_usdt", normalized.orderbook_depth):
-            gate_book_metrics = self._extract_orderbook_metrics(
-                await self._fetch_gate_orderbook(normalized_symbol, depth),
-                depth,
-            )
-            self._record_indicator(normalized, "spread_pct", gate_book_metrics.get("spread_pct"), "gate", "spread_pct")
+            binance_book_metrics = self._extract_orderbook_metrics(binance_orderbook, depth)
             self._record_indicator(
                 normalized,
                 "orderbook_depth",
-                gate_book_metrics.get("orderbook_depth_usdt"),
-                "gate",
+                binance_book_metrics.get("orderbook_depth_usdt"),
+                "binance_orderbook",
                 "orderbook_depth_usdt",
-            )
-
-        if not self.is_valid_data("orderbook_depth_usdt", normalized.orderbook_depth):
-            binance_book_metrics = self._extract_orderbook_metrics(
-                await self._fetch_binance_orderbook(normalized_symbol, depth),
-                depth,
+                reason="missing_from_gate",
+                captured_at=binance_orderbook_ts,
             )
             self._record_indicator(
                 normalized,
                 "spread_pct",
                 binance_book_metrics.get("spread_pct"),
-                "binance",
+                "binance_orderbook",
                 "spread_pct",
                 reason="missing_from_gate",
-            )
-            self._record_indicator(
-                normalized,
-                "orderbook_depth",
-                binance_book_metrics.get("orderbook_depth_usdt"),
-                "binance",
-                "orderbook_depth_usdt",
-                reason="missing_from_gate",
+                captured_at=binance_orderbook_ts,
             )
 
         if include_taker:
-            trade_limit = int(self._fallback_config().get("binance_trade_limit", 500))
-            taker_metrics = self._extract_taker_metrics(
-                await self._fetch_binance_trades(normalized_symbol, trade_limit)
-            )
+            taker_metrics = self._extract_taker_metrics(trades)
+            normalized.flags.extend(taker_metrics.get("flags", []))
             self._record_indicator(
                 normalized,
                 "taker_buy_volume",
                 taker_metrics.get("taker_buy_volume"),
-                "binance",
+                "binance_trade",
                 "taker_buy_volume",
                 reason="unavailable_on_gate_spot",
+                captured_at=trades_ts,
             )
             self._record_indicator(
                 normalized,
                 "taker_sell_volume",
                 taker_metrics.get("taker_sell_volume"),
-                "binance",
+                "binance_trade",
                 "taker_sell_volume",
                 reason="unavailable_on_gate_spot",
+                captured_at=trades_ts,
             )
             self._record_indicator(
                 normalized,
                 "taker_ratio",
                 taker_metrics.get("taker_ratio"),
-                "binance",
+                "binance_trade",
                 "taker_ratio",
                 reason="unavailable_on_gate_spot",
+                captured_at=trades_ts,
             )
-            if taker_metrics.get("volume_delta") is not None:
-                normalized.volume_delta = float(taker_metrics["volume_delta"])
-                normalized.source_map["volume_delta"] = "binance"
-                logger.info(
-                    "[DATA_SOURCE] symbol=%s indicator=%s source=%s reason=%s",
-                    normalized.symbol,
-                    "volume_delta",
-                    "binance_fallback",
-                    "unavailable_on_gate_spot",
-                )
+            self._record_indicator(
+                normalized,
+                "volume_delta",
+                taker_metrics.get("volume_delta_trades"),
+                "binance_trade",
+                "volume_delta_trades",
+                reason="unavailable_on_gate_spot",
+                captured_at=trades_ts,
+            )
+
+        self._enforce_snapshot_consistency(normalized)
 
         normalized.source = self._collapse_source(normalized.source_map)
         normalized.confidence_score = self._confidence_score(normalized.source)
         return normalized
+
+    def _enforce_snapshot_consistency(self, data: MarketDataNormalized) -> None:
+        timestamps = [timestamp for timestamp in data.timestamp_map.values() if timestamp is not None]
+        if len(timestamps) < 2:
+            return
+        max_diff_seconds = (
+            max(timestamps).timestamp() - min(timestamps).timestamp()
+        )
+        data.max_timestamp_diff_seconds = max_diff_seconds
+        threshold = float(self._fallback_config().get("max_timestamp_diff_seconds", 2))
+        if max_diff_seconds >= threshold:
+            data.snapshot_consistent = False
+            data.flags.append("market_data_snapshot_inconsistent")
 
     async def fetch_indicator_fallbacks(
         self,

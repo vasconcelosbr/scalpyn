@@ -128,14 +128,19 @@ async def init_db():
               high DECIMAL(20,8),
               low DECIMAL(20,8),
               close DECIMAL(20,8),
-              volume DECIMAL(20,4),
-              quote_volume DECIMAL(20,4)
+              volume DECIMAL(20,8),
+              quote_volume DECIMAL(20,8)
             );
         """))
         try:
             await conn.execute(text("""
                 ALTER TABLE ohlcv
-                  ADD COLUMN IF NOT EXISTS quote_volume DECIMAL(20,4);
+                  ADD COLUMN IF NOT EXISTS quote_volume DECIMAL(20,8);
+            """))
+            await conn.execute(text("""
+                ALTER TABLE ohlcv
+                  ALTER COLUMN volume TYPE DECIMAL(20,8),
+                  ALTER COLUMN quote_volume TYPE DECIMAL(20,8);
             """))
             await conn.execute(text("""
                 WITH ranked AS (
@@ -197,7 +202,7 @@ async def init_db():
               symbol VARCHAR(20) PRIMARY KEY,
               name VARCHAR(255),
               market_cap DECIMAL(20,2),
-              volume_24h DECIMAL(20,2),
+              volume_24h DECIMAL(20,8),
               price DECIMAL(20,8),
               price_change_24h DECIMAL(10,4),
               ranking INTEGER,
@@ -210,6 +215,7 @@ async def init_db():
         try:
             await conn.execute(text("""
                 ALTER TABLE market_metadata
+                  ALTER COLUMN volume_24h TYPE DECIMAL(20,8),
                   ADD COLUMN IF NOT EXISTS spread_pct DECIMAL(10,4),
                   ADD COLUMN IF NOT EXISTS orderbook_depth_usdt DECIMAL(20,2);
             """))

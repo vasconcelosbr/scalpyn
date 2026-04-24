@@ -71,12 +71,14 @@ async def test_fetch_indicator_fallbacks_returns_mixed_normalized_market_data(mo
     payload = await service.fetch_indicator_fallbacks("ADAUSDT", existing_data=existing_data, depth=10)
 
     assert payload["market_data_symbol"] == "ADA/USDT"
-    assert payload["volume_24h_base"] == 1000.0
-    assert payload["volume_24h_usdt"] == 2000.0
+    assert payload["volume_24h_ticker_base"] == 1000.0
+    assert payload["volume_24h_ticker_usdt"] == 2000.0
     assert payload["orderbook_depth_usdt"] == 18.4
+    assert payload["orderbook_depth_source"] == "binance"
     assert payload["taker_buy_volume"] == 3.0
     assert payload["taker_sell_volume"] == 1.0
-    assert payload["volume_delta"] == 2.0
-    assert math.isclose(payload["taker_ratio"], 0.75, rel_tol=1e-9)
+    assert payload["volume_delta_trades"] == 2.0
+    assert math.isclose(payload["taker_ratio"], 3.0, rel_tol=1e-9)
+    assert payload["indicator_trace"]["volume_delta_trades"]["source"] == "binance_trade"
     assert payload["market_data_source"] == "mixed"
     assert payload["market_data_confidence"] == 0.85

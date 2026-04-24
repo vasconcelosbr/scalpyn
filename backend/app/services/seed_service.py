@@ -32,6 +32,7 @@ DEFAULT_INDICATORS = {
         "orderbook_cache_ttl_seconds": 5,
         "trades_cache_ttl_seconds": 1,
         "binance_trade_limit": 500,
+        "max_timestamp_diff_seconds": 2,
         "max_cache_entries": 1000,
         "confidence_scores": {"gate": 0.7, "binance": 0.9, "mixed": 0.85},
     },

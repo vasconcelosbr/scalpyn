@@ -1,7 +1,7 @@
 """Feature Engine — calculates technical indicators dynamically from config."""
 
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 import pandas as pd
 import numpy as np
 
@@ -14,7 +14,12 @@ class FeatureEngine:
     def __init__(self, indicators_config: Dict[str, Any]):
         self.config = indicators_config
 
-    def calculate(self, df: pd.DataFrame, market_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def calculate(
+        self,
+        df: pd.DataFrame,
+        market_data: Optional[Dict[str, Any]] = None,
+        source_priority: str = "preserve_candle",
+    ) -> Dict[str, Any]:
         """Calculate all enabled indicators for the given OHLCV DataFrame.
 
         Args:
@@ -29,6 +34,9 @@ class FeatureEngine:
             return {}
 
         results: Dict[str, Any] = {}
+        indicator_trace: Dict[str, Dict[str, Any]] = {}
+        data_quality_flags: List[str] = []
+        candle_timestamp = self._frame_timestamp(df)
 
         try:
             if self.config.get("rsi", {}).get("enabled"):
@@ -105,7 +113,22 @@ class FeatureEngine:
                 )
 
             if market_data:
-                results.update(self._apply_market_data_overrides(market_data))
+                self._apply_market_data_overrides(
+                    results,
+                    market_data,
+                    indicator_trace,
+                    data_quality_flags,
+                    candle_timestamp,
+                    source_priority=source_priority,
+                )
+
+            self._finalize_volume_metrics(results, indicator_trace, data_quality_flags, candle_timestamp)
+            self._finalize_flow_metrics(results, indicator_trace, candle_timestamp)
+            self._backfill_indicator_trace(results, indicator_trace, candle_timestamp)
+            if indicator_trace:
+                results["indicator_trace"] = indicator_trace
+            if data_quality_flags:
+                results["data_quality_flags"] = sorted(set(data_quality_flags))
 
         except Exception as e:
             logger.exception(f"Error calculating indicators: {e}")
@@ -140,6 +163,7 @@ class FeatureEngine:
         result: Dict[str, Any] = {
             "volume_last_candle_base": round(float(base_volume.iloc[-1]), 8),
             "volume_last_candle_usdt": round(float(quote_volume.iloc[-1]), 8),
+            "volume_24h_window_complete": False,
         }
 
         if "time" not in df.columns:
@@ -177,8 +201,9 @@ class FeatureEngine:
             )
             return result
 
-        result["volume_24h_base"] = round(float(base_volume.loc[window_mask].sum()), 8)
-        result["volume_24h_usdt"] = round(float(quote_volume.loc[window_mask].sum()), 8)
+        result["volume_24h_candles_base"] = round(float(base_volume.loc[window_mask].sum()), 8)
+        result["volume_24h_candles_usdt"] = round(float(quote_volume.loc[window_mask].sum()), 8)
+        result["volume_24h_window_complete"] = True
         return result
 
     def _calc_rsi(self, df: pd.DataFrame) -> Dict[str, Any]:
@@ -381,7 +406,7 @@ class FeatureEngine:
         """Approximated volume delta using candle direction."""
         direction = np.sign(df["close"] - df["open"])
         delta = (direction * self._base_volume(df)).iloc[-1]
-        return {"volume_delta": round(float(delta), 2) if pd.notna(delta) else 0}
+        return {"volume_delta_candle": round(float(delta), 8) if pd.notna(delta) else 0.0}
 
     def _calc_volume_spike(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Volume relative to 20-period average."""
@@ -395,39 +420,216 @@ class FeatureEngine:
         return {"volume_spike": 1.0}
 
     def _calc_taker_ratio(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Approximate taker buy ratio from candle direction over last 20 periods.
-
-        Uses bullish candle volume / total volume as a proxy for buy pressure.
-        Returns value between 0.0 and 1.0 where > 0.5 indicates net buying.
-        """
+        """Approximate taker ratio from candle direction over the configured lookback."""
         lookback = min(max(int(self.config.get("taker_ratio", {}).get("lookback", 20)), 1), len(df))
         recent = df.tail(lookback)
         volume = self._base_volume(recent)
-        if recent.empty or volume.sum() == 0:
-            return {"taker_ratio": 0.5}
+        if recent.empty or volume.sum() <= 0:
+            return {"taker_ratio_candle": None}
 
         bullish_mask = recent["close"] >= recent["open"]
-        buy_volume = volume.loc[bullish_mask].sum()
-        total_volume = volume.sum()
-        ratio = buy_volume / total_volume if total_volume > 0 else 0.5
-        return {"taker_ratio": round(float(ratio), 4)}
+        buy_volume = float(volume.loc[bullish_mask].sum())
+        sell_volume = float(volume.loc[~bullish_mask].sum())
+        ratio = buy_volume / max(sell_volume, 1e-9)
+        if 0.2 <= ratio <= 5:
+            return {"taker_ratio_candle": round(float(ratio), 8)}
+        return {"taker_ratio_candle": None}
 
-    def _apply_market_data_overrides(self, market_data: Dict[str, Any]) -> Dict[str, Any]:
-        overrides: Dict[str, Any] = {}
+    @staticmethod
+    def _frame_timestamp(df: pd.DataFrame) -> Optional[str]:
+        if "time" not in df.columns or df.empty:
+            return None
+        timestamp = pd.to_datetime(df["time"].iloc[-1], utc=True, errors="coerce")
+        if pd.isna(timestamp):
+            return None
+        return timestamp.isoformat()
+
+    @staticmethod
+    def _trace_entry(value: Any, source: str, timestamp: Optional[str]) -> Dict[str, Any]:
+        return {
+            "value": value,
+            "source": source,
+            "timestamp": timestamp,
+        }
+
+    def _apply_market_data_overrides(
+        self,
+        results: Dict[str, Any],
+        market_data: Dict[str, Any],
+        indicator_trace: Dict[str, Dict[str, Any]],
+        data_quality_flags: List[str],
+        candle_timestamp: Optional[str],
+        source_priority: str = "preserve_candle",
+    ) -> None:
+        if source_priority == "override_allowed":
+            self._apply_override_explicitly(results, market_data)
+
+        market_flags = market_data.get("data_quality_flags") or []
+        data_quality_flags.extend(market_flags)
+
+        if not market_data.get("snapshot_consistent", True):
+            data_quality_flags.append("market_data_snapshot_inconsistent")
+            return
+
+        market_trace = market_data.get("indicator_trace") or {}
         for key in (
-            "volume_24h_base",
-            "volume_24h_usdt",
-            "orderbook_depth_usdt",
+            "price",
             "spread_pct",
-            "taker_buy_volume",
-            "taker_sell_volume",
-            "taker_ratio",
-            "volume_delta",
+            "orderbook_depth_usdt",
+            "orderbook_depth_source",
             "market_data_symbol",
             "market_data_source",
             "market_data_confidence",
+            "snapshot_consistent",
+            "max_timestamp_diff_seconds",
         ):
             value = market_data.get(key)
             if value is not None:
-                overrides[key] = value
-        return overrides
+                results[key] = value
+                if key in market_trace:
+                    indicator_trace[key] = market_trace[key]
+
+        for key in (
+            "volume_24h_ticker_base",
+            "volume_24h_ticker_usdt",
+            "taker_buy_volume",
+            "taker_sell_volume",
+            "taker_ratio",
+            "volume_delta_trades",
+        ):
+            value = market_data.get(key)
+            if value is None:
+                continue
+            results[key] = value
+            trace_entry = market_trace.get(key)
+            if trace_entry:
+                indicator_trace[key] = trace_entry
+
+        if "price" not in indicator_trace and "price" in market_trace:
+            indicator_trace["price"] = market_trace["price"]
+        if "spread_pct" not in indicator_trace and "spread_pct" in market_trace:
+            indicator_trace["spread_pct"] = market_trace["spread_pct"]
+        if "orderbook_depth_usdt" not in indicator_trace and "orderbook_depth_usdt" in market_trace:
+            indicator_trace["orderbook_depth_usdt"] = market_trace["orderbook_depth_usdt"]
+
+        if not results.get("volume_24h_ticker_usdt"):
+            data_quality_flags.append("volume_24h_ticker_missing")
+
+        if results.get("orderbook_depth_usdt") is None:
+            data_quality_flags.append("orderbook_depth_missing")
+
+        if results.get("taker_ratio") is None and results.get("taker_ratio_candle") is None:
+            data_quality_flags.append("taker_ratio_out_of_range")
+
+    @staticmethod
+    def _apply_override_explicitly(results: Dict[str, Any], market_data: Dict[str, Any]) -> None:
+        for key in (
+            "volume_24h_base",
+            "volume_24h_usdt",
+            "taker_ratio",
+            "volume_delta",
+        ):
+            value = market_data.get(key)
+            if value is not None:
+                results[key] = value
+
+    def _finalize_volume_metrics(
+        self,
+        results: Dict[str, Any],
+        indicator_trace: Dict[str, Dict[str, Any]],
+        data_quality_flags: List[str],
+        candle_timestamp: Optional[str],
+    ) -> None:
+        window_complete = bool(results.get("volume_24h_window_complete"))
+        candle_base = results.get("volume_24h_candles_base")
+        candle_usdt = results.get("volume_24h_candles_usdt")
+        ticker_base = results.get("volume_24h_ticker_base")
+        ticker_usdt = results.get("volume_24h_ticker_usdt")
+
+        if not window_complete:
+            data_quality_flags.append("volume_window_incomplete")
+
+        if window_complete and candle_base and candle_usdt and candle_base > 0 and candle_usdt > 0:
+            results["volume_24h_base"] = candle_base
+            results["volume_24h_usdt"] = candle_usdt
+            results["volume_24h_final"] = candle_usdt
+            results["volume_24h_final_source"] = "gate_candle"
+            indicator_trace["volume_24h_base"] = self._trace_entry(candle_base, "gate_candle", candle_timestamp)
+            indicator_trace["volume_24h_usdt"] = self._trace_entry(candle_usdt, "gate_candle", candle_timestamp)
+            indicator_trace["volume_24h_final"] = self._trace_entry(candle_usdt, "gate_candle", candle_timestamp)
+            return
+
+        if ticker_usdt and ticker_usdt > 0:
+            ticker_trace = indicator_trace.get("volume_24h_ticker_usdt", {})
+            ticker_timestamp = ticker_trace.get("timestamp")
+            ticker_source = ticker_trace.get("source", "gate_ticker")
+            if ticker_base is not None:
+                results["volume_24h_base"] = ticker_base
+            results["volume_24h_usdt"] = ticker_usdt
+            results["volume_24h_final"] = ticker_usdt
+            results["volume_24h_final_source"] = ticker_source
+            if ticker_base is not None:
+                indicator_trace["volume_24h_base"] = self._trace_entry(ticker_base, ticker_source, ticker_timestamp)
+            indicator_trace["volume_24h_usdt"] = self._trace_entry(ticker_usdt, ticker_source, ticker_timestamp)
+            indicator_trace["volume_24h_final"] = self._trace_entry(ticker_usdt, ticker_source, ticker_timestamp)
+            return
+
+        data_quality_flags.append("volume_24h_unavailable")
+
+    def _finalize_flow_metrics(
+        self,
+        results: Dict[str, Any],
+        indicator_trace: Dict[str, Dict[str, Any]],
+        candle_timestamp: Optional[str],
+    ) -> None:
+        trade_delta = results.get("volume_delta_trades")
+        candle_delta = results.get("volume_delta_candle")
+        if trade_delta is not None:
+            trade_trace = indicator_trace.get("volume_delta_trades", {})
+            indicator_trace["volume_delta"] = self._trace_entry(
+                trade_delta,
+                trade_trace.get("source", "binance_trade"),
+                trade_trace.get("timestamp"),
+            )
+            results["volume_delta"] = trade_delta
+        elif candle_delta is not None:
+            indicator_trace["volume_delta"] = self._trace_entry(candle_delta, "gate_candle", candle_timestamp)
+            results["volume_delta"] = candle_delta
+
+        trade_ratio = results.get("taker_ratio")
+        candle_ratio = results.get("taker_ratio_candle")
+        if trade_ratio is not None:
+            trade_trace = indicator_trace.get("taker_ratio", {})
+            indicator_trace["taker_ratio"] = self._trace_entry(
+                trade_ratio,
+                trade_trace.get("source", "binance_trade"),
+                trade_trace.get("timestamp"),
+            )
+            results["taker_ratio"] = trade_ratio
+        elif candle_ratio is not None:
+            indicator_trace["taker_ratio"] = self._trace_entry(candle_ratio, "gate_candle", candle_timestamp)
+            results["taker_ratio"] = candle_ratio
+
+    def _backfill_indicator_trace(
+        self,
+        results: Dict[str, Any],
+        indicator_trace: Dict[str, Dict[str, Any]],
+        candle_timestamp: Optional[str],
+    ) -> None:
+        meta_fields = {
+            "indicator_trace",
+            "data_quality_flags",
+            "market_data_symbol",
+            "market_data_source",
+            "market_data_confidence",
+            "snapshot_consistent",
+            "max_timestamp_diff_seconds",
+            "orderbook_depth_source",
+            "volume_24h_final_source",
+        }
+        for key, value in results.items():
+            if key in meta_fields or key in indicator_trace or value is None:
+                continue
+            if isinstance(value, (dict, list)):
+                continue
+            indicator_trace[key] = self._trace_entry(value, "gate_candle", candle_timestamp)
