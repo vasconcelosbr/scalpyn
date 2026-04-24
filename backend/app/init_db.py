@@ -222,6 +222,21 @@ async def init_db():
             """))
         except Exception as e:
             logger.warning(f"Could not add liquidity columns to market_metadata: {e}")
+
+        try:
+            await conn.execute(text("""
+                ALTER TABLE trades
+                  ADD COLUMN IF NOT EXISTS exchange_order_id VARCHAR(100),
+                  ADD COLUMN IF NOT EXISTS source VARCHAR(30) DEFAULT 'scalpyn';
+            """))
+            await conn.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS ix_trades_exchange_order_id
+                ON trades (exchange_order_id)
+                WHERE exchange_order_id IS NOT NULL;
+            """))
+            logger.info("Ensured trades.exchange_order_id and trades.source columns exist")
+        except Exception as e:
+            logger.warning(f"Could not add exchange_order_id/source columns to trades: {e}")
     # Attempt to create hypertables in separate transactions so failures don't abort the connection
     tables_to_hyper = ['ohlcv', 'indicators', 'alpha_scores', 'funding_rates']
     for table in tables_to_hyper:

@@ -650,6 +650,57 @@ class GateAdapter(BaseExchangeAdapter):
             raise GateAPIError(r.status_code, "PUBLIC_ERROR", r.text[:300])
         return r.json()
 
+    async def get_my_closed_spot_orders(
+        self,
+        days: int = 90,
+        page: int = 1,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        GET /spot/orders?status=finished — authenticated, returns user's closed spot orders.
+
+        Returns list of dicts with keys:
+            id, currency_pair, side ("buy"|"sell"), amount, price, avg_deal_price,
+            filled_total (quote filled), left, fee, fee_currency,
+            create_time, finish_time, status ("closed"|"cancelled").
+        """
+        from datetime import datetime, timezone, timedelta
+        start_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+        return await self._request(
+            "GET",
+            "/spot/orders",
+            params={
+                "status": "finished",
+                "page": str(page),
+                "limit": str(limit),
+                "from": str(start_ts),
+            },
+        )
+
+    async def get_my_spot_trades(
+        self,
+        currency_pair: Optional[str] = None,
+        days: int = 90,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """
+        GET /spot/my_trades — authenticated, returns user's personal trade fills.
+
+        Returns list of dicts with keys:
+            id, create_time, create_time_ms, order_id, currency_pair,
+            side ("buy"|"sell"), amount, price, role ("maker"|"taker"),
+            fee, fee_currency, point_fee, gt_fee.
+        """
+        from datetime import datetime, timezone, timedelta
+        start_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+        params: Dict[str, str] = {
+            "limit": str(limit),
+            "from": str(start_ts),
+        }
+        if currency_pair:
+            params["currency_pair"] = self._normalize_symbol(currency_pair)
+        return await self._request("GET", "/spot/my_trades", params=params)
+
     async def get_spot_trades(
         self,
         currency_pair: str,

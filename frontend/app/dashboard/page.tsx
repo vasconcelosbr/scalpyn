@@ -37,8 +37,11 @@ import {
   BarChart2,
   RefreshCw,
   Minus,
+  Download,
+  CheckCircle,
+  AlertCircle,
 } from "lucide-react";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 
 const C = {
   profit: "#34D399",
@@ -719,6 +722,8 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const fetchAll = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -737,6 +742,21 @@ export default function DashboardPage() {
       setRefreshing(false);
     }
   }, []);
+
+  const syncTrades = useCallback(async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const res = await apiPost<{ message: string; imported: number; skipped: number }>("/trades/sync?days=90");
+      setSyncResult({ ok: true, message: res.message });
+      await fetchAll(true);
+    } catch (err: any) {
+      setSyncResult({ ok: false, message: err.message ?? "Sync failed" });
+    } finally {
+      setSyncing(false);
+      setTimeout(() => setSyncResult(null), 8000);
+    }
+  }, [fetchAll]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
@@ -766,6 +786,15 @@ export default function DashboardPage() {
             </span>
           )}
           <button
+            onClick={syncTrades}
+            disabled={syncing || refreshing}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium transition-opacity hover:opacity-80 disabled:opacity-40"
+            style={{ background: "rgba(52,211,153,0.10)", color: C.profit, border: "1px solid rgba(52,211,153,0.20)" }}
+          >
+            <Download size={13} className={syncing ? "animate-bounce" : ""} />
+            {syncing ? "Importing…" : "Import from Gate"}
+          </button>
+          <button
             onClick={() => fetchAll(true)}
             disabled={refreshing}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium transition-opacity hover:opacity-80 disabled:opacity-40"
@@ -776,6 +805,22 @@ export default function DashboardPage() {
           </button>
         </div>
       </div>
+
+      {syncResult && (
+        <div
+          className="flex items-start gap-2.5 px-4 py-3 rounded-xl text-[12px]"
+          style={{
+            background: syncResult.ok ? "rgba(52,211,153,0.08)" : "rgba(248,113,113,0.08)",
+            border: `1px solid ${syncResult.ok ? "rgba(52,211,153,0.20)" : "rgba(248,113,113,0.20)"}`,
+            color: syncResult.ok ? C.profit : C.loss,
+          }}
+        >
+          {syncResult.ok
+            ? <CheckCircle size={14} className="flex-shrink-0 mt-0.5" />
+            : <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />}
+          {syncResult.message}
+        </div>
+      )}
 
       {loading ? (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

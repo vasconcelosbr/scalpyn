@@ -38,6 +38,13 @@ Required secrets (set in Replit Secrets):
 ## API Proxy
 The frontend proxies all `/api/*` requests to the FastAPI backend via `frontend/app/api/[...path]/route.ts`. This keeps the backend URL server-side only.
 
+## Trade Sync (Exchange Import)
+- `POST /api/trades/sync?days=90` — imports closed spot orders from Gate.io into the trades table
+- Uses FIFO matching to pair buy/sell orders per symbol and calculate P&L
+- Deduplicates via `trades.exchange_order_id` (unique index, nullable)
+- `trades.source` column: `"scalpyn"` (engine-initiated) vs `"exchange_import"` (synced)
+- Frontend: "Import from Gate" button on the Dashboard page triggers the sync
+
 ## Key Notes
 - TimescaleDB hypertable warnings on startup are expected (Replit PostgreSQL lacks this extension). The app falls back to regular PostgreSQL tables.
 - The DATABASE_URL validator in `backend/app/config.py` automatically converts `postgresql://` to `postgresql+asyncpg://` (required by asyncpg).

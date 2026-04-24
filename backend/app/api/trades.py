@@ -10,6 +10,7 @@ from ..database import get_db
 from ..models.trade import Trade
 from .config import get_current_user_id
 from ..services.portfolio_service import portfolio_service
+from ..services.trade_sync_service import trade_sync_service
 
 router = APIRouter(prefix="/api/trades", tags=["Trades"])
 
@@ -121,6 +122,19 @@ async def get_trade(
     return _serialize_trade(trade)
 
 
+@router.post("/sync")
+async def sync_trades_from_exchange(
+    days: int = Query(90, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Import closed spot orders from Gate.io into the trades table."""
+    result = await trade_sync_service.sync_spot_trades(db=db, user_id=user_id, days=days)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Sync failed"))
+    return result
+
+
 @router.post("/{trade_id}/close")
 async def close_trade(
     trade_id: UUID,
@@ -173,6 +187,8 @@ def _serialize_trade(t: Trade) -> dict:
         "entry_at": t.entry_at.isoformat() if t.entry_at else None,
         "exit_at": t.exit_at.isoformat() if t.exit_at else None,
         "holding_seconds": t.holding_seconds,
+        "exchange_order_id": t.exchange_order_id,
+        "source": t.source,
     }
 
 
