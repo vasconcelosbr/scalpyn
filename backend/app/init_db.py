@@ -138,13 +138,21 @@ async def init_db():
                   ADD COLUMN IF NOT EXISTS quote_volume DECIMAL(20,4);
             """))
             await conn.execute(text("""
-                DELETE FROM ohlcv a
-                USING ohlcv b
-                WHERE a.ctid < b.ctid
-                  AND a.time = b.time
-                  AND a.symbol = b.symbol
-                  AND a.exchange = b.exchange
-                  AND a.timeframe = b.timeframe;
+                WITH ranked AS (
+                    SELECT
+                        ctid,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY symbol, exchange, timeframe, time
+                            ORDER BY ctid DESC
+                        ) AS row_num
+                    FROM ohlcv
+                )
+                DELETE FROM ohlcv
+                WHERE ctid IN (
+                    SELECT ctid
+                    FROM ranked
+                    WHERE row_num > 1
+                );
             """))
             await conn.execute(text("""
                 CREATE UNIQUE INDEX IF NOT EXISTS ix_ohlcv_symbol_exchange_timeframe_time

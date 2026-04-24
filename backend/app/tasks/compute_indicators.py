@@ -12,6 +12,7 @@ from ..tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 _VOLUME_LOOKBACK_CANDLES = 20
+_STOCHASTIC_WARMUP_OVERLAP = 2
 
 
 def _run_async(coro):
@@ -35,7 +36,13 @@ def _derive_min_candles(indicators_config: dict, timeframe: str) -> int:
         indicators_config.get("bollinger", {}).get("period", 0),
         indicators_config.get("zscore", {}).get("lookback", 0),
         max(ema_periods) if ema_periods else 0,
-        max(stochastic.get("k", 0) + stochastic.get("smooth", 0) + stochastic.get("d", 0) - 2, 0),
+        max(
+            # Stochastic uses chained rolling windows (K → smooth → D), so the
+            # final warm-up is k + smooth + d minus the two overlapped candles
+            # shared at the window boundaries.
+            stochastic.get("k", 0) + stochastic.get("smooth", 0) + stochastic.get("d", 0) - _STOCHASTIC_WARMUP_OVERLAP,
+            0,
+        ),
         _VOLUME_LOOKBACK_CANDLES,
         288 if timeframe == "5m" else 24,
     ]

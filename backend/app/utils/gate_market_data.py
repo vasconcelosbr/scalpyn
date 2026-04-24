@@ -9,6 +9,10 @@ def parse_gate_spot_candle(candle: Sequence[Any]) -> Dict[str, float | datetime]
 
     Gate spot candles are returned as:
     [timestamp, quote_volume, close, high, low, open, base_volume, ...]
+
+    Returns:
+        Dict with keys time (datetime), open/high/low/close (float),
+        volume (base asset float), and quote_volume (quote asset float).
     """
     close = float(candle[2])
     quote_volume = float(candle[1])

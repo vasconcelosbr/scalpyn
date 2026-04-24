@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 
 logger = logging.getLogger(__name__)
+_MIN_24H_VOLUME_COVERAGE_HOURS = 23.5
 
 
 class FeatureEngine:
@@ -159,7 +160,7 @@ class FeatureEngine:
         result["volume_24h_candles"] = int(window_mask.sum())
         result["volume_24h_coverage_hours"] = round(float(coverage_hours), 4)
 
-        if coverage_hours < 23.5:
+        if coverage_hours < _MIN_24H_VOLUME_COVERAGE_HOURS:
             return result
 
         result["volume_24h_base"] = round(float(base_volume.loc[window_mask].sum()), 8)
