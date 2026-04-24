@@ -350,6 +350,38 @@ def test_pipeline_entry_trigger_emits_skipped_with_reason():
     assert payload["reason"] == "indicator_not_available"
 
 
+def test_legacy_condition_block_still_triggers_when_data_exists():
+    """Regression: type='condition' blocks must NOT be auto-skipped just
+    because they don't carry a single named indicator. The DSL evaluator
+    handles its own operands; the SKIPPED gate only applies to
+    threshold/range/grouped blocks.
+    """
+    engine = BlockEngine(
+        {
+            "blocks": [
+                {
+                    "id": "trend_down",
+                    "name": "Downtrend",
+                    "type": "condition",
+                    "condition": "ema9<ema50",
+                }
+            ]
+        }
+    )
+
+    # Bearish (ema9 NOT > ema50) → block triggers.
+    result = engine.evaluate({"ema9_gt_ema50": False})
+    assert result["blocked"] is True, "Condition block must still fire"
+    assert "Downtrend" in result["triggered_blocks"]
+    assert "Downtrend" not in result["skipped_blocks"]
+
+    # Bullish (ema9 > ema50) → block does NOT trigger and is NOT skipped.
+    result = engine.evaluate({"ema9_gt_ema50": True})
+    assert result["blocked"] is False
+    assert "Downtrend" not in result["triggered_blocks"]
+    assert "Downtrend" not in result["skipped_blocks"]
+
+
 def test_normalized_trace_item_preserves_skipped_reason():
     """The serialized evaluation_trace must keep the SKIPPED reason."""
     from app.services.pipeline_rejections import (

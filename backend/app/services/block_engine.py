@@ -102,6 +102,18 @@ class BlockEngine:
 
             block_type = block.get("type", "threshold")
             indicator = block.get("indicator", "")
+
+            # Legacy string-condition blocks (e.g. "ema9<ema50") don't use a
+            # single named indicator field — they parse their own DSL inside
+            # `_evaluate_string_condition`. Skip the indicator-validity gate
+            # for them so they retain their existing behaviour. The DSL
+            # evaluator already short-circuits to False on missing operands.
+            if block_type == "condition":
+                if self._evaluate_string_condition(block, indicators):
+                    triggered.append(block_name)
+                    details[block_id] = f"Condition '{block.get('condition')}' matched"
+                continue
+
             actual = indicators.get(indicator)
 
             valid, skip_reason = is_valid(actual, indicator)
@@ -115,11 +127,11 @@ class BlockEngine:
             try:
                 actual = float(actual)
             except (ValueError, TypeError):
-                # Handle string-based conditions
-                if block_type == "condition":
-                    if self._evaluate_string_condition(block, indicators):
-                        triggered.append(block_name)
-                        details[block_id] = f"Condition '{block.get('condition')}' matched"
+                # Non-numeric value on a non-condition block: treat as SKIPPED
+                # so we never block on data we cannot interpret.
+                skipped.append(block_name)
+                skipped_details[block_id] = SkipReason.INDICATOR_INVALID_VALUE.value
+                log_skipped(indicator, actual, SkipReason.INDICATOR_INVALID_VALUE)
                 continue
 
             is_triggered = False
