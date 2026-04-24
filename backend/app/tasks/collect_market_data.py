@@ -48,25 +48,25 @@ async def _collect_all_async():
                 if df is None or df.empty:
                     continue
 
-                # Insert latest candle into TimescaleDB
-                latest = df.iloc[-1]
-                pair = symbol.replace("USDT", "_USDT") if "_" not in symbol else symbol
+                for _, row in df.iterrows():
+                    await db.execute(text("""
+                        INSERT INTO ohlcv (time, symbol, exchange, timeframe, open, high, low, close, volume, quote_volume)
+                        VALUES (:time, :symbol, :exchange, :timeframe, :open, :high, :low, :close, :volume, :quote_volume)
+                        ON CONFLICT DO NOTHING
+                    """), {
+                        "time": row["time"],
+                        "symbol": symbol,
+                        "exchange": "gate.io",
+                        "timeframe": "1h",
+                        "open": float(row["open"]),
+                        "high": float(row["high"]),
+                        "low": float(row["low"]),
+                        "close": float(row["close"]),
+                        "volume": float(row["volume"]),
+                        "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
+                    })
 
-                await db.execute(text("""
-                    INSERT INTO ohlcv (time, symbol, exchange, timeframe, open, high, low, close, volume)
-                    VALUES (:time, :symbol, :exchange, :timeframe, :open, :high, :low, :close, :volume)
-                    ON CONFLICT DO NOTHING
-                """), {
-                    "time": latest["time"],
-                    "symbol": symbol,
-                    "exchange": "gate.io",
-                    "timeframe": "1h",
-                    "open": float(latest["open"]),
-                    "high": float(latest["high"]),
-                    "low": float(latest["low"]),
-                    "close": float(latest["close"]),
-                    "volume": float(latest["volume"]),
-                })
+                latest = df.iloc[-1]
 
                 # Update market_metadata
                 await db.execute(text("""
@@ -201,15 +201,15 @@ async def _collect_5m_async():
     async with AsyncSessionLocal() as db:
         for symbol in symbols:  # no cap — process all pool symbols
             try:
-                df = await market_data_service.fetch_ohlcv(symbol, "5m", limit=100)
+                df = await market_data_service.fetch_ohlcv(symbol, "5m", limit=288)
                 if df is None or df.empty:
                     continue
 
                 # Bulk-insert all returned candles (ON CONFLICT DO NOTHING is idempotent)
                 for _, row in df.iterrows():
                     await db.execute(text("""
-                        INSERT INTO ohlcv (time, symbol, exchange, timeframe, open, high, low, close, volume)
-                        VALUES (:time, :symbol, :exchange, :timeframe, :open, :high, :low, :close, :volume)
+                        INSERT INTO ohlcv (time, symbol, exchange, timeframe, open, high, low, close, volume, quote_volume)
+                        VALUES (:time, :symbol, :exchange, :timeframe, :open, :high, :low, :close, :volume, :quote_volume)
                         ON CONFLICT DO NOTHING
                     """), {
                         "time":      row["time"],
@@ -221,6 +221,7 @@ async def _collect_5m_async():
                         "low":       float(row["low"]),
                         "close":     float(row["close"]),
                         "volume":    float(row["volume"]),
+                        "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
                     })
 
                 # Seed market_metadata with price from latest OHLCV close.

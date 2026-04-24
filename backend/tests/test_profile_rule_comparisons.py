@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -48,6 +49,48 @@ def test_feature_engine_emits_price_and_requested_ema_values():
     assert {"ema5", "ema9", "ema21", "ema50", "ema200"} <= set(indicators)
     assert "ema9_gt_ema21" in indicators
     assert indicators["atr_percent"] == indicators["atr_pct"]
+
+
+def test_feature_engine_uses_base_volume_for_volume_indicators_and_quote_volume_for_24h_totals():
+    base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    df = pd.DataFrame(
+        {
+            "time": [base_time + timedelta(hours=i) for i in range(24)],
+            "open": [10 + i for i in range(24)],
+            "high": [11 + i for i in range(24)],
+            "low": [9 + i for i in range(24)],
+            "close": [10 + i for i in range(24)],
+            "volume": [2.0] * 24,
+            "quote_volume": [50.0] * 24,
+        }
+    )
+
+    engine = FeatureEngine(
+        {
+            "rsi": {"enabled": False},
+            "adx": {"enabled": False},
+            "ema": {"enabled": False},
+            "atr": {"enabled": False},
+            "macd": {"enabled": False},
+            "vwap": {"enabled": True},
+            "stochastic": {"enabled": False},
+            "obv": {"enabled": True},
+            "bollinger": {"enabled": False},
+            "parabolic_sar": {"enabled": False},
+            "zscore": {"enabled": False},
+            "volume_delta": {"enabled": True},
+        }
+    )
+
+    indicators = engine.calculate(df)
+
+    assert indicators["volume_last_candle_base"] == 2.0
+    assert indicators["volume_last_candle_usdt"] == 50.0
+    assert indicators["volume_24h_base"] == 48.0
+    assert indicators["volume_24h_usdt"] == 1200.0
+    assert indicators["volume_24h_candles"] == 24
+    assert indicators["obv"] == 46.0
+    assert indicators["volume_delta"] == 0.0
 
 
 def test_block_engine_supports_comparison_groups():

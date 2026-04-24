@@ -11,6 +11,29 @@ from sqlalchemy import text
 from ..tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+_STOCHASTIC_WARMUP_OVERLAP = 2
+
+
+def _calc_stochastic_warmup(stochastic_config: dict) -> int:
+    return max(
+        # Stochastic uses chained rolling windows (K → smooth → D), so the
+        # final warm-up is k + smooth + d minus the two overlapped candles
+        # shared at the window boundaries.
+        stochastic_config.get("k", 0)
+        + stochastic_config.get("smooth", 0)
+        + stochastic_config.get("d", 0)
+        - _STOCHASTIC_WARMUP_OVERLAP,
+        0,
+    )
+
+
+def _calc_volume_lookback(indicators_config: dict) -> int:
+    volume_spike = indicators_config.get("volume_spike", {})
+    taker_ratio = indicators_config.get("taker_ratio", {})
+    return max(
+        int(volume_spike.get("lookback", 20)),
+        int(taker_ratio.get("lookback", 20)),
+    )
 
 
 def _run_async(coro):
@@ -21,6 +44,26 @@ def _run_async(coro):
         loop.close()
 
 
+def _derive_min_candles(indicators_config: dict, timeframe: str) -> int:
+    ema_periods = indicators_config.get("ema", {}).get("periods", [])
+    stochastic = indicators_config.get("stochastic", {})
+
+    required = [
+        2,
+        indicators_config.get("adx", {}).get("period", 0) * 2,
+        indicators_config.get("rsi", {}).get("period", 0) + 1,
+        indicators_config.get("macd", {}).get("slow", 0),
+        indicators_config.get("atr", {}).get("period", 0),
+        indicators_config.get("bollinger", {}).get("period", 0),
+        indicators_config.get("zscore", {}).get("lookback", 0),
+        max(ema_periods) if ema_periods else 0,
+        _calc_stochastic_warmup(stochastic),
+        _calc_volume_lookback(indicators_config),
+        288 if timeframe == "5m" else 24,
+    ]
+    return max(required)
+
+
 async def _compute_async():
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.feature_engine import FeatureEngine
@@ -29,8 +72,9 @@ async def _compute_async():
     logger.info("Starting indicator computation...")
 
     indicators_config = DEFAULT_INDICATORS  # System defaults for centralized computation
-
     engine = FeatureEngine(indicators_config)
+    min_candles_1h = _derive_min_candles(indicators_config, "1h")
+    query_limit_1h = max(200, min_candles_1h)
     computed = 0
 
     async with AsyncSessionLocal() as db:
@@ -45,26 +89,41 @@ async def _compute_async():
             try:
                 # Fetch OHLCV data for this symbol
                 ohlcv_result = await db.execute(text("""
-                    SELECT time, open, high, low, close, volume
+                    SELECT time, open, high, low, close, volume, quote_volume
                     FROM ohlcv
                     WHERE symbol = :symbol AND timeframe = '1h'
-                    ORDER BY time ASC
-                    LIMIT 200
-                """), {"symbol": symbol})
+                    ORDER BY time DESC
+                    LIMIT :limit
+                """), {"symbol": symbol, "limit": query_limit_1h})
                 rows = ohlcv_result.fetchall()
 
-                if len(rows) < 20:
+                if len(rows) < min_candles_1h:
+                    logger.debug(
+                        "Skipping 1h indicator computation for %s: only %d candles (need ≥%d)",
+                        symbol, len(rows), min_candles_1h,
+                    )
                     continue
 
                 df = pd.DataFrame([{
                     "time": r.time, "open": float(r.open), "high": float(r.high),
                     "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
-                } for r in rows])
+                    "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
+                } for r in reversed(rows)])
 
                 # Calculate indicators
                 results = engine.calculate(df)
                 if not results:
                     continue
+
+                logger.debug(
+                    "Indicator volume audit %s[1h]: last_base=%s last_usdt=%s agg24h_usdt=%s coverage_h=%s candles_24h=%s",
+                    symbol,
+                    results.get("volume_last_candle_base"),
+                    results.get("volume_last_candle_usdt"),
+                    results.get("volume_24h_usdt"),
+                    results.get("volume_24h_coverage_hours"),
+                    results.get("volume_24h_candles"),
+                )
 
                 # Store in TimescaleDB
                 now = datetime.now(timezone.utc)
@@ -108,16 +167,8 @@ async def _compute_5m_async():
     indicators_config = DEFAULT_INDICATORS
     engine = FeatureEngine(indicators_config)
     computed = 0
-
-    # Derive minimum candle warm-up from the active indicator config so the
-    # threshold automatically scales when periods are changed in the DB config.
-    # ADX(period) needs 2×period candles (two sequential rolling windows).
-    # RSI(period) needs period+1; MACD needs its slow-EMA period.
-    # We take the maximum of these derived requirements.
-    _adx_p  = indicators_config.get("adx",  {}).get("period", 14)
-    _rsi_p  = indicators_config.get("rsi",  {}).get("period", 14)
-    _slow_p = indicators_config.get("macd", {}).get("slow",   26)
-    min_candles_5m = max(_adx_p * 2, _rsi_p + 1, _slow_p)
+    min_candles_5m = _derive_min_candles(indicators_config, "5m")
+    query_limit_5m = max(288, min_candles_5m)
 
     async with AsyncSessionLocal() as db:
         # Only symbols that have recent 5m candles
@@ -131,30 +182,40 @@ async def _compute_5m_async():
         for symbol in symbols:
             try:
                 ohlcv_result = await db.execute(text("""
-                    SELECT time, open, high, low, close, volume
+                    SELECT time, open, high, low, close, volume, quote_volume
                     FROM ohlcv
                     WHERE symbol = :symbol AND timeframe = '5m'
-                    ORDER BY time ASC
-                    LIMIT 100
-                """), {"symbol": symbol})
+                    ORDER BY time DESC
+                    LIMIT :limit
+                """), {"symbol": symbol, "limit": query_limit_5m})
                 rows = ohlcv_result.fetchall()
 
                 if len(rows) < min_candles_5m:
                     logger.debug(
-                        "Skipping 5m indicator computation for %s: only %d candles "
-                        "(need ≥%d derived from indicator periods: adx=%d, rsi=%d, macd_slow=%d)",
-                        symbol, len(rows), min_candles_5m, _adx_p, _rsi_p, _slow_p,
+                        "Skipping 5m indicator computation for %s: only %d candles (need ≥%d)",
+                        symbol, len(rows), min_candles_5m,
                     )
                     continue
 
                 df = pd.DataFrame([{
                     "time": r.time, "open": float(r.open), "high": float(r.high),
                     "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
-                } for r in rows])
+                    "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
+                } for r in reversed(rows)])
 
                 results = engine.calculate(df)
                 if not results:
                     continue
+
+                logger.debug(
+                    "Indicator volume audit %s[5m]: last_base=%s last_usdt=%s agg24h_usdt=%s coverage_h=%s candles_24h=%s",
+                    symbol,
+                    results.get("volume_last_candle_base"),
+                    results.get("volume_last_candle_usdt"),
+                    results.get("volume_24h_usdt"),
+                    results.get("volume_24h_coverage_hours"),
+                    results.get("volume_24h_candles"),
+                )
 
                 now = datetime.now(timezone.utc)
                 await db.execute(text("""

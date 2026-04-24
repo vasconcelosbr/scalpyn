@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import httpx
 import pandas as pd
 
+from ..utils.gate_market_data import parse_gate_spot_candle
 from ..utils.symbol_filters import is_excluded_asset, is_leveraged_base
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,8 @@ class MarketDataService:
     ) -> Optional[pd.DataFrame]:
         """Fetch OHLCV candles from Gate.io.
 
-        Returns DataFrame with columns: [time, open, high, low, close, volume].
+        Returns DataFrame with columns:
+        [time, open, high, low, close, volume, quote_volume].
         """
         tf_map = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d"}
         gate_tf = tf_map.get(timeframe, "1h")
@@ -50,17 +52,7 @@ class MarketDataService:
             if not data:
                 return None
 
-            # Gate.io format: [timestamp, volume, close, high, low, open, ...]
-            rows = []
-            for candle in data:
-                rows.append({
-                    "time": datetime.fromtimestamp(int(candle[0]), tz=timezone.utc),
-                    "volume": float(candle[1]),
-                    "close": float(candle[2]),
-                    "high": float(candle[3]),
-                    "low": float(candle[4]),
-                    "open": float(candle[5]),
-                })
+            rows = [parse_gate_spot_candle(candle) for candle in data]
 
             df = pd.DataFrame(rows)
             df = df.sort_values("time").reset_index(drop=True)

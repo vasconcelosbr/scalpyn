@@ -23,6 +23,9 @@ DEFAULT_INDICATORS = {
     "bollinger": {"enabled": True, "period": 20, "deviation": 2.0},
     "zscore": {"enabled": False, "lookback": 20},
     "volume_delta": {"enabled": False},
+    "volume_metrics": {"enabled": True, "min_coverage_hours": 23.5},
+    "volume_spike": {"enabled": True, "lookback": 20},
+    "taker_ratio": {"enabled": True, "lookback": 20},
     "orderbook_imbalance": {"enabled": False, "depth_levels": 10},
     "funding_rate": {"enabled": True},
     "btc_dominance": {"enabled": False}

@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from .base_adapter import BaseExchangeAdapter
+from ..utils.gate_market_data import parse_gate_spot_candle
 
 logger = logging.getLogger(__name__)
 
@@ -314,19 +315,15 @@ class GateAdapter(BaseExchangeAdapter):
                 }
                 for c in raw
             ]
-        # spot candles: [t, vol, close, high, low, open, ...]
+        # spot candles: [t, quote_volume, close, high, low, open, base_volume, ...]
         raw = await self._request(
             "GET", "/spot/candlesticks",
             params={"currency_pair": pair, "interval": interval, "limit": str(limit)},
         )
         return [
             {
-                "time":   int(c[0]),
-                "open":   float(c[5]),
-                "high":   float(c[3]),
-                "low":    float(c[4]),
-                "close":  float(c[2]),
-                "volume": float(c[1]),
+                **parse_gate_spot_candle(c),
+                "time": int(c[0]),
             }
             for c in raw
         ]
