@@ -27,18 +27,11 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-        # ─────────────────────────────────────────────────────────────────────
-        # CRITICAL migrations: each block below adds columns/tables that the
-        # SQLAlchemy ORM declares on its models. If any of these silently
-        # fails on production (as happened with Trade Sync columns), every
-        # `select(Model)` query expands to columns that don't exist and the
-        # global DB handler returns an opaque "Database error" 503.
-        #
-        # Therefore: log errors at error-level WITH stack trace AND re-raise,
-        # so Cloud Run aborts startup on schema mismatches instead of serving
-        # broken responses. `IF NOT EXISTS` keeps these blocks idempotent on
-        # successful runs.
-        # ─────────────────────────────────────────────────────────────────────
+        # Critical migrations below add columns/tables that the SQLAlchemy
+        # ORM declares on its models. They MUST log errors with stack trace
+        # and re-raise — silent failures cause `select(Model)` to crash with
+        # opaque "Database error" 503s on every request. IF NOT EXISTS keeps
+        # them idempotent on successful runs.
 
         try:
             await conn.execute(text("""
@@ -49,31 +42,16 @@ async def init_db():
             """))
             logger.info("Ensured pools.overrides and pools.autopilot_enabled columns exist")
         except Exception as e:
-            logger.error(
-                "FATAL: failed to add overrides/autopilot_enabled columns to pools "
-                "(both are ORM-referenced by Pool model). Aborting startup. Error: %s",
-                e,
-                exc_info=True,
-            )
+            logger.error("Failed to migrate pools columns (Pool ORM): %s", e, exc_info=True)
             raise
 
         try:
             await backfill_execution_tracking_columns(conn)
             logger.info("Ensured pipeline execution tracking columns exist")
         except Exception as e:
-            logger.error(
-                "FATAL: failed to add pipeline execution_id columns "
-                "(ORM-referenced by PipelineWatchlistAssets/Rejections). "
-                "Aborting startup. Error: %s",
-                e,
-                exc_info=True,
-            )
+            logger.error("Failed to add pipeline execution_id columns: %s", e, exc_info=True)
             raise
 
-        # Ensure pipeline staleness-tracking and analysis columns exist on
-        # existing tables. These are added by migrations 013/018 but may be
-        # absent if those migrations failed (e.g., blocked by a
-        # DuplicateColumnError in an earlier migration).
         try:
             await conn.execute(text("""
                 ALTER TABLE pipeline_watchlists
@@ -93,17 +71,10 @@ async def init_db():
             """))
             logger.info("Ensured pipeline staleness and analysis_snapshot columns exist")
         except Exception as e:
-            logger.error(
-                "FATAL: failed to add pipeline staleness/analysis columns "
-                "(ORM-referenced by PipelineWatchlist models). "
-                "Aborting startup. Error: %s",
-                e,
-                exc_info=True,
-            )
+            logger.error("Failed to add pipeline staleness/analysis columns: %s", e, exc_info=True)
             raise
 
-        # Ensure profiles and watchlist_profiles tables exist with all
-        # columns. These tables back the AI Skills + strategy profile UIs.
+        # profiles + watchlist_profiles: required by the AI Skills feature.
         try:
             await conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS profiles (
@@ -169,6 +140,9 @@ async def init_db():
               quote_volume DECIMAL(20,4)
             );
         """))
+        # Best-effort: ohlcv has no SQLAlchemy ORM model — it's accessed via
+        # raw SQL only. Failing here doesn't break ORM queries; warn and
+        # continue so the rest of startup completes.
         try:
             await conn.execute(text("""
                 ALTER TABLE ohlcv
@@ -243,7 +217,9 @@ async def init_db():
               last_updated TIMESTAMPTZ
             );
         """))
-        # Add liquidity columns to market_metadata if they don't exist (migration).
+        # Best-effort: market_metadata is accessed via raw SQL (no ORM model
+        # references these columns), so a missing column degrades the
+        # liquidity panel but does not crash core endpoints.
         # Note on freshness columns:
         #   - `last_updated` is generic metadata freshness — touched by ANY
         #     write (price seed, orderbook, indicators, ticker).
