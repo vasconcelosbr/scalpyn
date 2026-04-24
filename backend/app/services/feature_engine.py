@@ -1,12 +1,11 @@
 """Feature Engine — calculates technical indicators dynamically from config."""
 
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any
 import pandas as pd
 import numpy as np
 
 logger = logging.getLogger(__name__)
-_MIN_24H_VOLUME_COVERAGE_HOURS = 23.5
 
 
 class FeatureEngine:
@@ -68,13 +67,16 @@ class FeatureEngine:
             if self.config.get("volume_delta", {}).get("enabled"):
                 results.update(self._calc_volume_delta(df))
 
-            results.update(self._calc_volume_metrics(df))
+            if self.config.get("volume_metrics", {}).get("enabled", True):
+                results.update(self._calc_volume_metrics(df))
 
             # Derived: volume spike (always useful)
-            results.update(self._calc_volume_spike(df))
+            if self.config.get("volume_spike", {}).get("enabled", True):
+                results.update(self._calc_volume_spike(df))
 
             # Derived: taker buy ratio (proxy from candle direction)
-            results.update(self._calc_taker_ratio(df))
+            if self.config.get("taker_ratio", {}).get("enabled", True):
+                results.update(self._calc_taker_ratio(df))
 
             # Derived: EMA trend alignment
             if "ema9" in results and "ema21" in results:
@@ -117,16 +119,20 @@ class FeatureEngine:
             return pd.to_numeric(df["base_volume"], errors="coerce").fillna(0.0)
         return pd.Series(np.zeros(len(df)), index=df.index, dtype=float)
 
-    def _quote_volume(self, df: pd.DataFrame) -> pd.Series:
+    @staticmethod
+    def _quote_volume(df: pd.DataFrame) -> pd.Series:
         if "quote_volume" in df.columns:
             return pd.to_numeric(df["quote_volume"], errors="coerce").fillna(0.0)
-        base_volume = self._base_volume(df)
+        base_volume = FeatureEngine._base_volume(df)
         closes = pd.to_numeric(df["close"], errors="coerce").fillna(0.0)
         return base_volume * closes
 
     def _calc_volume_metrics(self, df: pd.DataFrame) -> Dict[str, Any]:
         base_volume = self._base_volume(df)
         quote_volume = self._quote_volume(df)
+        min_coverage_hours = float(
+            self.config.get("volume_metrics", {}).get("min_coverage_hours", 23.5)
+        )
 
         result: Dict[str, Any] = {
             "volume_last_candle_base": round(float(base_volume.iloc[-1]), 8),
@@ -160,11 +166,11 @@ class FeatureEngine:
         result["volume_24h_candles"] = int(window_mask.sum())
         result["volume_24h_coverage_hours"] = round(float(coverage_hours), 4)
 
-        if coverage_hours < _MIN_24H_VOLUME_COVERAGE_HOURS:
+        if coverage_hours < min_coverage_hours:
             logger.debug(
                 "Skipping 24h volume aggregation: only %.2f h of coverage available (need ≥ %.2f h)",
                 coverage_hours,
-                _MIN_24H_VOLUME_COVERAGE_HOURS,
+                min_coverage_hours,
             )
             return result
 
@@ -376,8 +382,9 @@ class FeatureEngine:
 
     def _calc_volume_spike(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Volume relative to 20-period average."""
+        lookback = max(int(self.config.get("volume_spike", {}).get("lookback", 20)), 1)
         volume = self._base_volume(df)
-        avg_vol = volume.rolling(window=20).mean()
+        avg_vol = volume.rolling(window=lookback).mean()
         val = avg_vol.iloc[-1]
         if pd.notna(val) and val > 0:
             spike = volume.iloc[-1] / val
@@ -390,7 +397,7 @@ class FeatureEngine:
         Uses bullish candle volume / total volume as a proxy for buy pressure.
         Returns value between 0.0 and 1.0 where > 0.5 indicates net buying.
         """
-        lookback = min(20, len(df))
+        lookback = min(max(int(self.config.get("taker_ratio", {}).get("lookback", 20)), 1), len(df))
         recent = df.tail(lookback)
         volume = self._base_volume(recent)
         if recent.empty or volume.sum() == 0:

@@ -11,7 +11,6 @@ from sqlalchemy import text
 from ..tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
-_VOLUME_LOOKBACK_CANDLES = 20
 _STOCHASTIC_WARMUP_OVERLAP = 2
 
 
@@ -25,6 +24,15 @@ def _calc_stochastic_warmup(stochastic_config: dict) -> int:
         + stochastic_config.get("d", 0)
         - _STOCHASTIC_WARMUP_OVERLAP,
         0,
+    )
+
+
+def _calc_volume_lookback(indicators_config: dict) -> int:
+    volume_spike = indicators_config.get("volume_spike", {})
+    taker_ratio = indicators_config.get("taker_ratio", {})
+    return max(
+        int(volume_spike.get("lookback", 20)),
+        int(taker_ratio.get("lookback", 20)),
     )
 
 
@@ -50,7 +58,7 @@ def _derive_min_candles(indicators_config: dict, timeframe: str) -> int:
         indicators_config.get("zscore", {}).get("lookback", 0),
         max(ema_periods) if ema_periods else 0,
         _calc_stochastic_warmup(stochastic),
-        _VOLUME_LOOKBACK_CANDLES,
+        _calc_volume_lookback(indicators_config),
         288 if timeframe == "5m" else 24,
     ]
     return max(required)
