@@ -1,7 +1,7 @@
 """Feature Engine — calculates technical indicators dynamically from config."""
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import pandas as pd
 import numpy as np
 
@@ -14,7 +14,7 @@ class FeatureEngine:
     def __init__(self, indicators_config: Dict[str, Any]):
         self.config = indicators_config
 
-    def calculate(self, df: pd.DataFrame, market_data: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    def calculate(self, df: pd.DataFrame, market_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Calculate all enabled indicators for the given OHLCV DataFrame.
 
         Args:

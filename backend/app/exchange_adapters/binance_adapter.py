@@ -21,8 +21,7 @@ class BinanceAdapter(BaseExchangeAdapter):
     SPOT_BASE = "https://api.binance.com/api/v3"
 
     def __init__(self, api_key: str = "", api_secret: str = ""):
-        self.api_key = api_key.strip()
-        self.api_secret = api_secret.strip()
+        _ = api_key, api_secret
 
     @staticmethod
     def _normalize_symbol(symbol: str) -> str:

@@ -60,6 +60,28 @@ async def _load_market_metadata_map(db) -> dict:
     }
 
 
+async def _upsert_market_metadata_snapshot(db, symbol: str, results: dict, updated_at: datetime) -> None:
+    await db.execute(text("""
+        INSERT INTO market_metadata (
+            symbol, price, volume_24h, spread_pct, orderbook_depth_usdt, last_updated
+        )
+        VALUES (:symbol, :price, :volume_24h, :spread_pct, :orderbook_depth_usdt, :updated)
+        ON CONFLICT (symbol) DO UPDATE SET
+            price = COALESCE(:price, market_metadata.price),
+            volume_24h = COALESCE(:volume_24h, market_metadata.volume_24h),
+            spread_pct = COALESCE(:spread_pct, market_metadata.spread_pct),
+            orderbook_depth_usdt = COALESCE(:orderbook_depth_usdt, market_metadata.orderbook_depth_usdt),
+            last_updated = :updated
+    """), {
+        "symbol": symbol,
+        "price": results.get("price"),
+        "volume_24h": results.get("volume_24h_usdt"),
+        "spread_pct": results.get("spread_pct"),
+        "orderbook_depth_usdt": results.get("orderbook_depth_usdt"),
+        "updated": updated_at,
+    })
+
+
 def _derive_min_candles(indicators_config: dict, timeframe: str) -> int:
     ema_periods = indicators_config.get("ema", {}).get("periods", [])
     stochastic = indicators_config.get("stochastic", {})
@@ -148,25 +170,7 @@ async def _compute_async():
                 )
 
                 now = datetime.now(timezone.utc)
-                await db.execute(text("""
-                    INSERT INTO market_metadata (
-                        symbol, price, volume_24h, spread_pct, orderbook_depth_usdt, last_updated
-                    )
-                    VALUES (:symbol, :price, :volume_24h, :spread_pct, :orderbook_depth_usdt, :updated)
-                    ON CONFLICT (symbol) DO UPDATE SET
-                        price = COALESCE(:price, market_metadata.price),
-                        volume_24h = COALESCE(:volume_24h, market_metadata.volume_24h),
-                        spread_pct = COALESCE(:spread_pct, market_metadata.spread_pct),
-                        orderbook_depth_usdt = COALESCE(:orderbook_depth_usdt, market_metadata.orderbook_depth_usdt),
-                        last_updated = :updated
-                """), {
-                    "symbol": symbol,
-                    "price": results.get("price"),
-                    "volume_24h": results.get("volume_24h_usdt"),
-                    "spread_pct": results.get("spread_pct"),
-                    "orderbook_depth_usdt": results.get("orderbook_depth_usdt"),
-                    "updated": now,
-                })
+                await _upsert_market_metadata_snapshot(db, symbol, results, now)
 
                 # Store in TimescaleDB
                 await db.execute(text("""
@@ -266,25 +270,7 @@ async def _compute_5m_async():
                 )
 
                 now = datetime.now(timezone.utc)
-                await db.execute(text("""
-                    INSERT INTO market_metadata (
-                        symbol, price, volume_24h, spread_pct, orderbook_depth_usdt, last_updated
-                    )
-                    VALUES (:symbol, :price, :volume_24h, :spread_pct, :orderbook_depth_usdt, :updated)
-                    ON CONFLICT (symbol) DO UPDATE SET
-                        price = COALESCE(:price, market_metadata.price),
-                        volume_24h = COALESCE(:volume_24h, market_metadata.volume_24h),
-                        spread_pct = COALESCE(:spread_pct, market_metadata.spread_pct),
-                        orderbook_depth_usdt = COALESCE(:orderbook_depth_usdt, market_metadata.orderbook_depth_usdt),
-                        last_updated = :updated
-                """), {
-                    "symbol": symbol,
-                    "price": results.get("price"),
-                    "volume_24h": results.get("volume_24h_usdt"),
-                    "spread_pct": results.get("spread_pct"),
-                    "orderbook_depth_usdt": results.get("orderbook_depth_usdt"),
-                    "updated": now,
-                })
+                await _upsert_market_metadata_snapshot(db, symbol, results, now)
                 await db.execute(text("""
                     INSERT INTO indicators (time, symbol, timeframe, indicators_json)
                     VALUES (:time, :symbol, :timeframe, :indicators)
