@@ -173,7 +173,9 @@ class MarketDataService:
         if indicator == "spread_pct":
             return 0 <= parsed < 100
         if indicator == "taker_ratio":
-            return 0.2 <= parsed <= 5
+            ratio_min = float(self._fallback_config().get("taker_ratio_min", 0.2))
+            ratio_max = float(self._fallback_config().get("taker_ratio_max", 5.0))
+            return ratio_min <= parsed <= ratio_max
         if indicator in {"taker_buy_volume", "taker_sell_volume"}:
             return parsed >= 0
         if indicator == "volume_delta_trades":
@@ -421,7 +423,8 @@ class MarketDataService:
             else:
                 taker_buy_volume += qty
         total_volume = taker_buy_volume + taker_sell_volume
-        ratio = taker_buy_volume / max(taker_sell_volume, 1e-9) if total_volume > 0 else None
+        denominator_floor = float(self._fallback_config().get("taker_ratio_denominator_floor", 1e-9))
+        ratio = taker_buy_volume / max(taker_sell_volume, denominator_floor) if total_volume > 0 else None
         payload: Dict[str, Any] = {
             "taker_buy_volume": taker_buy_volume,
             "taker_sell_volume": taker_sell_volume,

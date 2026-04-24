@@ -22,6 +22,7 @@ async def _collect_all_async():
     from ..services.market_data_service import market_data_service
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.config_service import config_service
+    from ..services.seed_service import DEFAULT_INDICATORS
     from sqlalchemy import text
 
     logger.info("Starting market data collection...")
@@ -39,12 +40,15 @@ async def _collect_all_async():
 
     logger.info(f"Collecting data for {len(symbols)} symbols")
     collected = 0
+    ohlcv_1h_limit = int(
+        DEFAULT_INDICATORS.get("market_data_fallback", {}).get("ohlcv_1h_limit", 300)
+    )
 
     # Fetch and store OHLCV for each symbol
     async with AsyncSessionLocal() as db:
         for symbol in symbols[:50]:  # Limit to avoid rate limits
             try:
-                df = await market_data_service.fetch_ohlcv(symbol, "1h", limit=300)
+                df = await market_data_service.fetch_ohlcv(symbol, "1h", limit=ohlcv_1h_limit)
                 if df is None or df.empty:
                     continue
 

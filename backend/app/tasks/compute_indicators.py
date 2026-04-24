@@ -114,7 +114,8 @@ async def _compute_async():
     indicators_config = DEFAULT_INDICATORS  # System defaults for centralized computation
     engine = FeatureEngine(indicators_config)
     min_candles_1h = _derive_min_candles(indicators_config, "1h")
-    query_limit_1h = max(300, min_candles_1h)
+    ohlcv_1h_limit = int(indicators_config.get("market_data_fallback", {}).get("ohlcv_1h_limit", 300))
+    query_limit_1h = max(ohlcv_1h_limit, min_candles_1h)
     computed = 0
 
     async with AsyncSessionLocal() as db:

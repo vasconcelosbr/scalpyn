@@ -153,6 +153,15 @@ class FeatureEngine:
         closes = pd.to_numeric(df["close"], errors="coerce").fillna(0.0)
         return base_volume * closes
 
+    def _taker_ratio_min(self) -> float:
+        return float(self.config.get("market_data_fallback", {}).get("taker_ratio_min", 0.2))
+
+    def _taker_ratio_max(self) -> float:
+        return float(self.config.get("market_data_fallback", {}).get("taker_ratio_max", 5.0))
+
+    def _taker_ratio_denominator_floor(self) -> float:
+        return float(self.config.get("market_data_fallback", {}).get("taker_ratio_denominator_floor", 1e-9))
+
     def _calc_volume_metrics(self, df: pd.DataFrame) -> Dict[str, Any]:
         base_volume = self._base_volume(df)
         quote_volume = self._quote_volume(df)
@@ -430,8 +439,8 @@ class FeatureEngine:
         bullish_mask = recent["close"] >= recent["open"]
         buy_volume = float(volume.loc[bullish_mask].sum())
         sell_volume = float(volume.loc[~bullish_mask].sum())
-        ratio = buy_volume / max(sell_volume, 1e-9)
-        if 0.2 <= ratio <= 5:
+        ratio = buy_volume / max(sell_volume, self._taker_ratio_denominator_floor())
+        if self._taker_ratio_min() <= ratio <= self._taker_ratio_max():
             return {"taker_ratio_candle": round(float(ratio), 8)}
         return {"taker_ratio_candle": None}
 
