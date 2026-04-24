@@ -223,6 +223,11 @@ async def init_db():
         except Exception as e:
             logger.warning(f"Could not add liquidity columns to market_metadata: {e}")
 
+        # CRITICAL migration: the SQLAlchemy Trade model declares these columns,
+        # so every `select(Trade)` in the app expands to all columns. If this
+        # ALTER TABLE silently fails on production, the dashboard returns a
+        # generic "Database error" 503 on every request. Fail loud and abort
+        # startup so the broken schema never serves traffic.
         try:
             await conn.execute(text("""
                 ALTER TABLE trades
@@ -236,7 +241,15 @@ async def init_db():
             """))
             logger.info("Ensured trades.exchange_order_id and trades.source columns exist")
         except Exception as e:
-            logger.warning(f"Could not add exchange_order_id/source columns to trades: {e}")
+            logger.error(
+                "FATAL: failed to add exchange_order_id/source columns to trades. "
+                "The Trade ORM model requires these columns; running with the old "
+                "schema will break every /analytics endpoint. Aborting startup. "
+                "Error: %s",
+                e,
+                exc_info=True,
+            )
+            raise
     # Attempt to create hypertables in separate transactions so failures don't abort the connection
     tables_to_hyper = ['ohlcv', 'indicators', 'alpha_scores', 'funding_rates']
     for table in tables_to_hyper:
