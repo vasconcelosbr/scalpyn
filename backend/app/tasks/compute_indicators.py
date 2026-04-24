@@ -11,6 +11,7 @@ from sqlalchemy import text
 from ..tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+_VOLUME_LOOKBACK_CANDLES = 20
 
 
 def _run_async(coro):
@@ -35,7 +36,7 @@ def _derive_min_candles(indicators_config: dict, timeframe: str) -> int:
         indicators_config.get("zscore", {}).get("lookback", 0),
         max(ema_periods) if ema_periods else 0,
         max(stochastic.get("k", 0) + stochastic.get("smooth", 0) + stochastic.get("d", 0) - 2, 0),
-        20,  # volume_spike + taker_ratio derived lookback
+        _VOLUME_LOOKBACK_CANDLES,
         288 if timeframe == "5m" else 24,
     ]
     return max(required)
