@@ -92,8 +92,9 @@ class FeatureEngine:
 
             results["close"] = float(df["close"].iloc[-1])
             results["price"] = results["close"]
-            # ATR as percentage of price
-            if "atr" in results:
+            # ATR as percentage of price — guard against None (returned when rolling
+            # window has insufficient data) to avoid a silent TypeError in the outer except.
+            if results.get("atr") is not None:
                 results["atr_pct"] = round((results["atr"] / results["close"]) * 100, 4) if results["close"] > 0 else 0
             if "atr_pct" in results:
                 results["atr_percent"] = results["atr_pct"]

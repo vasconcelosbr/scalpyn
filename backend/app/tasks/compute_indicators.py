@@ -98,7 +98,7 @@ def _derive_min_candles(indicators_config: dict, timeframe: str) -> int:
         max(ema_periods) if ema_periods else 0,
         _calc_stochastic_warmup(stochastic),
         _calc_volume_lookback(indicators_config),
-        288 if timeframe == "5m" else 24,
+        48 if timeframe == "5m" else 24,
     ]
     return max(required)
 
