@@ -22,7 +22,7 @@ DEFAULT_INDICATORS = {
     "parabolic_sar": {"enabled": True, "step": 0.02, "max_step": 0.2},
     "bollinger": {"enabled": True, "period": 20, "deviation": 2.0},
     "zscore": {"enabled": False, "lookback": 20},
-    "volume_delta": {"enabled": False},
+    "volume_delta": {"enabled": True},
     "volume_metrics": {"enabled": True, "min_coverage_hours": 23.5},
     "volume_spike": {"enabled": True, "lookback": 20},
     "taker_ratio": {"enabled": True, "lookback": 20},

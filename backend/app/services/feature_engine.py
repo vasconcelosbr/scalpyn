@@ -14,7 +14,7 @@ class FeatureEngine:
     def __init__(self, indicators_config: Dict[str, Any]):
         self.config = indicators_config
 
-    def calculate(self, df: pd.DataFrame) -> Dict[str, Any]:
+    def calculate(self, df: pd.DataFrame, market_data: Dict[str, Any] | None = None) -> Dict[str, Any]:
         """Calculate all enabled indicators for the given OHLCV DataFrame.
 
         Args:
@@ -103,6 +103,9 @@ class FeatureEngine:
                 results["ema9_distance_pct"] = round(
                     (results["close"] - results["ema9"]) / results["ema9"] * 100, 4
                 )
+
+            if market_data:
+                results.update(self._apply_market_data_overrides(market_data))
 
         except Exception as e:
             logger.exception(f"Error calculating indicators: {e}")
@@ -408,3 +411,23 @@ class FeatureEngine:
         total_volume = volume.sum()
         ratio = buy_volume / total_volume if total_volume > 0 else 0.5
         return {"taker_ratio": round(float(ratio), 4)}
+
+    def _apply_market_data_overrides(self, market_data: Dict[str, Any]) -> Dict[str, Any]:
+        overrides: Dict[str, Any] = {}
+        for key in (
+            "volume_24h_base",
+            "volume_24h_usdt",
+            "orderbook_depth_usdt",
+            "spread_pct",
+            "taker_buy_volume",
+            "taker_sell_volume",
+            "taker_ratio",
+            "volume_delta",
+            "market_data_symbol",
+            "market_data_source",
+            "market_data_confidence",
+        ):
+            value = market_data.get(key)
+            if value is not None:
+                overrides[key] = value
+        return overrides

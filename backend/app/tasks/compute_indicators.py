@@ -67,6 +67,7 @@ def _derive_min_candles(indicators_config: dict, timeframe: str) -> int:
 async def _compute_async():
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.feature_engine import FeatureEngine
+    from ..services.market_data_service import market_data_service
     from ..services.seed_service import DEFAULT_INDICATORS
 
     logger.info("Starting indicator computation...")
@@ -84,6 +85,19 @@ async def _compute_async():
             WHERE time > now() - interval '7 days'
         """))
         symbols = [row.symbol for row in symbols_result.fetchall()]
+        metadata_result = await db.execute(text("""
+            SELECT symbol, price, volume_24h, spread_pct, orderbook_depth_usdt
+            FROM market_metadata
+        """))
+        metadata_map = {
+            row.symbol: {
+                "price": float(row.price) if row.price is not None else None,
+                "volume_24h": float(row.volume_24h) if row.volume_24h is not None else None,
+                "spread_pct": float(row.spread_pct) if row.spread_pct is not None else None,
+                "orderbook_depth_usdt": float(row.orderbook_depth_usdt) if row.orderbook_depth_usdt is not None else None,
+            }
+            for row in metadata_result.fetchall()
+        }
 
         for symbol in symbols:
             try:
@@ -110,8 +124,12 @@ async def _compute_async():
                     "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
                 } for r in reversed(rows)])
 
+                market_data = await market_data_service.fetch_indicator_fallbacks(
+                    symbol,
+                    existing_data=metadata_map.get(symbol),
+                )
                 # Calculate indicators
-                results = engine.calculate(df)
+                results = engine.calculate(df, market_data=market_data)
                 if not results:
                     continue
 
@@ -125,8 +143,28 @@ async def _compute_async():
                     results.get("volume_24h_candles"),
                 )
 
-                # Store in TimescaleDB
                 now = datetime.now(timezone.utc)
+                await db.execute(text("""
+                    INSERT INTO market_metadata (
+                        symbol, price, volume_24h, spread_pct, orderbook_depth_usdt, last_updated
+                    )
+                    VALUES (:symbol, :price, :volume_24h, :spread_pct, :orderbook_depth_usdt, :updated)
+                    ON CONFLICT (symbol) DO UPDATE SET
+                        price = COALESCE(:price, market_metadata.price),
+                        volume_24h = COALESCE(:volume_24h, market_metadata.volume_24h),
+                        spread_pct = COALESCE(:spread_pct, market_metadata.spread_pct),
+                        orderbook_depth_usdt = COALESCE(:orderbook_depth_usdt, market_metadata.orderbook_depth_usdt),
+                        last_updated = :updated
+                """), {
+                    "symbol": symbol,
+                    "price": results.get("price"),
+                    "volume_24h": results.get("volume_24h_usdt"),
+                    "spread_pct": results.get("spread_pct"),
+                    "orderbook_depth_usdt": results.get("orderbook_depth_usdt"),
+                    "updated": now,
+                })
+
+                # Store in TimescaleDB
                 await db.execute(text("""
                     INSERT INTO indicators (time, symbol, timeframe, indicators_json)
                     VALUES (:time, :symbol, :timeframe, :indicators)
@@ -160,6 +198,7 @@ async def _compute_5m_async():
     """Compute technical indicators from 5-minute OHLCV candles."""
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.feature_engine import FeatureEngine
+    from ..services.market_data_service import market_data_service
     from ..services.seed_service import DEFAULT_INDICATORS
 
     logger.info("Starting 5m indicator computation...")
@@ -178,6 +217,19 @@ async def _compute_5m_async():
               AND time > now() - interval '2 hours'
         """))
         symbols = [row.symbol for row in symbols_result.fetchall()]
+        metadata_result = await db.execute(text("""
+            SELECT symbol, price, volume_24h, spread_pct, orderbook_depth_usdt
+            FROM market_metadata
+        """))
+        metadata_map = {
+            row.symbol: {
+                "price": float(row.price) if row.price is not None else None,
+                "volume_24h": float(row.volume_24h) if row.volume_24h is not None else None,
+                "spread_pct": float(row.spread_pct) if row.spread_pct is not None else None,
+                "orderbook_depth_usdt": float(row.orderbook_depth_usdt) if row.orderbook_depth_usdt is not None else None,
+            }
+            for row in metadata_result.fetchall()
+        }
 
         for symbol in symbols:
             try:
@@ -203,7 +255,11 @@ async def _compute_5m_async():
                     "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
                 } for r in reversed(rows)])
 
-                results = engine.calculate(df)
+                market_data = await market_data_service.fetch_indicator_fallbacks(
+                    symbol,
+                    existing_data=metadata_map.get(symbol),
+                )
+                results = engine.calculate(df, market_data=market_data)
                 if not results:
                     continue
 
@@ -218,6 +274,25 @@ async def _compute_5m_async():
                 )
 
                 now = datetime.now(timezone.utc)
+                await db.execute(text("""
+                    INSERT INTO market_metadata (
+                        symbol, price, volume_24h, spread_pct, orderbook_depth_usdt, last_updated
+                    )
+                    VALUES (:symbol, :price, :volume_24h, :spread_pct, :orderbook_depth_usdt, :updated)
+                    ON CONFLICT (symbol) DO UPDATE SET
+                        price = COALESCE(:price, market_metadata.price),
+                        volume_24h = COALESCE(:volume_24h, market_metadata.volume_24h),
+                        spread_pct = COALESCE(:spread_pct, market_metadata.spread_pct),
+                        orderbook_depth_usdt = COALESCE(:orderbook_depth_usdt, market_metadata.orderbook_depth_usdt),
+                        last_updated = :updated
+                """), {
+                    "symbol": symbol,
+                    "price": results.get("price"),
+                    "volume_24h": results.get("volume_24h_usdt"),
+                    "spread_pct": results.get("spread_pct"),
+                    "orderbook_depth_usdt": results.get("orderbook_depth_usdt"),
+                    "updated": now,
+                })
                 await db.execute(text("""
                     INSERT INTO indicators (time, symbol, timeframe, indicators_json)
                     VALUES (:time, :symbol, :timeframe, :indicators)

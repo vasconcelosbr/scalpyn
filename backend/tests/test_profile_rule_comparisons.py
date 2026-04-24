@@ -93,6 +93,52 @@ def test_feature_engine_uses_base_volume_for_volume_indicators_and_quote_volume_
     assert indicators["volume_delta"] == 0.0
 
 
+def test_feature_engine_prefers_normalized_market_data_over_candle_proxies():
+    engine = FeatureEngine(
+        {
+            "rsi": {"enabled": False},
+            "adx": {"enabled": False},
+            "ema": {"enabled": False},
+            "atr": {"enabled": False},
+            "macd": {"enabled": False},
+            "vwap": {"enabled": False},
+            "stochastic": {"enabled": False},
+            "obv": {"enabled": False},
+            "bollinger": {"enabled": False},
+            "parabolic_sar": {"enabled": False},
+            "zscore": {"enabled": False},
+            "volume_delta": {"enabled": True},
+            "volume_metrics": {"enabled": True},
+            "taker_ratio": {"enabled": True},
+        }
+    )
+
+    indicators = engine.calculate(
+        _sample_ohlcv(30),
+        market_data={
+            "volume_24h_base": 321.0,
+            "volume_24h_usdt": 654.0,
+            "orderbook_depth_usdt": 9999.0,
+            "taker_buy_volume": 7.0,
+            "taker_sell_volume": 3.0,
+            "taker_ratio": 0.7,
+            "volume_delta": 4.0,
+            "market_data_source": "mixed",
+            "market_data_confidence": 0.85,
+        },
+    )
+
+    assert indicators["volume_24h_base"] == 321.0
+    assert indicators["volume_24h_usdt"] == 654.0
+    assert indicators["orderbook_depth_usdt"] == 9999.0
+    assert indicators["taker_buy_volume"] == 7.0
+    assert indicators["taker_sell_volume"] == 3.0
+    assert indicators["taker_ratio"] == 0.7
+    assert indicators["volume_delta"] == 4.0
+    assert indicators["market_data_source"] == "mixed"
+    assert indicators["market_data_confidence"] == 0.85
+
+
 def test_block_engine_supports_comparison_groups():
     engine = BlockEngine(
         {
