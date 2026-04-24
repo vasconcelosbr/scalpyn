@@ -159,7 +159,7 @@ async def init_db():
                 ON ohlcv (symbol, exchange, timeframe, time);
             """))
         except Exception as e:
-            logger.warning(f"Could not backfill/dedupe ohlcv quote_volume index: {e}")
+            logger.warning(f"Could not add quote_volume column, deduplicate rows, or create unique index on ohlcv: {e}")
         # Indicators
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS indicators (
