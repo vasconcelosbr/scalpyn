@@ -7,6 +7,11 @@ from datetime import datetime, timezone
 from sqlalchemy import text
 
 from ..tasks.celery_app import celery_app
+from ..services.pool_selection import (
+    apply_pool_discovery_filters,
+    load_market_cap_map,
+    load_profile_discovery_thresholds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +53,17 @@ async def _discover_async():
                 overrides = pool.overrides or {}
                 auto_add = overrides.get("auto_add", True)
                 auto_remove = overrides.get("auto_remove", False)
-                min_volume = float(overrides.get("min_volume_24h", 0))
+                max_assets = int(overrides.get("max_assets", 0))
+                min_volume = 0.0
+                min_market_cap = 0.0
+
+                if pool.profile_id:
+                    min_volume, min_market_cap, _ = await load_profile_discovery_thresholds(
+                        db,
+                        pool.profile_id,
+                    )
+                if min_volume <= 0:
+                    min_volume = float(overrides.get("min_volume_24h", 0) or 0)
 
                 # Fetch universe
                 from ..utils.symbol_filters import is_excluded_asset
@@ -129,10 +144,19 @@ async def _discover_async():
                             vol_map = {}
                     # For spot, vol_map was pre-built from tickers above
 
-                    if vol_map:
-                        universe_symbols = {
-                            s for s in universe_symbols if vol_map.get(s, 0) >= min_volume
-                        }
+                market_cap_map = {}
+                if min_market_cap > 0:
+                    market_cap_map = await load_market_cap_map(db, universe_symbols)
+
+                selection = apply_pool_discovery_filters(
+                    universe_symbols,
+                    vol_map=vol_map,
+                    market_cap_map=market_cap_map,
+                    min_volume=min_volume,
+                    min_market_cap=min_market_cap,
+                    max_assets=max_assets,
+                )
+                universe_symbols = selection["symbols"]
 
                 # Load existing coins
                 coins_result = await db.execute(

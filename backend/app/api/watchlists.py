@@ -1107,6 +1107,11 @@ def _should_refresh_for_upstream_delta(
     return not persisted_symbols.issubset(upstream_symbols)
 
 
+def _watchlist_requires_exact_upstream_sync(effective_level: str) -> bool:
+    """True when a watchlist snapshot must exactly mirror its upstream symbol set."""
+    return effective_level in {"custom", "POOL"}
+
+
 def _is_upstream_scan_newer(
     parent_last_scanned_at: Optional[datetime],
     child_last_scanned_at: Optional[datetime],
@@ -1179,7 +1184,7 @@ async def _auto_refresh_watchlist_assets_if_needed(
         should_refresh = _should_refresh_for_upstream_delta(
             persisted_symbols=persisted_symbols,
             upstream_symbols=upstream_symbols,
-            exact_match=effective_level == "custom",
+            exact_match=_watchlist_requires_exact_upstream_sync(effective_level),
         )
         if (
             not should_refresh
