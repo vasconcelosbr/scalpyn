@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import { WatchlistTable } from '@/components/watchlist/WatchlistTable';
 import {
   WatchlistDecisionTable,
@@ -608,6 +608,17 @@ interface WatchlistRowProps {
 }
 
 // ── Futures Asset Table ──────────────────────────────────────────────────────
+interface FuturesComponents {
+  liquidity?: number;
+  structure_long?: number;
+  structure_short?: number;
+  momentum_long?: number;
+  momentum_short?: number;
+  volatility?: number;
+  order_flow_long?: number;
+  order_flow_short?: number;
+}
+
 interface FuturesAsset {
   symbol: string;
   score_long: number | null;
@@ -622,6 +633,10 @@ interface FuturesAsset {
   // Backend returns current_price / price_change_24h (matching _asset_to_dict)
   current_price?: number | null;
   price_change_24h?: number | null;
+  // Drilldown data
+  futures_components?: FuturesComponents;
+  block_reasons_long?: string[];
+  block_reasons_short?: string[];
 }
 
 function ScorePill({ value, color }: { value: number | null; color: string }) {
@@ -639,6 +654,114 @@ function ScorePill({ value, color }: { value: number | null; color: string }) {
   );
 }
 
+const FUTURES_LAYERS = [
+  { key: 'L1 Liquidez',    long: 'liquidity',       short: 'liquidity',        max: 20, shared: true  },
+  { key: 'L2 Estrutura',   long: 'structure_long',  short: 'structure_short',  max: 25, shared: false },
+  { key: 'L3 Momentum',    long: 'momentum_long',   short: 'momentum_short',   max: 30, shared: false },
+  { key: 'L4 Volatilidade',long: 'volatility',      short: 'volatility',       max: 10, shared: true  },
+  { key: 'L5 Order Flow',  long: 'order_flow_long', short: 'order_flow_short', max: 15, shared: false },
+] as const;
+
+function LayerBar({ value, max, color }: { value: number | undefined; max: number; color: string }) {
+  if (value == null) return <span className="text-[#334155] text-[10px]">—</span>;
+  const pct = Math.min(100, (value / max) * 100);
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="w-20 h-1.5 rounded-full bg-[#1A2035] overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-[10px] text-[#94A3B8] tabular-nums w-8 text-right">{value.toFixed(1)}/{max}</span>
+    </div>
+  );
+}
+
+function FuturesDrilldown({ asset }: { asset: FuturesAsset }) {
+  const comp = asset.futures_components ?? {};
+  const bLong  = asset.block_reasons_long  ?? [];
+  const bShort = asset.block_reasons_short ?? [];
+  return (
+    <div className="bg-[#060810] border-t border-[#1A2035] px-4 py-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Layer breakdown table */}
+        <div>
+          <p className="text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-2">Score por Layer</p>
+          <table className="w-full text-[10px]">
+            <thead>
+              <tr className="border-b border-[#1A2035]">
+                <th className="text-left py-1 pr-2 text-[#334155] font-medium">Layer</th>
+                <th className="text-left py-1 pr-2 text-emerald-500/70 font-medium">LONG</th>
+                <th className="text-left py-1 text-red-500/70 font-medium">SHORT</th>
+              </tr>
+            </thead>
+            <tbody>
+              {FUTURES_LAYERS.map((layer) => {
+                const longVal  = comp[layer.long  as keyof FuturesComponents] as number | undefined;
+                const shortVal = comp[layer.short as keyof FuturesComponents] as number | undefined;
+                return (
+                  <tr key={layer.key} className="border-b border-[#0D1118]">
+                    <td className="py-1.5 pr-2 text-[#6B7280] whitespace-nowrap">{layer.key}</td>
+                    <td className="py-1.5 pr-2">
+                      <LayerBar value={longVal}  max={layer.max} color="bg-emerald-500" />
+                    </td>
+                    <td className="py-1.5">
+                      <LayerBar value={shortVal} max={layer.max} color="bg-red-500" />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Block reasons */}
+        <div className="flex flex-col gap-3">
+          <div>
+            <p className="text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1.5">Bloqueios de Entrada</p>
+            <div className="space-y-2">
+              <div>
+                <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border mr-1.5 ${
+                  asset.entry_long_blocked
+                    ? 'bg-red-500/10 text-red-400 border-red-500/25'
+                    : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
+                }`}>
+                  {asset.entry_long_blocked ? '🔒 LONG Bloqueado' : '✓ LONG Aberto'}
+                </span>
+                {bLong.length > 0 && (
+                  <ul className="mt-1 space-y-0.5">
+                    {bLong.map((r) => (
+                      <li key={r} className="text-[9px] text-red-400/80 pl-2 border-l border-red-500/20">
+                        {r}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div>
+                <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border mr-1.5 ${
+                  asset.entry_short_blocked
+                    ? 'bg-red-500/10 text-red-400 border-red-500/25'
+                    : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
+                }`}>
+                  {asset.entry_short_blocked ? '🔒 SHORT Bloqueado' : '✓ SHORT Aberto'}
+                </span>
+                {bShort.length > 0 && (
+                  <ul className="mt-1 space-y-0.5">
+                    {bShort.map((r) => (
+                      <li key={r} className="text-[9px] text-red-400/80 pl-2 border-l border-red-500/20">
+                        {r}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function FuturesAssetTable({
   assets,
   loading,
@@ -650,6 +773,7 @@ function FuturesAssetTable({
   hideNeutral: boolean;
   onToggleHideNeutral: () => void;
 }) {
+  const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
   // Server already filters when hide_neutral=true; no client-side filtering needed.
   const displayed = assets;
 
@@ -690,6 +814,7 @@ function FuturesAssetTable({
           <table className="w-full text-xs min-w-[700px]">
             <thead>
               <tr className="border-b border-[#1A2035] bg-[#060810]">
+                <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium w-6"></th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium">Symbol</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium">Direção</th>
                 <th className="px-3 py-2.5 text-right text-[#4B5563] font-medium">Base α</th>
@@ -705,6 +830,7 @@ function FuturesAssetTable({
             <tbody>
               {displayed.map((asset) => {
                 const dir = asset.futures_direction;
+                const isOpen = expandedSymbol === asset.symbol;
                 const dirCls = dir === 'LONG'    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
                              : dir === 'SHORT'   ? 'bg-red-500/10 text-red-400 border-red-500/25'
                              : dir === 'NEUTRAL' ? 'bg-[#1E2433] text-[#6B7280] border-[#374151]'
@@ -716,36 +842,55 @@ function FuturesAssetTable({
                 const chg = asset.price_change_24h;
                 const chgCls = chg == null ? 'text-[#4B5563]' : chg >= 0 ? 'text-emerald-400' : 'text-red-400';
                 return (
-                  <tr key={asset.symbol} className="border-b border-[#1A2035]/60 hover:bg-[#0D1118] transition-colors">
-                    <td className="px-3 py-2.5 font-semibold text-[#E2E8F0] tracking-wide">{asset.symbol}</td>
-                    <td className="px-3 py-2.5">
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded border font-semibold ${dirCls}`}>
-                        {dirLabel}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-right tabular-nums text-[#94A3B8]">
-                      {asset.alpha_score != null ? asset.alpha_score.toFixed(1) : '—'}
-                    </td>
-                    <td className="px-3 py-2.5"><ScorePill value={asset.score_long}       color="bg-emerald-500" /></td>
-                    <td className="px-3 py-2.5"><ScorePill value={asset.score_short}      color="bg-red-500"     /></td>
-                    <td className="px-3 py-2.5"><ScorePill value={asset.confidence_score} color="bg-[#F472B6]"   /></td>
-                    <td className="px-3 py-2.5 text-center">
-                      <span className={`text-[9px] font-medium ${asset.entry_long_blocked ? 'text-red-400' : 'text-emerald-400'}`}>
-                        {asset.entry_long_blocked ? '🔒 Bloq.' : '✓ Open'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-center">
-                      <span className={`text-[9px] font-medium ${asset.entry_short_blocked ? 'text-red-400' : 'text-emerald-400'}`}>
-                        {asset.entry_short_blocked ? '🔒 Bloq.' : '✓ Open'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5 text-right text-[#94A3B8]">
-                      {asset.current_price != null ? `$${asset.current_price.toLocaleString(undefined, { maximumFractionDigits: 4 })}` : '—'}
-                    </td>
-                    <td className={`px-3 py-2.5 text-right tabular-nums ${chgCls}`}>
-                      {chg != null ? `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%` : '—'}
-                    </td>
-                  </tr>
+                  <Fragment key={asset.symbol}>
+                    <tr
+                      className="border-b border-[#1A2035]/60 hover:bg-[#0D1118] transition-colors cursor-pointer"
+                      onClick={() => setExpandedSymbol(isOpen ? null : asset.symbol)}
+                    >
+                      <td className="px-3 py-2.5 text-[#334155]">
+                        <ChevronDown
+                          size={12}
+                          className="transition-transform"
+                          style={{ transform: isOpen ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+                        />
+                      </td>
+                      <td className="px-3 py-2.5 font-semibold text-[#E2E8F0] tracking-wide">{asset.symbol}</td>
+                      <td className="px-3 py-2.5">
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded border font-semibold ${dirCls}`}>
+                          {dirLabel}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-[#94A3B8]">
+                        {asset.alpha_score != null ? asset.alpha_score.toFixed(1) : '—'}
+                      </td>
+                      <td className="px-3 py-2.5"><ScorePill value={asset.score_long}       color="bg-emerald-500" /></td>
+                      <td className="px-3 py-2.5"><ScorePill value={asset.score_short}      color="bg-red-500"     /></td>
+                      <td className="px-3 py-2.5"><ScorePill value={asset.confidence_score} color="bg-[#F472B6]"   /></td>
+                      <td className="px-3 py-2.5 text-center">
+                        <span className={`text-[9px] font-medium ${asset.entry_long_blocked ? 'text-red-400' : 'text-emerald-400'}`}>
+                          {asset.entry_long_blocked ? '🔒 Bloq.' : '✓ Open'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-center">
+                        <span className={`text-[9px] font-medium ${asset.entry_short_blocked ? 'text-red-400' : 'text-emerald-400'}`}>
+                          {asset.entry_short_blocked ? '🔒 Bloq.' : '✓ Open'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-[#94A3B8]">
+                        {asset.current_price != null ? `$${asset.current_price.toLocaleString(undefined, { maximumFractionDigits: 4 })}` : '—'}
+                      </td>
+                      <td className={`px-3 py-2.5 text-right tabular-nums ${chgCls}`}>
+                        {chg != null ? `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%` : '—'}
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr key={`${asset.symbol}-drilldown`} className="border-b border-[#1A2035]/60">
+                        <td colSpan={11} className="p-0">
+                          <FuturesDrilldown asset={asset} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>

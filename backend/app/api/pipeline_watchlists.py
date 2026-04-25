@@ -521,12 +521,53 @@ async def get_pipeline_assets(
             score_long = float(r.score_long) if r.score_long is not None else None
             score_short = float(r.score_short) if r.score_short is not None else None
             confidence = float(r.confidence_score) if r.confidence_score is not None else None
+            entry_long_blocked = bool(r.entry_long_blocked) if r.entry_long_blocked is not None else False
+            entry_short_blocked = bool(r.entry_short_blocked) if r.entry_short_blocked is not None else False
             asset_dict["score_long"] = score_long
             asset_dict["score_short"] = score_short
             asset_dict["confidence_score"] = confidence
             asset_dict["futures_direction"] = futures_direction
-            asset_dict["entry_long_blocked"] = bool(r.entry_long_blocked) if r.entry_long_blocked is not None else False
-            asset_dict["entry_short_blocked"] = bool(r.entry_short_blocked) if r.entry_short_blocked is not None else False
+            asset_dict["entry_long_blocked"] = entry_long_blocked
+            asset_dict["entry_short_blocked"] = entry_short_blocked
+
+            # Layer breakdown from live indicator data (for drilldown panel)
+            futures_components: Dict[str, Any] = {}
+            block_reasons_long: List[str] = []
+            block_reasons_short: List[str] = []
+            try:
+                from ..scoring.futures_pipeline_scorer import score_futures as _score_futures
+                _profile_cfg = profile_config or {}
+                _scoring_futures = _profile_cfg.get("scoring_futures") or {}
+                _futures_result = _score_futures(ind_data, scoring_futures=_scoring_futures)
+                futures_components = _futures_result.get("components", {})
+
+                # Compute human-readable block reasons
+                _adx_min   = float(_scoring_futures.get("entry_adx_min", 15.0))
+                _rsi_ob    = float(_scoring_futures.get("entry_rsi_overbought", 80.0))
+                _rsi_os    = float(_scoring_futures.get("entry_rsi_oversold", 20.0))
+                _tk_l_max  = float(_scoring_futures.get("entry_taker_long_max", 0.30))
+                _tk_s_min  = float(_scoring_futures.get("entry_taker_short_min", 0.70))
+                _adx_val   = ind_data.get("adx")
+                _rsi_val   = ind_data.get("rsi")
+                _tk_val    = ind_data.get("taker_ratio")
+
+                if _adx_val is not None and float(_adx_val) < _adx_min:
+                    block_reasons_long.append(f"ADX < {_adx_min:.0f} (sem tendência)")
+                    block_reasons_short.append(f"ADX < {_adx_min:.0f} (sem tendência)")
+                if _rsi_val is not None and float(_rsi_val) > _rsi_ob:
+                    block_reasons_long.append(f"RSI > {_rsi_ob:.0f} (overbought)")
+                if _rsi_val is not None and float(_rsi_val) < _rsi_os:
+                    block_reasons_short.append(f"RSI < {_rsi_os:.0f} (oversold)")
+                if _tk_val is not None and float(_tk_val) < _tk_l_max:
+                    block_reasons_long.append(f"Taker ratio < {_tk_l_max:.2f} (pressão vendedora)")
+                if _tk_val is not None and float(_tk_val) > _tk_s_min:
+                    block_reasons_short.append(f"Taker ratio > {_tk_s_min:.2f} (pressão compradora)")
+            except Exception as _fe:
+                logger.debug("futures drilldown components failed for %s: %s", sym, _fe)
+
+            asset_dict["futures_components"] = futures_components
+            asset_dict["block_reasons_long"] = block_reasons_long
+            asset_dict["block_reasons_short"] = block_reasons_short
 
         assets.append(asset_dict)
 
