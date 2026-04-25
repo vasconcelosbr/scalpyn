@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from typing import Optional
 from uuid import UUID
+from datetime import datetime, timezone, timedelta
 import io
 import csv
 
@@ -17,21 +18,47 @@ from .config import get_current_user_id
 router = APIRouter(prefix="/api/reports", tags=["Reports"])
 
 
+def _parse_period(
+    days: Optional[int],
+    start_date: Optional[str],
+    end_date: Optional[str],
+) -> tuple[Optional[datetime], Optional[datetime]]:
+    """Convert period params to start/end datetime objects.
+
+    Explicit start_date/end_date take priority over days.
+    If only days is provided, start = now - days, end = None (open).
+    """
+    if start_date or end_date:
+        start = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc) if start_date else None
+        end = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc) if end_date else None
+        return start, end
+    if days:
+        return datetime.now(timezone.utc) - timedelta(days=days), None
+    return None, None
+
+
 @router.get("/trades")
 async def get_trade_reports(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    days: Optional[int] = Query(None, ge=1),
     symbol: Optional[str] = None,
     direction: Optional[str] = None,
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(500, ge=1, le=5000),
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
     """Get trades with full indicator snapshots at entry."""
+    start, end = _parse_period(days, start_date, end_date)
+
     query = select(Trade).where(
         Trade.user_id == user_id, Trade.status == "closed"
     ).order_by(desc(Trade.exit_at))
 
+    if start:
+        query = query.where(Trade.exit_at >= start)
+    if end:
+        query = query.where(Trade.exit_at <= end)
     if symbol:
         query = query.where(Trade.symbol == symbol)
     if direction:
@@ -74,13 +101,23 @@ async def get_trade_reports(
 
 @router.get("/trades/export")
 async def export_trades_csv(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    days: Optional[int] = Query(None, ge=1),
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
     """Export trade history as CSV."""
+    start, end = _parse_period(days, start_date, end_date)
+
     query = select(Trade).where(
         Trade.user_id == user_id, Trade.status == "closed"
     ).order_by(desc(Trade.exit_at)).limit(5000)
+
+    if start:
+        query = query.where(Trade.exit_at >= start)
+    if end:
+        query = query.where(Trade.exit_at <= end)
 
     result = await db.execute(query)
     trades = result.scalars().all()
@@ -114,11 +151,15 @@ async def export_trades_csv(
 
 @router.get("/metrics")
 async def get_metrics(
-    days: int = Query(30, ge=1, le=365),
+    days: Optional[int] = Query(30, ge=1),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    """Get performance metrics."""
-    from datetime import datetime, timezone, timedelta
-    start = datetime.now(timezone.utc) - timedelta(days=days)
-    return await analytics_service.get_pnl_summary(db, user_id, start_date=start)
+    """Get performance metrics for a date range.
+
+    Explicit start_date/end_date take priority over days.
+    """
+    start, end = _parse_period(days, start_date, end_date)
+    return await analytics_service.get_pnl_summary(db, user_id, start_date=start, end_date=end)

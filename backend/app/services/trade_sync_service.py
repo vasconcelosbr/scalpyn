@@ -87,14 +87,20 @@ class TradeSyncService:
     # ── fetch all pages ───────────────────────────────────────────────────────
 
     async def _fetch_all_closed_orders(
-        self, adapter: GateAdapter, days: int
+        self, adapter: GateAdapter, days: int, all_history: bool = False
     ) -> List[Dict[str, Any]]:
+        from datetime import datetime, timezone
+        from_ts: Optional[int] = None
+        if all_history:
+            # Gate.io launched in 2017; use 2017-01-01 as the earliest safe timestamp
+            from_ts = int(datetime(2017, 1, 1, tzinfo=timezone.utc).timestamp())
+
         all_orders: List[Dict[str, Any]] = []
         page = 1
         while True:
             try:
                 batch = await adapter.get_my_closed_spot_orders(
-                    days=days, page=page, limit=100
+                    days=days, page=page, limit=100, from_timestamp=from_ts
                 )
             except Exception as exc:
                 logger.warning(f"Error fetching closed orders page {page}: {exc}")
@@ -219,10 +225,14 @@ class TradeSyncService:
         db: AsyncSession,
         user_id: UUID,
         days: int = 90,
+        all_history: bool = False,
     ) -> Dict[str, Any]:
         """
         Pull closed spot orders from Gate.io, match buy/sell pairs (FIFO),
         and insert new Trade records into the database.
+
+        When all_history=True, fetches from Gate.io's launch (2017-01-01)
+        regardless of the days parameter.
 
         Returns a summary dict with counts.
         """
@@ -234,7 +244,7 @@ class TradeSyncService:
             }
 
         try:
-            raw_orders = await self._fetch_all_closed_orders(adapter, days)
+            raw_orders = await self._fetch_all_closed_orders(adapter, days, all_history=all_history)
         except Exception as exc:
             logger.error(f"Failed to fetch exchange orders: {exc}")
             return {"success": False, "error": f"Exchange API error: {exc}"}

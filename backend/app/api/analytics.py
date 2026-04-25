@@ -29,12 +29,19 @@ async def get_pnl(
 
 @router.get("/capital")
 async def get_capital_evolution(
-    days: int = Query(30, ge=1, le=365),
+    days: int = Query(30, ge=1),
     initial_capital: float = Query(100000, ge=0),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    data = await analytics_service.get_capital_evolution(db, user_id, days, initial_capital)
+    start = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc) if start_date else None
+    end = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc) if end_date else None
+    data = await analytics_service.get_capital_evolution(
+        db, user_id, days=days, initial_capital=initial_capital,
+        start_date=start, end_date=end,
+    )
     return {"data": data}
 
 
@@ -48,14 +55,20 @@ async def get_daily_summary(
 
 @router.get("/dashboard")
 async def get_dashboard_overview(
-    days: int = Query(30, ge=1, le=365),
+    days: int = Query(30, ge=1),
     min_value_usdt: float = Query(10, ge=0),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
+    start = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc) if start_date else None
+    end = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc) if end_date else None
     return await portfolio_service.get_dashboard_overview(
         db=db,
         user_id=user_id,
         days=days,
         min_value_usdt=min_value_usdt,
+        start_date=start,
+        end_date=end,
     )

@@ -8,6 +8,7 @@ import {
   useCallback,
   memo,
 } from "react";
+
 import {
   Area,
   AreaChart,
@@ -40,8 +41,25 @@ import {
   Download,
   CheckCircle,
   AlertCircle,
+  Calendar,
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
+
+type Period = "1d" | "7d" | "30d" | "90d" | "custom";
+const PERIOD_LABELS: Record<Period, string> = { "1d": "Hoje", "7d": "7D", "30d": "30D", "90d": "90D", "custom": "Custom" };
+
+function periodToApiParams(period: Period, customStart: string, customEnd: string): string {
+  if (period === "custom") {
+    const parts: string[] = [];
+    if (customStart) parts.push(`start_date=${customStart}`);
+    if (customEnd) parts.push(`end_date=${customEnd}T23:59:59`);
+    return parts.join("&");
+  }
+  const days = period === "1d" ? 1 : period === "7d" ? 7 : period === "30d" ? 30 : 90;
+  const now = new Date();
+  const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+  return `start_date=${start.toISOString().split("T")[0]}&end_date=${now.toISOString().split("T")[0]}T23:59:59`;
+}
 
 const C = {
   profit: "#34D399",
@@ -724,15 +742,27 @@ export default function DashboardPage() {
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [period, setPeriod] = useState<Period>("30d");
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
+
+  const periodRef = useRef<Period>("30d");
+  const customStartRef = useRef("");
+  const customEndRef = useRef("");
+  periodRef.current = period;
+  customStartRef.current = customStart;
+  customEndRef.current = customEnd;
 
   const fetchAll = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     else setRefreshing(true);
 
+    const dateParams = periodToApiParams(periodRef.current, customStartRef.current, customEndRef.current);
+
     try {
       const [ov, pl] = await Promise.all([
-        apiGet<DashboardOverview>("/analytics/dashboard?days=30&min_value_usdt=10"),
-        apiGet<PnlSummary>("/analytics/pnl"),
+        apiGet<DashboardOverview>(`/analytics/dashboard?${dateParams}&min_value_usdt=10`),
+        apiGet<PnlSummary>(`/analytics/pnl?${dateParams}`),
       ]);
       setOverview(ov);
       setPnl(pl);
@@ -747,7 +777,7 @@ export default function DashboardPage() {
     setSyncing(true);
     setSyncResult(null);
     try {
-      const res = await apiPost<{ message: string; imported: number; skipped: number }>("/trades/sync?days=90");
+      const res = await apiPost<{ message: string; imported: number; skipped: number }>("/trades/sync?all_history=true");
       setSyncResult({ ok: true, message: res.message });
       await fetchAll(true);
     } catch (err: any) {
@@ -759,6 +789,18 @@ export default function DashboardPage() {
   }, [fetchAll]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  const handlePeriodSelect = (p: Period) => {
+    setPeriod(p);
+    periodRef.current = p;
+    if (p !== "custom") {
+      setTimeout(() => fetchAll(true), 0);
+    }
+  };
+
+  const handleCustomApply = () => {
+    if (customStart || customEnd) fetchAll(true);
+  };
 
   const sparkline = useMemo(() => {
     if (!overview?.capital_evolution) return [];
@@ -803,6 +845,57 @@ export default function DashboardPage() {
             <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
             Refresh
           </button>
+        </div>
+      </div>
+
+      {/* Period filter row */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div
+          className="flex gap-1 p-0.5 rounded-xl"
+          style={{ background: C.elevated, border: `1px solid ${C.border}` }}
+        >
+          {(["1d", "7d", "30d", "90d"] as Period[]).map((p) => (
+            <button
+              key={p}
+              onClick={() => handlePeriodSelect(p)}
+              className="px-3 py-1.5 text-[12px] font-medium rounded-[10px] transition-all"
+              style={
+                period === p
+                  ? { background: C.blue, color: "#fff" }
+                  : { color: C.textSecondary }
+              }
+            >
+              {PERIOD_LABELS[p]}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <Calendar size={13} style={{ color: C.textTertiary }} />
+          <input
+            type="date"
+            value={customStart}
+            onChange={(e) => { setCustomStart(e.target.value); setPeriod("custom"); customStartRef.current = e.target.value; }}
+            className="text-[11px] rounded-lg px-2 py-1.5 focus:outline-none"
+            style={{ background: C.elevated, border: `1px solid ${C.border}`, color: C.textPrimary }}
+          />
+          <span className="text-[11px]" style={{ color: C.textTertiary }}>–</span>
+          <input
+            type="date"
+            value={customEnd}
+            onChange={(e) => { setCustomEnd(e.target.value); setPeriod("custom"); customEndRef.current = e.target.value; }}
+            className="text-[11px] rounded-lg px-2 py-1.5 focus:outline-none"
+            style={{ background: C.elevated, border: `1px solid ${C.border}`, color: C.textPrimary }}
+          />
+          {period === "custom" && (
+            <button
+              onClick={handleCustomApply}
+              className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg transition-opacity hover:opacity-80"
+              style={{ background: C.blue, color: "#fff" }}
+            >
+              Aplicar
+            </button>
+          )}
         </div>
       </div>
 
@@ -894,7 +987,7 @@ export default function DashboardPage() {
                       {fmtUsd(overview.realized_total_pnl)}
                     </span>
                   )}
-                  <span className="text-[11px] px-2 py-1 rounded-lg" style={{ background: "rgba(255,255,255,0.04)", color: C.textTertiary }}>30D</span>
+                  <span className="text-[11px] px-2 py-1 rounded-lg" style={{ background: "rgba(255,255,255,0.04)", color: C.textTertiary }}>{PERIOD_LABELS[period]}</span>
                 </div>
               </div>
               <EquityCurve data={overview.capital_evolution} />

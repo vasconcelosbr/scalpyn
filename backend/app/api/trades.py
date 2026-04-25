@@ -124,12 +124,19 @@ async def get_trade(
 
 @router.post("/sync")
 async def sync_trades_from_exchange(
-    days: int = Query(90, ge=1, le=365),
+    days: int = Query(90, ge=1),
+    all_history: bool = Query(False, description="When true, fetches all trades since Gate.io launch (2017)"),
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    """Import closed spot orders from Gate.io into the trades table."""
-    result = await trade_sync_service.sync_spot_trades(db=db, user_id=user_id, days=days)
+    """Import closed spot orders from Gate.io into the trades table.
+
+    Pass all_history=true to import the complete trade history (since 2017).
+    Otherwise, pass days to control the lookback window (default 90).
+    """
+    result = await trade_sync_service.sync_spot_trades(
+        db=db, user_id=user_id, days=days, all_history=all_history
+    )
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Sync failed"))
     return result

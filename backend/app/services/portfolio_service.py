@@ -287,13 +287,17 @@ class PortfolioService:
         user_id: UUID,
         days: int = 30,
         min_value_usdt: float = 10.0,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         live = await self._build_live_positions(db, user_id, min_value_usdt)
         today_summary = await analytics_service.get_daily_summary(db, user_id)
         total_summary = await analytics_service.get_pnl_summary(db, user_id)
 
-        start = datetime.now(timezone.utc) - timedelta(days=days)
-        range_summary = await analytics_service.get_pnl_summary(db, user_id, start_date=start)
+        start = start_date if start_date else datetime.now(timezone.utc) - timedelta(days=days)
+        range_summary = await analytics_service.get_pnl_summary(
+            db, user_id, start_date=start, end_date=end_date
+        )
         current_capital = _safe_float(live["totals"].get("portfolio_value"))
         initial_capital = max(current_capital - _safe_float(range_summary.get("total_pnl")), 0.0)
         capital_evolution = await analytics_service.get_capital_evolution(
@@ -301,6 +305,8 @@ class PortfolioService:
             user_id,
             days=days,
             initial_capital=initial_capital,
+            start_date=start,
+            end_date=end_date,
         )
 
         return {

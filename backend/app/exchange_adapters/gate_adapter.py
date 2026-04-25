@@ -655,6 +655,7 @@ class GateAdapter(BaseExchangeAdapter):
         days: int = 90,
         page: int = 1,
         limit: int = 100,
+        from_timestamp: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         GET /spot/orders?status=finished — authenticated, returns user's closed spot orders.
@@ -663,9 +664,15 @@ class GateAdapter(BaseExchangeAdapter):
             id, currency_pair, side ("buy"|"sell"), amount, price, avg_deal_price,
             filled_total (quote filled), left, fee, fee_currency,
             create_time, finish_time, status ("closed"|"cancelled").
+
+        When from_timestamp is provided it is used directly; otherwise it is
+        computed from days (relative to now).
         """
         from datetime import datetime, timezone, timedelta
-        start_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+        if from_timestamp is not None:
+            start_ts = from_timestamp
+        else:
+            start_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
         return await self._request(
             "GET",
             "/spot/orders",
