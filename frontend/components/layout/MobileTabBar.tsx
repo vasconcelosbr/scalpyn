@@ -2,18 +2,19 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Eye, BarChart3, LineChart, Settings } from "lucide-react";
+import { LayoutDashboard, Eye, Activity, FileText, Menu } from "lucide-react";
+import { useAppStore } from "@/stores/useAppStore";
 
 const TABS = [
-  { name: "Dashboard", href: "/",           icon: LayoutDashboard },
-  { name: "Watchlist", href: "/watchlist",  icon: Eye             },
-  { name: "Positions", href: "/trading-desk/positions", icon: BarChart3 },
-  { name: "Analytics", href: "/analytics",  icon: LineChart       },
-  { name: "Settings",  href: "/settings/general", icon: Settings  },
+  { name: "Dashboard", href: "/",                    icon: LayoutDashboard },
+  { name: "Watchlist", href: "/watchlist",           icon: Eye             },
+  { name: "Trading",   href: "/trading-desk/spot",  icon: Activity        },
+  { name: "Reports",   href: "/reports",             icon: FileText        },
 ] as const;
 
 export function MobileTabBar() {
   const pathname = usePathname();
+  const { mobileNavOpen, openMobileNav } = useAppStore();
 
   return (
     <nav className="mobile-tab-bar" aria-label="Mobile navigation">
@@ -34,6 +35,17 @@ export function MobileTabBar() {
             </Link>
           );
         })}
+
+        {/* Menu button — opens full nav drawer */}
+        <button
+          onClick={openMobileNav}
+          className={`mobile-tab-item${mobileNavOpen ? " active" : ""}`}
+          aria-label="Open navigation menu"
+          aria-expanded={mobileNavOpen}
+        >
+          <Menu size={22} strokeWidth={mobileNavOpen ? 2 : 1.5} />
+          <span>Menu</span>
+        </button>
       </div>
     </nav>
   );

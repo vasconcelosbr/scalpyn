@@ -4,6 +4,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { Header } from "@/components/layout/Header";
 import { AuthGuard } from "@/components/auth/AuthGuard";
 import { MobileTabBar } from "@/components/layout/MobileTabBar";
+import { MobileNavDrawer } from "@/components/layout/MobileNavDrawer";
 import { ServiceWorkerRegistrar } from "@/components/ServiceWorkerRegistrar";
 
 export const metadata: Metadata = {
@@ -57,6 +58,8 @@ export default function RootLayout({
 
           {/* Mobile bottom tab bar — visible only on < 768px */}
           <MobileTabBar />
+          {/* Mobile nav drawer — full nav for mobile */}
+          <MobileNavDrawer />
         </AuthGuard>
       </body>
     </html>

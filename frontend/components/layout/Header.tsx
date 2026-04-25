@@ -3,12 +3,13 @@
 import { useAppStore } from '@/stores/useAppStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { getToken } from '@/lib/auth';
-import { Bell, ChevronRight, LogOut } from 'lucide-react';
+import { Bell, ChevronRight, LogOut, Menu } from 'lucide-react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 export function Header() {
   const mode = useAppStore((state) => state.mode);
+  const openMobileNav = useAppStore((state) => state.openMobileNav);
   const { user, logout, setUser } = useAuthStore();
   const pathname = usePathname();
   const router = useRouter();
@@ -66,8 +67,17 @@ export function Header() {
   return (
     <header className="fixed top-0 left-[240px] max-lg:left-[64px] max-md:left-0 right-0 h-[56px] border-b border-[var(--border-subtle)] flex items-center justify-between px-6 z-40 backdrop-blur-md bg-[#0C0D12D9] transition-all duration-350 ease-out">
 
+      {/* Hamburger — mobile only */}
+      <button
+        onClick={openMobileNav}
+        className="md:hidden btn-icon mr-2 shrink-0"
+        aria-label="Open navigation menu"
+      >
+        <Menu className="w-5 h-5" />
+      </button>
+
       {/* Left side: Page Title & Breadcrumb */}
-      <div className="flex flex-col justify-center">
+      <div className="flex flex-col justify-center flex-1 min-w-0">
         <div className="flex items-center gap-2 text-[11px] text-[var(--text-tertiary)] uppercase tracking-[0.05em] font-medium mb-0.5">
           <span>Scalpyn</span>
           <ChevronRight className="w-3 h-3" />
