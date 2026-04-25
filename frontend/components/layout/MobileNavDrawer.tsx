@@ -151,12 +151,14 @@ export function MobileNavDrawer() {
               >
                 {user?.name ?? "User"}
               </div>
-              <div
-                className="text-[11px] px-2 py-0.5 rounded-full inline-block mt-0.5"
-                style={{ background: "var(--bg-active)", color: "var(--text-secondary)" }}
-              >
-                Admin
-              </div>
+              {(user?.role || "Admin") && (
+                <div
+                  className="text-[11px] px-2 py-0.5 rounded-full inline-block mt-0.5"
+                  style={{ background: "var(--bg-active)", color: "var(--text-secondary)" }}
+                >
+                  {user?.role ?? "Admin"}
+                </div>
+              )}
             </div>
           </div>
           <button
