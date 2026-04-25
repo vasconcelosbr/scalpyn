@@ -324,9 +324,11 @@ def score_futures(
         ind, entry_adx_min, entry_rsi_oversold, entry_taker_short_min
     )
 
-    # Direction: L3-only, requires meaningful gap between scores
+    # Direction: L3-only; BLOCK pre-empts score-based resolution.
+    # When block_both triggers (ADX < adx_min), no direction is assigned —
+    # entry is forbidden for both sides, so no directional signal is meaningful.
     direction: Optional[str] = None
-    if watchlist_level == "L3":
+    if watchlist_level == "L3" and not block_both:
         gap = score_long - score_short
         if gap >= direction_gap_min:
             direction = "LONG"

@@ -707,7 +707,7 @@ function FuturesAssetTable({
                 const dir = asset.futures_direction;
                 const dirCls = dir === 'LONG'    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
                              : dir === 'SHORT'   ? 'bg-red-500/10 text-red-400 border-red-500/25'
-                             : dir === 'NEUTRAL' ? 'bg-amber-500/10 text-amber-400 border-amber-500/25'
+                             : dir === 'NEUTRAL' ? 'bg-[#1E2433] text-[#6B7280] border-[#374151]'
                              : 'bg-[#1E2433] text-[#4B5563] border-[#334155]';
                 const dirLabel = dir === 'LONG' ? 'LONG'
                                : dir === 'SHORT' ? 'SHORT'

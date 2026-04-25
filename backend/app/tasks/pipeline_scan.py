@@ -1639,13 +1639,21 @@ async def _run_pipeline_scan():
                     # Placed after score_config load so scoring_futures config is available.
                     is_futures = getattr(wl, "market_mode", "spot") == "futures"
                     if is_futures and assets:
-                        # scoring_futures sub-dict allows profile/admin config overrides
-                        futures_cfg = (score_config or {}).get("scoring_futures") or {}
-                        _tag_futures_scores(assets, effective_level, scoring_futures=futures_cfg)
-                        logger.info(
-                            "[PipelineScan] %s (%s): tagged futures scores on %d assets",
-                            wl.name, effective_level, len(assets),
-                        )
+                        # scoring_futures key must be present in config; if absent, degrade
+                        # silently to spot behavior rather than running with unknown defaults.
+                        futures_cfg = (score_config or {}).get("scoring_futures")
+                        if futures_cfg is None:
+                            logger.info(
+                                "[PipelineScan] %s: scoring_futures config absent — "
+                                "skipping futures scoring (spot fallback)",
+                                wl.name,
+                            )
+                        else:
+                            _tag_futures_scores(assets, effective_level, scoring_futures=futures_cfg)
+                            logger.info(
+                                "[PipelineScan] %s (%s): tagged futures scores on %d assets",
+                                wl.name, effective_level, len(assets),
+                            )
 
                     if effective_level == "custom":
                         existing_symbols = {a.get("symbol") for a in assets}
