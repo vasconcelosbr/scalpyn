@@ -390,14 +390,28 @@ def score_futures(
     score_short = round(liq + s_short + m_short + vol + of_short, 2)
     confidence  = round(max(score_long, score_short), 2)
 
-    # ── BLOCK priority: evaluated once, blocks both directions ────────────────
-    long_blocked  = _entry_long_blocked_cfg(ind, entry_adx_min, entry_rsi_overbought, entry_taker_long_max)
-    short_blocked = _entry_short_blocked_cfg(ind, entry_adx_min, entry_rsi_oversold,  entry_taker_short_min)
+    # ── BLOCK (shared) — priority 1, evaluated once for both directions ─────────
+    # A shared BLOCK pre-empts direction-specific ENTRY gates and score display.
+    # Condition: ADX below threshold → no meaningful trend, entry forbidden both ways.
+    adx = _get(ind, "adx")
+    block_both = bool(adx is not None and float(adx) < entry_adx_min)
+
+    # ── ENTRY gates — priority 2, evaluated independently per direction ────────
+    # These are only meaningful when block_both is False; they remain computed
+    # so the frontend can show the exact gate reason regardless of BLOCK status.
+    long_blocked  = block_both or _entry_long_blocked_cfg(
+        ind, entry_adx_min, entry_rsi_overbought, entry_taker_long_max
+    )
+    short_blocked = block_both or _entry_short_blocked_cfg(
+        ind, entry_adx_min, entry_rsi_oversold, entry_taker_short_min
+    )
+
+    # ── SCORE — priority 3 (display only; gate outcome above is authoritative) ─
 
     # ── Direction: L3-only, requires meaningful gap ───────────────────────────
-    # Non-L3 → None (not yet evaluated)
+    # Non-L3 → None (not yet evaluated at that pipeline stage)
     # L3 with gap ≥ threshold → directional signal
-    # L3 with gap < threshold → NEUTRAL (explicitly indecisive — hide with hide_neutral)
+    # L3 with gap < threshold → NEUTRAL (explicitly indecisive; hidden by hide_neutral)
     direction: Optional[str] = None
     if watchlist_level == "L3":
         gap = score_long - score_short
@@ -409,12 +423,18 @@ def score_futures(
             direction = "NEUTRAL"
 
     return {
+        # ── Scores (L3 — display layer) ──────────────────────────────────────
         "score_long":          score_long,
         "score_short":         score_short,
         "confidence_score":    confidence,
         "futures_direction":   direction,
+        # ── Gate flags (BLOCK > ENTRY priority contract) ───────────────────
+        # block_both: shared BLOCK triggered (ADX < adx_min) — pre-empts both
+        # entry_long_blocked / entry_short_blocked: ENTRY gates (include BLOCK)
+        "block_both":          block_both,
         "entry_long_blocked":  long_blocked,
         "entry_short_blocked": short_blocked,
+        # ── Per-layer breakdown for drilldown ─────────────────────────────
         "components": {
             "liquidity":        liq,
             "structure_long":   s_long,

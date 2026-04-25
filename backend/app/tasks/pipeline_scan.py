@@ -1054,9 +1054,13 @@ def _tag_futures_scores(
     """Mutate each asset dict to add futures score fields.
 
     Reads the pre-computed ``indicators`` sub-dict (populated by
-    ``_build_pipeline_asset`` from the ``indicators`` table) and adds:
-      score_long, score_short, confidence_score, futures_direction,
-      entry_long_blocked, entry_short_blocked
+    ``_build_pipeline_asset`` from the ``indicators`` table) and adds
+    (in BLOCK > ENTRY > SCORE priority order):
+      block_both            — shared BLOCK gate (ADX < adx_min); pre-empts both dirs
+      entry_long_blocked    — ENTRY gate LONG (includes block_both)
+      entry_short_blocked   — ENTRY gate SHORT (includes block_both)
+      score_long, score_short, confidence_score  — SCORE layer (display)
+      futures_direction     — LONG | SHORT | NEUTRAL (L3 only); None for non-L3
 
     Called only when ``wl.market_mode == 'futures'``.
     Direction is 'LONG' | 'SHORT' | 'NEUTRAL' for L3;
@@ -1087,6 +1091,8 @@ def _tag_futures_scores(
             asset["score_short"]         = result["score_short"]
             asset["confidence_score"]    = result["confidence_score"]
             asset["futures_direction"]   = result["futures_direction"]
+            # BLOCK > ENTRY priority: block_both is the shared BLOCK gate
+            asset["block_both"]          = result["block_both"]
             asset["entry_long_blocked"]  = result["entry_long_blocked"]
             asset["entry_short_blocked"] = result["entry_short_blocked"]
         except Exception as exc:
@@ -1613,19 +1619,6 @@ async def _run_pipeline_scan():
                             wl.name, effective_level, len(quarantined),
                         )
 
-                    # Futures mode: compute dual LONG/SHORT scores for all assets.
-                    # Must run BEFORE upsert so scores are persisted to DB.
-                    # Direction: LONG|SHORT|NEUTRAL at L3, None for non-L3.
-                    is_futures = getattr(wl, "market_mode", "spot") == "futures"
-                    if is_futures and assets:
-                        # Extract futures-specific config if present in score_config
-                        futures_cfg = (score_config or {}).get("scoring_futures") or {}
-                        _tag_futures_scores(assets, effective_level, scoring_futures=futures_cfg)
-                        logger.info(
-                            "[PipelineScan] %s (%s): tagged futures scores on %d assets",
-                            wl.name, effective_level, len(assets),
-                        )
-
                     assets_with_metadata = sum(1 for a in assets if a.get("_has_market_metadata"))
                     profile_candidate_count = len(assets)
 
@@ -1639,6 +1632,20 @@ async def _run_pipeline_scan():
                     except Exception:
                         from ..services.seed_service import DEFAULT_SCORE
                         score_config = DEFAULT_SCORE
+
+                    # Futures mode: compute dual LONG/SHORT scores for all assets.
+                    # Must run BEFORE upsert so scores are persisted to DB.
+                    # Direction: LONG|SHORT|NEUTRAL at L3; None for non-L3 (pre-rating).
+                    # Placed after score_config load so scoring_futures config is available.
+                    is_futures = getattr(wl, "market_mode", "spot") == "futures"
+                    if is_futures and assets:
+                        # scoring_futures sub-dict allows profile/admin config overrides
+                        futures_cfg = (score_config or {}).get("scoring_futures") or {}
+                        _tag_futures_scores(assets, effective_level, scoring_futures=futures_cfg)
+                        logger.info(
+                            "[PipelineScan] %s (%s): tagged futures scores on %d assets",
+                            wl.name, effective_level, len(assets),
+                        )
 
                     if effective_level == "custom":
                         existing_symbols = {a.get("symbol") for a in assets}

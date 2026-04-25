@@ -476,9 +476,11 @@ async def get_pipeline_assets(
                 if not result["passed"]:
                     continue  # Filter violation — hide asset
 
-        # Futures mode: apply hide_neutral filter BEFORE building the asset dict
+        # Futures mode: apply hide_neutral filter BEFORE building the asset dict.
+        # "NEUTRAL" = L3 asset with score gap < direction_gap_min (explicitly indecisive).
+        # None = non-L3 level (pre-rating stage) — NOT hidden by hide_neutral.
         futures_direction = getattr(r, "futures_direction", None)
-        if is_futures and hide_neutral and futures_direction is None:
+        if is_futures and hide_neutral and futures_direction == "NEUTRAL":
             continue  # neutral — skip when hide_neutral is requested
 
         # Flat indicators dict keyed by col.key (for dynamic table columns)
