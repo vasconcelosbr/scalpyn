@@ -1046,7 +1046,11 @@ async def _replace_rejection_snapshot(
 
 # ─── Futures scoring injection ────────────────────────────────────────────────
 
-def _tag_futures_scores(assets: list, watchlist_level: str) -> None:
+def _tag_futures_scores(
+    assets: list,
+    watchlist_level: str,
+    scoring_futures: Optional[dict] = None,
+) -> None:
     """Mutate each asset dict to add futures score fields.
 
     Reads the pre-computed ``indicators`` sub-dict (populated by
@@ -1055,8 +1059,15 @@ def _tag_futures_scores(assets: list, watchlist_level: str) -> None:
       entry_long_blocked, entry_short_blocked
 
     Called only when ``wl.market_mode == 'futures'``.
-    Direction is resolved only for L3; non-L3 assets always get
-    ``futures_direction = None``.
+    Direction is 'LONG' | 'SHORT' | 'NEUTRAL' for L3;
+    None for non-L3 (not yet evaluated at that stage).
+
+    Parameters
+    ----------
+    scoring_futures:
+        Optional sub-dict from profile/global config with futures-specific
+        thresholds (direction_gap_min, entry_adx_min, etc.).  If None,
+        defaults defined in ``score_futures`` are used.
     """
     try:
         from ..scoring.futures_pipeline_scorer import score_futures
@@ -1067,7 +1078,11 @@ def _tag_futures_scores(assets: list, watchlist_level: str) -> None:
     for asset in assets:
         ind = asset.get("indicators") or {}
         try:
-            result = score_futures(ind, watchlist_level=watchlist_level)
+            result = score_futures(
+                ind,
+                watchlist_level=watchlist_level,
+                scoring_futures=scoring_futures,
+            )
             asset["score_long"]          = result["score_long"]
             asset["score_short"]         = result["score_short"]
             asset["confidence_score"]    = result["confidence_score"]
@@ -1600,10 +1615,12 @@ async def _run_pipeline_scan():
 
                     # Futures mode: compute dual LONG/SHORT scores for all assets.
                     # Must run BEFORE upsert so scores are persisted to DB.
-                    # Direction is restricted to L3 inside the scorer.
+                    # Direction: LONG|SHORT|NEUTRAL at L3, None for non-L3.
                     is_futures = getattr(wl, "market_mode", "spot") == "futures"
                     if is_futures and assets:
-                        _tag_futures_scores(assets, effective_level)
+                        # Extract futures-specific config if present in score_config
+                        futures_cfg = (score_config or {}).get("scoring_futures") or {}
+                        _tag_futures_scores(assets, effective_level, scoring_futures=futures_cfg)
                         logger.info(
                             "[PipelineScan] %s (%s): tagged futures scores on %d assets",
                             wl.name, effective_level, len(assets),

@@ -613,11 +613,15 @@ interface FuturesAsset {
   score_long: number | null;
   score_short: number | null;
   confidence_score: number | null;
-  futures_direction: 'LONG' | 'SHORT' | null;
+  // 'LONG' | 'SHORT' | 'NEUTRAL' at L3; null for non-L3 (pre-rating stages)
+  futures_direction: 'LONG' | 'SHORT' | 'NEUTRAL' | null;
   entry_long_blocked: boolean;
   entry_short_blocked: boolean;
-  price?: number | null;
-  change_24h?: number | null;
+  // Standard alpha score (base spot score — always present)
+  alpha_score?: number | null;
+  // Backend returns current_price / price_change_24h (matching _asset_to_dict)
+  current_price?: number | null;
+  price_change_24h?: number | null;
 }
 
 function ScorePill({ value, color }: { value: number | null; color: string }) {
@@ -688,6 +692,7 @@ function FuturesAssetTable({
               <tr className="border-b border-[#1A2035] bg-[#060810]">
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium">Symbol</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium">Direção</th>
+                <th className="px-3 py-2.5 text-right text-[#4B5563] font-medium">Base α</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Score LONG</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Score SHORT</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Confidence</th>
@@ -700,22 +705,30 @@ function FuturesAssetTable({
             <tbody>
               {displayed.map((asset) => {
                 const dir = asset.futures_direction;
-                const dirCls = dir === 'LONG'  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
-                             : dir === 'SHORT' ? 'bg-red-500/10 text-red-400 border-red-500/25'
+                const dirCls = dir === 'LONG'    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
+                             : dir === 'SHORT'   ? 'bg-red-500/10 text-red-400 border-red-500/25'
+                             : dir === 'NEUTRAL' ? 'bg-amber-500/10 text-amber-400 border-amber-500/25'
                              : 'bg-[#1E2433] text-[#4B5563] border-[#334155]';
-                const chg = asset.change_24h;
+                const dirLabel = dir === 'LONG' ? 'LONG'
+                               : dir === 'SHORT' ? 'SHORT'
+                               : dir === 'NEUTRAL' ? 'NEUTRO'
+                               : '—';
+                const chg = asset.price_change_24h;
                 const chgCls = chg == null ? 'text-[#4B5563]' : chg >= 0 ? 'text-emerald-400' : 'text-red-400';
                 return (
                   <tr key={asset.symbol} className="border-b border-[#1A2035]/60 hover:bg-[#0D1118] transition-colors">
                     <td className="px-3 py-2.5 font-semibold text-[#E2E8F0] tracking-wide">{asset.symbol}</td>
                     <td className="px-3 py-2.5">
                       <span className={`text-[9px] px-1.5 py-0.5 rounded border font-semibold ${dirCls}`}>
-                        {dir ?? 'NEUTRO'}
+                        {dirLabel}
                       </span>
                     </td>
-                    <td className="px-3 py-2.5"><ScorePill value={asset.score_long} color="bg-emerald-500" /></td>
-                    <td className="px-3 py-2.5"><ScorePill value={asset.score_short} color="bg-red-500" /></td>
-                    <td className="px-3 py-2.5"><ScorePill value={asset.confidence_score} color="bg-[#F472B6]" /></td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-[#94A3B8]">
+                      {asset.alpha_score != null ? asset.alpha_score.toFixed(1) : '—'}
+                    </td>
+                    <td className="px-3 py-2.5"><ScorePill value={asset.score_long}       color="bg-emerald-500" /></td>
+                    <td className="px-3 py-2.5"><ScorePill value={asset.score_short}      color="bg-red-500"     /></td>
+                    <td className="px-3 py-2.5"><ScorePill value={asset.confidence_score} color="bg-[#F472B6]"   /></td>
                     <td className="px-3 py-2.5 text-center">
                       <span className={`text-[9px] font-medium ${asset.entry_long_blocked ? 'text-red-400' : 'text-emerald-400'}`}>
                         {asset.entry_long_blocked ? '🔒 Bloq.' : '✓ Open'}
@@ -727,7 +740,7 @@ function FuturesAssetTable({
                       </span>
                     </td>
                     <td className="px-3 py-2.5 text-right text-[#94A3B8]">
-                      {asset.price != null ? `$${asset.price.toLocaleString(undefined, { maximumFractionDigits: 4 })}` : '—'}
+                      {asset.current_price != null ? `$${asset.current_price.toLocaleString(undefined, { maximumFractionDigits: 4 })}` : '—'}
                     </td>
                     <td className={`px-3 py-2.5 text-right tabular-nums ${chgCls}`}>
                       {chg != null ? `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%` : '—'}

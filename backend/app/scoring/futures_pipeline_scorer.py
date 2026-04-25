@@ -276,12 +276,63 @@ def _entry_short_blocked(ind: Dict[str, Any]) -> bool:
     return False
 
 
+def _entry_long_blocked_cfg(
+    ind: Dict[str, Any],
+    adx_min: float,
+    rsi_overbought: float,
+    taker_long_max: float,
+) -> bool:
+    """Config-parametrized hard gate for LONG entry.
+
+    Priority: BLOCK (ADX < adx_min blocks both) > ENTRY (direction-specific gates).
+    """
+    adx = _get(ind, "adx")
+    if adx is not None and float(adx) < adx_min:
+        return True  # BLOCK: insufficient trend — blocks both LONG and SHORT
+
+    rsi = _get(ind, "rsi")
+    if rsi is not None and float(rsi) > rsi_overbought:
+        return True  # ENTRY: overbought — unfavorable for LONG
+
+    taker = _get(ind, "taker_ratio")
+    if taker is not None and float(taker) < taker_long_max:
+        return True  # ENTRY: seller dominance — unfavorable for LONG
+
+    return False
+
+
+def _entry_short_blocked_cfg(
+    ind: Dict[str, Any],
+    adx_min: float,
+    rsi_oversold: float,
+    taker_short_min: float,
+) -> bool:
+    """Config-parametrized hard gate for SHORT entry.
+
+    Priority: BLOCK (ADX < adx_min blocks both) > ENTRY (direction-specific gates).
+    """
+    adx = _get(ind, "adx")
+    if adx is not None and float(adx) < adx_min:
+        return True  # BLOCK: insufficient trend — blocks both LONG and SHORT
+
+    rsi = _get(ind, "rsi")
+    if rsi is not None and float(rsi) < rsi_oversold:
+        return True  # ENTRY: oversold — unfavorable for SHORT
+
+    taker = _get(ind, "taker_ratio")
+    if taker is not None and float(taker) > taker_short_min:
+        return True  # ENTRY: buyer dominance — unfavorable for SHORT
+
+    return False
+
+
 # ─── Public API ───────────────────────────────────────────────────────────────
 
 def score_futures(
     ind: Dict[str, Any],
     *,
     watchlist_level: str = "L1",
+    scoring_futures: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Compute dual LONG/SHORT futures scores for a single asset.
 
@@ -293,45 +344,69 @@ def score_futures(
     watchlist_level:
         Pipeline level of the watchlist.  Direction is only resolved at L3.
         Non-L3 watchlists always get ``futures_direction = None``.
+        At L3: 'LONG' | 'SHORT' if gap >= threshold, else 'NEUTRAL'.
+    scoring_futures:
+        Optional config dict (from profile or global settings) with keys:
+          ``direction_gap_min`` (float, default 5.0) — minimum score gap
+          required to assign a directional bias at L3.
+          ``entry_adx_min`` (float, default 15.0) — ADX below this blocks both.
+          ``entry_rsi_overbought`` (float, default 80.0) — RSI above blocks LONG.
+          ``entry_rsi_oversold`` (float, default 20.0) — RSI below blocks SHORT.
+          ``entry_taker_long_max`` (float, default 0.30) — taker_ratio below blocks LONG.
+          ``entry_taker_short_min`` (float, default 0.70) — taker_ratio above blocks SHORT.
 
     Returns
     -------
     dict with keys:
-        score_long          float  0-100
-        score_short         float  0-100
+        score_long          float  0–100
+        score_short         float  0–100
         confidence_score    float  max(score_long, score_short)
-        futures_direction   str | None  'LONG' | 'SHORT' | None (neutral)
+        futures_direction   str | None  'LONG' | 'SHORT' | 'NEUTRAL' (L3 only)
+                                        None for non-L3 levels
         entry_long_blocked  bool
         entry_short_blocked bool
         components          dict   per-layer scores for drilldown
     """
+    cfg = scoring_futures or {}
+    direction_gap_min      = float(cfg.get("direction_gap_min",      5.0))
+    entry_adx_min          = float(cfg.get("entry_adx_min",         15.0))
+    entry_rsi_overbought   = float(cfg.get("entry_rsi_overbought",  80.0))
+    entry_rsi_oversold     = float(cfg.get("entry_rsi_oversold",    20.0))
+    entry_taker_long_max   = float(cfg.get("entry_taker_long_max",   0.30))
+    entry_taker_short_min  = float(cfg.get("entry_taker_short_min",  0.70))
+
     liq = _score_liquidity(ind)
     vol = _score_volatility(ind)
 
-    s_long = _score_structure_long(ind)
-    m_long = _score_momentum_long(ind)
+    s_long  = _score_structure_long(ind)
+    m_long  = _score_momentum_long(ind)
     of_long = _score_order_flow_long(ind)
 
-    s_short = _score_structure_short(ind)
-    m_short = _score_momentum_short(ind)
+    s_short  = _score_structure_short(ind)
+    m_short  = _score_momentum_short(ind)
     of_short = _score_order_flow_short(ind)
 
-    score_long = round(liq + s_long + m_long + vol + of_long, 2)
+    score_long  = round(liq + s_long  + m_long  + vol + of_long,  2)
     score_short = round(liq + s_short + m_short + vol + of_short, 2)
-    confidence = round(max(score_long, score_short), 2)
+    confidence  = round(max(score_long, score_short), 2)
 
-    # Direction is restricted to L3 — requires a meaningful gap (≥ 5 pts)
+    # ── BLOCK priority: evaluated once, blocks both directions ────────────────
+    long_blocked  = _entry_long_blocked_cfg(ind, entry_adx_min, entry_rsi_overbought, entry_taker_long_max)
+    short_blocked = _entry_short_blocked_cfg(ind, entry_adx_min, entry_rsi_oversold,  entry_taker_short_min)
+
+    # ── Direction: L3-only, requires meaningful gap ───────────────────────────
+    # Non-L3 → None (not yet evaluated)
+    # L3 with gap ≥ threshold → directional signal
+    # L3 with gap < threshold → NEUTRAL (explicitly indecisive — hide with hide_neutral)
     direction: Optional[str] = None
     if watchlist_level == "L3":
         gap = score_long - score_short
-        if gap >= 5.0:
+        if gap >= direction_gap_min:
             direction = "LONG"
-        elif gap <= -5.0:
+        elif gap <= -direction_gap_min:
             direction = "SHORT"
-        # else: neutral — both directions close, no decisive bias
-
-    long_blocked = _entry_long_blocked(ind)
-    short_blocked = _entry_short_blocked(ind)
+        else:
+            direction = "NEUTRAL"
 
     return {
         "score_long":          score_long,
@@ -341,13 +416,13 @@ def score_futures(
         "entry_long_blocked":  long_blocked,
         "entry_short_blocked": short_blocked,
         "components": {
-            "liquidity":       liq,
-            "structure_long":  s_long,
-            "structure_short": s_short,
-            "momentum_long":   m_long,
-            "momentum_short":  m_short,
-            "volatility":      vol,
-            "order_flow_long": of_long,
+            "liquidity":        liq,
+            "structure_long":   s_long,
+            "structure_short":  s_short,
+            "momentum_long":    m_long,
+            "momentum_short":   m_short,
+            "volatility":       vol,
+            "order_flow_long":  of_long,
             "order_flow_short": of_short,
         },
     }

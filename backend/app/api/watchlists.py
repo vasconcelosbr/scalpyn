@@ -673,17 +673,13 @@ async def create_watchlist(
         user_id=user_id,
         name=name,
         level=level,
+        market_mode=market_mode,
         source_pool_id=source_pool_id,
         source_watchlist_id=source_watchlist_id,
         profile_id=_to_uuid(payload.get("profile_id")),
         auto_refresh=payload.get("auto_refresh", True),
         filters_json=filters,
     )
-    # market_mode stored via setattr so it works even if column was just added
-    try:
-        setattr(wl, "market_mode", market_mode)
-    except Exception:
-        pass
     db.add(wl)
     await db.commit()
     await db.refresh(wl)
@@ -747,10 +743,7 @@ async def update_watchlist(
         wl.filters_json = payload["filters_json"]
     if "market_mode" in payload:
         raw_mode = payload["market_mode"]
-        try:
-            setattr(wl, "market_mode", "futures" if str(raw_mode).lower() == "futures" else "spot")
-        except Exception:
-            pass
+        wl.market_mode = "futures" if str(raw_mode).lower() == "futures" else "spot"
     wl.updated_at = datetime.now(timezone.utc)
 
     logger.info(
@@ -1933,11 +1926,14 @@ async def get_watchlist_assets(
         enriched.append(enriched_asset)
 
     # Futures: server-side neutral filter + sort by confidence DESC
+    # hide_neutral removes NEUTRAL (gap < direction_gap_min at L3) assets.
+    # Assets without direction (non-L3 levels) have futures_direction = None
+    # and are NOT hidden by hide_neutral — they are pre-L3 and not yet rated.
     if is_futures:
         if hide_neutral:
             enriched = [
                 e for e in enriched
-                if e.get("futures_direction") is not None
+                if e.get("futures_direction") != "NEUTRAL"
             ]
         enriched.sort(
             key=lambda e: (
