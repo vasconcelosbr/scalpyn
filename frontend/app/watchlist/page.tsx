@@ -43,6 +43,7 @@ interface PipelineWatchlist {
   id: string;
   name: string;
   level: string;
+  market_mode?: string;  // 'spot' | 'futures'
   source_pool_id: string | null;
   source_watchlist_id: string | null;
   profile_id: string | null;
@@ -287,6 +288,9 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
   const existingFilters = wl?.filters_json || {};
   const [name, setName] = useState(wl?.name ?? '');
   const [level, setLevel] = useState(isNew ? 'custom' : resolveWatchlistLevel(wl, profiles));
+  const [marketMode, setMarketMode] = useState<'spot' | 'futures'>(
+    wl?.market_mode === 'futures' ? 'futures' : 'spot',
+  );
   const [sourcePoolId, setSourcePoolId] = useState(wl?.source_pool_id ?? '');
   const [sourceWatchlistId, setSourceWatchlistId] = useState(wl?.source_watchlist_id ?? '');
   const [profileId, setProfileId] = useState(wl?.profile_id ?? '');
@@ -357,6 +361,7 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
       await onSave({
         name,
         level,
+        market_mode: marketMode,
         source_pool_id: sourcePoolId || null,
         source_watchlist_id: sourceWatchlistId || null,
         profile_id: profileId || null,
@@ -507,6 +512,42 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
             </p>
           </div>
 
+          {/* ── Futures Mode toggle ── */}
+          <div className="border-t border-[#1E2433] pt-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <ArrowLeftRight size={12} className="text-[#F472B6]" />
+                  <span className="text-xs font-semibold text-[#94A3B8]">Futures Mode</span>
+                  {marketMode === 'futures' && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#F472B6]/10 text-[#F472B6] border border-[#F472B6]/25">
+                      FUTURES
+                    </span>
+                  )}
+                </div>
+                <p className="text-[10px] text-[#4B5563] mt-0.5">
+                  {marketMode === 'futures'
+                    ? 'Score duplo LONG/SHORT independente. Direção restrita ao L3.'
+                    : 'Score Alpha padrão (spot). Ative para dual LONG/SHORT scoring.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMarketMode((m) => m === 'futures' ? 'spot' : 'futures')}
+                className={`relative w-10 h-5 rounded-full transition-colors ${
+                  marketMode === 'futures' ? 'bg-[#F472B6]' : 'bg-[#1E2433]'
+                }`}
+                aria-label="Toggle Futures Mode"
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
+                    marketMode === 'futures' ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
@@ -566,12 +607,152 @@ interface WatchlistRowProps {
   liveDirections?: Record<string, string>;
 }
 
+// ── Futures Asset Table ──────────────────────────────────────────────────────
+interface FuturesAsset {
+  symbol: string;
+  score_long: number | null;
+  score_short: number | null;
+  confidence_score: number | null;
+  futures_direction: 'LONG' | 'SHORT' | null;
+  entry_long_blocked: boolean;
+  entry_short_blocked: boolean;
+  price?: number | null;
+  change_24h?: number | null;
+}
+
+function ScorePill({ value, color }: { value: number | null; color: string }) {
+  if (value == null) return <span className="text-[#334155] text-[10px]">—</span>;
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="w-16 h-1.5 rounded-full bg-[#1A2035] overflow-hidden">
+        <div
+          className={`h-full rounded-full ${color}`}
+          style={{ width: `${Math.min(100, value)}%` }}
+        />
+      </div>
+      <span className="text-[10px] text-[#94A3B8] tabular-nums w-7 text-right">{value.toFixed(0)}</span>
+    </div>
+  );
+}
+
+function FuturesAssetTable({
+  assets,
+  loading,
+  hideNeutral,
+  onToggleHideNeutral,
+}: {
+  assets: FuturesAsset[];
+  loading: boolean;
+  hideNeutral: boolean;
+  onToggleHideNeutral: () => void;
+}) {
+  const displayed = hideNeutral
+    ? assets.filter((a) => a.futures_direction !== null)
+    : assets;
+
+  if (loading) {
+    return (
+      <div className="px-4 py-6 text-center text-sm text-[#4B5563] flex items-center justify-center gap-2">
+        <RefreshCw size={13} className="animate-spin" />
+        Carregando scores futures…
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* controls bar */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-[#1A2035]">
+        <span className="text-[10px] text-[#4B5563]">{displayed.length} asset{displayed.length !== 1 ? 's' : ''}</span>
+        <button
+          type="button"
+          onClick={onToggleHideNeutral}
+          className={`flex items-center gap-1.5 text-[10px] px-2 py-1 rounded transition-colors ${
+            hideNeutral
+              ? 'bg-[#F472B6]/10 text-[#F472B6] border border-[#F472B6]/25'
+              : 'text-[#4B5563] hover:text-[#94A3B8] border border-[#1E2433]'
+          }`}
+        >
+          <ArrowLeftRight size={9} />
+          {hideNeutral ? 'Mostrar Neutros' : 'Ocultar Neutros'}
+        </button>
+      </div>
+
+      {displayed.length === 0 ? (
+        <div className="px-4 py-8 text-center text-sm text-[#4B5563]">
+          {hideNeutral ? 'Nenhum asset com direção definida.' : 'Nenhum asset disponível.'}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs min-w-[700px]">
+            <thead>
+              <tr className="border-b border-[#1A2035] bg-[#060810]">
+                <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium">Symbol</th>
+                <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium">Direção</th>
+                <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Score LONG</th>
+                <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Score SHORT</th>
+                <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Confidence</th>
+                <th className="px-3 py-2.5 text-center text-[#4B5563] font-medium">Entry Long</th>
+                <th className="px-3 py-2.5 text-center text-[#4B5563] font-medium">Entry Short</th>
+                <th className="px-3 py-2.5 text-right text-[#4B5563] font-medium">Preço</th>
+                <th className="px-3 py-2.5 text-right text-[#4B5563] font-medium">24h %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {displayed.map((asset) => {
+                const dir = asset.futures_direction;
+                const dirCls = dir === 'LONG'  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
+                             : dir === 'SHORT' ? 'bg-red-500/10 text-red-400 border-red-500/25'
+                             : 'bg-[#1E2433] text-[#4B5563] border-[#334155]';
+                const chg = asset.change_24h;
+                const chgCls = chg == null ? 'text-[#4B5563]' : chg >= 0 ? 'text-emerald-400' : 'text-red-400';
+                return (
+                  <tr key={asset.symbol} className="border-b border-[#1A2035]/60 hover:bg-[#0D1118] transition-colors">
+                    <td className="px-3 py-2.5 font-semibold text-[#E2E8F0] tracking-wide">{asset.symbol}</td>
+                    <td className="px-3 py-2.5">
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded border font-semibold ${dirCls}`}>
+                        {dir ?? 'NEUTRO'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5"><ScorePill value={asset.score_long} color="bg-emerald-500" /></td>
+                    <td className="px-3 py-2.5"><ScorePill value={asset.score_short} color="bg-red-500" /></td>
+                    <td className="px-3 py-2.5"><ScorePill value={asset.confidence_score} color="bg-[#F472B6]" /></td>
+                    <td className="px-3 py-2.5 text-center">
+                      <span className={`text-[9px] font-medium ${asset.entry_long_blocked ? 'text-red-400' : 'text-emerald-400'}`}>
+                        {asset.entry_long_blocked ? '🔒 Bloq.' : '✓ Open'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-center">
+                      <span className={`text-[9px] font-medium ${asset.entry_short_blocked ? 'text-red-400' : 'text-emerald-400'}`}>
+                        {asset.entry_short_blocked ? '🔒 Bloq.' : '✓ Open'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-right text-[#94A3B8]">
+                      {asset.price != null ? `$${asset.price.toLocaleString(undefined, { maximumFractionDigits: 4 })}` : '—'}
+                    </td>
+                    <td className={`px-3 py-2.5 text-right tabular-nums ${chgCls}`}>
+                      {chg != null ? `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%` : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, onRefreshed, refreshTick, liveDirections = {} }: WatchlistRowProps) {
   const displayLevel = resolveWatchlistLevel(wl, profiles);
+  const isFutures = wl.market_mode === 'futures';
   const [expanded, setExpanded] = useState(false);
   const [detailTab, setDetailTab] = useState<WatchlistDetailTab>('approved');
   const [approvedItems, setApprovedItems] = useState<RejectedAssetItem[]>([]);
   const [rejectedItems, setRejectedItems] = useState<RejectedAssetItem[]>([]);
+  const [futuresAssets, setFuturesAssets] = useState<FuturesAsset[]>([]);
+  const [hideNeutral, setHideNeutral] = useState(false);
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [loadingRejected, setLoadingRejected] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -600,12 +781,18 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     if (!silent) setLoadingRejected(true);
     try {
       const [data, rejected] = await Promise.all([
-        apiFetch<{ approved_items: RejectedAssetItem[]; total: number }>(`/watchlists/${wl.id}/assets`),
+        apiFetch<{
+          approved_items: RejectedAssetItem[];
+          assets: FuturesAsset[];
+          total: number;
+          market_mode?: string;
+        }>(`/watchlists/${wl.id}/assets`),
         apiFetch<{ items: RejectedAssetItem[] }>(`/pipeline/rejected?watchlist_id=${wl.id}`),
       ]);
       setApprovedItems(data.approved_items ?? []);
+      setFuturesAssets(data.assets ?? []);
       setRejectedItems(rejected.items ?? []);
-      if (triggerParentRefresh && (data.approved_items?.length ?? 0) > 0) {
+      if (triggerParentRefresh && ((data.approved_items?.length ?? 0) > 0 || (data.assets?.length ?? 0) > 0)) {
         onRefreshed();
       }
     } catch {
@@ -666,6 +853,12 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
         </span>
         <LevelBadge level={displayLevel} />
         <span className="text-sm font-medium text-[#E2E8F0] flex-1">{wl.name}</span>
+        {isFutures && (
+          <span className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-[#F472B6]/10 text-[#F472B6] border border-[#F472B6]/25 font-semibold">
+            <ArrowLeftRight size={8} />
+            FUTURES
+          </span>
+        )}
         <span className="text-xs text-[#4B5563]">from {sourceName}</span>
         {/* Freshness indicator */}
         {wl.auto_refresh && (
@@ -745,8 +938,10 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
                   : 'text-[#64748B] hover:text-[#94A3B8]'
               }`}
               >
-                Approved
-              <span className="ml-1 text-[#4B5563]">{approvedItems.length}</span>
+                {isFutures ? 'Assets Futures' : 'Approved'}
+              <span className="ml-1 text-[#4B5563]">
+                {isFutures ? futuresAssets.length : approvedItems.length}
+              </span>
             </button>
             <button
               type="button"
@@ -766,7 +961,14 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
               Refresh error: {refreshError}
             </div>
           )}
-          {detailTab === 'approved' && loadingAssets ? (
+          {detailTab === 'approved' && isFutures ? (
+            <FuturesAssetTable
+              assets={futuresAssets}
+              loading={loadingAssets}
+              hideNeutral={hideNeutral}
+              onToggleHideNeutral={() => setHideNeutral((h) => !h)}
+            />
+          ) : detailTab === 'approved' && loadingAssets ? (
             <div className="px-4 py-6 text-center text-sm text-[#4B5563] flex items-center justify-center gap-2">
               <RefreshCw size={13} className="animate-spin" />
               Loading approved decisions…

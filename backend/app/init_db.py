@@ -66,6 +66,28 @@ async def init_db():
             logger.error("Failed to add pipeline execution_id columns: %s", e, exc_info=True)
             raise
 
+        # CRITICAL: Futures Mode columns — referenced by PipelineWatchlist and
+        # PipelineWatchlistAsset ORM models. Failing here aborts startup so the
+        # schema mismatch never silently breaks the pipeline scan task.
+        try:
+            await conn.execute(text("""
+                ALTER TABLE pipeline_watchlists
+                    ADD COLUMN IF NOT EXISTS market_mode VARCHAR(10) NOT NULL DEFAULT 'spot';
+            """))
+            await conn.execute(text("""
+                ALTER TABLE pipeline_watchlist_assets
+                    ADD COLUMN IF NOT EXISTS score_long NUMERIC(5,2),
+                    ADD COLUMN IF NOT EXISTS score_short NUMERIC(5,2),
+                    ADD COLUMN IF NOT EXISTS confidence_score NUMERIC(5,2),
+                    ADD COLUMN IF NOT EXISTS futures_direction VARCHAR(5),
+                    ADD COLUMN IF NOT EXISTS entry_long_blocked BOOLEAN NOT NULL DEFAULT FALSE,
+                    ADD COLUMN IF NOT EXISTS entry_short_blocked BOOLEAN NOT NULL DEFAULT FALSE;
+            """))
+            logger.info("Ensured futures mode columns exist on pipeline_watchlists and pipeline_watchlist_assets")
+        except Exception as e:
+            logger.error("Failed to add futures mode columns: %s", e, exc_info=True)
+            raise
+
         try:
             await conn.execute(text("""
                 ALTER TABLE pipeline_watchlists

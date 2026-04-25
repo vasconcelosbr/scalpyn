@@ -1044,6 +1044,40 @@ async def _replace_rejection_snapshot(
         })
 
 
+# ─── Futures scoring injection ────────────────────────────────────────────────
+
+def _tag_futures_scores(assets: list, watchlist_level: str) -> None:
+    """Mutate each asset dict to add futures score fields.
+
+    Reads the pre-computed ``indicators`` sub-dict (populated by
+    ``_build_pipeline_asset`` from the ``indicators`` table) and adds:
+      score_long, score_short, confidence_score, futures_direction,
+      entry_long_blocked, entry_short_blocked
+
+    Called only when ``wl.market_mode == 'futures'``.
+    Direction is resolved only for L3; non-L3 assets always get
+    ``futures_direction = None``.
+    """
+    try:
+        from ..scoring.futures_pipeline_scorer import score_futures
+    except ImportError as exc:
+        logger.warning("[PipelineScan] futures scorer unavailable: %s", exc)
+        return
+
+    for asset in assets:
+        ind = asset.get("indicators") or {}
+        try:
+            result = score_futures(ind, watchlist_level=watchlist_level)
+            asset["score_long"]          = result["score_long"]
+            asset["score_short"]         = result["score_short"]
+            asset["confidence_score"]    = result["confidence_score"]
+            asset["futures_direction"]   = result["futures_direction"]
+            asset["entry_long_blocked"]  = result["entry_long_blocked"]
+            asset["entry_short_blocked"] = result["entry_short_blocked"]
+        except Exception as exc:
+            logger.debug("[PipelineScan] futures scorer error for %s: %s", asset.get("symbol"), exc)
+
+
 # ─── DB upsert ────────────────────────────────────────────────────────────────
 
 async def _upsert_assets(
@@ -1072,32 +1106,48 @@ async def _upsert_assets(
                 INSERT INTO pipeline_watchlist_assets
                     (id, watchlist_id, symbol, current_price, price_change_24h,
                       volume_24h, market_cap, alpha_score, entered_at, refreshed_at,
-                      level_direction, analysis_snapshot, execution_id)
+                      level_direction, analysis_snapshot, execution_id,
+                      score_long, score_short, confidence_score,
+                      futures_direction, entry_long_blocked, entry_short_blocked)
                 VALUES
                     (gen_random_uuid(), :wid, :sym, :price, :chg,
-                     :vol, :mc, :score, :now, :now, NULL, CAST(:analysis_snapshot AS jsonb), :execution_id)
+                     :vol, :mc, :score, :now, :now, NULL, CAST(:analysis_snapshot AS jsonb), :execution_id,
+                     :score_long, :score_short, :confidence_score,
+                     :futures_direction, :entry_long_blocked, :entry_short_blocked)
                 ON CONFLICT (watchlist_id, symbol)
                 DO UPDATE SET
-                    current_price    = EXCLUDED.current_price,
-                    price_change_24h = EXCLUDED.price_change_24h,
-                    volume_24h       = EXCLUDED.volume_24h,
-                    market_cap       = EXCLUDED.market_cap,
-                    alpha_score      = EXCLUDED.alpha_score,
-                    refreshed_at     = EXCLUDED.refreshed_at,
-                    level_direction  = NULL,
-                    analysis_snapshot = EXCLUDED.analysis_snapshot,
-                    execution_id     = EXCLUDED.execution_id
+                    current_price       = EXCLUDED.current_price,
+                    price_change_24h    = EXCLUDED.price_change_24h,
+                    volume_24h          = EXCLUDED.volume_24h,
+                    market_cap          = EXCLUDED.market_cap,
+                    alpha_score         = EXCLUDED.alpha_score,
+                    refreshed_at        = EXCLUDED.refreshed_at,
+                    level_direction     = NULL,
+                    analysis_snapshot   = EXCLUDED.analysis_snapshot,
+                    execution_id        = EXCLUDED.execution_id,
+                    score_long          = EXCLUDED.score_long,
+                    score_short         = EXCLUDED.score_short,
+                    confidence_score    = EXCLUDED.confidence_score,
+                    futures_direction   = EXCLUDED.futures_direction,
+                    entry_long_blocked  = EXCLUDED.entry_long_blocked,
+                    entry_short_blocked = EXCLUDED.entry_short_blocked
             """), {
-                "wid":   watchlist_id,
-                "sym":   a["symbol"],
-                "price": a.get("price"),
-                "chg":   a.get("change_24h"),
-                "vol":   a.get("volume_24h"),
-                "mc":    a.get("market_cap"),
-                "score": a.get("_score", a.get("score")),
-                "analysis_snapshot": json.dumps(_jsonable(a.get("analysis_snapshot") or {})),
-                "now":   now,
-                "execution_id": execution_id,
+                "wid":                watchlist_id,
+                "sym":                a["symbol"],
+                "price":              a.get("price"),
+                "chg":                a.get("change_24h"),
+                "vol":                a.get("volume_24h"),
+                "mc":                 a.get("market_cap"),
+                "score":              a.get("_score", a.get("score")),
+                "analysis_snapshot":  json.dumps(_jsonable(a.get("analysis_snapshot") or {})),
+                "now":                now,
+                "execution_id":       execution_id,
+                "score_long":         a.get("score_long"),
+                "score_short":        a.get("score_short"),
+                "confidence_score":   a.get("confidence_score"),
+                "futures_direction":  a.get("futures_direction"),
+                "entry_long_blocked": bool(a.get("entry_long_blocked", False)),
+                "entry_short_blocked": bool(a.get("entry_short_blocked", False)),
             })
 
         # Mark symbols that are no longer passing as 'down'
@@ -1548,6 +1598,17 @@ async def _run_pipeline_scan():
                             wl.name, effective_level, len(quarantined),
                         )
 
+                    # Futures mode: compute dual LONG/SHORT scores for all assets.
+                    # Must run BEFORE upsert so scores are persisted to DB.
+                    # Direction is restricted to L3 inside the scorer.
+                    is_futures = getattr(wl, "market_mode", "spot") == "futures"
+                    if is_futures and assets:
+                        _tag_futures_scores(assets, effective_level)
+                        logger.info(
+                            "[PipelineScan] %s (%s): tagged futures scores on %d assets",
+                            wl.name, effective_level, len(assets),
+                        )
+
                     assets_with_metadata = sum(1 for a in assets if a.get("_has_market_metadata"))
                     profile_candidate_count = len(assets)
 
@@ -1690,6 +1751,13 @@ async def _run_pipeline_scan():
                             "market_cap": decision["_asset"].get("market_cap"),
                             "analysis_snapshot": decision["_asset"].get("analysis_snapshot") or {},
                             "matched_conditions": decision["_processed"].get("signal", {}).get("matched_conditions", []),
+                            # Futures scores — non-None only when is_futures and _tag_futures_scores ran
+                            "score_long":          decision["_asset"].get("score_long"),
+                            "score_short":         decision["_asset"].get("score_short"),
+                            "confidence_score":    decision["_asset"].get("confidence_score"),
+                            "futures_direction":   decision["_asset"].get("futures_direction"),
+                            "entry_long_blocked":  decision["_asset"].get("entry_long_blocked", False),
+                            "entry_short_blocked": decision["_asset"].get("entry_short_blocked", False),
                         }
                         for decision in decisions
                         if decision["decision"] == "ALLOW"

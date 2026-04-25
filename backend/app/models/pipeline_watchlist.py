@@ -27,6 +27,9 @@ class PipelineWatchlist(Base):
     name = Column(String(100), nullable=False)
     level = Column(String(10), nullable=False, default='custom')  # POOL / L1 / L2 / L3 / custom
 
+    # Market mode — 'spot' (default) or 'futures'
+    market_mode = Column(String(10), nullable=False, default='spot')
+
     # Source — one of these must be set
     source_pool_id = Column(
         UUID(as_uuid=True),
@@ -89,8 +92,16 @@ class PipelineWatchlistAsset(Base):
     volume_24h = Column(Numeric(20, 2), nullable=True)
     market_cap = Column(Numeric(20, 2), nullable=True)
 
-    # Calculated score (from profile)
+    # Calculated score (from profile) — spot mode
     alpha_score = Column(Numeric(5, 2), nullable=True)
+
+    # Futures mode — dual LONG/SHORT scoring
+    score_long = Column(Numeric(5, 2), nullable=True)
+    score_short = Column(Numeric(5, 2), nullable=True)
+    confidence_score = Column(Numeric(5, 2), nullable=True)
+    futures_direction = Column(String(5), nullable=True)   # 'LONG' | 'SHORT' | NULL (neutral)
+    entry_long_blocked = Column(Boolean, nullable=False, default=False)
+    entry_short_blocked = Column(Boolean, nullable=False, default=False)
 
     # Level tracking
     entered_at = Column(
