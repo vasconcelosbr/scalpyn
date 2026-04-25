@@ -1585,6 +1585,31 @@ async def _resolve_and_persist(
             wl.name, wl.level, len(assets_out),
         )
 
+    # Futures mode: inject dual LONG/SHORT scores on-demand so values are
+    # always fresh even between scheduled pipeline_scan runs.
+    # Mirrors the same config-guard used in pipeline_scan (no scoring_futures
+    # key → degrade silently to spot, not run with unknown defaults).
+    if assets_out and getattr(wl, "market_mode", "spot") == "futures":
+        _futures_cfg = merged_score_config.get("scoring_futures")
+        if _futures_cfg is not None:
+            try:
+                from ..scoring.futures_pipeline_scorer import score_futures as _score_futures
+                for _asset in assets_out:
+                    _ind = ind_map.get(_asset["symbol"], {})
+                    _fr = _score_futures(
+                        _ind,
+                        watchlist_level=effective_level,
+                        scoring_futures=_futures_cfg,
+                    )
+                    _asset["score_long"]          = _fr["score_long"]
+                    _asset["score_short"]         = _fr["score_short"]
+                    _asset["confidence_score"]    = _fr["confidence_score"]
+                    _asset["futures_direction"]   = _fr["futures_direction"]
+                    _asset["entry_long_blocked"]  = _fr["entry_long_blocked"]
+                    _asset["entry_short_blocked"] = _fr["entry_short_blocked"]
+            except Exception as _e:
+                logger.debug("[Pipeline] on-demand futures scoring error: %s", _e)
+
     await _replace_rejection_snapshot(wl, rejected_rows, db)
 
     # Detect level transitions & upsert
@@ -1608,6 +1633,14 @@ async def _resolve_and_persist(
             row.alpha_score      = asset_data["alpha_score"]
             row.refreshed_at     = now
             row.analysis_snapshot = asset_data.get("analysis_snapshot") or {}
+            # Futures fields (only written when futures scoring ran; otherwise unchanged)
+            if "score_long" in asset_data:
+                row.score_long          = asset_data["score_long"]
+                row.score_short         = asset_data["score_short"]
+                row.confidence_score    = asset_data["confidence_score"]
+                row.futures_direction   = asset_data["futures_direction"]
+                row.entry_long_blocked  = asset_data.get("entry_long_blocked", False)
+                row.entry_short_blocked = asset_data.get("entry_short_blocked", False)
             # Re-activate asset if it was previously marked as "down"
             if row.level_direction == "down":
                 row.level_direction = "up"
@@ -1623,6 +1656,12 @@ async def _resolve_and_persist(
                 volume_24h=asset_data["volume_24h"],
                 market_cap=asset_data["market_cap"],
                 alpha_score=asset_data["alpha_score"],
+                score_long=asset_data.get("score_long"),
+                score_short=asset_data.get("score_short"),
+                confidence_score=asset_data.get("confidence_score"),
+                futures_direction=asset_data.get("futures_direction"),
+                entry_long_blocked=asset_data.get("entry_long_blocked", False),
+                entry_short_blocked=asset_data.get("entry_short_blocked", False),
                 entered_at=now,
                 refreshed_at=now,
                 level_direction="up",
