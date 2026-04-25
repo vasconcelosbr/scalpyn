@@ -646,9 +646,8 @@ function FuturesAssetTable({
   hideNeutral: boolean;
   onToggleHideNeutral: () => void;
 }) {
-  const displayed = hideNeutral
-    ? assets.filter((a) => a.futures_direction !== null)
-    : assets;
+  // Server already filters when hide_neutral=true; no client-side filtering needed.
+  const displayed = assets;
 
   if (loading) {
     return (
@@ -771,7 +770,11 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     : null;
 
   const loadAssets = useCallback(async (
-    { triggerParentRefresh = false, silent = false }: { triggerParentRefresh?: boolean; silent?: boolean } = {}
+    { triggerParentRefresh = false, silent = false, hn = hideNeutral }: {
+      triggerParentRefresh?: boolean;
+      silent?: boolean;
+      hn?: boolean;
+    } = {}
   ) => {
     // Drop overlapping refreshes for the same expanded board so polling,
     // manual refresh, and parent-triggered reloads do not race each other.
@@ -780,13 +783,17 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     if (!silent) setLoadingAssets(true);
     if (!silent) setLoadingRejected(true);
     try {
+      const assetsUrl = isFutures && hn
+        ? `/watchlists/${wl.id}/assets?hide_neutral=true`
+        : `/watchlists/${wl.id}/assets`;
       const [data, rejected] = await Promise.all([
         apiFetch<{
           approved_items: RejectedAssetItem[];
           assets: FuturesAsset[];
           total: number;
           market_mode?: string;
-        }>(`/watchlists/${wl.id}/assets`),
+          is_futures?: boolean;
+        }>(assetsUrl),
         apiFetch<{ items: RejectedAssetItem[] }>(`/pipeline/rejected?watchlist_id=${wl.id}`),
       ]);
       setApprovedItems(data.approved_items ?? []);
@@ -802,7 +809,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
       if (!silent) setLoadingAssets(false);
       if (!silent) setLoadingRejected(false);
     }
-  }, [wl.id, onRefreshed]);
+  }, [wl.id, isFutures, hideNeutral, onRefreshed]);
 
   useEffect(() => {
     if (expanded) {
@@ -815,6 +822,13 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
       void loadAssets({ silent: true });
     }
   }, [expanded, wl.auto_refresh, refreshTick, loadAssets]);
+
+  // Re-fetch when hide_neutral toggle changes (server-side filter)
+  useEffect(() => {
+    if (expanded && isFutures) {
+      void loadAssets({ silent: true, hn: hideNeutral });
+    }
+  }, [hideNeutral]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleRefresh() {
     setRefreshing(true);

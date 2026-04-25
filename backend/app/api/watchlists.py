@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from sqlalchemy import select, text, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -458,6 +458,7 @@ def _wl_to_dict(wl: PipelineWatchlist) -> Dict[str, Any]:
         "id":                   str(wl.id),
         "name":                 wl.name,
         "level":                wl.level,
+        "market_mode":          getattr(wl, "market_mode", "spot") or "spot",
         "source_pool_id":       str(wl.source_pool_id) if wl.source_pool_id else None,
         "source_watchlist_id":  str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
         "profile_id":           str(wl.profile_id) if wl.profile_id else None,
@@ -665,6 +666,9 @@ async def create_watchlist(
         source_watchlist_id=source_watchlist_id,
     )
 
+    raw_mode = payload.get("market_mode", "spot")
+    market_mode = "futures" if str(raw_mode).lower() == "futures" else "spot"
+
     wl = PipelineWatchlist(
         user_id=user_id,
         name=name,
@@ -675,6 +679,11 @@ async def create_watchlist(
         auto_refresh=payload.get("auto_refresh", True),
         filters_json=filters,
     )
+    # market_mode stored via setattr so it works even if column was just added
+    try:
+        setattr(wl, "market_mode", market_mode)
+    except Exception:
+        pass
     db.add(wl)
     await db.commit()
     await db.refresh(wl)
@@ -736,6 +745,12 @@ async def update_watchlist(
         wl.auto_refresh = bool(payload["auto_refresh"])
     if "filters_json" in payload:
         wl.filters_json = payload["filters_json"]
+    if "market_mode" in payload:
+        raw_mode = payload["market_mode"]
+        try:
+            setattr(wl, "market_mode", "futures" if str(raw_mode).lower() == "futures" else "spot")
+        except Exception:
+            pass
     wl.updated_at = datetime.now(timezone.utc)
 
     logger.info(
@@ -1642,6 +1657,7 @@ async def _resolve_and_persist(
 @router.get("/{watchlist_id}/assets")
 async def get_watchlist_assets(
     watchlist_id: UUID,
+    hide_neutral: bool = Query(False, description="Futures mode: omit assets with no direction assigned (score gap < 5 pts)"),
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1863,6 +1879,8 @@ async def get_watchlist_assets(
             symbols_with_meta=sum(1 for symbol in symbols if meta_map.get(symbol)),
         )["conditions"]
 
+    is_futures = getattr(wl, "market_mode", "spot") == "futures"
+
     enriched = []
     for a in assets:
         indicators = ind_map.get(a.symbol)
@@ -1902,7 +1920,33 @@ async def get_watchlist_assets(
                 selected_filter_conditions=selected_trace_conditions,
             )
         enriched_asset["evaluation_trace"] = evaluation_trace
+
+        # Futures-mode fields — always present for futures watchlists, null for spot
+        if is_futures:
+            enriched_asset["score_long"]          = float(a.score_long)          if a.score_long          is not None else None
+            enriched_asset["score_short"]         = float(a.score_short)         if a.score_short         is not None else None
+            enriched_asset["confidence_score"]    = float(a.confidence_score)    if a.confidence_score    is not None else None
+            enriched_asset["futures_direction"]   = getattr(a, "futures_direction",   None)
+            enriched_asset["entry_long_blocked"]  = bool(getattr(a, "entry_long_blocked",  False))
+            enriched_asset["entry_short_blocked"] = bool(getattr(a, "entry_short_blocked", False))
+
         enriched.append(enriched_asset)
+
+    # Futures: server-side neutral filter + sort by confidence DESC
+    if is_futures:
+        if hide_neutral:
+            enriched = [
+                e for e in enriched
+                if e.get("futures_direction") is not None
+            ]
+        enriched.sort(
+            key=lambda e: (
+                e.get("confidence_score") is None,                          # None last
+                -(e.get("confidence_score") or 0),                         # confidence DESC
+                -max(e.get("score_long") or 0, e.get("score_short") or 0), # tiebreak
+            )
+        )
+
     approved_items = [
         _normalize_decision_snapshot(
             symbol=asset.symbol,
@@ -1922,6 +1966,8 @@ async def get_watchlist_assets(
         "profile_indicators": profile_indicators,  # [{key, label, field}, ...]
         # Alpha Score visible only at L2 (Stage 2) and L3 (Stage 3).
         "show_score":         (wl.level or "").upper() in {"L2", "L3"},
+        "market_mode":        getattr(wl, "market_mode", "spot") or "spot",
+        "is_futures":         is_futures,
     }
 
 
