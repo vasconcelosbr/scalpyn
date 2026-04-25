@@ -14,6 +14,16 @@ from .config import get_current_user_id
 router = APIRouter(prefix="/api/analytics", tags=["Analytics"])
 
 
+def _parse_dt(value: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO date/datetime string and ensure it is UTC-aware."""
+    if not value:
+        return None
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 @router.get("/pnl")
 async def get_pnl(
     start_date: Optional[str] = None,
@@ -21,9 +31,7 @@ async def get_pnl(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    start = datetime.fromisoformat(start_date) if start_date else None
-    end = datetime.fromisoformat(end_date) if end_date else None
-    summary = await analytics_service.get_pnl_summary(db, user_id, start, end)
+    summary = await analytics_service.get_pnl_summary(db, user_id, _parse_dt(start_date), _parse_dt(end_date))
     return summary
 
 
@@ -36,11 +44,9 @@ async def get_capital_evolution(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    start = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc) if start_date else None
-    end = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc) if end_date else None
     data = await analytics_service.get_capital_evolution(
         db, user_id, days=days, initial_capital=initial_capital,
-        start_date=start, end_date=end,
+        start_date=_parse_dt(start_date), end_date=_parse_dt(end_date),
     )
     return {"data": data}
 
@@ -62,13 +68,11 @@ async def get_dashboard_overview(
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    start = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc) if start_date else None
-    end = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc) if end_date else None
     return await portfolio_service.get_dashboard_overview(
         db=db,
         user_id=user_id,
         days=days,
         min_value_usdt=min_value_usdt,
-        start_date=start,
-        end_date=end,
+        start_date=_parse_dt(start_date),
+        end_date=_parse_dt(end_date),
     )

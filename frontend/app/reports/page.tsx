@@ -22,16 +22,20 @@ function periodToDateParams(
   customStart: string,
   customEnd: string,
 ): string {
-  const now = new Date();
   if (period === "custom") {
     const parts: string[] = [];
     if (customStart) parts.push(`start_date=${customStart}`);
     if (customEnd) parts.push(`end_date=${customEnd}T23:59:59`);
     return parts.join("&");
   }
-  const days = period === "1d" ? 1 : period === "7d" ? 7 : period === "30d" ? 30 : 90;
+  const now = new Date();
+  const todayStr = now.toISOString().split("T")[0];
+  if (period === "1d") {
+    return `start_date=${todayStr}&end_date=${todayStr}T23:59:59`;
+  }
+  const days = period === "7d" ? 7 : period === "30d" ? 30 : 90;
   const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-  return `start_date=${start.toISOString().split("T")[0]}&end_date=${now.toISOString().split("T")[0]}T23:59:59`;
+  return `start_date=${start.toISOString().split("T")[0]}&end_date=${todayStr}T23:59:59`;
 }
 
 export default function ReportsPage() {
