@@ -94,10 +94,6 @@ export function MobileNavDrawer() {
     return () => { document.body.style.overflow = ""; };
   }, [mobileNavOpen]);
 
-  useEffect(() => {
-    closeMobileNav();
-  }, [pathname]);
-
   function handleLogout() {
     logout();
     closeMobileNav();
@@ -110,23 +106,26 @@ export function MobileNavDrawer() {
 
   return (
     <>
-      {/* Backdrop */}
+      {/* Backdrop — z-index above tab bar (100) */}
       <div
         onClick={closeMobileNav}
-        className="md:hidden fixed inset-0 z-[70] bg-black/60 backdrop-blur-sm transition-opacity duration-300"
+        className="md:hidden fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300"
         style={{
+          zIndex: 110,
           opacity: mobileNavOpen ? 1 : 0,
           pointerEvents: mobileNavOpen ? "auto" : "none",
         }}
         aria-hidden="true"
       />
 
-      {/* Drawer panel */}
+      {/* Drawer panel — z-index above backdrop */}
       <aside
-        className="md:hidden fixed top-0 left-0 bottom-0 w-[280px] z-[80] flex flex-col"
+        className="md:hidden fixed top-0 left-0 bottom-0 w-full flex flex-col"
         style={{
+          maxWidth: "320px",
           background: "var(--bg-surface)",
           borderRight: "1px solid var(--border-subtle)",
+          zIndex: 120,
           transform: mobileNavOpen ? "translateX(0)" : "translateX(-100%)",
           transition: "transform 0.3s cubic-bezier(0.4,0,0.2,1)",
           willChange: "transform",
@@ -184,6 +183,7 @@ export function MobileNavDrawer() {
                   <Link
                     key={item.href}
                     href={item.href}
+                    onClick={closeMobileNav}
                     className="flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-[13px] font-medium transition-colors"
                     style={{
                       color: isActive ? "var(--accent-primary)" : "var(--text-secondary)",
@@ -199,7 +199,7 @@ export function MobileNavDrawer() {
           ))}
         </nav>
 
-        {/* Footer: user + logout */}
+        {/* Footer: user info (name + role) + logout */}
         <div
           className="shrink-0 p-4 flex flex-col gap-3"
           style={{ borderTop: "1px solid var(--border-subtle)" }}
@@ -223,10 +223,10 @@ export function MobileNavDrawer() {
                 {user?.name ?? "User"}
               </div>
               <div
-                className="text-[11px] truncate"
-                style={{ color: "var(--text-tertiary)" }}
+                className="text-[11px] px-2 py-0.5 rounded-full inline-block mt-0.5"
+                style={{ background: "var(--bg-active)", color: "var(--text-secondary)" }}
               >
-                {user?.email ?? ""}
+                Admin
               </div>
             </div>
           </div>
