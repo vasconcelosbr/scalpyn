@@ -2,74 +2,13 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { 
-  BarChart2, 
-  Settings, 
-  Layers, 
-  List, 
-  Home,
-  ShieldCheck,
-  TrendingUp,
-  FileText,
-  Target,
-  Zap,
-  ShieldOff,
-  Shield,
-  Brain,
-  Repeat,
-  Bell,
-  Eye,
-  LayoutDashboard,
-  Sliders,
-  Sparkles,
-  Monitor,
-  Search,
-  ClipboardList,
-  AlertTriangle,
-  Database,
-  PlayCircle,
-  Users,
-  Activity,
-  CandlestickChart,
-} from 'lucide-react';
 import { useState } from 'react';
-
-const OVERVIEW_ITEMS = [
-  { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-  { name: 'Watchlist', href: '/watchlist', icon: Eye },
-];
-
-const TRADING_ITEMS = [
-  { name: 'Spot', href: '/trading-desk/spot', icon: Activity },
-  { name: 'Futures', href: '/trading-desk/futures', icon: CandlestickChart },
-  { name: 'Trades & P&L', href: '/trades', icon: TrendingUp },
-  { name: 'Reports', href: '/reports', icon: FileText },
-  { name: 'Pools', href: '/pools', icon: Layers },
-  { name: 'Profiles', href: '/profiles', icon: Sliders },
-];
-
-const BACKOFFICE_ITEMS = [
-  { name: 'Exec Dashboard', href: '/dashboard', icon: BarChart2 },
-  { name: 'Operations', href: '/backoffice', icon: Monitor },
-  { name: 'Asset Trace', href: '/assets', icon: Search },
-  { name: 'Decision Log', href: '/decisions', icon: ClipboardList },
-  { name: 'Data Monitor', href: '/data', icon: Database },
-  { name: 'Alert Center', href: '/alerts', icon: AlertTriangle },
-  { name: 'Replay', href: '/replay', icon: PlayCircle },
-  { name: 'Admin', href: '/admin', icon: Users },
-];
-
-const CONFIG_ITEMS = [
-  { name: 'General', href: '/settings/general', icon: Settings },
-  { name: 'Score Engine', href: '/settings/score', icon: Target },
-  { name: 'Signal Rules', href: '/settings/signal', icon: Zap },
-  { name: 'Block Rules', href: '/settings/block', icon: ShieldOff },
-  { name: 'Risk Management', href: '/settings/risk', icon: Shield },
-  { name: 'Strategies', href: '/settings/strategies', icon: Brain },
-  { name: 'AI Skills', href: '/settings/skills', icon: Sparkles },
-  { name: 'Exchanges', href: '/settings/exchanges', icon: Repeat },
-  { name: 'Notifications', href: '/settings/notifications', icon: Bell },
-];
+import {
+  OVERVIEW_ITEMS,
+  TRADING_ITEMS,
+  BACKOFFICE_ITEMS,
+  CONFIG_ITEMS,
+} from './navItems';
 
 export function Sidebar() {
   const pathname = usePathname();

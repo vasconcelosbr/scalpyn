@@ -5,79 +5,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { useAppStore } from "@/stores/useAppStore";
 import { useAuthStore } from "@/stores/useAuthStore";
-import {
-  BarChart2,
-  Settings,
-  Layers,
-  TrendingUp,
-  FileText,
-  Target,
-  Zap,
-  ShieldOff,
-  Shield,
-  Brain,
-  Repeat,
-  Bell,
-  Eye,
-  LayoutDashboard,
-  Sliders,
-  Sparkles,
-  Monitor,
-  Search,
-  ClipboardList,
-  AlertTriangle,
-  Database,
-  PlayCircle,
-  Users,
-  Activity,
-  CandlestickChart,
-  LogOut,
-  X,
-} from "lucide-react";
-
-const OVERVIEW_ITEMS = [
-  { name: "Dashboard", href: "/", icon: LayoutDashboard },
-  { name: "Watchlist", href: "/watchlist", icon: Eye },
-];
-
-const TRADING_ITEMS = [
-  { name: "Spot", href: "/trading-desk/spot", icon: Activity },
-  { name: "Futures", href: "/trading-desk/futures", icon: CandlestickChart },
-  { name: "Trades & P&L", href: "/trades", icon: TrendingUp },
-  { name: "Reports", href: "/reports", icon: FileText },
-  { name: "Pools", href: "/pools", icon: Layers },
-  { name: "Profiles", href: "/profiles", icon: Sliders },
-];
-
-const BACKOFFICE_ITEMS = [
-  { name: "Exec Dashboard", href: "/dashboard", icon: BarChart2 },
-  { name: "Operations", href: "/backoffice", icon: Monitor },
-  { name: "Asset Trace", href: "/assets", icon: Search },
-  { name: "Decision Log", href: "/decisions", icon: ClipboardList },
-  { name: "Data Monitor", href: "/data", icon: Database },
-  { name: "Alert Center", href: "/alerts", icon: AlertTriangle },
-  { name: "Replay", href: "/replay", icon: PlayCircle },
-  { name: "Admin", href: "/admin", icon: Users },
-];
-
-const CONFIG_ITEMS = [
-  { name: "General", href: "/settings/general", icon: Settings },
-  { name: "Score Engine", href: "/settings/score", icon: Target },
-  { name: "Signal Rules", href: "/settings/signal", icon: Zap },
-  { name: "Block Rules", href: "/settings/block", icon: ShieldOff },
-  { name: "Risk Management", href: "/settings/risk", icon: Shield },
-  { name: "Strategies", href: "/settings/strategies", icon: Brain },
-  { name: "AI Skills", href: "/settings/skills", icon: Sparkles },
-  { name: "Exchanges", href: "/settings/exchanges", icon: Repeat },
-  { name: "Notifications", href: "/settings/notifications", icon: Bell },
-];
-
-const NAV_SECTIONS = [
-  { label: "Overview", items: OVERVIEW_ITEMS },
-  { label: "Trading", items: TRADING_ITEMS },
-  { label: "Back Office", items: BACKOFFICE_ITEMS },
-  { label: "Configuration", items: CONFIG_ITEMS },
-];
+import { NAV_SECTIONS } from "./navItems";
+import { LogOut, X } from "lucide-react";
 
 export function MobileNavDrawer() {
   const pathname = usePathname();
@@ -165,7 +94,7 @@ export function MobileNavDrawer() {
           </button>
         </div>
 
-        {/* Nav sections */}
+        {/* Nav sections — shared constants from navItems.ts */}
         <nav className="flex-1 overflow-y-auto pb-4" style={{ overscrollBehavior: "contain" }}>
           {NAV_SECTIONS.map((section) => (
             <div key={section.label} className="mt-1">
@@ -199,7 +128,7 @@ export function MobileNavDrawer() {
           ))}
         </nav>
 
-        {/* Footer: user info (name + role) + logout */}
+        {/* Footer: user name + role + logout */}
         <div
           className="shrink-0 p-4 flex flex-col gap-3"
           style={{ borderTop: "1px solid var(--border-subtle)" }}
