@@ -99,7 +99,7 @@ class PipelineWatchlistAsset(Base):
     score_long = Column(Numeric(5, 2), nullable=True)
     score_short = Column(Numeric(5, 2), nullable=True)
     confidence_score = Column(Numeric(5, 2), nullable=True)
-    futures_direction = Column(String(5), nullable=True)   # 'LONG' | 'SHORT' | NULL (neutral)
+    futures_direction = Column(String(10), nullable=True)  # 'LONG' | 'SHORT' | 'NEUTRAL' | None
     entry_long_blocked = Column(Boolean, nullable=False, default=False)
     entry_short_blocked = Column(Boolean, nullable=False, default=False)
 

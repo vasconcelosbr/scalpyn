@@ -79,13 +79,23 @@ async def init_db():
                     ADD COLUMN IF NOT EXISTS score_long NUMERIC(5,2),
                     ADD COLUMN IF NOT EXISTS score_short NUMERIC(5,2),
                     ADD COLUMN IF NOT EXISTS confidence_score NUMERIC(5,2),
-                    ADD COLUMN IF NOT EXISTS futures_direction VARCHAR(5),
+                    ADD COLUMN IF NOT EXISTS futures_direction VARCHAR(10),
                     ADD COLUMN IF NOT EXISTS entry_long_blocked BOOLEAN NOT NULL DEFAULT FALSE,
                     ADD COLUMN IF NOT EXISTS entry_short_blocked BOOLEAN NOT NULL DEFAULT FALSE;
             """))
             logger.info("Ensured futures mode columns exist on pipeline_watchlists and pipeline_watchlist_assets")
         except Exception as e:
             logger.error("Failed to add futures mode columns: %s", e, exc_info=True)
+            raise
+
+        try:
+            await conn.execute(text("""
+                ALTER TABLE pipeline_watchlist_assets
+                    ALTER COLUMN futures_direction TYPE VARCHAR(10);
+            """))
+            logger.info("Ensured futures_direction column is VARCHAR(10)")
+        except Exception as e:
+            logger.error("Failed to widen futures_direction column: %s", e, exc_info=True)
             raise
 
         try:
