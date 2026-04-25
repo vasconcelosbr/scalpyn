@@ -278,7 +278,7 @@ function TraceSection({ title, items }: { title: string; items: DecisionTraceIte
       <div className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[#4B5563]">{title}</div>
       <div className="space-y-2">
         {items.map((item, index) => {
-          const noData = item.status === "FAIL" && item.current_value == null;
+          const noData = item.status === "SKIPPED" || (item.status === "FAIL" && item.current_value == null);
           const cls =
             item.status === "PASS"
               ? "border-[#14532D]/40 bg-[#061E14] text-[#86EFAC]"

@@ -122,15 +122,18 @@ def _evaluate_filter(
     asset: Dict[str, Any],
     condition: Dict[str, Any],
 ) -> Dict[str, Any]:
-    passed, detail = rule_engine.evaluate_condition(condition, asset, field_key="field")
-    return {
+    status, detail = rule_engine.evaluate_condition_status(condition, asset, field_key="field")
+    payload: Dict[str, Any] = {
         "type": "filter",
         "indicator": _condition_indicator(condition, field_key="field"),
         "condition": format_condition_text(condition, field_key="field"),
         "expected": format_expected(condition),
         "current_value": _detail_actual(detail),
-        "status": "PASS" if passed else "FAIL",
+        "status": status.value,
     }
+    if status == RuleStatus.SKIPPED and isinstance(detail, dict) and detail.get("reason"):
+        payload["reason"] = detail["reason"]
+    return payload
 
 
 def _evaluate_entry_trigger(
