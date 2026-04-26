@@ -29,7 +29,7 @@ set -e
 export SKIP_LIFESPAN_INIT_DB=1
 
 # ── Schema gate: Alembic migrations (authoritative, time-boxed) ──────────────
-ALEMBIC_TIMEOUT_PER_ATTEMPT=${ALEMBIC_TIMEOUT_PER_ATTEMPT:-180}
+ALEMBIC_TIMEOUT_PER_ATTEMPT=${ALEMBIC_TIMEOUT_PER_ATTEMPT:-50}
 
 run_alembic_upgrade() {
     local max_attempts=3
