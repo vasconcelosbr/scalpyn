@@ -35,6 +35,23 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
+    # Defense-in-depth against lock contention during Cloud Run deploy.
+    # The OLD revision is still serving (Celery beat keeps SELECT'ing
+    # pipeline_watchlist_assets) when the NEW revision tries to ALTER it.
+    # Without these timeouts, ALTER waits forever for AccessExclusiveLock,
+    # the container blows past Cloud Run's 240s startup window, and the
+    # whole deploy fails with "container failed to listen on PORT 8080".
+    #
+    # 10s lock_timeout: fail fast if a competing transaction is holding
+    # the table. start.sh retries the migration with backoff, giving the
+    # OLD revision time to drain its query.
+    # 60s statement_timeout: cap any single migration statement so a
+    # runaway DDL (e.g. table rewrite on a large table) can't pin the
+    # whole boot.
+    from sqlalchemy import text as _sa_text
+    connection.execute(_sa_text("SET lock_timeout = '10s'"))
+    connection.execute(_sa_text("SET statement_timeout = '60s'"))
+
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
         context.run_migrations()

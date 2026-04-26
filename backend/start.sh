@@ -1,21 +1,26 @@
 #!/bin/bash
 # Scalpyn backend startup script
 #
-# Strategy: schema bootstrap is AUTHORITATIVE on this script.  Two gates run
-# before uvicorn / Celery:
-#   1. `alembic upgrade head` (3 retries, exit 1 on persistent failure)
-#   2. `python -m app.init_db` (single attempt, exit 1 on failure)
+# Strategy: Alembic is the AUTHORITATIVE schema gate.
+#   1. `alembic upgrade head` (3 retries with backoff, time-boxed at 180s per
+#      attempt, exit 1 on persistent failure).
 #
-# If either gate fails, the container exits non-zero — Cloud Run will roll
-# back to the previous revision and surface a real error instead of serving
-# traffic with a half-broken schema.  This eliminates the silent-failure mode
-# that caused two production incidents (Task #41: market_mode missing,
-# follow-up: last_scanned_at missing) where /api/watchlists returned 500 and
-# the UI hid the failure.
+# Migration 021 mirrors 1:1 every DDL in `backend/app/init_db.py`, so
+# `alembic upgrade head` alone is enough to converge any production state to a
+# known-good schema. `init_db.py` is kept as a dev-only convenience (lifespan
+# runs it when SKIP_LIFESPAN_INIT_DB is unset).
 #
-# The /api/health/schema endpoint independently probes information_schema for
-# critical columns, so external monitors can detect drift even if both gates
-# unexpectedly skip.
+# Defenses against the failure mode that broke the Task #44 deploy:
+#   - `SET lock_timeout = '10s'` in alembic/env.py — migrations that try to
+#     ALTER a table held by the OLD revision (Celery beat is still running on
+#     the previous Cloud Run instance during deploy) fail in 10s instead of
+#     blocking forever.
+#   - `timeout 180s` per attempt here — bounded wall-clock so the container
+#     never exceeds the Cloud Run startup probe window (~240s).
+#
+# If the gate fails, the container exits non-zero — Cloud Run rolls back to
+# the previous revision automatically.  /api/health/schema independently
+# probes information_schema for critical columns post-boot.
 
 set -e
 
@@ -23,7 +28,9 @@ set -e
 # bootstrap now and double-running it just slows boot.
 export SKIP_LIFESPAN_INIT_DB=1
 
-# ── Gate 1: Alembic migrations (authoritative) ───────────────────────────────
+# ── Schema gate: Alembic migrations (authoritative, time-boxed) ──────────────
+ALEMBIC_TIMEOUT_PER_ATTEMPT=${ALEMBIC_TIMEOUT_PER_ATTEMPT:-180}
+
 run_alembic_upgrade() {
     local max_attempts=3
     local delay=5
@@ -71,12 +78,19 @@ except Exception as e:
 PYEOF
 
     while [ $attempt -le $max_attempts ]; do
-        echo " [migrations] attempt $attempt/$max_attempts ..."
-        if alembic upgrade head; then
+        echo " [migrations] attempt $attempt/$max_attempts (timeout ${ALEMBIC_TIMEOUT_PER_ATTEMPT}s) ..."
+        # `timeout` exits 124 on hard wall-clock expiry; treat that the same
+        # as an alembic failure so the retry/backoff loop kicks in.
+        if timeout "${ALEMBIC_TIMEOUT_PER_ATTEMPT}s" alembic upgrade head; then
             echo "==> [migrations] alembic upgrade head OK"
             return 0
         fi
-        echo " [migrations] attempt $attempt failed -- retry in ${delay}s"
+        rc=$?
+        if [ "$rc" = "124" ]; then
+            echo " [migrations] attempt $attempt timed out after ${ALEMBIC_TIMEOUT_PER_ATTEMPT}s -- retry in ${delay}s"
+        else
+            echo " [migrations] attempt $attempt failed (exit $rc) -- retry in ${delay}s"
+        fi
         sleep $delay
         delay=$((delay * 2))
         attempt=$((attempt + 1))
@@ -90,17 +104,6 @@ if ! run_alembic_upgrade; then
     echo "==> Aborting startup: schema migrations failed.  Cloud Run will roll back." >&2
     exit 1
 fi
-
-# ── Gate 2: init_db.py safety net ────────────────────────────────────────────
-# Even with alembic at head, init_db.py runs as a redundant idempotent
-# safety net.  Its CRITICAL blocks raise on failure, so a non-zero exit means
-# real schema mismatch.
-echo "==> [init_db] python -m app.init_db"
-if ! python -m app.init_db; then
-    echo "==> Aborting startup: init_db failed.  Cloud Run will roll back." >&2
-    exit 1
-fi
-echo "==> [init_db] OK"
 
 # ── Start Celery worker ──────────────────────────────────────────────────────
 echo "==> Starting Celery worker..."

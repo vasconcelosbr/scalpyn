@@ -36,11 +36,14 @@ async def lifespan(app: FastAPI):
     import logging
     _log = logging.getLogger(__name__)
 
-    # Schema bootstrap is now owned by start.sh in production (alembic upgrade
-    # head + python -m app.init_db, both gating container startup).  In dev,
-    # the workflow command runs uvicorn directly without start.sh, so we still
-    # bootstrap here as a convenience.  The /api/health/schema endpoint below
-    # queries information_schema directly and does not depend on this running.
+    # Schema bootstrap is owned by start.sh in production via `alembic upgrade
+    # head` (the only gate).  Migration 021 mirrors init_db.py 1:1, so Alembic
+    # alone converges the schema.  In dev, the workflow command runs uvicorn
+    # directly without start.sh, so we still call init_db() here as a
+    # convenience for fresh local DBs.  Production sets SKIP_LIFESPAN_INIT_DB=1
+    # to keep this path inert and avoid lock contention during deploy.
+    # The /api/health/schema endpoint below queries information_schema
+    # directly and does not depend on this running.
     import os
     if os.environ.get("SKIP_LIFESPAN_INIT_DB") != "1":
         try:
