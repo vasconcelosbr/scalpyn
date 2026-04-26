@@ -200,7 +200,8 @@ async def health_check_schema():
 
     payload = {
         "schema_ok": len(missing) == 0,
-        "checked": len(critical_columns),
+        "checked_count": len(critical_columns),
+        "checked": [{"table": t, "column": c} for (t, c) in critical_columns],
         "missing": missing,
     }
     if missing:
