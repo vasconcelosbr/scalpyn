@@ -420,9 +420,10 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
           <div>
             <label className="block text-xs text-[#64748B] mb-1">Source Pool <span className="text-[#4B5563]">(para POOL)</span></label>
             <select
-              className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
+              className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6] disabled:opacity-40 disabled:cursor-not-allowed"
               value={sourcePoolId}
               onChange={(e) => { setSourcePoolId(e.target.value); if (e.target.value) setSourceWatchlistId(''); }}
+              disabled={level === 'L1' || level === 'L2' || level === 'L3'}
               data-testid="watchlist-pool-select"
             >
               <option value="">— None —</option>
@@ -430,16 +431,19 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
+            {(level === 'L1' || level === 'L2' || level === 'L3') && (
+              <p className="text-xs text-[#4B5563] mt-1">Source Pool não se aplica para nível L1/L2/L3. Use Source Watchlist abaixo.</p>
+            )}
           </div>
 
           {/* Source Watchlist */}
           <div>
             <label className="block text-xs text-[#64748B] mb-1">Source Watchlist <span className="text-[#4B5563]">(para L1 / L2 / L3)</span></label>
             <select
-              className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
+              className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6] disabled:opacity-40 disabled:cursor-not-allowed"
               value={sourceWatchlistId}
               onChange={(e) => { setSourceWatchlistId(e.target.value); if (e.target.value) setSourcePoolId(''); }}
-              disabled={!!sourcePoolId}
+              disabled={level === 'POOL' || level === 'custom'}
               data-testid="watchlist-source-select"
             >
               <option value="">— None —</option>
@@ -447,8 +451,8 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
                 <option key={w.id} value={w.id}>[{resolveWatchlistLevel(w, profiles)}] {w.name}</option>
               ))}
             </select>
-            {sourcePoolId && (
-              <p className="text-xs text-[#4B5563] mt-1">Limpe o Source Pool acima para usar uma watchlist como fonte.</p>
+            {(level === 'POOL' || level === 'custom') && (
+              <p className="text-xs text-[#4B5563] mt-1">Source Watchlist não se aplica para este nível. Use Source Pool acima.</p>
             )}
           </div>
 
