@@ -1215,48 +1215,50 @@ function PipelineTab() {
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
-    // Load each endpoint independently so a single failure (e.g. backend
-    // schema drift on /watchlists) does not blank out pools and profiles.
-    // The previous Promise.all + empty catch hid the Task #41 bug.
-    const results = await Promise.allSettled([
-      apiFetch<{ watchlists: PipelineWatchlist[] }>('/watchlists'),
-      apiFetch<{ pools: Pool[] }>('/pools'),
-      apiFetch<{ profiles: Profile[] }>('/profiles'),
-    ]);
+    try {
+      // Load each endpoint independently so a single failure (e.g. backend
+      // schema drift on /watchlists) does not blank out pools and profiles.
+      // The previous Promise.all + empty catch hid the original bug.
+      const results = await Promise.allSettled([
+        apiFetch<{ watchlists: PipelineWatchlist[] }>('/watchlists'),
+        apiFetch<{ pools: Pool[] }>('/pools'),
+        apiFetch<{ profiles: Profile[] }>('/profiles'),
+      ]);
 
-    const failures: string[] = [];
+      const failures: string[] = [];
 
-    const wlRes = results[0];
-    if (wlRes.status === 'fulfilled') {
-      setWatchlists(wlRes.value.watchlists ?? []);
-    } else {
-      console.error('Failed to load watchlists:', wlRes.reason);
-      failures.push('watchlists');
+      const wlRes = results[0];
+      if (wlRes.status === 'fulfilled') {
+        setWatchlists(wlRes.value.watchlists ?? []);
+      } else {
+        console.error('Failed to load watchlists:', wlRes.reason);
+        failures.push('watchlists');
+      }
+
+      const poolRes = results[1];
+      if (poolRes.status === 'fulfilled') {
+        setPools(poolRes.value.pools ?? []);
+      } else {
+        console.error('Failed to load pools:', poolRes.reason);
+        failures.push('pools');
+      }
+
+      const profRes = results[2];
+      if (profRes.status === 'fulfilled') {
+        setProfiles(profRes.value.profiles ?? []);
+      } else {
+        console.error('Failed to load profiles:', profRes.reason);
+        failures.push('profiles');
+      }
+
+      setLoadError(
+        failures.length > 0
+          ? `Falha ao carregar: ${failures.join(', ')}. Verifique o backend e recarregue a página.`
+          : null,
+      );
+    } finally {
+      if (!silent) setLoading(false);
     }
-
-    const poolRes = results[1];
-    if (poolRes.status === 'fulfilled') {
-      setPools(poolRes.value.pools ?? []);
-    } else {
-      console.error('Failed to load pools:', poolRes.reason);
-      failures.push('pools');
-    }
-
-    const profRes = results[2];
-    if (profRes.status === 'fulfilled') {
-      setProfiles(profRes.value.profiles ?? []);
-    } else {
-      console.error('Failed to load profiles:', profRes.reason);
-      failures.push('profiles');
-    }
-
-    setLoadError(
-      failures.length > 0
-        ? `Falha ao carregar: ${failures.join(', ')}. Verifique o backend e recarregue a página.`
-        : null,
-    );
-
-    if (!silent) setLoading(false);
   }, []);
 
   const loadSilent = useCallback(() => load(true), [load]);
