@@ -36,25 +36,20 @@ async def lifespan(app: FastAPI):
     import logging
     _log = logging.getLogger(__name__)
 
-    # Track init_db outcome so /api/health/schema can report drift.  Without
-    # this, a silent init_db failure (timeout, missing column) lets uvicorn
-    # serve traffic with a broken schema — that's the bug that hid Pipeline
-    # watchlists from the user (Task #41).
-    app.state.init_db_error = None
-    app.state.init_db_ok = False
-
-    try:
-        _log.info("Initializing database schema...")
-        await asyncio.wait_for(init_db(), timeout=30)
-        app.state.init_db_ok = True
-    except asyncio.TimeoutError:
-        msg = "Database initialization timed out after 30 s — continuing without schema sync"
-        _log.warning(msg)
-        app.state.init_db_error = msg
-    except Exception as e:
-        msg = f"Database initialization error: {type(e).__name__}: {e}"
-        _log.error(msg, exc_info=True)
-        app.state.init_db_error = msg
+    # Schema bootstrap is now owned by start.sh in production (alembic upgrade
+    # head + python -m app.init_db, both gating container startup).  In dev,
+    # the workflow command runs uvicorn directly without start.sh, so we still
+    # bootstrap here as a convenience.  The /api/health/schema endpoint below
+    # queries information_schema directly and does not depend on this running.
+    import os
+    if os.environ.get("SKIP_LIFESPAN_INIT_DB") != "1":
+        try:
+            _log.info("Initializing database schema (dev convenience)...")
+            await asyncio.wait_for(init_db(), timeout=30)
+        except asyncio.TimeoutError:
+            _log.warning("Database initialization timed out after 30 s — startup continues; production must rely on start.sh gates")
+        except Exception as e:
+            _log.error("Database initialization error: %s", e, exc_info=True)
 
     try:
         from sqlalchemy import text
@@ -141,20 +136,76 @@ async def health_check():
 
 @app.get("/api/health/schema")
 async def health_check_schema():
-    """Reports whether init_db() finished successfully on startup.
+    """Probes information_schema for columns the ORM relies on.
 
-    Returns 503 if the schema bootstrap failed or timed out — that's the
-    silent-failure mode that hid Pipeline watchlists in production (Task #41).
-    Lets ops/CI catch schema drift instead of relying on user reports.
+    Returns 503 with the list of missing (table, column) pairs if any are
+    absent.  Detects schema drift even when init_db() reported success or
+    never ran — that's the silent-failure mode that caused two production
+    incidents (market_mode in Task #41, last_scanned_at right after).
+    Wire Cloud Run / external monitors at this endpoint, not /api/health.
     """
+    import json as _json
     from fastapi import Response
-    payload = {
-        "init_db_ok": getattr(app.state, "init_db_ok", False),
-        "init_db_error": getattr(app.state, "init_db_error", None),
-    }
-    if not payload["init_db_ok"]:
+    from sqlalchemy import text
+    from .database import AsyncSessionLocal
+
+    # Critical (table, column) pairs — every column declared by an ORM model
+    # whose absence would 500 a user-facing endpoint.  Keep in sync with
+    # backend/alembic/versions/021_init_db_parity_catchall.py.
+    critical_columns = [
+        ("pools", "overrides"),
+        ("pools", "autopilot_enabled"),
+        ("pipeline_watchlists", "market_mode"),
+        ("pipeline_watchlists", "last_scanned_at"),
+        ("pipeline_watchlist_assets", "execution_id"),
+        ("pipeline_watchlist_assets", "score_long"),
+        ("pipeline_watchlist_assets", "score_short"),
+        ("pipeline_watchlist_assets", "confidence_score"),
+        ("pipeline_watchlist_assets", "futures_direction"),
+        ("pipeline_watchlist_assets", "entry_long_blocked"),
+        ("pipeline_watchlist_assets", "entry_short_blocked"),
+        ("pipeline_watchlist_assets", "refreshed_at"),
+        ("pipeline_watchlist_assets", "analysis_snapshot"),
+        ("pipeline_watchlist_rejections", "execution_id"),
+        ("pipeline_watchlist_rejections", "analysis_snapshot"),
+        ("watchlist_profiles", "profile_type"),
+        ("trades", "exchange_order_id"),
+        ("trades", "source"),
+    ]
+
+    try:
+        async with AsyncSessionLocal() as sess:
+            rows = (await sess.execute(text("""
+                SELECT table_name, column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+            """))).all()
+        present = {(r[0], r[1]) for r in rows}
+        missing = [
+            {"table": t, "column": c}
+            for (t, c) in critical_columns
+            if (t, c) not in present
+        ]
+    except Exception as e:
         return Response(
-            content=__import__("json").dumps(payload),
+            content=_json.dumps({
+                "schema_ok": False,
+                "error": f"{type(e).__name__}: {e}",
+                "missing": [],
+                "checked": len(critical_columns),
+            }),
+            status_code=503,
+            media_type="application/json",
+        )
+
+    payload = {
+        "schema_ok": len(missing) == 0,
+        "checked": len(critical_columns),
+        "missing": missing,
+    }
+    if missing:
+        return Response(
+            content=_json.dumps(payload),
             status_code=503,
             media_type="application/json",
         )

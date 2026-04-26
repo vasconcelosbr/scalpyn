@@ -1,82 +1,106 @@
 #!/bin/bash
 # Scalpyn backend startup script
 #
-# Strategy: run Alembic migrations synchronously but with a hard wall-clock
-# limit so the container always proceeds to start uvicorn within Cloud Run's
-# startup-probe window (~240 s).  Migrations use IF-NOT-EXISTS and are
-# idempotent; they will catch up on the next deploy if skipped here.
+# Strategy: schema bootstrap is AUTHORITATIVE on this script.  Two gates run
+# before uvicorn / Celery:
+#   1. `alembic upgrade head` (3 retries, exit 1 on persistent failure)
+#   2. `python -m app.init_db` (single attempt, exit 1 on failure)
+#
+# If either gate fails, the container exits non-zero — Cloud Run will roll
+# back to the previous revision and surface a real error instead of serving
+# traffic with a half-broken schema.  This eliminates the silent-failure mode
+# that caused two production incidents (Task #41: market_mode missing,
+# follow-up: last_scanned_at missing) where /api/watchlists returned 500 and
+# the UI hid the failure.
+#
+# The /api/health/schema endpoint independently probes information_schema for
+# critical columns, so external monitors can detect drift even if both gates
+# unexpectedly skip.
 
 set -e
 
-# ── Synchronous migration runner (time-boxed) ────────────────────────────────
-run_migrations() {
+# Tell the FastAPI lifespan to skip its own init_db() call — start.sh owns
+# bootstrap now and double-running it just slows boot.
+export SKIP_LIFESPAN_INIT_DB=1
+
+# ── Gate 1: Alembic migrations (authoritative) ───────────────────────────────
+run_alembic_upgrade() {
     local max_attempts=3
-    local delay=2
+    local delay=5
     local attempt=1
 
-    echo "==> [migrations] Checking alembic state..."
+    echo "==> [migrations] alembic upgrade head"
 
+    # Stamp empty alembic_version on a DB that was create_all'd before alembic
+    # was introduced.  Without this, alembic refuses to run "fresh" migrations
+    # against a populated DB.
     python - <<'PYEOF'
-    import os, sys
-    try:
-        from sqlalchemy import create_engine, text, inspect
-        from alembic.config import Config
-        from alembic import command
+import os, sys
+try:
+    from sqlalchemy import create_engine, text, inspect
+    from alembic.config import Config
+    from alembic import command
 
-        db_url = os.environ.get("DATABASE_URL", "")
-        if not db_url:
-            print(" [migrations] DATABASE_URL not set -- skipping stamp check")
-            sys.exit(0)
+    db_url = os.environ.get("DATABASE_URL", "")
+    if not db_url:
+        print(" [migrations] DATABASE_URL not set -- aborting")
+        sys.exit(1)
 
-        sync_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
-        engine = create_engine(sync_url, connect_args={"connect_timeout": 10})
+    sync_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
+    engine = create_engine(sync_url, connect_args={"connect_timeout": 10})
+    with engine.connect() as conn:
+        insp = inspect(conn)
+        has_alembic = insp.has_table("alembic_version")
+        has_pools = insp.has_table("pools")
+        versions = []
+        if has_alembic:
+            versions = [r[0] for r in conn.execute(text("SELECT version_num FROM alembic_version"))]
+    engine.dispose()
 
-        with engine.connect() as conn:
-            insp = inspect(conn)
-            has_alembic = insp.has_table("alembic_version")
-            versions = []
-            if has_alembic:
-                result = conn.execute(text("SELECT version_num FROM alembic_version"))
-                versions = [r[0] for r in result]
-            has_pools = insp.has_table("pools")
-            engine.dispose()
-        
-            if has_pools and not versions:
-                print(" [migrations] Stamping alembic to base revision (create_all DB)...")
-                cfg = Config("/app/alembic.ini")
-                command.stamp(cfg, "base")
-                print(" [migrations] Stamped at base.")
-            elif versions:
-                print(f" [migrations] Current revision(s): {versions}")
-            else:
-                print(" [migrations] Fresh database -- running all migrations.")
-    except Exception as e:
-        print(f" [migrations] Stamp check failed ({e}) -- proceeding with upgrade anyway")
+    if has_pools and not versions:
+        print(" [migrations] DB has tables but no alembic_version -- stamping at base.")
+        cfg = Config("/app/alembic.ini")
+        command.stamp(cfg, "base")
+    elif versions:
+        print(f" [migrations] Current revision(s): {versions}")
+    else:
+        print(" [migrations] Fresh DB -- alembic will run all migrations.")
+except Exception as e:
+    print(f" [migrations] Stamp pre-check failed: {e}", file=sys.stderr)
+    # Do not exit 1 here — alembic upgrade itself is the real gate.
 PYEOF
-    
+
     while [ $attempt -le $max_attempts ]; do
-        echo " [migrations] alembic upgrade head (attempt $attempt/$max_attempts)..."
+        echo " [migrations] attempt $attempt/$max_attempts ..."
         if alembic upgrade head; then
-            echo "==> [migrations] Complete."
+            echo "==> [migrations] alembic upgrade head OK"
             return 0
         fi
-        echo " [migrations] Failed -- retrying in ${delay}s..."
+        echo " [migrations] attempt $attempt failed -- retry in ${delay}s"
         sleep $delay
+        delay=$((delay * 2))
         attempt=$((attempt + 1))
     done
-    echo " [migrations] WARNING: all attempts failed -- server may start without latest schema."
-    return 0
+
+    echo "==> [migrations] FATAL: alembic upgrade head failed after ${max_attempts} attempts" >&2
+    return 1
 }
 
-# ── Run migrations synchronously but time-boxed ──────────────────────────────
-# Hard wall-clock limit prevents migration retries from consuming the entire
-# Cloud Run startup window.  Default 60 s leaves ~180 s for Celery + uvicorn.
-MIGRATION_TIMEOUT=${MIGRATION_TIMEOUT:-60}
+if ! run_alembic_upgrade; then
+    echo "==> Aborting startup: schema migrations failed.  Cloud Run will roll back." >&2
+    exit 1
+fi
 
-export -f run_migrations                      # make function visible to subshell
-timeout "$MIGRATION_TIMEOUT" bash -c 'run_migrations' || {
-    echo "==> [migrations] Timed out or failed after ${MIGRATION_TIMEOUT}s -- proceeding."
-}
+# ── Gate 2: init_db.py safety net ────────────────────────────────────────────
+# Even with alembic at head, init_db.py runs as a redundant idempotent
+# safety net.  Its CRITICAL blocks raise on failure, so a non-zero exit means
+# real schema mismatch.
+echo "==> [init_db] python -m app.init_db"
+if ! python -m app.init_db; then
+    echo "==> Aborting startup: init_db failed.  Cloud Run will roll back." >&2
+    exit 1
+fi
+echo "==> [init_db] OK"
 
 # ── Start Celery worker ──────────────────────────────────────────────────────
 echo "==> Starting Celery worker..."

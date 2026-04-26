@@ -49,3 +49,10 @@ The frontend proxies all `/api/*` requests to the FastAPI backend via `frontend/
 - TimescaleDB hypertable warnings on startup are expected (Replit PostgreSQL lacks this extension). The app falls back to regular PostgreSQL tables.
 - The DATABASE_URL validator in `backend/app/config.py` automatically converts `postgresql://` to `postgresql+asyncpg://` (required by asyncpg).
 - CORS allows all `*.replit.app`, `*.replit.dev`, and `*.repl.co` domains.
+
+## Schema Bootstrap (Production)
+- **Single source of truth**: Alembic migrations in `backend/alembic/versions/`. New schema changes MUST land as a migration, not just in `init_db.py`.
+- **Cloud Run boot order** (`backend/start.sh`): (1) `alembic upgrade head` with 3 retries — `exit 1` on persistent failure; (2) `python -m app.init_db` as redundant safety net — `exit 1` on failure. Only then Celery + uvicorn start. A failed gate causes Cloud Run to roll back automatically.
+- **`init_db.py`** is a redundant idempotent safety net for legacy DBs (every `ALTER TABLE` uses `IF NOT EXISTS`). It is mirrored 1:1 by migration `021_init_db_parity_catchall.py`.
+- **Health probe**: `GET /api/health/schema` queries `information_schema.columns` for the critical column list and returns 503 with `{ missing: [...] }` if any are absent. Use this — not `/api/health` — to verify a deploy succeeded. Canonical post-deploy check before testing the UI.
+- **Adding new columns**: bump the critical column list in `backend/app/main.py::health_check_schema` so production drift is detected proactively.
