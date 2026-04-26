@@ -36,15 +36,25 @@ async def lifespan(app: FastAPI):
     import logging
     _log = logging.getLogger(__name__)
 
-    # Time-box DB init so a slow/unreachable DB never blocks the startup
-    # probe.  The health endpoint still works without the DB.
+    # Track init_db outcome so /api/health/schema can report drift.  Without
+    # this, a silent init_db failure (timeout, missing column) lets uvicorn
+    # serve traffic with a broken schema — that's the bug that hid Pipeline
+    # watchlists from the user (Task #41).
+    app.state.init_db_error = None
+    app.state.init_db_ok = False
+
     try:
         _log.info("Initializing database schema...")
         await asyncio.wait_for(init_db(), timeout=30)
+        app.state.init_db_ok = True
     except asyncio.TimeoutError:
-        _log.warning("Database initialization timed out after 30 s — continuing without schema sync")
+        msg = "Database initialization timed out after 30 s — continuing without schema sync"
+        _log.warning(msg)
+        app.state.init_db_error = msg
     except Exception as e:
-        _log.error("Database initialization error: %s", e)
+        msg = f"Database initialization error: {type(e).__name__}: {e}"
+        _log.error(msg, exc_info=True)
+        app.state.init_db_error = msg
 
     try:
         from sqlalchemy import text
@@ -127,6 +137,28 @@ app.include_router(websocket.router)
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok", "version": "0.2.0"}
+
+
+@app.get("/api/health/schema")
+async def health_check_schema():
+    """Reports whether init_db() finished successfully on startup.
+
+    Returns 503 if the schema bootstrap failed or timed out — that's the
+    silent-failure mode that hid Pipeline watchlists in production (Task #41).
+    Lets ops/CI catch schema drift instead of relying on user reports.
+    """
+    from fastapi import Response
+    payload = {
+        "init_db_ok": getattr(app.state, "init_db_ok", False),
+        "init_db_error": getattr(app.state, "init_db_error", None),
+    }
+    if not payload["init_db_ok"]:
+        return Response(
+            content=__import__("json").dumps(payload),
+            status_code=503,
+            media_type="application/json",
+        )
+    return payload
 
 
 @app.get("/api/market/scores")

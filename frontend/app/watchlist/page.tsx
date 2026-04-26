@@ -1175,6 +1175,7 @@ function PipelineTab() {
   const [pools, setPools] = useState<Pool[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [modalWl, setModalWl] = useState<Partial<PipelineWatchlist> | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
@@ -1214,20 +1215,48 @@ function PipelineTab() {
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
-    try {
-      const [wlData, poolData, profData] = await Promise.all([
-        apiFetch<{ watchlists: PipelineWatchlist[] }>('/watchlists'),
-        apiFetch<{ pools: Pool[] }>('/pools'),
-        apiFetch<{ profiles: Profile[] }>('/profiles'),
-      ]);
-      setWatchlists(wlData.watchlists);
-      setPools(poolData.pools ?? []);
-      setProfiles(profData.profiles ?? []);
-    } catch {
-      // ignore
-    } finally {
-      if (!silent) setLoading(false);
+    // Load each endpoint independently so a single failure (e.g. backend
+    // schema drift on /watchlists) does not blank out pools and profiles.
+    // The previous Promise.all + empty catch hid the Task #41 bug.
+    const results = await Promise.allSettled([
+      apiFetch<{ watchlists: PipelineWatchlist[] }>('/watchlists'),
+      apiFetch<{ pools: Pool[] }>('/pools'),
+      apiFetch<{ profiles: Profile[] }>('/profiles'),
+    ]);
+
+    const failures: string[] = [];
+
+    const wlRes = results[0];
+    if (wlRes.status === 'fulfilled') {
+      setWatchlists(wlRes.value.watchlists ?? []);
+    } else {
+      console.error('Failed to load watchlists:', wlRes.reason);
+      failures.push('watchlists');
     }
+
+    const poolRes = results[1];
+    if (poolRes.status === 'fulfilled') {
+      setPools(poolRes.value.pools ?? []);
+    } else {
+      console.error('Failed to load pools:', poolRes.reason);
+      failures.push('pools');
+    }
+
+    const profRes = results[2];
+    if (profRes.status === 'fulfilled') {
+      setProfiles(profRes.value.profiles ?? []);
+    } else {
+      console.error('Failed to load profiles:', profRes.reason);
+      failures.push('profiles');
+    }
+
+    setLoadError(
+      failures.length > 0
+        ? `Falha ao carregar: ${failures.join(', ')}. Verifique o backend e recarregue a página.`
+        : null,
+    );
+
+    if (!silent) setLoading(false);
   }, []);
 
   const loadSilent = useCallback(() => load(true), [load]);
@@ -1273,6 +1302,13 @@ function PipelineTab() {
 
   return (
     <div className="space-y-6">
+      {/* Error banner — surface load failures instead of hiding them */}
+      {loadError && (
+        <div className="rounded-lg border border-[#7F1D1D] bg-[#1F0A0A] px-4 py-3 text-sm text-[#FCA5A5]">
+          {loadError}
+        </div>
+      )}
+
       {/* Toolbar */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-[#64748B]">
