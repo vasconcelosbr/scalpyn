@@ -35,25 +35,26 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    # Defense-in-depth against lock contention during Cloud Run deploy.
-    # The OLD revision is still serving (Celery beat keeps SELECT'ing
-    # pipeline_watchlist_assets) when the NEW revision tries to ALTER it.
-    # Without these timeouts, ALTER waits forever for AccessExclusiveLock,
-    # the container blows past Cloud Run's 240s startup window, and the
-    # whole deploy fails with "container failed to listen on PORT 8080".
+    # SET commands must live INSIDE begin_transaction so they share the
+    # same transaction that alembic manages.  Calling connection.execute()
+    # BEFORE context.configure()/begin_transaction() triggers SQLAlchemy
+    # 2.0 "autobegin" — an implicit transaction is created, and when
+    # alembic then calls begin_transaction() it gets a conflict
+    # (InvalidRequestError / nested-transaction mismatch), causing
+    # alembic to exit non-zero.  All retries in start.sh fail quickly
+    # (~1:56 total) and Cloud Run rolls back.
     #
-    # 10s lock_timeout: fail fast if a competing transaction is holding
-    # the table. start.sh retries the migration with backoff, giving the
-    # OLD revision time to drain its query.
-    # 60s statement_timeout: cap any single migration statement so a
-    # runaway DDL (e.g. table rewrite on a large table) can't pin the
-    # whole boot.
+    # Defense against lock contention during Cloud Run deploy:
+    #   SET LOCAL lock_timeout  — fails the migration in 10s if the OLD
+    #     revision (Celery beat) is holding AccessExclusiveLock on the
+    #     table.  start.sh retries with backoff so the lock can drain.
+    #   SET LOCAL statement_timeout — caps any single DDL statement at
+    #     60s so a runaway table-rewrite never pins the whole boot.
     from sqlalchemy import text as _sa_text
-    connection.execute(_sa_text("SET lock_timeout = '10s'"))
-    connection.execute(_sa_text("SET statement_timeout = '60s'"))
-
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
+        connection.execute(_sa_text("SET LOCAL lock_timeout = '10s'"))
+        connection.execute(_sa_text("SET LOCAL statement_timeout = '60s'"))
         context.run_migrations()
 
 

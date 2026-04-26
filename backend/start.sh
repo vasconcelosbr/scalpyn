@@ -38,45 +38,6 @@ run_alembic_upgrade() {
 
     echo "==> [migrations] alembic upgrade head"
 
-    # Stamp empty alembic_version on a DB that was create_all'd before alembic
-    # was introduced.  Without this, alembic refuses to run "fresh" migrations
-    # against a populated DB.
-    python - <<'PYEOF'
-import os, sys
-try:
-    from sqlalchemy import create_engine, text, inspect
-    from alembic.config import Config
-    from alembic import command
-
-    db_url = os.environ.get("DATABASE_URL", "")
-    if not db_url:
-        print(" [migrations] DATABASE_URL not set -- aborting")
-        sys.exit(1)
-
-    sync_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
-    engine = create_engine(sync_url, connect_args={"connect_timeout": 10})
-    with engine.connect() as conn:
-        insp = inspect(conn)
-        has_alembic = insp.has_table("alembic_version")
-        has_pools = insp.has_table("pools")
-        versions = []
-        if has_alembic:
-            versions = [r[0] for r in conn.execute(text("SELECT version_num FROM alembic_version"))]
-    engine.dispose()
-
-    if has_pools and not versions:
-        print(" [migrations] DB has tables but no alembic_version -- stamping at base.")
-        cfg = Config("/app/alembic.ini")
-        command.stamp(cfg, "base")
-    elif versions:
-        print(f" [migrations] Current revision(s): {versions}")
-    else:
-        print(" [migrations] Fresh DB -- alembic will run all migrations.")
-except Exception as e:
-    print(f" [migrations] Stamp pre-check failed: {e}", file=sys.stderr)
-    # Do not exit 1 here — alembic upgrade itself is the real gate.
-PYEOF
-
     while [ $attempt -le $max_attempts ]; do
         echo " [migrations] attempt $attempt/$max_attempts (timeout ${ALEMBIC_TIMEOUT_PER_ATTEMPT}s) ..."
         # `timeout` exits 124 on hard wall-clock expiry; treat that the same
