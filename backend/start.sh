@@ -77,10 +77,10 @@ if ! run_alembic_upgrade; then
     # locks needed) so uvicorn can start.  /api/health/schema will detect any
     # real schema drift post-boot and return 503 if columns are missing.
     echo "==> [migrations] All attempts failed (lock contention from old revision)." >&2
-    echo "==> [migrations] Attempting alembic stamp fallback (021_init_db_parity_catchall)..." >&2
-    echo "==> [migrations] Rationale: init_db.py on the old revision already applied this DDL." >&2
-    if timeout 30s alembic stamp 021_init_db_parity_catchall 2>&1; then
-        echo "==> [migrations] Stamped at 021_init_db_parity_catchall. Proceeding with startup."
+    echo "==> [migrations] Attempting alembic stamp head fallback..." >&2
+    echo "==> [migrations] Rationale: DDL may already exist from a previous init_db.py run." >&2
+    if timeout 30s alembic stamp head 2>&1; then
+        echo "==> [migrations] Stamped at head. Proceeding with startup."
         echo "==> [migrations] WARNING: Validate schema drift via GET /api/health/schema after boot."
     else
         echo "==> Aborting startup: cannot upgrade or stamp schema." >&2
