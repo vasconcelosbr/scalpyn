@@ -443,7 +443,7 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
               className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6] disabled:opacity-40 disabled:cursor-not-allowed"
               value={sourceWatchlistId}
               onChange={(e) => { setSourceWatchlistId(e.target.value); if (e.target.value) setSourcePoolId(''); }}
-              disabled={level === 'POOL' || level === 'custom'}
+              disabled={level === 'POOL'}
               data-testid="watchlist-source-select"
             >
               <option value="">— None —</option>
@@ -451,8 +451,8 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
                 <option key={w.id} value={w.id}>[{resolveWatchlistLevel(w, profiles)}] {w.name}</option>
               ))}
             </select>
-            {(level === 'POOL' || level === 'custom') && (
-              <p className="text-xs text-[#4B5563] mt-1">Source Watchlist não se aplica para este nível. Use Source Pool acima.</p>
+            {level === 'POOL' && (
+              <p className="text-xs text-[#4B5563] mt-1">Source Watchlist não se aplica para nível POOL. Use Source Pool acima.</p>
             )}
           </div>
 
