@@ -67,15 +67,14 @@ run_alembic_upgrade() {
 
 if ! run_alembic_upgrade; then
     # ── Stamp fallback ────────────────────────────────────────────────────
-    # Migration 021 is blocked by lock contention from the old Celery beat
-    # (Cloud Run --min-instances=1 keeps the previous revision alive during
-    # rolling deploy).  The DDL in migration 021 mirrors init_db.py exactly,
-    # so the schema is already correct on the live DB — the old revision's
-    # lifespan called init_db.py before SKIP_LIFESPAN_INIT_DB was introduced.
+    # If alembic upgrade head fails (typically lock contention from the old
+    # Celery beat kept alive by Cloud Run --min-instances=1 during rolling
+    # deploy), stamp head as a last resort so uvicorn can start.
     #
-    # Strategy: stamp 021 as applied (just writes to alembic_version, no DDL
-    # locks needed) so uvicorn can start.  /api/health/schema will detect any
-    # real schema drift post-boot and return 503 if columns are missing.
+    # "alembic stamp head" only writes to the alembic_version table — no DDL
+    # locks on data tables needed.  /api/health/schema will detect any real
+    # schema drift post-boot and return 503 if critical columns are missing,
+    # providing a clear signal for follow-up action.
     echo "==> [migrations] All attempts failed (lock contention from old revision)." >&2
     echo "==> [migrations] Attempting alembic stamp head fallback..." >&2
     echo "==> [migrations] Rationale: DDL may already exist from a previous init_db.py run." >&2
