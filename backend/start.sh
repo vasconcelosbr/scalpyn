@@ -11,12 +11,16 @@
 # runs it when SKIP_LIFESPAN_INIT_DB is unset).
 #
 # Defenses against the failure mode that broke the Task #44 deploy:
-#   - `SET lock_timeout = '10s'` in alembic/env.py — migrations that try to
-#     ALTER a table held by the OLD revision (Celery beat is still running on
-#     the previous Cloud Run instance during deploy) fail in 10s instead of
-#     blocking forever.
-#   - `timeout 180s` per attempt here — bounded wall-clock so the container
-#     never exceeds the Cloud Run startup probe window (~240s).
+#   - asyncpg `server_settings` in alembic/env.py sets `lock_timeout=10s` and
+#     `statement_timeout=60s` at session level, before any transaction. This
+#     is more reliable than SET LOCAL inside alembic's transaction (which was
+#     silently inert in production with asyncpg + run_sync + SQLAlchemy 2.0).
+#     Migrations that try to ALTER a table held by the OLD revision's Celery
+#     beat fail in 10s with a clear "lock timeout" error instead of blocking.
+#   - `timeout 50s` per attempt (3 retries × 50s + 35s delays = 185s max) —
+#     bounded wall-clock so the container never exceeds the Cloud Run startup
+#     probe window (~240s). With lock_timeout firing at 10s, expected total
+#     on contention is ~65s.
 #
 # If the gate fails, the container exits non-zero — Cloud Run rolls back to
 # the previous revision automatically.  /api/health/schema independently
