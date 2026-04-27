@@ -50,6 +50,10 @@ _PLAUSIBILITY_RULES = {
     # writing volume or market_cap into the ratio field). Treat as
     # invalid_value rather than letting an absurd number drive the rule
     # outcome (regression: SUI showed taker_ratio == 8.98e9 in prod).
+    # Zero is also excluded: it means either a division-by-zero on the
+    # sell side or that no taker activity was observed in the window —
+    # both indicate a stale/empty feed, not a real ratio. This preserves
+    # the prior behavior (`v > 0`) while adding the upper bound.
     "taker_ratio": lambda v: 0 < v <= 5,
     "volume_spike": lambda v: v > 0,
     # ADX is bounded [0, 100] but a literal 0 means the calculation has
