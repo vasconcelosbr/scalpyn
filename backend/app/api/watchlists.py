@@ -34,6 +34,7 @@ from ..services.pipeline_rejections import (
     build_asset_evaluation_trace,
     build_trace_asset,
     evaluate_rejections,
+    recompute_rejection_trace,
     rejection_metrics,
 )
 from ..utils.pipeline_profile_filters import (
@@ -2057,25 +2058,122 @@ async def _get_watchlist_rejections_payload(
         .order_by(PipelineWatchlistRejection.recorded_at.desc(), PipelineWatchlistRejection.symbol.asc())
     )).scalars().all()
 
-    items = [
-        {
-            **_normalize_decision_snapshot(
-                symbol=row.symbol,
-                status="rejected",
-                stage=row.stage,
-                profile_id=str(row.profile_id) if row.profile_id else None,
-                timestamp=_iso_utc(row.recorded_at),
-                snapshot=row.analysis_snapshot,
-            ),
+    # Recompute evaluation_trace on read so the Rejected tab always reflects
+    # the current backend rule semantics (cascade SKIPPED reasons, taker_ratio
+    # plausibility, etc.) without waiting for the 30 min scheduler to refresh
+    # `pipeline_watchlist_rejections.evaluation_trace`. The stored column is
+    # left untouched (out of scope) and is used as a defensive fallback when
+    # the indicators table has no entry for a symbol.
+    rejection_symbols = sorted({row.symbol for row in rows})
+    ind_map = await _fetch_indicators_map(db, rejection_symbols) if rejection_symbols else {}
+    meta_map: Dict[str, Dict[str, Any]] = {}
+    if rejection_symbols:
+        try:
+            meta_rows = await db.execute(
+                text("""
+                    SELECT symbol, price, price_change_24h, volume_24h, market_cap,
+                           spread_pct, orderbook_depth_usdt
+                    FROM market_metadata
+                    WHERE symbol = ANY(:symbols)
+                """),
+                {"symbols": list(rejection_symbols)},
+            )
+            meta_map = {
+                r.symbol: {
+                    "current_price":        float(r.price) if r.price is not None else None,
+                    "price_change_24h":     float(r.price_change_24h) if r.price_change_24h is not None else None,
+                    "volume_24h":           float(r.volume_24h) if r.volume_24h is not None else None,
+                    "market_cap":           float(r.market_cap) if r.market_cap is not None else None,
+                    "spread_pct":           float(r.spread_pct) if r.spread_pct is not None else None,
+                    "orderbook_depth_usdt": float(r.orderbook_depth_usdt) if r.orderbook_depth_usdt is not None else None,
+                }
+                for r in meta_rows.fetchall()
+            }
+        except Exception:
+            try:
+                meta_rows = await db.execute(
+                    text("""
+                        SELECT symbol, price, price_change_24h, volume_24h, market_cap
+                        FROM market_metadata
+                        WHERE symbol = ANY(:symbols)
+                    """),
+                    {"symbols": list(rejection_symbols)},
+                )
+                meta_map = {
+                    r.symbol: {
+                        "current_price":    float(r.price) if r.price is not None else None,
+                        "price_change_24h": float(r.price_change_24h) if r.price_change_24h is not None else None,
+                        "volume_24h":       float(r.volume_24h) if r.volume_24h is not None else None,
+                        "market_cap":       float(r.market_cap) if r.market_cap is not None else None,
+                    }
+                    for r in meta_rows.fetchall()
+                }
+            except Exception:
+                meta_map = {}
+
+    trace_filter_conditions = list(((profile_config or {}).get("filters") or {}).get("conditions") or [])
+    selected_trace_conditions = trace_filter_conditions
+    if effective_level in ("L1", "L2", "L3") and wl.profile_id and trace_filter_conditions and rejection_symbols:
+        try:
+            selected_trace_conditions = select_profile_filter_conditions(
+                trace_filter_conditions,
+                total_symbols=len(rejection_symbols),
+                symbols_with_meta=sum(1 for s in rejection_symbols if meta_map.get(s)),
+            )["conditions"]
+        except Exception:
+            selected_trace_conditions = trace_filter_conditions
+
+    def _recompute_trace(row: PipelineWatchlistRejection) -> List[Dict[str, Any]]:
+        stored = row.evaluation_trace or []
+        indicators = ind_map.get(row.symbol)
+        meta = meta_map.get(row.symbol)
+        if not profile_config or (not indicators and not meta):
+            logger.debug(
+                "[Pipeline] Rejected trace recompute fallback for %s "
+                "(profile_config=%s, has_indicators=%s, has_meta=%s)",
+                row.symbol,
+                bool(profile_config),
+                bool(indicators),
+                bool(meta),
+            )
+        return recompute_rejection_trace(
+            row.symbol,
+            profile_config=profile_config,
+            indicators=indicators,
+            meta=meta,
+            stored_trace=stored,
+            selected_filter_conditions=selected_trace_conditions,
+        )
+
+    items = []
+    for row in rows:
+        normalized = _normalize_decision_snapshot(
+            symbol=row.symbol,
+            status="rejected",
+            stage=row.stage,
+            profile_id=str(row.profile_id) if row.profile_id else None,
+            timestamp=_iso_utc(row.recorded_at),
+            snapshot=row.analysis_snapshot,
+        )
+        recomputed_trace = _recompute_trace(row)
+        # The Rejected tab UI (RejectedAssetTable.tsx) reads
+        # `item.details.evaluation_trace`, NOT the top-level field, so we
+        # must overwrite it here too — otherwise the recompute is invisible
+        # to traders and the original bug ("Current: aguardando coleta")
+        # would still show on rows snapshotted before #71.
+        normalized["details"] = {
+            **normalized["details"],
+            "evaluation_trace": recomputed_trace,
+        }
+        items.append({
+            **normalized,
             "failed_type": row.failed_type,
             "failed_indicator": row.failed_indicator,
             "condition": row.condition_text,
             "current_value": row.current_value,
             "expected": row.expected_value,
-            "evaluation_trace": row.evaluation_trace or [],
-        }
-        for row in rows
-    ]
+            "evaluation_trace": recomputed_trace,
+        })
     metrics = rejection_metrics(items)
     metrics["approved_count"] = len(await _load_active_watchlist_assets(wl.id, db))
     metrics["available_indicators"] = sorted({item["failed_indicator"] for item in items if item.get("failed_indicator")})

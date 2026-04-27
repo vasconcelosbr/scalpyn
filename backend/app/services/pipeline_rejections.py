@@ -618,6 +618,50 @@ def build_asset_evaluation_trace(
     return jsonable_value(trace)
 
 
+def recompute_rejection_trace(
+    symbol: str,
+    *,
+    profile_config: Optional[Dict[str, Any]],
+    indicators: Optional[Dict[str, Any]],
+    meta: Optional[Dict[str, Any]],
+    stored_trace: Optional[List[Dict[str, Any]]] = None,
+    selected_filter_conditions: Optional[Sequence[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """Recompute a single rejection trace from current indicators + meta.
+
+    The Rejected tab calls this on read so backend semantics changes
+    (cascade SKIPPED reasons, plausibility bounds) appear immediately,
+    without having to wait for the 30-min scheduler to repopulate
+    `pipeline_watchlist_rejections.evaluation_trace`.
+
+    Falls back to `stored_trace` when:
+      * `profile_config` is missing (nothing to evaluate against), or
+      * neither `indicators` nor `meta` carry any data for the symbol
+        (recomputing would just downgrade everything to SEM DADOS), or
+      * the trace builder raises (defensive — never break the endpoint
+        because of one bad row).
+    """
+    fallback = list(stored_trace or [])
+    if not profile_config:
+        return fallback
+    if not indicators and not meta:
+        return fallback
+    try:
+        trace_asset = build_trace_asset(
+            symbol,
+            indicators=indicators,
+            meta=meta or {},
+            alpha_score=None,
+        )
+        return build_asset_evaluation_trace(
+            trace_asset,
+            profile_config=profile_config,
+            selected_filter_conditions=selected_filter_conditions,
+        )
+    except Exception:
+        return fallback
+
+
 def evaluate_rejections(
     assets: Sequence[Dict[str, Any]],
     *,

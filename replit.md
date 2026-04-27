@@ -66,6 +66,13 @@ The evaluation trace distinguishes three causes of `status="SKIPPED"` via the `r
 - `"indicator_invalid_value"` → indicator present but implausible (e.g. `taker_ratio` outside `(0, 5]`, `rsi` outside `[0, 100]`). Renders as **VALOR INVÁLIDO** (laranja) with the actual number shown for diagnostics. Plausibility predicates live in `_PLAUSIBILITY_RULES` (`backend/app/services/indicator_validity.py`).
 Tests: `backend/tests/test_pipeline_rejected_snapshot.py::test_cascade_skipped_blocks_carry_short_circuit_reason`, `test_filter_cascade_emits_short_circuit_reason_for_remaining_filters`, `test_taker_ratio_above_plausibility_bound_is_invalid_value`.
 
+## Rejected Tab Trace Recompute on Read (task #76)
+The Rejected tab endpoint (`_get_watchlist_rejections_payload` in `backend/app/api/watchlists.py`) **always recomputes** `evaluation_trace` on read using current `indicators_json` + `market_metadata`, instead of returning the trace stored in `pipeline_watchlist_rejections.evaluation_trace`. This guarantees backend semantics changes (new SKIPPED `reason` labels, plausibility bounds, etc.) appear in the UI immediately, without waiting for the 30-min scheduler to repopulate the snapshot column.
+- Helper: `pipeline_rejections.recompute_rejection_trace(symbol, profile_config, indicators, meta, stored_trace, selected_filter_conditions)` — pure function, falls back to `stored_trace` when `profile_config` is missing OR when the symbol has neither indicators nor meta (avoids downgrading every row to SEM DADOS during a collector outage).
+- The DB column `pipeline_watchlist_rejections.evaluation_trace` is intentionally **NOT** rewritten on read. The scheduler still owns that column; recompute-on-read is purely a presentation-layer override.
+- Selected filter conditions follow the same `select_profile_filter_conditions` logic used by the live Approved trace (`get_watchlist_assets`), so both tabs stay consistent.
+- Tests: `test_recompute_rejection_trace_uses_current_indicators_for_cascade_label`, `test_recompute_rejection_trace_falls_back_when_no_indicators_or_meta`, `test_recompute_rejection_trace_falls_back_when_profile_config_missing` in `test_pipeline_rejected_snapshot.py`.
+
 ## Schema Bootstrap (Production)
 - **Single source of truth**: Alembic migrations in `backend/alembic/versions/`. New schema changes MUST land as a migration, never only in `init_db.py`.
 - **Cloud Run boot order** (`backend/start.sh`): `alembic upgrade head` is the ONLY schema gate. Three retries with backoff, time-boxed at 180s per attempt. `exit 1` on persistent failure causes Cloud Run to roll back to the previous revision automatically. Then Celery + uvicorn start.

@@ -3,7 +3,11 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.services.pipeline_rejections import evaluate_rejections, rejection_metrics
+from app.services.pipeline_rejections import (
+    evaluate_rejections,
+    recompute_rejection_trace,
+    rejection_metrics,
+)
 
 
 def test_block_rules_reject_before_filters_and_mark_remaining_trace_as_skipped():
@@ -312,6 +316,117 @@ def test_approved_assets_receive_normalized_analysis_snapshot():
     assert snapshot["conditions"] == ["Volume 24h >= 1000000"]
     assert snapshot["current_values"]["Volume 24h"] == 2_500_000
     assert snapshot["expected_values"]["Volume 24h"] == "1000000"
+
+
+def test_recompute_rejection_trace_uses_current_indicators_for_cascade_label():
+    """Regression for the Rejected tab: a row stored before #71 carries an
+    old-format trace where the cascade-skipped blocks lack
+    `reason="cascade_short_circuit"`. On read the API must rebuild the
+    trace from current indicators so the frontend renders PULADO instead
+    of "Current: aguardando coleta".
+    """
+    profile_config = {
+        "filters": {
+            "logic": "AND",
+            "conditions": [
+                {"field": "adx", "operator": ">=", "value": 15},
+            ],
+        },
+        "block_rules": {
+            "blocks": [
+                {
+                    "id": "block_taker_ratio",
+                    "name": "Taker Ratio",
+                    "logic": "AND",
+                    "conditions": [
+                        {"indicator": "taker_ratio", "operator": "<", "value": 1.04},
+                    ],
+                },
+                {
+                    "id": "block_spike",
+                    "name": "Spike",
+                    "logic": "AND",
+                    "conditions": [
+                        {"indicator": "volume_spike", "operator": "<", "value": 1.2},
+                    ],
+                },
+            ]
+        },
+    }
+
+    # Old-format stored trace: no `reason` field on the SKIPPED entry.
+    stored_trace = [
+        {"type": "block_rule", "indicator": "Taker Ratio", "status": "FAIL"},
+        {"type": "block_rule", "indicator": "Spike", "status": "SKIPPED"},
+        {"type": "filter", "indicator": "ADX", "status": "SKIPPED"},
+    ]
+
+    # Current indicators: taker_ratio still failing → cascade triggers.
+    indicators = {
+        "taker_ratio": 0.4087,
+        "volume_spike": 0.5,
+        "adx": 22,
+    }
+
+    trace = recompute_rejection_trace(
+        "UNI_USDT",
+        profile_config=profile_config,
+        indicators=indicators,
+        meta={},
+        stored_trace=stored_trace,
+    )
+
+    by_indicator = {item["indicator"]: item for item in trace}
+    assert by_indicator["Taker Ratio"]["status"] == "FAIL"
+    spike = by_indicator["Spike"]
+    assert spike["status"] == "SKIPPED"
+    assert spike["reason"] == "cascade_short_circuit"
+    adx = by_indicator["ADX"]
+    assert adx["status"] == "SKIPPED"
+    assert adx["reason"] == "cascade_short_circuit"
+
+
+def test_recompute_rejection_trace_falls_back_when_no_indicators_or_meta():
+    """Defensive fallback: when neither indicators nor meta are available
+    for a symbol, the API must keep the stored trace verbatim instead of
+    downgrading every row to SEM DADOS.
+    """
+    profile_config = {
+        "filters": {"logic": "AND", "conditions": [
+            {"field": "adx", "operator": ">=", "value": 15},
+        ]},
+        "block_rules": {"blocks": []},
+    }
+    stored_trace = [
+        {"type": "filter", "indicator": "ADX", "status": "FAIL", "current_value": 12, "expected": "15"},
+    ]
+
+    trace = recompute_rejection_trace(
+        "GHOST_USDT",
+        profile_config=profile_config,
+        indicators=None,
+        meta=None,
+        stored_trace=stored_trace,
+    )
+
+    assert trace == stored_trace
+
+
+def test_recompute_rejection_trace_falls_back_when_profile_config_missing():
+    """Without a profile_config there is nothing to evaluate against, so
+    the helper must return the stored trace untouched.
+    """
+    stored_trace = [
+        {"type": "filter", "indicator": "RSI", "status": "FAIL"},
+    ]
+    trace = recompute_rejection_trace(
+        "BTC_USDT",
+        profile_config=None,
+        indicators={"rsi": 80},
+        meta={"current_price": 50000.0},
+        stored_trace=stored_trace,
+    )
+    assert trace == stored_trace
 
 
 def test_rejected_assets_expose_normalized_details_contract():
