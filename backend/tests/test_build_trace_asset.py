@@ -106,6 +106,7 @@ def test_alias_bollinger_width_resolves_from_canonical():
         indicators={"bb_width": 0.0541},
     )
     assert asset["bollinger_width"] == 0.0541
+    assert asset["bollinger_band_width"] == 0.0541
     assert asset["bb_width"] == 0.0541
 
 
@@ -117,6 +118,44 @@ def test_alias_canonical_resolves_from_legacy_spelling():
     )
     assert asset["bb_width"] == 0.07
     assert asset["volume_24h"] == 4_500_000.0
+
+
+def test_alias_bollinger_band_width_resolves_from_legacy_spelling():
+    """Profile rules saved with the long `bollinger_band_width` spelling
+    must resolve to the canonical `bb_width` value (and vice versa).
+    """
+    forward = build_trace_asset(
+        "SUI_USDT",
+        indicators={"bollinger_band_width": 0.061},
+    )
+    assert forward["bb_width"] == 0.061
+    assert forward["bollinger_width"] == 0.061
+    assert forward["bollinger_band_width"] == 0.061
+
+    reverse = build_trace_asset(
+        "SUI_USDT",
+        indicators={"bb_width": 0.044},
+    )
+    assert reverse["bollinger_band_width"] == 0.044
+    assert reverse["bollinger_width"] == 0.044
+    assert reverse["bb_width"] == 0.044
+
+
+def test_alias_vol_spike_resolves_in_both_directions():
+    """Legacy `vol_spike` payload must populate `volume_spike` and vice versa."""
+    forward = build_trace_asset(
+        "SUI_USDT",
+        indicators={"vol_spike": 1.85},
+    )
+    assert forward["volume_spike"] == 1.85
+    assert forward["vol_spike"] == 1.85
+
+    reverse = build_trace_asset(
+        "SUI_USDT",
+        indicators={"volume_spike": 2.10},
+    )
+    assert reverse["vol_spike"] == 2.10
+    assert reverse["volume_spike"] == 2.10
 
 
 def test_alpha_score_passthrough():
@@ -170,8 +209,12 @@ def test_trace_no_longer_reports_sem_dados_for_sui_block_rule():
 
     # Block rule evaluated against indicators_json value (0.0108 < 0.5):
     # block did NOT trigger → status PASS, NOT skipped for missing data.
-    assert by_indicator["Wide Spread"]["status"] == "PASS"
-    assert by_indicator["Wide Spread"].get("reason") != "indicator_not_available"
+    # The `current_value` payload must surface the actual indicator value
+    # so the trader can SEE the spread, not "SEM DADOS".
+    spread_item = by_indicator["Wide Spread"]
+    assert spread_item["status"] == "PASS"
+    assert spread_item.get("reason") != "indicator_not_available"
+    assert spread_item["current_value"] == 0.0108
 
     # Filters on indicator-only fields actually evaluate.
     assert by_indicator["BB Width"]["status"] == "PASS"

@@ -97,8 +97,9 @@ _PROFILE_STRING_INDICATORS = frozenset(
 # names, we want the trace to find the canonical value (and vice versa)
 # so that legacy DB drift is not falsely reported as "no data".
 _INDICATOR_FIELD_ALIASES: Dict[str, tuple] = {
-    "bb_width":             ("bollinger_width",),
+    "bb_width":             ("bollinger_width", "bollinger_band_width"),
     "volume_24h":           ("volume_24h_usdt", "vol_24h"),
+    "volume_spike":         ("vol_spike",),
     "price_change_24h":     ("price_change_24h_pct",),
     "spread_pct":           ("spread_percent",),
     "atr_pct":              ("atr_percent",),
