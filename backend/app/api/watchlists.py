@@ -1757,7 +1757,7 @@ async def get_watchlist_assets(
     # missing key indicator fields (stale/partial cache), fetch OHLCV and recompute.
     # We check both *presence* and *non-None value* so that a row with e.g.
     # rsi=66 but adx=None still triggers a full re-compute.
-    _KEY_INDICATOR_FIELDS = {"taker_ratio", "ema9_distance_pct", "rsi", "adx", "bb_width"}
+    _KEY_INDICATOR_FIELDS = {"taker_ratio", "ema9_distance_pct", "rsi", "adx", "bb_width", "volume_spike"}
     if symbols:
         missing = [
             s for s in symbols

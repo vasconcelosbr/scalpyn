@@ -442,6 +442,12 @@ class MarketDataService:
     async def fetch_orderbook_metrics(self, symbol: str, depth: int = 10) -> Dict[str, Any]:
         """Fetch orderbook for a symbol and compute spread_pct and orderbook_depth_usdt.
 
+        Gate.io is tried first via fetch_normalized_market_data (which already has an
+        internal Binance fallback when Gate depth is missing).  An *additional* explicit
+        Binance safety-net is applied after that main path so that the edge case where
+        Gate has valid depth but no spread (e.g. bid/ask = 0 on a thin Gate listing)
+        is also covered.
+
         Returns:
             {
               "spread_pct": float (% difference between best ask and best bid),
@@ -456,13 +462,38 @@ class MarketDataService:
             depth=depth,
             include_taker=False,
         )
-        payload = {}
+        payload: Dict[str, Any] = {}
         if normalized.spread_pct is not None:
             payload["spread_pct"] = round(float(normalized.spread_pct), 4)
         if normalized.orderbook_depth is not None:
             payload["orderbook_depth_usdt"] = round(float(normalized.orderbook_depth), 8)
-        if payload:
+
+        # ── Explicit Binance safety net for spread ────────────────────────────
+        # fetch_normalized_market_data triggers Binance when Gate *depth* is
+        # missing.  Edge case: Gate returns valid depth (bids/asks exist) but
+        # spread ends up None due to bid/ask == 0 on a thin Gate listing.
+        # In that case the internal Binance path is skipped (depth is valid),
+        # so we retry Binance here specifically for spread.
+        if not payload.get("spread_pct"):
+            try:
+                normalized_sym = symbol.replace("/", "_").replace("-", "_")
+                binance_book_metrics = self._extract_orderbook_metrics(
+                    await self._fetch_binance_orderbook(normalized_sym, depth),
+                    depth,
+                )
+                if binance_book_metrics.get("spread_pct") is not None:
+                    payload["spread_pct"] = round(float(binance_book_metrics["spread_pct"]), 4)
+                    if not payload.get("orderbook_depth_usdt") and binance_book_metrics.get("orderbook_depth_usdt") is not None:
+                        payload["orderbook_depth_usdt"] = round(float(binance_book_metrics["orderbook_depth_usdt"]), 8)
+                    payload["market_data_source"] = "binance"
+                    logger.info("[SPREAD] Binance safety-net spread for %s: %.4f%%", symbol, payload["spread_pct"])
+            except Exception as exc:
+                logger.warning("[SPREAD] Binance safety-net failed for %s: %s", symbol, exc)
+
+        if payload and not payload.get("market_data_source"):
             payload["market_data_source"] = normalized.source_map.get("orderbook_depth_usdt", normalized.source)
+            payload["market_data_confidence"] = normalized.confidence_score
+        elif payload and payload.get("market_data_source") != "binance":
             payload["market_data_confidence"] = normalized.confidence_score
         return payload
 
