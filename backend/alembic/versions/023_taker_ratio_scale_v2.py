@@ -37,7 +37,9 @@ on-disk artifacts of the legacy scale:
 
      Idempotency: a per-row marker ``_taker_ratio_scale_v2: true``
      is added to ``profiles.config``; rows that already carry it are
-     left untouched.
+     left untouched. The leading underscore mirrors the convention used
+     elsewhere in the codebase for "internal/operational" config keys
+     that should not surface in the ProfileBuilder UI.
 
   2. **Stale ``indicators.indicators_json``** — every row whose
      persisted ``taker_ratio`` falls outside the new plausibility
@@ -111,6 +113,15 @@ def _migrate_condition(cond: Dict[str, Any], key_name: str) -> bool:
 
     ``key_name`` is the field that holds the indicator identity:
     ``"indicator"`` for block rules, ``"field"`` for filters.
+
+    Two threshold shapes are supported:
+
+      * ``{"operator": ">", "value": 1.5}`` — single-value comparisons.
+      * ``{"operator": "between", "min": 0.8, "max": 1.5}`` — range
+        comparisons (the shape consumed by
+        ``app.services.rule_engine`` for ``between``). Both bounds are
+        converted independently because ``f(x) = x/(x+1)`` is strictly
+        increasing, so ``min <= x <= max`` is preserved.
     """
     if not isinstance(cond, dict):
         return False
@@ -119,14 +130,26 @@ def _migrate_condition(cond: Dict[str, Any], key_name: str) -> bool:
     operator = str(cond.get("operator", "")).strip()
     if operator not in _CONVERTIBLE_OPERATORS:
         return False
-    if "value" not in cond:
-        return False
-    old_value = cond["value"]
-    new_value = _convert_threshold(old_value)
-    if new_value == old_value:
-        return False
-    cond["value"] = new_value
-    return True
+
+    changed = False
+
+    if "value" in cond:
+        old_value = cond["value"]
+        new_value = _convert_threshold(old_value)
+        if new_value != old_value:
+            cond["value"] = new_value
+            changed = True
+
+    # Range conditions encoded as separate min/max keys.
+    for bound_key in ("min", "max"):
+        if bound_key in cond:
+            old_bound = cond[bound_key]
+            new_bound = _convert_threshold(old_bound)
+            if new_bound != old_bound:
+                cond[bound_key] = new_bound
+                changed = True
+
+    return changed
 
 
 def _migrate_block_rules(block_rules: Any) -> bool:

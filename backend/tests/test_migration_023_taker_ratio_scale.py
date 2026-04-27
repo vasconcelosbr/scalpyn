@@ -121,6 +121,51 @@ def test_migrate_condition_skips_unsupported_operator():
     assert cond["value"] == [1.0, 2.0]
 
 
+def test_migrate_condition_handles_between_with_min_max_keys():
+    """``between`` conditions in this codebase use separate ``min`` and
+    ``max`` keys (see ``rule_engine._apply_operator``), not a list under
+    ``value``. Both bounds must be converted independently — the mapping
+    f(x)=x/(x+1) is strictly increasing so ``min <= x <= max`` is
+    preserved on the new scale."""
+    cond = {
+        "indicator": "taker_ratio",
+        "operator": "between",
+        "min": 0.5,
+        "max": 1.5,
+    }
+    assert migration._migrate_condition(cond, "indicator") is True
+    # 0.5 / 1.5 = 0.3333; 1.5 / 2.5 = 0.6.
+    assert cond["min"] == 0.3333
+    assert cond["max"] == 0.6
+    # Order is preserved (still a valid range on the new scale).
+    assert cond["min"] < cond["max"]
+
+
+def test_migrate_condition_between_with_value_list_also_works():
+    """Some legacy rows store ``between`` bounds as ``value: [min, max]``
+    instead of separate keys. _convert_threshold maps lists element-wise."""
+    cond = {
+        "indicator": "taker_ratio",
+        "operator": "between",
+        "value": [0.5, 1.5],
+    }
+    assert migration._migrate_condition(cond, "indicator") is True
+    assert cond["value"] == [0.3333, 0.6]
+
+
+def test_migrate_condition_partial_bounds_only_converts_present_keys():
+    """A condition that only has a ``min`` (or only a ``max``) bound must
+    still convert that one without crashing on the missing key."""
+    cond = {
+        "indicator": "taker_ratio",
+        "operator": "between",
+        "min": 1.5,
+    }
+    assert migration._migrate_condition(cond, "indicator") is True
+    assert cond["min"] == 0.6
+    assert "max" not in cond
+
+
 # ── _migrate_profile_config (idempotency) ─────────────────────────────────────
 
 def test_migrate_profile_config_marks_and_returns_new_config():
