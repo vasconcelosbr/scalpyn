@@ -38,7 +38,10 @@ def test_is_valid_rejects_none_and_nan():
 
 
 def test_is_valid_rejects_implausible_values():
-    valid, reason = is_valid(0, "taker_ratio")
+    # Since #82 the canonical scale is buy/(buy+sell) ∈ [0, 1]; 0 itself
+    # is now a *valid* signal ("100% sell pressure"), so the implausible
+    # case is anything > 1 (or < 0).
+    valid, reason = is_valid(1.5, "taker_ratio")
     assert valid is False
     assert reason.value == "indicator_invalid_value"
 
@@ -56,15 +59,15 @@ def test_is_valid_rejects_implausible_values():
 
 # (indicator name, block configuration, "good" value, "bad" value, "implausible" value)
 INDICATOR_CASES = [
-    # taker_ratio: block when below 1.05
+    # taker_ratio: block when buy/(buy+sell) below 0.55  (#82 scale)
     ("taker_ratio", {
         "id": "tr",
         "name": "Weak Taker Ratio",
         "indicator": "taker_ratio",
         "type": "threshold",
         "operator": ">=",
-        "value": 1.05,
-    }, 1.20, 0.90, 0),
+        "value": 0.55,
+    }, 0.70, 0.40, 1.5),
     # volume_spike: block when below 1.5
     ("volume_spike", {
         "id": "vs",
@@ -257,14 +260,14 @@ def test_block_group_skip_reason_preserves_invalid_value():
                     "conditions": [
                         # rsi present and valid
                         {"indicator": "rsi", "operator": ">", "value": 70},
-                        # taker_ratio present but implausible (zero)
-                        {"indicator": "taker_ratio", "operator": ">=", "value": 1.05},
+                        # taker_ratio present but implausible (out of [0, 1])
+                        {"indicator": "taker_ratio", "operator": ">=", "value": 0.55},
                     ],
                 }
             ]
         }
     )
-    result = engine.evaluate({"rsi": 80, "taker_ratio": 0})
+    result = engine.evaluate({"rsi": 80, "taker_ratio": 1.5})
     assert result["blocked"] is False
     assert "Combo" in result["skipped_blocks"]
     assert result["skipped_details"]["grp"] == "indicator_invalid_value"
@@ -299,15 +302,16 @@ def test_pipeline_block_rule_emits_skipped_with_reason():
     rule_engine = RuleEngine()
 
     # Implausible indicator → SKIPPED with indicator_invalid_value.
+    # Threshold rescaled for #82: buy/(buy+sell) ∈ [0, 1].
     block = {
         "id": "tr",
         "name": "Weak Taker Ratio",
         "logic": "AND",
         "conditions": [
-            {"indicator": "taker_ratio", "operator": ">=", "value": 1.05},
+            {"indicator": "taker_ratio", "operator": ">=", "value": 0.55},
         ],
     }
-    payload = _evaluate_block_rule(rule_engine, {"taker_ratio": 0}, block)
+    payload = _evaluate_block_rule(rule_engine, {"taker_ratio": 1.5}, block)
     assert payload["status"] == "SKIPPED"
     assert payload["triggered"] is False
     assert payload["reason"] == "indicator_invalid_value"
@@ -320,15 +324,15 @@ def test_pipeline_block_rule_emits_skipped_with_reason():
 
     # In `_evaluate_block_rule`, a block triggers when its conditions
     # evaluate True (the rule is the "danger" pattern). Here the
-    # condition is `taker_ratio >= 1.05`, so:
-    #   taker_ratio=1.5 → condition True → block triggers → status FAIL.
-    payload = _evaluate_block_rule(rule_engine, {"taker_ratio": 1.5}, block)
+    # condition is `taker_ratio >= 0.55`, so:
+    #   taker_ratio=0.8 → condition True → block triggers → status FAIL.
+    payload = _evaluate_block_rule(rule_engine, {"taker_ratio": 0.8}, block)
     assert payload["status"] == "FAIL"
     assert payload["triggered"] is True
     assert "reason" not in payload
 
-    #   taker_ratio=0.8 → condition False → block does not trigger → PASS.
-    payload = _evaluate_block_rule(rule_engine, {"taker_ratio": 0.8}, block)
+    #   taker_ratio=0.4 → condition False → block does not trigger → PASS.
+    payload = _evaluate_block_rule(rule_engine, {"taker_ratio": 0.4}, block)
     assert payload["status"] == "PASS"
     assert payload["triggered"] is False
     assert "reason" not in payload
@@ -339,9 +343,9 @@ def test_pipeline_entry_trigger_emits_skipped_with_reason():
     from app.services.rule_engine import RuleEngine
 
     rule_engine = RuleEngine()
-    cond = {"indicator": "taker_ratio", "operator": ">=", "value": 1.05}
+    cond = {"indicator": "taker_ratio", "operator": ">=", "value": 0.55}
 
-    payload = _evaluate_entry_trigger(rule_engine, {"taker_ratio": 0}, cond)
+    payload = _evaluate_entry_trigger(rule_engine, {"taker_ratio": 1.5}, cond)
     assert payload["status"] == "SKIPPED"
     assert payload["reason"] == "indicator_invalid_value"
 
@@ -393,10 +397,10 @@ def test_normalized_trace_item_preserves_skipped_reason():
     from app.services.rule_engine import RuleEngine
 
     rule_engine = RuleEngine()
-    cond = {"indicator": "taker_ratio", "operator": ">=", "value": 1.05}
+    cond = {"indicator": "taker_ratio", "operator": ">=", "value": 0.55}
 
     # Entry trigger SKIPPED → reason survives normalization.
-    raw = _evaluate_entry_trigger(rule_engine, {"taker_ratio": 0}, cond)
+    raw = _evaluate_entry_trigger(rule_engine, {"taker_ratio": 1.5}, cond)
     normalized = _normalized_trace_item(raw)
     assert normalized["status"] == "SKIPPED"
     assert normalized["reason"] == "indicator_invalid_value"
@@ -414,13 +418,13 @@ def test_normalized_trace_item_preserves_skipped_reason():
     assert normalized["reason"] == "indicator_not_available"
 
     # Signal condition SKIPPED → reason survives normalization.
-    raw = _evaluate_signal_condition(rule_engine, {"taker_ratio": 0}, cond)
+    raw = _evaluate_signal_condition(rule_engine, {"taker_ratio": 1.5}, cond)
     normalized = _normalized_trace_item(raw)
     assert normalized["status"] == "SKIPPED"
     assert normalized["reason"] == "indicator_invalid_value"
 
     # PASS items must NOT acquire a spurious reason field.
-    raw = _evaluate_entry_trigger(rule_engine, {"taker_ratio": 1.5}, cond)
+    raw = _evaluate_entry_trigger(rule_engine, {"taker_ratio": 0.7}, cond)
     normalized = _normalized_trace_item(raw)
     assert normalized["status"] == "PASS"
     assert "reason" not in normalized
@@ -438,7 +442,7 @@ def test_required_entry_trigger_with_missing_data_does_not_block_entry():
                     "id": "req_taker",
                     "indicator": "taker_ratio",
                     "operator": ">=",
-                    "value": 1.05,
+                    "value": 0.55,
                     "required": True,
                     "enabled": True,
                 }
@@ -447,8 +451,9 @@ def test_required_entry_trigger_with_missing_data_does_not_block_entry():
         }
     )
 
-    # taker_ratio==0 is implausible → SKIPPED → entry still allowed.
-    result = engine.evaluate_entry({"taker_ratio": 0})
+    # taker_ratio==1.5 is out of [0, 1] → implausible → SKIPPED →
+    # entry still allowed (missing/garbage data must never block).
+    result = engine.evaluate_entry({"taker_ratio": 1.5})
     assert result["allowed"] is True
     assert result["failed_required"] == []
     assert "req_taker" in result["skipped"]

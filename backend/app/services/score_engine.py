@@ -25,13 +25,15 @@ _IND_LABELS: Dict[str, str] = {
 }
 
 # ── Category per indicator name ────────────────────────────────────────────────
-# taker_ratio  = buy / sell          → [0, ∞)  → lives in "signal" (threshold > 1)
+# taker_ratio  = buy / (buy + sell)  → [0, 1]  → lives in "liquidity" (threshold > 0.5)
 # buy_pressure = buy / (buy + sell)  → [0, 1]  → lives in "liquidity" (threshold > 0.5)
+# Both fields carry the same "Buy Volume Ratio" value since #82 (was buy/sell before).
 _IND_CATEGORY: Dict[str, str] = {
     "volume_spike": "liquidity", "volume_24h": "liquidity",
     "spread_pct": "liquidity", "orderbook_depth_usdt": "liquidity",
     "obv": "liquidity",
     "buy_pressure": "liquidity",          # buy/(buy+sell), [0, 1]
+    "taker_ratio":  "liquidity",          # buy/(buy+sell), [0, 1] — moved from "signal" in #82
     "taker_buy_volume": "liquidity",
     "taker_sell_volume": "liquidity",
     "adx": "market_structure", "ema_trend": "market_structure",
@@ -317,14 +319,15 @@ class ScoreEngine:
 
         Rules are mapped to categories by indicator type:
         - liquidity:        volume_spike, volume_24h, spread_pct, orderbook_depth_usdt, obv,
-                            buy_pressure (buy/(buy+sell), 0-1), taker_buy_volume, taker_sell_volume
+                            buy_pressure (buy/(buy+sell), 0-1), taker_ratio (buy/(buy+sell), 0-1),
+                            taker_buy_volume, taker_sell_volume
         - market_structure: adx, ema_trend, atr, atr_pct, psar_trend, bb_width, di_plus, di_minus, di_trend
         - momentum:         rsi, macd, macd_signal, macd_histogram, stoch_k, stoch_d, zscore, vwap_distance_pct
-        - signal:           taker_ratio (buy/sell, 0-∞), adx_acceleration, volume_delta, funding_rate,
+        - signal:           adx_acceleration, volume_delta, funding_rate,
                             ema9_gt_ema50, ema50_gt_ema200, ema_full_alignment
 
         buy_pressure  = buy / (buy + sell)  → [0, 1],  equilibrium = 0.5
-        taker_ratio   = buy / sell          → [0, ∞),  equilibrium ≈ 1.0
+        taker_ratio   = buy / (buy + sell)  → [0, 1],  equilibrium = 0.5  (#82: was buy/sell)
         """
         earned_points = 0.0
         possible_points = 0.0

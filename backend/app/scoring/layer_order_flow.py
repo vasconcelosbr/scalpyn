@@ -5,9 +5,12 @@ All thresholds from ScoringFuturesConfig (zero hardcode).
 
 Contracts:
   buy_pressure = taker_buy_volume / (taker_buy_volume + taker_sell_volume)  → [0, 1]
-  taker_ratio  = taker_buy_volume / taker_sell_volume                       → (0, 5] or None
-                                                                              (None when window is one-sided
-                                                                              or ratio falls outside plausibility)
+  taker_ratio  = taker_buy_volume / (taker_buy_volume + taker_sell_volume)  → [0, 1] or None
+                 Same canonical "Buy Volume Ratio" formula as buy_pressure
+                 (#82 unified the two — until then taker_ratio was buy/sell
+                 in (0, 5], which conflicted with futures_pipeline_scorer's
+                 own thresholds 0.50/0.55/0.65 on the same field).
+                 None means no taker activity in the window.
 
 Source: Gate.io futures trades endpoint (real individual trade data, last 60s window).
 No fallback via long_short_account_ratio. No hard-coded 0.5 default.
@@ -50,7 +53,7 @@ def score_order_flow(
     whale_sells_usdt: float,        # large sell transactions > threshold in USD
     trade_direction: str,           # "long" | "short"
     cfg: ScoringFuturesConfig,
-    taker_ratio: Optional[float] = None,  # buy / sell, [0, ∞), informational
+    taker_ratio: Optional[float] = None,  # buy / (buy + sell), [0, 1] — same as buy_pressure (#82)
 ) -> L5Result:
     """Calculate L5 Order Flow score."""
     ext_pos = cfg.l5_funding_extreme_positive
@@ -257,17 +260,14 @@ async def fetch_order_flow_data(
                 elif size < 0:
                     sell_vol += abs(size)
 
-            total_vol = buy_vol + sell_vol
-            if total_vol > 0:
-                buy_pressure = round(buy_vol / total_vol, 6)         # [0, 1]
-                # taker_ratio = buy / sell. Guard against degenerate
-                # one-sided windows (sell_vol == 0) and implausible
-                # values; otherwise dividing by an epsilon floor would
-                # feed L5 with absurd inputs (~1e9). Same fix as
-                # `app.services.order_flow_service.safe_taker_ratio`.
-                taker_ratio = safe_taker_ratio(
-                    contract, FUTURES_TRADE_WINDOW_SECONDS, buy_vol, sell_vol,
-                )
+            # taker_ratio and buy_pressure are now the same canonical
+            # "Buy Volume Ratio" formula: buy / (buy + sell), bounded
+            # [0, 1]. Single helper guarantees identical guards across
+            # spot and futures collectors (#82).
+            taker_ratio = safe_taker_ratio(
+                contract, FUTURES_TRADE_WINDOW_SECONDS, buy_vol, sell_vol,
+            )
+            buy_pressure = taker_ratio
     except Exception as exc:
         logger.warning("[L5] failed to fetch futures trades for %s: %s", contract, exc)
 

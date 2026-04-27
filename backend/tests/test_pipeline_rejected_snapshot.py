@@ -239,7 +239,8 @@ def test_filter_cascade_emits_short_circuit_reason_for_remaining_filters():
 def test_taker_ratio_above_plausibility_bound_is_invalid_value():
     """Regression: SUI showed taker_ratio == 8.98e9 in prod. The trace
     must mark this as `indicator_invalid_value`, not let the absurd
-    number drive the rule outcome.
+    number drive the rule outcome. After #82 the canonical scale is
+    Buy/(Buy+Sell) ∈ [0, 1], so anything > 1 trips the validity check.
     """
     profile_config = {
         "filters": {"logic": "AND", "conditions": []},
@@ -250,7 +251,9 @@ def test_taker_ratio_above_plausibility_bound_is_invalid_value():
                     "name": "Taker Ratio",
                     "logic": "AND",
                     "conditions": [
-                        {"indicator": "taker_ratio", "operator": "<", "value": 1.04},
+                        # Threshold expressed on the new [0, 1] scale: block
+                        # when sellers dominate (taker_ratio < 0.5).
+                        {"indicator": "taker_ratio", "operator": "<", "value": 0.5},
                     ],
                 }
             ]

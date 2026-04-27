@@ -1,11 +1,19 @@
 """Regression tests for order flow taker_ratio normalization.
 
-The collector previously persisted absurd values (~1e9) into
-``indicators_json->'taker_ratio'`` whenever a 60s window happened to be
-one-sided (e.g. only buy-side trades for SUI). The fix adds a
-plausibility/degeneracy guard around ``buy_vol / sell_vol`` so the
-collector now writes ``None`` instead of a number that cannot represent
-a real ratio.
+History
+-------
+* Pre-#72: collector persisted absurd values (~1e9) into
+  ``indicators_json->'taker_ratio'`` for one-sided 60s windows
+  (e.g. only buy-side trades for SUI), because the formula was
+  ``buy / sell`` with a 1e-9 epsilon floor.
+* #72: added a degeneracy/plausibility guard that clamped to (0, 5]
+  but kept the buy/sell formula. Did not fix one-sided windows
+  (they returned None) and still allowed large-but-finite imbalances
+  like 3.28e2 to flow through.
+* #82: switched to the canonical "Buy Volume Ratio" formula
+  ``buy / (buy + sell)``, bounded [0, 1]. One-sided windows now
+  produce a real, bounded value (1.0 for buy-only, 0.0 for
+  sell-only) instead of being discarded.
 """
 
 import os
@@ -24,41 +32,49 @@ from app.services.order_flow_service import (
 )
 
 
-def test_safe_taker_ratio_returns_none_when_sell_volume_is_zero():
+def test_safe_taker_ratio_buy_only_window_returns_one():
     # SUI regression: 60s window had 8.98 SUI bought, 0 sold.  Old code
-    # divided by 1e-9 and produced 8.98e9.  New code returns None so the
-    # value is never persisted as a "ratio".
-    assert safe_taker_ratio("SUI_USDT", 60, buy_vol=8.98, sell_vol=0.0) is None
+    # divided by 1e-9 and produced 8.98e9.  #72 returned None.  #82
+    # returns 1.0 — a real, bounded signal of "all flow was buys".
+    assert safe_taker_ratio("SUI_USDT", 60, buy_vol=8.98, sell_vol=0.0) == pytest.approx(1.0)
 
 
-def test_safe_taker_ratio_returns_none_when_buy_volume_is_zero():
-    assert safe_taker_ratio("SUI_USDT", 60, buy_vol=0.0, sell_vol=12.5) is None
+def test_safe_taker_ratio_sell_only_window_returns_zero():
+    assert safe_taker_ratio("SUI_USDT", 60, buy_vol=0.0, sell_vol=12.5) == pytest.approx(0.0)
 
 
 def test_safe_taker_ratio_returns_none_for_empty_window():
-    # Both sides zero → no warning, no value (caller is expected to have
-    # already returned the empty payload, but the helper must still be
-    # defensive).
+    # Both sides zero → no taker activity at all → caller must persist None.
     assert safe_taker_ratio("SUI_USDT", 60, buy_vol=0.0, sell_vol=0.0) is None
 
 
-def test_safe_taker_ratio_returns_none_when_above_plausibility_bound():
-    # A large but finite buy/sell imbalance still has to fit in (0, 5];
-    # anything above is treated as a corrupted feed regardless of the
-    # raw inputs.
-    assert safe_taker_ratio("SUI_USDT", 60, buy_vol=1000.0, sell_vol=1.0) is None
+def test_safe_taker_ratio_value_is_bounded_to_zero_one():
+    # Sanity check: even an extreme buy:sell imbalance produces a value
+    # in [0, 1] under the new formula. 1000:1 → 0.999001.
+    ratio = safe_taker_ratio("SUI_USDT", 60, buy_vol=1000.0, sell_vol=1.0)
+    assert ratio == pytest.approx(1000.0 / 1001.0, rel=1e-4)
+    assert 0.0 <= ratio <= 1.0
 
 
 def test_safe_taker_ratio_accepts_value_at_upper_bound():
-    # Boundary check: exactly TAKER_RATIO_MAX is the largest valid ratio.
-    ratio = safe_taker_ratio("SUI_USDT", 60, buy_vol=5.0, sell_vol=1.0)
+    # Boundary check: exactly TAKER_RATIO_MAX (= 1.0) is the largest
+    # valid ratio, achieved when sell_vol == 0.
+    assert TAKER_RATIO_MAX == pytest.approx(1.0)
+    ratio = safe_taker_ratio("SUI_USDT", 60, buy_vol=5.0, sell_vol=0.0)
     assert ratio == pytest.approx(TAKER_RATIO_MAX)
 
 
 def test_safe_taker_ratio_returns_real_value_in_normal_range():
     # Normal SUI window: balanced taker flow.
+    # buy/(buy+sell) = 510 / 1510 = 0.337748
     ratio = safe_taker_ratio("SUI_USDT", 60, buy_vol=510.0, sell_vol=1000.0)
-    assert ratio == pytest.approx(0.51)
+    assert ratio == pytest.approx(510.0 / 1510.0, rel=1e-4)
+
+
+def test_safe_taker_ratio_balanced_window_is_half():
+    # Equal buy and sell volumes → 0.5, the equilibrium signal.
+    ratio = safe_taker_ratio("SUI_USDT", 60, buy_vol=42.0, sell_vol=42.0)
+    assert ratio == pytest.approx(0.5)
 
 
 def _make_trade(side: str, amount: str, ts_ms: float) -> Dict[str, Any]:
@@ -87,15 +103,13 @@ def _patch_gate_trades(monkeypatch, trades: List[Dict[str, Any]]) -> None:
 
 
 @pytest.mark.anyio
-async def test_get_order_flow_data_returns_none_taker_ratio_for_sui_one_sided_window(
-    monkeypatch,
-):
-    """End-to-end regression: SUI-style one-sided window → taker_ratio=None.
+async def test_get_order_flow_data_buy_only_window_returns_one(monkeypatch):
+    """End-to-end: SUI-style one-sided window → taker_ratio == 1.0.
 
     Mirrors what production was doing: a 60s window with several buy-side
-    taker trades and zero sell-side ones.  The persisted payload must
-    have ``taker_ratio == None`` so downstream rule evaluators mark the
-    rule SKIPPED instead of receiving 8.98e9.
+    taker trades and zero sell-side ones. Under the canonical
+    Buy/(Buy+Sell) formula adopted in #82, that's a real signal of
+    "100% buys" and persists as 1.0 (not 8.98e9, not None).
     """
 
     import time
@@ -109,9 +123,8 @@ async def test_get_order_flow_data_returns_none_taker_ratio_for_sui_one_sided_wi
 
     payload = await get_order_flow_data("SUI_USDT", window_seconds=60)
 
-    # The bug: taker_ratio was ~8.98e9.  The fix: None.
-    assert payload["taker_ratio"] is None
-    # buy_pressure should still carry the directional signal.
+    assert payload["taker_ratio"] == pytest.approx(1.0)
+    # buy_pressure carries the same value (kept as alias for backward compat).
     assert payload["buy_pressure"] == pytest.approx(1.0)
     # And the underlying volumes are preserved for diagnostics.
     assert payload["taker_buy_volume"] == pytest.approx(8.98)
@@ -131,15 +144,20 @@ async def test_get_order_flow_data_returns_real_ratio_for_balanced_window(monkey
 
     payload = await get_order_flow_data("SUI_USDT", window_seconds=60)
 
-    assert payload["taker_ratio"] == pytest.approx(0.5)
+    # Both fields carry the same Buy/(Buy+Sell) value: 5/15 = 0.333.
+    assert payload["taker_ratio"] == pytest.approx(5 / 15)
     assert payload["buy_pressure"] == pytest.approx(5 / 15)
 
 
 @pytest.mark.anyio
-async def test_get_order_flow_data_drops_implausible_ratio(monkeypatch):
-    """A ratio above the plausibility bound (e.g. 1000:1) is dropped, not
-    persisted.  Defends against feeds that emit dust-only sell volume
-    against large buys."""
+async def test_get_order_flow_data_extreme_imbalance_stays_in_unit_interval(monkeypatch):
+    """A very lopsided 1000:1 buy/sell window is no longer dropped.
+
+    Under the new formula the result is 1000/1001 ≈ 0.999 — well within
+    [0, 1] and a meaningful signal (whales hammered the buy side). The
+    legacy [0, 5] guard would have rejected it; the new [0, 1] bound
+    accepts it.
+    """
 
     import time
 
@@ -152,9 +170,9 @@ async def test_get_order_flow_data_drops_implausible_ratio(monkeypatch):
 
     payload = await get_order_flow_data("SUI_USDT", window_seconds=60)
 
-    assert payload["taker_ratio"] is None
-    # buy_pressure is still well-defined and meaningful.
+    assert payload["taker_ratio"] == pytest.approx(1000 / 1001)
     assert payload["buy_pressure"] == pytest.approx(1000 / 1001)
+    assert 0.0 <= payload["taker_ratio"] <= 1.0
 
 
 @pytest.fixture

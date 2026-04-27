@@ -44,17 +44,18 @@ class SkipReason(str, Enum):
 # returns True when the value is plausible. Predicates assume the value
 # has already passed the None/NaN screening.
 _PLAUSIBILITY_RULES = {
-    # taker_ratio is taker_buy / total (or taker_buy / taker_sell). Either
-    # definition stays well below 5 in normal market conditions; values
-    # above that are evidence of a corrupted feed (collector accidentally
-    # writing volume or market_cap into the ratio field). Treat as
-    # invalid_value rather than letting an absurd number drive the rule
-    # outcome (regression: SUI showed taker_ratio == 8.98e9 in prod).
-    # Zero is also excluded: it means either a division-by-zero on the
-    # sell side or that no taker activity was observed in the window —
-    # both indicate a stale/empty feed, not a real ratio. This preserves
-    # the prior behavior (`v > 0`) while adding the upper bound.
-    "taker_ratio": lambda v: 0 < v <= 5,
+    # taker_ratio = taker_buy_volume / (taker_buy_volume + taker_sell_volume).
+    # Canonical "Buy Volume Ratio" definition adopted in #82 — bounded
+    # to [0, 1] by construction. Anything outside this range is a
+    # corrupted feed (collector accidentally writing volume or
+    # market_cap into the ratio field) or a stale row from the legacy
+    # buy/sell scale (Task #72 era). Treat as invalid_value rather
+    # than letting an absurd number drive the rule outcome
+    # (regression: SUI showed taker_ratio == 8.98e9 in prod;
+    # PENGU_USDT showed 3.28e11 even after #72).
+    # The endpoints 0 (all sells) and 1 (all buys) are valid signals
+    # of total directional flow and remain accepted.
+    "taker_ratio": lambda v: 0 <= v <= 1,
     "volume_spike": lambda v: v > 0,
     # ADX is bounded [0, 100] but a literal 0 means the calculation has
     # not converged yet (insufficient candles).
