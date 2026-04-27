@@ -542,11 +542,13 @@ class ProfileEngine:
                 "direction": signal_result.get("direction"),
                 "matched_conditions": signal_result.get("matched", []),
                 "failed_required": signal_result.get("failed_required", []),
+                "skipped": signal_result.get("skipped", []),
             },
             "entry": {
                 "allowed": entry_allowed,
                 "matched": entry_result.get("matched", []),
                 "failed_required": entry_result.get("failed_required", []),
+                "skipped": entry_result.get("skipped", []),
             },
         }
 
