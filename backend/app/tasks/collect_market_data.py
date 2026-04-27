@@ -48,6 +48,7 @@ async def _collect_all_async():
                 if df is None or df.empty:
                     continue
 
+                ohlcv_exchange = df.attrs.get("exchange", "gate.io")
                 for _, row in df.iterrows():
                     await db.execute(text("""
                         INSERT INTO ohlcv (time, symbol, exchange, timeframe, open, high, low, close, volume, quote_volume)
@@ -56,7 +57,7 @@ async def _collect_all_async():
                     """), {
                         "time": row["time"],
                         "symbol": symbol,
-                        "exchange": "gate.io",
+                        "exchange": ohlcv_exchange,
                         "timeframe": "1h",
                         "open": float(row["open"]),
                         "high": float(row["high"]),
@@ -209,6 +210,7 @@ async def _collect_5m_async():
                 if df is None or df.empty:
                     continue
 
+                ohlcv_exchange = df.attrs.get("exchange", "gate.io")
                 # Bulk-insert all returned candles (ON CONFLICT DO NOTHING is idempotent)
                 for _, row in df.iterrows():
                     await db.execute(text("""
@@ -218,7 +220,7 @@ async def _collect_5m_async():
                     """), {
                         "time":      row["time"],
                         "symbol":    symbol,
-                        "exchange":  "gate.io",
+                        "exchange":  ohlcv_exchange,
                         "timeframe": "5m",
                         "open":      float(row["open"]),
                         "high":      float(row["high"]),

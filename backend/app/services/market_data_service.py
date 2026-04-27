@@ -358,15 +358,17 @@ class MarketDataService:
     async def fetch_ohlcv(
         self, symbol: str, timeframe: str = "1h", limit: int = 200,
     ) -> Optional[pd.DataFrame]:
-        """Fetch OHLCV candles from Gate.io.
+        """Fetch OHLCV candles — Gate.io primary, Binance fallback.
 
         Returns DataFrame with columns:
         [time, open, high, low, close, volume, quote_volume].
+        df.attrs['exchange'] is set to the source that returned data.
         """
         tf_map = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d"}
         gate_tf = tf_map.get(timeframe, "1h")
         pair = self.to_gate_symbol(symbol)
 
+        # ── Primary: Gate.io ─────────────────────────────────────────────────
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(GATE_SPOT_URL, params={
@@ -377,18 +379,45 @@ class MarketDataService:
                 resp.raise_for_status()
                 data = resp.json()
 
-            if not data:
-                return None
+            if data:
+                rows = [parse_gate_spot_candle(candle) for candle in data]
+                df = pd.DataFrame(rows)
+                df = df.sort_values("time").reset_index(drop=True)
+                df.attrs["exchange"] = "gate.io"
+                return df
 
-            rows = [parse_gate_spot_candle(candle) for candle in data]
-
-            df = pd.DataFrame(rows)
-            df = df.sort_values("time").reset_index(drop=True)
-            return df
-
+            logger.info(
+                "[OHLCV] Gate.io returned empty for %s/%s — trying Binance fallback",
+                symbol, timeframe,
+            )
         except Exception as e:
-            logger.error(f"Failed to fetch OHLCV for {symbol}: {e}")
-            return None
+            logger.warning(
+                "[OHLCV] Gate.io failed for %s/%s (%s) — trying Binance fallback",
+                symbol, timeframe, e,
+            )
+
+        # ── Fallback: Binance ─────────────────────────────────────────────────
+        try:
+            binance_sym = self.to_binance_symbol(symbol)
+            rows = await self._binance.get_klines(
+                binance_sym, interval=timeframe, limit=limit, market="spot"
+            )
+            if rows:
+                df = pd.DataFrame(rows)
+                df = df.sort_values("time").reset_index(drop=True)
+                df.attrs["exchange"] = "binance"
+                logger.info(
+                    "[OHLCV] Binance fallback succeeded for %s/%s (%d candles)",
+                    symbol, timeframe, len(df),
+                )
+                return df
+        except Exception as exc:
+            logger.warning(
+                "[OHLCV] Binance fallback also failed for %s/%s: %s",
+                symbol, timeframe, exc,
+            )
+
+        return None
 
     async def fetch_all_tickers(self) -> List[Dict[str, Any]]:
         """Fetch all USDT spot tickers from Gate.io (excluding leveraged tokens + stablecoins)."""
