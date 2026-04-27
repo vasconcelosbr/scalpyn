@@ -636,15 +636,19 @@ def recompute_rejection_trace(
 
     Falls back to `stored_trace` when:
       * `profile_config` is missing (nothing to evaluate against), or
-      * neither `indicators` nor `meta` carry any data for the symbol
-        (recomputing would just downgrade everything to SEM DADOS), or
+      * `indicators` is empty/None for the symbol — even when `meta` is
+        present. Indicators are the source of truth for the bulk of the
+        rules (rsi, taker_ratio, volume_spike, bb_width, …); without
+        them recomputation would mass-downgrade everything to SEM DADOS
+        and lose the historical reason that rejected the asset, which is
+        the opposite of the user-visible improvement we want here.
       * the trace builder raises (defensive — never break the endpoint
         because of one bad row).
     """
     fallback = list(stored_trace or [])
     if not profile_config:
         return fallback
-    if not indicators and not meta:
+    if not indicators:
         return fallback
     try:
         trace_asset = build_trace_asset(

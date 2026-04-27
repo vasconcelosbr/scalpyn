@@ -2127,13 +2127,13 @@ async def _get_watchlist_rejections_payload(
         stored = row.evaluation_trace or []
         indicators = ind_map.get(row.symbol)
         meta = meta_map.get(row.symbol)
-        if not profile_config or (not indicators and not meta):
-            logger.debug(
-                "[Pipeline] Rejected trace recompute fallback for %s "
-                "(profile_config=%s, has_indicators=%s, has_meta=%s)",
+        if profile_config and not indicators:
+            # Discreet warning so we can spot persistent collector gaps
+            # in production logs without spamming on every poll.
+            logger.warning(
+                "[Pipeline] Rejected trace recompute falling back to stored snapshot "
+                "for %s (no indicators row; has_meta=%s)",
                 row.symbol,
-                bool(profile_config),
-                bool(indicators),
                 bool(meta),
             )
         return recompute_rejection_trace(

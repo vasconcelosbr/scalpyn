@@ -386,10 +386,12 @@ def test_recompute_rejection_trace_uses_current_indicators_for_cascade_label():
     assert adx["reason"] == "cascade_short_circuit"
 
 
-def test_recompute_rejection_trace_falls_back_when_no_indicators_or_meta():
-    """Defensive fallback: when neither indicators nor meta are available
-    for a symbol, the API must keep the stored trace verbatim instead of
-    downgrading every row to SEM DADOS.
+def test_recompute_rejection_trace_falls_back_when_indicators_missing():
+    """Defensive fallback: when there is no indicators row for the symbol
+    (collector gap, delisted asset, fresh symbol not yet scored), the
+    API must keep the stored trace verbatim instead of mass-downgrading
+    every entry to SEM DADOS — that would erase the historical reason
+    for the rejection.
     """
     profile_config = {
         "filters": {"logic": "AND", "conditions": [
@@ -406,6 +408,57 @@ def test_recompute_rejection_trace_falls_back_when_no_indicators_or_meta():
         profile_config=profile_config,
         indicators=None,
         meta=None,
+        stored_trace=stored_trace,
+    )
+
+    assert trace == stored_trace
+
+
+def test_recompute_rejection_trace_falls_back_when_only_meta_is_present():
+    """The realistic collector-gap scenario: market_metadata still has a
+    fresh row for the symbol (price, volume, market_cap) but the
+    indicators table has no entry yet. Indicator-based rules (rsi,
+    taker_ratio, …) have no data, so recomputing would degrade the
+    trace; the helper must fall back to the stored snapshot.
+    """
+    profile_config = {
+        "filters": {"logic": "AND", "conditions": [
+            {"field": "rsi", "operator": "<", "value": 55},
+        ]},
+        "block_rules": {
+            "blocks": [
+                {
+                    "id": "block_taker",
+                    "name": "Taker Ratio",
+                    "logic": "AND",
+                    "conditions": [
+                        {"indicator": "taker_ratio", "operator": "<", "value": 1.04},
+                    ],
+                }
+            ]
+        },
+    }
+    stored_trace = [
+        {"type": "block_rule", "indicator": "Taker Ratio", "status": "FAIL", "current_value": 0.4, "expected": "1.04"},
+        {"type": "filter", "indicator": "RSI", "status": "SKIPPED", "reason": "cascade_short_circuit"},
+    ]
+
+    # market_metadata-only payload: enough for volume/market_cap rules,
+    # but NOT enough for taker_ratio / rsi.
+    meta = {
+        "current_price": 1.23,
+        "price_change_24h": -2.4,
+        "volume_24h": 5_000_000.0,
+        "market_cap": 1_000_000_000.0,
+        "spread_pct": 0.05,
+        "orderbook_depth_usdt": 200_000.0,
+    }
+
+    trace = recompute_rejection_trace(
+        "FRESHLISTED_USDT",
+        profile_config=profile_config,
+        indicators=None,
+        meta=meta,
         stored_trace=stored_trace,
     )
 
