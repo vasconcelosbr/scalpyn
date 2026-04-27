@@ -1616,6 +1616,13 @@ async def _resolve_and_persist(
             except Exception as _e:
                 logger.debug("[Pipeline] on-demand futures scoring error: %s", _e)
 
+    for _rrow in rejected_rows:
+        _rsym = _rrow.get("symbol")
+        if _rsym and _rsym in score_rules_map:
+            _rsnap = dict(_rrow.get("analysis_snapshot") or {})
+            _rsnap["score_rules"] = score_rules_map[_rsym]
+            _rrow["analysis_snapshot"] = _rsnap
+
     await _replace_rejection_snapshot(wl, rejected_rows, db)
 
     # Detect level transitions & upsert
