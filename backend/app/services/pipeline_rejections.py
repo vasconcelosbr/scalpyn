@@ -475,31 +475,37 @@ def _normalized_trace_item(item: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def _skipped_block_rule(block: Dict[str, Any]) -> Dict[str, Any]:
+def _skipped_block_rule(
+    block: Dict[str, Any], *, reason: Optional[str] = None
+) -> Dict[str, Any]:
     name = block.get("name") or "Unnamed Block"
-    return _normalized_trace_item(
-        {
-            "type": "block_rule",
-            "indicator": name,
-            "condition": block.get("reason") or name,
-            "expected": block.get("reason"),
-            "current_value": None,
-            "status": "SKIPPED",
-        }
-    )
+    item: Dict[str, Any] = {
+        "type": "block_rule",
+        "indicator": name,
+        "condition": block.get("reason") or name,
+        "expected": block.get("reason"),
+        "current_value": None,
+        "status": "SKIPPED",
+    }
+    if reason:
+        item["reason"] = reason
+    return _normalized_trace_item(item)
 
 
-def _skipped_filter(condition: Dict[str, Any]) -> Dict[str, Any]:
-    return _normalized_trace_item(
-        {
-            "type": "filter",
-            "indicator": _condition_indicator(condition, field_key="field"),
-            "condition": format_condition_text(condition, field_key="field"),
-            "expected": format_expected(condition),
-            "current_value": None,
-            "status": "SKIPPED",
-        }
-    )
+def _skipped_filter(
+    condition: Dict[str, Any], *, reason: Optional[str] = None
+) -> Dict[str, Any]:
+    item: Dict[str, Any] = {
+        "type": "filter",
+        "indicator": _condition_indicator(condition, field_key="field"),
+        "condition": format_condition_text(condition, field_key="field"),
+        "expected": format_expected(condition),
+        "current_value": None,
+        "status": "SKIPPED",
+    }
+    if reason:
+        item["reason"] = reason
+    return _normalized_trace_item(item)
 
 
 def _build_asset_evaluation_trace(
@@ -543,9 +549,13 @@ def _build_asset_evaluation_trace(
         if block_trace["status"] == "FAIL":
             failed_trace = block_trace
             for remaining_block in block_rules[index + 1:]:
-                trace.append(_skipped_block_rule(remaining_block))
+                trace.append(
+                    _skipped_block_rule(remaining_block, reason="cascade_short_circuit")
+                )
             for condition in filters:
-                trace.append(_skipped_filter(condition))
+                trace.append(
+                    _skipped_filter(condition, reason="cascade_short_circuit")
+                )
             for condition in entry_triggers:
                 trace.append(_normalized_trace_item(_evaluate_entry_trigger(rule_engine, asset, condition)))
             for condition in signal_conditions:
@@ -560,7 +570,9 @@ def _build_asset_evaluation_trace(
         if filter_logic != "OR" and filter_trace["status"] == "FAIL":
             failed_trace = filter_trace
             for remaining_condition in filters[index + 1:]:
-                trace.append(_skipped_filter(remaining_condition))
+                trace.append(
+                    _skipped_filter(remaining_condition, reason="cascade_short_circuit")
+                )
             for condition in entry_triggers:
                 trace.append(_normalized_trace_item(_evaluate_entry_trigger(rule_engine, asset, condition)))
             for condition in signal_conditions:

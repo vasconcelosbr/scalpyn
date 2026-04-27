@@ -7,6 +7,47 @@ export interface EvaluationTraceItem {
   expected?: string | null;
   current_value?: unknown;
   status: 'PASS' | 'FAIL' | 'SKIPPED';
+  reason?: string | null;
+}
+
+type SkipDisplay = {
+  kind: 'cascade' | 'invalid' | 'no_data';
+  label: string;
+  cls: string;
+  currentText: string | null;
+  expectedOverride?: string;
+};
+
+export function classifySkip(item: { status: string; reason?: string | null; current_value?: unknown }): SkipDisplay | null {
+  const reason = item.reason ?? null;
+  if (reason === 'cascade_short_circuit') {
+    return {
+      kind: 'cascade',
+      label: 'PULADO',
+      cls: 'border-[#1E2433] bg-[#0B1220] text-[#64748B]',
+      currentText: '—',
+      expectedOverride: 'bloco anterior já rejeitou',
+    };
+  }
+  if (reason === 'indicator_invalid_value') {
+    return {
+      kind: 'invalid',
+      label: 'VALOR INVÁLIDO',
+      cls: 'border-[#7C2D12]/50 bg-[#1A0E05] text-[#FB923C]',
+      currentText: null,
+    };
+  }
+  const isNoData =
+    item.status === 'SKIPPED' || (item.status === 'FAIL' && item.current_value == null);
+  if (isNoData) {
+    return {
+      kind: 'no_data',
+      label: 'SEM DADOS',
+      cls: 'border-[#78350F]/40 bg-[#1A1205] text-[#FCD34D]',
+      currentText: 'aguardando coleta',
+    };
+  }
+  return null;
 }
 
 export function formatEvaluationTraceValue(value: unknown): string {
@@ -59,12 +100,12 @@ function TraceSection({
       <div className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[#4B5563]">{title}</div>
       <div className="space-y-2">
         {items.map((item, index) => {
-          const noData = item.status === 'SKIPPED' || (item.status === 'FAIL' && item.current_value == null);
+          const skip = classifySkip(item);
           const cls =
             item.status === 'PASS'
               ? 'border-[#14532D]/40 bg-[#061E14] text-[#86EFAC]'
-              : noData
-                ? 'border-[#78350F]/40 bg-[#1A1205] text-[#FCD34D]'
+              : skip
+                ? skip.cls
                 : item.status === 'FAIL'
                   ? item.type === 'block_rule'
                     ? 'border-[#6B21A8]/40 bg-[#1A0A2A] text-[#D8B4FE]'
@@ -76,7 +117,7 @@ function TraceSection({
               <div className="flex items-center justify-between gap-3">
                 <span className="font-semibold">{item.indicator}</span>
                 <span className="font-mono text-[10px]">
-                  {noData ? 'SEM DADOS' : item.status}
+                  {skip ? skip.label : item.status}
                 </span>
               </div>
               <div className="mt-1 text-[#CBD5E1]">{item.condition}</div>
@@ -84,10 +125,17 @@ function TraceSection({
                 <span>
                   Current:{' '}
                   <span className="font-mono">
-                    {noData ? <span className="italic opacity-60">aguardando coleta</span> : formatEvaluationTraceValue(item.current_value)}
+                    {skip && skip.currentText
+                      ? <span className="italic opacity-60">{skip.currentText}</span>
+                      : formatEvaluationTraceValue(item.current_value)}
                   </span>
                 </span>
-                <span>Expected: <span className="font-mono">{item.expected ?? '—'}</span></span>
+                <span>
+                  Expected:{' '}
+                  <span className="font-mono">
+                    {skip?.expectedOverride ?? (item.expected ?? '—')}
+                  </span>
+                </span>
               </div>
             </div>
           );

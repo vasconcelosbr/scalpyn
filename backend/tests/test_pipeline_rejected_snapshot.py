@@ -129,6 +129,147 @@ def test_pool_stage_rejections_are_labeled_as_pool():
     assert rejected[0]["evaluation_trace"][0]["status"] == "FAIL"
 
 
+def test_cascade_skipped_blocks_carry_short_circuit_reason():
+    """When the first block fails the asset is rejected immediately; the
+    remaining blocks/filters must be marked SKIPPED with
+    `reason="cascade_short_circuit"` so the frontend can label them
+    'PULADO' instead of the misleading 'SEM DADOS / aguardando coleta'.
+    """
+    profile_config = {
+        "filters": {
+            "logic": "AND",
+            "conditions": [
+                {"field": "adx", "operator": ">=", "value": 15},
+            ],
+        },
+        "block_rules": {
+            "blocks": [
+                {
+                    "id": "block_taker_ratio",
+                    "name": "Taker Ratio",
+                    "logic": "AND",
+                    "conditions": [
+                        {"indicator": "taker_ratio", "operator": "<", "value": 1.04},
+                    ],
+                },
+                {
+                    "id": "block_spike",
+                    "name": "Spike",
+                    "logic": "AND",
+                    "conditions": [
+                        {"indicator": "volume_spike", "operator": "<", "value": 1.2},
+                    ],
+                },
+                {
+                    "id": "block_bbw",
+                    "name": "BB Width",
+                    "logic": "AND",
+                    "conditions": [
+                        {"indicator": "bb_width", "operator": "<", "value": 0.01},
+                    ],
+                },
+            ]
+        },
+    }
+
+    # taker_ratio < 1.04 → first block triggers (FAIL); the next two
+    # blocks and the filter must be marked SKIPPED with the new reason.
+    _, rejected = evaluate_rejections(
+        [{"symbol": "UNI_USDT", "taker_ratio": 0.4087, "volume_spike": 0.5, "bb_width": 0.04, "adx": 22}],
+        profile_config=profile_config,
+        stage="L3",
+        profile_id="profile-cascade",
+    )
+
+    assert len(rejected) == 1
+    trace = rejected[0]["evaluation_trace"]
+
+    by_indicator = {item["indicator"]: item for item in trace}
+    assert by_indicator["Taker Ratio"]["status"] == "FAIL"
+
+    # Cascade-skipped blocks carry the new reason.
+    spike = by_indicator["Spike"]
+    bbw = by_indicator["BB Width"]
+    assert spike["status"] == "SKIPPED"
+    assert spike["reason"] == "cascade_short_circuit"
+    assert bbw["status"] == "SKIPPED"
+    assert bbw["reason"] == "cascade_short_circuit"
+
+    # The downstream filter is also cascade-skipped.
+    adx = by_indicator["ADX"]
+    assert adx["status"] == "SKIPPED"
+    assert adx["reason"] == "cascade_short_circuit"
+
+
+def test_filter_cascade_emits_short_circuit_reason_for_remaining_filters():
+    """Filter cascade (AND logic) must propagate the new reason too."""
+    profile_config = {
+        "filters": {
+            "logic": "AND",
+            "conditions": [
+                {"field": "rsi", "operator": "<", "value": 55},
+                {"field": "adx", "operator": ">=", "value": 15},
+                {"field": "volume_24h", "operator": ">", "value": 1_000_000},
+            ],
+        },
+        "block_rules": {"blocks": []},
+    }
+
+    _, rejected = evaluate_rejections(
+        [{"symbol": "BTC_USDT", "rsi": 62, "adx": 22, "volume_24h": 5_000_000}],
+        profile_config=profile_config,
+        stage="L2",
+        profile_id="profile-filter-cascade",
+    )
+
+    trace = rejected[0]["evaluation_trace"]
+    statuses = [(item["indicator"], item["status"], item.get("reason")) for item in trace]
+    # rsi FAIL → adx + volume_24h are cascade-skipped.
+    assert statuses == [
+        ("RSI", "FAIL", None),
+        ("ADX", "SKIPPED", "cascade_short_circuit"),
+        ("Volume 24h", "SKIPPED", "cascade_short_circuit"),
+    ]
+
+
+def test_taker_ratio_above_plausibility_bound_is_invalid_value():
+    """Regression: SUI showed taker_ratio == 8.98e9 in prod. The trace
+    must mark this as `indicator_invalid_value`, not let the absurd
+    number drive the rule outcome.
+    """
+    profile_config = {
+        "filters": {"logic": "AND", "conditions": []},
+        "block_rules": {
+            "blocks": [
+                {
+                    "id": "block_taker",
+                    "name": "Taker Ratio",
+                    "logic": "AND",
+                    "conditions": [
+                        {"indicator": "taker_ratio", "operator": "<", "value": 1.04},
+                    ],
+                }
+            ]
+        },
+    }
+
+    approved, rejected = evaluate_rejections(
+        [{"symbol": "SUI_USDT", "taker_ratio": 8_980_000_800.0}],
+        profile_config=profile_config,
+        stage="L3",
+        profile_id="profile-taker-invalid",
+    )
+
+    # Block was SKIPPED → asset is NOT rejected by it (no false negative
+    # blocking trades on garbage data).
+    assert rejected == []
+    assert len(approved) == 1
+    trace = approved[0]["evaluation_trace"]
+    block = next(item for item in trace if item["type"] == "block_rule")
+    assert block["status"] == "SKIPPED"
+    assert block["reason"] == "indicator_invalid_value"
+
+
 def test_rejection_metrics_group_by_indicator_and_block_rate():
     metrics = rejection_metrics([
         {"failed_type": "filter", "failed_indicator": "RSI"},

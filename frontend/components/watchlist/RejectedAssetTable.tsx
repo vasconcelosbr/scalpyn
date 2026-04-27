@@ -4,6 +4,7 @@ import { Fragment, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, CheckCircle2, XCircle } from "lucide-react";
 import {
   EvaluationTraceBreakdown,
+  classifySkip,
   formatEvaluationTraceValue,
   type EvaluationTraceItem,
 } from "./EvaluationTraceBreakdown";
@@ -18,6 +19,7 @@ export interface DecisionTraceItem {
   expected?: string | null;
   current_value?: unknown;
   status: "PASS" | "FAIL" | "SKIPPED";
+  reason?: string | null;
 }
 
 export interface DecisionDetails {
@@ -303,12 +305,12 @@ function TraceSection({ title, items }: { title: string; items: DecisionTraceIte
       <div className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[#4B5563]">{title}</div>
       <div className="space-y-2">
         {items.map((item, index) => {
-          const noData = item.status === "SKIPPED" || (item.status === "FAIL" && item.current_value == null);
+          const skip = classifySkip(item);
           const cls =
             item.status === "PASS"
               ? "border-[#14532D]/40 bg-[#061E14] text-[#86EFAC]"
-              : noData
-                ? "border-[#78350F]/40 bg-[#1A1205] text-[#FCD34D]"
+              : skip
+                ? skip.cls
                 : item.status === "FAIL"
                   ? item.type === "block_rule"
                     ? "border-[#6B21A8]/40 bg-[#1A0A2A] text-[#D8B4FE]"
@@ -318,17 +320,24 @@ function TraceSection({ title, items }: { title: string; items: DecisionTraceIte
             <div key={index} className={`rounded-lg border px-3 py-2 text-xs ${cls}`}>
               <div className="flex items-center justify-between gap-3">
                 <span className="font-semibold">{item.indicator}</span>
-                <span className="font-mono text-[10px]">{noData ? "SEM DADOS" : item.status}</span>
+                <span className="font-mono text-[10px]">{skip ? skip.label : item.status}</span>
               </div>
               <div className="mt-1 text-[#CBD5E1]">{item.condition}</div>
               <div className="mt-1 flex flex-wrap gap-3 text-[11px]">
                 <span>
                   Current:{" "}
                   <span className="font-mono">
-                    {noData ? <span className="italic opacity-60">aguardando coleta</span> : fmtValue(item.current_value)}
+                    {skip && skip.currentText
+                      ? <span className="italic opacity-60">{skip.currentText}</span>
+                      : fmtValue(item.current_value)}
                   </span>
                 </span>
-                <span>Expected: <span className="font-mono">{item.expected ?? "—"}</span></span>
+                <span>
+                  Expected:{" "}
+                  <span className="font-mono">
+                    {skip?.expectedOverride ?? (item.expected ?? "—")}
+                  </span>
+                </span>
               </div>
             </div>
           );

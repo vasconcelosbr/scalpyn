@@ -44,9 +44,13 @@ class SkipReason(str, Enum):
 # returns True when the value is plausible. Predicates assume the value
 # has already passed the None/NaN screening.
 _PLAUSIBILITY_RULES = {
-    # Ratios cannot be zero or negative — a zero ratio means the source
-    # feed is missing one side, not that buyers/sellers are absent.
-    "taker_ratio": lambda v: v > 0,
+    # taker_ratio is taker_buy / total (or taker_buy / taker_sell). Either
+    # definition stays well below 5 in normal market conditions; values
+    # above that are evidence of a corrupted feed (collector accidentally
+    # writing volume or market_cap into the ratio field). Treat as
+    # invalid_value rather than letting an absurd number drive the rule
+    # outcome (regression: SUI showed taker_ratio == 8.98e9 in prod).
+    "taker_ratio": lambda v: 0 < v <= 5,
     "volume_spike": lambda v: v > 0,
     # ADX is bounded [0, 100] but a literal 0 means the calculation has
     # not converged yet (insufficient candles).

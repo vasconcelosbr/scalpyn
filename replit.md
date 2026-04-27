@@ -59,6 +59,13 @@ The frontend proxies all `/api/*` requests to the FastAPI backend via `frontend/
   - Variant aliases (`bollinger_width` ↔ `bb_width`, `volume_24h_usdt` ↔ `volume_24h`, `price_change_24h_pct` ↔ `price_change_24h`, `spread_percent` ↔ `spread_pct`, `atr_percent` ↔ `atr_pct`, `orderbook_depth` ↔ `orderbook_depth_usdt`, `price` ↔ `current_price`) are auto-populated in both directions so legacy field naming never produces a false "SEM DADOS / aguardando coleta".
 - Both call-sites in `backend/app/api/watchlists.py` (`_resolve_watchlist_pipeline` ~line 1490 and `get_watchlist_assets` ~line 1957) MUST go through this helper. Regression locked in by `backend/tests/test_build_trace_asset.py`.
 
+## Trace SKIPPED Reasons (task #71)
+The evaluation trace distinguishes three causes of `status="SKIPPED"` via the `reason` field — the frontend (`EvaluationTraceBreakdown.classifySkip` in `frontend/components/watchlist/EvaluationTraceBreakdown.tsx`) renders each one differently so traders can tell them apart at a glance:
+- `"cascade_short_circuit"` → block/filter not evaluated because an earlier block already triggered the rejection. Renders as **PULADO** (cinza neutro), value `—`, expected `bloco anterior já rejeitou`. Set by `_skipped_block_rule` / `_skipped_filter` in `pipeline_rejections.py` when iterating `block_rules[index+1:]` after a FAIL.
+- `"indicator_not_available"` → indicator missing from the payload (None/NaN). Renders as **SEM DADOS** (amarelo), value `aguardando coleta`. Emitted by `indicator_validity.is_valid` and propagated through `rule_engine.evaluate_condition_status`.
+- `"indicator_invalid_value"` → indicator present but implausible (e.g. `taker_ratio` outside `(0, 5]`, `rsi` outside `[0, 100]`). Renders as **VALOR INVÁLIDO** (laranja) with the actual number shown for diagnostics. Plausibility predicates live in `_PLAUSIBILITY_RULES` (`backend/app/services/indicator_validity.py`).
+Tests: `backend/tests/test_pipeline_rejected_snapshot.py::test_cascade_skipped_blocks_carry_short_circuit_reason`, `test_filter_cascade_emits_short_circuit_reason_for_remaining_filters`, `test_taker_ratio_above_plausibility_bound_is_invalid_value`.
+
 ## Schema Bootstrap (Production)
 - **Single source of truth**: Alembic migrations in `backend/alembic/versions/`. New schema changes MUST land as a migration, never only in `init_db.py`.
 - **Cloud Run boot order** (`backend/start.sh`): `alembic upgrade head` is the ONLY schema gate. Three retries with backoff, time-boxed at 180s per attempt. `exit 1` on persistent failure causes Cloud Run to roll back to the previous revision automatically. Then Celery + uvicorn start.
