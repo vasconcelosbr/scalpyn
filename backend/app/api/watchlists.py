@@ -1754,12 +1754,16 @@ async def get_watchlist_assets(
     ind_map = await _fetch_indicators_map(db, symbols) if symbols else {}
 
     # On-demand computation: if some symbols have no indicators in DB OR are
-    # missing key indicator fields (stale cache), fetch OHLCV and recompute.
-    _KEY_INDICATOR_FIELDS = {"taker_ratio", "ema9_distance_pct", "rsi"}
+    # missing key indicator fields (stale/partial cache), fetch OHLCV and recompute.
+    # We check both *presence* and *non-None value* so that a row with e.g.
+    # rsi=66 but adx=None still triggers a full re-compute.
+    _KEY_INDICATOR_FIELDS = {"taker_ratio", "ema9_distance_pct", "rsi", "adx", "bb_width"}
     if symbols:
         missing = [
             s for s in symbols
-            if not ind_map.get(s) or not _KEY_INDICATOR_FIELDS.issubset(ind_map[s].keys())
+            if not ind_map.get(s) or any(
+                ind_map[s].get(f) is None for f in _KEY_INDICATOR_FIELDS
+            )
         ]
         if missing:
             on_demand = await _compute_indicators_on_demand(db, missing)
