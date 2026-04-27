@@ -556,6 +556,7 @@ def _normalize_decision_snapshot(
     profile_id: Optional[str],
     timestamp: Optional[str],
     snapshot: Optional[Dict[str, Any]],
+    alpha_score: Optional[float] = None,
 ) -> Dict[str, Any]:
     raw_snapshot = snapshot or {}
     raw_details = raw_snapshot.get("details") if isinstance(raw_snapshot.get("details"), dict) else {}
@@ -575,6 +576,7 @@ def _normalize_decision_snapshot(
         "status": raw_snapshot.get("status") or status,
         "stage": raw_snapshot.get("stage") or stage,
         "profile_id": raw_snapshot.get("profile_id") or profile_id,
+        "alpha_score": alpha_score,
         "failed_indicators": list(raw_snapshot.get("failed_indicators") or []),
         "conditions": list(raw_snapshot.get("conditions") or details["conditions"]),
         "current_values": dict(raw_snapshot.get("current_values") or details["current_values"]),
@@ -1990,6 +1992,7 @@ async def get_watchlist_assets(
             profile_id=str(wl.profile_id) if wl.profile_id else None,
             timestamp=_iso_utc(getattr(asset, "refreshed_at", None)),
             snapshot=asset.analysis_snapshot,
+            alpha_score=float(asset.alpha_score) if asset.alpha_score is not None else None,
         )
         for asset in assets
     ]
