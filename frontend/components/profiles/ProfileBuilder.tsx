@@ -126,13 +126,19 @@ const NO_TF_INDICATORS = new Set([
   "funding_rate",
 ]);
 
+const DEFAULT_SCORING_CONFIG = {
+  enabled: true,
+  selected_rule_ids: [] as string[],
+  weights: { liquidity: 25, market_structure: 25, momentum: 25, signal: 25 },
+};
+
 const DEFAULT_CONFIG = {
   default_timeframe: "5m",
   filters:       { logic: "AND", conditions: [] },
-  scoring:       { enabled: true, weights: { liquidity: 25, market_structure: 25, momentum: 25, signal: 25 } },
-  signals:       { logic: "AND", conditions: [] },
+  scoring:       { ...DEFAULT_SCORING_CONFIG },
+  signals:       { logic: "AND", conditions: [], scoring: { ...DEFAULT_SCORING_CONFIG } },
   block_rules:   { blocks: [] },
-  entry_triggers: { logic: "AND", conditions: [] },
+  entry_triggers: { logic: "AND", conditions: [], scoring: { ...DEFAULT_SCORING_CONFIG } },
 };
 
 type ActiveTab = "filters" | "scoring" | "signals" | "block_rules" | "entry_triggers";
@@ -303,6 +309,11 @@ function normalizeProfileConfig(rawConfig: any) {
   return {
     ...DEFAULT_CONFIG,
     ...(rawConfig || {}),
+    signals: {
+      logic: rawConfig?.signals?.logic || "AND",
+      conditions: rawConfig?.signals?.conditions || [],
+      scoring: rawConfig?.signals?.scoring ?? { ...DEFAULT_SCORING_CONFIG },
+    },
     block_rules: {
       blocks: (rawConfig?.block_rules?.blocks || []).map(normalizeBlockRule),
     },
@@ -310,6 +321,7 @@ function normalizeProfileConfig(rawConfig: any) {
       logic: rawConfig?.entry_triggers?.logic || "AND",
       logic_preview_text: rawConfig?.entry_triggers?.logic_preview_text,
       conditions: (rawConfig?.entry_triggers?.conditions || []).map(normalizeEntryTrigger),
+      scoring: rawConfig?.entry_triggers?.scoring ?? { ...DEFAULT_SCORING_CONFIG },
     },
   };
 }
@@ -517,7 +529,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     setConfig((c: any) => ({ ...c, filters: { logic, conditions } }));
 
   const updateSignals  = (conditions: Condition[], logic: string) =>
-    setConfig((c: any) => ({ ...c, signals: { logic, conditions } }));
+    setConfig((c: any) => ({ ...c, signals: { ...c.signals, logic, conditions } }));
 
   const updateWeights  = (weights: any) =>
     setConfig((c: any) => ({ ...c, scoring: { ...c.scoring, weights } }));
@@ -802,7 +814,8 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
       signals: incoming.signals ? {
         ...incoming.signals,
         conditions: fixConditions(incoming.signals.conditions ?? []),
-      } : incoming.signals,
+        scoring: incoming.signals.scoring ?? { ...DEFAULT_SCORING_CONFIG },
+      } : { logic: "AND", conditions: [], scoring: { ...DEFAULT_SCORING_CONFIG } },
       block_rules: incoming.block_rules ? {
         ...incoming.block_rules,
         blocks: fixBlocks(incoming.block_rules.blocks ?? []),
@@ -816,7 +829,8 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
           enabled: c.enabled !== false,
           required: c.required || false,
         })),
-      } : { logic: "AND", conditions: [] },
+        scoring: incoming.entry_triggers.scoring ?? { ...DEFAULT_SCORING_CONFIG },
+      } : { logic: "AND", conditions: [], scoring: { ...DEFAULT_SCORING_CONFIG } },
     };
   };
 
@@ -827,6 +841,12 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
       setEntryLogicPreview(normalized.entry_triggers?.logic_preview_text || "");
       if (normalized.scoring?.enabled !== undefined) {
         setScoringEnabled(normalized.scoring.enabled !== false);
+      }
+      if (normalized.signals?.scoring?.enabled !== undefined) {
+        setSignalsScoringEnabled(normalized.signals.scoring.enabled !== false);
+      }
+      if (normalized.entry_triggers?.scoring?.enabled !== undefined) {
+        setEntryTriggersScoringEnabled(normalized.entry_triggers.scoring.enabled !== false);
       }
     }
   };
