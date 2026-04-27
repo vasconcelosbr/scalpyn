@@ -578,7 +578,7 @@ def _normalize_decision_snapshot(
         "stage": raw_snapshot.get("stage") or stage,
         "profile_id": raw_snapshot.get("profile_id") or profile_id,
         "alpha_score": alpha_score,
-        "score_rules": score_rules or [],
+        "score_rules": list(score_rules if score_rules is not None else (raw_snapshot.get("score_rules") or [])),
         "failed_indicators": list(raw_snapshot.get("failed_indicators") or []),
         "conditions": list(raw_snapshot.get("conditions") or details["conditions"]),
         "current_values": dict(raw_snapshot.get("current_values") or details["current_values"]),
