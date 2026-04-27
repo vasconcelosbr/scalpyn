@@ -452,9 +452,15 @@ def _build_asset_evaluation_trace(
         return trace, failed_trace
 
     for condition in entry_triggers:
-        trace.append(_normalized_trace_item(_evaluate_entry_trigger(rule_engine, asset, condition)))
+        result = _normalized_trace_item(_evaluate_entry_trigger(rule_engine, asset, condition))
+        trace.append(result)
+        if failed_trace is None and result["status"] == "FAIL":
+            failed_trace = result
     for condition in signal_conditions:
-        trace.append(_normalized_trace_item(_evaluate_signal_condition(rule_engine, asset, condition)))
+        result = _normalized_trace_item(_evaluate_signal_condition(rule_engine, asset, condition))
+        trace.append(result)
+        if failed_trace is None and result["status"] == "FAIL":
+            failed_trace = result
 
     return trace, failed_trace
 
