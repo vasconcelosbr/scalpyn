@@ -474,7 +474,7 @@ class MarketDataService:
         # spread ends up None due to bid/ask == 0 on a thin Gate listing.
         # In that case the internal Binance path is skipped (depth is valid),
         # so we retry Binance here specifically for spread.
-        if not payload.get("spread_pct"):
+        if payload.get("spread_pct") is None:
             try:
                 normalized_sym = symbol.replace("/", "_").replace("-", "_")
                 binance_book_metrics = self._extract_orderbook_metrics(
@@ -486,6 +486,7 @@ class MarketDataService:
                     if not payload.get("orderbook_depth_usdt") and binance_book_metrics.get("orderbook_depth_usdt") is not None:
                         payload["orderbook_depth_usdt"] = round(float(binance_book_metrics["orderbook_depth_usdt"]), 8)
                     payload["market_data_source"] = "binance"
+                    payload["market_data_confidence"] = normalized.confidence_score
                     logger.info("[SPREAD] Binance safety-net spread for %s: %.4f%%", symbol, payload["spread_pct"])
             except Exception as exc:
                 logger.warning("[SPREAD] Binance safety-net failed for %s: %s", symbol, exc)
@@ -493,7 +494,7 @@ class MarketDataService:
         if payload and not payload.get("market_data_source"):
             payload["market_data_source"] = normalized.source_map.get("orderbook_depth_usdt", normalized.source)
             payload["market_data_confidence"] = normalized.confidence_score
-        elif payload and payload.get("market_data_source") != "binance":
+        elif payload and "market_data_confidence" not in payload:
             payload["market_data_confidence"] = normalized.confidence_score
         return payload
 
