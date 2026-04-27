@@ -65,7 +65,30 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         _log.warning("DB warmup failed (will retry on first request): %s", e)
 
-    yield
+    # ── Background scheduler ──────────────────────────────────────────────
+    # Periodically refreshes OHLCV / indicators / spread for every symbol in
+    # the active watchlists.  Replaces the missing Celery worker so the DB
+    # tables (ohlcv, indicators, market_metadata.spread_pct) stay populated.
+    # Disable by setting SKIP_BACKGROUND_SCHEDULER=1.
+    try:
+        from .services.scheduler_service import (
+            start_background_scheduler,
+            stop_background_scheduler,
+        )
+        start_background_scheduler()
+    except Exception as e:
+        _log.warning("Background scheduler failed to start: %s", e)
+        stop_background_scheduler = None  # type: ignore[assignment]
+
+    try:
+        yield
+    finally:
+        if stop_background_scheduler is not None:
+            try:
+                await stop_background_scheduler()
+            except Exception as e:
+                _log.warning("Background scheduler shutdown error: %s", e)
+    return
 
 
 app = FastAPI(

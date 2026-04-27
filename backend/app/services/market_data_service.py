@@ -355,18 +355,36 @@ class MarketDataService:
             "volume_delta": taker_buy_volume - taker_sell_volume if total_volume > 0 else 0.0,
         }
 
+    # Minimum candle count required for the heaviest indicators in the
+    # default config (ADX(14) needs two chained 14-period rollings = 28,
+    # Bollinger/Volume Spike rolling(20), Stochastic warmup ~18).  Below
+    # this threshold the Binance fallback is *also* tried and merged with
+    # whatever Gate returned, instead of trusting Gate alone.
+    MIN_OHLCV_CANDLES = 50
+
     async def fetch_ohlcv(
         self, symbol: str, timeframe: str = "1h", limit: int = 200,
     ) -> Optional[pd.DataFrame]:
-        """Fetch OHLCV candles — Gate.io primary, Binance fallback.
+        """Fetch OHLCV candles — Gate.io primary, Binance fallback, merge on shortage.
+
+        If Gate returns ≥ MIN_OHLCV_CANDLES rows, it is used as-is.  When Gate
+        returns fewer than that (or fails entirely), Binance is queried and the
+        two responses are merged on the ``time`` column (deduplicating).  This
+        prevents the silent-data-shortage failure mode where Gate returns 14-20
+        candles, RSI/MACD compute but ADX/Bollinger/Volume Spike all come back
+        as None.
 
         Returns DataFrame with columns:
         [time, open, high, low, close, volume, quote_volume].
-        df.attrs['exchange'] is set to the source that returned data.
+        df.attrs['exchange'] is set to "gate.io", "binance", or
+        "merged (Ngate+Mbinance)" depending on which source(s) contributed.
         """
         tf_map = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d"}
         gate_tf = tf_map.get(timeframe, "1h")
         pair = self.to_gate_symbol(symbol)
+
+        gate_df: Optional[pd.DataFrame] = None
+        binance_df: Optional[pd.DataFrame] = None
 
         # ── Primary: Gate.io ─────────────────────────────────────────────────
         try:
@@ -381,41 +399,79 @@ class MarketDataService:
 
             if data:
                 rows = [parse_gate_spot_candle(candle) for candle in data]
-                df = pd.DataFrame(rows)
-                df = df.sort_values("time").reset_index(drop=True)
-                df.attrs["exchange"] = "gate.io"
-                return df
+                gate_df = pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
 
-            logger.info(
-                "[OHLCV] Gate.io returned empty for %s/%s — trying Binance fallback",
-                symbol, timeframe,
-            )
+                # Gate covered the request fully — no need to call Binance.
+                if len(gate_df) >= self.MIN_OHLCV_CANDLES:
+                    gate_df.attrs["exchange"] = "gate.io"
+                    return gate_df
+
+                logger.info(
+                    "[OHLCV] Gate.io returned only %d candles for %s/%s "
+                    "(< %d) — also fetching Binance to merge",
+                    len(gate_df), symbol, timeframe, self.MIN_OHLCV_CANDLES,
+                )
+            else:
+                logger.info(
+                    "[OHLCV] Gate.io returned empty for %s/%s — trying Binance fallback",
+                    symbol, timeframe,
+                )
         except Exception as e:
             logger.warning(
                 "[OHLCV] Gate.io failed for %s/%s (%s) — trying Binance fallback",
                 symbol, timeframe, e,
             )
 
-        # ── Fallback: Binance ─────────────────────────────────────────────────
+        # ── Fallback / Merge source: Binance ──────────────────────────────────
         try:
             binance_sym = self.to_binance_symbol(symbol)
             rows = await self._binance.get_klines(
                 binance_sym, interval=timeframe, limit=limit, market="spot"
             )
             if rows:
-                df = pd.DataFrame(rows)
-                df = df.sort_values("time").reset_index(drop=True)
-                df.attrs["exchange"] = "binance"
-                logger.info(
-                    "[OHLCV] Binance fallback succeeded for %s/%s (%d candles)",
-                    symbol, timeframe, len(df),
-                )
-                return df
+                binance_df = pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
         except Exception as exc:
             logger.warning(
-                "[OHLCV] Binance fallback also failed for %s/%s: %s",
+                "[OHLCV] Binance fallback failed for %s/%s: %s",
                 symbol, timeframe, exc,
             )
+
+        # ── Decide what to return ─────────────────────────────────────────────
+        if gate_df is not None and binance_df is not None:
+            merged = (
+                pd.concat([gate_df, binance_df], ignore_index=True)
+                .drop_duplicates(subset="time", keep="first")
+                .sort_values("time")
+                .reset_index(drop=True)
+            )
+            merged.attrs["exchange"] = (
+                f"merged ({len(gate_df)}gate+{len(binance_df)}binance="
+                f"{len(merged)})"
+            )
+            logger.info(
+                "[OHLCV] Merged Gate(%d) + Binance(%d) → %d rows for %s/%s",
+                len(gate_df), len(binance_df), len(merged), symbol, timeframe,
+            )
+            return merged
+
+        if binance_df is not None:
+            binance_df.attrs["exchange"] = "binance"
+            logger.info(
+                "[OHLCV] Binance fallback succeeded for %s/%s (%d candles)",
+                symbol, timeframe, len(binance_df),
+            )
+            return binance_df
+
+        if gate_df is not None:
+            # Gate-only short response — return what we have, caller decides
+            # whether it's enough for their indicators.
+            gate_df.attrs["exchange"] = "gate.io"
+            logger.warning(
+                "[OHLCV] Returning short Gate-only df for %s/%s (%d candles, "
+                "Binance also failed)",
+                symbol, timeframe, len(gate_df),
+            )
+            return gate_df
 
         return None
 

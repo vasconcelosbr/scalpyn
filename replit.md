@@ -4,7 +4,7 @@
 - **Frontend**: Next.js 16 (App Router) + TypeScript + TailwindCSS + shadcn/ui — runs on port 5000
 - **Backend**: FastAPI (Python 3.12) + SQLAlchemy 2.0 + Alembic — runs on port 8000
 - **DB**: PostgreSQL (Replit managed) — TimescaleDB extension not available on Replit (handled gracefully)
-- **Tasks**: Celery + Redis (Redis defaults to localhost:6379)
+- **Tasks**: Celery + Redis (Redis defaults to localhost:6379) — **plus** an in-process asyncio scheduler (`app/services/scheduler_service.py`) launched from the FastAPI lifespan that refreshes OHLCV / indicators / market_metadata for every watchlist symbol on a fixed interval (default 30 min, env: `BACKGROUND_SCHEDULER_INTERVAL_SECONDS`, `BACKGROUND_SCHEDULER_CONCURRENCY`, `SKIP_BACKGROUND_SCHEDULER`). This guarantees the DB stays warm even when no Celery worker is configured (e.g. local Replit dev).
 - **Exchange**: Gate.io API v4
 
 ## Project Structure
