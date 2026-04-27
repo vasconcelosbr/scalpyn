@@ -1,12 +1,13 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, CheckCircle2, XCircle } from "lucide-react";
 import {
   EvaluationTraceBreakdown,
   formatEvaluationTraceValue,
   type EvaluationTraceItem,
 } from "./EvaluationTraceBreakdown";
+import type { ScoreRule } from "./PipelineAssetTable";
 
 const DECISION_SUMMARY_INDICATOR_LIMIT = 3;
 
@@ -35,6 +36,7 @@ export interface WatchlistDecisionItem {
   profile_id?: string | null;
   timestamp?: string | null;
   alpha_score?: number | null;
+  score_rules?: ScoreRule[];
   failed_indicators: string[];
   conditions: string[];
   current_values: Record<string, unknown>;
@@ -256,6 +258,12 @@ export function WatchlistDecisionTable({
                               items={item.details.evaluation_trace.filter((trace) => trace.type === "signal")}
                             />
                           </div>
+                          <div className="mt-4">
+                            <ScoreBreakdownSection
+                              rules={item.score_rules ?? []}
+                              alphaScore={item.alpha_score ?? null}
+                            />
+                          </div>
                         </td>
                       </tr>
                     )}
@@ -327,6 +335,146 @@ function TraceSection({ title, items }: { title: string; items: DecisionTraceIte
         })}
         {items.length === 0 && <div className="text-xs text-[#4B5563]">No rules configured.</div>}
       </div>
+    </div>
+  );
+}
+
+const SCORE_CATEGORY_ORDER = ["momentum", "market_structure", "liquidity", "signal", "other"];
+const SCORE_CATEGORY_LABELS: Record<string, string> = {
+  momentum: "Momentum",
+  market_structure: "Estrutura de Mercado",
+  liquidity: "Liquidez",
+  signal: "Sinal",
+  other: "Outros",
+};
+
+function fmtRuleValue(value: ScoreRule["actual_value"]): string {
+  if (value == null) return "—";
+  if (typeof value === "boolean") return value ? "✓" : "✗";
+  if (typeof value === "number") {
+    if (Math.abs(value) >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+    if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+    if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+    return value % 1 === 0 ? String(value) : value.toFixed(2);
+  }
+  return String(value);
+}
+
+function scoreColor(score: number | null): string {
+  if (score == null) return "#64748B";
+  if (score >= 70) return "#34D399";
+  if (score >= 45) return "#FBBF24";
+  return "#F87171";
+}
+
+function ScoreBreakdownSection({
+  rules,
+  alphaScore,
+}: {
+  rules: ScoreRule[];
+  alphaScore: number | null;
+}) {
+  const totalPossible = rules.reduce((s, r) => s + r.points_possible, 0);
+  const totalAwarded = rules.reduce((s, r) => s + r.points_awarded, 0);
+  const color = scoreColor(alphaScore);
+
+  const byCategory = SCORE_CATEGORY_ORDER.reduce<Record<string, ScoreRule[]>>((acc, cat) => {
+    const catRules = rules.filter((r) => r.category === cat);
+    if (catRules.length) acc[cat] = catRules;
+    return acc;
+  }, {});
+
+  const uncategorized = rules.filter((r) => !SCORE_CATEGORY_ORDER.includes(r.category));
+  if (uncategorized.length) byCategory["other"] = [...(byCategory["other"] ?? []), ...uncategorized];
+
+  return (
+    <div className="rounded-xl border border-[#1E2433] bg-[#0A0B10] p-4">
+      <div className="mb-3 flex items-center gap-3">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-[#4B5563]">
+          Score Breakdown
+        </span>
+        {rules.length > 0 && (
+          <>
+            <span className="text-xs text-[#334155]">
+              {totalAwarded.toFixed(0)} / {totalPossible.toFixed(0)} pts
+            </span>
+            <div className="flex-1 h-1 bg-[#1A2035] rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all duration-700"
+                style={{
+                  width: `${totalPossible > 0 ? (totalAwarded / totalPossible) * 100 : 0}%`,
+                  backgroundColor: color,
+                }}
+              />
+            </div>
+            {alphaScore != null && (
+              <span className="text-xs font-semibold tabular-nums" style={{ color }}>
+                {alphaScore.toFixed(1)}
+              </span>
+            )}
+          </>
+        )}
+      </div>
+
+      {rules.length === 0 ? (
+        <p className="text-xs text-[#334155] text-center py-2">
+          Sem regras de scoring configuradas.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {Object.entries(byCategory).map(([cat, catRules]) => (
+            <div key={cat}>
+              <div className="text-[10px] font-medium text-[#334155] uppercase tracking-wider mb-1.5">
+                {SCORE_CATEGORY_LABELS[cat] ?? cat}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1">
+                {catRules.map((rule) => (
+                  <div
+                    key={rule.id}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs border ${
+                      rule.passed
+                        ? "bg-[#061E14] border-[#14532D]/40"
+                        : "bg-[#150A0A] border-[#7F1D1D]/25"
+                    }`}
+                  >
+                    {rule.passed ? (
+                      <CheckCircle2 size={11} className="text-[#34D399] shrink-0" />
+                    ) : (
+                      <XCircle size={11} className="text-[#F87171] shrink-0" />
+                    )}
+                    <span
+                      className={`flex-1 truncate ${
+                        rule.passed ? "text-[#94A3B8]" : "text-[#4B5563]"
+                      }`}
+                      title={rule.condition_text}
+                    >
+                      {rule.condition_text}
+                    </span>
+                    <span
+                      className={`font-mono text-[10px] shrink-0 ${
+                        rule.actual_value != null
+                          ? rule.passed
+                            ? "text-[#CBD5E1]"
+                            : "text-[#64748B]"
+                          : "text-[#334155]"
+                      }`}
+                    >
+                      {fmtRuleValue(rule.actual_value)}
+                    </span>
+                    <span
+                      className={`font-mono text-[10px] shrink-0 w-14 text-right ${
+                        rule.passed ? "text-[#34D399]" : "text-[#4B5563]"
+                      }`}
+                    >
+                      {rule.passed ? `+${rule.points_awarded.toFixed(0)}` : "+0"}/{rule.points_possible.toFixed(0)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

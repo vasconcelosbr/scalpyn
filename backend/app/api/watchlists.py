@@ -557,6 +557,7 @@ def _normalize_decision_snapshot(
     timestamp: Optional[str],
     snapshot: Optional[Dict[str, Any]],
     alpha_score: Optional[float] = None,
+    score_rules: Optional[list] = None,
 ) -> Dict[str, Any]:
     raw_snapshot = snapshot or {}
     raw_details = raw_snapshot.get("details") if isinstance(raw_snapshot.get("details"), dict) else {}
@@ -577,6 +578,7 @@ def _normalize_decision_snapshot(
         "stage": raw_snapshot.get("stage") or stage,
         "profile_id": raw_snapshot.get("profile_id") or profile_id,
         "alpha_score": alpha_score,
+        "score_rules": score_rules or [],
         "failed_indicators": list(raw_snapshot.get("failed_indicators") or []),
         "conditions": list(raw_snapshot.get("conditions") or details["conditions"]),
         "current_values": dict(raw_snapshot.get("current_values") or details["current_values"]),
@@ -1405,6 +1407,7 @@ async def _resolve_and_persist(
     merged_score_config = merge_score_config(global_score_config, profile_config_full)
     _score_engine = _SE(merged_score_config)
     live_score_map: Dict[str, float] = {}
+    score_rules_map: Dict[str, list] = {}
     for sym in base_symbols:
         ind = ind_map.get(sym, {})
         meta = meta_map.get(sym, {})
@@ -1418,6 +1421,7 @@ async def _resolve_and_persist(
             }
             r = _score_engine.compute_alpha_score(eval_data)
             live_score_map[sym] = round(r.get("total_score", 0), 1)
+            score_rules_map[sym] = _score_engine.get_full_breakdown(eval_data)
         else:
             live_score_map[sym] = precomp_score_map.get(sym, 0.0)
 
@@ -1634,7 +1638,10 @@ async def _resolve_and_persist(
             row.market_cap       = asset_data["market_cap"]
             row.alpha_score      = asset_data["alpha_score"]
             row.refreshed_at     = now
-            row.analysis_snapshot = asset_data.get("analysis_snapshot") or {}
+            _snap = dict(asset_data.get("analysis_snapshot") or {})
+            if sym in score_rules_map:
+                _snap["score_rules"] = score_rules_map[sym]
+            row.analysis_snapshot = _snap
             # Futures fields (only written when futures scoring ran; otherwise unchanged)
             if "score_long" in asset_data:
                 row.score_long          = asset_data["score_long"]
@@ -1668,7 +1675,10 @@ async def _resolve_and_persist(
                 refreshed_at=now,
                 level_direction="up",
                 level_change_at=now,
-                analysis_snapshot=asset_data.get("analysis_snapshot") or {},
+                analysis_snapshot={
+                    **dict(asset_data.get("analysis_snapshot") or {}),
+                    **({"score_rules": score_rules_map[sym]} if sym in score_rules_map else {}),
+                },
             )
             db.add(row)
             asset_data["level_direction"] = "up"
@@ -1993,6 +2003,7 @@ async def get_watchlist_assets(
             timestamp=_iso_utc(getattr(asset, "refreshed_at", None)),
             snapshot=asset.analysis_snapshot,
             alpha_score=float(asset.alpha_score) if asset.alpha_score is not None else None,
+            score_rules=list((asset.analysis_snapshot or {}).get("score_rules") or []),
         )
         for asset in assets
     ]
