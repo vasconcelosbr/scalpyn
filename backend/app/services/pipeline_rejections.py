@@ -73,17 +73,11 @@ FIELD_LABELS: Dict[str, str] = {
 #     are normalised so a profile rule that references either spelling
 #     finds the value.
 
-# Required meta-source fields. Always present in the returned dict (None
-# when not yet collected) so legacy DB-write paths that look up these
-# keys directly do not raise KeyError.
-_META_REQUIRED_FIELDS = (
-    "current_price",
-    "price_change_24h",
-    "volume_24h",
-    "market_cap",
-)
-
 # Hybrid fields. Indicator value wins; meta value used as fallback.
+# (Required meta-source fields — current_price, price_change_24h,
+# volume_24h, market_cap — are seeded explicitly inside `build_trace_asset`
+# because they must always be present in the dict, even when both meta
+# and indicators omit them, so DB-write paths can index them safely.)
 _HYBRID_FIELDS = ("spread_pct", "orderbook_depth_usdt")
 
 # Indicator-payload string keys allowed to propagate to the trace asset.
