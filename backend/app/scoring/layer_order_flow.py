@@ -5,7 +5,9 @@ All thresholds from ScoringFuturesConfig (zero hardcode).
 
 Contracts:
   buy_pressure = taker_buy_volume / (taker_buy_volume + taker_sell_volume)  → [0, 1]
-  taker_ratio  = taker_buy_volume / max(taker_sell_volume, 1e-9)            → [0, ∞)
+  taker_ratio  = taker_buy_volume / taker_sell_volume                       → (0, 5] or None
+                                                                              (None when window is one-sided
+                                                                              or ratio falls outside plausibility)
 
 Source: Gate.io futures trades endpoint (real individual trade data, last 60s window).
 No fallback via long_short_account_ratio. No hard-coded 0.5 default.
@@ -18,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ..schemas.futures_engine_config import ScoringFuturesConfig
+from ..services.order_flow_service import safe_taker_ratio
 
 logger = logging.getLogger(__name__)
 
@@ -257,13 +260,14 @@ async def fetch_order_flow_data(
             total_vol = buy_vol + sell_vol
             if total_vol > 0:
                 buy_pressure = round(buy_vol / total_vol, 6)         # [0, 1]
-                taker_ratio  = round(buy_vol / max(sell_vol, 1e-9), 6)  # [0, ∞)
-
-                if taker_ratio < 0.1 or taker_ratio > 10:
-                    logger.warning(
-                        "[L5] taker_ratio out of normal range for %s: %.4f",
-                        contract, taker_ratio,
-                    )
+                # taker_ratio = buy / sell. Guard against degenerate
+                # one-sided windows (sell_vol == 0) and implausible
+                # values; otherwise dividing by an epsilon floor would
+                # feed L5 with absurd inputs (~1e9). Same fix as
+                # `app.services.order_flow_service.safe_taker_ratio`.
+                taker_ratio = safe_taker_ratio(
+                    contract, FUTURES_TRADE_WINDOW_SECONDS, buy_vol, sell_vol,
+                )
     except Exception as exc:
         logger.warning("[L5] failed to fetch futures trades for %s: %s", contract, exc)
 
