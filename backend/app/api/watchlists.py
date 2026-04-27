@@ -32,6 +32,7 @@ from ..models.pipeline_watchlist import (
 from ..services.market_data_service import _is_etf_pair
 from ..services.pipeline_rejections import (
     build_asset_evaluation_trace,
+    build_trace_asset,
     evaluate_rejections,
     rejection_metrics,
 )
@@ -1488,27 +1489,17 @@ async def _resolve_and_persist(
 
         meta = meta_map.get(symbol, {})
         ind = ind_map.get(symbol, {})
-        # Build asset dict with BOTH meta AND indicator data so that profile
-        # filter conditions on indicator fields (atr_pct, rsi, etc.) can be
-        # evaluated properly in _passes_profile_filters.
-        asset_entry: Dict[str, Any] = {
-            "symbol":               symbol,
-            "current_price":        meta.get("price"),
-            "price_change_24h":     meta.get("price_change_24h"),
-            "change_24h":           meta.get("price_change_24h"),   # alias for conditions
-            "volume_24h":           meta.get("volume_24h"),
-            "market_cap":           meta.get("market_cap"),
-            "spread_pct":           meta.get("spread_pct"),
-            "orderbook_depth_usdt": meta.get("orderbook_depth_usdt"),
-            "alpha_score":          alpha if scoring_data_available else None,
-        }
-        # Merge indicator values (skip non-scalar) for profile filter evaluation
-        for k, v in ind.items():
-            if (
-                (isinstance(v, (int, float, bool)) or (isinstance(v, str) and k in _PROFILE_STRING_INDICATORS))
-                and k not in asset_entry
-            ):
-                asset_entry[k] = v
+        # Build asset dict via the shared helper so the merge contract
+        # (indicators_json wins; meta None never shadows a real indicator
+        # value) is identical between this path and `get_watchlist_assets`.
+        # See `pipeline_rejections.build_trace_asset` for the full
+        # invariants — task #69.
+        asset_entry = build_trace_asset(
+            symbol,
+            indicators=ind,
+            meta=meta,
+            alpha_score=alpha if scoring_data_available else None,
+        )
         candidate_assets.append(asset_entry)
 
     assets_out = list(candidate_assets)
@@ -1956,19 +1947,23 @@ async def get_watchlist_assets(
         )
         evaluation_trace = normalized_snapshot["details"]["evaluation_trace"]
         if not evaluation_trace and profile_config:
-            trace_asset = {
-                "symbol": a.symbol,
-                "price": enriched_asset.get("current_price"),
-                "current_price": enriched_asset.get("current_price"),
-                "price_change_24h": enriched_asset.get("price_change_24h"),
-                "change_24h": enriched_asset.get("price_change_24h"),
-                "volume_24h": enriched_asset.get("volume_24h"),
-                "market_cap": enriched_asset.get("market_cap"),
-                "spread_pct": (meta or {}).get("spread_pct"),
-                "orderbook_depth_usdt": (meta or {}).get("orderbook_depth_usdt"),
-                "alpha_score": enriched_asset.get("alpha_score"),
-                **(indicators or {}),
-            }
+            # Pass `enriched_asset` values via the meta dict so the
+            # helper's "indicators win over meta None" rule still applies
+            # but we keep the existing fallback to DB-stored asset
+            # columns when meta_map is incomplete.
+            trace_asset = build_trace_asset(
+                a.symbol,
+                indicators=indicators,
+                meta={
+                    "current_price":        enriched_asset.get("current_price"),
+                    "price_change_24h":     enriched_asset.get("price_change_24h"),
+                    "volume_24h":           enriched_asset.get("volume_24h"),
+                    "market_cap":           enriched_asset.get("market_cap"),
+                    "spread_pct":           (meta or {}).get("spread_pct"),
+                    "orderbook_depth_usdt": (meta or {}).get("orderbook_depth_usdt"),
+                },
+                alpha_score=enriched_asset.get("alpha_score"),
+            )
             evaluation_trace = build_asset_evaluation_trace(
                 trace_asset,
                 profile_config=profile_config,

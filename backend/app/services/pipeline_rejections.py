@@ -48,6 +48,137 @@ FIELD_LABELS: Dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Trace-asset builder
+# ---------------------------------------------------------------------------
+#
+# `build_asset_evaluation_trace` and `_passes_profile_filters` both consume a
+# flat dict per symbol that mixes market_metadata fields with
+# indicators_json fields. Two independent call-sites in the watchlists API
+# used to construct that dict by hand and disagreed on the merge order —
+# the older one seeded the dict with `meta.get(...)` first (often `None`)
+# and then merged indicators with a `if k not in asset_entry` guard, so
+# any meta `None` would shadow a perfectly valid indicator value (the SUI
+# "SEM DADOS / aguardando coleta" false-negative reported in task #69).
+#
+# This helper centralises the contract so the merge order can never drift
+# again:
+#
+#   * `indicators_json` is the SOLE source of truth for indicator values.
+#   * `market_metadata` complements `current_price`, `price_change_24h`,
+#     `volume_24h`, `market_cap`.
+#   * `spread_pct` and `orderbook_depth_usdt` are hybrid — indicators win
+#     when present, otherwise meta supplies them.
+#   * Common alias spellings (`bollinger_width`, `volume_24h_usdt`, ...)
+#     are normalised so a profile rule that references either spelling
+#     finds the value.
+
+# Required meta-source fields. Always present in the returned dict (None
+# when not yet collected) so legacy DB-write paths that look up these
+# keys directly do not raise KeyError.
+_META_REQUIRED_FIELDS = (
+    "current_price",
+    "price_change_24h",
+    "volume_24h",
+    "market_cap",
+)
+
+# Hybrid fields. Indicator value wins; meta value used as fallback.
+_HYBRID_FIELDS = ("spread_pct", "orderbook_depth_usdt")
+
+# Indicator-payload string keys allowed to propagate to the trace asset.
+# Other strings are dropped because the rule engine treats them as
+# unevaluable scalars.
+_PROFILE_STRING_INDICATORS = frozenset(
+    {"macd_signal", "psar_trend", "ema_align_label"}
+)
+
+# Variant aliases. When a profile rule references one of these field
+# names, we want the trace to find the canonical value (and vice versa)
+# so that legacy DB drift is not falsely reported as "no data".
+_INDICATOR_FIELD_ALIASES: Dict[str, tuple] = {
+    "bb_width":             ("bollinger_width",),
+    "volume_24h":           ("volume_24h_usdt", "vol_24h"),
+    "price_change_24h":     ("price_change_24h_pct",),
+    "spread_pct":           ("spread_percent",),
+    "atr_pct":              ("atr_percent",),
+    "orderbook_depth_usdt": ("orderbook_depth",),
+    "current_price":        ("price",),
+}
+
+
+def build_trace_asset(
+    symbol: str,
+    *,
+    indicators: Optional[Dict[str, Any]] = None,
+    meta: Optional[Dict[str, Any]] = None,
+    alpha_score: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Merge indicators_json + market_metadata into a single dict suitable
+    for `build_asset_evaluation_trace` and `_passes_profile_filters`.
+
+    Critical invariant: if an indicator value is non-None it must NEVER
+    be shadowed by a None coming from meta. This is the regression
+    locked in by `tests/test_build_trace_asset.py`.
+    """
+    meta = meta or {}
+    indicators = indicators or {}
+    asset: Dict[str, Any] = {"symbol": symbol}
+
+    # 1. Required meta fields — always present (None when not collected).
+    asset["current_price"] = meta.get("current_price", meta.get("price"))
+    asset["price_change_24h"] = meta.get("price_change_24h")
+    asset["volume_24h"] = meta.get("volume_24h")
+    asset["market_cap"] = meta.get("market_cap")
+
+    # 2. Indicator payload — wins for any field where the value is usable.
+    #    Non-scalar entries are dropped to keep the dict JSON-safe.
+    for key, value in indicators.items():
+        if value is None:
+            continue
+        if isinstance(value, (int, float, bool)) or (
+            isinstance(value, str) and key in _PROFILE_STRING_INDICATORS
+        ):
+            asset[key] = value
+
+    # 3. Hybrid fields: prefer indicators (already merged), else meta.
+    for key in _HYBRID_FIELDS:
+        if asset.get(key) is None:
+            value = meta.get(key)
+            if value is not None:
+                asset[key] = value
+
+    # 4. Alias map — populate canonical from variant and vice versa so
+    #    legacy field naming does not cause a false 'data not available'.
+    for canonical, variants in _INDICATOR_FIELD_ALIASES.items():
+        canon_value = asset.get(canonical)
+        for variant in variants:
+            variant_value = asset.get(variant)
+            if canon_value is None and variant_value is not None:
+                asset[canonical] = variant_value
+                canon_value = variant_value
+        if canon_value is not None:
+            for variant in variants:
+                if asset.get(variant) is None:
+                    asset[variant] = canon_value
+
+    # 5. price/current_price compatibility (legacy rules query 'price').
+    if asset.get("price") is None and asset.get("current_price") is not None:
+        asset["price"] = asset["current_price"]
+
+    # 6. change_24h alias kept for legacy profile filters.
+    if asset.get("change_24h") is None and asset.get("price_change_24h") is not None:
+        asset["change_24h"] = asset["price_change_24h"]
+
+    # 7. Alpha score — always present; None propagates as SKIPPED in the
+    #    rule engine via indicator_validity.
+    asset["alpha_score"] = alpha_score
+    if "score" not in asset:
+        asset["score"] = alpha_score
+
+    return asset
+
+
 def jsonable_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(k): jsonable_value(v) for k, v in value.items()}
