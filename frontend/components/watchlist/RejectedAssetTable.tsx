@@ -34,6 +34,7 @@ export interface WatchlistDecisionItem {
   stage?: string | null;
   profile_id?: string | null;
   timestamp?: string | null;
+  alpha_score?: number | null;
   failed_indicators: string[];
   conditions: string[];
   current_values: Record<string, unknown>;
@@ -46,6 +47,20 @@ export type RejectedAssetItem = WatchlistDecisionItem;
 
 function fmtValue(value: unknown): string {
   return formatEvaluationTraceValue(value);
+}
+
+function ScoreBar({ value }: { value?: number | null }) {
+  if (value == null) return <span className="text-[#334155] text-[10px]">—</span>;
+  const pct = Math.min(100, Math.max(0, value));
+  const color = pct >= 70 ? "bg-[#34D399]" : pct >= 45 ? "bg-[#FBBF24]" : "bg-[#F87171]";
+  return (
+    <div className="flex items-center gap-1.5 min-w-[110px]">
+      <div className="w-20 h-1.5 rounded-full bg-[#1A2035] overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="tabular-nums text-[10px] w-7 text-right text-[#94A3B8]">{value.toFixed(0)}</span>
+    </div>
+  );
 }
 
 function itemPalette(status: "approved" | "rejected") {
@@ -186,6 +201,7 @@ export function WatchlistDecisionTable({
               <tr className="border-b border-[#1A2035] bg-[#060810]">
                 <th className="w-8 px-2 py-2.5" />
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Symbol</th>
+                <th className="px-3 py-2.5 text-left text-[#4B5563] min-w-[130px]">Score</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Stage</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Status</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Indicators</th>
@@ -208,6 +224,7 @@ export function WatchlistDecisionTable({
                         {isExpanded ? <ChevronDown size={13} className="text-[#60A5FA]" /> : <ChevronRight size={13} />}
                       </td>
                       <td className="px-3 py-2.5 font-semibold text-[#E2E8F0]">{item.symbol}</td>
+                      <td className="px-3 py-2.5"><ScoreBar value={item.alpha_score} /></td>
                       <td className="px-3 py-2.5 text-[#94A3B8]">{item.stage ?? "—"}</td>
                       <td className="px-3 py-2.5">
                         <span className={`inline-flex rounded px-2 py-0.5 text-[10px] font-semibold ${palette.badge}`}>
@@ -220,7 +237,7 @@ export function WatchlistDecisionTable({
                     </tr>
                     {isExpanded && (
                       <tr className="border-b border-[#1A2035] bg-[#06080E]">
-                        <td colSpan={7} className="p-4">
+                        <td colSpan={8} className="p-4">
                           <div className="grid gap-4 lg:grid-cols-2">
                             <TraceSection
                               title="Block Rules"
