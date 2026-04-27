@@ -158,8 +158,10 @@ function getIndicatorColor(key: string, value: IndicatorValue): { text: string; 
         dot: n > 2.0 ? '🟢' : n >= 1.3 ? '🟡' : '🔴',
       };
     case 'taker_ratio':
+      // Canonical scale since #82: buy/(buy+sell) ∈ [0, 1]. Equilibrium = 0.5.
+      // 3-decimal display so 0.512 vs 0.498 is distinguishable next to thresholds.
       return {
-        text: n.toFixed(2),
+        text: n.toFixed(3),
         cls: n > 0.6 ? 'text-[#34D399]' : n < 0.4 ? 'text-[#F87171]' : 'text-[#94A3B8]',
         dot: n > 0.6 ? '🟢' : n < 0.4 ? '🔴' : '⚪',
       };

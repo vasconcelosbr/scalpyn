@@ -76,7 +76,7 @@ const RULE_INDICATORS: RuleIndicatorOption[] = [
   { value: "macd", label: "MACD", kind: "number" },
   { value: "macd_histogram", label: "MACD Histogram", kind: "number" },
   { value: "volume_spike", label: "Volume Spike", kind: "number" },
-  { value: "taker_ratio", label: "Taker Ratio", kind: "number" },
+  { value: "taker_ratio", label: "Taker Ratio (buy/(buy+sell), 0-1)", kind: "number" },
   { value: "volume_delta", label: "Volume Delta", kind: "number" },
   { value: "orderbook_pressure", label: "Orderbook Pressure", kind: "number" },
   { value: "bid_ask_imbalance", label: "Bid/Ask Imbalance", kind: "number" },

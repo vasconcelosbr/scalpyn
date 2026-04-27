@@ -9,8 +9,8 @@ from typing import Dict, Any, List, Optional, Set
 # ── Display labels per indicator name ─────────────────────────────────────────
 _IND_LABELS: Dict[str, str] = {
     "rsi": "RSI", "volume_spike": "Vol Spike",
-    "taker_ratio": "Taker Ratio (buy/sell)",
-    "buy_pressure": "Buy Pressure (0-1)",
+    "taker_ratio": "Taker Ratio (buy/(buy+sell))",
+    "buy_pressure": "Buy Pressure (buy/(buy+sell))",
     "taker_buy_volume": "Taker Buy Vol", "taker_sell_volume": "Taker Sell Vol",
     "adx": "ADX", "macd_histogram": "MACD Hist", "macd": "MACD",
     "macd_signal": "MACD Signal", "ema9_gt_ema50": "EMA 9>50",
@@ -45,7 +45,9 @@ _IND_CATEGORY: Dict[str, str] = {
     "macd_histogram": "momentum", "stoch_k": "momentum",
     "stoch_d": "momentum", "zscore": "momentum", "vwap_distance_pct": "momentum",
     "ema9_distance_pct": "momentum",
-    "taker_ratio": "signal",              # buy/sell, [0, ∞), threshold > 1 meaningful
+    # taker_ratio used to live in "signal" with the legacy buy/sell formula;
+    # since #82 it is buy/(buy+sell) ∈ [0, 1] and lives in "liquidity"
+    # (see entry above). Do not re-add it here.
     "adx_acceleration": "signal", "volume_delta": "signal",
     "funding_rate": "signal", "ema9_gt_ema50": "signal",
     "ema50_gt_ema200": "signal", "ema_full_alignment": "signal",

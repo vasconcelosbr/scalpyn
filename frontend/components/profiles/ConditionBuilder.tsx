@@ -46,7 +46,7 @@ const INDICATOR_FIELDS = [
   { value: "change_24h", label: "Variacao 24h %", type: "number", group: "price" },
   { value: "spread_pct", label: "Spread %", type: "number", group: "liquidity" },
   { value: "orderbook_depth_usdt", label: "Profundidade Book (USDT)", type: "number", group: "liquidity" },
-  { value: "taker_ratio", label: "Taker Ratio", type: "number", group: "liquidity" },
+  { value: "taker_ratio", label: "Taker Ratio (buy/(buy+sell), 0-1)", type: "number", group: "liquidity" },
   { value: "volume_spike", label: "Volume Spike", type: "number", group: "liquidity" },
   { value: "volume_delta", label: "Volume Delta", type: "number", group: "liquidity" },
   { value: "orderbook_pressure", label: "Orderbook Pressure", type: "number", group: "liquidity" },

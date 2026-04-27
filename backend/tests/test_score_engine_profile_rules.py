@@ -124,3 +124,61 @@ def test_validate_profile_config_preserves_default_timeframe():
     validated = _validate_profile_config({"default_timeframe": "15m"})
 
     assert validated["default_timeframe"] == "15m"
+
+
+# ── Category mapping regression (#82) ──────────────────────────────────────────
+
+
+def test_resolve_rule_category_taker_ratio_defaults_to_liquidity():
+    """Regression for the duplicate-key bug fixed in #82: ``taker_ratio``
+    used to appear twice in ``_IND_CATEGORY`` (liquidity then signal),
+    so dict resolution silently kept the legacy "signal" mapping. After
+    the fix, a rule with no explicit ``category`` must resolve to
+    ``"liquidity"`` (since the indicator now ranges in [0, 1] with
+    equilibrium 0.5, like buy_pressure)."""
+    from app.services.score_engine import resolve_rule_category
+
+    assert resolve_rule_category({"indicator": "taker_ratio"}) == "liquidity"
+    # Sanity: explicit category still wins over the default mapping.
+    assert (
+        resolve_rule_category({"indicator": "taker_ratio", "category": "signal"})
+        == "signal"
+    )
+    # Sanity: buy_pressure (the alias field) sits in the same bucket.
+    assert resolve_rule_category({"indicator": "buy_pressure"}) == "liquidity"
+
+
+def test_taker_ratio_rule_contributes_to_liquidity_bucket():
+    """End-to-end check: a default-category taker_ratio rule reports
+    ``category="liquidity"`` in the breakdown (not ``signal``) and feeds
+    the liquidity component score, not the signal one."""
+    config = {
+        "weights": {
+            "liquidity": 50,
+            "market_structure": 0,
+            "momentum": 0,
+            "signal": 50,
+        },
+        "scoring_rules": [
+            {
+                "id": "tr_buy_dom",
+                "indicator": "taker_ratio",
+                "operator": ">=",
+                "value": 0.55,
+                "points": 100,
+                # Note: NO explicit "category" — must default to liquidity.
+            }
+        ],
+    }
+
+    engine = ScoreEngine(config)
+    breakdown = engine.get_full_breakdown({"taker_ratio": 0.7})
+    rule = next(r for r in breakdown if r["id"] == "tr_buy_dom")
+    assert rule["category"] == "liquidity"
+    assert rule["passed"] is True
+    assert rule["points_awarded"] == 100.0
+
+    # And the rule's points must land in the liquidity component, not signal.
+    score = engine.compute_alpha_score({"taker_ratio": 0.7})
+    assert score["components"]["liquidity_score"] == 100
+    assert score["components"]["signal_score"] == 0

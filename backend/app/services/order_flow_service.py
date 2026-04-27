@@ -69,11 +69,23 @@ def safe_taker_ratio(
     A one-sided window (e.g. only buy trades) is no longer treated as
     invalid: with the canonical formula ``buy / (buy + sell)`` it just
     produces 1.0 (or 0.0 for sell-only), which is a real, bounded
-    signal of total directional flow.
+    signal of total directional flow. We still emit a low-volume
+    diagnostic so operators can spot symbols that consistently produce
+    one-sided windows (often a thin-liquidity or feed problem).
     """
     total_vol = buy_vol + sell_vol
     if total_vol <= 0:
         return None
+
+    if buy_vol <= 0 or sell_vol <= 0:
+        # Not invalid under the new formula, but worth noting: a pure
+        # 0.0 / 1.0 means the entire window had taker flow on one side.
+        logger.warning(
+            "[OrderFlow] one-sided %ds window for %s "
+            "(buy=%.8f sell=%.8f) — taker_ratio=%.4f",
+            window_seconds, symbol, buy_vol, sell_vol,
+            buy_vol / total_vol,
+        )
 
     raw = buy_vol / total_vol
     if not (TAKER_RATIO_MIN <= raw <= TAKER_RATIO_MAX):
