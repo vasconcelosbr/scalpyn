@@ -1608,7 +1608,7 @@ async def _resolve_and_persist(
                 ]
                 _snapshot = build_analysis_snapshot(
                     symbol=_sym,
-                    stage=stage,
+                    stage=effective_level,
                     profile_id=str(wl.profile_id) if wl.profile_id else None,
                     status="rejected",
                     trace=_score_trace,
@@ -1617,7 +1617,7 @@ async def _resolve_and_persist(
                 rejected_rows.append(
                     {
                         "symbol": _sym,
-                        "stage": stage,
+                        "stage": effective_level,
                         "profile_id": str(wl.profile_id) if wl.profile_id else None,
                         "failed_type": "filter",
                         "failed_indicator": "Alpha Score",
