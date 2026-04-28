@@ -13,6 +13,7 @@ Routes:
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -54,6 +55,27 @@ logger = logging.getLogger(__name__)
 GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/spot/tickers"
 MAX_WATCHLIST_AUTO_REFRESH_DEPTH = 5
 _PROFILE_STRING_INDICATORS = {"macd_signal", "psar_trend", "ema_align_label"}
+
+# Default upper bound on how stale `pipeline_watchlist.last_scanned_at` is
+# allowed to be before an on-read request triggers a refresh. Tunable via the
+# PIPELINE_SCAN_STALE_SECONDS env var. Default 900 s (15 min) so the on-read
+# fallback only fires when the in-process pipeline scheduler missed several
+# cycles (it normally runs every PIPELINE_SCHEDULER_INTERVAL_SECONDS = 600 s).
+_PIPELINE_SCAN_STALE_SECONDS_DEFAULT = 900
+
+
+def _pipeline_scan_stale_threshold_seconds() -> int:
+    raw = os.environ.get("PIPELINE_SCAN_STALE_SECONDS")
+    if raw is None or raw == "":
+        return _PIPELINE_SCAN_STALE_SECONDS_DEFAULT
+    try:
+        return max(int(raw), 1)
+    except (TypeError, ValueError):
+        logger.warning(
+            "[Pipeline] Invalid PIPELINE_SCAN_STALE_SECONDS=%r — using default %ds",
+            raw, _PIPELINE_SCAN_STALE_SECONDS_DEFAULT,
+        )
+        return _PIPELINE_SCAN_STALE_SECONDS_DEFAULT
 
 
 def _normalize_and_validate_watchlist_sources(
@@ -1199,28 +1221,60 @@ async def _auto_refresh_watchlist_assets_if_needed(
             )
             await db.refresh(parent)
 
-    should_refresh = not assets
-    if not should_refresh:
+    refresh_reason: Optional[str] = None
+
+    if not assets:
+        refresh_reason = "empty_assets"
+
+    if refresh_reason is None:
         persisted_symbols = {a.symbol for a in assets}
         upstream_symbols = (
             {a.symbol for a in parent_assets}
             if parent is not None
             else set(await _get_base_symbols(wl, user_id, db, depth=depth))
         )
-        should_refresh = _should_refresh_for_upstream_delta(
+        if _should_refresh_for_upstream_delta(
             persisted_symbols=persisted_symbols,
             upstream_symbols=upstream_symbols,
             exact_match=_watchlist_requires_exact_upstream_sync(effective_level),
-        )
-        if (
-            not should_refresh
-            and parent
+        ):
+            refresh_reason = "upstream_delta"
+        elif (
+            parent
             and _is_upstream_scan_newer(parent.last_scanned_at, wl.last_scanned_at)
         ):
-            should_refresh = True
+            refresh_reason = "upstream_drift"
 
-    if not should_refresh:
+    # ── Staleness fallback ────────────────────────────────────────────────
+    # If the in-process pipeline scheduler has not landed a cycle for this
+    # watchlist (last_scanned_at is NULL or older than the threshold), fire a
+    # refresh so the Rejected tab and approved-assets snapshot reflect current
+    # indicator values instead of returning an empty / stale snapshot.  This
+    # is the second arm of Task #92 — without it, fresh databases (or those
+    # whose Celery worker never ran) keep serving an empty
+    # `pipeline_watchlist_rejections` table forever.
+    if refresh_reason is None:
+        threshold_seconds = _pipeline_scan_stale_threshold_seconds()
+        last_scanned = wl.last_scanned_at
+        if last_scanned is None:
+            refresh_reason = "never_scanned"
+        else:
+            if last_scanned.tzinfo is None:
+                last_scanned = last_scanned.replace(tzinfo=timezone.utc)
+            age_seconds = (datetime.now(timezone.utc) - last_scanned).total_seconds()
+            if age_seconds > threshold_seconds:
+                refresh_reason = "stale_threshold"
+
+    if refresh_reason is None:
         return assets
+
+    logger.info(
+        "[Pipeline] Auto-refresh firing for wl=%s level=%s reason=%s "
+        "assets=%d last_scanned_at=%s",
+        wl.id, effective_level, refresh_reason,
+        len(assets),
+        wl.last_scanned_at.isoformat() if wl.last_scanned_at else None,
+    )
 
     await _resolve_and_persist(wl, user_id, db)
     return await _load_active_watchlist_assets(wl.id, db)

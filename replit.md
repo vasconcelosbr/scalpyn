@@ -4,7 +4,9 @@
 - **Frontend**: Next.js 16 (App Router) + TypeScript + TailwindCSS + shadcn/ui — runs on port 5000
 - **Backend**: FastAPI (Python 3.12) + SQLAlchemy 2.0 + Alembic — runs on port 8000
 - **DB**: PostgreSQL (Replit managed) — TimescaleDB extension not available on Replit (handled gracefully)
-- **Tasks**: Celery + Redis (Redis defaults to localhost:6379) — **plus** an in-process asyncio scheduler (`app/services/scheduler_service.py`) launched from the FastAPI lifespan that refreshes OHLCV / indicators / market_metadata for every watchlist symbol on a fixed interval (default 30 min, env: `BACKGROUND_SCHEDULER_INTERVAL_SECONDS`, `BACKGROUND_SCHEDULER_CONCURRENCY`, `SKIP_BACKGROUND_SCHEDULER`). This guarantees the DB stays warm even when no Celery worker is configured (e.g. local Replit dev).
+- **Tasks**: Celery + Redis (Redis defaults to localhost:6379) — **plus** two in-process asyncio schedulers launched from the FastAPI lifespan, so the DB stays warm even when no Celery worker is configured (e.g. local Replit dev):
+  - `app/services/scheduler_service.py` — refreshes OHLCV / indicators / market_metadata for every watchlist symbol on a fixed interval (default 30 min, env: `BACKGROUND_SCHEDULER_INTERVAL_SECONDS`, `BACKGROUND_SCHEDULER_CONCURRENCY`, `SKIP_BACKGROUND_SCHEDULER`).
+  - `app/services/pipeline_scheduler_service.py` — runs the full pipeline scan (POOL → L1 → L2 → L3) by invoking `_run_pipeline_scan()` so `pipeline_watchlist_assets.refreshed_at`, `pipeline_watchlist_rejections` and `pipeline_watchlist.last_scanned_at` stay populated (default 600 s, env: `PIPELINE_SCHEDULER_INTERVAL_SECONDS`, `PIPELINE_SCHEDULER_FIRST_RUN_DELAY_SECONDS` default 60 s, `SKIP_PIPELINE_SCHEDULER`). The on-read fallback `_auto_refresh_watchlist_assets_if_needed` also fires when `last_scanned_at` is NULL or older than `PIPELINE_SCAN_STALE_SECONDS` (default 900 s) so a fresh DB or one whose scheduler missed cycles never serves an empty rejections snapshot.
 - **Exchange**: Gate.io API v4
 
 ## Project Structure

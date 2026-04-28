@@ -81,6 +81,21 @@ async def lifespan(app: FastAPI):
         _log.warning("Background scheduler failed to start: %s", e)
         stop_background_scheduler = None  # type: ignore[assignment]
 
+    # ── Pipeline scan scheduler ───────────────────────────────────────────
+    # Periodically runs the full pipeline scan (POOL → L1 → L2 → L3) so
+    # `pipeline_watchlist_assets.refreshed_at`, `pipeline_watchlist_rejections`
+    # and `pipeline_watchlist.last_scanned_at` stay populated even without a
+    # Celery worker. Disable by setting SKIP_PIPELINE_SCHEDULER=1.
+    try:
+        from .services.pipeline_scheduler_service import (
+            start_pipeline_scheduler,
+            stop_pipeline_scheduler,
+        )
+        start_pipeline_scheduler()
+    except Exception as e:
+        _log.warning("Pipeline scheduler failed to start: %s", e)
+        stop_pipeline_scheduler = None  # type: ignore[assignment]
+
     try:
         yield
     finally:
@@ -89,6 +104,11 @@ async def lifespan(app: FastAPI):
                 await stop_background_scheduler()
             except Exception as e:
                 _log.warning("Background scheduler shutdown error: %s", e)
+        if stop_pipeline_scheduler is not None:
+            try:
+                await stop_pipeline_scheduler()
+            except Exception as e:
+                _log.warning("Pipeline scheduler shutdown error: %s", e)
     return
 
 
