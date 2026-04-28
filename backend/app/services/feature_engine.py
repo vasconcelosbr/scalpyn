@@ -275,12 +275,19 @@ class FeatureEngine:
         hist_mean = hist_prior.mean() if len(hist_prior) >= 1 else float("nan")
         hist_std = hist_prior.std(ddof=0) if len(hist_prior) >= 2 else 0.0
 
+        hist_slope: Optional[float] = (
+            round(float(hist_val - hist_prev), 8)
+            if hist_prev is not None and pd.notna(hist_val) and pd.notna(hist_prev)
+            else None
+        )
+
         return {
             "macd": round(float(macd_val), 8) if pd.notna(macd_val) else None,
             "macd_signal_line": round(float(sig_val), 8) if pd.notna(sig_val) else None,
             "macd_histogram": round(float(hist_val), 8) if pd.notna(hist_val) else None,
             "macd_signal": "positive" if pd.notna(macd_val) and macd_val > sig_val else "negative",
             "macd_histogram_prev": round(float(hist_prev), 8) if hist_prev is not None and pd.notna(hist_prev) else None,
+            "macd_histogram_slope": hist_slope,
             "macd_histogram_mean_10": round(float(hist_mean), 8) if pd.notna(hist_mean) else None,
             "macd_histogram_std_10": round(float(hist_std), 8) if pd.notna(hist_std) else None,
         }

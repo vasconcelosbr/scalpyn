@@ -394,6 +394,21 @@ class TestConsistencyWithFeatureEngine:
         assert fe_mean is not None
         assert abs(fe_mean - val_mean) < 1e-6
 
+    def test_histogram_slope_is_current_minus_prev(self):
+        """macd_histogram_slope = histogram_value - histogram_prev."""
+        prices = _linear_prices(N, step=0.4)
+        df = _build_df(prices)
+        engine = FeatureEngine(MACD_CONFIG)
+        fe_result = engine._calc_macd(df)
+
+        hist = fe_result["macd_histogram"]
+        prev = fe_result["macd_histogram_prev"]
+        slope = fe_result.get("macd_histogram_slope")
+        assert hist is not None
+        assert prev is not None
+        assert slope is not None
+        assert abs(slope - (hist - prev)) < 1e-7
+
 
 # ---------------------------------------------------------------------------
 # 9. details structure
@@ -405,19 +420,42 @@ class TestDetailsStructure:
         result = validate_macd_histogram(prices)
         details = result["details"]
         for key in ("macd_line", "signal_line", "histogram_prev",
-                    "histogram_mean_10", "histogram_std_10", "z_score"):
+                    "histogram_mean_10", "histogram_std_10", "z_score",
+                    "outlier_threshold"):
             assert key in details, f"Missing key: {key}"
 
     def test_top_level_keys_present(self):
         prices = _linear_prices(N)
         result = validate_macd_histogram(prices)
-        for key in ("histogram_value", "histogram_sign", "momentum_direction",
-                    "momentum_strength", "consistency_status", "signal_quality",
+        for key in ("histogram_value", "histogram_sign", "momentum_state",
+                    "momentum_direction", "momentum_strength",
+                    "consistency_status", "signal_quality",
                     "diagnostic_message", "details"):
             assert key in result, f"Missing top-level key: {key}"
 
-    def test_no_momentum_state_field(self):
-        """momentum_state must NOT exist — replaced by direction + strength."""
+    def test_momentum_state_valid_enum(self):
+        """momentum_state must be one of increasing/decreasing/flat."""
         prices = _linear_prices(N)
         result = validate_macd_histogram(prices)
-        assert "momentum_state" not in result
+        assert result["momentum_state"] in ("increasing", "decreasing", "flat")
+
+    def test_momentum_state_consistent_with_direction(self):
+        """momentum_state maps 1-to-1 from momentum_direction."""
+        mapping = {"up": "increasing", "down": "decreasing", "flat": "flat"}
+        prices = _linear_prices(N)
+        result = validate_macd_histogram(prices)
+        assert result["momentum_state"] == mapping[result["momentum_direction"]]
+
+    def test_outlier_threshold_is_mean_plus_3std(self):
+        """outlier_threshold = mean_10 + 3 * std_10 when std > 0."""
+        prices = _linear_prices(N, step=0.4)
+        result = validate_macd_histogram(prices)
+        details = result["details"]
+        mean = details["histogram_mean_10"]
+        std = details["histogram_std_10"]
+        threshold = details["outlier_threshold"]
+        if std and std > 0:
+            expected = round(mean + 3 * std, 8)
+            assert abs(threshold - expected) < 1e-7
+        else:
+            assert threshold is None

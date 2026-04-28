@@ -254,9 +254,15 @@ def validate_macd_histogram(
             f"Direction: {momentum_direction}. Signal quality: {signal_quality}."
         )
 
+    _dir_to_state = {"up": "increasing", "down": "decreasing", "flat": "flat"}
+    momentum_state = _dir_to_state[momentum_direction]
+
+    outlier_threshold = round(mean_10 + 3 * std_10, 8) if std_10 > 0 else None
+
     return {
         "histogram_value": round(current, 8),
         "histogram_sign": histogram_sign,
+        "momentum_state": momentum_state,
         "momentum_direction": momentum_direction,
         "momentum_strength": momentum_strength,
         "consistency_status": consistency_status,
@@ -268,6 +274,7 @@ def validate_macd_histogram(
             "histogram_prev": round(hist_prev, 8) if hist_prev is not None else None,
             "histogram_mean_10": round(mean_10, 8),
             "histogram_std_10": round(std_10, 8),
+            "outlier_threshold": outlier_threshold,
             "z_score": round(z_score, 4) if z_score is not None else None,
         },
     }
