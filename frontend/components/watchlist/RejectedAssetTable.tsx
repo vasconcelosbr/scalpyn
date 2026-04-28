@@ -53,16 +53,27 @@ function fmtValue(value: unknown): string {
   return formatEvaluationTraceValue(value);
 }
 
+function scoreColor(pct: number): string {
+  if (pct >= 70) return "#34D399";
+  if (pct >= 45) return "#FBBF24";
+  return "#F87171";
+}
+
 function ScoreBar({ value }: { value?: number | null }) {
-  if (value == null) return <span className="text-[#334155] text-[10px]">—</span>;
+  if (value == null) return <span className="text-[#334155] text-xs">—</span>;
   const pct = Math.min(100, Math.max(0, value));
-  const color = pct >= 70 ? "bg-[#34D399]" : pct >= 45 ? "bg-[#FBBF24]" : "bg-[#F87171]";
+  const color = scoreColor(pct);
   return (
-    <div className="flex items-center gap-1.5 min-w-[110px]">
-      <div className="w-20 h-1.5 rounded-full bg-[#1A2035] overflow-hidden">
-        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+    <div className="flex items-center gap-2 min-w-[110px]">
+      <div className="relative flex-1 h-1.5 bg-[#1A2035] rounded-full overflow-hidden">
+        <div
+          className="h-full rounded-full transition-all duration-700"
+          style={{ width: `${pct}%`, backgroundColor: color }}
+        />
       </div>
-      <span className="tabular-nums text-[10px] w-7 text-right text-[#94A3B8]">{value.toFixed(0)}</span>
+      <span className="text-sm font-bold tabular-nums w-7 text-right" style={{ color }}>
+        {Math.round(value)}
+      </span>
     </div>
   );
 }

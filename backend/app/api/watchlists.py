@@ -574,12 +574,23 @@ def _normalize_decision_snapshot(
     details["expected_values"] = dict(details.get("expected_values") or {})
     details["evaluation_trace"] = list(details.get("evaluation_trace") or [])
 
+    # alpha_score fallback: explicit arg wins; otherwise read from snapshot
+    # (written there by the pipeline since task #84).
+    resolved_alpha = alpha_score
+    if resolved_alpha is None:
+        _snap_score = raw_snapshot.get("alpha_score")
+        if _snap_score is not None:
+            try:
+                resolved_alpha = float(_snap_score)
+            except (TypeError, ValueError):
+                resolved_alpha = None
+
     return {
         "symbol": symbol,
         "status": raw_snapshot.get("status") or status,
         "stage": raw_snapshot.get("stage") or stage,
         "profile_id": raw_snapshot.get("profile_id") or profile_id,
-        "alpha_score": alpha_score,
+        "alpha_score": resolved_alpha,
         "score_rules": list(score_rules if score_rules is not None else (raw_snapshot.get("score_rules") or [])),
         "failed_indicators": list(raw_snapshot.get("failed_indicators") or []),
         "conditions": list(raw_snapshot.get("conditions") or details["conditions"]),
@@ -1613,6 +1624,9 @@ async def _resolve_and_persist(
         if _rsym and _rsym in score_rules_map:
             _rsnap = dict(_rrow.get("analysis_snapshot") or {})
             _rsnap["score_rules"] = score_rules_map[_rsym]
+            # Persist alpha_score so the Rejected tab can display the score
+            # bar without recomputing it on every read (task #84).
+            _rsnap["alpha_score"] = _rrow.get("alpha_score")
             _rrow["analysis_snapshot"] = _rsnap
 
     await _replace_rejection_snapshot(wl, rejected_rows, db)
@@ -2123,6 +2137,50 @@ async def _get_watchlist_rejections_payload(
         except Exception:
             selected_trace_conditions = trace_filter_conditions
 
+    # Build a ScoreEngine for live alpha_score computation on rows that pre-date
+    # task #84 and therefore have no alpha_score stored in analysis_snapshot.
+    _rejection_se = None
+    if profile_config and ind_map:
+        try:
+            from ..services.score_engine import ScoreEngine as _SE, merge_score_config
+            from ..services.config_service import DEFAULT_SCORE
+            _rejection_se = _SE(merge_score_config(DEFAULT_SCORE, profile_config))
+        except Exception as _e:
+            logger.debug("[Pipeline] ScoreEngine init for rejections failed: %s", _e)
+
+    def _resolve_alpha_score(row: PipelineWatchlistRejection) -> Optional[float]:
+        """Return alpha_score for a rejected row.
+
+        Priority:
+        1. Already in analysis_snapshot (set by the pipeline since task #84).
+        2. Computed live from current indicators (for legacy rows).
+        3. None — no indicator data available.
+        """
+        snap_score = (row.analysis_snapshot or {}).get("alpha_score")
+        if snap_score is not None:
+            try:
+                return float(snap_score)
+            except (TypeError, ValueError):
+                pass
+        if _rejection_se is None:
+            return None
+        ind = ind_map.get(row.symbol)
+        if not ind:
+            return None
+        meta = meta_map.get(row.symbol) or {}
+        eval_data = {
+            **ind,
+            "price":      meta.get("current_price", 0),
+            "volume_24h": meta.get("volume_24h", 0),
+            "market_cap": meta.get("market_cap", 0),
+            "change_24h": meta.get("price_change_24h", 0),
+        }
+        try:
+            result = _rejection_se.compute_alpha_score(eval_data)
+            return round(float(result.get("total_score", 0)), 1)
+        except Exception:
+            return None
+
     def _recompute_trace(row: PipelineWatchlistRejection) -> List[Dict[str, Any]]:
         stored = row.evaluation_trace or []
         indicators = ind_map.get(row.symbol)
@@ -2154,6 +2212,7 @@ async def _get_watchlist_rejections_payload(
             profile_id=str(row.profile_id) if row.profile_id else None,
             timestamp=_iso_utc(row.recorded_at),
             snapshot=row.analysis_snapshot,
+            alpha_score=_resolve_alpha_score(row),
         )
         recomputed_trace = _recompute_trace(row)
         # The Rejected tab UI (RejectedAssetTable.tsx) reads
