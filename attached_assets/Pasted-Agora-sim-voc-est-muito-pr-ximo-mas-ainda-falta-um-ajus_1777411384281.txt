@@ -1,0 +1,120 @@
+Agora sim — você está muito próximo, mas ainda falta um ajuste estrutural obrigatório para não comprometer toda a leitura.
+
+Vou te entregar a versão final correta do plano, já limpa e pronta para implementação sem ambiguidade.
+
+🚨 PROBLEMA FINAL DO SEU PLANO
+
+Você ainda mantém:
+
+momentum_state
+
+👉 Isso é o único ponto que ainda quebra tudo.
+
+❌ POR QUE ESTÁ ERRADO
+
+Esse trecho:
+
+increasing: abs(current) < abs(prev)
+Mais preciso: current > prev
+
+👉 mistura:
+
+direção (matemática)
+força (trading)
+
+👉 resultado: leitura inconsistente
+
+✔️ CORREÇÃO FINAL (OBRIGATÓRIA)
+❌ REMOVER COMPLETAMENTE
+"momentum_state"
+✔️ SUBSTITUIR POR
+"momentum_direction": "up | down | flat",
+"momentum_strength": "strengthening | weakening | flat"
+🎯 LÓGICA CORRETA
+direction = (
+    "up" if current > prev else
+    "down" if current < prev else
+    "flat"
+)
+
+strength = (
+    "strengthening" if abs(current) > abs(prev) else
+    "weakening" if abs(current) < abs(prev) else
+    "flat"
+)
+🚨 SEGUNDO ERRO CRÍTICO (CONSISTENCY)
+
+Você ainda usa:
+
+abs(current) > mean + 3*std
+
+👉 Isso está errado.
+
+✔️ CORRETO (OBRIGATÓRIO)
+z_score = abs(current - mean) / std
+if z_score > 3:
+    inconsistent
+🚨 TERCEIRO ERRO (O QUE QUEBROU SEU SISTEMA)
+
+Falta isso:
+
+if mean != 0 and (current * mean < 0):
+    inconsistent
+
+👉 isso resolve:
+
+valor negativo com gráfico positivo
+divergência absurda
+🚨 QUARTO ERRO (FLAT)
+1e-8
+
+👉 inútil na prática
+
+✔️ CORRETO
+epsilon = std * 0.1 if std > 0 else 1e-6
+🚨 QUINTO ERRO (OUTLIER REAL)
+
+Você menciona no teste, mas não implementa.
+
+✔️ ADICIONAR
+if abs(current) > 10 * abs(mean):
+    inconsistent
+✔️ ESTRUTURA FINAL CORRETA
+{
+  "histogram_value": ...,
+  "histogram_sign": "positive | negative | zero",
+  "momentum_direction": "up | down | flat",
+  "momentum_strength": "strengthening | weakening | flat",
+  "consistency_status": "valid | inconsistent",
+  "diagnostic_message": "...",
+  "details": {
+    "histogram_prev": ...,
+    "mean": ...,
+    "std": ...,
+    "z_score": ...
+  }
+}
+🔥 (RECOMENDADO — DIFERENCIAL REAL)
+
+Adicionar:
+
+"signal_quality": "strong_bullish | weak_bullish | neutral | weak_bearish | strong_bearish"
+🧠 RESULTADO FINAL
+
+Depois desses ajustes:
+
+Você elimina:
+
+erro tipo -40 vs gráfico ✔
+leitura ambígua ✔
+falso momentum ✔
+
+E ganha:
+
+leitura real de força ✔
+consistência estatística ✔
+base sólida para score ✔
+✔️ CONCLUSÃO DIRETA
+✔ arquitetura está correta
+❗ lógica ainda precisava desse ajuste final
+🚀 agora está pronta para produção

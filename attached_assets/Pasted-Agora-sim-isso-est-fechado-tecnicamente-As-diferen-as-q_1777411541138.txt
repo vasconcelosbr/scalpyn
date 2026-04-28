@@ -1,0 +1,108 @@
+Agora sim — isso está fechado tecnicamente.
+As diferenças que sobraram são de padronização e precisão operacional, não mais de lógica.
+
+Vou responder direto e definir o padrão final recomendado.
+
+✔️ 1. Nomes no details → manter explícito
+
+Você perguntou:
+
+mean/std vs histogram_mean_10/std_10
+
+👉 Recomendação: manter explícito
+
+"histogram_mean_10"
+"histogram_std_10"
+Por quê:
+evita ambiguidade (futuro: mean_50, mean_20, etc.)
+melhora debug
+facilita leitura por outras IAs
+✔️ 2. macd_line e signal_line → MANTER
+
+👉 Não remova.
+
+Por quê:
+ajudam a validar divergência
+úteis para debug (principalmente inconsistências)
+praticamente zero custo (já calculado)
+
+✔ decisão: manter no details
+
+✔️ 3. Direção com epsilon → usar (mas do jeito certo)
+
+Você propôs:
+
+current > prev + epsilon
+
+👉 Correto usar epsilon, mas precisa ser consistente com o resto.
+
+✔️ Versão final recomendada
+epsilon = std_10 * 0.1 if std_10 > 0 else 1e-6
+
+if current > prev + epsilon:
+    momentum_direction = "up"
+elif current < prev - epsilon:
+    momentum_direction = "down"
+else:
+    momentum_direction = "flat"
+⚠️ Ajuste importante (quase ninguém faz)
+
+👉 Use o mesmo epsilon na força
+
+if abs(current) > abs(prev) + epsilon:
+    momentum_strength = "strengthening"
+elif abs(current) < abs(prev) - epsilon:
+    momentum_strength = "weakening"
+else:
+    momentum_strength = "flat"
+
+👉 isso evita:
+
+flip constante entre estados
+ruído em mercado lateral
+✔️ 4. Consistency (validação final)
+
+Você já implementou corretamente, então só reforço a ordem ideal:
+
+Ordem recomendada:
+z-score
+incoerência de sinal
+escala absurda
+
+👉 primeira falha já pode marcar inconsistente
+
+✔️ 5. Estrutura final recomendada (definitiva)
+{
+  "histogram_value": ...,
+  "histogram_sign": "...",
+  "momentum_direction": "...",
+  "momentum_strength": "...",
+  "consistency_status": "...",
+  "diagnostic_message": "...",
+  "details": {
+    "macd_line": ...,
+    "signal_line": ...,
+    "histogram_prev": ...,
+    "histogram_mean_10": ...,
+    "histogram_std_10": ...,
+    "z_score": ...
+  }
+}
+🔥 (RECOMENDADO — nível acima)
+
+Você já está pronto para isso:
+
+"signal_quality"
+Lógica simples:
+if current > 0:
+    if momentum_strength == "strengthening":
+        "strong_bullish"
+    else:
+        "weak_bullish"
+elif current < 0:
+    if momentum_strength == "strengthening":
+        "strong_bearish"
+    else:
+        "weak_bearish"
+else:
+    "neutral"

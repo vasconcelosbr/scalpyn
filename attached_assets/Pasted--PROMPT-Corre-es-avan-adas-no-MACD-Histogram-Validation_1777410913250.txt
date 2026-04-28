@@ -1,0 +1,155 @@
+### 🎯 PROMPT — Correções avançadas no MACD Histogram Validation
+
+Objetivo:
+Refinar a função `validate_macd_histogram()` para eliminar inconsistências, melhorar a leitura de momentum e garantir coerência estatística com o comportamento real do gráfico.
+
+---
+
+# 🔧 Ajustes obrigatórios
+
+## 1. Separar direção e força do momentum
+
+Substituir lógica atual por:
+
+```python
+momentum_direction = (
+    "up" if current > prev else
+    "down" if current < prev else
+    "flat"
+)
+
+momentum_strength = (
+    "strengthening" if abs(current) > abs(prev) else
+    "weakening" if abs(current) < abs(prev) else
+    "flat"
+)
+```
+
+---
+
+## 2. Corrigir cálculo de consistência (z-score)
+
+Substituir:
+
+```python
+abs(current) > mean + 3 * std
+```
+
+Por:
+
+```python
+if std > 0:
+    z_score = abs(current - mean) / std
+    if z_score > 3:
+        consistency_status = "inconsistent"
+```
+
+---
+
+## 3. Validar coerência de sinal
+
+Adicionar verificação:
+
+```python
+if mean != 0 and (current * mean < 0):
+    consistency_status = "inconsistent"
+```
+
+---
+
+## 4. Validar escala (detecção de valores absurdos)
+
+Adicionar:
+
+```python
+if abs(mean) > 0 and abs(current) > 10 * abs(mean):
+    consistency_status = "inconsistent"
+```
+
+---
+
+## 5. Ajustar threshold de "flat"
+
+Substituir:
+
+```python
+abs(current - prev) < 1e-8
+```
+
+Por:
+
+```python
+epsilon = std * 0.1 if std > 0 else 1e-6
+if abs(current - prev) < epsilon:
+    momentum_direction = "flat"
+    momentum_strength = "flat"
+```
+
+---
+
+# 🧠 Classificação de qualidade do sinal (novo)
+
+Adicionar campo `signal_quality`:
+
+```python
+if current > 0:
+    if momentum_strength == "strengthening":
+        signal_quality = "strong_bullish"
+    else:
+        signal_quality = "weak_bullish"
+elif current < 0:
+    if momentum_strength == "strengthening":
+        signal_quality = "strong_bearish"
+    else:
+        signal_quality = "weak_bearish"
+else:
+    signal_quality = "neutral"
+```
+
+---
+
+# 📤 Saída final esperada
+
+```json
+{
+  "histogram_value": ...,
+  "histogram_sign": "positive | negative | zero",
+  "momentum_direction": "up | down | flat",
+  "momentum_strength": "strengthening | weakening | flat",
+  "consistency_status": "valid | inconsistent",
+  "signal_quality": "strong_bullish | weak_bullish | neutral | weak_bearish | strong_bearish",
+  "diagnostic_message": "...",
+  "details": {
+    "macd_line": ...,
+    "signal_line": ...,
+    "histogram_prev": ...,
+    "histogram_mean_10": ...,
+    "z_score": ...
+  }
+}
+```
+
+---
+
+# ⚠️ Regras finais
+
+* A função deve permanecer PURA (sem acesso a DB)
+* Reutilizar `_calc_macd()` existente
+* Garantir compatibilidade com testes existentes
+* Adicionar novos testes para:
+
+  * divergência de sinal
+  * outliers extremos
+  * weakening vs strengthening
+  * signal_quality correto
+
+---
+
+# 🎯 Resultado esperado
+
+Após implementação:
+
+* elimina valores incoerentes (ex: -40 com gráfico positivo)
+* distingue força vs fraqueza do movimento
+* melhora decisão de entrada
+* fornece diagnóstico confiável para IA e frontend

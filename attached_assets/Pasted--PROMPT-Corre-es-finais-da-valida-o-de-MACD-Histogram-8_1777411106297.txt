@@ -1,0 +1,189 @@
+### 🎯 PROMPT — Correções finais da validação de MACD Histogram (#89)
+
+Objetivo:
+Ajustar a função `validate_macd_histogram()` para corrigir erros de interpretação de momentum, inconsistência estatística e ambiguidade no retorno.
+
+---
+
+# 🔧 1. Substituir `momentum_state` por duas dimensões
+
+❌ Remover:
+
+```python
+momentum_state
+```
+
+✔ Implementar:
+
+```python
+momentum_direction = (
+    "up" if current > prev else
+    "down" if current < prev else
+    "flat"
+)
+
+momentum_strength = (
+    "strengthening" if abs(current) > abs(prev) else
+    "weakening" if abs(current) < abs(prev) else
+    "flat"
+)
+```
+
+---
+
+# ⚠️ 2. Corrigir detecção de "flat"
+
+❌ Remover:
+
+```python
+abs(current - prev) < 1e-8
+```
+
+✔ Implementar:
+
+```python
+epsilon = std_10 * 0.1 if std_10 > 0 else 1e-6
+
+if abs(current - prev) < epsilon:
+    momentum_direction = "flat"
+    momentum_strength = "flat"
+```
+
+---
+
+# 📉 3. Corrigir cálculo de consistência (z-score correto)
+
+❌ Remover:
+
+```python
+abs(current) > mean + 3 * std
+```
+
+✔ Implementar:
+
+```python
+consistency_status = "valid"
+
+if std_10 > 0:
+    z_score = abs(current - mean_10) / std_10
+    if z_score > 3:
+        consistency_status = "inconsistent"
+```
+
+---
+
+# 🚨 4. Adicionar validação de incoerência de sinal
+
+✔ Implementar:
+
+```python
+if mean_10 != 0 and (current * mean_10 < 0):
+    consistency_status = "inconsistent"
+```
+
+---
+
+# 🚨 5. Adicionar validação de escala absurda
+
+✔ Implementar:
+
+```python
+if abs(mean_10) > 0 and abs(current) > 10 * abs(mean_10):
+    consistency_status = "inconsistent"
+```
+
+---
+
+# 📊 6. Ajustar `histogram_sign`
+
+```python
+if current > 0:
+    histogram_sign = "positive"
+elif current < 0:
+    histogram_sign = "negative"
+else:
+    histogram_sign = "zero"
+```
+
+---
+
+# 🧠 7. Adicionar classificação de qualidade do sinal
+
+```python
+if current > 0:
+    if momentum_strength == "strengthening":
+        signal_quality = "strong_bullish"
+    else:
+        signal_quality = "weak_bullish"
+elif current < 0:
+    if momentum_strength == "strengthening":
+        signal_quality = "strong_bearish"
+    else:
+        signal_quality = "weak_bearish"
+else:
+    signal_quality = "neutral"
+```
+
+---
+
+# 📤 8. Atualizar estrutura de retorno
+
+❌ Remover:
+
+```json
+"momentum_state"
+```
+
+✔ Novo formato:
+
+```json
+{
+  "histogram_value": ...,
+  "histogram_sign": "...",
+  "momentum_direction": "...",
+  "momentum_strength": "...",
+  "consistency_status": "...",
+  "signal_quality": "...",
+  "diagnostic_message": "...",
+  "details": {
+    "macd_line": ...,
+    "signal_line": ...,
+    "histogram_prev": ...,
+    "histogram_mean_10": ...,
+    "histogram_std_10": ...,
+    "z_score": ...
+  }
+}
+```
+
+---
+
+# 🧪 9. Atualizar testes
+
+Adicionar testes para:
+
+* divergência de sinal (mean positivo vs current negativo)
+* strengthening vs weakening
+* flat detection com epsilon dinâmico
+* outlier de escala (10x mean)
+* signal_quality correto
+
+---
+
+# ⚠️ Regras obrigatórias
+
+* função deve permanecer PURA
+* reutilizar `_calc_macd()`
+* não duplicar lógica de EMA
+* garantir consistência com TradingView
+
+---
+
+# 🎯 Resultado esperado
+
+Após implementação:
+
+* elimina inconsistências como **-40 vs gráfico positivo**
+* distingue corretamente força vs fraqueza
+* melhora qualidade do score
+* fornece diagnóstico confiável para decisões automatizadas
