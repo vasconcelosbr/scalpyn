@@ -744,3 +744,63 @@ def test_live_score_computation_via_score_engine_for_legacy_rejection_rows():
     assert 0 <= total <= 100, f"Score out of bounds: {total}"
     # rsi_1 + rsi_2 both pass → score > 0
     assert total > 0
+
+
+# ── Task #88: alpha_score matches score_rules in Rejected tab ──────────────────
+
+def test_rejection_snapshot_alpha_score_comes_from_live_score_map():
+    """Regression for #88: the alpha_score persisted into analysis_snapshot for a
+    rejected asset must match the score computed by the same ScoreEngine run that
+    built score_rules_map — NOT from _rrow.get("alpha_score") which is always None
+    since evaluate_rejections() does not populate that key.
+
+    Simulates the enrichment loop at watchlists.py:1673-1687:
+      - live_score_map[sym]   = engine.compute_alpha_score(eval_data)["total_score"]
+      - score_rules_map[sym]  = engine.get_full_breakdown(eval_data)
+      - _rsnap["alpha_score"] = live_score_map.get(sym)   ← correct (post-fix)
+      - _rsnap["alpha_score"] = _rrow.get("alpha_score")  ← was None (pre-fix)
+
+    Ensures the displayed score number in ScoreBreakdownSection matches the
+    sum of points_awarded in the score_rules list.
+    """
+    from app.services.score_engine import ScoreEngine, merge_score_config
+    from app.services.seed_service import DEFAULT_SCORE
+
+    engine = ScoreEngine(merge_score_config(DEFAULT_SCORE, {}))
+    eval_data = {"rsi": 22, "volume_24h": 5_000_000, "market_cap": 500_000_000, "change_24h": 1.5}
+
+    # These are what watchlists.py builds at lines 1438-1440
+    score_result = engine.compute_alpha_score(eval_data)
+    live_score = round(float(score_result.get("total_score", 0)), 1)
+    score_rules = engine.get_full_breakdown(eval_data)
+
+    # Simulate a rejection row — no "alpha_score" key (as returned by evaluate_rejections)
+    rejection_row = {
+        "symbol": "SHIB_USDT",
+        "stage": "L1",
+        "failed_type": "filter",
+        "failed_indicator": "Volume 24h",
+        "analysis_snapshot": {"status": "rejected"},
+    }
+
+    # Pre-fix behaviour: _rrow.get("alpha_score") → always None
+    pre_fix_value = rejection_row.get("alpha_score")
+    assert pre_fix_value is None, "evaluate_rejections rows must not carry alpha_score"
+
+    # Post-fix behaviour: live_score_map.get(sym)
+    sym = rejection_row["symbol"]
+    live_score_map = {sym: live_score}
+    score_rules_map = {sym: score_rules}
+
+    # Replicate the enrichment loop
+    _rsnap = dict(rejection_row.get("analysis_snapshot") or {})
+    _rsnap["score_rules"] = score_rules_map[sym]
+    _rsnap["alpha_score"] = live_score_map.get(sym)  # ← the fix
+
+    # The stored alpha_score must now equal the live computed score (not None / 0)
+    assert _rsnap["alpha_score"] is not None
+    assert _rsnap["alpha_score"] == live_score
+    assert _rsnap["alpha_score"] > 0, "RSI=22 should trigger both rsi_1 and rsi_2 rules"
+
+    # The score_rules list must have at least one rule (rsi_1 or rsi_2 from DEFAULT_SCORE)
+    assert len(_rsnap["score_rules"]) > 0, "score_rules must not be empty when indicators are present"

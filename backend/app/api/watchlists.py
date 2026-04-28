@@ -1677,7 +1677,10 @@ async def _resolve_and_persist(
             _rsnap["score_rules"] = score_rules_map[_rsym]
             # Persist alpha_score so the Rejected tab can display the score
             # bar without recomputing it on every read (task #84).
-            _rsnap["alpha_score"] = _rrow.get("alpha_score")
+            # Use live_score_map (computed from current indicators, same eval_data
+            # as score_rules_map) so the displayed score matches the rule breakdown.
+            # _rrow itself has no "alpha_score" key — using it always stored None.
+            _rsnap["alpha_score"] = live_score_map.get(_rsym)
             _rrow["analysis_snapshot"] = _rsnap
 
     await _replace_rejection_snapshot(wl, rejected_rows, db)
