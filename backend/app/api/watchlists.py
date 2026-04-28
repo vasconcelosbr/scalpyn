@@ -31,6 +31,7 @@ from ..models.pipeline_watchlist import (
 )
 from ..services.market_data_service import _is_etf_pair
 from ..services.pipeline_rejections import (
+    build_analysis_snapshot,
     build_asset_evaluation_trace,
     build_trace_asset,
     evaluate_rejections,
@@ -1256,10 +1257,12 @@ async def _resolve_and_persist(
         await db.commit()
         return []
 
-    # NOTE: filters_json on the watchlist is IGNORED at runtime.
-    # All filtering criteria (min_score, require_signal, market_cap, volume, etc.)
-    # come exclusively from the associated Profile (profile.config.filters.conditions).
-    # The watchlist is purely an organisational grouping (POOL/L1/L2/L3) + profile reference.
+    # NOTE: filters_json on the watchlist is partially respected at runtime.
+    # Most filtering criteria (require_signal, market_cap, volume, etc.) come
+    # exclusively from the associated Profile (profile.config.filters.conditions).
+    # Exception: filters_json.min_alpha_score IS enforced for all effective levels —
+    # assets that pass all indicator gates but have a score below this threshold
+    # are moved to the Rejected tab with reason "Alpha Score < threshold".
 
     # Fetch market metadata for these symbols (include liquidity columns so profile
     # filter conditions on spread_pct / orderbook_depth_usdt can be evaluated).
@@ -1450,6 +1453,9 @@ async def _resolve_and_persist(
     p_logic = pf_cfg.get("logic", "AND")
     profile_min_score: float = float(pf_cfg.get("min_score", 0))
     profile_require_signal: bool = bool(pf_cfg.get("require_signal", False))
+    # Watchlist-level minimum score (filters_json.min_alpha_score).  Applied at ALL
+    # effective levels — distinct from profile_min_score which is L2/L3 only.
+    wl_min_score: float = float((wl.filters_json or {}).get("min_alpha_score") or 0)
 
     # Source-pool watchlists with actual profile filter conditions must honor that
     # profile even if legacy data stored them as "custom". Those legacy boards are
@@ -1579,11 +1585,56 @@ async def _resolve_and_persist(
     # Apply score/signal gates after the profile block/filter decision path.
     if scoring_data_available and assets_out:
         gated_assets: List[Dict[str, Any]] = []
+        _ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         for asset in assets_out:
             alpha = asset.get("alpha_score") or 0.0
             if should_apply_min_score and profile_min_score and alpha < profile_min_score:
                 continue
             if should_require_signal and profile_require_signal and not signal_status.get(asset["symbol"], True):
+                continue
+            # Watchlist-level min score gate (applies at all effective levels).
+            if wl_min_score > 0 and alpha < wl_min_score:
+                _sym = str(asset.get("symbol") or "")
+                _condition = f"Score >= {wl_min_score:g}"
+                _score_trace = [
+                    {
+                        "type": "filter",
+                        "indicator": "Alpha Score",
+                        "status": "FAIL",
+                        "condition": _condition,
+                        "current_value": round(alpha, 1),
+                        "expected": wl_min_score,
+                    }
+                ]
+                _snapshot = build_analysis_snapshot(
+                    symbol=_sym,
+                    stage=stage,
+                    profile_id=str(wl.profile_id) if wl.profile_id else None,
+                    status="rejected",
+                    trace=_score_trace,
+                    timestamp=_ts,
+                )
+                rejected_rows.append(
+                    {
+                        "symbol": _sym,
+                        "stage": stage,
+                        "profile_id": str(wl.profile_id) if wl.profile_id else None,
+                        "failed_type": "filter",
+                        "failed_indicator": "Alpha Score",
+                        "condition": _condition,
+                        "current_value": str(round(alpha, 1)),
+                        "expected": str(wl_min_score),
+                        "timestamp": _ts,
+                        "evaluation_trace": _score_trace,
+                        "status": _snapshot["status"],
+                        "details": _snapshot["details"],
+                        "failed_indicators": _snapshot["failed_indicators"],
+                        "conditions": _snapshot["conditions"],
+                        "current_values": _snapshot["current_values"],
+                        "expected_values": _snapshot["expected_values"],
+                        "analysis_snapshot": _snapshot,
+                    }
+                )
                 continue
             gated_assets.append(asset)
         assets_out = gated_assets

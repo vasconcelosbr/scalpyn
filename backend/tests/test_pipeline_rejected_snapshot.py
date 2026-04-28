@@ -588,6 +588,48 @@ def test_normalize_decision_snapshot_returns_none_when_no_alpha_score():
     assert result["alpha_score"] is None
 
 
+def test_build_analysis_snapshot_for_watchlist_min_score_gate():
+    """build_analysis_snapshot with the synthetic trace produced by the
+    watchlist-level min_alpha_score gate must return a well-formed rejection
+    snapshot with 'Alpha Score' listed as the sole failed indicator.
+    """
+    from app.services.pipeline_rejections import build_analysis_snapshot
+
+    wl_min_score = 40.0
+    actual_score = 27.3
+    _condition = f"Score >= {wl_min_score:g}"
+
+    trace = [
+        {
+            "type": "filter",
+            "indicator": "Alpha Score",
+            "status": "FAIL",
+            "condition": _condition,
+            "current_value": round(actual_score, 1),
+            "expected": wl_min_score,
+        }
+    ]
+
+    snapshot = build_analysis_snapshot(
+        symbol="SOL_USDT",
+        stage="L1",
+        profile_id="profile-wl",
+        status="rejected",
+        trace=trace,
+        timestamp="2026-01-01T00:00:00Z",
+    )
+
+    assert snapshot["status"] == "rejected"
+    assert snapshot["symbol"] == "SOL_USDT"
+    assert snapshot["stage"] == "L1"
+    assert snapshot["failed_indicators"] == ["Alpha Score"]
+    assert "Alpha Score" in snapshot["current_values"]
+    assert snapshot["current_values"]["Alpha Score"] == round(actual_score, 1)
+    assert "Alpha Score" in snapshot["expected_values"]
+    assert snapshot["expected_values"]["Alpha Score"] == wl_min_score
+    assert _condition in snapshot["conditions"]
+
+
 def test_live_score_computation_via_score_engine_for_legacy_rejection_rows():
     """Verify that the ScoreEngine path used for legacy rows (those without
     alpha_score in analysis_snapshot) produces a finite, bounded score from
