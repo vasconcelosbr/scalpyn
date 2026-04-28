@@ -630,6 +630,86 @@ def test_build_analysis_snapshot_for_watchlist_min_score_gate():
     assert _condition in snapshot["conditions"]
 
 
+def test_watchlist_min_score_rejection_row_contains_all_required_fields():
+    """The rejection dict built by the watchlist min_alpha_score gate must
+    contain every field that _replace_rejection_snapshot consumes when
+    creating a PipelineWatchlistRejection row.
+
+    Required fields (from watchlists.py _replace_rejection_snapshot):
+      symbol, stage, failed_type, failed_indicator, condition (→ condition_text),
+      current_value, expected (→ expected_value), evaluation_trace, analysis_snapshot.
+    Plus snapshot-denormalised fields used by the read path:
+      status, details, failed_indicators, conditions, current_values, expected_values.
+    """
+    from app.services.pipeline_rejections import build_analysis_snapshot
+
+    wl_min_score = 55.0
+    actual_score = 38.6
+    effective_level = "L1"
+    profile_id = "profile-abc"
+    timestamp = "2026-01-01T00:00:00Z"
+
+    _sym = "ADA_USDT"
+    _condition = f"Score >= {wl_min_score:g}"
+    _score_trace = [
+        {
+            "type": "filter",
+            "indicator": "Alpha Score",
+            "status": "FAIL",
+            "condition": _condition,
+            "current_value": round(actual_score, 1),
+            "expected": wl_min_score,
+        }
+    ]
+    _snapshot = build_analysis_snapshot(
+        symbol=_sym,
+        stage=effective_level,
+        profile_id=profile_id,
+        status="rejected",
+        trace=_score_trace,
+        timestamp=timestamp,
+    )
+
+    row = {
+        "symbol": _sym,
+        "stage": effective_level,
+        "profile_id": profile_id,
+        "failed_type": "filter",
+        "failed_indicator": "Alpha Score",
+        "condition": _condition,
+        "current_value": round(actual_score, 1),
+        "expected": str(wl_min_score),
+        "timestamp": timestamp,
+        "evaluation_trace": _score_trace,
+        "status": _snapshot["status"],
+        "details": _snapshot["details"],
+        "failed_indicators": _snapshot["failed_indicators"],
+        "conditions": _snapshot["conditions"],
+        "current_values": _snapshot["current_values"],
+        "expected_values": _snapshot["expected_values"],
+        "analysis_snapshot": _snapshot,
+    }
+
+    # Fields consumed by _replace_rejection_snapshot
+    for field in ("symbol", "stage", "failed_type", "failed_indicator",
+                  "condition", "current_value", "expected",
+                  "evaluation_trace", "analysis_snapshot"):
+        assert field in row, f"Missing required rejection row field: {field}"
+
+    # Field values / types
+    assert row["symbol"] == "ADA_USDT"
+    assert row["stage"] == "L1"
+    assert row["failed_type"] == "filter"
+    assert row["failed_indicator"] == "Alpha Score"
+    assert row["condition"] == "Score >= 55"
+    assert isinstance(row["current_value"], float)  # numeric, not string
+    assert row["current_value"] == round(actual_score, 1)
+    assert row["failed_indicators"] == ["Alpha Score"]
+    assert len(row["evaluation_trace"]) == 1
+    assert row["evaluation_trace"][0]["status"] == "FAIL"
+    assert row["analysis_snapshot"]["status"] == "rejected"
+
+
 def test_live_score_computation_via_score_engine_for_legacy_rejection_rows():
     """Verify that the ScoreEngine path used for legacy rows (those without
     alpha_score in analysis_snapshot) produces a finite, bounded score from

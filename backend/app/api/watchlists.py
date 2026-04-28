@@ -1622,7 +1622,7 @@ async def _resolve_and_persist(
                         "failed_type": "filter",
                         "failed_indicator": "Alpha Score",
                         "condition": _condition,
-                        "current_value": str(round(alpha, 1)),
+                        "current_value": round(alpha, 1),
                         "expected": str(wl_min_score),
                         "timestamp": _ts,
                         "evaluation_trace": _score_trace,
