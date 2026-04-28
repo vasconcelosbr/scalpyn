@@ -2143,7 +2143,7 @@ async def _get_watchlist_rejections_payload(
     if profile_config and ind_map:
         try:
             from ..services.score_engine import ScoreEngine as _SE, merge_score_config
-            from ..services.config_service import DEFAULT_SCORE
+            from ..services.seed_service import DEFAULT_SCORE
             _rejection_se = _SE(merge_score_config(DEFAULT_SCORE, profile_config))
         except Exception as _e:
             logger.debug("[Pipeline] ScoreEngine init for rejections failed: %s", _e)

@@ -512,3 +512,113 @@ def test_rejected_assets_expose_normalized_details_contract():
     assert item["failed_indicators"] == ["RSI"]
     assert item["current_values"]["RSI"] == 62
     assert item["expected_values"]["RSI"] == "55"
+
+
+# ── Task #84: alpha_score in Rejected tab ──────────────────────────────────────
+
+def test_normalize_decision_snapshot_reads_alpha_score_from_snapshot():
+    """Regression for #84: when `alpha_score` is NOT passed as an explicit
+    argument, `_normalize_decision_snapshot` must fall back to the value
+    stored inside `analysis_snapshot` (written there since the fix).
+    This covers legacy rows whose snapshot was enriched during a pipeline
+    cycle that predates the task but already had the write-path fix active.
+    """
+    from app.api.watchlists import _normalize_decision_snapshot
+
+    snapshot = {
+        "status": "rejected",
+        "stage": "L1",
+        "alpha_score": 42.5,
+        "score_rules": [],
+        "failed_indicators": ["RSI"],
+        "conditions": ["RSI < 55"],
+        "current_values": {},
+        "expected_values": {},
+    }
+
+    result = _normalize_decision_snapshot(
+        symbol="ETH_USDT",
+        status="rejected",
+        stage="L1",
+        profile_id=None,
+        timestamp=None,
+        snapshot=snapshot,
+        # alpha_score NOT passed → must fall back to snapshot value
+    )
+
+    assert result["alpha_score"] == 42.5
+
+
+def test_normalize_decision_snapshot_explicit_arg_wins_over_snapshot():
+    """Explicit `alpha_score` argument must override any value stored in
+    the snapshot (the caller may have a fresher live-computed value).
+    """
+    from app.api.watchlists import _normalize_decision_snapshot
+
+    snapshot = {"alpha_score": 10.0}
+
+    result = _normalize_decision_snapshot(
+        symbol="BTC_USDT",
+        status="rejected",
+        stage="POOL",
+        profile_id=None,
+        timestamp=None,
+        snapshot=snapshot,
+        alpha_score=77.0,  # explicit override
+    )
+
+    assert result["alpha_score"] == 77.0
+
+
+def test_normalize_decision_snapshot_returns_none_when_no_alpha_score():
+    """When neither the explicit argument nor the snapshot contains an
+    alpha_score, the field must be None (renders '–' in the frontend).
+    """
+    from app.api.watchlists import _normalize_decision_snapshot
+
+    result = _normalize_decision_snapshot(
+        symbol="UNKNOWN_USDT",
+        status="rejected",
+        stage="L2",
+        profile_id=None,
+        timestamp=None,
+        snapshot={},
+    )
+
+    assert result["alpha_score"] is None
+
+
+def test_live_score_computation_via_score_engine_for_legacy_rejection_rows():
+    """Verify that the ScoreEngine path used for legacy rows (those without
+    alpha_score in analysis_snapshot) produces a finite, bounded score from
+    raw indicator data — mirroring what _resolve_alpha_score does in the
+    rejection read path.
+
+    This is a white-box sanity check: if ScoreEngine.compute_alpha_score()
+    succeeds on a dict of raw indicators, the live-recompute path in
+    `_get_watchlist_rejections_payload` will surface a real number instead
+    of '–' for every legacy rejected row that has an indicators row.
+
+    DEFAULT_SCORE ships with rsi_1 (RSI ≤ 25) and rsi_2 (RSI ≤ 30) as its
+    built-in scoring rules. Providing RSI=22 triggers both, ensuring the
+    returned total_score is > 0.
+    """
+    from app.services.score_engine import ScoreEngine, merge_score_config
+    from app.services.seed_service import DEFAULT_SCORE
+
+    engine = ScoreEngine(merge_score_config(DEFAULT_SCORE, {}))
+    # RSI=22 satisfies both rsi_1 (≤25) and rsi_2 (≤30).
+    indicators = {
+        "rsi": 22,
+        "volume_24h": 3_000_000,
+        "market_cap": 500_000_000,
+        "change_24h": 1.5,
+    }
+
+    result = engine.compute_alpha_score(indicators)
+    total = result.get("total_score", None)
+
+    assert total is not None
+    assert 0 <= total <= 100, f"Score out of bounds: {total}"
+    # rsi_1 + rsi_2 both pass → score > 0
+    assert total > 0
