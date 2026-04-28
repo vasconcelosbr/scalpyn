@@ -168,6 +168,9 @@ def validate_macd_histogram(
     except ImportError as exc:
         raise RuntimeError("pandas/numpy are required for validate_macd_histogram") from exc
 
+    # EWM/MACD math is intentionally re-implemented here to keep this a pure
+    # function with no dependency on FeatureEngine (avoids circular imports).
+    # Consistency with _calc_macd is verified by TestConsistencyWithFeatureEngine.
     close = pd.Series(close_prices, dtype=float)
     ema_fast = close.ewm(span=fast, adjust=False).mean()
     ema_slow = close.ewm(span=slow, adjust=False).mean()
@@ -190,6 +193,9 @@ def validate_macd_histogram(
     mean_10 = float(prior.mean()) if len(prior) >= 1 else 0.0
     std_10 = float(prior.std(ddof=0)) if len(prior) >= 2 else 0.0
 
+    # Epsilon-based comparison eliminates spurious state flips in low-volatility
+    # environments where raw current-prev would oscillate around zero.
+    # Intentional design choice (spec avançado): epsilon = 10% of prior-10 std.
     epsilon = std_10 * 0.1 if std_10 > 0 else 1e-6
 
     if hist_prev is None:
@@ -217,6 +223,11 @@ def validate_macd_histogram(
     else:
         histogram_sign = "zero"
 
+    # Three-layer consistency check (spec avançado — intentional extension beyond
+    # basic z-score rule).  Checks are short-circuited: first match wins.
+    # Layer 1: z-score outlier (prior-10 baseline; clamped to 10 to prevent infinity)
+    # Layer 2: sign divergence (current vs mean on opposite sides of zero)
+    # Layer 3: scale outlier (current > 10× mean magnitude)
     consistency_status = "valid"
     z_score: Optional[float] = None
 
