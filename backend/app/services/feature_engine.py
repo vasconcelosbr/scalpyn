@@ -267,11 +267,22 @@ class FeatureEngine:
         macd_val = macd_line.iloc[-1]
         sig_val = signal_line.iloc[-1]
         hist_val = histogram.iloc[-1]
+
+        hist_prev = histogram.iloc[-2] if len(histogram) >= 2 else None
+        # Use the 10 candles prior to (excluding) the current one so that
+        # the stored mean/std match the baseline used by validate_macd_histogram.
+        hist_prior = histogram.iloc[-11:-1] if len(histogram) >= 11 else histogram.iloc[:-1]
+        hist_mean = hist_prior.mean() if len(hist_prior) >= 1 else float("nan")
+        hist_std = hist_prior.std(ddof=0) if len(hist_prior) >= 2 else 0.0
+
         return {
             "macd": round(float(macd_val), 8) if pd.notna(macd_val) else None,
             "macd_signal_line": round(float(sig_val), 8) if pd.notna(sig_val) else None,
             "macd_histogram": round(float(hist_val), 8) if pd.notna(hist_val) else None,
             "macd_signal": "positive" if pd.notna(macd_val) and macd_val > sig_val else "negative",
+            "macd_histogram_prev": round(float(hist_prev), 8) if hist_prev is not None and pd.notna(hist_prev) else None,
+            "macd_histogram_mean_10": round(float(hist_mean), 8) if pd.notna(hist_mean) else None,
+            "macd_histogram_std_10": round(float(hist_std), 8) if pd.notna(hist_std) else None,
         }
 
     def _calc_vwap(self, df: pd.DataFrame) -> Dict[str, Any]:

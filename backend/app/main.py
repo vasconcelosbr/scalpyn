@@ -28,6 +28,7 @@ from .api import (
     ai_keys,
     ai_skills,
     asset_search,
+    debug_indicators,
 )
 
 
@@ -150,6 +151,9 @@ app.include_router(ai_keys.router)
 
 # AI Skills
 app.include_router(ai_skills.router)
+
+# Debug / Diagnostic endpoints
+app.include_router(debug_indicators.router)
 
 # WebSocket
 app.include_router(websocket.router)
