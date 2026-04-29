@@ -12,6 +12,8 @@ class DecisionLog(Base):
         Index("idx_decisions_created_at", "created_at"),
         Index("idx_decisions_score", "score"),
         Index("idx_decisions_decision", "decision"),
+        Index("idx_decisions_group_id", "decision_group_id"),
+        Index("idx_decisions_state_hash", "state_hash"),
     )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
@@ -27,7 +29,32 @@ class DecisionLog(Base):
     metrics = Column(JSONB, nullable=True)
     latency_ms = Column(Integer, nullable=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=True)
+    decision_group_id = Column(UUID(as_uuid=True), nullable=True)
+    state_hash = Column(String(64), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class ActiveCandidate(Base):
+    __tablename__ = 'active_candidates'
+    __table_args__ = (
+        Index("idx_active_candidates_user_symbol_strategy", "user_id", "symbol", "strategy", unique=True),
+        Index("idx_active_candidates_state", "state"),
+        Index("idx_active_candidates_last_seen", "last_seen_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    symbol = Column(String(20), nullable=False)
+    strategy = Column(String(50), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
+    state = Column(String(10), nullable=False, default='IDLE')
+    state_hash = Column(String(64), nullable=True)
+    score = Column(Float, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    last_seen_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    decision_id = Column(BigInteger, nullable=True)
+    metadata = Column(JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class AssetTrace(Base):

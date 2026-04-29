@@ -881,11 +881,46 @@ def _evaluate_l3_decisions(
     return decisions
 
 
-async def _persist_decision_logs(db, user_id, decisions: list[dict]):
+async def _persist_decision_logs(db, user_id, decisions: list[dict], use_state_deduplication: bool = True):
+    """Persist decision logs with optional state-based deduplication.
+
+    When use_state_deduplication=True (default), filters decisions through the
+    state engine to prevent logging duplicates for the same ongoing opportunity.
+
+    Returns:
+        (payloads, stats) - List of decision payloads and deduplication statistics
+    """
     from ..models.backoffice import DecisionLog
+    from ..services.decision_state_service import DecisionStateService
 
     if not decisions:
-        return []
+        return [], {}
+
+    stats = {}
+    decisions_to_log = decisions
+
+    # Apply state-based deduplication
+    if use_state_deduplication:
+        try:
+            state_service = DecisionStateService(db)
+            decisions_to_log, stats = await state_service.process_decisions(decisions, user_id)
+
+            logger.info(
+                "[Decision] State engine filtered %d → %d decisions (prevented %d duplicates)",
+                len(decisions),
+                len(decisions_to_log),
+                len(decisions) - len(decisions_to_log),
+            )
+        except Exception as exc:
+            logger.warning(
+                "[Decision] State engine failed, falling back to logging all decisions: %s",
+                exc,
+                exc_info=True,
+            )
+            decisions_to_log = decisions
+
+    if not decisions_to_log:
+        return [], stats
 
     rows = [
         DecisionLog(
@@ -901,12 +936,27 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             metrics=decision.get("metrics"),
             latency_ms=decision.get("latency_ms"),
             user_id=user_id,
+            decision_group_id=decision.get("decision_group_id"),
+            state_hash=decision.get("state_hash"),
             created_at=decision.get("created_at"),
         )
-        for decision in decisions
+        for decision in decisions_to_log
     ]
     db.add_all(rows)
     await db.flush()
+
+    # Update state service with persisted decision IDs
+    if use_state_deduplication:
+        try:
+            strategy = decisions_to_log[0].get("strategy", "SPOT") if decisions_to_log else "SPOT"
+            state_service = DecisionStateService(db)
+            await state_service.update_decision_ids(
+                [(row.symbol, row.id) for row in rows],
+                user_id,
+                strategy,
+            )
+        except Exception as exc:
+            logger.warning("[Decision] Failed to update state with decision IDs: %s", exc)
 
     payloads = []
     for row in rows:
@@ -924,10 +974,16 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             "metrics": row.metrics or {},
             "latency_ms": row.latency_ms,
             "created_at": row.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "decision_group_id": str(row.decision_group_id) if row.decision_group_id else None,
+            "state_hash": row.state_hash,
         }
-        logger.info("[Decision] %s | score=%s | %s", row.symbol, round(float(row.score or 0), 2), row.decision)
+        logger.info("[Decision] %s | score=%s | %s | group=%s",
+                   row.symbol,
+                   round(float(row.score or 0), 2),
+                   row.decision,
+                   str(row.decision_group_id)[:8] if row.decision_group_id else "N/A")
         payloads.append(payload)
-    return payloads
+    return payloads, stats
 
 
 async def _run_staleness_only(
@@ -1797,9 +1853,17 @@ async def _run_pipeline_scan():
                     new_syms = sorted(current_set - prior_set)
 
                     _save_signals(redis, wl_id, current_set)
-                    decision_payloads = await _persist_decision_logs(db, wl.user_id, decisions)
+                    decision_payloads, dedup_stats = await _persist_decision_logs(db, wl.user_id, decisions)
                     await _upsert_assets(db, wl_id, signals, filters_json, execution_id=execution_id)
                     await _update_last_scanned(db, wl_id)
+
+                    # Track deduplication stats
+                    if dedup_stats:
+                        logger.info(
+                            "[PipelineScan] %s: Decision deduplication stats: %s",
+                            wl.name,
+                            dedup_stats,
+                        )
 
                     if decision_payloads:
                         from ..api.websocket import broadcast_decision_created
