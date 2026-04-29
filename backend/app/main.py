@@ -29,6 +29,7 @@ from .api import (
     ai_skills,
     asset_search,
     debug_indicators,
+    simulations,
 )
 
 
@@ -210,6 +211,9 @@ app.include_router(profiles.router)
 app.include_router(analytics.router)
 app.include_router(reports.router)
 app.include_router(backoffice.router)
+
+# Simulations
+app.include_router(simulations.router)
 
 # Notifications
 app.include_router(notifications.router)

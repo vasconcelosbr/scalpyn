@@ -21,6 +21,7 @@ celery_app = Celery(
         "app.tasks.fetch_market_caps",
         "app.tasks.pipeline_scan",
         "app.tasks.ohlcv_backfill",
+        "app.tasks.simulation",
     ],
 )
 
