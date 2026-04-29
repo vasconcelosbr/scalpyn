@@ -75,18 +75,26 @@ def run_trade_simulation(
     return asyncio.run(_run())
 
 
-@celery_app.task(name="app.tasks.simulation.run_simulation_batch")
+@celery_app.task(
+    name="app.tasks.simulation.run_simulation_batch",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    time_limit=600,  # 10 minutes max
+    soft_time_limit=540,  # 9 minutes soft limit
+)
 def run_simulation_batch(
+    self,
     limit: int = 100,
     skip_existing: bool = True,
     user_id: Optional[str] = None,
     exchange: str = "gate",
 ):
     """
-    Run simulation on a batch of decisions.
+    Run simulation on a batch of decisions with retry logic and timeout protection.
 
     Args:
-        limit: Maximum number of decisions to process
+        limit: Maximum number of decisions to process (max 1000)
         skip_existing: Skip decisions that already have simulations
         user_id: Optional user ID filter
         exchange: Exchange name
@@ -95,21 +103,69 @@ def run_simulation_batch(
         Summary statistics
     """
     import asyncio
+    from datetime import datetime, timezone
+
+    # Enforce maximum batch size
+    limit = min(limit, 1000)
+
+    start_time = datetime.now(timezone.utc)
+    logger.info(
+        "[Simulation] Starting batch simulation: limit=%d, skip_existing=%s, exchange=%s",
+        limit, skip_existing, exchange
+    )
 
     async def _run():
         async with CeleryAsyncSessionLocal() as session:
-            service = SimulationService(session)
-            result = await service.run_simulation_batch(
-                limit=limit,
-                skip_existing=skip_existing,
-                user_id=user_id,
-                exchange=exchange,
-            )
+            try:
+                service = SimulationService(session)
+                result = await service.run_simulation_batch(
+                    limit=limit,
+                    skip_existing=skip_existing,
+                    user_id=user_id,
+                    exchange=exchange,
+                )
 
-            logger.info("Batch simulation complete: %s", result)
-            return result
+                # Enhanced logging
+                duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+                logger.info(
+                    "[Simulation] Batch complete in %.2fs: processed=%d, skipped=%d, "
+                    "simulated=%d, errors=%d, records_inserted=%d",
+                    duration,
+                    result.get("processed", 0),
+                    result.get("skipped", 0),
+                    result.get("simulated", 0),
+                    result.get("errors", 0),
+                    result.get("records_inserted", 0),
+                )
 
-    return asyncio.run(_run())
+                # Store last run info in result for status endpoint
+                result["last_run"] = start_time.isoformat()
+                result["duration_seconds"] = duration
+
+                return result
+
+            except Exception as exc:
+                duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+                logger.error(
+                    "[Simulation] Batch failed after %.2fs: %s",
+                    duration, exc, exc_info=True
+                )
+
+                # Retry on transient errors
+                if self.request.retries < self.max_retries:
+                    logger.info(
+                        "[Simulation] Retrying batch (attempt %d/%d)",
+                        self.request.retries + 1, self.max_retries
+                    )
+                    raise self.retry(exc=exc)
+
+                raise
+
+    try:
+        return asyncio.run(_run())
+    except asyncio.TimeoutError:
+        logger.error("[Simulation] Task timeout after soft_time_limit")
+        raise
 
 
 @celery_app.task(name="app.tasks.simulation.get_simulation_stats")

@@ -106,4 +106,13 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.pipeline_scan.scan",
         "schedule": 300.0,
     },
+    # Run simulation batch every 10 minutes
+    "run_simulation_batch_every_10min": {
+        "task": "app.tasks.simulation.run_simulation_batch",
+        "schedule": crontab(minute="*/10"),
+        "kwargs": {
+            "limit": 200,
+            "skip_existing": True,
+        },
+    },
 }

@@ -3,9 +3,11 @@
 import logging
 from typing import Optional
 from uuid import UUID
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
 
 from ..database import get_db
 from ..services.simulation_service import SimulationService
@@ -159,4 +161,76 @@ async def get_simulation_config(
         raise HTTPException(
             status_code=500,
             detail="Failed to get simulation config"
+        ) from exc
+
+
+@router.get("/status")
+async def get_simulation_status(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """
+    Get simulation system status and health metrics.
+
+    Returns:
+        Status dictionary with total simulations, last run info, and health status
+    """
+    try:
+        service = SimulationService(db)
+
+        # Get basic stats
+        stats = await service.get_stats()
+
+        # Get last simulation timestamp
+        result = await db.execute(text("""
+            SELECT MAX(created_at) as last_simulation,
+                   COUNT(*) as total_simulations
+            FROM trade_simulations
+        """))
+        row = result.fetchone()
+
+        last_simulation = row.last_simulation if row else None
+        total_simulations = row.total_simulations if row else 0
+
+        # Check if simulations are current (within last 15 minutes)
+        now = datetime.now(timezone.utc)
+        is_current = False
+        lag_minutes = None
+
+        if last_simulation:
+            if last_simulation.tzinfo is None:
+                last_simulation = last_simulation.replace(tzinfo=timezone.utc)
+            lag_seconds = (now - last_simulation).total_seconds()
+            lag_minutes = int(lag_seconds / 60)
+            is_current = lag_seconds < 900  # 15 minutes
+
+        # Determine overall status
+        if total_simulations == 0:
+            status = "empty"
+        elif is_current:
+            status = "healthy"
+        elif lag_minutes and lag_minutes < 60:
+            status = "warning"
+        else:
+            status = "stale"
+
+        return {
+            "status": status,
+            "total_simulations": total_simulations,
+            "last_simulation": last_simulation.isoformat() if last_simulation else None,
+            "lag_minutes": lag_minutes,
+            "is_current": is_current,
+            "stats": stats,
+            "system": {
+                "automatic_execution": True,
+                "schedule": "every 10 minutes",
+                "batch_size": 200,
+            }
+        }
+
+    except Exception as exc:
+        logger.error("Failed to get simulation status: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to get simulation status"
         ) from exc
