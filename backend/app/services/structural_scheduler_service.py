@@ -60,7 +60,7 @@ def _env_int(name: str, default: int) -> int:
     try:
         return max(int(raw), 1)
     except (TypeError, ValueError):
-        logger.warning("[STRUCTURAL] Invalid int for %s=%r — using default %d",
+        logger.warning("[STRUCT-SCHED] Invalid int for %s=%r — using default %d",
                        name, raw, default)
         return default
 
@@ -109,7 +109,7 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
                 "payload": payload,
             })
         except Exception as exc:
-            logger.warning("[STRUCTURAL] indicators insert failed for %s: %s", symbol, exc)
+            logger.warning("[STRUCT-SCHED] indicators insert failed for %s: %s", symbol, exc)
 
 
 async def _refresh_market_metadata(db, symbol: str, df: pd.DataFrame, when: datetime) -> None:
@@ -125,7 +125,7 @@ async def _refresh_market_metadata(db, symbol: str, df: pd.DataFrame, when: date
                 last_updated = :updated
         """), {"symbol": symbol, "price": last_close, "updated": when})
     except Exception as exc:
-        logger.debug("[STRUCTURAL] market_metadata upsert skipped for %s: %s", symbol, exc)
+        logger.debug("[STRUCT-SCHED] market_metadata upsert skipped for %s: %s", symbol, exc)
 
 
 async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
@@ -139,7 +139,7 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
             df = await market_data_service.fetch_ohlcv(symbol, TIMEFRAME,
                                                         limit=DEFAULT_OHLCV_LIMIT)
         except Exception as exc:
-            logger.warning("[STRUCTURAL] fetch_ohlcv failed for %s: %s", symbol, exc)
+            logger.warning("[STRUCT-SCHED] fetch_ohlcv failed for %s: %s", symbol, exc)
             return f"{symbol}: fetch_failed"
 
         if df is None or df.empty:
@@ -149,7 +149,7 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
         try:
             results = engine.calculate(df, group=SCHEDULER_GROUP) or {}
         except Exception as exc:
-            logger.warning("[STRUCTURAL] FeatureEngine failed for %s: %s", symbol, exc)
+            logger.warning("[STRUCT-SCHED] FeatureEngine failed for %s: %s", symbol, exc)
             results = {}
 
         now = datetime.now(timezone.utc)
@@ -170,10 +170,10 @@ async def _run_one_cycle(concurrency: int) -> None:
             symbols = await _collect_symbols(db)
 
         if not symbols:
-            logger.info("[STRUCTURAL] no symbols to refresh — skipping cycle")
+            logger.info("[STRUCT-SCHED] no symbols to refresh — skipping cycle")
             return
 
-        logger.info("[STRUCTURAL] starting cycle for %d symbols (concurrency=%d)",
+        logger.info("[STRUCT-SCHED] starting cycle for %d symbols (concurrency=%d)",
                     len(symbols), concurrency)
 
         semaphore = asyncio.Semaphore(concurrency)
@@ -185,7 +185,7 @@ async def _run_one_cycle(concurrency: int) -> None:
         ok = sum(1 for r in results if isinstance(r, str) and ": ok " in r)
         failed = sum(1 for r in results if isinstance(r, BaseException))
         duration = (datetime.now(timezone.utc) - cycle_start).total_seconds()
-        logger.info("[STRUCTURAL] cycle done — %d/%d ok, %d exceptions, %.1fs",
+        logger.info("[STRUCT-SCHED] cycle done — %d/%d ok, %d exceptions, %.1fs",
                     ok, len(symbols), failed, duration)
     finally:
         _get_first_cycle_done_event().set()
@@ -205,7 +205,7 @@ async def _scheduler_loop() -> None:
     first_run_delay = _env_int("BACKGROUND_SCHEDULER_FIRST_RUN_DELAY_SECONDS",
                                DEFAULT_FIRST_RUN_DELAY_SECONDS)
 
-    logger.info("[STRUCTURAL] scheduler starting (interval=%ds, concurrency=%d)",
+    logger.info("[STRUCT-SCHED] scheduler starting (interval=%ds, concurrency=%d)",
                 interval, concurrency)
 
     try:
@@ -217,15 +217,15 @@ async def _scheduler_loop() -> None:
         try:
             await _run_one_cycle(concurrency)
         except asyncio.CancelledError:
-            logger.info("[STRUCTURAL] scheduler cancelled — exiting loop")
+            logger.info("[STRUCT-SCHED] scheduler cancelled — exiting loop")
             raise
         except Exception as exc:
-            logger.exception("[STRUCTURAL] cycle crashed: %s", exc)
+            logger.exception("[STRUCT-SCHED] cycle crashed: %s", exc)
 
         try:
             await asyncio.sleep(interval)
         except asyncio.CancelledError:
-            logger.info("[STRUCTURAL] scheduler cancelled — exiting loop")
+            logger.info("[STRUCT-SCHED] scheduler cancelled — exiting loop")
             raise
 
 
@@ -234,11 +234,11 @@ def start_structural_scheduler() -> Optional[asyncio.Task]:
     global _scheduler_task
 
     if os.environ.get("SKIP_STRUCTURAL_SCHEDULER") == "1":
-        logger.info("[STRUCTURAL] SKIP_STRUCTURAL_SCHEDULER=1 — scheduler disabled")
+        logger.info("[STRUCT-SCHED] SKIP_STRUCTURAL_SCHEDULER=1 — scheduler disabled")
         return None
 
     if _scheduler_task is not None and not _scheduler_task.done():
-        logger.debug("[STRUCTURAL] scheduler already running — reusing existing task")
+        logger.debug("[STRUCT-SCHED] scheduler already running — reusing existing task")
         return _scheduler_task
 
     loop = asyncio.get_event_loop()

@@ -33,7 +33,7 @@ FeatureEngine calc-key sets that map config keys to groups:
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Literal, Optional, TypedDict
 
 Group = Literal["structural", "microstructure"]
 Subtype = Literal["pure", "hybrid"]
@@ -166,31 +166,55 @@ _EMA_STRUCT_MIN_PERIOD = 50   # EMA periods ≥ 50 → structural
 
 
 def classify_indicator(name: str) -> Group:
-    """Return the scheduler group for a given indicator name."""
+    """Return the scheduler group for a given indicator name (name-only shorthand)."""
     return classify_indicator_full(name)["group"]
 
 
-def classify_indicator_full(name: str) -> IndicatorClassification:
-    """Return {group, subtype} for a given indicator name.
+def classify_indicator_full(
+    name: str,
+    *,
+    data_source: Optional[str] = None,
+    reacts_fast: Optional[bool] = None,
+    mode: Optional[str] = None,
+) -> IndicatorClassification:
+    """Return {group, subtype} for an indicator using the formal 6-level priority model.
 
-    Uses the formal priority model described in the module docstring.
+    Args:
+        name:        Canonical indicator name (e.g. "rsi", "ema9", "vwap").
+        data_source: Optional data lineage hint — "order_flow" | "ohlcv" | None.
+        reacts_fast: True if the indicator responds meaningfully within a 5-min window.
+        mode:        For VWAP: "intraday" (daily reset) → microstructure;
+                     "daily" | "weekly" | "monthly" | "anchored" → structural.
+
+    Priority order (first match wins):
+      1. Explicit indicator name map (covers all known indicator names)
+      2. EMA/MA period rule (period <= 21 → micro; >= 50 → struct; 22-49 → struct/hybrid)
+      3. data_source == "order_flow" → microstructure
+      4. data_source == "ohlcv"      → structural
+      5. reacts_fast == True         → microstructure
+      6. Fallback                    → structural / pure
     """
-    # Priority 1a: explicit microstructure
+    # ── Priority 1a: Explicit microstructure names ────────────────────────────
     if name in _MICRO_EXPLICIT:
         return {"group": "microstructure", "subtype": "pure"}
 
-    # Priority 1b: explicit structural
+    # ── Priority 1b: Explicit structural names ────────────────────────────────
     if name in _STRUCT_EXPLICIT:
         return {"group": "structural", "subtype": "pure"}
 
-    # Priority 1c: hybrid (cross-group derived)
+    # ── Priority 1c: Hybrid (cross-group derived) names ───────────────────────
     if name in _HYBRID_INDICATORS:
-        # Hybrid indicators live in the structural group because they anchor
-        # on slow EMA values; the fast-EMA component is merged at query time.
         return {"group": "structural", "subtype": "hybrid"}
 
-    # Priority 2: EMA/MA period rule
-    # Pattern: ema<period> (e.g. "ema34")
+    # ── VWAP mode check (before generic prefix/period rules) ─────────────────
+    if name == "vwap" or name.startswith("vwap_"):
+        # Explicit mode kwarg overrides name-based default
+        if mode in ("weekly", "monthly", "anchored", "daily"):
+            return {"group": "structural", "subtype": "hybrid"}
+        # "intraday" or unspecified → microstructure (default for VWAP is intraday)
+        return {"group": "microstructure", "subtype": "pure"}
+
+    # ── Priority 2: EMA/MA period rule (ema<period>) ─────────────────────────
     if name.startswith("ema") and len(name) > 3:
         suffix = name[3:]
         try:
@@ -206,21 +230,29 @@ def classify_indicator_full(name: str) -> IndicatorClassification:
                 # 22–49: conservative fallback to structural
                 return {"group": "structural", "subtype": "hybrid"}
 
-    # Priority 3: order_flow data source → microstructure
+    # ── Priority 3: data_source == "order_flow" → microstructure ─────────────
+    if data_source == "order_flow":
+        return {"group": "microstructure", "subtype": "pure"}
+
+    # Also apply order_flow via name prefix for unknown future indicators
     if name.startswith((
         "market_data_", "orderbook_", "taker_", "funding_", "spread_",
     )):
         return {"group": "microstructure", "subtype": "pure"}
 
-    # Priority 4: ohlcv data source → structural
-    # (Most remaining OHLCV-only indicators arrive here via the explicit map
-    # above; this catch-all handles future unknowns with ohlcv heritage.)
+    # ── Priority 4: data_source == "ohlcv" → structural ──────────────────────
+    if data_source == "ohlcv":
+        return {"group": "structural", "subtype": "pure"}
 
-    # Priority 5: reacts_fast — volume prefix → microstructure
+    # ── Priority 5: reacts_fast == True → microstructure ─────────────────────
+    if reacts_fast is True:
+        return {"group": "microstructure", "subtype": "pure"}
+
+    # Also apply volume prefix as a name-based reacts_fast proxy
     if name.startswith("volume_"):
         return {"group": "microstructure", "subtype": "pure"}
 
-    # Priority 6: fallback → structural / pure
+    # ── Priority 6: Fallback → structural / pure ──────────────────────────────
     return {"group": "structural", "subtype": "pure"}
 
 

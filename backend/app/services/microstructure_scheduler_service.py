@@ -61,7 +61,7 @@ def _env_int(name: str, default: int) -> int:
     try:
         return max(int(raw), 1)
     except (TypeError, ValueError):
-        logger.warning("[MICRO] Invalid int for %s=%r — using default %d",
+        logger.warning("[MICRO-SCHED] Invalid int for %s=%r — using default %d",
                        name, raw, default)
         return default
 
@@ -109,7 +109,7 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
                 "payload": payload,
             })
         except Exception as exc:
-            logger.warning("[MICRO] indicators insert failed for %s: %s", symbol, exc)
+            logger.warning("[MICRO-SCHED] indicators insert failed for %s: %s", symbol, exc)
 
 
 async def _refresh_market_metadata(db, symbol: str,
@@ -135,7 +135,7 @@ async def _refresh_market_metadata(db, symbol: str,
             "updated": when,
         })
     except Exception as exc:
-        logger.debug("[MICRO] market_metadata upsert skipped for %s: %s", symbol, exc)
+        logger.debug("[MICRO-SCHED] market_metadata upsert skipped for %s: %s", symbol, exc)
 
 
 async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
@@ -150,14 +150,14 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
             df = await market_data_service.fetch_ohlcv(symbol, TIMEFRAME,
                                                         limit=DEFAULT_OHLCV_LIMIT)
         except Exception as exc:
-            logger.warning("[MICRO] fetch_ohlcv failed for %s: %s", symbol, exc)
+            logger.warning("[MICRO-SCHED] fetch_ohlcv failed for %s: %s", symbol, exc)
             df = None
 
         # Always fetch live orderbook for spread/depth/taker data
         try:
             spread_payload = await market_data_service.fetch_orderbook_metrics(symbol)
         except Exception as exc:
-            logger.debug("[MICRO] orderbook fetch failed for %s: %s", symbol, exc)
+            logger.debug("[MICRO-SCHED] orderbook fetch failed for %s: %s", symbol, exc)
             spread_payload = {}
 
         results: dict = {}
@@ -168,7 +168,7 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
                 results = engine.calculate(df, market_data=spread_payload or None,
                                            group=SCHEDULER_GROUP) or {}
             except Exception as exc:
-                logger.warning("[MICRO] FeatureEngine failed for %s: %s", symbol, exc)
+                logger.warning("[MICRO-SCHED] FeatureEngine failed for %s: %s", symbol, exc)
                 results = {}
 
         # Ensure spread/depth always land in the results even when OHLCV failed
@@ -201,10 +201,10 @@ async def _run_one_cycle(concurrency: int) -> None:
             symbols = await _collect_symbols(db)
 
         if not symbols:
-            logger.info("[MICRO] no symbols to refresh — skipping cycle")
+            logger.info("[MICRO-SCHED] no symbols to refresh — skipping cycle")
             return
 
-        logger.info("[MICRO] starting cycle for %d symbols (concurrency=%d)",
+        logger.info("[MICRO-SCHED] starting cycle for %d symbols (concurrency=%d)",
                     len(symbols), concurrency)
 
         semaphore = asyncio.Semaphore(concurrency)
@@ -216,7 +216,7 @@ async def _run_one_cycle(concurrency: int) -> None:
         ok = sum(1 for r in results if isinstance(r, str) and ": ok " in r)
         failed = sum(1 for r in results if isinstance(r, BaseException))
         duration = (datetime.now(timezone.utc) - cycle_start).total_seconds()
-        logger.info("[MICRO] cycle done — %d/%d ok, %d exceptions, %.1fs",
+        logger.info("[MICRO-SCHED] cycle done — %d/%d ok, %d exceptions, %.1fs",
                     ok, len(symbols), failed, duration)
     finally:
         _get_first_cycle_done_event().set()
@@ -236,7 +236,7 @@ async def _scheduler_loop() -> None:
     first_run_delay = _env_int("MICROSTRUCTURE_SCHEDULER_FIRST_RUN_DELAY_SECONDS",
                                DEFAULT_FIRST_RUN_DELAY_SECONDS)
 
-    logger.info("[MICRO] scheduler starting (interval=%ds, concurrency=%d)",
+    logger.info("[MICRO-SCHED] scheduler starting (interval=%ds, concurrency=%d)",
                 interval, concurrency)
 
     try:
@@ -248,15 +248,15 @@ async def _scheduler_loop() -> None:
         try:
             await _run_one_cycle(concurrency)
         except asyncio.CancelledError:
-            logger.info("[MICRO] scheduler cancelled — exiting loop")
+            logger.info("[MICRO-SCHED] scheduler cancelled — exiting loop")
             raise
         except Exception as exc:
-            logger.exception("[MICRO] cycle crashed: %s", exc)
+            logger.exception("[MICRO-SCHED] cycle crashed: %s", exc)
 
         try:
             await asyncio.sleep(interval)
         except asyncio.CancelledError:
-            logger.info("[MICRO] scheduler cancelled — exiting loop")
+            logger.info("[MICRO-SCHED] scheduler cancelled — exiting loop")
             raise
 
 
@@ -265,11 +265,11 @@ def start_microstructure_scheduler() -> Optional[asyncio.Task]:
     global _scheduler_task
 
     if os.environ.get("SKIP_MICROSTRUCTURE_SCHEDULER") == "1":
-        logger.info("[MICRO] SKIP_MICROSTRUCTURE_SCHEDULER=1 — scheduler disabled")
+        logger.info("[MICRO-SCHED] SKIP_MICROSTRUCTURE_SCHEDULER=1 — scheduler disabled")
         return None
 
     if _scheduler_task is not None and not _scheduler_task.done():
-        logger.debug("[MICRO] scheduler already running — reusing existing task")
+        logger.debug("[MICRO-SCHED] scheduler already running — reusing existing task")
         return _scheduler_task
 
     loop = asyncio.get_event_loop()

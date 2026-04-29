@@ -187,40 +187,55 @@ async def _scheduler_loop() -> None:
                 wait_for_first_cycle as _wait_micro,
             )
 
+            micro_enabled = os.environ.get("SKIP_MICROSTRUCTURE_SCHEDULER") != "1"
+            struct_enabled = os.environ.get("SKIP_STRUCTURAL_SCHEDULER") != "1"
+
             # Step 1: Wait for microstructure first (fast — completes in ~15 s + 5 min).
-            micro_ok = await _wait_micro(timeout=float(max_readiness_wait))
-            if micro_ok:
-                logger.info(
-                    "[PIPELINE-SCHED] microstructure scheduler signaled first "
-                    "cycle complete — now waiting for structural (lag < 30 min)..."
-                )
+            # Only wait if microstructure scheduler is actually running.
+            if micro_enabled:
+                micro_ok = await _wait_micro(timeout=float(max_readiness_wait))
+                if micro_ok:
+                    logger.info(
+                        "[PIPELINE-SCHED] microstructure scheduler signaled first "
+                        "cycle complete — now waiting for structural (lag < 30 min)..."
+                    )
+                else:
+                    logger.warning(
+                        "[PIPELINE-SCHED] no microstructure readiness signal within "
+                        "%ds — proceeding to avoid startup deadlock",
+                        max_readiness_wait,
+                    )
             else:
-                logger.warning(
-                    "[PIPELINE-SCHED] no microstructure readiness signal within "
-                    "%ds — proceeding to avoid startup deadlock",
-                    max_readiness_wait,
+                logger.info(
+                    "[PIPELINE-SCHED] microstructure scheduler disabled "
+                    "(SKIP_MICROSTRUCTURE_SCHEDULER=1) — skipping micro wait"
                 )
 
-            # Step 2: Also wait for structural, up to STRUCTURAL_LAG_LIMIT_SECONDS
+            # Step 2: Wait for structural, up to STRUCTURAL_LAG_LIMIT_SECONDS
             # (default 1800 s = 30 min) after microstructure completes.
-            # If structural finishes early, great; if it's still on its first
-            # 15-min cycle we advance once the lag budget is spent.
-            structural_lag_limit = _env_int(
-                "PIPELINE_SCHEDULER_STRUCTURAL_LAG_LIMIT_SECONDS",
-                1800,  # 30 minutes
-            )
-            struct_ok = await _wait_structural(timeout=float(structural_lag_limit))
-            if struct_ok:
-                logger.info(
-                    "[PIPELINE-SCHED] structural scheduler signaled first "
-                    "cycle complete — both schedulers ready"
+            # Skip entirely when structural scheduler is explicitly disabled.
+            if struct_enabled:
+                structural_lag_limit = _env_int(
+                    "PIPELINE_SCHEDULER_STRUCTURAL_LAG_LIMIT_SECONDS",
+                    1800,  # 30 minutes
                 )
+                struct_ok = await _wait_structural(timeout=float(structural_lag_limit))
+                if struct_ok:
+                    logger.info(
+                        "[PIPELINE-SCHED] structural scheduler signaled first "
+                        "cycle complete — both schedulers ready"
+                    )
+                else:
+                    logger.warning(
+                        "[PIPELINE-SCHED] structural scheduler first cycle not "
+                        "complete within %ds — proceeding (fresh microstructure "
+                        "indicators available, structural pending)",
+                        structural_lag_limit,
+                    )
             else:
-                logger.warning(
-                    "[PIPELINE-SCHED] structural scheduler first cycle not "
-                    "complete within %ds — proceeding (fresh microstructure "
-                    "indicators available, structural pending)",
-                    structural_lag_limit,
+                logger.info(
+                    "[PIPELINE-SCHED] structural scheduler disabled "
+                    "(SKIP_STRUCTURAL_SCHEDULER=1) — skipping structural wait"
                 )
 
     except asyncio.CancelledError:
