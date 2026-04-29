@@ -56,6 +56,23 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+async def _count_active_watchlists() -> Optional[int]:
+    """Cheap pre-scan COUNT so we can include it in the cycle start log."""
+    try:
+        from sqlalchemy import text
+        from ..database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            row = (await db.execute(text(
+                "SELECT COUNT(*) FROM pipeline_watchlists WHERE auto_refresh = true"
+            ))).first()
+            return int(row[0]) if row else 0
+    except Exception as exc:
+        logger.debug(
+            "[PIPELINE-SCHED] active-watchlist count query failed: %s", exc
+        )
+        return None
+
+
 async def _run_one_cycle() -> None:
     """Invoke the pipeline scan exactly once and log a structured summary."""
     # Imported lazily so `import app.services.pipeline_scheduler_service` stays
@@ -63,7 +80,14 @@ async def _run_one_cycle() -> None:
     from ..tasks.pipeline_scan import _run_pipeline_scan
 
     cycle_start = datetime.now(timezone.utc)
-    logger.info("[PIPELINE-SCHED] starting pipeline scan cycle")
+    active_count = await _count_active_watchlists()
+    if active_count is not None:
+        logger.info(
+            "[PIPELINE-SCHED] starting pipeline scan cycle for %d watchlists",
+            active_count,
+        )
+    else:
+        logger.info("[PIPELINE-SCHED] starting pipeline scan cycle")
 
     try:
         result = await _run_pipeline_scan()
@@ -110,10 +134,36 @@ async def _scheduler_loop() -> None:
         interval, first_run_delay,
     )
 
+    # Prefer a readiness handshake with the indicator scheduler over a raw
+    # sleep: this guarantees the first pipeline run lands on top of fresh
+    # OHLCV / indicators / market_metadata rather than racing them. If that
+    # scheduler is disabled (or never fires within `first_run_delay`), fall
+    # back to the time-based delay so we never block startup forever.
     try:
-        await asyncio.sleep(first_run_delay)
+        from .scheduler_service import wait_for_first_cycle
+        signaled = await wait_for_first_cycle(timeout=first_run_delay)
+        if signaled:
+            logger.info(
+                "[PIPELINE-SCHED] indicator scheduler signaled first cycle "
+                "complete — proceeding"
+            )
+        else:
+            logger.info(
+                "[PIPELINE-SCHED] indicator scheduler readiness timed out "
+                "after %ds — proceeding with time-based delay",
+                first_run_delay,
+            )
     except asyncio.CancelledError:
         return
+    except Exception as exc:
+        logger.warning(
+            "[PIPELINE-SCHED] readiness handshake unavailable (%s) — "
+            "falling back to %ds sleep", exc, first_run_delay,
+        )
+        try:
+            await asyncio.sleep(first_run_delay)
+        except asyncio.CancelledError:
+            return
 
     while True:
         try:

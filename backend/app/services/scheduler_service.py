@@ -33,6 +33,38 @@ TIMEFRAME = "1h"
 
 _scheduler_task: Optional[asyncio.Task] = None
 
+# Set after the first refresh cycle has finished. Other in-process
+# schedulers (e.g. pipeline_scheduler_service) await this so their first
+# run lands on top of fresh OHLCV / indicators / market_metadata instead
+# of racing the very first indicator computation. Lazily created so we do
+# not bind it to a stale event loop at import time.
+_first_cycle_done_event: Optional[asyncio.Event] = None
+
+
+def _get_first_cycle_done_event() -> asyncio.Event:
+    """Return the singleton event, creating it lazily on the running loop."""
+    global _first_cycle_done_event
+    if _first_cycle_done_event is None:
+        _first_cycle_done_event = asyncio.Event()
+    return _first_cycle_done_event
+
+
+async def wait_for_first_cycle(timeout: Optional[float] = None) -> bool:
+    """Block until the background scheduler has completed at least one
+    refresh cycle. Returns True if the event fired, False on timeout.
+
+    Safe to call even when the scheduler is disabled — callers should
+    treat a False return as "fall back to your own time delay".
+    """
+    event = _get_first_cycle_done_event()
+    if event.is_set():
+        return True
+    try:
+        await asyncio.wait_for(event.wait(), timeout=timeout)
+        return True
+    except asyncio.TimeoutError:
+        return False
+
 
 def _env_int(name: str, default: int) -> int:
     raw = os.environ.get(name)
@@ -232,6 +264,10 @@ async def _run_one_cycle(concurrency: int) -> None:
         "[SCHED] cycle finished — %d/%d ok, %d exceptions, %.1fs",
         ok, len(symbols), failed, duration,
     )
+
+    # Signal any other in-process scheduler waiting on us (notably the
+    # pipeline scheduler) that fresh OHLCV / indicators are now in place.
+    _get_first_cycle_done_event().set()
 
 
 async def _scheduler_loop() -> None:
