@@ -54,7 +54,8 @@ function fmtValue(value: unknown): string {
   return formatEvaluationTraceValue(value);
 }
 
-function scoreColor(pct: number): string {
+function scoreColor(pct: number | null): string {
+  if (pct == null) return "#64748B";
   if (pct >= 70) return "#34D399";
   if (pct >= 45) return "#FBBF24";
   return "#F87171";
@@ -379,13 +380,6 @@ function fmtRuleValue(value: ScoreRule["actual_value"]): string {
     return value % 1 === 0 ? String(value) : value.toFixed(2);
   }
   return String(value);
-}
-
-function scoreColor(score: number | null): string {
-  if (score == null) return "#64748B";
-  if (score >= 70) return "#34D399";
-  if (score >= 45) return "#FBBF24";
-  return "#F87171";
 }
 
 function ScoreBreakdownSection({
