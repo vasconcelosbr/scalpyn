@@ -455,25 +455,28 @@ function ScoreBreakdownSection({
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1">
                 {catRules.map((rule) => {
                   const isPenalty = rule.type === 'penalty';
+                  const isNeutral = rule.type === 'neutral';
                   const isFired   = rule.passed;
-                  const isGood    = !isPenalty && isFired;
-                  const colors    = isPenalty
-                    ? (isFired ? RULE_COLORS.penaltyFired : RULE_COLORS.penaltyIdle)
-                    : (isFired ? RULE_COLORS.positiveMatched : RULE_COLORS.positiveUnmatched);
+                  const isGood    = !isPenalty && !isNeutral && isFired;
+                  const colors    = isNeutral
+                    ? RULE_COLORS.positiveUnmatched
+                    : isPenalty
+                      ? (isFired ? RULE_COLORS.penaltyFired : RULE_COLORS.penaltyIdle)
+                      : (isFired ? RULE_COLORS.positiveMatched : RULE_COLORS.positiveUnmatched);
 
                   return (
                     <div
                       key={rule.id}
                       className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs border ${colors.bg}`}
                     >
-                      {isGood || (isPenalty && !isFired) ? (
+                      {isGood || (isPenalty && !isFired) || (isNeutral && isFired) ? (
                         <CheckCircle2 size={11} className={`${isGood ? 'text-[#34D399]' : 'text-[#4B5563]'} shrink-0`} />
                       ) : (
-                        <XCircle size={11} className="text-[#F87171] shrink-0" />
+                        <XCircle size={11} className={`${isNeutral ? 'text-[#4B5563]' : 'text-[#F87171]'} shrink-0`} />
                       )}
                       <span
                         className={`flex-1 truncate ${
-                          isFired && !isPenalty ? 'text-[#94A3B8]' : isPenalty && isFired ? 'text-[#F87171]' : 'text-[#4B5563]'
+                          isGood ? 'text-[#94A3B8]' : isPenalty && isFired ? 'text-[#F87171]' : 'text-[#4B5563]'
                         }`}
                         title={rule.condition_text}
                       >
@@ -482,7 +485,7 @@ function ScoreBreakdownSection({
                       <span
                         className={`font-mono text-[10px] shrink-0 ${
                           rule.actual_value != null
-                            ? isFired && !isPenalty ? 'text-[#CBD5E1]' : isPenalty && isFired ? 'text-[#FCA5A5]' : 'text-[#64748B]'
+                            ? isGood ? 'text-[#CBD5E1]' : isPenalty && isFired ? 'text-[#FCA5A5]' : 'text-[#64748B]'
                             : 'text-[#334155]'
                         }`}
                       >

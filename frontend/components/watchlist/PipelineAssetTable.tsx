@@ -18,7 +18,7 @@ export interface ScoreRule {
   passed: boolean;
   points_awarded: number;
   points_possible: number;
-  type?: "positive" | "penalty";
+  type?: "positive" | "penalty" | "neutral";
   condition_text: string;
   category: string;
   scheduler_group?: string | null;
@@ -42,14 +42,15 @@ export function fmtPts(v: number): string {
   return r > 0 ? `+${r}` : `${r}`;
 }
 
-/** Sort score rules: positive rules first (descending by points_possible),
- *  then penalty rules (ascending by magnitude — most negative first). */
+/** Sort score rules: positive first (descending), neutral in the middle,
+ *  penalty rules last (ascending by magnitude — most negative first). */
 export function sortScoreRules(rules: ScoreRule[]): ScoreRule[] {
-  const pos = rules.filter(r => (r.type ?? 'positive') !== 'penalty');
-  const pen = rules.filter(r => r.type === 'penalty');
+  const pos = rules.filter(r => r.type === 'positive' || (!r.type && r.points_possible > 0));
+  const neu = rules.filter(r => r.type === 'neutral' || (!r.type && r.points_possible === 0));
+  const pen = rules.filter(r => r.type === 'penalty' || (!r.type && r.points_possible < 0));
   pos.sort((a, b) => b.points_possible - a.points_possible);
   pen.sort((a, b) => a.points_possible - b.points_possible);
-  return [...pos, ...pen];
+  return [...pos, ...neu, ...pen];
 }
 
 type IndicatorValue = number | boolean | string | null | undefined;
@@ -427,11 +428,14 @@ function DrilldownPanel({
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1">
               {catRules.map((rule) => {
                 const isPenalty = rule.type === 'penalty';
+                const isNeutral = rule.type === 'neutral';
                 const isFired   = rule.passed;
-                const isGood    = !isPenalty && isFired;
-                const colors    = isPenalty
-                  ? (isFired ? RULE_COLORS.penaltyFired : RULE_COLORS.penaltyIdle)
-                  : (isFired ? RULE_COLORS.positiveMatched : RULE_COLORS.positiveUnmatched);
+                const isGood    = !isPenalty && !isNeutral && isFired;
+                const colors    = isNeutral
+                  ? RULE_COLORS.positiveUnmatched
+                  : isPenalty
+                    ? (isFired ? RULE_COLORS.penaltyFired : RULE_COLORS.penaltyIdle)
+                    : (isFired ? RULE_COLORS.positiveMatched : RULE_COLORS.positiveUnmatched);
 
                 const grpKey = rule.scheduler_group ?? '';
                 const grpLabel = GROUP_LABEL[grpKey] ?? grpKey;
@@ -447,16 +451,16 @@ function DrilldownPanel({
                     className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs border ${colors.bg}`}
                     data-testid={`drilldown-rule-${rule.indicator}`}
                   >
-                    {isGood || (isPenalty && !isFired)
+                    {isGood || (isPenalty && !isFired) || (isNeutral && isFired)
                       ? <CheckCircle2 size={11} className={`${isGood ? 'text-[#34D399]' : 'text-[#4B5563]'} shrink-0`} />
-                      : <XCircle size={11} className="text-[#F87171] shrink-0" />
+                      : <XCircle size={11} className={`${isNeutral ? 'text-[#4B5563]' : 'text-[#F87171]'} shrink-0`} />
                     }
-                    <span className={`flex-1 truncate ${isFired && !isPenalty ? 'text-[#94A3B8]' : isPenalty && isFired ? 'text-[#F87171]' : 'text-[#4B5563]'}`}>
+                    <span className={`flex-1 truncate ${isGood ? 'text-[#94A3B8]' : isPenalty && isFired ? 'text-[#F87171]' : 'text-[#4B5563]'}`}>
                       {rule.condition_text}
                     </span>
                     <span className={`font-mono text-[10px] shrink-0 ${
                       rule.actual_value != null
-                        ? isFired && !isPenalty ? 'text-[#CBD5E1]' : isPenalty && isFired ? 'text-[#FCA5A5]' : 'text-[#64748B]'
+                        ? isGood ? 'text-[#CBD5E1]' : isPenalty && isFired ? 'text-[#FCA5A5]' : 'text-[#64748B]'
                         : 'text-[#334155]'
                     }`}>
                       {rule.actual_value != null ? fmtIndValue(rule.indicator, rule.actual_value) : '—'}

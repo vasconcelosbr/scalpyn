@@ -566,7 +566,7 @@ class ScoreEngine:
                 "passed": passed,
                 "points_awarded": float(pts) if passed else 0.0,
                 "points_possible": float(pts),
-                "type": "positive" if pts >= 0 else "penalty",
+                "type": "positive" if pts > 0 else ("penalty" if pts < 0 else "neutral"),
                 "condition_text": cond,
                 "category": resolve_rule_category(rule),
             })
