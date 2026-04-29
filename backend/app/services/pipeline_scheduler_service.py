@@ -41,6 +41,14 @@ logger = logging.getLogger(__name__)
 DEFAULT_INTERVAL_SECONDS = 600
 DEFAULT_FIRST_RUN_DELAY_SECONDS = 60
 
+# Hard upper bound on how long the readiness handshake will block startup,
+# even when the indicator scheduler is enabled.  Belt-and-suspenders:
+# scheduler_service now sets `_first_cycle_done_event` from a try/finally
+# so it should always fire, but if a future regression breaks that
+# guarantee the pipeline scheduler must NOT deadlock on a fresh DB — the
+# whole point of this scheduler is to repair that exact state.
+DEFAULT_MAX_READINESS_WAIT_SECONDS = 300
+
 _scheduler_task: Optional[asyncio.Task] = None
 
 
@@ -141,14 +149,22 @@ async def _scheduler_loop() -> None:
     # refresh so the first pipeline run lands on top of fresh data instead
     # of racing it.
     #
-    # When the indicator scheduler is enabled (the production default) we
-    # wait WITHOUT a timeout — its cycle can legitimately take longer than
-    # `first_run_delay` on cold starts, and proceeding early would defeat
-    # the purpose of the handshake.  Only when the indicator scheduler is
-    # explicitly opted out via SKIP_BACKGROUND_SCHEDULER=1 do we fall back
-    # to the time-based delay so the pipeline scheduler still runs.
+    # Wait policy:
+    #   * If the indicator scheduler is OPTED OUT (SKIP_BACKGROUND_SCHEDULER=1)
+    #     we use the short `first_run_delay` as a hard timeout — there is
+    #     nobody to signal us, so we just sleep and proceed.
+    #   * Otherwise we wait up to `max_readiness_wait` seconds for the
+    #     readiness signal.  This is bounded (default 300 s, env
+    #     `PIPELINE_SCHEDULER_MAX_READINESS_WAIT_SECONDS`) instead of
+    #     `None` so that a future regression in scheduler_service (where
+    #     the event might never be set) cannot deadlock the pipeline
+    #     scheduler — the very state this loop is supposed to repair.
     indicator_scheduler_disabled = (
         os.environ.get("SKIP_BACKGROUND_SCHEDULER") == "1"
+    )
+    max_readiness_wait = _env_int(
+        "PIPELINE_SCHEDULER_MAX_READINESS_WAIT_SECONDS",
+        DEFAULT_MAX_READINESS_WAIT_SECONDS,
     )
     try:
         from .scheduler_service import wait_for_first_cycle
@@ -166,11 +182,18 @@ async def _scheduler_loop() -> None:
                     first_run_delay,
                 )
         else:
-            await wait_for_first_cycle(timeout=None)
-            logger.info(
-                "[PIPELINE-SCHED] indicator scheduler signaled first cycle "
-                "complete — proceeding"
-            )
+            signaled = await wait_for_first_cycle(timeout=max_readiness_wait)
+            if signaled:
+                logger.info(
+                    "[PIPELINE-SCHED] indicator scheduler signaled first "
+                    "cycle complete — proceeding"
+                )
+            else:
+                logger.warning(
+                    "[PIPELINE-SCHED] no readiness signal within %ds — "
+                    "proceeding anyway to avoid startup deadlock",
+                    max_readiness_wait,
+                )
     except asyncio.CancelledError:
         return
     except Exception as exc:

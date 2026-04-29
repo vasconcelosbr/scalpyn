@@ -240,34 +240,45 @@ async def _run_one_cycle(concurrency: int) -> None:
     from ..database import AsyncSessionLocal
 
     cycle_start = datetime.now(timezone.utc)
-    async with AsyncSessionLocal() as db:
-        symbols = await _collect_watchlist_symbols(db)
 
-    if not symbols:
-        logger.info("[SCHED] no symbols to refresh — skipping cycle")
-        return
+    # Always signal readiness on cycle exit — even when the cycle is
+    # skipped due to an empty symbol set or a transient DB error. Otherwise
+    # downstream waiters (pipeline_scheduler_service) would deadlock on a
+    # fresh DB where market_metadata / pipeline_watchlist_assets have not
+    # been populated yet (the very state this scheduler is supposed to
+    # repair).  Using try/finally guarantees the event is set even on
+    # CancelledError / unexpected exceptions.
+    try:
+        async with AsyncSessionLocal() as db:
+            symbols = await _collect_watchlist_symbols(db)
 
-    logger.info("[SCHED] starting refresh cycle for %d symbols (concurrency=%d)",
-                len(symbols), concurrency)
+        if not symbols:
+            logger.info("[SCHED] no symbols to refresh — skipping cycle")
+            return
 
-    semaphore = asyncio.Semaphore(concurrency)
-    results = await asyncio.gather(
-        *[_refresh_one_symbol(s, semaphore) for s in symbols],
-        return_exceptions=True,
-    )
+        logger.info("[SCHED] starting refresh cycle for %d symbols (concurrency=%d)",
+                    len(symbols), concurrency)
 
-    ok = sum(1 for r in results if isinstance(r, str) and ": ok " in r)
-    failed = sum(1 for r in results if isinstance(r, BaseException))
-    duration = (datetime.now(timezone.utc) - cycle_start).total_seconds()
+        semaphore = asyncio.Semaphore(concurrency)
+        results = await asyncio.gather(
+            *[_refresh_one_symbol(s, semaphore) for s in symbols],
+            return_exceptions=True,
+        )
 
-    logger.info(
-        "[SCHED] cycle finished — %d/%d ok, %d exceptions, %.1fs",
-        ok, len(symbols), failed, duration,
-    )
+        ok = sum(1 for r in results if isinstance(r, str) and ": ok " in r)
+        failed = sum(1 for r in results if isinstance(r, BaseException))
+        duration = (datetime.now(timezone.utc) - cycle_start).total_seconds()
 
-    # Signal any other in-process scheduler waiting on us (notably the
-    # pipeline scheduler) that fresh OHLCV / indicators are now in place.
-    _get_first_cycle_done_event().set()
+        logger.info(
+            "[SCHED] cycle finished — %d/%d ok, %d exceptions, %.1fs",
+            ok, len(symbols), failed, duration,
+        )
+    finally:
+        # Signal any other in-process scheduler waiting on us (notably the
+        # pipeline scheduler) that this cycle has run.  This must fire on
+        # EVERY cycle exit, including the empty-symbols early return, to
+        # avoid the readiness deadlock described above.
+        _get_first_cycle_done_event().set()
 
 
 async def _scheduler_loop() -> None:
