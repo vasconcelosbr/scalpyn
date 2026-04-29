@@ -455,12 +455,10 @@ function DecisionRow({
           </span>
         </td>
         <td>
-          {item.event_type ? (
+          {item.event_type && (
             <span className={`inline-flex rounded border px-2 py-0.5 text-[11px] font-medium ${eventTypeTone(item.event_type)}`}>
               {eventTypeLabel(item.event_type)}
             </span>
-          ) : (
-            <span className="text-[var(--text-tertiary)]">—</span>
           )}
         </td>
         <td>{gateMark(item.l1_pass)}</td>
