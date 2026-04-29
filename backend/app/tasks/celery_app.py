@@ -20,6 +20,7 @@ celery_app = Celery(
         "app.tasks.execute_buy",
         "app.tasks.fetch_market_caps",
         "app.tasks.pipeline_scan",
+        "app.tasks.ohlcv_backfill",
     ],
 )
 
