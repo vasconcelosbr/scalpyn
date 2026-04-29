@@ -9,6 +9,7 @@ import {
   type EvaluationTraceItem,
 } from "./EvaluationTraceBreakdown";
 import type { ScoreRule } from "./PipelineAssetTable";
+import { RULE_COLORS, fmtPts, sortScoreRules } from "./PipelineAssetTable";
 
 const DECISION_SUMMARY_INDICATOR_LIMIT = 3;
 
@@ -394,35 +395,37 @@ function ScoreBreakdownSection({
   rules: ScoreRule[];
   alphaScore: number | null;
 }) {
-  const totalPossible = rules.reduce((s, r) => s + r.points_possible, 0);
-  const totalAwarded = rules.reduce((s, r) => s + r.points_awarded, 0);
+  // Separate positive rules from penalty rules for correct header totals.
+  const totalPossible  = rules.filter(r => (r.type ?? 'positive') !== 'penalty').reduce((s, r) => s + r.points_possible, 0);
+  const earnedPositive = rules.filter(r => (r.type ?? 'positive') !== 'penalty').reduce((s, r) => s + r.points_awarded, 0);
+  const totalPenalties = rules.filter(r => r.type === 'penalty').reduce((s, r) => s + r.points_awarded, 0);
   const color = scoreColor(alphaScore);
 
   const byCategory = SCORE_CATEGORY_ORDER.reduce<Record<string, ScoreRule[]>>((acc, cat) => {
-    const catRules = rules.filter((r) => r.category === cat);
+    const catRules = sortScoreRules(rules.filter((r) => r.category === cat));
     if (catRules.length) acc[cat] = catRules;
     return acc;
   }, {});
 
-  const uncategorized = rules.filter((r) => !SCORE_CATEGORY_ORDER.includes(r.category));
+  const uncategorized = sortScoreRules(rules.filter((r) => !SCORE_CATEGORY_ORDER.includes(r.category)));
   if (uncategorized.length) byCategory["other"] = [...(byCategory["other"] ?? []), ...uncategorized];
 
   return (
     <div className="rounded-xl border border-[#1E2433] bg-[#0A0B10] p-4">
-      <div className="mb-3 flex items-center gap-3">
+      <div className="mb-1 flex items-center gap-3">
         <span className="text-[11px] font-semibold uppercase tracking-wider text-[#4B5563]">
           Score Breakdown
         </span>
         {rules.length > 0 && (
           <>
             <span className="text-xs text-[#334155]">
-              {totalAwarded.toFixed(0)} / {totalPossible.toFixed(0)} pts
+              Score: {fmtPts(earnedPositive)}/{totalPossible.toFixed(0)} pts
             </span>
             <div className="flex-1 h-1 bg-[#1A2035] rounded-full overflow-hidden">
               <div
                 className="h-full rounded-full transition-all duration-700"
                 style={{
-                  width: `${totalPossible > 0 ? (totalAwarded / totalPossible) * 100 : 0}%`,
+                  width: `${totalPossible > 0 ? Math.max(0, Math.min(100, (earnedPositive / totalPossible) * 100)) : 0}%`,
                   backgroundColor: color,
                 }}
               />
@@ -435,6 +438,14 @@ function ScoreBreakdownSection({
           </>
         )}
       </div>
+      {totalPenalties < 0 && (
+        <div className="mb-3">
+          <span className="text-[10px] text-[#F87171]">
+            Penalty: {totalPenalties.toFixed(0)}
+          </span>
+        </div>
+      )}
+      {!totalPenalties && <div className="mb-3" />}
 
       {rules.length === 0 ? (
         <p className="text-xs text-[#334155] text-center py-2">
@@ -448,48 +459,50 @@ function ScoreBreakdownSection({
                 {SCORE_CATEGORY_LABELS[cat] ?? cat}
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1">
-                {catRules.map((rule) => (
-                  <div
-                    key={rule.id}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs border ${
-                      rule.passed
-                        ? "bg-[#061E14] border-[#14532D]/40"
-                        : "bg-[#150A0A] border-[#7F1D1D]/25"
-                    }`}
-                  >
-                    {rule.passed ? (
-                      <CheckCircle2 size={11} className="text-[#34D399] shrink-0" />
-                    ) : (
-                      <XCircle size={11} className="text-[#F87171] shrink-0" />
-                    )}
-                    <span
-                      className={`flex-1 truncate ${
-                        rule.passed ? "text-[#94A3B8]" : "text-[#4B5563]"
-                      }`}
-                      title={rule.condition_text}
+                {catRules.map((rule) => {
+                  const isPenalty = rule.type === 'penalty';
+                  const isFired   = rule.passed;
+                  const isGood    = !isPenalty && isFired;
+                  const colors    = isPenalty
+                    ? (isFired ? RULE_COLORS.penaltyFired : RULE_COLORS.penaltyIdle)
+                    : (isFired ? RULE_COLORS.positiveMatched : RULE_COLORS.positiveUnmatched);
+
+                  return (
+                    <div
+                      key={rule.id}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs border ${colors.bg}`}
                     >
-                      {rule.condition_text}
-                    </span>
-                    <span
-                      className={`font-mono text-[10px] shrink-0 ${
-                        rule.actual_value != null
-                          ? rule.passed
-                            ? "text-[#CBD5E1]"
-                            : "text-[#64748B]"
-                          : "text-[#334155]"
-                      }`}
-                    >
-                      {fmtRuleValue(rule.actual_value)}
-                    </span>
-                    <span
-                      className={`font-mono text-[10px] shrink-0 w-14 text-right ${
-                        rule.passed ? "text-[#34D399]" : "text-[#4B5563]"
-                      }`}
-                    >
-                      {rule.passed ? `+${rule.points_awarded.toFixed(0)}` : "+0"}/{rule.points_possible.toFixed(0)}
-                    </span>
-                  </div>
-                ))}
+                      {isGood || (isPenalty && !isFired) ? (
+                        <CheckCircle2 size={11} className={`${isGood ? 'text-[#34D399]' : 'text-[#4B5563]'} shrink-0`} />
+                      ) : (
+                        <XCircle size={11} className="text-[#F87171] shrink-0" />
+                      )}
+                      <span
+                        className={`flex-1 truncate ${
+                          isFired && !isPenalty ? 'text-[#94A3B8]' : isPenalty && isFired ? 'text-[#F87171]' : 'text-[#4B5563]'
+                        }`}
+                        title={rule.condition_text}
+                      >
+                        {rule.condition_text}
+                      </span>
+                      <span
+                        className={`font-mono text-[10px] shrink-0 ${
+                          rule.actual_value != null
+                            ? isFired && !isPenalty ? 'text-[#CBD5E1]' : isPenalty && isFired ? 'text-[#FCA5A5]' : 'text-[#64748B]'
+                            : 'text-[#334155]'
+                        }`}
+                      >
+                        {fmtRuleValue(rule.actual_value)}
+                      </span>
+                      <span
+                        className={`font-mono text-[10px] shrink-0 w-16 text-right ${colors.text}`}
+                        title={`${rule.passed ? rule.points_awarded.toFixed(2) : '0'} / ${rule.points_possible.toFixed(2)} pts`}
+                      >
+                        {rule.passed ? fmtPts(rule.points_awarded) : '0'}/{fmtPts(rule.points_possible)}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ))}

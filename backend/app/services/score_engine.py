@@ -259,7 +259,8 @@ class ScoreEngine:
     def compute_alpha_score(self, indicators: Dict[str, Any]) -> Dict[str, Any]:
         """Compute the composite Alpha Score from indicator values.
 
-        Returns dict with: total_score, classification, component scores, matched rules.
+        Returns dict with: total_score, classification, component scores,
+        category_summaries (debug/drilldown), matched rules.
         """
         if not indicators:
             return {"total_score": 0, "classification": "no_data", "components": {}}
@@ -269,20 +270,19 @@ class ScoreEngine:
             for category in ("liquidity", "market_structure", "momentum", "signal")
         }
 
+        # Component score is already computed to [0, 1] in _evaluate_category_rules;
+        # multiply by 100 and round for display.
         component_scores = {
-            category: (
-                round(min(100.0, (summary["earned_points"] / summary["possible_points"]) * 100), 2)
-                if summary["possible_points"] > 0
-                else 0.0
-            )
+            category: round(summary["final_score"] * 100, 2)
             for category, summary in category_summaries.items()
         }
 
-        # Apply weights only to categories that have active scoring rules.
+        # Apply weights only to categories that have active positive scoring rules.
+        # Categories with only penalty rules have positive_possible=0 and are excluded.
         w = self.weights
         weighted_categories = [
             category for category, summary in category_summaries.items()
-            if summary["possible_points"] > 0
+            if summary["positive_possible"] > 0
         ]
         total_weight = sum(w.get(category, 25) for category in weighted_categories)
 
@@ -308,11 +308,29 @@ class ScoreEngine:
                 "momentum_score": component_scores["momentum"],
                 "signal_score": component_scores["signal"],
             },
+            "category_summaries": category_summaries,
             "matched_rules": self._get_matched_rules(indicators),
         }
 
-    def _evaluate_category_rules(self, indicators: Dict[str, Any], category: str) -> Dict[str, float]:
-        """Evaluate scoring rules and summarize earned vs. possible points.
+    def _evaluate_category_rules(self, indicators: Dict[str, Any], category: str) -> Dict[str, Any]:
+        """Evaluate scoring rules and summarise earned vs possible points.
+
+        Uses three separate accumulators to correctly handle penalty rules
+        (negative points):
+
+        - positive_possible : sum of points for positive rules only
+                              (denominator / maximum achievable).
+        - earned_positive   : sum of positive-rule points that matched.
+        - penalties         : sum of negative-rule points that fired (≤ 0).
+
+        Formula (after guards):
+            raw = (earned_positive + penalties) / positive_possible
+            category_score = clamp(raw, 0.0, 1.0)
+
+        A category with no positive rules always scores 0.0.  This is an
+        explicit design decision — penalty-only categories have no defined
+        maximum, so they cannot contribute a meaningful percentage score.
+        Do not change this behaviour without updating the task spec.
 
         Each rule is assigned to exactly ONE category based on _IND_CATEGORY
         (the canonical mapping).  This prevents double-counting — e.g. an
@@ -331,8 +349,12 @@ class ScoreEngine:
         buy_pressure  = buy / (buy + sell)  → [0, 1],  equilibrium = 0.5
         taker_ratio   = buy / (buy + sell)  → [0, 1],  equilibrium = 0.5  (#82: was buy/sell)
         """
-        earned_points = 0.0
-        possible_points = 0.0
+        EPS = 1e-9
+        positive_possible = 0.0
+        earned_positive   = 0.0
+        penalties         = 0.0
+        rules_passed      = 0
+        rules_failed      = 0
 
         for rule in self.rules:
             # Use _IND_CATEGORY as the single source of truth for which
@@ -343,13 +365,60 @@ class ScoreEngine:
                 continue
 
             points = float(rule.get("points") if rule.get("points") is not None else 0)
-            possible_points += points
-            if self._evaluate_rule(rule, indicators):
-                earned_points += points
+            matched = self._evaluate_rule(rule, indicators)
+
+            if points > 0:
+                positive_possible += points
+                if matched:
+                    earned_positive += points
+                    rules_passed += 1
+                else:
+                    rules_failed += 1
+            elif points < 0:
+                if matched:
+                    penalties += points  # already negative → subtracts from numerator
+                    rules_passed += 1
+                else:
+                    rules_failed += 1
+            # pts == 0: no effect on any accumulator
+
+        # ── Guards (in this exact order) ─────────────────────────────────
+        positive_possible = max(0.0, positive_possible)            # float drift
+        earned_positive   = min(earned_positive, positive_possible) # earned ≤ max
+        penalties         = min(penalties, 0.0)                    # invariant: never increases score
+
+        # Structured-log invariant checks (not assert — stripped by -O flag)
+        if earned_positive > positive_possible + 1e-6:
+            logger.warning("[score] earned_positive overflow",
+                           extra={"category": category,
+                                  "earned": earned_positive,
+                                  "possible": positive_possible})
+        if penalties > 1e-6:
+            logger.warning("[score] penalties anomaly — positive value",
+                           extra={"category": category, "penalties": penalties})
+
+        # ── Score calculation ─────────────────────────────────────────────
+        if positive_possible <= EPS:
+            # Category with no positive rules always scores 0.
+            # See docstring — do not change without updating task spec.
+            category_score = 0.0
+        else:
+            raw = (earned_positive + penalties) / positive_possible
+            category_score = max(0.0, min(1.0, raw))  # double clamp
+
+        logger.debug(
+            "[score] category=%s positive_possible=%.4f earned=%.4f "
+            "penalties=%.4f score=%.4f",
+            category, positive_possible, earned_positive, penalties, category_score,
+        )
 
         return {
-            "earned_points": earned_points,
-            "possible_points": possible_points,
+            "positive_possible": float(positive_possible),
+            "earned_positive":   float(earned_positive),
+            "penalties":         float(penalties),
+            "final_score":       float(category_score),
+            "rules_passed":      int(rules_passed),
+            "rules_failed":      int(rules_failed),
         }
 
     def _evaluate_rule(self, rule: Dict[str, Any], indicators: Dict[str, Any]) -> bool:
@@ -496,12 +565,21 @@ class ScoreEngine:
                 "max": rule.get("max"),
                 "actual_value": actual if not isinstance(actual, dict) else None,
                 "passed": passed,
-                "points_awarded": pts if passed else 0.0,
-                "points_possible": pts,
+                "points_awarded": float(pts) if passed else 0.0,
+                "points_possible": float(pts),
+                "type": "positive" if pts >= 0 else "penalty",
                 "condition_text": cond,
                 "category": resolve_rule_category(rule),
             })
-        return result
+
+        # Sort: positive rules first (descending by points), then penalty rules
+        # (ascending by magnitude — most negative first).  Preserves deterministic
+        # ordering across environments and simplifies per-category drilldown debug.
+        positive_rules = [r for r in result if r["type"] == "positive"]
+        penalty_rules  = [r for r in result if r["type"] == "penalty"]
+        positive_rules.sort(key=lambda r: -(r["points_possible"] or 0))
+        penalty_rules.sort(key=lambda r:  (r["points_possible"] or 0))  # most-negative first
+        return positive_rules + penalty_rules
 
     def _classify(self, score: float) -> str:
         if score >= self.thresholds.get("strong_buy", 80):
