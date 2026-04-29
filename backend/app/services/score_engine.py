@@ -382,12 +382,7 @@ class ScoreEngine:
                     rules_failed += 1
             # pts == 0: no effect on any accumulator
 
-        # ── Guards (in this exact order) ─────────────────────────────────
-        positive_possible = max(0.0, positive_possible)            # float drift
-        earned_positive   = min(earned_positive, positive_possible) # earned ≤ max
-        penalties         = min(penalties, 0.0)                    # invariant: never increases score
-
-        # Structured-log invariant checks (not assert — stripped by -O flag)
+        # ── Invariant checks on raw accumulators (before clamping) ──────────
         if earned_positive > positive_possible + 1e-6:
             logger.warning("[score] earned_positive overflow",
                            extra={"category": category,
@@ -396,6 +391,11 @@ class ScoreEngine:
         if penalties > 1e-6:
             logger.warning("[score] penalties anomaly — positive value",
                            extra={"category": category, "penalties": penalties})
+
+        # ── Guards (in this exact order) ─────────────────────────────────
+        positive_possible = max(0.0, positive_possible)             # float drift
+        earned_positive   = min(earned_positive, positive_possible)  # earned ≤ max
+        penalties         = min(penalties, 0.0)                     # never increases score
 
         # ── Score calculation ─────────────────────────────────────────────
         if positive_possible <= EPS:

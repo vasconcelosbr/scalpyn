@@ -432,14 +432,14 @@ function ScoreBreakdownSection({
           </>
         )}
       </div>
-      {totalPenalties < 0 && (
+      {totalPenalties !== 0 && (
         <div className="mb-3">
           <span className="text-[10px] text-[#F87171]">
-            Penalty: {totalPenalties.toFixed(0)}
+            Penalty: {fmtPts(totalPenalties)}
           </span>
         </div>
       )}
-      {!totalPenalties && <div className="mb-3" />}
+      {totalPenalties === 0 && <div className="mb-3" />}
 
       {rules.length === 0 ? (
         <p className="text-xs text-[#334155] text-center py-2">

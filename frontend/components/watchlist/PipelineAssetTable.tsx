@@ -408,14 +408,14 @@ function DrilldownPanel({
           {score.toFixed(1)}
         </span>
       </div>
-      {totalPenalties < 0 && (
+      {totalPenalties !== 0 && (
         <div className="mb-3">
           <span className="text-[10px] text-[#F87171]">
-            Penalty: {totalPenalties.toFixed(0)}
+            Penalty: {fmtPts(totalPenalties)}
           </span>
         </div>
       )}
-      {!totalPenalties && <div className="mb-3" />}
+      {totalPenalties === 0 && <div className="mb-3" />}
 
       {/* Rules by category */}
       <div className="space-y-3">
