@@ -428,9 +428,7 @@ function DrilldownPanel({
               {catRules.map((rule) => {
                 const isPenalty = rule.type === 'penalty';
                 const isFired   = rule.passed;
-                // Semantics: a penalty that fired is "bad"; a penalty not fired is "safe"
                 const isGood    = !isPenalty && isFired;
-                const isBad     = (isPenalty && isFired) || (!isPenalty && !isFired);
                 const colors    = isPenalty
                   ? (isFired ? RULE_COLORS.penaltyFired : RULE_COLORS.penaltyIdle)
                   : (isFired ? RULE_COLORS.positiveMatched : RULE_COLORS.positiveUnmatched);
@@ -451,7 +449,7 @@ function DrilldownPanel({
                   >
                     {isGood || (isPenalty && !isFired)
                       ? <CheckCircle2 size={11} className={`${isGood ? 'text-[#34D399]' : 'text-[#4B5563]'} shrink-0`} />
-                      : <XCircle      size={11} className={`${isBad && !isPenalty ? 'text-[#F87171]' : 'text-[#F87171]'} shrink-0`} />
+                      : <XCircle size={11} className="text-[#F87171] shrink-0" />
                     }
                     <span className={`flex-1 truncate ${isFired && !isPenalty ? 'text-[#94A3B8]' : isPenalty && isFired ? 'text-[#F87171]' : 'text-[#4B5563]'}`}>
                       {rule.condition_text}

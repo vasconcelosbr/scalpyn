@@ -270,13 +270,6 @@ class ScoreEngine:
             for category in ("liquidity", "market_structure", "momentum", "signal")
         }
 
-        # Component score is already computed to [0, 1] in _evaluate_category_rules;
-        # multiply by 100 and round for display.
-        component_scores = {
-            category: round(summary["final_score"] * 100, 2)
-            for category, summary in category_summaries.items()
-        }
-
         # Apply weights only to categories that have active positive scoring rules.
         # Categories with only penalty rules have positive_possible=0 and are excluded.
         w = self.weights
@@ -286,13 +279,21 @@ class ScoreEngine:
         ]
         total_weight = sum(w.get(category, 25) for category in weighted_categories)
 
+        # Compute weighted total from unrounded final_score values to avoid precision loss;
+        # round only the final output and the per-component display fields.
         if total_weight > 0:
             total_score = sum(
-                component_scores[category] * w.get(category, 25)
+                category_summaries[category]["final_score"] * 100 * w.get(category, 25)
                 for category in weighted_categories
             ) / total_weight
         else:
             total_score = 0.0
+
+        # Per-component scores (display only — not used in weighted aggregation above).
+        component_scores = {
+            category: round(summary["final_score"] * 100, 2)
+            for category, summary in category_summaries.items()
+        }
 
         total_score = round(min(100, max(0, total_score)), 2)
 
@@ -327,10 +328,9 @@ class ScoreEngine:
             raw = (earned_positive + penalties) / positive_possible
             category_score = clamp(raw, 0.0, 1.0)
 
-        A category with no positive rules always scores 0.0.  This is an
-        explicit design decision — penalty-only categories have no defined
-        maximum, so they cannot contribute a meaningful percentage score.
-        Do not change this behaviour without updating the task spec.
+        A category with no positive rules always scores 0.0 — penalty-only
+        categories have no defined maximum so they cannot contribute a
+        meaningful percentage score.
 
         Each rule is assigned to exactly ONE category based on _IND_CATEGORY
         (the canonical mapping).  This prevents double-counting — e.g. an
@@ -399,8 +399,7 @@ class ScoreEngine:
 
         # ── Score calculation ─────────────────────────────────────────────
         if positive_possible <= EPS:
-            # Category with no positive rules always scores 0.
-            # See docstring — do not change without updating task spec.
+            # No positive rules means no defined maximum; score 0.
             category_score = 0.0
         else:
             raw = (earned_positive + penalties) / positive_possible
