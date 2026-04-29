@@ -47,47 +47,58 @@ def upgrade() -> None:
 
             CONSTRAINT uq_simulation_symbol_entry_direction
                 UNIQUE (symbol, timestamp_entry, direction)
-        );
+        )
+    """))
 
-        -- Indexes for efficient querying
+    op.execute(sa.text("""
         CREATE INDEX IF NOT EXISTS idx_trade_simulations_symbol
-            ON trade_simulations(symbol);
+            ON trade_simulations(symbol)
+    """))
 
+    op.execute(sa.text("""
         CREATE INDEX IF NOT EXISTS idx_trade_simulations_timestamp_entry
-            ON trade_simulations(timestamp_entry);
+            ON trade_simulations(timestamp_entry)
+    """))
 
+    op.execute(sa.text("""
         CREATE INDEX IF NOT EXISTS idx_trade_simulations_result
-            ON trade_simulations(result);
+            ON trade_simulations(result)
+    """))
 
+    op.execute(sa.text("""
         CREATE INDEX IF NOT EXISTS idx_trade_simulations_direction
-            ON trade_simulations(direction);
+            ON trade_simulations(direction)
+    """))
 
+    op.execute(sa.text("""
         CREATE INDEX IF NOT EXISTS idx_trade_simulations_decision_type
-            ON trade_simulations(decision_type);
+            ON trade_simulations(decision_type)
+    """))
 
-        -- Composite index for common queries
+    op.execute(sa.text("""
         CREATE INDEX IF NOT EXISTS idx_trade_simulations_symbol_timestamp
-            ON trade_simulations(symbol, timestamp_entry DESC);
+            ON trade_simulations(symbol, timestamp_entry DESC)
+    """))
 
-        -- Foreign key to decision_log (optional, may not exist for all simulations)
+    # Optional FK to decisions_log — only added when the table exists
+    op.execute(sa.text("""
         DO $$
         BEGIN
-            IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'decisions_log') THEN
-                IF NOT EXISTS (
-                    SELECT 1 FROM information_schema.table_constraints
-                    WHERE constraint_name = 'fk_trade_simulations_decision_id'
-                ) THEN
-                    ALTER TABLE trade_simulations
-                        ADD CONSTRAINT fk_trade_simulations_decision_id
-                        FOREIGN KEY (decision_id) REFERENCES decisions_log(id)
-                        ON DELETE SET NULL;
-                END IF;
+            IF EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'decisions_log'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints
+                WHERE constraint_name = 'fk_trade_simulations_decision_id'
+            ) THEN
+                ALTER TABLE trade_simulations
+                    ADD CONSTRAINT fk_trade_simulations_decision_id
+                    FOREIGN KEY (decision_id) REFERENCES decisions_log(id)
+                    ON DELETE SET NULL;
             END IF;
-        END $$;
+        END $$
     """))
 
 
 def downgrade() -> None:
-    op.execute(sa.text("""
-        DROP TABLE IF EXISTS trade_simulations CASCADE;
-    """))
+    op.execute(sa.text("DROP TABLE IF EXISTS trade_simulations CASCADE"))
