@@ -123,21 +123,24 @@ async def lifespan(app: FastAPI):
         _log.warning("Pipeline scheduler failed to start: %s", e)
         stop_pipeline_scheduler = None  # type: ignore[assignment]
 
-    # ── Consolidated scheduler startup summary ───────────────────────────────
+    # ── Consolidated scheduler startup summary (env-derived intervals) ──────
+    _struct_interval   = int(os.environ.get("STRUCTURAL_SCHEDULER_INTERVAL_SECONDS", 900))
+    _micro_interval    = int(os.environ.get("MICROSTRUCTURE_SCHEDULER_INTERVAL_SECONDS", 300))
+    _pipeline_interval = int(os.environ.get("PIPELINE_SCHEDULER_INTERVAL_SECONDS", 600))
     _sched_summary = []
     if os.environ.get("ENABLE_COMBINED_SCHEDULER") == "1":
-        _sched_summary.append("combined(legacy,600s)")
+        _sched_summary.append(f"combined(legacy,{_pipeline_interval}s)")
     else:
         if os.environ.get("SKIP_STRUCTURAL_SCHEDULER") != "1":
-            _sched_summary.append("[STRUCT-SCHED](900s,1h-OHLCV)")
+            _sched_summary.append(f"[STRUCT-SCHED]({_struct_interval}s,1h-OHLCV)")
         else:
             _sched_summary.append("[STRUCT-SCHED](disabled)")
         if os.environ.get("SKIP_MICROSTRUCTURE_SCHEDULER") != "1":
-            _sched_summary.append("[MICRO-SCHED](300s,5m-OHLCV+live)")
+            _sched_summary.append(f"[MICRO-SCHED]({_micro_interval}s,5m-OHLCV+live)")
         else:
             _sched_summary.append("[MICRO-SCHED](disabled)")
     if os.environ.get("SKIP_PIPELINE_SCHEDULER") != "1":
-        _sched_summary.append("pipeline(600s)")
+        _sched_summary.append(f"pipeline({_pipeline_interval}s)")
     _log.info("[SCHED-STARTUP] active schedulers: %s", " | ".join(_sched_summary))
 
     try:

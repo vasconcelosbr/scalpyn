@@ -370,6 +370,10 @@ async def get_pipeline_assets(
                             "group": m.get("group"),
                             "age_seconds": m.get("age_seconds"),
                             "stale": m.get("stale", False),
+                            "timestamp": (
+                                m.get("timestamp").isoformat()
+                                if m.get("timestamp") is not None else None
+                            ),
                         }
                         for k, m in mi.meta.items()
                     }
@@ -522,6 +526,7 @@ async def get_pipeline_assets(
             indicators_meta[ikey] = {
                 "value": indicators.get(ikey),  # None for stale-only keys
                 "source_group": imeta.get("group"),
+                "timestamp": imeta.get("timestamp"),
                 "age_seconds": imeta.get("age_seconds"),
                 "stale": imeta.get("stale", False),
             }

@@ -330,6 +330,15 @@ async def fetch_merged_indicators(
             ))
 
         for sym, row_list in by_sym.items():
+            # combined rows are legacy fallback — discard them when the symbol
+            # already has at least one structural or microstructure row so we
+            # do not mix sources when the new dual schedulers are active.
+            has_separated = any(
+                g in ("structural", "microstructure")
+                for g, _t, _d in row_list
+            )
+            if has_separated:
+                row_list = [(g, t, d) for g, t, d in row_list if g != "combined"]
             merged[sym] = merge_indicator_rows(row_list, now=now)
 
         # Legacy fallback for symbols still missing
