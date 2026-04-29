@@ -36,7 +36,12 @@ class FeatureEngine:
         from .indicator_classifier import STRUCTURAL_CALC_KEYS, MICROSTRUCTURE_CALC_KEYS
 
         def _want(key: str) -> bool:
-            """Return True when this calc-key should run for the requested group."""
+            """Return True when this calc-key should run for the requested group.
+
+            "ema" is in BOTH sets because each group computes different period
+            subsets; post-compute filtering strips the irrelevant periods.
+            "stochastic" is microstructure (fast signal on 5m candles).
+            """
             if group is None or group == "all":
                 return True
             if group == "structural":
@@ -96,8 +101,40 @@ class FeatureEngine:
             if _want("taker_ratio") and self.config.get("taker_ratio", {}).get("enabled", True):
                 results.update(self._calc_taker_ratio(df))
 
-            # Derived: EMA trend alignment (structural group only)
-            if group is None or group == "all" or group == "structural":
+            # ── Post-compute: EMA period filtering by group ────────────────────
+            # "ema" calc key runs in both groups but each stores only its subset:
+            #   structural   → EMA50, EMA200 (slow, anchor for trend structure)
+            #   microstructure → EMA5, EMA9, EMA21 (fast, entry timing)
+            # Hybrid derived values (ema9_gt_ema50, ema_full_alignment) are
+            # computed at query-merge time when both groups' data is available;
+            # each scheduler only stores what it can compute independently.
+            _EMA_STRUCT_KEYS = frozenset({
+                "ema50", "ema200", "ema50_gt_ema200",
+            })
+            _EMA_MICRO_KEYS = frozenset({
+                "ema5", "ema9", "ema21",
+                "ema9_gt_ema21",   # EMA9 vs EMA21 — both in micro
+                "ema9_distance_pct",
+            })
+
+            if group == "structural":
+                # Strip fast-EMA keys — structural scheduler only stores EMA50/200
+                for _k in list(_EMA_MICRO_KEYS):
+                    results.pop(_k, None)
+                # Also strip ema-vs-micro derived hybrids (need merge to compute)
+                results.pop("ema9_gt_ema50", None)
+                results.pop("ema_full_alignment", None)
+            elif group == "microstructure":
+                # Strip slow-EMA keys — micro scheduler only stores EMA5/9/21
+                for _k in list(_EMA_STRUCT_KEYS):
+                    results.pop(_k, None)
+                # Strip hybrids — need structural EMA50/200 to be meaningful
+                results.pop("ema9_gt_ema50", None)
+                results.pop("ema_full_alignment", None)
+                results.pop("ema50_gt_ema200", None)
+
+            # ── EMA-derived alignment flags (group=None / "all" only) ─────────
+            if group is None or group == "all":
                 if "ema9" in results and "ema21" in results:
                     results["ema9_gt_ema21"] = results["ema9"] > results["ema21"]
                 if "ema9" in results and "ema50" in results:
@@ -109,10 +146,24 @@ class FeatureEngine:
                         results["ema9"] > results["ema50"] > results["ema200"]
                     )
 
-            # close/price: include for structural and combined
+            # EMA9-vs-EMA21 alignment (within microstructure group)
+            if group == "microstructure":
+                if "ema9" in results and "ema21" in results:
+                    results["ema9_gt_ema21"] = results["ema9"] > results["ema21"]
+
+            # EMA50-vs-EMA200 alignment (within structural group)
+            if group == "structural":
+                if "ema50" in results and "ema200" in results:
+                    results["ema50_gt_ema200"] = results["ema50"] > results["ema200"]
+
+            # close/price: structural and combined keep the 1h close
             if group is None or group == "all" or group == "structural":
                 results["close"] = float(df["close"].iloc[-1])
                 results["price"] = results["close"]
+            # Microstructure keeps the 5m close for distance computation
+            if group == "microstructure":
+                _close_5m = float(df["close"].iloc[-1])
+                results["close_5m"] = _close_5m
 
             # ATR as percentage of price
             if results.get("atr") is not None and results.get("close"):
@@ -123,9 +174,10 @@ class FeatureEngine:
                 results["atr_percent"] = results["atr_pct"]
 
             # Derived: EMA 9 distance as percentage of current price
-            if "ema9" in results and results.get("close", 0) > 0 and results["ema9"] > 0:
+            _close_for_dist = results.get("close") or results.get("close_5m")
+            if "ema9" in results and _close_for_dist and _close_for_dist > 0 and results["ema9"] > 0:
                 results["ema9_distance_pct"] = round(
-                    (results["close"] - results["ema9"]) / results["ema9"] * 100, 4
+                    (_close_for_dist - results["ema9"]) / results["ema9"] * 100, 4
                 )
 
             if market_data:

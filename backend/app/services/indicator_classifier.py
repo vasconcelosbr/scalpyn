@@ -1,33 +1,64 @@
-"""Indicator group classifier for the dual-scheduler architecture.
+"""Indicator group classifier — dual-scheduler architecture (Task #95).
 
 Determines whether an indicator belongs to the 'structural' group
-(slow indicators, computed from 1h OHLCV, refreshed every 15 min)
-or the 'microstructure' group (fast indicators, computed from 5m OHLCV
-+ live market data, refreshed every 5 min).
+(slow, 1h-OHLCV, refreshed every 15 min) or the 'microstructure' group
+(fast, 5m-OHLCV + live data, refreshed every 5 min).
 
-Priority order for classify_indicator():
-  1. Explicit allow-list (covers all known indicator names)
-  2. Prefix rules (ema*, market_data_*, orderbook_*, volume_*)
-  3. Fallback → structural
+Classification priority (applied in order — first match wins):
+  1. Explicit indicator name map  (covers all known indicator names)
+  2. EMA/MA period rule:
+       period <= 21  → microstructure / pure
+       period 22-49  → structural / hybrid  (conservative)
+       period >= 50  → structural / pure
+  3. data_source == "order_flow" → microstructure / pure
+  4. data_source == "ohlcv"      → structural / pure
+  5. reacts_fast == True         → microstructure / pure
+  6. Fallback                    → structural / pure
 
-For classify_calc_key():
-  Maps FeatureEngine config keys ('rsi', 'macd', 'vwap', …) to a group
-  so the scheduler can call FeatureEngine.calculate(df, group='structural')
-  and only compute indicators for that group.
+VWAP:
+  reset_period="daily" (intraday mode, current default) → microstructure
+  reset_period="weekly"/"monthly"/anchored              → structural
+
+Each indicator also gets a subtype:
+  "pure"   — belongs unambiguously to one group
+  "hybrid" — cross-group derived value (needs both groups' data to be fully
+             meaningful, e.g. ema_full_alignment combines EMA9 and EMA200)
+
+FeatureEngine calc-key sets that map config keys to groups:
+  STRUCTURAL_CALC_KEYS    — config keys computed by the structural scheduler
+  MICROSTRUCTURE_CALC_KEYS — config keys computed by the microstructure scheduler
+  Note: "ema" appears in BOTH sets because each scheduler computes a subset of
+  EMA periods; post-compute filtering strips the irrelevant periods.
 """
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, TypedDict
 
 Group = Literal["structural", "microstructure"]
+Subtype = Literal["pure", "hybrid"]
 
-# ── Explicit indicator → group mapping ───────────────────────────────────────
 
-_MICROSTRUCTURE_INDICATORS: frozenset[str] = frozenset({
+class IndicatorClassification(TypedDict):
+    group: Group
+    subtype: Subtype
+
+
+# ── Priority 1: Explicit microstructure indicators ───────────────────────────
+
+_MICRO_EXPLICIT: frozenset[str] = frozenset({
     # VWAP (intraday, resets daily → reacts fast on 5m)
     "vwap",
     "vwap_distance_pct",
+    # Short-period EMAs (reacts fast enough to justify 5m cadence)
+    "ema5",
+    "ema9",
+    "ema21",
+    "ema9_gt_ema21",
+    "ema9_distance_pct",
+    # Stochastic (14-period on 5m candles — fast signal)
+    "stoch_k",
+    "stoch_d",
     # Volume microstructure
     "volume_spike",
     "volume_delta",
@@ -37,7 +68,7 @@ _MICROSTRUCTURE_INDICATORS: frozenset[str] = frozenset({
     "volume_24h_coverage_hours",
     "volume_24h_base_aggregated",
     "volume_24h_usdt_aggregated",
-    # Order flow (live market data overrides)
+    # Order flow / live market data
     "taker_ratio",
     "taker_buy_volume",
     "taker_sell_volume",
@@ -47,35 +78,29 @@ _MICROSTRUCTURE_INDICATORS: frozenset[str] = frozenset({
     "market_data_source",
     "market_data_confidence",
     "market_data_symbol",
-    # Volume 24h from ticker (updated by microstructure scheduler)
+    # Volume 24h from ticker
     "volume_24h_base",
     "volume_24h_usdt",
 })
 
-_STRUCTURAL_INDICATORS: frozenset[str] = frozenset({
+# ── Priority 1: Explicit structural indicators ────────────────────────────────
+
+_STRUCT_EXPLICIT: frozenset[str] = frozenset({
     # RSI / ADX
     "rsi",
     "adx",
     "di_plus",
     "di_minus",
     "adx_acceleration",
-    # EMA values
-    "ema5",
-    "ema9",
-    "ema21",
+    # Slow EMAs
     "ema50",
     "ema200",
-    # EMA-derived booleans
-    "ema9_gt_ema21",
-    "ema9_gt_ema50",
     "ema50_gt_ema200",
-    "ema_full_alignment",
-    "ema9_distance_pct",
     # ATR
     "atr",
     "atr_pct",
     "atr_percent",
-    # MACD family
+    # MACD family (26/12/9 period — slow)
     "macd",
     "macd_signal_line",
     "macd_histogram",
@@ -84,7 +109,7 @@ _STRUCTURAL_INDICATORS: frozenset[str] = frozenset({
     "macd_histogram_slope",
     "macd_histogram_mean_10",
     "macd_histogram_std_10",
-    # Bollinger Bands
+    # Bollinger Bands (20-period SMA)
     "bb_upper",
     "bb_middle",
     "bb_lower",
@@ -94,27 +119,31 @@ _STRUCTURAL_INDICATORS: frozenset[str] = frozenset({
     "psar_trend",
     # Z-score
     "zscore",
-    # OBV
+    # OBV (cumulative — structural by nature)
     "obv",
-    # Stochastic
-    "stoch_k",
-    "stoch_d",
-    # Close / price (from 1h OHLCV)
+    # Close / price (from 1h OHLCV structural candle)
     "close",
     "price",
 })
 
-# ── FeatureEngine config key → group ─────────────────────────────────────────
-# These are the keys in indicators_config / DEFAULT_INDICATORS that map to
-# the individual _calc_* methods inside FeatureEngine.
+# ── Hybrid indicators (depend on both groups' data) ───────────────────────────
+# Classified as structural because the slow EMAs are the anchor; the fast
+# EMA values are merged in at query time.
+_HYBRID_INDICATORS: frozenset[str] = frozenset({
+    "ema9_gt_ema50",        # EMA9 (micro) vs EMA50 (structural)
+    "ema_full_alignment",   # EMA9 > EMA50 > EMA200 — all three groups
+})
+
+# ── FeatureEngine config key → scheduler group ───────────────────────────────
+# "ema" appears in BOTH because each scheduler computes different period subsets;
+# FeatureEngine.calculate() applies post-compute period filtering per group.
 
 STRUCTURAL_CALC_KEYS: frozenset[str] = frozenset({
     "rsi",
     "adx",
-    "ema",
+    "ema",           # runs _calc_ema; structural filters keep only EMA50/200
     "atr",
     "macd",
-    "stochastic",
     "bollinger",
     "parabolic_sar",
     "zscore",
@@ -123,64 +152,90 @@ STRUCTURAL_CALC_KEYS: frozenset[str] = frozenset({
 
 MICROSTRUCTURE_CALC_KEYS: frozenset[str] = frozenset({
     "vwap",
+    "stochastic",    # fast signal on 5m candles
+    "ema",           # runs _calc_ema; micro filters keep only EMA5/9/21
     "volume_spike",
     "volume_delta",
     "volume_metrics",
     "taker_ratio",
 })
 
-# Config keys that do not cleanly belong to either group (order-book imbalance,
-# funding rate, btc_dominance) are computed by the microstructure scheduler
-# since they also rely on live market data.
-_AMBIGUOUS_AS_MICROSTRUCTURE: frozenset[str] = frozenset({
-    "orderbook_imbalance",
-    "funding_rate",
-    "btc_dominance",
-    "market_data_fallback",
-})
+# EMA period boundaries
+_EMA_MICRO_MAX_PERIOD = 21    # EMA periods ≤ 21 → microstructure
+_EMA_STRUCT_MIN_PERIOD = 50   # EMA periods ≥ 50 → structural
 
 
 def classify_indicator(name: str) -> Group:
-    """Return the scheduler group for a given indicator name.
+    """Return the scheduler group for a given indicator name."""
+    return classify_indicator_full(name)["group"]
 
-    Args:
-        name: The raw indicator key (e.g. 'rsi', 'vwap_distance_pct').
 
-    Returns:
-        'structural' or 'microstructure'.
+def classify_indicator_full(name: str) -> IndicatorClassification:
+    """Return {group, subtype} for a given indicator name.
+
+    Uses the formal priority model described in the module docstring.
     """
-    if name in _MICROSTRUCTURE_INDICATORS:
-        return "microstructure"
-    if name in _STRUCTURAL_INDICATORS:
-        return "structural"
+    # Priority 1a: explicit microstructure
+    if name in _MICRO_EXPLICIT:
+        return {"group": "microstructure", "subtype": "pure"}
 
-    # Prefix rules
-    if name.startswith("ema"):
-        return "structural"
-    if name.startswith(("market_data_", "orderbook_", "taker_", "funding_")):
-        return "microstructure"
+    # Priority 1b: explicit structural
+    if name in _STRUCT_EXPLICIT:
+        return {"group": "structural", "subtype": "pure"}
+
+    # Priority 1c: hybrid (cross-group derived)
+    if name in _HYBRID_INDICATORS:
+        # Hybrid indicators live in the structural group because they anchor
+        # on slow EMA values; the fast-EMA component is merged at query time.
+        return {"group": "structural", "subtype": "hybrid"}
+
+    # Priority 2: EMA/MA period rule
+    # Pattern: ema<period> (e.g. "ema34")
+    if name.startswith("ema") and len(name) > 3:
+        suffix = name[3:]
+        try:
+            period = int(suffix)
+        except ValueError:
+            period = None
+        if period is not None:
+            if period <= _EMA_MICRO_MAX_PERIOD:
+                return {"group": "microstructure", "subtype": "pure"}
+            elif period >= _EMA_STRUCT_MIN_PERIOD:
+                return {"group": "structural", "subtype": "pure"}
+            else:
+                # 22–49: conservative fallback to structural
+                return {"group": "structural", "subtype": "hybrid"}
+
+    # Priority 3: order_flow data source → microstructure
+    if name.startswith((
+        "market_data_", "orderbook_", "taker_", "funding_", "spread_",
+    )):
+        return {"group": "microstructure", "subtype": "pure"}
+
+    # Priority 4: ohlcv data source → structural
+    # (Most remaining OHLCV-only indicators arrive here via the explicit map
+    # above; this catch-all handles future unknowns with ohlcv heritage.)
+
+    # Priority 5: reacts_fast — volume prefix → microstructure
     if name.startswith("volume_"):
-        return "microstructure"
+        return {"group": "microstructure", "subtype": "pure"}
 
-    # Fallback
-    return "structural"
+    # Priority 6: fallback → structural / pure
+    return {"group": "structural", "subtype": "pure"}
 
 
 def classify_calc_key(config_key: str) -> Group:
-    """Return the scheduler group for a FeatureEngine config key.
+    """Return the primary scheduler group for a FeatureEngine config key.
 
-    Args:
-        config_key: e.g. 'rsi', 'vwap', 'volume_metrics'.
-
-    Returns:
-        'structural' or 'microstructure'.
+    Note: "ema" is ambiguous (appears in both groups) — callers that need
+    precise handling should use STRUCTURAL_CALC_KEYS / MICROSTRUCTURE_CALC_KEYS
+    directly.
     """
-    if config_key in STRUCTURAL_CALC_KEYS:
+    if config_key in STRUCTURAL_CALC_KEYS and config_key not in MICROSTRUCTURE_CALC_KEYS:
         return "structural"
-    if config_key in MICROSTRUCTURE_CALC_KEYS:
+    if config_key in MICROSTRUCTURE_CALC_KEYS and config_key not in STRUCTURAL_CALC_KEYS:
         return "microstructure"
-    if config_key in _AMBIGUOUS_AS_MICROSTRUCTURE:
-        return "microstructure"
+    # Ambiguous ("ema") or unknown → structural (conservative)
     return "structural"
 
 

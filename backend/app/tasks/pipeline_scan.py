@@ -377,33 +377,13 @@ async def _fetch_market_data(db, symbols: list) -> list:
             {"symbols": syms_list},
         )).fetchall()
 
-    # Step 2: Fetch indicators — always runs regardless of which meta path was taken
+    # Step 2: Fetch indicators via dual-scheduler merge utility
+    # Merges structural (15m cadence) + microstructure (5m cadence) rows with
+    # per-key latest-timestamp-wins semantics. Falls back to legacy single-row
+    # query when scheduler_group column is absent.
     try:
-        # Prefer 5m indicators (fresh, 5-min cadence); fall back to any timeframe
-        ind_rows = (await db.execute(
-            text("""
-                SELECT DISTINCT ON (symbol) symbol, indicators_json
-                FROM indicators
-                WHERE symbol = ANY(:symbols)
-                  AND timeframe = '5m'
-                ORDER BY symbol, time DESC
-            """),
-            {"symbols": syms_list},
-        )).fetchall()
-
-        found_syms = {r.symbol for r in ind_rows}
-        missing = [s for s in symbols if s not in found_syms]
-        if missing:
-            fallback_rows = (await db.execute(
-                text("""
-                    SELECT DISTINCT ON (symbol) symbol, indicators_json
-                    FROM indicators
-                    WHERE symbol = ANY(:symbols)
-                    ORDER BY symbol, time DESC
-                """),
-                {"symbols": missing},
-            )).fetchall()
-            ind_rows = list(ind_rows) + list(fallback_rows)
+        from ..utils.indicator_merge import fetch_merged_indicators
+        _merged_by_sym = await fetch_merged_indicators(db, syms_list)
 
         score_rows = (await db.execute(
             text("""
@@ -423,7 +403,8 @@ async def _fetch_market_data(db, symbols: list) -> list:
         logger.warning("Pipeline scan: market data fetch failed: %s", exc)
         return None
 
-    ind_map   = {r.symbol: (r.indicators_json or {}) for r in ind_rows}
+    # Build flat ind_map from merged dual-scheduler results
+    ind_map = {sym: mi.as_flat_dict() for sym, mi in _merged_by_sym.items()}
     score_map = {r.symbol: r for r in score_rows}
 
     # ── Funnel stats: symbols requested vs. found in market_metadata ─────────

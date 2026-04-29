@@ -354,93 +354,22 @@ async def get_pipeline_assets(
     ind_map: Dict[str, Dict] = {}
     ind_meta_map: Dict[str, Dict[str, Dict]] = {}  # symbol → {ind_key: {group, age_seconds}}
     all_ind_keys: set = set()
-    MAX_DRIFT_SECONDS = 900  # microstructure stale threshold
 
     if symbols:
         try:
-            _now = datetime.now(timezone.utc)
-
-            # Try dual-scheduler query (requires scheduler_group column)
-            dual_ok = False
-            try:
-                dual_rows = (await db.execute(text("""
-                    SELECT DISTINCT ON (symbol, scheduler_group)
-                        symbol, scheduler_group, time, indicators_json
-                    FROM   indicators
-                    WHERE  symbol = ANY(:syms)
-                    ORDER  BY symbol, scheduler_group, time DESC
-                """), {"syms": symbols})).fetchall()
-                dual_ok = True
-            except Exception:
-                dual_rows = []
-
-            if dual_ok and dual_rows:
-                # Build per-symbol, per-group maps
-                from collections import defaultdict
-                _by_sym: Dict[str, Dict[str, dict]] = defaultdict(dict)
-                _ts_by_sym: Dict[str, Dict[str, datetime]] = defaultdict(dict)
-                for r in dual_rows:
-                    grp = r.scheduler_group or "combined"
-                    j = r.indicators_json or {}
-                    row_ts = r.time
-                    if row_ts is not None and row_ts.tzinfo is None:
-                        row_ts = row_ts.replace(tzinfo=timezone.utc)
-                    _by_sym[r.symbol][grp] = j
-                    _ts_by_sym[r.symbol][grp] = row_ts
-
-                for sym in symbols:
-                    grp_data = _by_sym.get(sym, {})
-                    grp_ts = _ts_by_sym.get(sym, {})
-                    merged: Dict[str, Any] = {}
-                    meta: Dict[str, Dict] = {}
-
-                    # Structural first (base layer)
-                    for grp in ("combined", "structural"):
-                        j = grp_data.get(grp, {})
-                        ts = grp_ts.get(grp)
-                        age = (_now - ts).total_seconds() if ts else None
-                        for k, v in j.items():
-                            if isinstance(v, (int, float, bool)):
-                                merged[k] = v
-                                meta[k] = {"group": grp, "age_seconds": age}
-
-                    # Microstructure layer — only if within drift threshold
-                    micro_j = grp_data.get("microstructure", {})
-                    micro_ts = grp_ts.get("microstructure")
-                    micro_age = (_now - micro_ts).total_seconds() if micro_ts else None
-                    if micro_j and (micro_age is None or micro_age <= MAX_DRIFT_SECONDS):
-                        for k, v in micro_j.items():
-                            if isinstance(v, (int, float, bool)):
-                                merged[k] = v
-                                meta[k] = {"group": "microstructure", "age_seconds": micro_age}
-
-                    if merged:
-                        ind_map[sym] = merged
-                        ind_meta_map[sym] = meta
-
-                # Fallback for symbols still missing
-                missing_syms = [s for s in symbols if s not in ind_map]
-            else:
-                missing_syms = symbols
-
-            if missing_syms:
-                fb_rows = (await db.execute(text("""
-                    SELECT DISTINCT ON (symbol) symbol, indicators_json, time
-                    FROM   indicators
-                    WHERE  symbol = ANY(:syms)
-                    ORDER  BY symbol, time DESC
-                """), {"syms": missing_syms})).fetchall()
-                for r in fb_rows:
-                    j = r.indicators_json or {}
-                    row_ts = r.time
-                    if row_ts is not None and row_ts.tzinfo is None:
-                        row_ts = row_ts.replace(tzinfo=timezone.utc)
-                    age = (_now - row_ts).total_seconds() if row_ts else None
-                    numeric = {k: v for k, v in j.items() if isinstance(v, (int, float, bool))}
-                    ind_map[r.symbol] = numeric
-                    ind_meta_map[r.symbol] = {
-                        k: {"group": "combined", "age_seconds": age}
-                        for k in numeric
+            from ..utils.indicator_merge import fetch_merged_indicators
+            merged_by_sym = await fetch_merged_indicators(db, symbols)
+            for sym, mi in merged_by_sym.items():
+                flat = mi.as_flat_dict()
+                if flat:
+                    ind_map[sym] = flat
+                    # Convert MergedIndicators.meta to the expected {group, age_seconds} shape
+                    ind_meta_map[sym] = {
+                        k: {
+                            "group": m.get("group"),
+                            "age_seconds": m.get("age_seconds"),
+                        }
+                        for k, m in mi.meta.items()
                     }
 
             for sym, numeric in ind_map.items():
