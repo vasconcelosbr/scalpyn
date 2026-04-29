@@ -513,6 +513,19 @@ async def get_pipeline_assets(
                 rule["indicator_age_seconds"] = None
                 rule["indicator_stale"] = False
 
+        # Build per-key inline metadata: {key: {value, source_group, age_seconds, stale}}
+        # This satisfies the inline metadata contract without changing the flat
+        # `indicators` format that the scoring engine and frontend depend on.
+        indicators_meta: Dict[str, Dict[str, Any]] = {}
+        sym_meta_all = ind_meta_map.get(sym, {})
+        for ikey, imeta in sym_meta_all.items():
+            indicators_meta[ikey] = {
+                "value": indicators.get(ikey),  # None for stale-only keys
+                "source_group": imeta.get("group"),
+                "age_seconds": imeta.get("age_seconds"),
+                "stale": imeta.get("stale", False),
+            }
+
         asset_dict: Dict[str, Any] = {
             "id":               sym,
             "watchlist_id":     str(wl_id),
@@ -530,6 +543,7 @@ async def get_pipeline_assets(
             "previous_level":   r.previous_level,
             "level_change_at":  r.level_change_at.isoformat() if r.level_change_at else None,
             "indicators":       indicators,
+            "indicators_meta":  indicators_meta,
             "score_rules":      score_rules,
         }
 

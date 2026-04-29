@@ -173,6 +173,10 @@ def merge_indicator_rows(
                     "[merge] drift=%.0fs > %.0fs — microstructure group absent",
                     drift, max_drift,
                 )
+            # Track drift-dropped rows as stale (same as absolute staleness)
+            for entry in live:
+                if entry[0] in stale_groups:
+                    stale_rows.append(entry)
             live = [(g, t, d, a) for g, t, d, a in live if g not in stale_groups]
 
     # ── Step 3: Per-key latest-timestamp-wins merge ───────────────────────────
@@ -345,14 +349,23 @@ async def fetch_merged_indicators(
 
 
 async def _fetch_legacy(db, symbols: List[str]) -> List:
+    """Fetch multiple recent indicator rows per symbol for legacy merge.
+
+    When the scheduler_group column is absent, each scheduler may have
+    inserted separate rows (structural vs microstructure) that lack the
+    group tag.  Fetching the last N rows (up to 3, within 2 h) and merging
+    them by timestamp gives a more complete combined indicator set than
+    taking only the single latest row.
+    """
     from sqlalchemy import text
     if not symbols:
         return []
     try:
         rows = (await db.execute(text("""
-            SELECT DISTINCT ON (symbol) symbol, time, indicators_json
+            SELECT symbol, time, indicators_json
             FROM   indicators
             WHERE  symbol = ANY(:syms)
+              AND  time > now() - interval '2 hours'
             ORDER  BY symbol, time DESC
         """), {"syms": symbols})).fetchall()
         return list(rows)
@@ -366,9 +379,18 @@ def _add_legacy_rows(
     legacy_rows: List,
     now: datetime,
 ) -> None:
+    """Merge multiple legacy rows per symbol into MergedIndicators.
+
+    Groups rows by symbol and merges them as "combined" rows (all get the
+    same group tag so they compete on timestamp alone — newest per key wins).
+    """
+    from collections import defaultdict
+    by_sym: Dict[str, List] = defaultdict(list)
     for r in legacy_rows:
-        if r.symbol in merged:
-            continue
-        ts = _ensure_utc(r.time)
-        rows = [("combined", ts, r.indicators_json or {})]
-        merged[r.symbol] = merge_indicator_rows(rows, now=now)
+        if r.symbol not in merged:
+            ts = _ensure_utc(r.time)
+            by_sym[r.symbol].append(("combined", ts, r.indicators_json or {}))
+
+    for sym, row_list in by_sym.items():
+        if sym not in merged:
+            merged[sym] = merge_indicator_rows(row_list, now=now)
