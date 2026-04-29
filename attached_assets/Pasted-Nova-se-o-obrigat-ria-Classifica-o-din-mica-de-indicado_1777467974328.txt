@@ -1,0 +1,77 @@
+Nova seção obrigatória: Classificação dinâmica de indicadores
+
+Você deve classificar automaticamente qualquer indicador, inclusive não listado explicitamente (ex: EMA, SMA, VWAP, Bollinger, etc.), em um dos dois grupos: estrutural ou microestrutura.
+
+Regra principal (obrigatória)
+
+A classificação deve ser baseada em comportamento temporal e função, não no nome do indicador.
+
+Critérios de decisão
+1. Classificar como ESTRUTURAL se:
+Período ≥ 30
+Baseado em OHLCV agregado
+Suavização alta (lag natural)
+Mede tendência, direção ou contexto
+Baixa sensibilidade a variações de curto prazo
+
+Exemplos típicos:
+
+Exponential Moving Average longa (≥50)
+Relative Strength Index (14+)
+Average Directional Index
+Moving Average Convergence Divergence
+
+➡ Assignar para: structural_scheduler (15 min)
+
+2. Classificar como MICROESTRUTURA se:
+Período < 30
+Alta sensibilidade a mudanças recentes
+Pode mudar significativamente em poucos minutos
+Mede fluxo, pressão ou execução
+Baseado em dados de ordem, volume ou preço recente
+
+Exemplos típicos:
+
+Exponential Moving Average curta (≤21)
+Taker Ratio
+Spread
+Volume Spike
+
+➡ Assignar para: microstructure_scheduler (5 min)
+
+Regra específica para médias móveis (obrigatória)
+IF indicator_type IN ["EMA", "SMA", "WMA"]:
+    IF period >= 50:
+        group = "structural"
+    ELIF period <= 21:
+        group = "microstructure"
+    ELSE:
+        group = "structural"  # default conservador
+Regra fallback (quando não houver período explícito)
+
+Se o indicador não tiver parâmetro de período:
+
+Se derivado de order flow → microestrutura
+Se derivado de OHLCV agregado → estrutural
+Em caso de dúvida → estrutural (evitar ruído)
+Atualização dos schedulers (inalterado)
+Structural Scheduler → 15 min
+Microstructure Scheduler → 5 min
+Pipeline → 10 min
+Regra de consistência
+Cada indicador deve carregar:
+group (structural ou microstructure)
+timestamp próprio
+O pipeline deve sempre usar o dado mais recente de cada grupo
+Critério de validação
+
+O sistema deve:
+
+Classificar corretamente qualquer novo indicador sem intervenção manual
+Alocar automaticamente EMAs conforme período
+Evitar que indicadores rápidos fiquem presos no ciclo de 15 min
+Evitar que indicadores lentos gerem ruído no ciclo de 5 min
+Conclusão
+
+Com esse ajuste, o prompt deixa de ser “fixo” e passa a ser adaptativo.
+Qualquer indicador novo entra no sistema já classificado corretamente, sem quebrar a arquitetura.
