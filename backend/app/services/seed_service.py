@@ -105,6 +105,17 @@ DEFAULT_DECISION_LOG = {
     "realtime_highlight_ms": 3000,
 }
 
+DEFAULT_AI_SETTINGS = {
+    "ml_enabled": True,
+    "model_path": "/tmp/scalpyn_models/model.pkl",
+    "ai_block_threshold": 0.5,
+    "use_ml_ranking": True,
+    "fallback_probability": 1.0,
+    "auto_retrain_enabled": False,
+    "retrain_interval_days": 7,
+    "min_simulations_for_training": 1000,
+}
+
 async def seed_user_defaults(db: AsyncSession, user_id: UUID) -> None:
     # Check if config exists
     query = select(ConfigProfile).where(ConfigProfile.user_id == user_id)
@@ -120,3 +131,4 @@ async def seed_user_defaults(db: AsyncSession, user_id: UUID) -> None:
         await config_service.update_config(db, 'strategy', user_id, DEFAULT_STRATEGY, user_id, change_description="System Seed Reset")
         await config_service.update_config(db, 'universe', user_id, DEFAULT_UNIVERSE, user_id, change_description="System Seed Reset")
         await config_service.update_config(db, 'decision_log', user_id, DEFAULT_DECISION_LOG, user_id, change_description="System Seed Reset")
+        await config_service.update_config(db, 'ai-settings', user_id, DEFAULT_AI_SETTINGS, user_id, change_description="System Seed Reset")
