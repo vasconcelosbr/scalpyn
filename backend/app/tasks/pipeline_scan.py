@@ -1930,14 +1930,28 @@ async def _run_pipeline_scan():
                     # If DB fails, Redis must NOT advance — otherwise the symbol
                     # gets stuck as ALLOW with no DB record and is silently
                     # filtered forever (ordering bug, Task #109).
-                    decision_payloads = await _persist_decision_logs(db, wl.user_id, decisions_to_log)
-                    # Stamp db_confirmed_at on each successfully persisted symbol
-                    if decisions_to_log:
-                        _confirmed_at = datetime.now(timezone.utc).isoformat()
-                        for _d in decisions_to_log:
-                            _sym = _d.get("symbol")
-                            if _sym in new_states:
-                                new_states[_sym]["db_confirmed_at"] = _confirmed_at
+                    #
+                    # The decision log INSERT is wrapped in a SAVEPOINT so that
+                    # a DB-level failure (e.g. missing columns from migration 026)
+                    # only rolls back the savepoint and leaves the parent session
+                    # healthy for _upsert_assets / _update_last_scanned below.
+                    decision_payloads = []
+                    try:
+                        async with db.begin_nested():
+                            decision_payloads = await _persist_decision_logs(db, wl.user_id, decisions_to_log)
+                            # Stamp db_confirmed_at on each successfully persisted symbol
+                            if decisions_to_log:
+                                _confirmed_at = datetime.now(timezone.utc).isoformat()
+                                for _d in decisions_to_log:
+                                    _sym = _d.get("symbol")
+                                    if _sym in new_states:
+                                        new_states[_sym]["db_confirmed_at"] = _confirmed_at
+                    except Exception as _dl_exc:
+                        logger.error(
+                            "[Decision] Failed to persist decision logs for watchlist %s: %s "
+                            "— verify migration 026 (direction/event_type columns) is applied",
+                            wl_id, _dl_exc,
+                        )
                     _save_decision_states(redis, wl_id, new_states)
                     await _upsert_assets(db, wl_id, signals, filters_json, execution_id=execution_id)
                     await _update_last_scanned(db, wl_id)
@@ -1960,6 +1974,12 @@ async def _run_pipeline_scan():
                 except Exception as exc:
                     logger.exception("[PipelineScan] Error processing watchlist %s: %s", wl.name, exc)
                     stats["errors"] += 1
+                    # Roll back any failed transaction so subsequent watchlists
+                    # are not affected by an InFailedSQLTransactionError cascade.
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
                     continue
 
         stats["integrity"] = await validate_pipeline_integrity(

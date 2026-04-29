@@ -85,19 +85,22 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
         return
     payload = json.dumps(results, default=str)
     try:
-        await db.execute(text("""
-            INSERT INTO indicators
-                (time, symbol, timeframe, indicators_json, scheduler_group)
-            VALUES
-                (:time, :symbol, :timeframe, :payload, :grp)
-            ON CONFLICT DO NOTHING
-        """), {
-            "time": when,
-            "symbol": symbol,
-            "timeframe": TIMEFRAME,
-            "payload": payload,
-            "grp": SCHEDULER_GROUP,
-        })
+        # SAVEPOINT: isolates a constraint error so the parent transaction
+        # remains healthy for _refresh_market_metadata below.
+        async with db.begin_nested():
+            await db.execute(text("""
+                INSERT INTO indicators
+                    (time, symbol, timeframe, indicators_json, scheduler_group)
+                VALUES
+                    (:time, :symbol, :timeframe, :payload, :grp)
+                ON CONFLICT DO NOTHING
+            """), {
+                "time": when,
+                "symbol": symbol,
+                "timeframe": TIMEFRAME,
+                "payload": payload,
+                "grp": SCHEDULER_GROUP,
+            })
     except Exception as exc:
         logger.warning("[MICRO-SCHED] indicators insert failed for %s: %s", symbol, exc)
 
@@ -109,21 +112,23 @@ async def _refresh_market_metadata(db, symbol: str,
     if spread_pct is None and depth is None:
         return
     try:
-        await db.execute(text("""
-            INSERT INTO market_metadata
-                (symbol, spread_pct, orderbook_depth_usdt, last_updated)
-            VALUES
-                (:symbol, :spread, :depth, :updated)
-            ON CONFLICT (symbol) DO UPDATE SET
-                spread_pct = COALESCE(:spread, market_metadata.spread_pct),
-                orderbook_depth_usdt = COALESCE(:depth, market_metadata.orderbook_depth_usdt),
-                last_updated = :updated
-        """), {
-            "symbol": symbol,
-            "spread": spread_pct,
-            "depth": depth,
-            "updated": when,
-        })
+        # SAVEPOINT: isolates a market_metadata failure from the rest of the session.
+        async with db.begin_nested():
+            await db.execute(text("""
+                INSERT INTO market_metadata
+                    (symbol, spread_pct, orderbook_depth_usdt, last_updated)
+                VALUES
+                    (:symbol, :spread, :depth, :updated)
+                ON CONFLICT (symbol) DO UPDATE SET
+                    spread_pct = COALESCE(:spread, market_metadata.spread_pct),
+                    orderbook_depth_usdt = COALESCE(:depth, market_metadata.orderbook_depth_usdt),
+                    last_updated = :updated
+            """), {
+                "symbol": symbol,
+                "spread": spread_pct,
+                "depth": depth,
+                "updated": when,
+            })
     except Exception as exc:
         logger.debug("[MICRO-SCHED] market_metadata upsert skipped for %s: %s", symbol, exc)
 

@@ -131,15 +131,19 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
     if not results:
         return
     try:
-        await db.execute(text("""
-            INSERT INTO indicators (time, symbol, timeframe, indicators_json)
-            VALUES (:time, :symbol, :timeframe, :payload)
-        """), {
-            "time": when,
-            "symbol": symbol,
-            "timeframe": TIMEFRAME,
-            "payload": json.dumps(results, default=str),
-        })
+        # SAVEPOINT: isolates a constraint / column error so the parent
+        # transaction remains healthy for _refresh_market_metadata below.
+        async with db.begin_nested():
+            await db.execute(text("""
+                INSERT INTO indicators (time, symbol, timeframe, indicators_json)
+                VALUES (:time, :symbol, :timeframe, :payload)
+                ON CONFLICT DO NOTHING
+            """), {
+                "time": when,
+                "symbol": symbol,
+                "timeframe": TIMEFRAME,
+                "payload": json.dumps(results, default=str),
+            })
     except Exception as exc:
         logger.warning("[SCHED] indicators insert failed for %s: %s", symbol, exc)
 
@@ -159,23 +163,25 @@ async def _refresh_market_metadata(db, symbol: str, df: pd.DataFrame,
         return
 
     try:
-        await db.execute(text("""
-            INSERT INTO market_metadata
-                (symbol, price, spread_pct, orderbook_depth_usdt, last_updated)
-            VALUES
-                (:symbol, :price, :spread, :depth, :updated)
-            ON CONFLICT (symbol) DO UPDATE SET
-                price = COALESCE(:price, market_metadata.price),
-                spread_pct = COALESCE(:spread, market_metadata.spread_pct),
-                orderbook_depth_usdt = COALESCE(:depth, market_metadata.orderbook_depth_usdt),
-                last_updated = :updated
-        """), {
-            "symbol": symbol,
-            "price": last_close,
-            "spread": spread_pct,
-            "depth": depth,
-            "updated": when,
-        })
+        # SAVEPOINT: isolates a market_metadata failure from the rest of the session.
+        async with db.begin_nested():
+            await db.execute(text("""
+                INSERT INTO market_metadata
+                    (symbol, price, spread_pct, orderbook_depth_usdt, last_updated)
+                VALUES
+                    (:symbol, :price, :spread, :depth, :updated)
+                ON CONFLICT (symbol) DO UPDATE SET
+                    price = COALESCE(:price, market_metadata.price),
+                    spread_pct = COALESCE(:spread, market_metadata.spread_pct),
+                    orderbook_depth_usdt = COALESCE(:depth, market_metadata.orderbook_depth_usdt),
+                    last_updated = :updated
+            """), {
+                "symbol": symbol,
+                "price": last_close,
+                "spread": spread_pct,
+                "depth": depth,
+                "updated": when,
+            })
     except Exception as exc:
         logger.warning("[SCHED] market_metadata upsert failed for %s: %s", symbol, exc)
 
