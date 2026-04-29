@@ -31,6 +31,8 @@ from .api import (
     debug_indicators,
     simulations,
     ml,
+    spot_engine,
+    futures_engine,
 )
 
 
@@ -201,6 +203,10 @@ app.include_router(trades.router)
 app.include_router(orders.router)
 app.include_router(pools.router)
 app.include_router(exchanges.router)
+
+# Trading Engines
+app.include_router(spot_engine.router)
+app.include_router(futures_engine.router)
 
 # Asset Search
 app.include_router(asset_search.router)
