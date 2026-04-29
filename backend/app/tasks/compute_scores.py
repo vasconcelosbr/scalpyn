@@ -28,81 +28,87 @@ async def _score_async():
     logger.info("Starting Alpha Score computation...")
 
     async with AsyncSessionLocal() as db:
-        # Load score config from the first user who has it configured
-        score_config = DEFAULT_SCORE
         try:
-            from ..services.config_service import config_service
-            from ..models.pipeline_watchlist import PipelineWatchlist
-            from sqlalchemy import select as sa_select
-            user_row = (await db.execute(
-                text("SELECT DISTINCT user_id FROM pipeline_watchlists LIMIT 1")
-            )).fetchone()
-            if user_row:
-                cfg = await config_service.get_config(db, "score", user_row.user_id)
-                if cfg and cfg.get("scoring_rules"):
-                    score_config = cfg
-        except Exception as _e:
-            logger.debug("compute_scores: could not load user score config: %s", _e)
-
-        engine = ScoreEngine(score_config)
-        scored = 0
-
-        # Get latest indicators for all symbols
-        result = await db.execute(text("""
-            SELECT DISTINCT ON (symbol) symbol, indicators_json, time
-            FROM indicators
-            WHERE time > now() - interval '2 hours'
-            ORDER BY symbol, time DESC
-        """))
-        rows = result.fetchall()
-
-        now = datetime.now(timezone.utc)
-
-        for row in rows:
+            # Load score config from the first user who has it configured
+            score_config = DEFAULT_SCORE
             try:
-                indicators = row.indicators_json or {}
-                score_result = engine.compute_alpha_score(indicators)
+                from ..services.config_service import config_service
+                from ..models.pipeline_watchlist import PipelineWatchlist
+                from sqlalchemy import select as sa_select
+                user_row = (await db.execute(
+                    text("SELECT DISTINCT user_id FROM pipeline_watchlists LIMIT 1")
+                )).fetchone()
+                if user_row:
+                    cfg = await config_service.get_config(db, "score", user_row.user_id)
+                    if cfg and cfg.get("scoring_rules"):
+                        score_config = cfg
+            except Exception as _e:
+                logger.debug("compute_scores: could not load user score config: %s", _e)
 
-                components = score_result.get("components", {})
+            engine = ScoreEngine(score_config)
+            scored = 0
 
-                await db.execute(text("""
-                    INSERT INTO alpha_scores
-                        (time, symbol, score, liquidity_score, market_structure_score,
-                         momentum_score, signal_score, components_json)
-                    VALUES
-                        (:time, :symbol, :score, :liq, :ms, :mom, :sig, :components)
-                """), {
-                    "time": now,
-                    "symbol": row.symbol,
-                    "score": score_result["total_score"],
-                    "liq": components.get("liquidity_score", 0),
-                    "ms": components.get("market_structure_score", 0),
-                    "mom": components.get("momentum_score", 0),
-                    "sig": components.get("signal_score", 0),
-                    "components": json.dumps({
-                        "classification": score_result.get("classification"),
-                        "matched_rules": score_result.get("matched_rules", []),
-                    }),
-                })
+            # Get latest indicators for all symbols
+            result = await db.execute(text("""
+                SELECT DISTINCT ON (symbol) symbol, indicators_json, time
+                FROM indicators
+                WHERE time > now() - interval '2 hours'
+                ORDER BY symbol, time DESC
+            """))
+            rows = result.fetchall()
 
-                scored += 1
+            now = datetime.now(timezone.utc)
 
+            for row in rows:
+                try:
+                    indicators = row.indicators_json or {}
+                    score_result = engine.compute_alpha_score(indicators)
+
+                    components = score_result.get("components", {})
+
+                    await db.execute(text("""
+                        INSERT INTO alpha_scores
+                            (time, symbol, score, liquidity_score, market_structure_score,
+                             momentum_score, signal_score, components_json)
+                        VALUES
+                            (:time, :symbol, :score, :liq, :ms, :mom, :sig, :components)
+                    """), {
+                        "time": now,
+                        "symbol": row.symbol,
+                        "score": score_result["total_score"],
+                        "liq": components.get("liquidity_score", 0),
+                        "ms": components.get("market_structure_score", 0),
+                        "mom": components.get("momentum_score", 0),
+                        "sig": components.get("signal_score", 0),
+                        "components": json.dumps({
+                            "classification": score_result.get("classification"),
+                            "matched_rules": score_result.get("matched_rules", []),
+                        }),
+                    })
+
+                    scored += 1
+
+                except Exception as e:
+                    logger.warning(f"Failed to compute score for {row.symbol}: {e}")
+                    await db.rollback()
+                    continue
+
+            await db.commit()
+
+            logger.info(f"Alpha Score computation complete: {scored} symbols")
+
+            # ── Level transition detection ────────────────────────────────────────
+            # Compare fresh scores against pipeline_watchlist_assets to detect
+            # assets entering / leaving criteria (min_score from profile config).
+            # Must run inside the same session so the DB connection is still open.
+            try:
+                await _detect_level_transitions(db, rows, score_config)
             except Exception as e:
-                logger.warning(f"Failed to compute score for {row.symbol}: {e}")
-                continue
-
-        await db.commit()
-
-        logger.info(f"Alpha Score computation complete: {scored} symbols")
-
-        # ── Level transition detection ────────────────────────────────────────
-        # Compare fresh scores against pipeline_watchlist_assets to detect
-        # assets entering / leaving criteria (min_score from profile config).
-        # Must run inside the same session so the DB connection is still open.
-        try:
-            await _detect_level_transitions(db, rows, score_config)
+                logger.warning(f"Level transition detection failed: {e}")
         except Exception as e:
-            logger.warning(f"Level transition detection failed: {e}")
+            logger.error("Alpha Score computation failed: %s", e)
+            await db.rollback()
+            raise
 
     return scored
 

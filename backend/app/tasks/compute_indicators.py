@@ -124,88 +124,94 @@ async def _compute_async():
     computed = 0
 
     async with AsyncSessionLocal() as db:
-        # Get all symbols with recent OHLCV data
-        symbols_result = await db.execute(text("""
-            SELECT DISTINCT symbol FROM ohlcv
-            WHERE time > now() - interval '7 days'
-        """))
-        symbols = [row.symbol for row in symbols_result.fetchall()]
-        metadata_map = await _load_market_metadata_map(db)
+        try:
+            # Get all symbols with recent OHLCV data
+            symbols_result = await db.execute(text("""
+                SELECT DISTINCT symbol FROM ohlcv
+                WHERE time > now() - interval '7 days'
+            """))
+            symbols = [row.symbol for row in symbols_result.fetchall()]
+            metadata_map = await _load_market_metadata_map(db)
 
-        for symbol in symbols:
-            try:
-                # Fetch OHLCV data for this symbol
-                ohlcv_result = await db.execute(text("""
-                    SELECT time, open, high, low, close, volume, quote_volume
-                    FROM ohlcv
-                    WHERE symbol = :symbol AND timeframe = '1h'
-                    ORDER BY time DESC
-                    LIMIT :limit
-                """), {"symbol": symbol, "limit": query_limit_1h})
-                rows = ohlcv_result.fetchall()
+            for symbol in symbols:
+                try:
+                    # Fetch OHLCV data for this symbol
+                    ohlcv_result = await db.execute(text("""
+                        SELECT time, open, high, low, close, volume, quote_volume
+                        FROM ohlcv
+                        WHERE symbol = :symbol AND timeframe = '1h'
+                        ORDER BY time DESC
+                        LIMIT :limit
+                    """), {"symbol": symbol, "limit": query_limit_1h})
+                    rows = ohlcv_result.fetchall()
 
-                if len(rows) < min_candles_1h:
-                    logger.debug(
-                        "Skipping 1h indicator computation for %s: only %d candles (need ≥%d)",
-                        symbol, len(rows), min_candles_1h,
+                    if len(rows) < min_candles_1h:
+                        logger.debug(
+                            "Skipping 1h indicator computation for %s: only %d candles (need ≥%d)",
+                            symbol, len(rows), min_candles_1h,
+                        )
+                        continue
+
+                    df = pd.DataFrame([{
+                        "time": r.time, "open": float(r.open), "high": float(r.high),
+                        "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
+                        "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
+                    } for r in reversed(rows)])
+
+                    market_data = await market_data_service.fetch_indicator_fallbacks(
+                        symbol,
+                        existing_data=metadata_map.get(symbol),
                     )
+                    # Calculate OHLCV-based indicators
+                    results = engine.calculate(df, market_data=market_data)
+                    if not results:
+                        continue
+
+                    logger.debug(
+                        "Indicator volume audit %s[1h]: last_base=%s last_usdt=%s agg24h_usdt=%s ticker24h_usdt=%s coverage_h=%s candles_24h=%s",
+                        symbol,
+                        results.get("volume_last_candle_base"),
+                        results.get("volume_last_candle_usdt"),
+                        results.get("volume_24h_usdt_aggregated"),
+                        results.get("volume_24h_usdt"),
+                        results.get("volume_24h_coverage_hours"),
+                        results.get("volume_24h_candles"),
+                    )
+
+                    # Merge real order flow data (taker_ratio, buy_pressure — 60s trade window)
+                    of_data = await get_order_flow_data(symbol, window_seconds=60)
+                    results.update({k: v for k, v in of_data.items() if v is not None or k in {
+                        "taker_ratio", "buy_pressure", "volume_delta",
+                        "taker_buy_volume", "taker_sell_volume",
+                    }})
+
+
+                    now = datetime.now(timezone.utc)
+                    await _upsert_market_metadata_snapshot(db, symbol, results, now)
+
+                    # Store in TimescaleDB
+                    await db.execute(text("""
+                        INSERT INTO indicators (time, symbol, timeframe, indicators_json)
+                        VALUES (:time, :symbol, :timeframe, :indicators)
+                    """), {
+                        "time": now,
+                        "symbol": symbol,
+                        "timeframe": "1h",
+                        "indicators": json.dumps(results),
+                    })
+
+                    computed += 1
+
+                except Exception as e:
+                    logger.warning(f"Failed to compute indicators for {symbol}: {e}")
+                    await db.rollback()
                     continue
 
-                df = pd.DataFrame([{
-                    "time": r.time, "open": float(r.open), "high": float(r.high),
-                    "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
-                    "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
-                } for r in reversed(rows)])
-
-                market_data = await market_data_service.fetch_indicator_fallbacks(
-                    symbol,
-                    existing_data=metadata_map.get(symbol),
-                )
-                # Calculate OHLCV-based indicators
-                results = engine.calculate(df, market_data=market_data)
-                if not results:
-                    continue
-
-                logger.debug(
-                    "Indicator volume audit %s[1h]: last_base=%s last_usdt=%s agg24h_usdt=%s ticker24h_usdt=%s coverage_h=%s candles_24h=%s",
-                    symbol,
-                    results.get("volume_last_candle_base"),
-                    results.get("volume_last_candle_usdt"),
-                    results.get("volume_24h_usdt_aggregated"),
-                    results.get("volume_24h_usdt"),
-                    results.get("volume_24h_coverage_hours"),
-                    results.get("volume_24h_candles"),
-                )
-
-                # Merge real order flow data (taker_ratio, buy_pressure — 60s trade window)
-                of_data = await get_order_flow_data(symbol, window_seconds=60)
-                results.update({k: v for k, v in of_data.items() if v is not None or k in {
-                    "taker_ratio", "buy_pressure", "volume_delta",
-                    "taker_buy_volume", "taker_sell_volume",
-                }})
-
-
-                now = datetime.now(timezone.utc)
-                await _upsert_market_metadata_snapshot(db, symbol, results, now)
-
-                # Store in TimescaleDB
-                await db.execute(text("""
-                    INSERT INTO indicators (time, symbol, timeframe, indicators_json)
-                    VALUES (:time, :symbol, :timeframe, :indicators)
-                """), {
-                    "time": now,
-                    "symbol": symbol,
-                    "timeframe": "1h",
-                    "indicators": json.dumps(results),
-                })
-
-                computed += 1
-
-            except Exception as e:
-                logger.warning(f"Failed to compute indicators for {symbol}: {e}")
-                continue
-
-        await db.commit()
+            await db.commit()
+        except Exception as e:
+            logger.error("Indicator computation failed: %s", e)
+            await db.rollback()
+            raise
 
     logger.info(f"Indicator computation complete: {computed} symbols")
     return computed
@@ -235,84 +241,90 @@ async def _compute_5m_async():
     query_limit_5m = max(288, min_candles_5m)
 
     async with AsyncSessionLocal() as db:
-        # Only symbols that have recent 5m candles
-        symbols_result = await db.execute(text("""
-            SELECT DISTINCT symbol FROM ohlcv
-            WHERE timeframe = '5m'
-              AND time > now() - interval '2 hours'
-        """))
-        symbols = [row.symbol for row in symbols_result.fetchall()]
-        metadata_map = await _load_market_metadata_map(db)
+        try:
+            # Only symbols that have recent 5m candles
+            symbols_result = await db.execute(text("""
+                SELECT DISTINCT symbol FROM ohlcv
+                WHERE timeframe = '5m'
+                  AND time > now() - interval '2 hours'
+            """))
+            symbols = [row.symbol for row in symbols_result.fetchall()]
+            metadata_map = await _load_market_metadata_map(db)
 
-        for symbol in symbols:
-            try:
-                ohlcv_result = await db.execute(text("""
-                    SELECT time, open, high, low, close, volume, quote_volume
-                    FROM ohlcv
-                    WHERE symbol = :symbol AND timeframe = '5m'
-                    ORDER BY time DESC
-                    LIMIT :limit
-                """), {"symbol": symbol, "limit": query_limit_5m})
-                rows = ohlcv_result.fetchall()
+            for symbol in symbols:
+                try:
+                    ohlcv_result = await db.execute(text("""
+                        SELECT time, open, high, low, close, volume, quote_volume
+                        FROM ohlcv
+                        WHERE symbol = :symbol AND timeframe = '5m'
+                        ORDER BY time DESC
+                        LIMIT :limit
+                    """), {"symbol": symbol, "limit": query_limit_5m})
+                    rows = ohlcv_result.fetchall()
 
-                if len(rows) < min_candles_5m:
-                    logger.debug(
-                        "Skipping 5m indicator computation for %s: only %d candles (need ≥%d)",
-                        symbol, len(rows), min_candles_5m,
+                    if len(rows) < min_candles_5m:
+                        logger.debug(
+                            "Skipping 5m indicator computation for %s: only %d candles (need ≥%d)",
+                            symbol, len(rows), min_candles_5m,
+                        )
+                        continue
+
+                    df = pd.DataFrame([{
+                        "time": r.time, "open": float(r.open), "high": float(r.high),
+                        "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
+                        "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
+                    } for r in reversed(rows)])
+
+                    market_data = await market_data_service.fetch_indicator_fallbacks(
+                        symbol,
+                        existing_data=metadata_map.get(symbol),
                     )
+                    results = engine.calculate(df, market_data=market_data)
+                    if not results:
+                        continue
+
+                    logger.debug(
+                        "Indicator volume audit %s[5m]: last_base=%s last_usdt=%s agg24h_usdt=%s ticker24h_usdt=%s coverage_h=%s candles_24h=%s",
+                        symbol,
+                        results.get("volume_last_candle_base"),
+                        results.get("volume_last_candle_usdt"),
+                        results.get("volume_24h_usdt_aggregated"),
+                        results.get("volume_24h_usdt"),
+                        results.get("volume_24h_coverage_hours"),
+                        results.get("volume_24h_candles"),
+                    )
+
+                    # Merge real order flow data (taker_ratio, buy_pressure — 60s trade window)
+                    of_data = await get_order_flow_data(symbol, window_seconds=60)
+                    results.update({k: v for k, v in of_data.items() if v is not None or k in {
+                        "taker_ratio", "buy_pressure", "volume_delta",
+                        "taker_buy_volume", "taker_sell_volume",
+                    }})
+
+                    now = datetime.now(timezone.utc)
+                    await _upsert_market_metadata_snapshot(db, symbol, results, now)
+                    await db.execute(text("""
+                        INSERT INTO indicators (time, symbol, timeframe, indicators_json)
+                        VALUES (:time, :symbol, :timeframe, :indicators)
+                    """), {
+                        "time":       now,
+                        "symbol":     symbol,
+                        "timeframe":  "5m",
+                        "indicators": json.dumps(results),
+                    })
+
+                    computed += 1
+
+                except Exception as e:
+                    logger.warning(f"Failed to compute 5m indicators for {symbol}: {e}")
+                    await db.rollback()
                     continue
 
-                df = pd.DataFrame([{
-                    "time": r.time, "open": float(r.open), "high": float(r.high),
-                    "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
-                    "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
-                } for r in reversed(rows)])
-
-                market_data = await market_data_service.fetch_indicator_fallbacks(
-                    symbol,
-                    existing_data=metadata_map.get(symbol),
-                )
-                results = engine.calculate(df, market_data=market_data)
-                if not results:
-                    continue
-
-                logger.debug(
-                    "Indicator volume audit %s[5m]: last_base=%s last_usdt=%s agg24h_usdt=%s ticker24h_usdt=%s coverage_h=%s candles_24h=%s",
-                    symbol,
-                    results.get("volume_last_candle_base"),
-                    results.get("volume_last_candle_usdt"),
-                    results.get("volume_24h_usdt_aggregated"),
-                    results.get("volume_24h_usdt"),
-                    results.get("volume_24h_coverage_hours"),
-                    results.get("volume_24h_candles"),
-                )
-
-                # Merge real order flow data (taker_ratio, buy_pressure — 60s trade window)
-                of_data = await get_order_flow_data(symbol, window_seconds=60)
-                results.update({k: v for k, v in of_data.items() if v is not None or k in {
-                    "taker_ratio", "buy_pressure", "volume_delta",
-                    "taker_buy_volume", "taker_sell_volume",
-                }})
-
-                now = datetime.now(timezone.utc)
-                await _upsert_market_metadata_snapshot(db, symbol, results, now)
-                await db.execute(text("""
-                    INSERT INTO indicators (time, symbol, timeframe, indicators_json)
-                    VALUES (:time, :symbol, :timeframe, :indicators)
-                """), {
-                    "time":       now,
-                    "symbol":     symbol,
-                    "timeframe":  "5m",
-                    "indicators": json.dumps(results),
-                })
-
-                computed += 1
-
-            except Exception as e:
-                logger.warning(f"Failed to compute 5m indicators for {symbol}: {e}")
-                continue
-
-        await db.commit()
+            await db.commit()
+        except Exception as e:
+            logger.error("5m indicator computation failed: %s", e)
+            await db.rollback()
+            raise
 
     logger.info(f"5m indicator computation complete: {computed} symbols")
     return computed

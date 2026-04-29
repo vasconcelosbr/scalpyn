@@ -37,6 +37,8 @@ _db_url, _connect_args = _resolve_db_url(settings.DATABASE_URL)
 # Fail fast on unreachable DB — asyncpg default is 60 s which is too long
 # for Cloud Run startup.  15 s is enough for Cloud SQL proxy sockets.
 _connect_args.setdefault("timeout", 15)
+# Add command_timeout to prevent hung queries
+_connect_args.setdefault("command_timeout", 60)
 
 engine = create_async_engine(
     _db_url,
@@ -44,6 +46,8 @@ engine = create_async_engine(
     connect_args=_connect_args,
     pool_pre_ping=True,
     pool_recycle=1800,
+    pool_size=20,  # Increased from default 5
+    max_overflow=30,  # Increased from default 10 (total = 50 connections)
 )
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -53,9 +57,11 @@ AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 # across loops raises "Future attached to a different loop".
 # NullPool disables connection reuse: each session opens/closes its own
 # connection within the task's event loop, fully avoiding this error.
+_celery_connect_args = dict(_connect_args)
+_celery_connect_args.setdefault("command_timeout", 60)
 _celery_engine = create_async_engine(
     _db_url,
-    connect_args=_connect_args,
+    connect_args=_celery_connect_args,
     poolclass=NullPool,
 )
 CeleryAsyncSessionLocal = async_sessionmaker(_celery_engine, expire_on_commit=False)
