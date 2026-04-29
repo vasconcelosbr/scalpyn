@@ -366,6 +366,7 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
     useEngineStatus(profile);
 
   const [actionLoading, setActionLoading] = useState<'start' | 'pause' | 'resume' | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const engineState = resolveEngineState(isRunning, isPaused);
   const stateCfg = STATE_CONFIG[engineState];
@@ -374,8 +375,13 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
 
   async function handleStart() {
     setActionLoading('start');
+    setError(null);
     try {
       await startEngine();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      console.error('Failed to start engine:', err);
     } finally {
       setActionLoading(null);
     }
@@ -383,8 +389,13 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
 
   async function handlePause() {
     setActionLoading('pause');
+    setError(null);
     try {
       await pauseEngine();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      console.error('Failed to pause engine:', err);
     } finally {
       setActionLoading(null);
     }
@@ -392,16 +403,71 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
 
   async function handleResume() {
     setActionLoading('resume');
+    setError(null);
     try {
       await resumeEngine();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      console.error('Failed to resume engine:', err);
     } finally {
       setActionLoading(null);
     }
   }
 
   return (
-    <div
-      style={{
+    <>
+      {error && (
+        <div
+          style={{
+            padding: '12px 16px',
+            background: 'var(--color-loss-muted)',
+            border: '1px solid var(--color-loss-border)',
+            borderRadius: 'var(--radius-lg)',
+            marginBottom: '12px',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '12px',
+          }}
+          role="alert"
+        >
+          <AlertTriangle size={16} style={{ color: 'var(--color-loss)', flexShrink: 0, marginTop: '2px' }} />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)' }}>
+              Failed to start {profile} engine
+            </span>
+            <span style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              {error}
+            </span>
+            {(error.includes('config') || error.includes('connection')) && (
+              <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                Make sure you have configured your {profile === 'spot' ? 'Spot' : 'Futures'} Engine settings and connected your Gate.io API keys.
+              </span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-tertiary)',
+              cursor: 'pointer',
+              padding: '4px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 'var(--radius-sm)',
+              flexShrink: 0,
+            }}
+            aria-label="Dismiss error"
+          >
+            ×
+          </button>
+        </div>
+      )}
+      <div
+        style={{
         display: 'flex',
         alignItems: 'center',
         gap: '0',
@@ -536,5 +602,6 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
         </Link>
       </div>
     </div>
+    </>
   );
 }
