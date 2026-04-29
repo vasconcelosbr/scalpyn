@@ -299,6 +299,76 @@ def _save_signals(redis, watchlist_id: str, symbols: set, ttl: int = 300):
         pass
 
 
+def _prior_decision_states(redis, watchlist_id: str) -> dict:
+    """Load the map of {symbol: {state, score, direction, saved_at}} from the last scan."""
+    if not redis:
+        return {}
+    try:
+        raw = redis.get(f"{_REDIS_PREFIX}{watchlist_id}:decision_states")
+        return json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+
+
+def _save_decision_states(redis, watchlist_id: str, states: dict, ttl: int = 600):
+    """Persist current decision state map for next-cycle comparison (TTL 10 min)."""
+    if not redis:
+        return
+    try:
+        redis.setex(f"{_REDIS_PREFIX}{watchlist_id}:decision_states", ttl, json.dumps(states))
+    except Exception:
+        pass
+
+
+def _should_log_decision(
+    decision: dict,
+    prior: Optional[dict],
+    score_delta_threshold: float = 5.0,
+    direction_change_logs: bool = True,
+) -> tuple[bool, Optional[str]]:
+    """
+    Decide whether a decision dict should be written to the Decision Log and
+    return the event_type string.
+
+    Rules:
+    - None/absent → ALLOW   → log, NEW_SIGNAL
+    - ALLOW       → BLOCK   → log, SIGNAL_LOST
+    - BLOCK       → ALLOW   → log, SIGNAL_REGAINED
+    - ALLOW → ALLOW stable  → skip
+    - ALLOW → ALLOW score delta > threshold → log, SIGNAL_EVOLVED_SCORE
+    - ALLOW → ALLOW direction flip         → log, SIGNAL_EVOLVED_DIRECTION (if enabled)
+    - BLOCK → BLOCK         → skip
+    - None/absent → BLOCK   → skip
+    """
+    current_state = decision.get("decision")
+    current_score = float(decision.get("score") or 0)
+    current_direction = decision.get("direction")
+
+    if prior is None:
+        if current_state == "ALLOW":
+            return True, "NEW_SIGNAL"
+        return False, None
+
+    prior_state = prior.get("state")
+    prior_score = float(prior.get("score") or 0)
+    prior_direction = prior.get("direction")
+
+    if prior_state != "ALLOW" and current_state == "ALLOW":
+        return True, "SIGNAL_REGAINED"
+
+    if prior_state == "ALLOW" and current_state == "BLOCK":
+        return True, "SIGNAL_LOST"
+
+    if prior_state == "ALLOW" and current_state == "ALLOW":
+        if abs(current_score - prior_score) > score_delta_threshold:
+            return True, "SIGNAL_EVOLVED_SCORE"
+        if direction_change_logs and current_direction and prior_direction and current_direction != prior_direction:
+            return True, "SIGNAL_EVOLVED_DIRECTION"
+        return False, None
+
+    return False, None
+
+
 async def _update_last_scanned(db, watchlist_id: str):
     """Update last_scanned_at on a PipelineWatchlist after each scan attempt."""
     from sqlalchemy import text
@@ -873,6 +943,7 @@ def _evaluate_l3_decisions(
             "reasons": _decision_reason_map(processed, has_signal_conditions),
             "metrics": _decision_metrics(asset, processed),
             "latency_ms": latency_ms,
+            "direction": asset.get("futures_direction"),
             "created_at": datetime.now(timezone.utc),
             "_processed": processed,
             "_asset": asset,
@@ -900,6 +971,8 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             reasons=decision.get("reasons"),
             metrics=decision.get("metrics"),
             latency_ms=decision.get("latency_ms"),
+            direction=decision.get("direction"),
+            event_type=decision.get("event_type"),
             user_id=user_id,
             created_at=decision.get("created_at"),
         )
@@ -923,9 +996,14 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             "reasons": row.reasons or {},
             "metrics": row.metrics or {},
             "latency_ms": row.latency_ms,
+            "direction": row.direction,
+            "event_type": row.event_type,
             "created_at": row.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
-        logger.info("[Decision] %s | score=%s | %s", row.symbol, round(float(row.score or 0), 2), row.decision)
+        logger.info(
+            "[Decision] %s | score=%s | %s | event=%s",
+            row.symbol, round(float(row.score or 0), 2), row.decision, row.event_type or "—",
+        )
         payloads.append(payload)
     return payloads
 
@@ -1797,7 +1875,44 @@ async def _run_pipeline_scan():
                     new_syms = sorted(current_set - prior_set)
 
                     _save_signals(redis, wl_id, current_set)
-                    decision_payloads = await _persist_decision_logs(db, wl.user_id, decisions)
+
+                    # ── Decision Log deduplication ────────────────────────────
+                    from ..services.seed_service import DEFAULT_DECISION_LOG as _DL_DEFAULTS
+                    dl_score_delta = float(_DL_DEFAULTS.get("score_delta_threshold", 5.0))
+                    dl_direction_logs = bool(_DL_DEFAULTS.get("direction_change_logs", True))
+                    try:
+                        from ..services.config_service import config_service
+                        _dl_cfg = await config_service.get_config(db, "decision_log", wl.user_id)
+                        if isinstance(_dl_cfg, dict):
+                            dl_score_delta = float(_dl_cfg.get("score_delta_threshold", dl_score_delta))
+                            dl_direction_logs = bool(_dl_cfg.get("direction_change_logs", dl_direction_logs))
+                    except Exception:
+                        pass
+
+                    prior_states = _prior_decision_states(redis, wl_id)
+                    new_states: dict = {}
+                    decisions_to_log: list = []
+                    for d in decisions:
+                        sym = d.get("symbol")
+                        prior = prior_states.get(sym)
+                        should_log, event_type = _should_log_decision(
+                            d, prior,
+                            score_delta_threshold=dl_score_delta,
+                            direction_change_logs=dl_direction_logs,
+                        )
+                        new_states[sym] = {
+                            "state": d.get("decision"),
+                            "score": d.get("score"),
+                            "direction": d.get("direction"),
+                            "saved_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                        if should_log:
+                            d["event_type"] = event_type
+                            decisions_to_log.append(d)
+                    _save_decision_states(redis, wl_id, new_states)
+                    # ─────────────────────────────────────────────────────────
+
+                    decision_payloads = await _persist_decision_logs(db, wl.user_id, decisions_to_log)
                     await _upsert_assets(db, wl_id, signals, filters_json, execution_id=execution_id)
                     await _update_last_scanned(db, wl_id)
 

@@ -103,6 +103,8 @@ DEFAULT_DECISION_LOG = {
     "client_buffer_size": 200,
     "max_displayed_metrics": 16,
     "realtime_highlight_ms": 3000,
+    "score_delta_threshold": 5.0,
+    "direction_change_logs": True,
 }
 
 DEFAULT_AI_SETTINGS = {

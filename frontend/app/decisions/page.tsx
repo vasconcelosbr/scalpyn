@@ -77,6 +77,28 @@ function matchesFilters(item: DecisionItem, filters: Filters) {
   return true;
 }
 
+function eventTypeTone(eventType?: string | null): string {
+  switch (eventType) {
+    case "NEW_SIGNAL":       return "bg-[var(--color-profit-muted)] text-[var(--color-profit)] border-[var(--color-profit-border)]";
+    case "SIGNAL_LOST":      return "bg-[var(--color-loss-muted)] text-[var(--color-loss)] border-[var(--color-loss-border)]";
+    case "SIGNAL_REGAINED":  return "bg-[rgba(20,184,166,0.12)] text-[rgb(20,184,166)] border-[rgba(20,184,166,0.3)]";
+    case "SIGNAL_EVOLVED_SCORE":
+    case "SIGNAL_EVOLVED_DIRECTION": return "bg-[rgba(251,191,36,0.12)] text-[var(--color-warning)] border-[rgba(251,191,36,0.25)]";
+    default:                 return "bg-[var(--bg-elevated)] text-[var(--text-secondary)] border-[var(--border-default)]";
+  }
+}
+
+function eventTypeLabel(eventType?: string | null): string {
+  switch (eventType) {
+    case "NEW_SIGNAL":               return "New";
+    case "SIGNAL_LOST":              return "Lost";
+    case "SIGNAL_REGAINED":          return "Regained";
+    case "SIGNAL_EVOLVED_SCORE":     return "Δ Score";
+    case "SIGNAL_EVOLVED_DIRECTION": return "Δ Dir";
+    default:                         return eventType ?? "";
+  }
+}
+
 function scoreTone(score?: number | null) {
   if ((score ?? 0) >= 80) return "bg-[var(--color-profit-muted)] text-[var(--color-profit)] border-[var(--color-profit-border)]";
   if ((score ?? 0) >= 60) return "bg-[rgba(251,191,36,0.12)] text-[var(--color-warning)] border-[rgba(251,191,36,0.25)]";
@@ -347,6 +369,7 @@ export default function DecisionsPage() {
                   <th>Strategy</th>
                   <th>Score</th>
                   <th>Decision</th>
+                  <th>Event</th>
                   <th>L1</th>
                   <th>L2</th>
                   <th>L3</th>
@@ -431,6 +454,15 @@ function DecisionRow({
             {item.decision}
           </span>
         </td>
+        <td>
+          {item.event_type ? (
+            <span className={`inline-flex rounded border px-2 py-0.5 text-[11px] font-medium ${eventTypeTone(item.event_type)}`}>
+              {eventTypeLabel(item.event_type)}
+            </span>
+          ) : (
+            <span className="text-[var(--text-tertiary)]">—</span>
+          )}
+        </td>
         <td>{gateMark(item.l1_pass)}</td>
         <td>{gateMark(item.l2_pass)}</td>
         <td>{gateMark(item.l3_pass)}</td>
@@ -438,7 +470,7 @@ function DecisionRow({
       </tr>
       {expanded && (
         <tr>
-          <td colSpan={10} className="!p-0">
+          <td colSpan={11} className="!p-0">
             <DetailPanel item={item} config={config} />
           </td>
         </tr>

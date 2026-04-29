@@ -91,6 +91,8 @@ export interface DecisionItem {
   reasons?: Record<string, unknown>;
   metrics?: Record<string, unknown>;
   latency_ms?: number | null;
+  direction?: string | null;
+  event_type?: string | null;
   created_at: string;
 }
 

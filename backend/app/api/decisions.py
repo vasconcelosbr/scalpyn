@@ -114,6 +114,8 @@ def _serialize_item(row: DecisionLog) -> dict[str, Any]:
         "reasons": row.reasons or {},
         "metrics": row.metrics or {},
         "latency_ms": row.latency_ms,
+        "direction": row.direction,
+        "event_type": row.event_type,
         "created_at": _serialize_dt(row.created_at),
     }
 
