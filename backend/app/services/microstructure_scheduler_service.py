@@ -90,6 +90,7 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
                 (time, symbol, timeframe, indicators_json, scheduler_group)
             VALUES
                 (:time, :symbol, :timeframe, :payload, :grp)
+            ON CONFLICT DO NOTHING
         """), {
             "time": when,
             "symbol": symbol,
@@ -97,19 +98,8 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
             "payload": payload,
             "grp": SCHEDULER_GROUP,
         })
-    except Exception:
-        try:
-            await db.execute(text("""
-                INSERT INTO indicators (time, symbol, timeframe, indicators_json)
-                VALUES (:time, :symbol, :timeframe, :payload)
-            """), {
-                "time": when,
-                "symbol": symbol,
-                "timeframe": TIMEFRAME,
-                "payload": payload,
-            })
-        except Exception as exc:
-            logger.warning("[MICRO-SCHED] indicators insert failed for %s: %s", symbol, exc)
+    except Exception as exc:
+        logger.warning("[MICRO-SCHED] indicators insert failed for %s: %s", symbol, exc)
 
 
 async def _refresh_market_metadata(db, symbol: str,
