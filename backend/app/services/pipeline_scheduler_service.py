@@ -20,10 +20,12 @@ versus the live ``indicators`` table) — the bug captured by Task #92.
 
 Companion to ``scheduler_service.py`` (which keeps OHLCV / indicators /
 spread fresh).  This scheduler is opt-out via ``SKIP_PIPELINE_SCHEDULER=1``
-and tuneable via ``PIPELINE_SCHEDULER_INTERVAL_SECONDS`` (default 600 s = 5
-min, matching the historical Celery beat) and
-``PIPELINE_SCHEDULER_FIRST_RUN_DELAY_SECONDS`` (default 60 s — long enough
-for the indicator scheduler to land its first cycle before we score).
+and tuneable via ``PIPELINE_SCHEDULER_INTERVAL_SECONDS`` (default 600 s =
+10 min, twice the historical Celery beat to keep API latency low) and
+``PIPELINE_SCHEDULER_FIRST_RUN_DELAY_SECONDS`` (default 60 s — used as a
+hard timeout only when ``SKIP_BACKGROUND_SCHEDULER=1``; otherwise the
+pipeline scheduler waits indefinitely for the indicator scheduler to land
+its first cycle so the first pipeline run lands on top of fresh data).
 """
 
 from __future__ import annotations
@@ -134,24 +136,40 @@ async def _scheduler_loop() -> None:
         interval, first_run_delay,
     )
 
-    # Prefer a readiness handshake with the indicator scheduler over a raw
-    # sleep: this guarantees the first pipeline run lands on top of fresh
-    # OHLCV / indicators / market_metadata rather than racing them. If that
-    # scheduler is disabled (or never fires within `first_run_delay`), fall
-    # back to the time-based delay so we never block startup forever.
+    # Readiness handshake with the indicator scheduler: wait until that
+    # scheduler has completed at least one OHLCV / indicators / metadata
+    # refresh so the first pipeline run lands on top of fresh data instead
+    # of racing it.
+    #
+    # When the indicator scheduler is enabled (the production default) we
+    # wait WITHOUT a timeout — its cycle can legitimately take longer than
+    # `first_run_delay` on cold starts, and proceeding early would defeat
+    # the purpose of the handshake.  Only when the indicator scheduler is
+    # explicitly opted out via SKIP_BACKGROUND_SCHEDULER=1 do we fall back
+    # to the time-based delay so the pipeline scheduler still runs.
+    indicator_scheduler_disabled = (
+        os.environ.get("SKIP_BACKGROUND_SCHEDULER") == "1"
+    )
     try:
         from .scheduler_service import wait_for_first_cycle
-        signaled = await wait_for_first_cycle(timeout=first_run_delay)
-        if signaled:
+        if indicator_scheduler_disabled:
+            signaled = await wait_for_first_cycle(timeout=first_run_delay)
+            if signaled:
+                logger.info(
+                    "[PIPELINE-SCHED] indicator scheduler signaled first "
+                    "cycle complete — proceeding"
+                )
+            else:
+                logger.info(
+                    "[PIPELINE-SCHED] indicator scheduler disabled and no "
+                    "signal within %ds — proceeding with time-based delay",
+                    first_run_delay,
+                )
+        else:
+            await wait_for_first_cycle(timeout=None)
             logger.info(
                 "[PIPELINE-SCHED] indicator scheduler signaled first cycle "
                 "complete — proceeding"
-            )
-        else:
-            logger.info(
-                "[PIPELINE-SCHED] indicator scheduler readiness timed out "
-                "after %ds — proceeding with time-based delay",
-                first_run_delay,
             )
     except asyncio.CancelledError:
         return
