@@ -1887,6 +1887,8 @@ async def get_watchlist_assets(
     # Uses global scoring rules merged with the profile's Alpha Score Weights
     # so watchlist scores respect both configurations.
     score_override: Dict[str, Optional[float]] = {}
+    ml_predictions: Dict[str, Dict[str, Any]] = {}  # Store ML predictions per symbol
+
     if ind_map:
         try:
             from ..services.score_engine import ScoreEngine as _SE, merge_score_config
@@ -1933,6 +1935,84 @@ async def get_watchlist_assets(
                 await db.commit()
         except Exception as _e:
             logger.debug("[Pipeline] On-demand scoring error: %s", _e)
+
+    # ── ML-enhanced ranking for L3 (if enabled) ──────────────────────────────────
+    # Apply ML predictions to calculate final_score and optionally block trades
+    # based on probability threshold from ai-settings config.
+    if wl.level == "L3" and ind_map:
+        try:
+            from ..services.config_service import config_service
+            from ..ml.predict_service import get_predict_service
+
+            # Get AI settings
+            ai_settings = {}
+            try:
+                ai_settings = await config_service.get_config(
+                    db=db, config_type="ai-settings", user_id=user_id
+                )
+            except Exception:
+                pass
+
+            ml_enabled = ai_settings.get("ml_enabled", False)
+            use_ml_ranking = ai_settings.get("use_ml_ranking", False)
+
+            if ml_enabled and use_ml_ranking:
+                model_path = ai_settings.get("model_path", "/tmp/scalpyn_models/model.pkl")
+                ai_block_threshold = ai_settings.get("ai_block_threshold", 0.5)
+
+                # Get prediction service
+                predict_service = get_predict_service(model_path=model_path)
+
+                if predict_service.is_ready():
+                    market_mode = getattr(wl, "market_mode", "spot") or "spot"
+                    profile_type = "FUTURES" if market_mode == "futures" else "SPOT"
+
+                    for a in assets:
+                        ind = ind_map.get(a.symbol)
+                        if not ind:
+                            continue
+
+                        base_score = score_override.get(a.symbol) or (
+                            float(a.alpha_score) if a.alpha_score is not None else 0.0
+                        )
+
+                        try:
+                            # Predict best direction and probability
+                            prediction = predict_service.predict_best_direction(
+                                features=ind,
+                                profile_type=profile_type,
+                            )
+
+                            # Calculate final score
+                            final_score = predict_service.calculate_final_score(
+                                score=base_score,
+                                probability=prediction["probability"],
+                            )
+
+                            # Check if trade should be blocked
+                            blocked_by_ml = predict_service.should_block(
+                                probability=prediction["probability"],
+                                ai_block_threshold=ai_block_threshold,
+                            )
+
+                            # Store prediction
+                            ml_predictions[a.symbol] = {
+                                "probability": prediction["probability"],
+                                "direction": prediction["direction"],
+                                "base_score": base_score,
+                                "final_score": final_score * 100,  # Scale back to 0-100
+                                "blocked_by_ml": blocked_by_ml,
+                            }
+
+                        except Exception as pred_err:
+                            logger.debug(f"[ML] Prediction failed for {a.symbol}: {pred_err}")
+
+                    logger.info(f"[ML] Generated {len(ml_predictions)} predictions for L3")
+                else:
+                    logger.warning("[ML] Model not loaded, skipping ML predictions")
+        except Exception as ml_err:
+            logger.warning(f"[ML] ML prediction pipeline error: {ml_err}")
+
 
     # Fresh meta (some values may be missing from pipeline_watchlist_assets)
     meta_map: Dict[str, Dict[str, Any]] = {}
@@ -2094,6 +2174,15 @@ async def get_watchlist_assets(
             )
         enriched_asset["evaluation_trace"] = evaluation_trace
 
+        # ML prediction fields (L3 only, if ML enabled)
+        ml_pred = ml_predictions.get(a.symbol)
+        if ml_pred:
+            enriched_asset["ml_probability"]  = ml_pred["probability"]
+            enriched_asset["ml_direction"]    = ml_pred["direction"]
+            enriched_asset["ml_base_score"]   = ml_pred["base_score"]
+            enriched_asset["ml_final_score"]  = ml_pred["final_score"]
+            enriched_asset["blocked_by_ml"]   = ml_pred["blocked_by_ml"]
+
         # Futures-mode fields — always present for futures watchlists, null for spot
         if is_futures:
             enriched_asset["score_long"]          = float(a.score_long)          if a.score_long          is not None else None
@@ -2115,13 +2204,26 @@ async def get_watchlist_assets(
                 e for e in enriched
                 if e.get("futures_direction") != "NEUTRAL"
             ]
+        # Sort by ML final_score (if available), otherwise confidence_score
         enriched.sort(
             key=lambda e: (
-                e.get("confidence_score") is None,                          # None last
-                -(e.get("confidence_score") or 0),                         # confidence DESC
+                e.get("ml_final_score") is None,                           # ML predictions first
+                -(e.get("ml_final_score") or 0),                          # ML final_score DESC
+                e.get("confidence_score") is None,                         # Then confidence
+                -(e.get("confidence_score") or 0),                        # confidence DESC
                 -max(e.get("score_long") or 0, e.get("score_short") or 0), # tiebreak
             )
         )
+    else:
+        # SPOT: sort by ML final_score (if available), otherwise alpha_score
+        enriched.sort(
+            key=lambda e: (
+                e.get("ml_final_score") is None,                           # ML predictions first
+                -(e.get("ml_final_score") or 0),                          # ML final_score DESC
+                -(e.get("alpha_score") or 0),                             # alpha_score DESC
+            )
+        )
+
 
     approved_items = [
         _normalize_decision_snapshot(
