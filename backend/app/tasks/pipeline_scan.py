@@ -339,10 +339,18 @@ def _should_log_decision(
     - ALLOW → ALLOW direction flip         → log, SIGNAL_EVOLVED_DIRECTION (if enabled)
     - BLOCK → BLOCK         → skip
     - None/absent → BLOCK   → skip
+
+    Recovery rule: if prior state is ALLOW but was never confirmed by a successful DB
+    write (db_confirmed_at is absent), treat prior as None so the symbol is re-logged.
+    This auto-recovers symbols stuck by the ordering bug where Redis advanced ahead of DB.
     """
     current_state = decision.get("decision")
     current_score = float(decision.get("score") or 0)
     current_direction = decision.get("direction")
+
+    # Recovery: unconfirmed ALLOW state means the DB write never happened — reset
+    if prior is not None and prior.get("state") == "ALLOW" and not prior.get("db_confirmed_at"):
+        prior = None
 
     if prior is None:
         if current_state == "ALLOW":
@@ -1895,6 +1903,12 @@ async def _run_pipeline_scan():
                     for d in decisions:
                         sym = d.get("symbol")
                         prior = prior_states.get(sym)
+                        # Warn when recovering a symbol stuck due to ordering bug
+                        if prior and prior.get("state") == "ALLOW" and not prior.get("db_confirmed_at"):
+                            logger.warning(
+                                "[Decision] Recovering unconfirmed ALLOW state for %s in watchlist %s",
+                                sym, wl_id,
+                            )
                         should_log, event_type = _should_log_decision(
                             d, prior,
                             score_delta_threshold=dl_score_delta,
@@ -1905,14 +1919,26 @@ async def _run_pipeline_scan():
                             "score": d.get("score"),
                             "direction": d.get("direction"),
                             "saved_at": datetime.now(timezone.utc).isoformat(),
+                            # Preserve db_confirmed_at from prior for filtered symbols
+                            "db_confirmed_at": prior.get("db_confirmed_at") if prior else None,
                         }
                         if should_log:
                             d["event_type"] = event_type
                             decisions_to_log.append(d)
-                    _save_decision_states(redis, wl_id, new_states)
                     # ─────────────────────────────────────────────────────────
-
+                    # IMPORTANT: persist to DB FIRST, then update Redis.
+                    # If DB fails, Redis must NOT advance — otherwise the symbol
+                    # gets stuck as ALLOW with no DB record and is silently
+                    # filtered forever (ordering bug, Task #109).
                     decision_payloads = await _persist_decision_logs(db, wl.user_id, decisions_to_log)
+                    # Stamp db_confirmed_at on each successfully persisted symbol
+                    if decisions_to_log:
+                        _confirmed_at = datetime.now(timezone.utc).isoformat()
+                        for _d in decisions_to_log:
+                            _sym = _d.get("symbol")
+                            if _sym in new_states:
+                                new_states[_sym]["db_confirmed_at"] = _confirmed_at
+                    _save_decision_states(redis, wl_id, new_states)
                     await _upsert_assets(db, wl_id, signals, filters_json, execution_id=execution_id)
                     await _update_last_scanned(db, wl_id)
 
