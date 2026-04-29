@@ -22,3 +22,6 @@ numpy>=2.0.0
 gate-api>=3.5.2
 pandas-ta>=0.4.67b0
 anthropic>=0.40.0
+xgboost>=2.0.0
+scikit-learn>=1.5.0
+joblib>=1.4.0

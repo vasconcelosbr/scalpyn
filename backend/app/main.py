@@ -30,6 +30,7 @@ from .api import (
     asset_search,
     debug_indicators,
     simulations,
+    ml,
 )
 
 
@@ -214,6 +215,9 @@ app.include_router(backoffice.router)
 
 # Simulations
 app.include_router(simulations.router)
+
+# Machine Learning
+app.include_router(ml.router)
 
 # Notifications
 app.include_router(notifications.router)
