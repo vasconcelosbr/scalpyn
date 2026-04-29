@@ -317,15 +317,30 @@ async def _scheduler_loop() -> None:
 
 
 def start_background_scheduler() -> Optional[asyncio.Task]:
-    """Launch the scheduler as a background task.
+    """Launch the combined (legacy) scheduler as a background task.
+
+    By default the combined scheduler is DISABLED when the dual-scheduler
+    architecture is active (structural + microstructure).  Set
+    ``ENABLE_COMBINED_SCHEDULER=1`` to re-enable it (e.g. for debugging or
+    during a rollback).
 
     Returns the task handle (so the lifespan can cancel it on shutdown), or
-    None when the scheduler is disabled via SKIP_BACKGROUND_SCHEDULER=1.
+    None when the scheduler is disabled.
     """
     global _scheduler_task
 
     if os.environ.get("SKIP_BACKGROUND_SCHEDULER") == "1":
-        logger.info("[SCHED] SKIP_BACKGROUND_SCHEDULER=1 — scheduler disabled")
+        logger.info("[SCHED] SKIP_BACKGROUND_SCHEDULER=1 — combined scheduler disabled")
+        return None
+
+    # The combined scheduler is opt-in when the dual-scheduler is present.
+    # Without ENABLE_COMBINED_SCHEDULER=1 it stays dormant but its
+    # wait_for_first_cycle() is still functional (forwarded by the new schedulers).
+    if os.environ.get("ENABLE_COMBINED_SCHEDULER") != "1":
+        logger.info(
+            "[SCHED] combined scheduler inactive (ENABLE_COMBINED_SCHEDULER not set); "
+            "structural + microstructure schedulers handle refresh"
+        )
         return None
 
     if _scheduler_task is not None and not _scheduler_task.done():

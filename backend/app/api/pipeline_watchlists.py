@@ -11,6 +11,7 @@ Endpoints:
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 from uuid import UUID
 
@@ -349,36 +350,102 @@ async def get_pipeline_assets(
     # POOL/custom (Stage 0) and L1 (Stage 1) are pure filter stages.
     show_score = (wl.level or "").upper() in {"L2", "L3"}
 
-    # ── 3. Fetch FULL indicator data from DB ──────────────────────────────────
+    # ── 3. Fetch FULL indicator data from DB (dual-scheduler merge) ──────────
     ind_map: Dict[str, Dict] = {}
+    ind_meta_map: Dict[str, Dict[str, Dict]] = {}  # symbol → {ind_key: {group, age_seconds}}
     all_ind_keys: set = set()
+    MAX_DRIFT_SECONDS = 900  # microstructure stale threshold
+
     if symbols:
         try:
-            ind_rows = (await db.execute(text("""
-                SELECT DISTINCT ON (symbol) symbol, indicators_json
-                FROM   indicators
-                WHERE  symbol = ANY(:syms)
-                  AND  timeframe = '5m'
-                ORDER  BY symbol, time DESC
-            """), {"syms": symbols})).fetchall()
+            _now = datetime.now(timezone.utc)
 
-            found = {r.symbol for r in ind_rows}
-            missing_syms = [s for s in symbols if s not in found]
+            # Try dual-scheduler query (requires scheduler_group column)
+            dual_ok = False
+            try:
+                dual_rows = (await db.execute(text("""
+                    SELECT DISTINCT ON (symbol, scheduler_group)
+                        symbol, scheduler_group, time, indicators_json
+                    FROM   indicators
+                    WHERE  symbol = ANY(:syms)
+                    ORDER  BY symbol, scheduler_group, time DESC
+                """), {"syms": symbols})).fetchall()
+                dual_ok = True
+            except Exception:
+                dual_rows = []
+
+            if dual_ok and dual_rows:
+                # Build per-symbol, per-group maps
+                from collections import defaultdict
+                _by_sym: Dict[str, Dict[str, dict]] = defaultdict(dict)
+                _ts_by_sym: Dict[str, Dict[str, datetime]] = defaultdict(dict)
+                for r in dual_rows:
+                    grp = r.scheduler_group or "combined"
+                    j = r.indicators_json or {}
+                    row_ts = r.time
+                    if row_ts is not None and row_ts.tzinfo is None:
+                        row_ts = row_ts.replace(tzinfo=timezone.utc)
+                    _by_sym[r.symbol][grp] = j
+                    _ts_by_sym[r.symbol][grp] = row_ts
+
+                for sym in symbols:
+                    grp_data = _by_sym.get(sym, {})
+                    grp_ts = _ts_by_sym.get(sym, {})
+                    merged: Dict[str, Any] = {}
+                    meta: Dict[str, Dict] = {}
+
+                    # Structural first (base layer)
+                    for grp in ("combined", "structural"):
+                        j = grp_data.get(grp, {})
+                        ts = grp_ts.get(grp)
+                        age = (_now - ts).total_seconds() if ts else None
+                        for k, v in j.items():
+                            if isinstance(v, (int, float, bool)):
+                                merged[k] = v
+                                meta[k] = {"group": grp, "age_seconds": age}
+
+                    # Microstructure layer — only if within drift threshold
+                    micro_j = grp_data.get("microstructure", {})
+                    micro_ts = grp_ts.get("microstructure")
+                    micro_age = (_now - micro_ts).total_seconds() if micro_ts else None
+                    if micro_j and (micro_age is None or micro_age <= MAX_DRIFT_SECONDS):
+                        for k, v in micro_j.items():
+                            if isinstance(v, (int, float, bool)):
+                                merged[k] = v
+                                meta[k] = {"group": "microstructure", "age_seconds": micro_age}
+
+                    if merged:
+                        ind_map[sym] = merged
+                        ind_meta_map[sym] = meta
+
+                # Fallback for symbols still missing
+                missing_syms = [s for s in symbols if s not in ind_map]
+            else:
+                missing_syms = symbols
+
             if missing_syms:
-                fb = (await db.execute(text("""
-                    SELECT DISTINCT ON (symbol) symbol, indicators_json
+                fb_rows = (await db.execute(text("""
+                    SELECT DISTINCT ON (symbol) symbol, indicators_json, time
                     FROM   indicators
                     WHERE  symbol = ANY(:syms)
                     ORDER  BY symbol, time DESC
                 """), {"syms": missing_syms})).fetchall()
-                ind_rows = list(ind_rows) + list(fb)
+                for r in fb_rows:
+                    j = r.indicators_json or {}
+                    row_ts = r.time
+                    if row_ts is not None and row_ts.tzinfo is None:
+                        row_ts = row_ts.replace(tzinfo=timezone.utc)
+                    age = (_now - row_ts).total_seconds() if row_ts else None
+                    numeric = {k: v for k, v in j.items() if isinstance(v, (int, float, bool))}
+                    ind_map[r.symbol] = numeric
+                    ind_meta_map[r.symbol] = {
+                        k: {"group": "combined", "age_seconds": age}
+                        for k in numeric
+                    }
 
-            for r in ind_rows:
-                j = r.indicators_json or {}
-                # Keep numeric AND boolean indicators (booleans needed for EMA trend display)
-                numeric = {k: v for k, v in j.items() if isinstance(v, (int, float, bool))}
-                ind_map[r.symbol] = numeric
+            for sym, numeric in ind_map.items():
                 all_ind_keys.update(k for k, v in numeric.items() if isinstance(v, (int, float)))
+
         except Exception as exc:
             logger.warning("pipeline assets: indicator fetch failed: %s", exc)
 
@@ -495,6 +562,23 @@ async def get_pipeline_assets(
 
         # Compute per-rule scoring breakdown for drilldown / transparency
         score_rules = se.get_full_breakdown(eval_dict) if se else []
+
+        # Enrich each rule with scheduler_group + indicator_age_seconds metadata
+        # so the UI can show e.g. "RSI 62.1 · structural · 12m"
+        sym_meta = ind_meta_map.get(sym, {})
+        for rule in score_rules:
+            ind_key = rule.get("indicator")
+            if ind_key and ind_key in sym_meta:
+                rule["scheduler_group"] = sym_meta[ind_key].get("group")
+                rule["indicator_age_seconds"] = sym_meta[ind_key].get("age_seconds")
+            elif ind_key:
+                # Classify statically when no DB metadata available
+                try:
+                    from ..services.indicator_classifier import classify_indicator
+                    rule["scheduler_group"] = classify_indicator(ind_key)
+                except Exception:
+                    rule["scheduler_group"] = None
+                rule["indicator_age_seconds"] = None
 
         asset_dict: Dict[str, Any] = {
             "id":               sym,

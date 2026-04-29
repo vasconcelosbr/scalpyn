@@ -14,16 +14,36 @@ class FeatureEngine:
     def __init__(self, indicators_config: Dict[str, Any]):
         self.config = indicators_config
 
-    def calculate(self, df: pd.DataFrame, market_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Calculate all enabled indicators for the given OHLCV DataFrame.
+    def calculate(
+        self,
+        df: pd.DataFrame,
+        market_data: Optional[Dict[str, Any]] = None,
+        group: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Calculate enabled indicators for the given OHLCV DataFrame.
 
         Args:
             df: DataFrame with columns [open, high, low, close, volume]
                 and optional [time, quote_volume].
+            market_data: Live market-data dict (orderbook, spread, taker data).
+            group: Optional filter — 'structural' computes only slow/OHLCV-based
+                indicators; 'microstructure' computes only fast/live-data
+                indicators.  None (default) computes everything (legacy path).
 
         Returns:
             Dictionary of indicator_name -> value (latest value).
         """
+        from .indicator_classifier import STRUCTURAL_CALC_KEYS, MICROSTRUCTURE_CALC_KEYS
+
+        def _want(key: str) -> bool:
+            """Return True when this calc-key should run for the requested group."""
+            if group is None or group == "all":
+                return True
+            if group == "structural":
+                return key in STRUCTURAL_CALC_KEYS
+            if group == "microstructure":
+                return key in MICROSTRUCTURE_CALC_KEYS
+            return True
         if df is None or df.empty or len(df) < 2:
             logger.warning("Insufficient data for indicator calculation")
             return {}
@@ -31,76 +51,79 @@ class FeatureEngine:
         results: Dict[str, Any] = {}
 
         try:
-            if self.config.get("rsi", {}).get("enabled"):
+            if _want("rsi") and self.config.get("rsi", {}).get("enabled"):
                 results.update(self._calc_rsi(df))
 
-            if self.config.get("adx", {}).get("enabled"):
+            if _want("adx") and self.config.get("adx", {}).get("enabled"):
                 results.update(self._calc_adx(df))
 
-            if self.config.get("ema", {}).get("enabled"):
+            if _want("ema") and self.config.get("ema", {}).get("enabled"):
                 results.update(self._calc_ema(df))
 
-            if self.config.get("atr", {}).get("enabled"):
+            if _want("atr") and self.config.get("atr", {}).get("enabled"):
                 results.update(self._calc_atr(df))
 
-            if self.config.get("macd", {}).get("enabled"):
+            if _want("macd") and self.config.get("macd", {}).get("enabled"):
                 results.update(self._calc_macd(df))
 
-            if self.config.get("vwap", {}).get("enabled"):
+            if _want("vwap") and self.config.get("vwap", {}).get("enabled"):
                 results.update(self._calc_vwap(df))
 
-            if self.config.get("stochastic", {}).get("enabled"):
+            if _want("stochastic") and self.config.get("stochastic", {}).get("enabled"):
                 results.update(self._calc_stochastic(df))
 
-            if self.config.get("obv", {}).get("enabled"):
+            if _want("obv") and self.config.get("obv", {}).get("enabled"):
                 results.update(self._calc_obv(df))
 
-            if self.config.get("bollinger", {}).get("enabled"):
+            if _want("bollinger") and self.config.get("bollinger", {}).get("enabled"):
                 results.update(self._calc_bollinger(df))
 
-            if self.config.get("parabolic_sar", {}).get("enabled"):
+            if _want("parabolic_sar") and self.config.get("parabolic_sar", {}).get("enabled"):
                 results.update(self._calc_parabolic_sar(df))
 
-            if self.config.get("zscore", {}).get("enabled"):
+            if _want("zscore") and self.config.get("zscore", {}).get("enabled"):
                 results.update(self._calc_zscore(df))
 
-            if self.config.get("volume_delta", {}).get("enabled"):
+            if _want("volume_delta") and self.config.get("volume_delta", {}).get("enabled"):
                 results.update(self._calc_volume_delta(df))
 
-            if self.config.get("volume_metrics", {}).get("enabled", True):
+            if _want("volume_metrics") and self.config.get("volume_metrics", {}).get("enabled", True):
                 results.update(self._calc_volume_metrics(df))
 
-            # Derived: volume spike (always useful)
-            if self.config.get("volume_spike", {}).get("enabled", True):
+            if _want("volume_spike") and self.config.get("volume_spike", {}).get("enabled", True):
                 results.update(self._calc_volume_spike(df))
 
-            # Derived: taker buy ratio (proxy from candle direction)
-            if self.config.get("taker_ratio", {}).get("enabled", True):
+            if _want("taker_ratio") and self.config.get("taker_ratio", {}).get("enabled", True):
                 results.update(self._calc_taker_ratio(df))
 
-            # Derived: EMA trend alignment
-            if "ema9" in results and "ema21" in results:
-                results["ema9_gt_ema21"] = results["ema9"] > results["ema21"]
-            if "ema9" in results and "ema50" in results:
-                results["ema9_gt_ema50"] = results["ema9"] > results["ema50"]
-            if "ema50" in results and "ema200" in results:
-                results["ema50_gt_ema200"] = results["ema50"] > results["ema200"]
-            if "ema9" in results and "ema50" in results and "ema200" in results:
-                results["ema_full_alignment"] = (
-                    results["ema9"] > results["ema50"] > results["ema200"]
-                )
+            # Derived: EMA trend alignment (structural group only)
+            if group is None or group == "all" or group == "structural":
+                if "ema9" in results and "ema21" in results:
+                    results["ema9_gt_ema21"] = results["ema9"] > results["ema21"]
+                if "ema9" in results and "ema50" in results:
+                    results["ema9_gt_ema50"] = results["ema9"] > results["ema50"]
+                if "ema50" in results and "ema200" in results:
+                    results["ema50_gt_ema200"] = results["ema50"] > results["ema200"]
+                if "ema9" in results and "ema50" in results and "ema200" in results:
+                    results["ema_full_alignment"] = (
+                        results["ema9"] > results["ema50"] > results["ema200"]
+                    )
 
-            results["close"] = float(df["close"].iloc[-1])
-            results["price"] = results["close"]
-            # ATR as percentage of price — guard against None (returned when rolling
-            # window has insufficient data) to avoid a silent TypeError in the outer except.
-            if results.get("atr") is not None:
-                results["atr_pct"] = round((results["atr"] / results["close"]) * 100, 4) if results["close"] > 0 else 0
+            # close/price: include for structural and combined
+            if group is None or group == "all" or group == "structural":
+                results["close"] = float(df["close"].iloc[-1])
+                results["price"] = results["close"]
+
+            # ATR as percentage of price
+            if results.get("atr") is not None and results.get("close"):
+                results["atr_pct"] = round(
+                    (results["atr"] / results["close"]) * 100, 4
+                ) if results["close"] > 0 else 0
             if "atr_pct" in results:
                 results["atr_percent"] = results["atr_pct"]
 
             # Derived: EMA 9 distance as percentage of current price
-            if "ema9" in results and results["close"] > 0 and results["ema9"] > 0:
+            if "ema9" in results and results.get("close", 0) > 0 and results["ema9"] > 0:
                 results["ema9_distance_pct"] = round(
                     (results["close"] - results["ema9"]) / results["ema9"] * 100, 4
                 )

@@ -66,11 +66,37 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         _log.warning("DB warmup failed (will retry on first request): %s", e)
 
-    # ── Background scheduler ──────────────────────────────────────────────
-    # Periodically refreshes OHLCV / indicators / spread for every symbol in
-    # the active watchlists.  Replaces the missing Celery worker so the DB
-    # tables (ohlcv, indicators, market_metadata.spread_pct) stay populated.
-    # Disable by setting SKIP_BACKGROUND_SCHEDULER=1.
+    # ── Structural indicator scheduler (15 min, 1h OHLCV) ────────────────
+    # Computes slow technical indicators: RSI, ADX, EMA, ATR, MACD, Bollinger,
+    # PSAR, Z-score, OBV, Stochastic.  Disable via SKIP_STRUCTURAL_SCHEDULER=1.
+    stop_structural_scheduler = None
+    try:
+        from .services.structural_scheduler_service import (
+            start_structural_scheduler,
+            stop_structural_scheduler,
+        )
+        start_structural_scheduler()
+    except Exception as e:
+        _log.warning("Structural scheduler failed to start: %s", e)
+        stop_structural_scheduler = None  # type: ignore[assignment]
+
+    # ── Microstructure indicator scheduler (5 min, 5m OHLCV + live data) ─
+    # Computes fast indicators: VWAP, volume_spike, taker_ratio, volume_delta,
+    # spread_pct, orderbook_depth.  Disable via SKIP_MICROSTRUCTURE_SCHEDULER=1.
+    stop_microstructure_scheduler = None
+    try:
+        from .services.microstructure_scheduler_service import (
+            start_microstructure_scheduler,
+            stop_microstructure_scheduler,
+        )
+        start_microstructure_scheduler()
+    except Exception as e:
+        _log.warning("Microstructure scheduler failed to start: %s", e)
+        stop_microstructure_scheduler = None  # type: ignore[assignment]
+
+    # ── Combined scheduler (legacy, opt-in via ENABLE_COMBINED_SCHEDULER=1) ─
+    # Disabled by default; structural + microstructure schedulers take over.
+    stop_background_scheduler = None
     try:
         from .services.scheduler_service import (
             start_background_scheduler,
@@ -78,7 +104,7 @@ async def lifespan(app: FastAPI):
         )
         start_background_scheduler()
     except Exception as e:
-        _log.warning("Background scheduler failed to start: %s", e)
+        _log.warning("Combined scheduler failed to start: %s", e)
         stop_background_scheduler = None  # type: ignore[assignment]
 
     # ── Pipeline scan scheduler ───────────────────────────────────────────
@@ -86,6 +112,7 @@ async def lifespan(app: FastAPI):
     # `pipeline_watchlist_assets.refreshed_at`, `pipeline_watchlist_rejections`
     # and `pipeline_watchlist.last_scanned_at` stay populated even without a
     # Celery worker. Disable by setting SKIP_PIPELINE_SCHEDULER=1.
+    stop_pipeline_scheduler = None
     try:
         from .services.pipeline_scheduler_service import (
             start_pipeline_scheduler,
@@ -99,16 +126,17 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        if stop_background_scheduler is not None:
-            try:
-                await stop_background_scheduler()
-            except Exception as e:
-                _log.warning("Background scheduler shutdown error: %s", e)
-        if stop_pipeline_scheduler is not None:
-            try:
-                await stop_pipeline_scheduler()
-            except Exception as e:
-                _log.warning("Pipeline scheduler shutdown error: %s", e)
+        for _stop_fn, _name in [
+            (stop_structural_scheduler, "Structural scheduler"),
+            (stop_microstructure_scheduler, "Microstructure scheduler"),
+            (stop_background_scheduler, "Combined scheduler"),
+            (stop_pipeline_scheduler, "Pipeline scheduler"),
+        ]:
+            if _stop_fn is not None:
+                try:
+                    await _stop_fn()
+                except Exception as e:
+                    _log.warning("%s shutdown error: %s", _name, e)
     return
 
 

@@ -309,6 +309,25 @@ async def init_db():
                 exc_info=True,
             )
             raise
+        # BEST-EFFORT: add scheduler_group to indicators table for dual-scheduler
+        # architecture (Task #95).  Non-fatal because the column is not referenced
+        # by any ORM model — it's read/written via raw SQL only.
+        try:
+            await conn.execute(text("""
+                ALTER TABLE indicators
+                    ADD COLUMN IF NOT EXISTS scheduler_group VARCHAR(20) DEFAULT 'combined';
+            """))
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS ix_indicators_symbol_group_time
+                ON indicators (symbol, scheduler_group, time DESC);
+            """))
+            logger.info("Ensured indicators.scheduler_group column and index exist")
+        except Exception as e:
+            logger.warning(
+                "Could not add scheduler_group to indicators (non-fatal, "
+                "dual-scheduler will fall back gracefully): %s", e
+            )
+
     # Attempt to create hypertables in separate transactions so failures don't abort the connection
     tables_to_hyper = ['ohlcv', 'indicators', 'alpha_scores', 'funding_rates']
     for table in tables_to_hyper:

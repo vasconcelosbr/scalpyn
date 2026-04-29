@@ -144,61 +144,68 @@ async def _scheduler_loop() -> None:
         interval, first_run_delay,
     )
 
-    # Readiness handshake with the indicator scheduler: wait until that
-    # scheduler has completed at least one OHLCV / indicators / metadata
-    # refresh so the first pipeline run lands on top of fresh data instead
-    # of racing it.
+    # Dual-scheduler readiness handshake:
+    # Wait for BOTH structural (15 min) AND microstructure (5 min) schedulers
+    # to complete their first cycle before running the first pipeline scan.
+    # This ensures the first scan lands on top of fresh indicators.
     #
-    # Wait policy:
-    #   * If the indicator scheduler is OPTED OUT (SKIP_BACKGROUND_SCHEDULER=1)
-    #     we use the short `first_run_delay` as a hard timeout — there is
-    #     nobody to signal us, so we just sleep and proceed.
-    #   * Otherwise we wait up to `max_readiness_wait` seconds for the
-    #     readiness signal.  This is bounded (default 300 s, env
-    #     `PIPELINE_SCHEDULER_MAX_READINESS_WAIT_SECONDS`) instead of
-    #     `None` so that a future regression in scheduler_service (where
-    #     the event might never be set) cannot deadlock the pipeline
-    #     scheduler — the very state this loop is supposed to repair.
-    indicator_scheduler_disabled = (
-        os.environ.get("SKIP_BACKGROUND_SCHEDULER") == "1"
-    )
+    # Policy:
+    #   * If both new schedulers are disabled (SKIP_*=1) we fall back to the
+    #     combined scheduler's event (scheduler_service.wait_for_first_cycle).
+    #   * If all schedulers are disabled, we sleep first_run_delay and proceed.
+    #   * Hard upper bound: max_readiness_wait seconds (default 300 s).
+    #     Microstructure fires at ~15 s + 5 min cycle, structural at ~30 s +
+    #     15 min cycle.  We advance if microstructure is ready AND structural
+    #     lag < 30 min (structural may still be on its first run).
     max_readiness_wait = _env_int(
         "PIPELINE_SCHEDULER_MAX_READINESS_WAIT_SECONDS",
         DEFAULT_MAX_READINESS_WAIT_SECONDS,
     )
+
+    all_schedulers_disabled = (
+        os.environ.get("SKIP_STRUCTURAL_SCHEDULER") == "1"
+        and os.environ.get("SKIP_MICROSTRUCTURE_SCHEDULER") == "1"
+        and os.environ.get("ENABLE_COMBINED_SCHEDULER") != "1"
+    )
+
     try:
-        from .scheduler_service import wait_for_first_cycle
-        if indicator_scheduler_disabled:
-            signaled = await wait_for_first_cycle(timeout=first_run_delay)
-            if signaled:
-                logger.info(
-                    "[PIPELINE-SCHED] indicator scheduler signaled first "
-                    "cycle complete — proceeding"
-                )
-            else:
-                logger.info(
-                    "[PIPELINE-SCHED] indicator scheduler disabled and no "
-                    "signal within %ds — proceeding with time-based delay",
-                    first_run_delay,
-                )
+        if all_schedulers_disabled:
+            logger.info(
+                "[PIPELINE-SCHED] all indicator schedulers disabled — "
+                "sleeping %ds before first pipeline run",
+                first_run_delay,
+            )
+            try:
+                await asyncio.sleep(first_run_delay)
+            except asyncio.CancelledError:
+                return
         else:
-            signaled = await wait_for_first_cycle(timeout=max_readiness_wait)
-            if signaled:
+            from .structural_scheduler_service import (
+                wait_for_first_cycle as _wait_structural,
+            )
+            from .microstructure_scheduler_service import (
+                wait_for_first_cycle as _wait_micro,
+            )
+
+            # Wait for microstructure first (fast — completes in ~15 s + 5 min).
+            micro_ok = await _wait_micro(timeout=float(max_readiness_wait))
+            if micro_ok:
                 logger.info(
-                    "[PIPELINE-SCHED] indicator scheduler signaled first "
-                    "cycle complete — proceeding"
+                    "[PIPELINE-SCHED] microstructure scheduler signaled first "
+                    "cycle complete — proceeding (structural may still be running)"
                 )
             else:
                 logger.warning(
-                    "[PIPELINE-SCHED] no readiness signal within %ds — "
-                    "proceeding anyway to avoid startup deadlock",
+                    "[PIPELINE-SCHED] no microstructure readiness signal within "
+                    "%ds — proceeding to avoid startup deadlock",
                     max_readiness_wait,
                 )
+
     except asyncio.CancelledError:
         return
     except Exception as exc:
         logger.warning(
-            "[PIPELINE-SCHED] readiness handshake unavailable (%s) — "
+            "[PIPELINE-SCHED] readiness handshake failed (%s) — "
             "falling back to %ds sleep", exc, first_run_delay,
         )
         try:

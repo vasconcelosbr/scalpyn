@@ -20,6 +20,8 @@ export interface ScoreRule {
   points_possible: number;
   condition_text: string;
   category: string;
+  scheduler_group?: string | null;
+  indicator_age_seconds?: number | null;
 }
 
 type IndicatorValue = number | boolean | string | null | undefined;
@@ -238,6 +240,25 @@ function getStatus(score: number, classification?: string | null, blocked: boole
   return { label: score > 0 ? 'SCORED' : 'WEAK', cls: 'text-[#94A3B8]', dot: 'bg-[#94A3B8]' };
 }
 
+function fmtAge(seconds: number | null | undefined): string {
+  if (seconds == null) return '';
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${(seconds / 3600).toFixed(1)}h`;
+}
+
+const GROUP_LABEL: Record<string, string> = {
+  structural: 'struct',
+  microstructure: 'micro',
+  combined: 'cmbd',
+};
+
+const GROUP_COLOR: Record<string, string> = {
+  structural: 'text-[#60A5FA]',
+  microstructure: 'text-[#34D399]',
+  combined: 'text-[#94A3B8]',
+};
+
 function getWeaknesses(rules: ScoreRule[]): string {
   const failed = rules
     .filter(r => !r.passed && r.points_possible > 0)
@@ -364,37 +385,49 @@ function DrilldownPanel({
               {CATEGORY_LABELS[cat]}
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1">
-              {catRules.map((rule) => (
-                <div
-                  key={rule.id}
-                  className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs border ${
-                    rule.passed
-                      ? 'bg-[#061E14] border-[#14532D]/40'
-                      : 'bg-[#150A0A] border-[#7F1D1D]/25'
-                  }`}
-                  data-testid={`drilldown-rule-${rule.indicator}`}
-                >
-                  {rule.passed
-                    ? <CheckCircle2 size={11} className="text-[#34D399] shrink-0" />
-                    : <XCircle      size={11} className="text-[#F87171] shrink-0" />
-                  }
-                  <span className={`flex-1 truncate ${rule.passed ? 'text-[#94A3B8]' : 'text-[#4B5563]'}`}>
-                    {rule.condition_text}
-                  </span>
-                  <span className={`font-mono text-[10px] shrink-0 ${
-                    rule.actual_value != null
-                      ? rule.passed ? 'text-[#CBD5E1]' : 'text-[#64748B]'
-                      : 'text-[#334155]'
-                  }`}>
-                    {rule.actual_value != null ? fmtIndValue(rule.indicator, rule.actual_value) : '—'}
-                  </span>
-                  <span className={`font-mono text-[10px] shrink-0 w-14 text-right ${
-                    rule.passed ? 'text-[#34D399]' : 'text-[#4B5563]'
-                  }`}>
-                    {rule.passed ? `+${rule.points_awarded.toFixed(0)}` : '+0'}/{rule.points_possible.toFixed(0)}
-                  </span>
-                </div>
-              ))}
+              {catRules.map((rule) => {
+                const grpKey = rule.scheduler_group ?? '';
+                const grpLabel = GROUP_LABEL[grpKey] ?? grpKey;
+                const grpColor = GROUP_COLOR[grpKey] ?? 'text-[#4B5563]';
+                const ageStr = fmtAge(rule.indicator_age_seconds);
+                return (
+                  <div
+                    key={rule.id}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs border ${
+                      rule.passed
+                        ? 'bg-[#061E14] border-[#14532D]/40'
+                        : 'bg-[#150A0A] border-[#7F1D1D]/25'
+                    }`}
+                    data-testid={`drilldown-rule-${rule.indicator}`}
+                  >
+                    {rule.passed
+                      ? <CheckCircle2 size={11} className="text-[#34D399] shrink-0" />
+                      : <XCircle      size={11} className="text-[#F87171] shrink-0" />
+                    }
+                    <span className={`flex-1 truncate ${rule.passed ? 'text-[#94A3B8]' : 'text-[#4B5563]'}`}>
+                      {rule.condition_text}
+                    </span>
+                    <span className={`font-mono text-[10px] shrink-0 ${
+                      rule.actual_value != null
+                        ? rule.passed ? 'text-[#CBD5E1]' : 'text-[#64748B]'
+                        : 'text-[#334155]'
+                    }`}>
+                      {rule.actual_value != null ? fmtIndValue(rule.indicator, rule.actual_value) : '—'}
+                    </span>
+                    {grpLabel && (
+                      <span className={`font-mono text-[9px] shrink-0 ${grpColor} opacity-70`}
+                            title={`${rule.scheduler_group ?? ''}${ageStr ? ` · ${ageStr} ago` : ''}`}>
+                        {grpLabel}{ageStr ? `·${ageStr}` : ''}
+                      </span>
+                    )}
+                    <span className={`font-mono text-[10px] shrink-0 w-14 text-right ${
+                      rule.passed ? 'text-[#34D399]' : 'text-[#4B5563]'
+                    }`}>
+                      {rule.passed ? `+${rule.points_awarded.toFixed(0)}` : '+0'}/{rule.points_possible.toFixed(0)}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         ))}
