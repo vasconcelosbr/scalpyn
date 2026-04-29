@@ -189,7 +189,7 @@ def merge_indicator_rows(
 
     for grp, ts_utc, ind_json, age in live:
         for k, v in ind_json.items():
-            if not isinstance(v, (int, float, bool)):
+            if not isinstance(v, (int, float, bool, str)):
                 continue
 
             existing_meta = result.meta.get(k)
@@ -269,7 +269,7 @@ def merge_indicator_rows(
     # overwritten (a fresh value always wins the metadata slot).
     for grp, ts_utc, ind_json, age in stale_rows:
         for k, v in ind_json.items():
-            if not isinstance(v, (int, float, bool)):
+            if not isinstance(v, (int, float, bool, str)):
                 continue
             if k not in result.meta:
                 # Key has no live entry — record as stale (value omitted)
