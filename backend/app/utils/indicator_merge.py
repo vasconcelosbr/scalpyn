@@ -57,11 +57,19 @@ def _ensure_utc(ts: Optional[datetime]) -> Optional[datetime]:
 
 
 class MergedIndicators:
-    """Container for a symbol's merged indicator data with per-key metadata."""
+    """Container for a symbol's merged indicator data with per-key metadata.
+
+    attributes:
+        values   — {key: scalar} usable for scoring (non-stale values only).
+        meta     — {key: {group, age_seconds, timestamp, stale}} per key.
+                   Includes keys from stale groups (stale=True) so the API
+                   can show staleness signals without using stale values for
+                   scoring.
+    """
 
     def __init__(self) -> None:
         self.values: Dict[str, Any] = {}
-        # Per-key metadata: {key: {group, age_seconds, timestamp}}
+        # {key: {group, age_seconds, timestamp, stale}}
         self.meta: Dict[str, Dict[str, Any]] = {}
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -71,7 +79,27 @@ class MergedIndicators:
         return key in self.values
 
     def as_flat_dict(self) -> Dict[str, Any]:
+        """Flat {key: value} dict — non-stale values only, safe for scoring."""
         return dict(self.values)
+
+    def as_enriched_dict(self) -> Dict[str, Dict[str, Any]]:
+        """Enriched {key: {value, source_group, timestamp, stale}} for API responses.
+
+        Includes stale keys with value=None and stale=True so that the UI can
+        show debugging metadata while the score engine uses as_flat_dict() for
+        actual filter evaluation.
+        """
+        enriched: Dict[str, Dict[str, Any]] = {}
+        for k, m in self.meta.items():
+            enriched[k] = {
+                "value": self.values.get(k),  # None for stale keys
+                "source_group": m.get("group"),
+                "timestamp": m.get("timestamp").isoformat()
+                if m.get("timestamp") is not None else None,
+                "stale": m.get("stale", False),
+                "age_seconds": m.get("age_seconds"),
+            }
+        return enriched
 
 
 def merge_indicator_rows(
@@ -94,7 +122,10 @@ def merge_indicator_rows(
     assert now is not None
 
     # ── Step 1: Absolute staleness filter ────────────────────────────────────
+    # Stale rows are excluded from scoring values but tracked in `stale_rows`
+    # so their metadata can be added to result.meta with stale=True.
     live: List[Tuple[str, Optional[datetime], Dict[str, Any], float]] = []
+    stale_rows: List[Tuple[str, Optional[datetime], Dict[str, Any], float]] = []
     for grp, ts, ind_json in rows:
         ts_utc = _ensure_utc(ts)
         stale_limit = _GROUP_STALE.get(grp, STRUCTURAL_STALE_SECONDS)
@@ -102,9 +133,10 @@ def merge_indicator_rows(
             age = (now - ts_utc).total_seconds()
             if age > stale_limit:
                 logger.debug(
-                    "[merge] group=%s ts=%s age=%.0fs > stale_limit=%.0fs — absent",
+                    "[merge] group=%s ts=%s age=%.0fs > stale_limit=%.0fs — stale",
                     grp, ts_utc.isoformat(), age, stale_limit,
                 )
+                stale_rows.append((grp, ts_utc, ind_json or {}, age))
                 continue
             live.append((grp, ts_utc, ind_json or {}, age))
         else:
@@ -222,7 +254,33 @@ def merge_indicator_rows(
             "group": "structural",
             "age_seconds": max(ages) if ages else None,
             "timestamp": None,
+            "stale": False,
         }
+
+    # ── Step 5: Add stale metadata (debugging/observability) ─────────────────
+    # Stale rows are excluded from `values` (not used for scoring), but their
+    # keys are registered in `meta` with stale=True so that API responses can
+    # surface staleness information to the UI without using stale values in
+    # filter/scoring logic.  Non-stale keys that already exist in meta are not
+    # overwritten (a fresh value always wins the metadata slot).
+    for grp, ts_utc, ind_json, age in stale_rows:
+        for k, v in ind_json.items():
+            if not isinstance(v, (int, float, bool)):
+                continue
+            if k not in result.meta:
+                # Key has no live entry — record as stale (value omitted)
+                result.meta[k] = {
+                    "group": grp,
+                    "age_seconds": age,
+                    "timestamp": ts_utc,
+                    "stale": True,
+                }
+            # If a live entry exists for this key, don't overwrite with stale meta.
+
+    # Ensure stale=False on all live meta entries (default for non-stale keys)
+    for k, m in result.meta.items():
+        if "stale" not in m:
+            m["stale"] = False
 
     return result
 

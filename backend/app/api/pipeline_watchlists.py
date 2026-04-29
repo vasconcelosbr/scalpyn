@@ -363,11 +363,13 @@ async def get_pipeline_assets(
                 flat = mi.as_flat_dict()
                 if flat:
                     ind_map[sym] = flat
-                    # Convert MergedIndicators.meta to the expected {group, age_seconds} shape
+                    # Convert MergedIndicators.meta to the expected shape,
+                    # including stale=True for keys from expired groups.
                     ind_meta_map[sym] = {
                         k: {
                             "group": m.get("group"),
                             "age_seconds": m.get("age_seconds"),
+                            "stale": m.get("stale", False),
                         }
                         for k, m in mi.meta.items()
                     }
@@ -500,6 +502,7 @@ async def get_pipeline_assets(
             if ind_key and ind_key in sym_meta:
                 rule["scheduler_group"] = sym_meta[ind_key].get("group")
                 rule["indicator_age_seconds"] = sym_meta[ind_key].get("age_seconds")
+                rule["indicator_stale"] = sym_meta[ind_key].get("stale", False)
             elif ind_key:
                 # Classify statically when no DB metadata available
                 try:
@@ -508,6 +511,7 @@ async def get_pipeline_assets(
                 except Exception:
                     rule["scheduler_group"] = None
                 rule["indicator_age_seconds"] = None
+                rule["indicator_stale"] = False
 
         asset_dict: Dict[str, Any] = {
             "id":               sym,
