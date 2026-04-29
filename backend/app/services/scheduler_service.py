@@ -133,11 +133,15 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
     try:
         # SAVEPOINT: isolates a constraint / column error so the parent
         # transaction remains healthy for _refresh_market_metadata below.
+        # ON CONFLICT target matches uq_indicators_time_symbol_timeframe unique index
+        # created by init_db.  Falls back to SAVEPOINT rollback + warning if the
+        # index does not yet exist (e.g. due to pre-existing duplicate rows).
         async with db.begin_nested():
             await db.execute(text("""
                 INSERT INTO indicators (time, symbol, timeframe, indicators_json)
                 VALUES (:time, :symbol, :timeframe, :payload)
-                ON CONFLICT DO NOTHING
+                ON CONFLICT (time, symbol, timeframe)
+                    DO UPDATE SET indicators_json = EXCLUDED.indicators_json
             """), {
                 "time": when,
                 "symbol": symbol,

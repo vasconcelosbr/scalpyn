@@ -327,6 +327,23 @@ async def init_db():
                 "Could not add scheduler_group to indicators (non-fatal, "
                 "dual-scheduler will fall back gracefully): %s", e
             )
+        # BEST-EFFORT: add a unique constraint on (time, symbol, timeframe) so that
+        # ON CONFLICT DO UPDATE in _persist_indicators has a valid conflict target and
+        # prevents duplicate indicator rows from accumulating.  Non-fatal — if the
+        # table already contains duplicate rows the index creation will fail; in that
+        # case the table should be deduplicated manually before this succeeds.
+        try:
+            await conn.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_indicators_time_symbol_timeframe
+                ON indicators (time, symbol, timeframe);
+            """))
+            logger.info("Ensured unique index on indicators(time, symbol, timeframe)")
+        except Exception as e:
+            logger.warning(
+                "Could not add unique index to indicators (non-fatal — "
+                "table may contain duplicate rows; ON CONFLICT will use DO NOTHING "
+                "as fallback): %s", e
+            )
 
     # Attempt to create hypertables in separate transactions so failures don't abort the connection
     tables_to_hyper = ['ohlcv', 'indicators', 'alpha_scores', 'funding_rates']
