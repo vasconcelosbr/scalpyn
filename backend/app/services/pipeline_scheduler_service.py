@@ -162,10 +162,11 @@ async def _scheduler_loop() -> None:
         DEFAULT_MAX_READINESS_WAIT_SECONDS,
     )
 
+    micro_enabled = os.environ.get("SKIP_MICROSTRUCTURE_SCHEDULER") != "1"
+    struct_enabled = os.environ.get("SKIP_STRUCTURAL_SCHEDULER") != "1"
+    combined_enabled = os.environ.get("ENABLE_COMBINED_SCHEDULER") == "1"
     all_schedulers_disabled = (
-        os.environ.get("SKIP_STRUCTURAL_SCHEDULER") == "1"
-        and os.environ.get("SKIP_MICROSTRUCTURE_SCHEDULER") == "1"
-        and os.environ.get("ENABLE_COMBINED_SCHEDULER") != "1"
+        not micro_enabled and not struct_enabled and not combined_enabled
     )
 
     try:
@@ -179,6 +180,19 @@ async def _scheduler_loop() -> None:
                 await asyncio.sleep(first_run_delay)
             except asyncio.CancelledError:
                 return
+        elif not micro_enabled and not struct_enabled and combined_enabled:
+            # Only combined scheduler is active — wait for its first cycle
+            from .scheduler_service import wait_for_first_cycle as _wait_combined
+            combined_ok = await _wait_combined(timeout=float(max_readiness_wait))
+            if combined_ok:
+                logger.info(
+                    "[PIPELINE-SCHED] combined scheduler signaled first cycle complete"
+                )
+            else:
+                logger.warning(
+                    "[PIPELINE-SCHED] combined scheduler no signal within %ds — proceeding",
+                    max_readiness_wait,
+                )
         else:
             from .structural_scheduler_service import (
                 wait_for_first_cycle as _wait_structural,
@@ -186,9 +200,6 @@ async def _scheduler_loop() -> None:
             from .microstructure_scheduler_service import (
                 wait_for_first_cycle as _wait_micro,
             )
-
-            micro_enabled = os.environ.get("SKIP_MICROSTRUCTURE_SCHEDULER") != "1"
-            struct_enabled = os.environ.get("SKIP_STRUCTURAL_SCHEDULER") != "1"
 
             # Step 1: Wait for microstructure first (fast — completes in ~15 s + 5 min).
             # Only wait if microstructure scheduler is actually running.

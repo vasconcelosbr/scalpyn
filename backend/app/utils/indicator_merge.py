@@ -143,34 +143,58 @@ def merge_indicator_rows(
                 )
             live = [(g, t, d, a) for g, t, d, a in live if g not in stale_groups]
 
-    # ── Step 3: Build per-group indicator dicts ───────────────────────────────
-    # Prefer microstructure for shared keys (rule 4 of the merge contract).
-    # Processing order: structural/combined first, then microstructure
-    # (micro overwrites shared keys because it is preferred).
+    # ── Step 3: Per-key latest-timestamp-wins merge ───────────────────────────
+    # For each indicator key:
+    #   - If present in only one group: use that group's value.
+    #   - If present in multiple groups: use the value from the group with the
+    #     newest timestamp.  Microstructure is the tiebreak if timestamps are
+    #     equal (its faster cadence means it is at least as fresh as structural).
     result = MergedIndicators()
 
-    def _apply_group(
-        grp: str, ts_utc: Optional[datetime], ind_json: Dict[str, Any], age: float
-    ) -> None:
+    for grp, ts_utc, ind_json, age in live:
         for k, v in ind_json.items():
             if not isinstance(v, (int, float, bool)):
                 continue
-            result.values[k] = v
-            result.meta[k] = {
-                "group": grp,
-                "age_seconds": age,
-                "timestamp": ts_utc,
-            }
 
-    # Apply structural / combined first (base layer)
-    for grp, ts_utc, ind_json, age in live:
-        if grp in ("structural", "combined"):
-            _apply_group(grp, ts_utc, ind_json, age)
+            existing_meta = result.meta.get(k)
+            if existing_meta is None:
+                # First entry for this key
+                result.values[k] = v
+                result.meta[k] = {
+                    "group": grp,
+                    "age_seconds": age,
+                    "timestamp": ts_utc,
+                }
+                continue
 
-    # Apply microstructure second (overwrites shared keys — preferred per contract)
-    for grp, ts_utc, ind_json, age in live:
-        if grp == "microstructure":
-            _apply_group(grp, ts_utc, ind_json, age)
+            existing_ts: Optional[datetime] = existing_meta.get("timestamp")
+
+            # Determine whether this entry should overwrite the existing one
+            should_overwrite = False
+            if ts_utc is None and existing_ts is None:
+                # Neither has a timestamp — prefer microstructure (tiebreak)
+                should_overwrite = grp == "microstructure"
+            elif ts_utc is None:
+                # Existing has a timestamp, this one doesn't — keep existing
+                should_overwrite = False
+            elif existing_ts is None:
+                # This entry has a timestamp, existing doesn't — use this
+                should_overwrite = True
+            elif ts_utc > existing_ts:
+                # This entry is newer — use it
+                should_overwrite = True
+            elif ts_utc == existing_ts:
+                # Equal timestamps — microstructure is the tiebreak
+                should_overwrite = grp == "microstructure"
+            # else: existing is newer — keep existing (should_overwrite stays False)
+
+            if should_overwrite:
+                result.values[k] = v
+                result.meta[k] = {
+                    "group": grp,
+                    "age_seconds": age,
+                    "timestamp": ts_utc,
+                }
 
     # ── Step 4: Post-merge hybrid indicators ──────────────────────────────────
     # ema9_gt_ema50: EMA9 (microstructure) vs EMA50 (structural)

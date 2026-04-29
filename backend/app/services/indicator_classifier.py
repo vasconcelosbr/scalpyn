@@ -45,11 +45,11 @@ class IndicatorClassification(TypedDict):
 
 
 # ── Priority 1: Explicit microstructure indicators ───────────────────────────
+# NOTE: "vwap" and "vwap_distance_pct" are intentionally omitted from this set.
+# VWAP classification is mode-aware and handled as Priority 0 (before explicit maps)
+# so that mode="daily"|"anchored" can correctly return structural.
 
 _MICRO_EXPLICIT: frozenset[str] = frozenset({
-    # VWAP (intraday, resets daily → reacts fast on 5m)
-    "vwap",
-    "vwap_distance_pct",
     # Short-period EMAs (reacts fast enough to justify 5m cadence)
     "ema5",
     "ema9",
@@ -109,11 +109,6 @@ _STRUCT_EXPLICIT: frozenset[str] = frozenset({
     "macd_histogram_slope",
     "macd_histogram_mean_10",
     "macd_histogram_std_10",
-    # Bollinger Bands (20-period SMA)
-    "bb_upper",
-    "bb_middle",
-    "bb_lower",
-    "bb_width",
     # Parabolic SAR
     "psar",
     "psar_trend",
@@ -126,7 +121,22 @@ _STRUCT_EXPLICIT: frozenset[str] = frozenset({
     "price",
 })
 
-# ── Hybrid indicators (depend on both groups' data) ───────────────────────────
+# ── Structural-hybrid indicators (structural group, subtype="hybrid") ─────────
+# These indicators are computed using structural OHLCV (1h candles) but their
+# period is "intermediate" — not as slow as RSI/ADX, but not as fast as EMA9.
+# The task spec explicitly marks Bollinger and anchored VWAP as hybrid.
+_STRUCT_HYBRID: frozenset[str] = frozenset({
+    # Bollinger Bands (20-period SMA — intermediate period)
+    "bb_upper",
+    "bb_middle",
+    "bb_lower",
+    "bb_width",
+    # VWAP daily/weekly/anchored (intraday default is microstructure)
+    # Note: VWAP name-only lookup never reaches here (Priority 0 intercepts it).
+    # This set is used when mode is explicitly "daily"|"weekly"|"anchored".
+})
+
+# ── Cross-group hybrid indicators (depend on BOTH groups' data) ───────────────
 # Classified as structural because the slow EMAs are the anchor; the fast
 # EMA values are merged in at query time.
 _HYBRID_INDICATORS: frozenset[str] = frozenset({
@@ -194,6 +204,15 @@ def classify_indicator_full(
       5. reacts_fast == True         → microstructure
       6. Fallback                    → structural / pure
     """
+    # ── Priority 0: VWAP mode-aware classification (runs before explicit maps) ──
+    # This must run first so that mode="daily"|"anchored" overrides the default
+    # microstructure classification of vwap/vwap_distance_pct.
+    if name == "vwap" or name.startswith("vwap_"):
+        if mode in ("weekly", "monthly", "anchored", "daily"):
+            return {"group": "structural", "subtype": "hybrid"}
+        # "intraday" or None → microstructure (default VWAP reset is daily intraday)
+        return {"group": "microstructure", "subtype": "pure"}
+
     # ── Priority 1a: Explicit microstructure names ────────────────────────────
     if name in _MICRO_EXPLICIT:
         return {"group": "microstructure", "subtype": "pure"}
@@ -202,33 +221,31 @@ def classify_indicator_full(
     if name in _STRUCT_EXPLICIT:
         return {"group": "structural", "subtype": "pure"}
 
-    # ── Priority 1c: Hybrid (cross-group derived) names ───────────────────────
+    # ── Priority 1c: Structural-hybrid names (structural group, hybrid subtype) ─
+    if name in _STRUCT_HYBRID:
+        return {"group": "structural", "subtype": "hybrid"}
+
+    # ── Priority 1d: Cross-group hybrid names (structural group, hybrid subtype) ─
     if name in _HYBRID_INDICATORS:
         return {"group": "structural", "subtype": "hybrid"}
 
-    # ── VWAP mode check (before generic prefix/period rules) ─────────────────
-    if name == "vwap" or name.startswith("vwap_"):
-        # Explicit mode kwarg overrides name-based default
-        if mode in ("weekly", "monthly", "anchored", "daily"):
-            return {"group": "structural", "subtype": "hybrid"}
-        # "intraday" or unspecified → microstructure (default for VWAP is intraday)
-        return {"group": "microstructure", "subtype": "pure"}
-
-    # ── Priority 2: EMA/MA period rule (ema<period>) ─────────────────────────
-    if name.startswith("ema") and len(name) > 3:
-        suffix = name[3:]
-        try:
-            period = int(suffix)
-        except ValueError:
-            period = None
-        if period is not None:
-            if period <= _EMA_MICRO_MAX_PERIOD:
-                return {"group": "microstructure", "subtype": "pure"}
-            elif period >= _EMA_STRUCT_MIN_PERIOD:
-                return {"group": "structural", "subtype": "pure"}
-            else:
-                # 22–49: conservative fallback to structural
-                return {"group": "structural", "subtype": "hybrid"}
+    # ── Priority 2: EMA/SMA/WMA period rule ──────────────────────────────────
+    # Applies to ema<period>, sma<period>, wma<period>
+    for _prefix in ("ema", "sma", "wma"):
+        if name.startswith(_prefix) and len(name) > len(_prefix):
+            suffix = name[len(_prefix):]
+            try:
+                period = int(suffix)
+            except ValueError:
+                period = None
+            if period is not None:
+                if period <= _EMA_MICRO_MAX_PERIOD:
+                    return {"group": "microstructure", "subtype": "pure"}
+                elif period >= _EMA_STRUCT_MIN_PERIOD:
+                    return {"group": "structural", "subtype": "pure"}
+                else:
+                    # 22–49: conservative fallback to structural
+                    return {"group": "structural", "subtype": "hybrid"}
 
     # ── Priority 3: data_source == "order_flow" → microstructure ─────────────
     if data_source == "order_flow":
