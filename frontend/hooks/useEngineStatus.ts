@@ -28,7 +28,20 @@ export interface CapitalInfo {
 
 export interface EngineStatusResponse {
   engine?: EngineInfo;
-  positions?: Record<string, any>[];
+  /**
+   * Raw `positions` payload from the backend.
+   *
+   * Intentionally typed as `unknown` because the backend returns this in
+   * three different real shapes (see Task #127):
+   *   - Spot   `/status` → dict `{ total, active, underwater, ... }`
+   *   - Futures `/status` → dict `{ open_count, positions: [...], ... }`
+   *   - Plus tolerated edge cases: real array, `{ error: "..." }`, missing.
+   *
+   * Always read this through `extractPositions` /
+   * `extractPositionsSummary` from `@/lib/engineStatus` rather than touching
+   * it directly.
+   */
+  positions?: unknown;
   capital?: CapitalInfo;
   balance?: Record<string, any>;
   [key: string]: any;
