@@ -28,7 +28,9 @@ from sqlalchemy.exc import DBAPIError, ProgrammingError
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.database import AsyncSessionLocal, _safe_rollback, engine  # noqa: E402
+from fastapi import HTTPException, status  # noqa: E402
+
+from app.database import AsyncSessionLocal, _safe_rollback, engine, get_db  # noqa: E402
 from app.tasks.pipeline_scan import _update_last_scanned  # noqa: E402
 from app.websocket.event_handlers import _process_batch  # noqa: E402
 
@@ -168,6 +170,65 @@ def test_process_batch_no_cascade_after_db_failure():
 
 
 # ── _update_last_scanned does not poison the scan loop's session ──────────────
+
+def test_get_db_rolls_back_on_http_exception():
+    """``get_db`` is a FastAPI dependency that yields an AsyncSession.
+    When the route (downstream of the yield) raises HTTPException —
+    which is a normal control-flow signal, not a DB failure — the
+    dependency must still rollback the open transaction before the
+    session is returned to the pool.  Without this, the next caller
+    that picks up the same connection sees InFailedSQLTransactionError.
+    """
+    async def run():
+        gen = get_db()
+        session = await gen.__anext__()
+
+        # Mid-route, an UPDATE fails (e.g. the row doesn't exist) and
+        # the route maps it to a 4xx HTTPException.
+        try:
+            await session.execute(text("SELECT * FROM no_such_table_t122_a"))
+        except Exception:
+            pass
+
+        # Route raises HTTPException — get_db must catch it, rollback,
+        # then re-raise it so FastAPI returns the right status code.
+        with pytest.raises(HTTPException) as excinfo:
+            await gen.athrow(HTTPException(status_code=status.HTTP_404_NOT_FOUND))
+        assert excinfo.value.status_code == status.HTTP_404_NOT_FOUND
+
+        # Now reuse a fresh session: if the rollback above worked, the
+        # pool gives us a clean connection. If it didn't, this SELECT
+        # would raise InFailedSQLTransactionError.
+        async with AsyncSessionLocal() as fresh:
+            row = (await fresh.execute(text("SELECT 11"))).scalar_one()
+            assert row == 11
+
+    _run(run)
+
+
+def test_get_db_rolls_back_on_generic_exception():
+    """When the route raises an unexpected exception (not HTTPException),
+    ``get_db`` must rollback the session and translate the error into a
+    503 — without leaving a poisoned connection in the pool."""
+    async def run():
+        gen = get_db()
+        session = await gen.__anext__()
+
+        try:
+            await session.execute(text("SELECT * FROM no_such_table_t122_b"))
+        except Exception:
+            pass
+
+        with pytest.raises(HTTPException) as excinfo:
+            await gen.athrow(RuntimeError("simulated route failure"))
+        assert excinfo.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+
+        async with AsyncSessionLocal() as fresh:
+            row = (await fresh.execute(text("SELECT 13"))).scalar_one()
+            assert row == 13
+
+    _run(run)
+
 
 def test_update_last_scanned_recovers_session_on_failure():
     """If the UPDATE inside _update_last_scanned fails, the session must be
