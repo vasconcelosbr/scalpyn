@@ -33,6 +33,7 @@ from .api import (
     ml,
     spot_engine,
     futures_engine,
+    system,
 )
 
 
@@ -238,6 +239,9 @@ app.include_router(backoffice.router)
 
 # Simulations
 app.include_router(simulations.router)
+
+# System health
+app.include_router(system.router)
 
 # Machine Learning
 app.include_router(ml.router)

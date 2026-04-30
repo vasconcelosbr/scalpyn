@@ -969,6 +969,71 @@ def _evaluate_l3_decisions(
 
 async def _persist_decision_logs(db, user_id, decisions: list[dict]):
     from ..models.backoffice import DecisionLog
+    from sqlalchemy import text
+
+    if not decisions:
+        return []
+
+    # DEDUPLICATION: Check for recent duplicate decisions (last 5 minutes)
+    # This prevents duplicate logging from multiple pipeline cycles
+    now = datetime.now(timezone.utc)
+    recent_window = now - timedelta(minutes=5)
+
+    # Build dedup query to check for existing recent decisions
+    dedup_checks = []
+    for decision in decisions:
+        symbol = decision["symbol"]
+        strategy = decision["strategy"]
+        direction = decision.get("direction")
+
+        dedup_checks.append((symbol, strategy, direction))
+
+    # Query for existing decisions in the recent window
+    if dedup_checks:
+        # Create a set to check uniquely
+        unique_checks = list(set(dedup_checks))
+
+        existing_result = await db.execute(text("""
+            SELECT DISTINCT symbol, strategy, direction
+            FROM decisions_log
+            WHERE created_at >= :recent_window
+              AND (symbol, strategy, COALESCE(direction, '')) IN :checks
+        """), {
+            "recent_window": recent_window,
+            "checks": tuple((s, st, d or "") for s, st, d in unique_checks)
+        })
+
+        existing_decisions = {
+            (row.symbol, row.strategy, row.direction or None)
+            for row in existing_result.fetchall()
+        }
+
+        # Filter out duplicates
+        decisions_to_insert = []
+        skipped_count = 0
+        for decision in decisions:
+            key = (
+                decision["symbol"],
+                decision["strategy"],
+                decision.get("direction")
+            )
+            if key in existing_decisions:
+                logger.debug(
+                    "[Decision] SKIP duplicate: %s | strategy=%s | direction=%s (logged in last 5 min)",
+                    key[0], key[1], key[2] or "—"
+                )
+                skipped_count += 1
+            else:
+                decisions_to_insert.append(decision)
+
+        if skipped_count > 0:
+            logger.info(
+                "[Decision] Deduplication: skipped %d duplicate(s), inserting %d new decision(s)",
+                skipped_count, len(decisions_to_insert)
+            )
+
+        # Use filtered list
+        decisions = decisions_to_insert
 
     if not decisions:
         return []
@@ -1016,10 +1081,17 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             "created_at": row.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
         logger.info(
-            "[Decision] %s | score=%s | %s | event=%s",
-            row.symbol, round(float(row.score or 0), 2), row.decision, row.event_type or "—",
+            "[Decision] PERSISTED | id=%s | %s | score=%s | %s | event=%s",
+            row.id, row.symbol, round(float(row.score or 0), 2), row.decision, row.event_type or "—",
         )
         payloads.append(payload)
+
+    # Log summary
+    logger.info(
+        "[Decision] Batch persisted: %d decision(s) successfully logged to decisions_log table",
+        len(payloads)
+    )
+
     return payloads
 
 
@@ -2001,10 +2073,14 @@ async def _run_pipeline_scan():
                                         new_states[_sym]["db_confirmed_at"] = _confirmed_at
                     except Exception as _dl_exc:
                         logger.error(
-                            "[Decision] Failed to persist decision logs for watchlist %s: %s "
+                            "FATAL: Decision persistence failed for watchlist %s: %s "
                             "— verify migration 026 (direction/event_type columns) is applied",
-                            wl_id, _dl_exc,
+                            wl_id, _dl_exc, exc_info=True
                         )
+                        # CRITICAL: Re-raise exception to prevent silent failure
+                        raise RuntimeError(
+                            f"Decision persistence failed for watchlist {wl_id}: {_dl_exc}"
+                        ) from _dl_exc
                     _save_decision_states(redis, wl_id, new_states)
                     await _upsert_assets(db, wl_id, signals, filters_json, execution_id=execution_id)
                     await _update_last_scanned(db, wl_id)

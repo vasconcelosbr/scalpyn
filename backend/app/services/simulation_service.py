@@ -150,14 +150,14 @@ class SimulationService:
 
         if not candles:
             logger.warning(
-                "No candles found for %s after %s",
+                "[Simulation] SKIP: No candles found | symbol=%s | after=%s",
                 decision.symbol, decision.created_at
             )
             return []
 
         if len(candles) < 2:
             logger.warning(
-                "Insufficient candles for %s: got %d, need at least 2",
+                "[Simulation] SKIP: Insufficient candles | symbol=%s | got=%d | need=2",
                 decision.symbol, len(candles)
             )
             return []
@@ -165,7 +165,10 @@ class SimulationService:
         # Calculate entry price (first candle open)
         entry_price = engine.calculate_entry_price(decision.created_at, candles)
         if not entry_price:
-            logger.warning("Failed to calculate entry price for %s", decision.symbol)
+            logger.warning(
+                "[Simulation] SKIP: Failed to calculate entry price | symbol=%s",
+                decision.symbol
+            )
             return []
 
         # Entry timestamp is the first candle time
@@ -200,8 +203,8 @@ class SimulationService:
             # Skip invalid results
             if outcome.get("result") == "INVALID":
                 logger.info(
-                    "Skipping invalid simulation for %s %s: %s",
-                    decision.symbol, direction, outcome.get("reason")
+                    "[Simulation] SKIP: Invalid simulation | symbol=%s | direction=%s | reason=%s",
+                    decision.symbol, direction, outcome.get("reason", "unknown")
                 )
                 continue
 
@@ -249,6 +252,39 @@ class SimulationService:
         Returns:
             Summary statistics
         """
+        # CRITICAL: Validate OHLCV data availability before processing batch
+        ohlcv_check = await self.session.execute(text("""
+            SELECT COUNT(DISTINCT symbol) as symbol_count,
+                   MAX(time) as latest_time,
+                   COUNT(*) as total_candles
+            FROM ohlcv
+            WHERE exchange = :exchange
+              AND timeframe = '1h'
+              AND time >= NOW() - INTERVAL '24 hours'
+        """), {"exchange": exchange})
+
+        ohlcv_row = ohlcv_check.fetchone()
+
+        if not ohlcv_row or not ohlcv_row.total_candles:
+            error_msg = f"OHLCV validation FAILED: No recent candle data found for exchange={exchange}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+
+        if ohlcv_row.total_candles < 100:
+            error_msg = (
+                f"OHLCV validation FAILED: Insufficient candle data "
+                f"(found {ohlcv_row.total_candles} candles, need at least 100)"
+            )
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+
+        logger.info(
+            "[Simulation] OHLCV validation PASSED: %d symbols, %d candles, latest=%s",
+            ohlcv_row.symbol_count or 0,
+            ohlcv_row.total_candles,
+            ohlcv_row.latest_time
+        )
+
         # Get config
         config = await self.get_simulation_config(user_id)
 
@@ -266,6 +302,8 @@ class SimulationService:
         skipped = 0
         simulated = 0
         errors = 0
+        skipped_no_candles = 0
+        skipped_invalid = 0
 
         all_records = []
 
@@ -292,24 +330,56 @@ class SimulationService:
                 if records:
                     all_records.extend(records)
                     simulated += len(records)
+                    logger.debug(
+                        "[Simulation] SUCCESS | decision_id=%s | symbol=%s | records=%d",
+                        decision.id, decision.symbol, len(records)
+                    )
+                else:
+                    skipped_no_candles += 1
+                    logger.debug(
+                        "[Simulation] SKIP | decision_id=%s | symbol=%s | reason=no_candles",
+                        decision.id, decision.symbol
+                    )
 
                 processed += 1
 
                 # Log progress every 10 decisions
                 if processed % 10 == 0:
-                    logger.info("Progress: %d/%d decisions processed", processed, len(decisions))
+                    logger.info(
+                        "[Simulation] Progress: %d/%d decisions processed | simulated=%d | skipped=%d",
+                        processed, len(decisions), simulated, skipped + skipped_no_candles
+                    )
 
             except Exception as e:
                 logger.error(
-                    "Failed to simulate decision %s: %s",
-                    decision.id, e, exc_info=True
+                    "[Simulation] ERROR | decision_id=%s | symbol=%s | error=%s",
+                    decision.id, decision.symbol, str(e), exc_info=True
                 )
                 errors += 1
+
+        # Calculate skip rate for alerting
+        total_attempts = processed
+        total_skipped = skipped_no_candles + skipped_invalid
+        skip_rate = (total_skipped / total_attempts * 100) if total_attempts > 0 else 0
+
+        # Alert if skip rate is excessive
+        if skip_rate > 50 and total_attempts > 10:
+            logger.warning(
+                "[Simulation] HIGH SKIP RATE: %.1f%% (%d/%d) — check OHLCV data quality",
+                skip_rate, total_skipped, total_attempts
+            )
 
         # Bulk insert results
         if all_records:
             inserted = await self.repository.bulk_insert_simulations(all_records)
-            logger.info("Inserted %d simulation records", inserted)
+            logger.info("[Simulation] Bulk insert complete: %d records", inserted)
+
+        # Final summary
+        logger.info(
+            "[Simulation] Batch complete | decisions=%d | processed=%d | "
+            "simulated=%d | skipped_existing=%d | skipped_no_data=%d | errors=%d",
+            len(decisions), processed, simulated, skipped, skipped_no_candles, errors
+        )
 
         return {
             "total_decisions": len(decisions),
@@ -318,6 +388,8 @@ class SimulationService:
             "simulated": simulated,
             "errors": errors,
             "records_inserted": len(all_records),
+            "skipped_no_candles": skipped_no_candles,
+            "skip_rate": round(skip_rate, 2),
         }
 
     async def get_stats(self) -> Dict[str, Any]:
