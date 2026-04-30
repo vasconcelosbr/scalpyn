@@ -1,9 +1,3 @@
-/**
- * API client with JWT interceptor for Scalpyn backend.
- */
-
-// Always use relative /api path so Next.js rewrites proxy the request server-side.
-// This avoids CORS issues — the browser never calls Cloud Run directly.
 const API_URL = '/api';
 
 function getToken(): string | null {
@@ -11,19 +5,6 @@ function getToken(): string | null {
   return localStorage.getItem('token');
 }
 
-/**
- * Resolve a caller-supplied endpoint into the absolute browser path that will
- * be requested. Two conventions exist in this codebase historically:
- *   1. `/profiles`              → fetched at `/api/profiles`
- *   2. `/api/spot-engine/start` → fetched at `/api/spot-engine/start`
- *
- * Without normalization, convention (2) double-prefixes to `/api/api/...`,
- * which the FastAPI backend rejects with `404 {"detail":"Not Found"}` — this
- * was the root cause of the Start Engine "Not Found" alert in production.
- *
- * Strategy: strip a single leading `/api` (or `api`) segment if present, then
- * prefix exactly once with `API_URL`. Idempotent under both conventions.
- */
 function resolvePath(endpoint: string): string {
   let cleaned = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   if (cleaned === '/api' || cleaned.startsWith('/api/')) {
@@ -32,19 +13,13 @@ function resolvePath(endpoint: string): string {
   return `${API_URL}${cleaned}`;
 }
 
-/**
- * Structured error thrown by apiFetch on non-OK responses.
- *
- * Keeps `message` backward-compatible (uses backend `detail` when present),
- * but exposes status / path / endpoint / method / detail / rawBody so callers
- * and UI surfaces can render rich diagnostics (especially for proxy 404s
- * where the body is just `{"detail":"Not Found"}`).
- */
+function buildErrorMessage(status: number, detail: string | null): string {
+  return detail ? `${status} ${detail}` : `${status} API error`;
+}
+
 export class ApiError extends Error {
   status: number;
-  /** Logical endpoint string passed by the caller (e.g. `/spot-engine/start`). */
   endpoint: string;
-  /** Actual browser path requested after normalization (e.g. `/api/spot-engine/start`). */
   path: string;
   method: string;
   detail: string | null;
@@ -58,8 +33,7 @@ export class ApiError extends Error {
     detail: string | null;
     rawBody: string | null;
   }) {
-    const baseMessage = opts.detail ?? `API error: ${opts.status}`;
-    super(baseMessage);
+    super(buildErrorMessage(opts.status, opts.detail));
     this.name = 'ApiError';
     this.status = opts.status;
     this.endpoint = opts.endpoint;
@@ -69,10 +43,8 @@ export class ApiError extends Error {
     this.rawBody = opts.rawBody;
   }
 
-  /** Human-readable summary including HTTP status + actual fetched path. */
   toDescriptiveString(): string {
-    const detailPart = this.detail ?? '(no detail)';
-    return `${detailPart} — HTTP ${this.status} on ${this.method} ${this.path}`;
+    return `${this.message} on ${this.method} ${this.path}`;
   }
 }
 
@@ -94,7 +66,6 @@ export async function apiFetch<T = any>(
   const res = await fetch(path, { ...options, headers });
 
   if (res.status === 401) {
-    // Token expired — redirect to login
     if (typeof window !== 'undefined') {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
@@ -122,7 +93,7 @@ export async function apiFetch<T = any>(
           detail = parsed.message;
         }
       } catch {
-        // Non-JSON body (e.g. HTML error page from edge proxy). Keep rawBody only.
+        // Non-JSON body — keep rawBody only.
       }
     }
     throw new ApiError({
@@ -135,7 +106,6 @@ export async function apiFetch<T = any>(
     });
   }
 
-  // Some endpoints return 204 / empty bodies — guard against JSON parse error.
   if (res.status === 204) return undefined as unknown as T;
   const text = await res.text();
   if (!text) return undefined as unknown as T;

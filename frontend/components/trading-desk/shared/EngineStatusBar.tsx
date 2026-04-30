@@ -6,16 +6,9 @@ import { useEngineStatus, type TradingProfile } from '@/hooks/useEngineStatus';
 import { ApiError } from '@/lib/api';
 import { useState } from 'react';
 
-// Convert any thrown error from a control action into a user-readable string
-// that always includes the HTTP status + request path when available, so we
-// can diagnose proxy / routing issues like a stray 404 from production.
 function formatActionError(err: unknown): string {
-  if (err instanceof ApiError) {
-    return err.toDescriptiveString();
-  }
-  if (err instanceof Error) {
-    return err.message;
-  }
+  if (err instanceof ApiError) return err.toDescriptiveString();
+  if (err instanceof Error) return err.message;
   return String(err);
 }
 
@@ -466,14 +459,14 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
                 Make sure you have configured your {profile === 'spot' ? 'Spot' : 'Futures'} Engine settings and connected your Gate.io API keys.
               </span>
             )}
-            {/HTTP 404/.test(error) && (
+            {/^404\b/.test(error) && (
               <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
-                The request reached the proxy but the upstream API returned 404. This usually means a stale frontend deploy or a transient routing issue — try a hard refresh (Cmd/Ctrl+Shift+R) and retry.
+                The request reached the proxy but the upstream API returned 404. This usually means a stale frontend deploy — try a hard refresh (Cmd/Ctrl+Shift+R) and retry.
               </span>
             )}
-            {/HTTP 5\d\d/.test(error) && (
+            {/^5\d\d\b/.test(error) && (
               <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
-                The backend returned a server error. The server logs will have full details — please retry in a moment.
+                The backend returned a server error. Server logs will have full details — please retry in a moment.
               </span>
             )}
           </div>

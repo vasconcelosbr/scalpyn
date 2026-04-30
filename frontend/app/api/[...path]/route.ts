@@ -45,8 +45,6 @@ async function proxyRequest(req: NextRequest, context: RouteContext): Promise<Ne
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
   const body = hasBody ? await req.arrayBuffer() : undefined;
 
-  // Diagnostics: log every proxied request so we can correlate stray 404s
-  // (Cloud Run cold starts, missed routes, etc.) with the originating call.
   const startedAt = Date.now();
 
   let backendRes: Response;
@@ -61,13 +59,10 @@ async function proxyRequest(req: NextRequest, context: RouteContext): Promise<Ne
     const message = err instanceof Error ? err.message : String(err);
     // eslint-disable-next-line no-console
     console.error(
-      `[api-proxy] upstream fetch failed method=${req.method} path=${rawPath} target=${targetUrl} elapsed=${Date.now() - startedAt}ms err=${message}`,
+      `[api-proxy] upstream fetch failed method=${req.method} path=${rawPath} elapsed=${Date.now() - startedAt}ms err=${message}`,
     );
     return NextResponse.json(
-      {
-        detail: `Upstream API unreachable: ${message}`,
-        proxy: { method: req.method, path: rawPath, target: targetUrl },
-      },
+      { detail: 'Upstream API unreachable' },
       { status: 502 },
     );
   }
