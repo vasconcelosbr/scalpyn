@@ -283,6 +283,10 @@ async def health_check_schema():
         ("watchlist_profiles", "profile_type"),
         ("trades", "exchange_order_id"),
         ("trades", "source"),
+        # Added by migration 026; without these, _persist_decision_logs raises
+        # UndefinedColumnError and poisons the session for the whole scan loop.
+        ("decisions_log", "direction"),
+        ("decisions_log", "event_type"),
     ]
 
     try:
