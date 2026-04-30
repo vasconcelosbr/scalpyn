@@ -3,7 +3,21 @@
 import Link from 'next/link';
 import { Pause, Play, BarChart3, AlertTriangle, TrendingUp, TrendingDown } from 'lucide-react';
 import { useEngineStatus, type TradingProfile } from '@/hooks/useEngineStatus';
+import { ApiError } from '@/lib/api';
 import { useState } from 'react';
+
+// Convert any thrown error from a control action into a user-readable string
+// that always includes the HTTP status + request path when available, so we
+// can diagnose proxy / routing issues like a stray 404 from production.
+function formatActionError(err: unknown): string {
+  if (err instanceof ApiError) {
+    return err.toDescriptiveString();
+  }
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return String(err);
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -379,7 +393,7 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
     try {
       await startEngine();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatActionError(err);
       setError(message);
       console.error('Failed to start engine:', err);
     } finally {
@@ -393,7 +407,7 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
     try {
       await pauseEngine();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatActionError(err);
       setError(message);
       console.error('Failed to pause engine:', err);
     } finally {
@@ -407,7 +421,7 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
     try {
       await resumeEngine();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatActionError(err);
       setError(message);
       console.error('Failed to resume engine:', err);
     } finally {
@@ -436,12 +450,30 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
             <span style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)' }}>
               Failed to start {profile} engine
             </span>
-            <span style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            <span
+              style={{
+                fontSize: '12px',
+                color: 'var(--text-secondary)',
+                lineHeight: 1.5,
+                fontFamily: 'var(--font-mono)',
+                wordBreak: 'break-word',
+              }}
+            >
               {error}
             </span>
             {(error.includes('config') || error.includes('connection')) && (
               <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
                 Make sure you have configured your {profile === 'spot' ? 'Spot' : 'Futures'} Engine settings and connected your Gate.io API keys.
+              </span>
+            )}
+            {/HTTP 404/.test(error) && (
+              <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                The request reached the proxy but the upstream API returned 404. This usually means a stale frontend deploy or a transient routing issue — try a hard refresh (Cmd/Ctrl+Shift+R) and retry.
+              </span>
+            )}
+            {/HTTP 5\d\d/.test(error) && (
+              <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                The backend returned a server error. The server logs will have full details — please retry in a moment.
               </span>
             )}
           </div>

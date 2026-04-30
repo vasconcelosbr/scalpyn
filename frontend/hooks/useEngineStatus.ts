@@ -108,9 +108,20 @@ export function useEngineStatus(profile: TradingProfile): UseEngineStatusReturn 
 
   const postControl = useCallback(
     async (action: 'start' | 'pause' | 'resume' | 'stop') => {
+      // Run the actual control call. Any error here is the *real* failure
+      // and must propagate to the caller so the UI can surface it.
       await apiPost(`${baseUrl}/${action}`);
-      // Immediately re-fetch status to reflect the new state.
-      await mutate();
+
+      // Best-effort: re-fetch status to reflect the new state. A failure here
+      // (e.g. transient 5xx on the status poll, network blip) must NOT be
+      // mistaken for an action failure — the action already succeeded.
+      try {
+        await mutate();
+      } catch (refreshErr) {
+        // Swallow: SWR will pick up fresh state on its own poll cycle.
+        // eslint-disable-next-line no-console
+        console.warn(`[engine] post-${action} status refresh failed:`, refreshErr);
+      }
     },
     [baseUrl, mutate]
   );

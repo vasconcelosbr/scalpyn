@@ -24,48 +24,75 @@ async function proxyRequest(req: NextRequest, context: RouteContext): Promise<Ne
 
   // Forward the full /api/... path
   let rawPath = req.nextUrl.pathname;
-  
+
   // Add trailing slash for collection routes (FastAPI requires it)
   if (COLLECTION_ROUTES.includes(rawPath) && !rawPath.endsWith('/')) {
     rawPath = rawPath + '/';
   }
-  
-    const search = req.nextUrl.search ?? '';
-    const targetUrl = `${BACKEND_ROOT}${rawPath}${search}`;
+
+  const search = req.nextUrl.search ?? '';
+  const targetUrl = `${BACKEND_ROOT}${rawPath}${search}`;
 
   // Forward all headers except host (which would confuse the backend)
   const forwardHeaders: Record<string, string> = {};
-    req.headers.forEach((value, key) => {
-          const lower = key.toLowerCase();
-          if (lower !== 'host' && lower !== 'accept-encoding' && lower !== 'connection') {
-                  forwardHeaders[key] = value;
-          }
-    });
+  req.headers.forEach((value, key) => {
+    const lower = key.toLowerCase();
+    if (lower !== 'host' && lower !== 'accept-encoding' && lower !== 'connection') {
+      forwardHeaders[key] = value;
+    }
+  });
 
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
-    const body = hasBody ? await req.arrayBuffer() : undefined;
+  const body = hasBody ? await req.arrayBuffer() : undefined;
 
-  const backendRes = await fetch(targetUrl, {
-        method: req.method,
-        headers: forwardHeaders,
-        body: body ? Buffer.from(body) : undefined,
-        redirect: 'follow',
-  });
+  // Diagnostics: log every proxied request so we can correlate stray 404s
+  // (Cloud Run cold starts, missed routes, etc.) with the originating call.
+  const startedAt = Date.now();
+
+  let backendRes: Response;
+  try {
+    backendRes = await fetch(targetUrl, {
+      method: req.method,
+      headers: forwardHeaders,
+      body: body ? Buffer.from(body) : undefined,
+      redirect: 'follow',
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // eslint-disable-next-line no-console
+    console.error(
+      `[api-proxy] upstream fetch failed method=${req.method} path=${rawPath} target=${targetUrl} elapsed=${Date.now() - startedAt}ms err=${message}`,
+    );
+    return NextResponse.json(
+      {
+        detail: `Upstream API unreachable: ${message}`,
+        proxy: { method: req.method, path: rawPath, target: targetUrl },
+      },
+      { status: 502 },
+    );
+  }
+
+  if (!backendRes.ok) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[api-proxy] upstream non-2xx method=${req.method} path=${rawPath} status=${backendRes.status} elapsed=${Date.now() - startedAt}ms`,
+    );
+  }
 
   // Forward response headers back to client
   const resHeaders = new Headers();
-    backendRes.headers.forEach((value, key) => {
-          const lower = key.toLowerCase();
-          if (lower !== 'transfer-encoding' && lower !== 'content-encoding') {
-                  resHeaders.set(key, value);
-          }
-    });
+  backendRes.headers.forEach((value, key) => {
+    const lower = key.toLowerCase();
+    if (lower !== 'transfer-encoding' && lower !== 'content-encoding') {
+      resHeaders.set(key, value);
+    }
+  });
 
   const responseBody = await backendRes.arrayBuffer();
 
   return new NextResponse(responseBody, {
-        status: backendRes.status,
-        headers: resHeaders,
+    status: backendRes.status,
+    headers: resHeaders,
   });
 }
 

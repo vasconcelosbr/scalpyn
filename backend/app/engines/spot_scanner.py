@@ -426,6 +426,7 @@ async def build_scanner_from_db(user_id: str) -> "SpotScanner":
         )
         cfg_row = cfg_row.scalars().first()
         if not cfg_row:
+            logger.warning("[spot-engine] build_scanner_from_db: missing spot_engine config for user=%s", user_id)
             raise ValueError(f"No active spot_engine config found for user {user_id}")
         spot_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
 
@@ -461,6 +462,7 @@ async def build_scanner_from_db(user_id: str) -> "SpotScanner":
         )
         exc_row = exc_row.scalars().first()
         if not exc_row:
+            logger.warning("[spot-engine] build_scanner_from_db: missing Gate.io connection for user=%s", user_id)
             raise ValueError(f"No active Gate.io connection found for user {user_id}")
 
         raw_key    = bytes(exc_row.api_key_encrypted)    if isinstance(exc_row.api_key_encrypted, memoryview) else exc_row.api_key_encrypted

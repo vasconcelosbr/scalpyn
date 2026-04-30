@@ -594,6 +594,7 @@ async def build_futures_scanner(user_id: str) -> "FuturesScanner":
         )
         exc_row = exc_row.scalars().first()
         if not exc_row:
+            logger.warning("[futures-engine] build_futures_scanner: missing Gate.io connection for user=%s", user_id)
             raise ValueError(f"No active Gate.io connection for user {user_id}")
 
         raw_key    = bytes(exc_row.api_key_encrypted)    if isinstance(exc_row.api_key_encrypted, memoryview)    else exc_row.api_key_encrypted

@@ -45,19 +45,23 @@ async def start_engine(
     Idempotent: if already running, returns current status.
     """
     uid = str(user_id)
+    logger.info("[futures-engine] /start invoked for user=%s", uid)
     existing = get_engine(uid)
     if existing and existing._running and not existing._paused:
+        logger.info("[futures-engine] /start short-circuit: already_running for user=%s", uid)
         return {"status": "already_running", "engine": existing.status()}
 
     try:
         scanner = await build_futures_scanner(uid)
     except ValueError as e:
+        logger.warning("[futures-engine] /start config error for user=%s: %s", uid, e)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.exception("Failed to build futures scanner for user %s: %s", uid, e)
+        logger.exception("[futures-engine] /start failed to build scanner for user=%s: %s", uid, e)
         raise HTTPException(status_code=500, detail=f"Failed to initialize futures engine: {e}")
 
     scanner.start()
+    logger.info("[futures-engine] /start scanner running for user=%s", uid)
     return {"status": "started", "engine": scanner.status()}
 
 
