@@ -12,16 +12,40 @@ function getToken(): string | null {
 }
 
 /**
+ * Resolve a caller-supplied endpoint into the absolute browser path that will
+ * be requested. Two conventions exist in this codebase historically:
+ *   1. `/profiles`              → fetched at `/api/profiles`
+ *   2. `/api/spot-engine/start` → fetched at `/api/spot-engine/start`
+ *
+ * Without normalization, convention (2) double-prefixes to `/api/api/...`,
+ * which the FastAPI backend rejects with `404 {"detail":"Not Found"}` — this
+ * was the root cause of the Start Engine "Not Found" alert in production.
+ *
+ * Strategy: strip a single leading `/api` (or `api`) segment if present, then
+ * prefix exactly once with `API_URL`. Idempotent under both conventions.
+ */
+function resolvePath(endpoint: string): string {
+  let cleaned = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  if (cleaned === '/api' || cleaned.startsWith('/api/')) {
+    cleaned = cleaned.slice(4) || '/';
+  }
+  return `${API_URL}${cleaned}`;
+}
+
+/**
  * Structured error thrown by apiFetch on non-OK responses.
  *
  * Keeps `message` backward-compatible (uses backend `detail` when present),
- * but exposes status / endpoint / method / detail / rawBody so callers and
- * UI surfaces can render rich diagnostics (especially for proxy 404s where
- * the body is just `{"detail":"Not Found"}`).
+ * but exposes status / path / endpoint / method / detail / rawBody so callers
+ * and UI surfaces can render rich diagnostics (especially for proxy 404s
+ * where the body is just `{"detail":"Not Found"}`).
  */
 export class ApiError extends Error {
   status: number;
+  /** Logical endpoint string passed by the caller (e.g. `/spot-engine/start`). */
   endpoint: string;
+  /** Actual browser path requested after normalization (e.g. `/api/spot-engine/start`). */
+  path: string;
   method: string;
   detail: string | null;
   rawBody: string | null;
@@ -29,6 +53,7 @@ export class ApiError extends Error {
   constructor(opts: {
     status: number;
     endpoint: string;
+    path: string;
     method: string;
     detail: string | null;
     rawBody: string | null;
@@ -38,15 +63,16 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.status = opts.status;
     this.endpoint = opts.endpoint;
+    this.path = opts.path;
     this.method = opts.method;
     this.detail = opts.detail;
     this.rawBody = opts.rawBody;
   }
 
-  /** Human-readable summary including HTTP status + path. */
+  /** Human-readable summary including HTTP status + actual fetched path. */
   toDescriptiveString(): string {
     const detailPart = this.detail ?? '(no detail)';
-    return `${detailPart} — HTTP ${this.status} on ${this.method} ${this.endpoint}`;
+    return `${detailPart} — HTTP ${this.status} on ${this.method} ${this.path}`;
   }
 }
 
@@ -64,7 +90,8 @@ export async function apiFetch<T = any>(
   }
 
   const method = (options.method ?? 'GET').toUpperCase();
-  const res = await fetch(`${API_URL}${endpoint}`, { ...options, headers });
+  const path = resolvePath(endpoint);
+  const res = await fetch(path, { ...options, headers });
 
   if (res.status === 401) {
     // Token expired — redirect to login
@@ -76,6 +103,7 @@ export async function apiFetch<T = any>(
     throw new ApiError({
       status: 401,
       endpoint,
+      path,
       method,
       detail: 'Unauthorized',
       rawBody: null,
@@ -100,6 +128,7 @@ export async function apiFetch<T = any>(
     throw new ApiError({
       status: res.status,
       endpoint,
+      path,
       method,
       detail,
       rawBody: rawBody || null,
