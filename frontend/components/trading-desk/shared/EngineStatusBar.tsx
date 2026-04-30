@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { Pause, Play, BarChart3, AlertTriangle, TrendingUp, TrendingDown } from 'lucide-react';
 import { useEngineStatus, type TradingProfile } from '@/hooks/useEngineStatus';
 import { ApiError } from '@/lib/api';
+import { pickActivePositionsCount, pickUnderwaterCount } from '@/lib/engineStatus';
 import { useState } from 'react';
 
 function formatActionError(err: unknown): string {
@@ -192,21 +193,24 @@ function MacroRegimeBadge({ regime }: { regime: string }) {
 
 function SpotBody({
   positions,
+  positionsSummary,
   capital,
 }: {
   positions: Record<string, any>[];
+  positionsSummary: Record<string, any> | null;
   capital: { total: number; used: number; free: number } | null;
 }) {
-  const underwaterCount = positions.filter(
-    (p) => p.unrealized_pnl != null && p.unrealized_pnl < 0
-  ).length;
+  // Belt-and-braces guard so a future contract drift cannot crash render.
+  const safePositions = Array.isArray(positions) ? positions : [];
+  const activeCount = pickActivePositionsCount(positionsSummary, safePositions);
+  const underwaterCount = pickUnderwaterCount(positionsSummary, safePositions);
 
   const deployedPct =
     capital && capital.total > 0 ? (capital.used / capital.total) * 100 : null;
 
   return (
     <>
-      <Metric label="Active Positions" value={positions.length} />
+      <Metric label="Active Positions" value={activeCount} />
       <Divider />
       {underwaterCount > 0 ? (
         <Metric
@@ -247,15 +251,20 @@ function SpotBody({
 
 function FuturesBody({
   positions,
+  positionsSummary,
   capital,
   balance,
 }: {
   positions: Record<string, any>[];
+  positionsSummary: Record<string, any> | null;
   capital: { total: number; used: number; free: number } | null;
   balance: Record<string, any> | null;
 }) {
-  const longs = positions.filter((p) => p.side === 'long' || p.direction === 'long').length;
-  const shorts = positions.filter((p) => p.side === 'short' || p.direction === 'short').length;
+  // Belt-and-braces guard so a future contract drift cannot crash render.
+  const safePositions = Array.isArray(positions) ? positions : [];
+  const openCount = pickActivePositionsCount(positionsSummary, safePositions);
+  const longs = safePositions.filter((p) => p && (p.side === 'long' || p.direction === 'long')).length;
+  const shorts = safePositions.filter((p) => p && (p.side === 'short' || p.direction === 'short')).length;
 
   const unrealizedPnl: number | null = balance?.unrealized_pnl ?? null;
   const pnlPositive = unrealizedPnl != null && unrealizedPnl >= 0;
@@ -271,7 +280,7 @@ function FuturesBody({
 
   return (
     <>
-      <Metric label="Open Positions" value={positions.length} />
+      <Metric label="Open Positions" value={openCount} />
       <Divider />
       <Metric
         label="Longs"
@@ -369,8 +378,18 @@ function SkeletonBar() {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function EngineStatusBar({ profile }: EngineStatusBarProps) {
-  const { isRunning, isPaused, positions, capital, balance, isLoading, startEngine, pauseEngine, resumeEngine } =
-    useEngineStatus(profile);
+  const {
+    isRunning,
+    isPaused,
+    positions,
+    positionsSummary,
+    capital,
+    balance,
+    isLoading,
+    startEngine,
+    pauseEngine,
+    resumeEngine,
+  } = useEngineStatus(profile);
 
   const [actionLoading, setActionLoading] = useState<'start' | 'pause' | 'resume' | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -553,9 +572,18 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
         }}
       >
         {profile === 'spot' ? (
-          <SpotBody positions={positions} capital={capital} />
+          <SpotBody
+            positions={positions}
+            positionsSummary={positionsSummary}
+            capital={capital}
+          />
         ) : (
-          <FuturesBody positions={positions} capital={capital} balance={balance} />
+          <FuturesBody
+            positions={positions}
+            positionsSummary={positionsSummary}
+            capital={capital}
+            balance={balance}
+          />
         )}
       </div>
 
