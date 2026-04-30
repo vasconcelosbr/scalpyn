@@ -3,18 +3,7 @@
 import { useEffect } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 
-/**
- * Route-level error boundary for /trading-desk/* (Task #127).
- *
- * Without this boundary, any render-time error inside spot, futures, positions,
- * or history would escape to Next.js's global handler and the user would see
- * the full-screen production overlay:
- *
- *   "Application error: a client-side exception has occurred…"
- *
- * With this boundary, the user sees an inline card with the error message
- * and a Retry button (which calls `reset()` to attempt re-render).
- */
+/** Route-level error boundary for /trading-desk/* — degrades gracefully instead of the global Next.js overlay. */
 export default function TradingDeskError({
   error,
   reset,

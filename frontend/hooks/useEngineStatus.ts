@@ -28,19 +28,7 @@ export interface CapitalInfo {
 
 export interface EngineStatusResponse {
   engine?: EngineInfo;
-  /**
-   * Raw `positions` payload from the backend.
-   *
-   * Intentionally typed as `unknown` because the backend returns this in
-   * three different real shapes (see Task #127):
-   *   - Spot   `/status` → dict `{ total, active, underwater, ... }`
-   *   - Futures `/status` → dict `{ open_count, positions: [...], ... }`
-   *   - Plus tolerated edge cases: real array, `{ error: "..." }`, missing.
-   *
-   * Always read this through `extractPositions` /
-   * `extractPositionsSummary` from `@/lib/engineStatus` rather than touching
-   * it directly.
-   */
+  /** Raw payload — read via `extractPositions` / `extractPositionsSummary`. */
   positions?: unknown;
   capital?: CapitalInfo;
   balance?: Record<string, any>;
@@ -54,28 +42,9 @@ export interface UseEngineStatusReturn {
   isRunning: boolean;
   /** True if the engine is paused. */
   isPaused: boolean;
-  /**
-   * Current open positions, ALWAYS as an array.
-   *
-   * Normalised by `extractPositions` so callers can safely call array methods
-   * regardless of the raw payload shape (Task #127). The backend currently
-   * returns `positions` as a *dict* on both spot (counts only) and futures
-   * (`{ open_count, positions: [...], total_unrealized_pnl }`), so without
-   * this normalisation `EngineStatusBar` used to crash with
-   * "positions.filter is not a function" on every render after Start Engine.
-   *
-   * - Spot summary dict → `[]` (no underlying list to iterate)
-   * - Futures dict      → the inner `positions` array
-   * - Real array        → returned as-is
-   * - `error` dict / null / undefined → `[]`
-   */
+  /** Always an array — normalised from the raw payload. */
   positions: Record<string, any>[];
-  /**
-   * Original `positions` payload when it was a dict (spot/futures summary),
-   * or `null` when the payload was already an array / missing. Use this to
-   * read pre-aggregated counters like `total`, `active`, `underwater`,
-   * `open_count`, `total_unrealized_pnl` without recomputing from the array.
-   */
+  /** Original dict payload (spot/futures summary) or null when it was an array/missing. */
   positionsSummary: Record<string, any> | null;
   /** Capital summary from the status response. */
   capital: CapitalInfo | null;
@@ -135,10 +104,6 @@ export function useEngineStatus(profile: TradingProfile): UseEngineStatusReturn 
   const status = data ?? null;
   const isRunning = status?.engine?.running ?? false;
   const isPaused = status?.engine?.paused ?? false;
-  // The backend returns `positions` as a *dict* (summary object) on both
-  // spot and futures status endpoints — see Task #127. Normalise here so
-  // every consumer can safely call array methods on `positions`, while
-  // `positionsSummary` exposes the raw dict for precomputed counters.
   const rawPositions = status?.positions;
   const positions = extractPositions(rawPositions);
   const positionsSummary = extractPositionsSummary(rawPositions);

@@ -1,30 +1,9 @@
 /**
- * Helpers for normalizing the `/api/{spot|futures}-engine/status` payload.
+ * Normalisers for the `/api/{spot|futures}-engine/status` payload.
  *
- * Why this module exists
- * ----------------------
- * The backend returns the `positions` field as a dict (a summary object),
- * but the frontend originally treated it as an array and called `.filter` on
- * it during render — which crashed the whole page with a TypeError, surfacing
- * as the production "Application error: a client-side exception" overlay
- * (Task #127).
- *
- * The two real backend shapes today are:
- *   - Spot   `/status` → `positions = { total, active, underwater,
- *                                       unrealized_pnl_usdt }`
- *                        (no underlying list — counts only)
- *   - Futures `/status` → `positions = { open_count, positions: [...],
- *                                        total_unrealized_pnl }`
- *                         (the actual list lives at `.positions`)
- *
- * Plus three legacy / edge shapes we want to keep tolerating:
- *   - `[]` (empty array — current default before SWR returns)
- *   - `[ { ... } ]` (legacy "real array")
- *   - `{ error: "…" }` (downstream fetch failure inside the status endpoint)
- *   - `null` / `undefined` (fetch failed, status not loaded yet)
- *
- * Centralizing this normalization means EngineStatusBar can safely call
- * array methods on the result without ever crashing render.
+ * Backend returns `positions` as either a summary dict (spot, futures) or a
+ * plain array; these helpers always yield an array so consumers never crash
+ * on `.filter`. See `runEngineStatusAssertions` for the full shape matrix.
  */
 
 export type RawPositions = unknown;
@@ -102,12 +81,8 @@ export function pickUnderwaterCount(
 }
 
 /**
- * Lightweight regression check intended to be invoked from a test harness
- * (e.g. once a unit-test runner is set up — see follow-up task).
- *
- * Pure: returns an array of failure messages. Empty array means all five
- * payload shapes documented at the top of this file behave correctly.
- * Does not throw, does not log, does not run on import.
+ * Pure regression helper — returns failure messages (empty = all good).
+ * Used by `lib/__tests__/engineStatus.test.ts`. Never invoked at import.
  */
 export function runEngineStatusAssertions(): string[] {
   const failures: string[] = [];

@@ -200,7 +200,6 @@ function SpotBody({
   positionsSummary: Record<string, any> | null;
   capital: { total: number; used: number; free: number } | null;
 }) {
-  // Belt-and-braces guard so a future contract drift cannot crash render.
   const safePositions = Array.isArray(positions) ? positions : [];
   const activeCount = pickActivePositionsCount(positionsSummary, safePositions);
   const underwaterCount = pickUnderwaterCount(positionsSummary, safePositions);
@@ -260,7 +259,6 @@ function FuturesBody({
   capital: { total: number; used: number; free: number } | null;
   balance: Record<string, any> | null;
 }) {
-  // Belt-and-braces guard so a future contract drift cannot crash render.
   const safePositions = Array.isArray(positions) ? positions : [];
   const openCount = pickActivePositionsCount(positionsSummary, safePositions);
   const longs = safePositions.filter((p) => p && (p.side === 'long' || p.direction === 'long')).length;
