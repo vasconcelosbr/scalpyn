@@ -1,0 +1,60 @@
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: bootstrap-simulations
+spec:
+  template:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: bootstrap
+            # Image will be set dynamically during job creation
+            # image: us-central1-docker.pkg.dev/PROJECT_ID/scalpyn/scalpyn:latest
+            command:
+            - python
+            args:
+            - bootstrap_simulations.py
+            - --limit
+            - "5000"
+            resources:
+              limits:
+                cpu: "1"
+                memory: 1Gi
+            env:
+            - name: ENV
+              value: "production"
+            # Database connection via Cloud SQL Unix socket
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: database-url
+                  key: url
+            # Required environment variables from secrets
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: jwt-secret
+                  key: secret
+            - name: ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: encryption-key
+                  key: key
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: redis-url
+                  key: url
+            - name: AI_KEYS_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ai-keys-encryption-key
+                  key: key
+          restartPolicy: Never
+          serviceAccountName: scalpyn-service-account
+          # Cloud SQL connection
+          cloudSqlInstances:
+          - clickrate-477217:us-central1:scalpyn
+      backoffLimit: 1
+      timeoutSeconds: 3600
