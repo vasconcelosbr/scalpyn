@@ -1,11 +1,8 @@
 """ML API endpoints for model training, evaluation, and prediction.
 
-NOTE: heavy ML modules (train_model, evaluation_report, predict_service,
-model_loader) are imported lazily inside each handler to keep container
-cold-start fast. Top-level imports of those would pull xgboost / scikit-learn
-into every uvicorn worker on boot, adding 1-3 s per worker before the port
-opens — which compounds with Alembic + Celery startup and was a contributor
-to Cloud Run "failed to listen on PORT" timeouts.
+Heavy ML modules (train_model, evaluation_report, predict_service,
+model_loader) are imported lazily inside each handler so this module's
+top-level import does not transitively load xgboost / scikit-learn / joblib.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
@@ -120,7 +117,6 @@ async def train_model(
                 detail="ML is disabled in settings",
             )
 
-        # Lazy import
         from ..ml.train_model import train_model_pipeline
 
         # Start training
@@ -166,7 +162,6 @@ async def evaluate_model(
     try:
         logger.info(f"Model evaluation requested by user {user_id}")
 
-        # Lazy import
         from ..ml.evaluation_report import generate_evaluation_report
 
         report = await generate_evaluation_report(
@@ -220,7 +215,6 @@ async def predict(
                 "direction": "LONG",
             }
 
-        # Lazy import
         from ..ml.predict_service import get_predict_service
 
         # Get prediction service
@@ -277,7 +271,6 @@ async def predict_batch(
                 "predictions": request.assets,
             }
 
-        # Lazy import
         from ..ml.predict_service import get_predict_service
 
         # Get prediction service
@@ -325,7 +318,6 @@ async def reload_model(
     try:
         logger.info(f"Model reload requested by user {user_id}")
 
-        # Lazy import
         from ..ml.model_loader import get_model_loader
 
         # Reload model
@@ -372,7 +364,6 @@ async def get_ml_status(
         ml_enabled = ai_settings.get("ml_enabled", True)
         model_path = ai_settings.get("model_path", "/tmp/scalpyn_models/model.pkl")
 
-        # Lazy import
         from ..ml.predict_service import get_predict_service
 
         # Check if model is loaded
