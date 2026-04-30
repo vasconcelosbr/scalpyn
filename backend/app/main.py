@@ -70,6 +70,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         _log.warning("DB warmup failed (will retry on first request): %s", e)
 
+    # ── DB pool stats logger (Task #116) ──────────────────────────────────
+    # Periodically logs pool utilisation so we can diagnose `QueuePool limit
+    # … reached` errors.  Disable via DB_POOL_STATS_INTERVAL_SECONDS=0.
+    pool_stats_task = None
+    try:
+        from .database import start_pool_stats_logger
+        pool_stats_task = start_pool_stats_logger()
+    except Exception as e:
+        _log.warning("Pool stats logger failed to start: %s", e)
+        pool_stats_task = None
+
     # ── Structural indicator scheduler (15 min, 1h OHLCV) ────────────────
     # Computes slow technical indicators: RSI, ADX, EMA, ATR, MACD, Bollinger,
     # PSAR, Z-score, OBV, Stochastic.  Disable via SKIP_STRUCTURAL_SCHEDULER=1.
@@ -161,6 +172,12 @@ async def lifespan(app: FastAPI):
                     await _stop_fn()
                 except Exception as e:
                     _log.warning("%s shutdown error: %s", _name, e)
+        if pool_stats_task is not None:
+            pool_stats_task.cancel()
+            try:
+                await pool_stats_task
+            except (asyncio.CancelledError, Exception):
+                pass
     return
 
 

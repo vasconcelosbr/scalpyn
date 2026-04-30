@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.orm import declarative_base
@@ -9,6 +10,18 @@ from fastapi import HTTPException, status
 from .config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read int from env with safe fallback on parse error."""
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning("Invalid value for %s (%r) — falling back to %d", name, raw, default)
+        return default
 
 
 def _resolve_db_url(url: str) -> tuple[str, dict]:
@@ -40,19 +53,83 @@ _connect_args.setdefault("timeout", 15)
 # Add command_timeout to prevent hung queries
 _connect_args.setdefault("command_timeout", 60)
 
+# ── Pool sizing ──────────────────────────────────────────────────────────────
+# Each uvicorn worker process holds its own pool; Celery worker + beat run in
+# their own processes alongside.  The total upper bound on simultaneous
+# Postgres connections from this app is therefore:
+#
+#   uvicorn_workers * (DB_POOL_SIZE + DB_MAX_OVERFLOW)
+#       + celery_workers (NullPool, ~one connection per active task)
+#       + celery_beat
+#
+# This must stay below the Cloud SQL tier's `max_connections`.  Always run
+# `SHOW max_connections;` against the live instance before raising the
+# defaults — db-f1-micro = 25, db-g1-small = 50, db-n1-standard-1 = 100.
+#
+# Defaults bumped to 10 + 10 (was 5 + 5) to absorb the extra concurrent
+# connection demand created by the in-process pipeline scheduler scanning
+# ~200 watchlists while user-facing API requests come in (Task #116).
+_pool_size = _env_int("DB_POOL_SIZE", 10)
+_max_overflow = _env_int("DB_MAX_OVERFLOW", 10)
+_pool_timeout = _env_int("DB_POOL_TIMEOUT", 30)
+
 engine = create_async_engine(
     _db_url,
     echo=False,
     connect_args=_connect_args,
     pool_pre_ping=True,
     pool_recycle=1800,
-    # Conservative pool — every uvicorn worker process has its own pool, and
-    # Celery worker + beat run in their own processes alongside.  Confirm the
-    # Cloud SQL tier's max_connections before raising these.
-    pool_size=5,
-    max_overflow=5,
+    pool_size=_pool_size,
+    max_overflow=_max_overflow,
+    pool_timeout=_pool_timeout,
 )
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+logger.info(
+    "DB pool configured: pool_size=%d max_overflow=%d pool_timeout=%ds",
+    _pool_size, _max_overflow, _pool_timeout,
+)
+
+
+# ── Pool observability ───────────────────────────────────────────────────────
+# Periodic logger so we can correlate `QueuePool limit … reached` errors with
+# actual pool utilisation.  Disabled when DB_POOL_STATS_INTERVAL_SECONDS=0.
+
+def log_pool_stats() -> None:
+    """Log a snapshot of the engine's connection pool state."""
+    try:
+        pool = engine.pool
+        logger.info(
+            "DB pool stats: size=%d checked_out=%d overflow=%d checked_in=%d status=%r",
+            pool.size(),
+            pool.checkedout(),
+            pool.overflow(),
+            pool.checkedin(),
+            pool.status(),
+        )
+    except Exception as exc:  # pragma: no cover — diagnostics only
+        logger.warning("Failed to log DB pool stats: %s", exc)
+
+
+async def _pool_stats_loop(interval_seconds: int) -> None:
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            log_pool_stats()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pragma: no cover — diagnostics only
+            logger.warning("Pool stats loop iteration failed: %s", exc)
+
+
+def start_pool_stats_logger() -> asyncio.Task | None:
+    """Start the periodic pool-stats logger.  Returns the task (or None when disabled)."""
+    interval = _env_int("DB_POOL_STATS_INTERVAL_SECONDS", 60)
+    if interval <= 0:
+        logger.info("DB pool stats logger disabled (DB_POOL_STATS_INTERVAL_SECONDS=%d)", interval)
+        return None
+    logger.info("Starting DB pool stats logger (every %ds)", interval)
+    return asyncio.create_task(_pool_stats_loop(interval), name="db-pool-stats-logger")
 
 # ── Celery-safe session factory ───────────────────────────────────────────────
 # Celery workers create a NEW event loop per task via asyncio.new_event_loop().
