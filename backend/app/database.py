@@ -66,9 +66,12 @@ _connect_args.setdefault("command_timeout", 60)
 # `SHOW max_connections;` against the live instance before raising the
 # defaults — db-f1-micro = 25, db-g1-small = 50, db-n1-standard-1 = 100.
 #
-# Defaults bumped to 10 + 10 (was 5 + 5) to absorb the extra concurrent
-# connection demand created by the in-process pipeline scheduler scanning
-# ~200 watchlists while user-facing API requests come in (Task #116).
+# Defaults bumped to 10 + 10 (was 5 + 5) to give API request handlers,
+# WebSocket event handlers and the in-process indicator schedulers
+# (structural + microstructure + combined, each at concurrency=8) enough
+# headroom on this engine's pool. The pipeline scan loop runs on the
+# separate Celery NullPool engine below and does NOT consume from this
+# pool, so it is not part of this calculation (Task #116).
 _pool_size = _env_int("DB_POOL_SIZE", 10)
 _max_overflow = _env_int("DB_MAX_OVERFLOW", 10)
 _pool_timeout = _env_int("DB_POOL_TIMEOUT", 30)
