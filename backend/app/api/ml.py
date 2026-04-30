@@ -1,4 +1,12 @@
-"""ML API endpoints for model training, evaluation, and prediction."""
+"""ML API endpoints for model training, evaluation, and prediction.
+
+NOTE: heavy ML modules (train_model, evaluation_report, predict_service,
+model_loader) are imported lazily inside each handler to keep container
+cold-start fast. Top-level imports of those would pull xgboost / scikit-learn
+into every uvicorn worker on boot, adding 1-3 s per worker before the port
+opens — which compounds with Alembic + Celery startup and was a contributor
+to Cloud Run "failed to listen on PORT" timeouts.
+"""
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -13,10 +21,6 @@ import jwt as pyjwt
 from ..config import settings
 from ..database import get_db
 from ..services.config_service import config_service
-from ..ml.train_model import train_model_pipeline
-from ..ml.evaluation_report import generate_evaluation_report
-from ..ml.predict_service import get_predict_service
-from ..ml.model_loader import get_model_loader
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +120,9 @@ async def train_model(
                 detail="ML is disabled in settings",
             )
 
+        # Lazy import: keeps xgboost / scikit-learn out of container boot path
+        from ..ml.train_model import train_model_pipeline
+
         # Start training
         result = await train_model_pipeline(
             db=db,
@@ -158,6 +165,9 @@ async def evaluate_model(
     """
     try:
         logger.info(f"Model evaluation requested by user {user_id}")
+
+        # Lazy import: keeps xgboost / scikit-learn out of container boot path
+        from ..ml.evaluation_report import generate_evaluation_report
 
         report = await generate_evaluation_report(
             db=db,
@@ -209,6 +219,9 @@ async def predict(
                 "probability": 1.0,
                 "direction": "LONG",
             }
+
+        # Lazy import: keeps xgboost / scikit-learn out of container boot path
+        from ..ml.predict_service import get_predict_service
 
         # Get prediction service
         service = get_predict_service(
@@ -264,6 +277,9 @@ async def predict_batch(
                 "predictions": request.assets,
             }
 
+        # Lazy import: keeps xgboost / scikit-learn out of container boot path
+        from ..ml.predict_service import get_predict_service
+
         # Get prediction service
         service = get_predict_service(
             model_path=ai_settings.get("model_path", "/tmp/scalpyn_models/model.pkl")
@@ -309,6 +325,9 @@ async def reload_model(
     try:
         logger.info(f"Model reload requested by user {user_id}")
 
+        # Lazy import: keeps joblib / scikit-learn out of container boot path
+        from ..ml.model_loader import get_model_loader
+
         # Reload model
         loader = get_model_loader(model_path=request.model_path, reload=True)
 
@@ -352,6 +371,9 @@ async def get_ml_status(
 
         ml_enabled = ai_settings.get("ml_enabled", True)
         model_path = ai_settings.get("model_path", "/tmp/scalpyn_models/model.pkl")
+
+        # Lazy import: keeps xgboost / scikit-learn out of container boot path
+        from ..ml.predict_service import get_predict_service
 
         # Check if model is loaded
         service = get_predict_service(model_path=model_path)

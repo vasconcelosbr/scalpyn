@@ -15,6 +15,12 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Belt-and-suspenders defense against deploy-time lock contention from the
+    # OLD revision still writing to decisions_log via _persist_decision_logs.
+    # alembic/env.py already sets lock_timeout=10s session-wide, but a stricter
+    # 5s per-statement cap here makes ADD COLUMN fail fast and lets start.sh
+    # retry/backoff (3 attempts) before falling through to the stamp fallback.
+    op.execute(sa.text("SET LOCAL lock_timeout = '5s'"))
     op.execute(sa.text("""
         ALTER TABLE decisions_log
             ADD COLUMN IF NOT EXISTS direction VARCHAR(10),
