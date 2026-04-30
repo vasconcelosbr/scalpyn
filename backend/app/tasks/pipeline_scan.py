@@ -1724,14 +1724,25 @@ async def _run_pipeline_scan():
                     profile_candidate_count = len(assets)
 
                     score_config: Optional[dict] = None
+                    # Best-effort score config read.  Wrapped in a SAVEPOINT so a
+                    # DB-level failure (e.g. timeout, missing column) only rolls
+                    # back the savepoint and leaves the parent session healthy
+                    # for the rest of this watchlist's writes.  Without this,
+                    # asyncpg's poisoned-tx state cascades to _upsert_assets
+                    # below and ultimately to validate_pipeline_integrity at the
+                    # end of the cycle (Task #125).
+                    from ..services.seed_service import DEFAULT_SCORE
                     try:
                         from ..services.config_service import config_service
-                        from ..services.seed_service import DEFAULT_SCORE
-                        score_config = await config_service.get_config(db, "score", wl.user_id)
+                        async with db.begin_nested():
+                            score_config = await config_service.get_config(db, "score", wl.user_id)
                         if not score_config:
                             score_config = DEFAULT_SCORE
-                    except Exception:
-                        from ..services.seed_service import DEFAULT_SCORE
+                    except Exception as _sc_exc:
+                        logger.warning(
+                            "[PipelineScan] %s: score config read failed (%s) — falling back to DEFAULT_SCORE",
+                            wl.name, _sc_exc,
+                        )
                         score_config = DEFAULT_SCORE
 
                     # Futures mode: compute dual LONG/SHORT scores for all assets.
@@ -1922,14 +1933,22 @@ async def _run_pipeline_scan():
                     from ..services.seed_service import DEFAULT_DECISION_LOG as _DL_DEFAULTS
                     dl_score_delta = float(_DL_DEFAULTS.get("score_delta_threshold", 5.0))
                     dl_direction_logs = bool(_DL_DEFAULTS.get("direction_change_logs", True))
+                    # Best-effort decision-log config read.  SAVEPOINT-wrapped
+                    # for the same reason as the score config above (Task #125):
+                    # a swallowed exception here used to poison the parent tx
+                    # and cascade into the next _upsert_assets call.
                     try:
                         from ..services.config_service import config_service
-                        _dl_cfg = await config_service.get_config(db, "decision_log", wl.user_id)
+                        async with db.begin_nested():
+                            _dl_cfg = await config_service.get_config(db, "decision_log", wl.user_id)
                         if isinstance(_dl_cfg, dict):
                             dl_score_delta = float(_dl_cfg.get("score_delta_threshold", dl_score_delta))
                             dl_direction_logs = bool(_dl_cfg.get("direction_change_logs", dl_direction_logs))
-                    except Exception:
-                        pass
+                    except Exception as _dl_cfg_exc:
+                        logger.warning(
+                            "[PipelineScan] %s: decision_log config read failed (%s) — using defaults",
+                            wl.name, _dl_cfg_exc,
+                        )
 
                     prior_states = _prior_decision_states(redis, wl_id)
                     new_states: dict = {}
@@ -2010,18 +2029,31 @@ async def _run_pipeline_scan():
                     stats["errors"] += 1
                     # Roll back any failed transaction so subsequent watchlists
                     # are not affected by an InFailedSQLTransactionError cascade.
+                    # Surface rollback failures at WARNING — they used to be
+                    # silently swallowed and were the entry point for the
+                    # cascade tracked in Task #125.
                     try:
                         await db.rollback()
-                    except Exception:
-                        pass
+                    except Exception as _rb_exc:
+                        logger.warning(
+                            "[PipelineScan] %s: rollback after watchlist failure raised %s: %s "
+                            "— session may be unusable for subsequent watchlists",
+                            wl.name, type(_rb_exc).__name__, _rb_exc,
+                        )
                     continue
 
-        stats["integrity"] = await validate_pipeline_integrity(
-            db,
-            wl_rows=wl_snapshots,
-            profile_config_map=profile_config_map,
-            execution_id=execution_id,
-        )
+        # Run the integrity check on a *fresh* session.  Defense-in-depth: even
+        # if the per-watchlist loop accidentally leaks an aborted-tx state into
+        # the loop session, a brand-new session for integrity guarantees the
+        # final SELECT/UPDATE pair won't see InFailedSQLTransactionError
+        # (Task #125).
+        async with AsyncSessionLocal() as integrity_db:
+            stats["integrity"] = await validate_pipeline_integrity(
+                integrity_db,
+                wl_rows=wl_snapshots,
+                profile_config_map=profile_config_map,
+                execution_id=execution_id,
+            )
 
     logger.info(
         "[PipelineScan] Done — watchlists=%d  new_signals=%d  errors=%d",
