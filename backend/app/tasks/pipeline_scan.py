@@ -16,6 +16,7 @@ import json
 import logging
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -1499,17 +1500,30 @@ async def _run_pipeline_scan():
             logger.debug("[PipelineScan] No pipeline watchlists with auto_refresh — skipping.")
             return stats
 
-        # Snapshot watchlist names as primitives so the per-iteration except
-        # handler can log without ever touching ORM attributes. If a previous
-        # iteration leaves the session in an aborted state, accessing wl.name
-        # in the except handler triggers a lazy-load (sqlalchemy _load_expired)
-        # that raises MissingGreenlet — which propagates out BEFORE the
-        # explicit db.rollback() runs, leaving the session unhealthy and
-        # cascading InFailedSQLTransactionError across all remaining
-        # watchlists in this scan cycle (Task #114).
-        wl_name_snapshot: dict[str, str] = {str(wl.id): (wl.name or str(wl.id)) for wl in wl_rows}
+        # Materialise watchlists into primitive snapshots BEFORE any further
+        # work. The session is guaranteed healthy here (we just loaded the
+        # rows). After this point, the per-watchlist loop and integrity check
+        # operate exclusively on these snapshots and never touch ORM
+        # attributes — so a rollback in any iteration cannot expire fields
+        # that subsequent iterations need, which eliminates the
+        # MissingGreenlet lazy-load on aborted sessions and the resulting
+        # InFailedSQLTransactionError cascade (Task #114).
+        wl_snapshots = [
+            SimpleNamespace(
+                id=wl.id,
+                name=wl.name,
+                level=wl.level,
+                profile_id=wl.profile_id,
+                source_pool_id=wl.source_pool_id,
+                source_watchlist_id=wl.source_watchlist_id,
+                user_id=wl.user_id,
+                filters_json=wl.filters_json,
+                created_at=wl.created_at,
+            )
+            for wl in wl_rows
+        ]
 
-        profile_ids = {wl.profile_id for wl in wl_rows if wl.profile_id}
+        profile_ids = {wl.profile_id for wl in wl_snapshots if wl.profile_id}
         profile_config_map = {}
         if profile_ids:
             profile_rows = (await db.execute(
@@ -1517,7 +1531,7 @@ async def _run_pipeline_scan():
             )).scalars().all()
             profile_config_map = {row.id: row.config for row in profile_rows}
 
-        wl_rows.sort(
+        wl_snapshots.sort(
             key=lambda wl: (
                 WATCHLIST_STAGE_ORDER.get(
                     effective_pipeline_level(
@@ -1533,14 +1547,14 @@ async def _run_pipeline_scan():
 
         logger.info(
             "[PipelineScan] Processing %d pipeline watchlists… execution_id=%s",
-            len(wl_rows),
+            len(wl_snapshots),
             execution_id,
         )
 
         stage_buckets: dict[str, list] = {stage: [] for stage in (*_PIPELINE_EXECUTION_ORDER, "custom")}
         effective_level_map: dict[str, str] = {}
         pool_gate_watchlist_map: dict[tuple[str, str], str] = {}
-        for _wl in wl_rows:
+        for _wl in wl_snapshots:
             _eff = effective_pipeline_level(
                 _wl.level,
                 source_pool_id=_wl.source_pool_id,
@@ -1553,14 +1567,10 @@ async def _run_pipeline_scan():
 
         for stage in (*_PIPELINE_EXECUTION_ORDER, "custom"):
             for wl in stage_buckets.get(stage, []):
-                # Capture id outside the try so the except handler always has a
-                # valid wl_id for snapshot lookup, even if a lazy-load fails on
-                # the first ORM access below (Task #114). PKs are not expired
-                # by SA rollback, so str(wl.id) is safe here.
-                try:
-                    wl_id = str(wl.id)
-                except Exception:
-                    wl_id = ""
+                # `wl` is a SimpleNamespace primitive snapshot — never an ORM
+                # object — so attribute access here cannot trigger lazy-load
+                # IO and cannot raise MissingGreenlet (Task #114).
+                wl_id = str(wl.id)
                 try:
                     stats["watchlists"] += 1
                     level = (wl.level or "L1").upper()
@@ -1989,14 +1999,7 @@ async def _run_pipeline_scan():
                         )
 
                 except Exception as exc:
-                    # Use the primitive snapshot rather than wl.name — the ORM
-                    # attribute may be expired after the failure above, and a
-                    # lazy-load on an aborted session raises MissingGreenlet
-                    # which would propagate out before db.rollback() runs and
-                    # cascade InFailedSQLTransactionError to every subsequent
-                    # watchlist (Task #114).
-                    _safe_wl_name = wl_name_snapshot.get(wl_id, wl_id) if wl_id else "<unknown>"
-                    logger.exception("[PipelineScan] Error processing watchlist %s: %s", _safe_wl_name, exc)
+                    logger.exception("[PipelineScan] Error processing watchlist %s: %s", wl.name, exc)
                     stats["errors"] += 1
                     # Roll back any failed transaction so subsequent watchlists
                     # are not affected by an InFailedSQLTransactionError cascade.
@@ -2008,7 +2011,7 @@ async def _run_pipeline_scan():
 
         stats["integrity"] = await validate_pipeline_integrity(
             db,
-            wl_rows=wl_rows,
+            wl_rows=wl_snapshots,
             profile_config_map=profile_config_map,
             execution_id=execution_id,
         )
