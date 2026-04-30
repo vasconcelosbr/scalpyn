@@ -152,18 +152,40 @@ CeleryAsyncSessionLocal = async_sessionmaker(_celery_engine, expire_on_commit=Fa
 Base = declarative_base()
 
 
+async def _safe_rollback(session) -> None:
+    """Best-effort rollback so a poisoned transaction never survives back into
+    the connection pool.  asyncpg raises InFailedSQLTransactionError on every
+    subsequent statement until rollback is called."""
+    try:
+        await session.rollback()
+    except Exception as rollback_exc:
+        logger.warning("Rollback failed: %s: %s", type(rollback_exc).__name__, rollback_exc)
+
+
 async def get_db():
+    session: AsyncSession | None = None
     try:
         async with AsyncSessionLocal() as session:
-            yield session
+            try:
+                yield session
+            except HTTPException:
+                # FastAPI HTTPException is a normal control-flow signal from
+                # the route, not a DB failure — but the route may have raised
+                # mid-transaction, so rollback before bubbling up.
+                await _safe_rollback(session)
+                raise
+            except Exception:
+                await _safe_rollback(session)
+                raise
     except asyncio.CancelledError:
         logger.error("DB session cancelled (CancelledError) — cold start or pool timeout")
+        if session is not None:
+            await _safe_rollback(session)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database temporarily unavailable, please retry",
         )
     except HTTPException:
-        # Don't mask FastAPI HTTP errors (e.g. 404, 502 from endpoint logic)
         raise
     except Exception as exc:
         logger.error("DB session error: %s: %s", type(exc).__name__, exc, exc_info=True)

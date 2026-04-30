@@ -48,6 +48,41 @@ def _is_our_order(text: str | None) -> bool:
     return bool(text and _SCALPYN_TAG in text)
 
 
+async def _safe_rollback(session) -> None:
+    """Roll back a poisoned async transaction, swallowing rollback failures.
+
+    asyncpg raises InFailedSQLTransactionError on every subsequent statement
+    once a transaction is aborted, until rollback is called explicitly.  Each
+    per-item exception below must therefore reset the session before the loop
+    continues to the next item, otherwise both the next item and the final
+    batch commit re-raise the same error.
+    """
+    try:
+        await session.rollback()
+    except Exception as rollback_exc:
+        logger.warning(
+            "_safe_rollback failed: %s: %s",
+            type(rollback_exc).__name__, rollback_exc,
+        )
+
+
+async def _safe_commit(session, label: str) -> None:
+    """Commit a session, logging (but not re-raising) commit failures.
+
+    If the commit fails — typically because an earlier per-item error
+    poisoned the transaction — we still need to roll back so the connection
+    is clean when it returns to the pool.
+    """
+    try:
+        await session.commit()
+    except Exception as commit_exc:
+        logger.warning(
+            "%s: batch commit failed: %s: %s",
+            label, type(commit_exc).__name__, commit_exc,
+        )
+        await _safe_rollback(session)
+
+
 # ── Handler: futures.positions ────────────────────────────────────────────────
 
 async def handle_futures_positions(result: list[dict]) -> None:
@@ -69,7 +104,8 @@ async def handle_futures_positions(result: list[dict]) -> None:
                         "handle_futures_positions: error processing position %s: %s",
                         pos.get("contract"), exc, exc_info=True,
                     )
-            await session.commit()
+                    await _safe_rollback(session)
+            await _safe_commit(session, "handle_futures_positions")
     except Exception as exc:
         logger.warning("handle_futures_positions: session error: %s", exc, exc_info=True)
 
@@ -202,7 +238,8 @@ async def handle_futures_orders(result: list[dict]) -> None:
                         "handle_futures_orders: error processing order %s: %s",
                         order.get("id"), exc, exc_info=True,
                     )
-            await session.commit()
+                    await _safe_rollback(session)
+            await _safe_commit(session, "handle_futures_orders")
     except Exception as exc:
         logger.warning("handle_futures_orders: session error: %s", exc, exc_info=True)
 
@@ -368,7 +405,8 @@ async def handle_futures_liquidates(result: list[dict]) -> None:
                         "handle_futures_liquidates: error processing liquidation %s: %s",
                         liq.get("contract"), exc, exc_info=True,
                     )
-            await session.commit()
+                    await _safe_rollback(session)
+            await _safe_commit(session, "handle_futures_liquidates")
     except Exception as exc:
         logger.warning("handle_futures_liquidates: session error: %s", exc, exc_info=True)
 
@@ -454,7 +492,8 @@ async def handle_spot_orders(result: list[dict]) -> None:
                         "handle_spot_orders: error processing order %s: %s",
                         order.get("id"), exc, exc_info=True,
                     )
-            await session.commit()
+                    await _safe_rollback(session)
+            await _safe_commit(session, "handle_spot_orders")
     except Exception as exc:
         logger.warning("handle_spot_orders: session error: %s", exc, exc_info=True)
 

@@ -390,6 +390,12 @@ async def _update_last_scanned(db, watchlist_id: str):
         await db.commit()
     except Exception as exc:
         logger.debug("[PipelineScan] Failed to update last_scanned_at for %s: %s", watchlist_id, exc)
+        # Reset the session so the next watchlist in the scan loop does not
+        # inherit an aborted asyncpg transaction (InFailedSQLTransactionError).
+        try:
+            await db.rollback()
+        except Exception as rb_exc:
+            logger.debug("[PipelineScan] Rollback after last_scanned_at failure failed: %s", rb_exc)
 
 
 # ─── market data loader ───────────────────────────────────────────────────────
