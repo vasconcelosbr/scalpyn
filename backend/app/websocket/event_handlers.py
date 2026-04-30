@@ -48,39 +48,50 @@ def _is_our_order(text: str | None) -> bool:
     return bool(text and _SCALPYN_TAG in text)
 
 
-async def _safe_rollback(session) -> None:
-    """Roll back a poisoned async transaction, swallowing rollback failures.
+async def _process_batch(
+    label: str,
+    items: list[dict],
+    process_one,
+    item_id,
+) -> None:
+    """Run *process_one(session, item)* for each item, isolating per-item
+    failures with PostgreSQL SAVEPOINTs (``session.begin_nested()``).
 
-    asyncpg raises InFailedSQLTransactionError on every subsequent statement
-    once a transaction is aborted, until rollback is called explicitly.  Each
-    per-item exception below must therefore reset the session before the loop
-    continues to the next item, otherwise both the next item and the final
-    batch commit re-raise the same error.
+    Guarantees demanded by Task #122:
+
+    1. Items that succeed are committed even if a later item fails — the
+       outer ``session.begin()`` commits at the end, and savepoints isolate
+       the rollback to a single bad item.
+    2. asyncpg's "current transaction is aborted" cascade cannot occur,
+       because the savepoint rollback runs synchronously before the next
+       item is attempted.
+    3. If the savepoint rollback itself fails (a real connection-level
+       problem), the session's outer transaction is no longer active and
+       we abort the whole batch instead of silently reusing a poisoned
+       session — the connection is then discarded by the pool when the
+       AsyncSessionLocal context manager closes.
     """
     try:
-        await session.rollback()
-    except Exception as rollback_exc:
-        logger.warning(
-            "_safe_rollback failed: %s: %s",
-            type(rollback_exc).__name__, rollback_exc,
-        )
-
-
-async def _safe_commit(session, label: str) -> None:
-    """Commit a session, logging (but not re-raising) commit failures.
-
-    If the commit fails — typically because an earlier per-item error
-    poisoned the transaction — we still need to roll back so the connection
-    is clean when it returns to the pool.
-    """
-    try:
-        await session.commit()
-    except Exception as commit_exc:
-        logger.warning(
-            "%s: batch commit failed: %s: %s",
-            label, type(commit_exc).__name__, commit_exc,
-        )
-        await _safe_rollback(session)
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                for item in items:
+                    try:
+                        async with session.begin_nested():
+                            await process_one(session, item)
+                    except Exception as exc:
+                        logger.warning(
+                            "%s: per-item failure for %s: %s",
+                            label, item_id(item), exc, exc_info=True,
+                        )
+                        if not session.is_active:
+                            logger.error(
+                                "%s: session deactivated after savepoint "
+                                "rollback — aborting batch",
+                                label,
+                            )
+                            raise
+    except Exception as exc:
+        logger.warning("%s: session error: %s", label, exc, exc_info=True)
 
 
 # ── Handler: futures.positions ────────────────────────────────────────────────
@@ -94,20 +105,12 @@ async def handle_futures_positions(result: list[dict]) -> None:
     - Broadcast a position_update event when unrealised_pnl changes >1 %.
     - Broadcast a liq_alert event when the mark price is within 8 % of liq_price.
     """
-    try:
-        async with AsyncSessionLocal() as session:
-            for pos in result:
-                try:
-                    await _process_futures_position(session, pos)
-                except Exception as exc:
-                    logger.warning(
-                        "handle_futures_positions: error processing position %s: %s",
-                        pos.get("contract"), exc, exc_info=True,
-                    )
-                    await _safe_rollback(session)
-            await _safe_commit(session, "handle_futures_positions")
-    except Exception as exc:
-        logger.warning("handle_futures_positions: session error: %s", exc, exc_info=True)
+    await _process_batch(
+        "handle_futures_positions",
+        result,
+        _process_futures_position,
+        lambda p: p.get("contract"),
+    )
 
 
 async def _process_futures_position(session, pos: dict) -> None:
@@ -228,20 +231,12 @@ async def handle_futures_orders(result: list[dict]) -> None:
     Identifies orders tagged with 't-scalpyn', determines their role
     (TP1/TP2/SL), updates the DB, and broadcasts the appropriate event.
     """
-    try:
-        async with AsyncSessionLocal() as session:
-            for order in result:
-                try:
-                    await _process_futures_order(session, order)
-                except Exception as exc:
-                    logger.warning(
-                        "handle_futures_orders: error processing order %s: %s",
-                        order.get("id"), exc, exc_info=True,
-                    )
-                    await _safe_rollback(session)
-            await _safe_commit(session, "handle_futures_orders")
-    except Exception as exc:
-        logger.warning("handle_futures_orders: session error: %s", exc, exc_info=True)
+    await _process_batch(
+        "handle_futures_orders",
+        result,
+        _process_futures_order,
+        lambda o: o.get("id"),
+    )
 
 
 async def _process_futures_order(session, order: dict) -> None:
@@ -395,20 +390,12 @@ async def handle_futures_liquidates(result: list[dict]) -> None:
     - Logs at CRITICAL level.
     - Broadcasts an emergency_alert event to all connected clients.
     """
-    try:
-        async with AsyncSessionLocal() as session:
-            for liq in result:
-                try:
-                    await _process_futures_liquidate(session, liq)
-                except Exception as exc:
-                    logger.warning(
-                        "handle_futures_liquidates: error processing liquidation %s: %s",
-                        liq.get("contract"), exc, exc_info=True,
-                    )
-                    await _safe_rollback(session)
-            await _safe_commit(session, "handle_futures_liquidates")
-    except Exception as exc:
-        logger.warning("handle_futures_liquidates: session error: %s", exc, exc_info=True)
+    await _process_batch(
+        "handle_futures_liquidates",
+        result,
+        _process_futures_liquidate,
+        lambda l: l.get("contract"),
+    )
 
 
 async def _process_futures_liquidate(session, liq: dict) -> None:
@@ -482,20 +469,12 @@ async def handle_spot_orders(result: list[dict]) -> None:
     - On closed buy → confirms trade ACTIVE.
     - Broadcasts appropriate events to connected clients.
     """
-    try:
-        async with AsyncSessionLocal() as session:
-            for order in result:
-                try:
-                    await _process_spot_order(session, order)
-                except Exception as exc:
-                    logger.warning(
-                        "handle_spot_orders: error processing order %s: %s",
-                        order.get("id"), exc, exc_info=True,
-                    )
-                    await _safe_rollback(session)
-            await _safe_commit(session, "handle_spot_orders")
-    except Exception as exc:
-        logger.warning("handle_spot_orders: session error: %s", exc, exc_info=True)
+    await _process_batch(
+        "handle_spot_orders",
+        result,
+        _process_spot_order,
+        lambda o: o.get("id"),
+    )
 
 
 async def _process_spot_order(session, order: dict) -> None:
