@@ -33,21 +33,16 @@ set -e
 export SKIP_LIFESPAN_INIT_DB=1
 
 # ── Boot diagnostics ──────────────────────────────────────────────────────────
-# Print which critical env vars are PRESENT (just names, never values) so a
-# future "container failed to listen on PORT" failure can be diagnosed from
-# the Cloud Run logs without needing to ssh in.  Missing JWT_SECRET /
-# ENCRYPTION_KEY / DATABASE_URL / REDIS_URL would cause settings instantiation
-# to crash silently and produce the same generic timeout error.
+# Print PRESENT/MISSING for required env vars so deploy failures can be
+# diagnosed from Cloud Run logs.  Never log values or lengths.
 echo "==> [boot] Scalpyn backend starting (PORT=${PORT:-8080}, WEB_CONCURRENCY=${WEB_CONCURRENCY:-2})"
 for var in DATABASE_URL JWT_SECRET ENCRYPTION_KEY REDIS_URL AI_KEYS_ENCRYPTION_KEY; do
-    val="${!var}"
-    if [ -n "$val" ]; then
-        echo " [boot] env $var: PRESENT (len=${#val})"
+    if [ -n "${!var}" ]; then
+        echo " [boot] env $var: PRESENT"
     else
         echo " [boot] env $var: MISSING"
     fi
 done
-unset val
 
 # ── Schema gate: Alembic migrations (authoritative, time-boxed) ──────────────
 ALEMBIC_TIMEOUT_PER_ATTEMPT=${ALEMBIC_TIMEOUT_PER_ATTEMPT:-50}

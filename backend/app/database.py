@@ -46,13 +46,9 @@ engine = create_async_engine(
     connect_args=_connect_args,
     pool_pre_ping=True,
     pool_recycle=1800,
-    # Pool sized for Cloud Run + Cloud SQL.  Each Cloud Run instance also has
-    # Celery worker + beat sharing the same Cloud SQL.  With min-instances=1
-    # and rolling deploys, the OLD and NEW revisions overlap briefly and BOTH
-    # hold their pools.  Cloud SQL db-f1-micro caps at 25 connections, db-g1-small
-    # at 50.  Previous values (20 + 30 = 50) caused container startup to stall
-    # waiting for connections during deploy overlap, so the port never opened.
-    # 5 + 5 = 10 per instance × 2 revisions = 20 — fits inside even db-f1-micro.
+    # Conservative pool — every uvicorn worker process has its own pool, and
+    # Celery worker + beat run in their own processes alongside.  Confirm the
+    # Cloud SQL tier's max_connections before raising these.
     pool_size=5,
     max_overflow=5,
 )
