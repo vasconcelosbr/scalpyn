@@ -461,7 +461,7 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
             )}
             {/^404\b/.test(error) && (
               <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
-                The request reached the proxy but the upstream API returned 404. This usually means a stale frontend deploy — try a hard refresh (Cmd/Ctrl+Shift+R) and retry.
+                The upstream API returned 404 for this route. If the issue persists, try a hard refresh (Cmd/Ctrl+Shift+R) and contact support with the path shown above.
               </span>
             )}
             {/^5\d\d\b/.test(error) && (
