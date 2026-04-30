@@ -1513,6 +1513,7 @@ async def _run_pipeline_scan():
                 id=wl.id,
                 name=wl.name,
                 level=wl.level,
+                market_mode=wl.market_mode,
                 profile_id=wl.profile_id,
                 source_pool_id=wl.source_pool_id,
                 source_watchlist_id=wl.source_watchlist_id,
