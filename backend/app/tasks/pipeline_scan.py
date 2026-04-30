@@ -1499,6 +1499,16 @@ async def _run_pipeline_scan():
             logger.debug("[PipelineScan] No pipeline watchlists with auto_refresh — skipping.")
             return stats
 
+        # Snapshot watchlist names as primitives so the per-iteration except
+        # handler can log without ever touching ORM attributes. If a previous
+        # iteration leaves the session in an aborted state, accessing wl.name
+        # in the except handler triggers a lazy-load (sqlalchemy _load_expired)
+        # that raises MissingGreenlet — which propagates out BEFORE the
+        # explicit db.rollback() runs, leaving the session unhealthy and
+        # cascading InFailedSQLTransactionError across all remaining
+        # watchlists in this scan cycle (Task #114).
+        wl_name_snapshot: dict[str, str] = {str(wl.id): (wl.name or str(wl.id)) for wl in wl_rows}
+
         profile_ids = {wl.profile_id for wl in wl_rows if wl.profile_id}
         profile_config_map = {}
         if profile_ids:
@@ -1543,9 +1553,16 @@ async def _run_pipeline_scan():
 
         for stage in (*_PIPELINE_EXECUTION_ORDER, "custom"):
             for wl in stage_buckets.get(stage, []):
+                # Capture id outside the try so the except handler always has a
+                # valid wl_id for snapshot lookup, even if a lazy-load fails on
+                # the first ORM access below (Task #114). PKs are not expired
+                # by SA rollback, so str(wl.id) is safe here.
+                try:
+                    wl_id = str(wl.id)
+                except Exception:
+                    wl_id = ""
                 try:
                     stats["watchlists"] += 1
-                    wl_id = str(wl.id)
                     level = (wl.level or "L1").upper()
                     profile_config = profile_config_map.get(wl.profile_id) if wl.profile_id else None
                     effective_level = effective_pipeline_level(
@@ -1972,7 +1989,14 @@ async def _run_pipeline_scan():
                         )
 
                 except Exception as exc:
-                    logger.exception("[PipelineScan] Error processing watchlist %s: %s", wl.name, exc)
+                    # Use the primitive snapshot rather than wl.name — the ORM
+                    # attribute may be expired after the failure above, and a
+                    # lazy-load on an aborted session raises MissingGreenlet
+                    # which would propagate out before db.rollback() runs and
+                    # cascade InFailedSQLTransactionError to every subsequent
+                    # watchlist (Task #114).
+                    _safe_wl_name = wl_name_snapshot.get(wl_id, wl_id) if wl_id else "<unknown>"
+                    logger.exception("[PipelineScan] Error processing watchlist %s: %s", _safe_wl_name, exc)
                     stats["errors"] += 1
                     # Roll back any failed transaction so subsequent watchlists
                     # are not affected by an InFailedSQLTransactionError cascade.
