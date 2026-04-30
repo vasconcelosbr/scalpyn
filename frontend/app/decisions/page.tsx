@@ -1,9 +1,13 @@
 "use client";
 
-import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   ChevronRight,
+  Clock,
   Download,
   FileText,
   Filter,
@@ -26,6 +30,36 @@ interface DecisionLogConfig {
   realtime_highlight_ms?: number;
 }
 
+interface ApprovedSnapshotItem {
+  symbol: string;
+  score: number | null;
+  alpha_score: number | null;
+  score_long: number | null;
+  score_short: number | null;
+  direction: "LONG" | "SHORT" | "NEUTRAL" | null;
+  watchlist_id: string;
+  watchlist_name: string;
+  stage: string;
+  market_mode: "spot" | "futures";
+  approved_at: string | null;
+  indicators: Array<Record<string, unknown> | string>;
+  score_rules: Array<Record<string, unknown> | string>;
+}
+
+interface ApprovedSnapshotResponse {
+  items: ApprovedSnapshotItem[];
+  total: number;
+  as_of: string | null;
+}
+
+interface SnapshotWatchlist {
+  id: string;
+  name: string;
+  market_mode: "spot" | "futures";
+}
+
+type Tab = "audit" | "approved";
+
 type Filters = {
   startDate: string;
   endDate: string;
@@ -34,6 +68,13 @@ type Filters = {
   scoreMin: string;
   scoreMax: string;
   decision: "ALL" | "ALLOW" | "BLOCK";
+};
+
+type SnapshotFilters = {
+  symbol: string;
+  marketMode: "all" | "spot" | "futures";
+  watchlistId: string;
+  sort: "score_desc" | "score_asc" | "symbol_asc" | "approved_at_desc";
 };
 
 const DEFAULT_FILTERS: Filters = {
@@ -45,6 +86,15 @@ const DEFAULT_FILTERS: Filters = {
   scoreMax: "100",
   decision: "ALL",
 };
+
+const DEFAULT_SNAPSHOT_FILTERS: SnapshotFilters = {
+  symbol: "",
+  marketMode: "all",
+  watchlistId: "",
+  sort: "score_desc",
+};
+
+const SNAPSHOT_REFRESH_MS = 30_000;
 
 const INPUT_CLASS =
   "rounded-[var(--radius-sm)] border border-[var(--border-default)] bg-[var(--bg-input)] px-3 py-1.5 text-[12px] text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-tertiary)] focus:border-[var(--accent-primary)]";
@@ -60,6 +110,15 @@ function buildParams(filters: Filters, config?: DecisionLogConfig | null, cursor
   params.set("decision", filters.decision);
   if (config?.page_size) params.set("limit", String(config.page_size));
   if (cursor) params.set("cursor", cursor);
+  return params.toString();
+}
+
+function buildSnapshotParams(filters: SnapshotFilters) {
+  const params = new URLSearchParams();
+  if (filters.symbol) params.set("symbol", filters.symbol.trim().toUpperCase());
+  if (filters.marketMode !== "all") params.set("market_mode", filters.marketMode);
+  if (filters.watchlistId) params.set("watchlist_id", filters.watchlistId);
+  if (filters.sort) params.set("sort", filters.sort);
   return params.toString();
 }
 
@@ -111,6 +170,12 @@ function decisionTone(decision: DecisionItem["decision"]) {
     : "bg-[var(--color-loss-muted)] text-[var(--color-loss)] border-[var(--color-loss-border)]";
 }
 
+function directionTone(direction?: ApprovedSnapshotItem["direction"]) {
+  if (direction === "LONG") return "bg-[var(--color-profit-muted)] text-[var(--color-profit)] border-[var(--color-profit-border)]";
+  if (direction === "SHORT") return "bg-[var(--color-loss-muted)] text-[var(--color-loss)] border-[var(--color-loss-border)]";
+  return "bg-[var(--bg-elevated)] text-[var(--text-secondary)] border-[var(--border-default)]";
+}
+
 function gateMark(value?: boolean | null) {
   return value ? "✓" : "✗";
 }
@@ -123,7 +188,106 @@ function formatMetricValue(value: unknown) {
   return String(value);
 }
 
+function indicatorChipLabel(entry: Record<string, unknown> | string): string {
+  if (typeof entry === "string") return entry;
+  const raw = entry as Record<string, unknown>;
+  const label =
+    (raw.label as string | undefined) ??
+    (raw.name as string | undefined) ??
+    (raw.indicator as string | undefined) ??
+    (raw.key as string | undefined);
+  return label ?? JSON.stringify(raw);
+}
+
+function DecisionsPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialTab: Tab = searchParams.get("tab") === "approved" ? "approved" : "audit";
+  const [tab, setTab] = useState<Tab>(initialTab);
+
+  const switchTab = useCallback(
+    (next: Tab) => {
+      setTab(next);
+      const sp = new URLSearchParams(Array.from(searchParams.entries()));
+      if (next === "audit") {
+        sp.delete("tab");
+      } else {
+        sp.set("tab", next);
+      }
+      const qs = sp.toString();
+      router.replace(qs ? `/decisions?${qs}` : "/decisions");
+    },
+    [router, searchParams]
+  );
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">Decision Log</h1>
+          <p className="mt-1 text-[13px] text-[var(--text-secondary)]">
+            {tab === "audit"
+              ? "Real pipeline audit trail — state transitions only"
+              : "Snapshot of every asset currently approved at L3"}
+          </p>
+        </div>
+        <TabSwitcher tab={tab} onChange={switchTab} />
+      </div>
+
+      {tab === "audit" ? <AuditTrailView /> : <ApprovedSnapshotView />}
+    </div>
+  );
+}
+
+function TabSwitcher({ tab, onChange }: { tab: Tab; onChange: (next: Tab) => void }) {
+  const baseClass =
+    "rounded-[var(--radius-sm)] px-3 py-1.5 text-[12px] font-medium transition-colors";
+  const activeClass = "bg-[var(--accent-primary)] text-white";
+  const inactiveClass =
+    "bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-default)] hover:text-[var(--text-primary)]";
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => onChange("audit")}
+        className={`${baseClass} ${tab === "audit" ? activeClass : inactiveClass}`}
+      >
+        Audit Trail
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("approved")}
+        className={`${baseClass} ${tab === "approved" ? activeClass : inactiveClass}`}
+      >
+        Currently Approved (L3)
+      </button>
+    </div>
+  );
+}
+
 export default function DecisionsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="space-y-6">
+          <div className="space-y-3">
+            <div className="skeleton h-8 w-64" />
+            <div className="skeleton h-4 w-80" />
+          </div>
+          <div className="card space-y-3 p-8">
+            {Array.from({ length: 6 }).map((_, idx) => (
+              <div key={idx} className="skeleton h-10 w-full" />
+            ))}
+          </div>
+        </div>
+      }
+    >
+      <DecisionsPageInner />
+    </Suspense>
+  );
+}
+
+function AuditTrailView() {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [items, setItems] = useState<DecisionItem[]>([]);
@@ -228,11 +392,7 @@ export default function DecisionsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">Decision Log</h1>
-          <p className="mt-1 text-[13px] text-[var(--text-secondary)]">Real pipeline audit trail</p>
-        </div>
+      <div className="flex justify-end">
         <button
           onClick={downloadCsv}
           className="flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--border-default)] bg-[var(--bg-elevated)] px-4 py-1.5 text-[12px] font-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
@@ -403,6 +563,363 @@ export default function DecisionsPage() {
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function ApprovedSnapshotView() {
+  const [filters, setFilters] = useState<SnapshotFilters>(DEFAULT_SNAPSHOT_FILTERS);
+  const [items, setItems] = useState<ApprovedSnapshotItem[]>([]);
+  const [watchlists, setWatchlists] = useState<SnapshotWatchlist[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [asOf, setAsOf] = useState<string | null>(null);
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+
+  const fetchSnapshot = useCallback(
+    async (current: SnapshotFilters, isInitial: boolean) => {
+      if (isInitial) {
+        setLoading(true);
+        setError(null);
+      } else {
+        setRefreshing(true);
+      }
+      try {
+        const qs = buildSnapshotParams(current);
+        const response = await apiGet<ApprovedSnapshotResponse>(
+          qs ? `/decisions/approved-snapshot?${qs}` : `/decisions/approved-snapshot`
+        );
+        setItems(response.items ?? []);
+        setAsOf(response.as_of ?? null);
+        setError(null);
+      } catch (err) {
+        if (isInitial) {
+          setItems([]);
+          setError(err instanceof Error ? err.message : "Failed to load snapshot");
+        }
+      } finally {
+        if (isInitial) setLoading(false);
+        else setRefreshing(false);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    void apiGet<{ items: SnapshotWatchlist[] }>("/decisions/approved-snapshot/watchlists")
+      .then((response) => setWatchlists(response.items ?? []))
+      .catch(() => setWatchlists([]));
+  }, []);
+
+  useEffect(() => {
+    void fetchSnapshot(filters, true);
+  }, [filters, fetchSnapshot]);
+
+  useEffect(() => {
+    const handle = window.setInterval(() => {
+      void fetchSnapshot(filters, false);
+    }, SNAPSHOT_REFRESH_MS);
+    return () => window.clearInterval(handle);
+  }, [filters, fetchSnapshot]);
+
+  const updateFilter = <K extends keyof SnapshotFilters>(key: K, value: SnapshotFilters[K]) => {
+    setExpandedKey(null);
+    setFilters((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const toggleSort = () => {
+    setExpandedKey(null);
+    setFilters((prev) => ({
+      ...prev,
+      sort: prev.sort === "score_desc" ? "score_asc" : "score_desc",
+    }));
+  };
+
+  const formatTimestamp = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : "—");
+
+  return (
+    <div className="space-y-6">
+      <div className="card">
+        <div className="flex flex-wrap items-end gap-3 p-4">
+          <FilterField label="Symbol">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-tertiary)]" />
+              <input
+                value={filters.symbol}
+                onChange={(event) => updateFilter("symbol", event.target.value)}
+                placeholder="BTC_USDT"
+                className={`${INPUT_CLASS} w-[150px] pl-8`}
+              />
+            </div>
+          </FilterField>
+          <FilterField label="Market">
+            <select
+              value={filters.marketMode}
+              onChange={(event) => updateFilter("marketMode", event.target.value as SnapshotFilters["marketMode"])}
+              className={INPUT_CLASS}
+            >
+              <option value="all">All</option>
+              <option value="spot">Spot</option>
+              <option value="futures">Futures</option>
+            </select>
+          </FilterField>
+          <FilterField label="Watchlist">
+            <select
+              value={filters.watchlistId}
+              onChange={(event) => updateFilter("watchlistId", event.target.value)}
+              className={INPUT_CLASS}
+            >
+              <option value="">All L3</option>
+              {watchlists.map((wl) => (
+                <option key={wl.id} value={wl.id}>
+                  {wl.name} ({wl.market_mode})
+                </option>
+              ))}
+            </select>
+          </FilterField>
+          <FilterField label="Sort">
+            <select
+              value={filters.sort}
+              onChange={(event) => updateFilter("sort", event.target.value as SnapshotFilters["sort"])}
+              className={INPUT_CLASS}
+            >
+              <option value="score_desc">Score (high → low)</option>
+              <option value="score_asc">Score (low → high)</option>
+              <option value="symbol_asc">Symbol (A → Z)</option>
+              <option value="approved_at_desc">Most recently approved</option>
+            </select>
+          </FilterField>
+          <button
+            onClick={() => void fetchSnapshot(filters, false)}
+            disabled={refreshing}
+            className="flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--border-default)] bg-[var(--bg-elevated)] px-4 py-1.5 text-[12px] font-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+            {refreshing ? "Refreshing..." : "Refresh"}
+          </button>
+          <div className="ml-auto flex items-center gap-1.5 text-[11px] text-[var(--text-tertiary)]">
+            <Clock className="h-3.5 w-3.5" />
+            <span>Auto-refresh every 30s</span>
+            {asOf && <span className="font-mono">· as of {new Date(asOf).toLocaleTimeString()}</span>}
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <h3>Currently Approved (L3)</h3>
+          <span className="caption">{items.length} approved</span>
+        </div>
+        <div className="overflow-x-auto">
+          {loading ? (
+            <div className="space-y-3 p-8">
+              {Array.from({ length: 6 }).map((_, index) => (
+                <div key={index} className="skeleton h-10 w-full" />
+              ))}
+            </div>
+          ) : error ? (
+            <div className="flex flex-col items-center gap-3 py-16 text-center text-[var(--text-secondary)]">
+              <FileText className="h-8 w-8 opacity-40" />
+              <p className="text-[13px]">{error}</p>
+              <button
+                onClick={() => void fetchSnapshot(filters, true)}
+                className="flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--border-default)] bg-[var(--bg-elevated)] px-3 py-1.5 text-[12px] text-[var(--text-primary)]"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Retry
+              </button>
+            </div>
+          ) : items.length === 0 ? (
+            <div className="py-16 text-center text-[var(--text-tertiary)]">
+              <FileText className="mx-auto mb-2 h-8 w-8 opacity-30" />
+              <p className="text-[13px]">Nenhuma cripto aprovada em L3 no momento.</p>
+            </div>
+          ) : (
+            <table className="data-table text-[12px]">
+              <thead>
+                <tr>
+                  <th className="w-8" />
+                  <th>Symbol</th>
+                  <th>
+                    <button
+                      type="button"
+                      onClick={toggleSort}
+                      className="inline-flex items-center gap-1 text-inherit"
+                    >
+                      Score
+                      {filters.sort === "score_desc" ? (
+                        <ArrowDown className="h-3 w-3" />
+                      ) : filters.sort === "score_asc" ? (
+                        <ArrowUp className="h-3 w-3" />
+                      ) : null}
+                    </button>
+                  </th>
+                  <th>Direction</th>
+                  <th>Watchlist</th>
+                  <th>Stage</th>
+                  <th>Market</th>
+                  <th>Approved at</th>
+                  <th>Indicators</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => {
+                  const key = `${item.watchlist_id}:${item.symbol}`;
+                  const expanded = expandedKey === key;
+                  return (
+                    <SnapshotRow
+                      key={key}
+                      item={item}
+                      expanded={expanded}
+                      onToggle={() => setExpandedKey((prev) => (prev === key ? null : key))}
+                      formatTimestamp={formatTimestamp}
+                    />
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SnapshotRow({
+  item,
+  expanded,
+  onToggle,
+  formatTimestamp,
+}: {
+  item: ApprovedSnapshotItem;
+  expanded: boolean;
+  onToggle: () => void;
+  formatTimestamp: (iso: string | null) => string;
+}) {
+  const indicatorChips = item.indicators.slice(0, 3);
+  const moreIndicators = Math.max(0, item.indicators.length - indicatorChips.length);
+
+  return (
+    <>
+      <tr onClick={onToggle} className="cursor-pointer transition-colors">
+        <td>
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
+          )}
+        </td>
+        <td className="font-semibold text-[var(--text-primary)]">{item.symbol}</td>
+        <td>
+          <span className={`inline-flex rounded border px-2 py-0.5 font-mono text-[11px] ${scoreTone(item.score)}`}>
+            {item.score === null ? "—" : item.score.toFixed(1)}
+          </span>
+        </td>
+        <td>
+          {item.direction ? (
+            <span className={`inline-flex rounded border px-2 py-0.5 text-[11px] font-medium ${directionTone(item.direction)}`}>
+              {item.direction}
+            </span>
+          ) : (
+            <span className="text-[var(--text-tertiary)]">—</span>
+          )}
+        </td>
+        <td className="text-[var(--text-secondary)]">{item.watchlist_name}</td>
+        <td>
+          <span className="inline-flex rounded border border-[var(--border-default)] bg-[var(--bg-elevated)] px-2 py-0.5 font-mono text-[11px] text-[var(--text-primary)]">
+            {item.stage}
+          </span>
+        </td>
+        <td className="text-[var(--text-secondary)]">{item.market_mode}</td>
+        <td className="text-[var(--text-secondary)]">{formatTimestamp(item.approved_at)}</td>
+        <td>
+          <div className="flex flex-wrap gap-1">
+            {indicatorChips.map((entry, idx) => (
+              <span
+                key={idx}
+                className="inline-flex rounded border border-[var(--border-default)] bg-[var(--bg-elevated)] px-2 py-0.5 text-[11px] text-[var(--text-secondary)]"
+              >
+                {indicatorChipLabel(entry)}
+              </span>
+            ))}
+            {moreIndicators > 0 && (
+              <span className="inline-flex rounded border border-[var(--border-default)] bg-[var(--bg-elevated)] px-2 py-0.5 text-[11px] text-[var(--text-tertiary)]">
+                +{moreIndicators}
+              </span>
+            )}
+          </div>
+        </td>
+      </tr>
+      {expanded && (
+        <tr>
+          <td colSpan={9} className="!p-0">
+            <SnapshotDetailPanel item={item} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function SnapshotDetailPanel({ item }: { item: ApprovedSnapshotItem }) {
+  return (
+    <div className="space-y-4 border-t border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4">
+      <div className="grid gap-4 md:grid-cols-3">
+        <section>
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">Scores</p>
+          <div className="space-y-1 text-[12px]">
+            <div className="flex justify-between gap-3 rounded border border-[var(--border-default)] bg-[var(--bg-input)] px-2 py-1">
+              <span className="text-[var(--text-secondary)]">Alpha</span>
+              <span className="font-mono text-[var(--text-primary)]">{formatMetricValue(item.alpha_score)}</span>
+            </div>
+            <div className="flex justify-between gap-3 rounded border border-[var(--border-default)] bg-[var(--bg-input)] px-2 py-1">
+              <span className="text-[var(--text-secondary)]">Long</span>
+              <span className="font-mono text-[var(--text-primary)]">{formatMetricValue(item.score_long)}</span>
+            </div>
+            <div className="flex justify-between gap-3 rounded border border-[var(--border-default)] bg-[var(--bg-input)] px-2 py-1">
+              <span className="text-[var(--text-secondary)]">Short</span>
+              <span className="font-mono text-[var(--text-primary)]">{formatMetricValue(item.score_short)}</span>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">Indicators</p>
+          <div className="flex flex-wrap gap-2">
+            {item.indicators.length > 0 ? (
+              item.indicators.map((entry, idx) => (
+                <span
+                  key={idx}
+                  className="inline-flex rounded border border-[var(--border-default)] bg-[var(--bg-input)] px-2 py-1 text-[11px] text-[var(--text-secondary)]"
+                >
+                  {indicatorChipLabel(entry)}
+                </span>
+              ))
+            ) : (
+              <span className="text-[12px] text-[var(--text-secondary)]">No indicators captured.</span>
+            )}
+          </div>
+        </section>
+
+        <section>
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">Score rules</p>
+          <div className="flex flex-wrap gap-2">
+            {item.score_rules.length > 0 ? (
+              item.score_rules.map((entry, idx) => (
+                <span
+                  key={idx}
+                  className="inline-flex rounded border border-[var(--border-default)] bg-[var(--bg-input)] px-2 py-1 text-[11px] text-[var(--text-secondary)]"
+                >
+                  {indicatorChipLabel(entry)}
+                </span>
+              ))
+            ) : (
+              <span className="text-[12px] text-[var(--text-secondary)]">No score rules captured.</span>
+            )}
+          </div>
+        </section>
       </div>
     </div>
   );

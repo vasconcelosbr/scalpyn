@@ -18,9 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models.backoffice import DecisionLog
+from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
 from ..services.config_service import config_service
 from ..services.seed_service import DEFAULT_DECISION_LOG
 from .config import get_current_user_id
+
+_MARKET_MODES = {"all", "spot", "futures"}
 
 logger = logging.getLogger(__name__)
 
@@ -323,6 +326,168 @@ async def get_decisions_summary(
     except Exception as exc:
         logger.error("Failed to fetch decision summary: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch decision summary") from exc
+
+
+def _resolve_snapshot_score(asset: PipelineWatchlistAsset, market_mode: str) -> Optional[float]:
+    """Pick the score that matches the asset's mode + futures direction."""
+    alpha = float(asset.alpha_score) if asset.alpha_score is not None else None
+    sl = float(asset.score_long) if asset.score_long is not None else None
+    ss = float(asset.score_short) if asset.score_short is not None else None
+    if (market_mode or "spot") != "futures":
+        return alpha
+    direction = (asset.futures_direction or "").upper()
+    if direction == "LONG":
+        return sl
+    if direction == "SHORT":
+        return ss
+    candidates = [v for v in (sl, ss) if v is not None]
+    return max(candidates) if candidates else alpha
+
+
+def _build_snapshot_item(
+    asset: PipelineWatchlistAsset,
+    watchlist: PipelineWatchlist,
+) -> dict[str, Any]:
+    snapshot = asset.analysis_snapshot or {}
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    details = snapshot.get("details") if isinstance(snapshot.get("details"), dict) else {}
+    indicators = list(details.get("indicators") or snapshot.get("indicators") or [])
+    score_rules = list(snapshot.get("score_rules") or [])
+    market_mode = (watchlist.market_mode or "spot").lower()
+    direction_raw = (asset.futures_direction or "").upper() if market_mode == "futures" else ""
+    direction = direction_raw if direction_raw in {"LONG", "SHORT", "NEUTRAL"} else None
+    return {
+        "symbol": asset.symbol,
+        "score": _resolve_snapshot_score(asset, market_mode),
+        "alpha_score": float(asset.alpha_score) if asset.alpha_score is not None else None,
+        "score_long": float(asset.score_long) if asset.score_long is not None else None,
+        "score_short": float(asset.score_short) if asset.score_short is not None else None,
+        "direction": direction,
+        "watchlist_id": str(watchlist.id),
+        "watchlist_name": watchlist.name,
+        "stage": watchlist.level,
+        "market_mode": market_mode,
+        "approved_at": _serialize_dt(asset.refreshed_at or asset.entered_at),
+        "indicators": indicators,
+        "score_rules": score_rules,
+    }
+
+
+@router.get("/approved-snapshot")
+async def get_approved_snapshot(
+    symbol: Optional[str] = Query(None),
+    market_mode: str = Query("all"),
+    watchlist_id: Optional[UUID] = Query(None),
+    sort: str = Query("score_desc"),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Snapshot of all currently L3-approved assets across the user's pipeline.
+
+    This is **not** the audit trail (decisions_log). It returns the current
+    active set: every asset still sitting at L3 in any of the user's
+    pipeline watchlists (level_direction NULL or "up"). Useful when the user
+    wants to see "what is approved right now" instead of "what changed".
+    """
+    try:
+        normalized_mode = (market_mode or "all").strip().lower()
+        if normalized_mode not in _MARKET_MODES:
+            raise HTTPException(
+                status_code=422,
+                detail="market_mode must be all, spot, or futures",
+            )
+        normalized_sort = (sort or "score_desc").strip().lower()
+        if normalized_sort not in {"score_desc", "score_asc", "symbol_asc", "approved_at_desc"}:
+            raise HTTPException(
+                status_code=422,
+                detail="sort must be one of: score_desc, score_asc, symbol_asc, approved_at_desc",
+            )
+        normalized_symbol = _sanitize_symbol(symbol)
+
+        conditions = [
+            PipelineWatchlist.user_id == user_id,
+            func.upper(PipelineWatchlist.level) == "L3",
+            or_(
+                PipelineWatchlistAsset.level_direction.is_(None),
+                PipelineWatchlistAsset.level_direction == "up",
+            ),
+        ]
+        if normalized_mode in {"spot", "futures"}:
+            conditions.append(PipelineWatchlist.market_mode == normalized_mode)
+        if watchlist_id is not None:
+            conditions.append(PipelineWatchlist.id == watchlist_id)
+        if normalized_symbol:
+            conditions.append(PipelineWatchlistAsset.symbol == normalized_symbol)
+
+        query = (
+            select(PipelineWatchlistAsset, PipelineWatchlist)
+            .join(
+                PipelineWatchlist,
+                PipelineWatchlist.id == PipelineWatchlistAsset.watchlist_id,
+            )
+            .where(and_(*conditions))
+        )
+
+        result = await db.execute(query)
+        rows = result.all()
+
+        items = [_build_snapshot_item(asset, wl) for asset, wl in rows]
+
+        if normalized_sort == "score_desc":
+            items.sort(key=lambda i: (i["score"] is None, -(i["score"] or 0), i["symbol"]))
+        elif normalized_sort == "score_asc":
+            items.sort(key=lambda i: (i["score"] is None, (i["score"] or 0), i["symbol"]))
+        elif normalized_sort == "symbol_asc":
+            items.sort(key=lambda i: i["symbol"])
+        else:  # approved_at_desc
+            items.sort(key=lambda i: (i["approved_at"] is None, i["approved_at"] or ""), reverse=True)
+
+        return {
+            "items": items,
+            "total": len(items),
+            "as_of": _serialize_dt(datetime.now(timezone.utc)),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to fetch approved snapshot: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch approved snapshot") from exc
+
+
+@router.get("/approved-snapshot/watchlists")
+async def list_approved_snapshot_watchlists(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """List the user's L3 watchlists for the snapshot tab filter dropdown."""
+    try:
+        result = await db.execute(
+            select(
+                PipelineWatchlist.id,
+                PipelineWatchlist.name,
+                PipelineWatchlist.market_mode,
+            )
+            .where(
+                PipelineWatchlist.user_id == user_id,
+                func.upper(PipelineWatchlist.level) == "L3",
+            )
+            .order_by(PipelineWatchlist.name.asc())
+        )
+        rows = result.all()
+        return {
+            "items": [
+                {
+                    "id": str(row.id),
+                    "name": row.name,
+                    "market_mode": (row.market_mode or "spot").lower(),
+                }
+                for row in rows
+            ],
+        }
+    except Exception as exc:
+        logger.error("Failed to list snapshot watchlists: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to list watchlists") from exc
 
 
 @router.get("/export")
