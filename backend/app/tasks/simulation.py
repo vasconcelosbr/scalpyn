@@ -4,7 +4,7 @@ import logging
 from typing import Optional
 
 from .celery_app import celery_app
-from ..database import run_db_task
+from ..database import run_db_task, CeleryAsyncSessionLocal
 from ..services.simulation_service import SimulationService
 
 logger = logging.getLogger(__name__)
@@ -113,6 +113,7 @@ def run_simulation_batch(
                 skip_existing=skip_existing,
                 user_id=user_id,
                 exchange=exchange,
+                session_factory=CeleryAsyncSessionLocal,
             )
 
         try:

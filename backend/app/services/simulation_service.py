@@ -233,25 +233,79 @@ class SimulationService:
 
         return results
 
+    async def _process_single_decision(
+        self,
+        decision: DecisionLog,
+        config: Dict[str, Any],
+        exchange: str,
+        skip_existing: bool,
+        session_factory,
+    ) -> tuple[str, List[Dict[str, Any]]]:
+        """
+        Process a single decision in its own isolated session/transaction.
+
+        Opening a fresh session per decision ensures a database error on one
+        decision cannot poison the transaction state for any other decision
+        (no InFailedSQLTransactionError cascade).
+
+        Returns:
+            (status, records) where status is one of:
+              "skipped"    — already has simulations and skip_existing=True
+              "no_candles" — simulate_decision returned empty list
+              "ok"         — simulation produced records
+        """
+        async with session_factory() as session:
+            async with session.begin():
+                if skip_existing:
+                    existing = await session.execute(
+                        text("""
+                            SELECT COUNT(*) as cnt
+                            FROM trade_simulations
+                            WHERE decision_id = :decision_id
+                        """),
+                        {"decision_id": decision.id},
+                    )
+                    row = existing.fetchone()
+                    if row and row.cnt > 0:
+                        return "skipped", []
+
+                svc = SimulationService(session)
+                records = await svc.simulate_decision(decision, config, exchange)
+                return ("no_candles" if not records else "ok"), records
+
     async def run_simulation_batch(
         self,
         limit: int = 100,
         skip_existing: bool = True,
         user_id: Optional[str] = None,
         exchange: str = "gate",
+        session_factory=None,
     ) -> Dict[str, Any]:
         """
         Run simulation on a batch of decisions.
+
+        Each decision is processed in its own short-lived session/transaction
+        so that a database error on one decision cannot poison the rest of the
+        batch (no InFailedSQLTransactionError cascade).  The final bulk insert
+        also runs in its own dedicated session/transaction.
 
         Args:
             limit: Maximum number of decisions to process
             skip_existing: Skip decisions that already have simulations
             user_id: Optional user ID filter
             exchange: Exchange name
+            session_factory: Async session factory to use for per-decision and
+                bulk-insert sessions.  Defaults to AsyncSessionLocal.  Pass
+                CeleryAsyncSessionLocal when calling from a Celery task so the
+                NullPool engine is used (safe across asyncio.run() boundaries).
 
         Returns:
             Summary statistics
         """
+        if session_factory is None:
+            from ..database import AsyncSessionLocal
+            session_factory = AsyncSessionLocal
+
         # CRITICAL: Validate OHLCV data availability before processing batch
         ohlcv_check = await self.session.execute(text("""
             SELECT COUNT(DISTINCT symbol) as symbol_count,
@@ -288,7 +342,7 @@ class SimulationService:
         # Get config
         config = await self.get_simulation_config(user_id)
 
-        # Fetch decisions
+        # Fetch decisions (read-only; uses the outer session)
         query = select(DecisionLog).order_by(DecisionLog.created_at.desc()).limit(limit)
         if user_id:
             query = query.where(DecisionLog.user_id == user_id)
@@ -309,39 +363,35 @@ class SimulationService:
 
         for decision in decisions:
             try:
-                # Check if already simulated (if skip_existing)
-                if skip_existing:
-                    existing = await self.session.execute(
-                        text("""
-                            SELECT COUNT(*) as cnt
-                            FROM trade_simulations
-                            WHERE decision_id = :decision_id
-                        """),
-                        {"decision_id": decision.id}
+                # Each decision runs in its own isolated session so a DB error
+                # on one decision cannot abort the rest of the batch.
+                status, records = await self._process_single_decision(
+                    decision=decision,
+                    config=config,
+                    exchange=exchange,
+                    skip_existing=skip_existing,
+                    session_factory=session_factory,
+                )
+
+                if status == "skipped":
+                    skipped += 1
+                    continue
+
+                processed += 1
+
+                if status == "no_candles":
+                    skipped_no_candles += 1
+                    logger.debug(
+                        "[Simulation] SKIP | decision_id=%s | symbol=%s | reason=no_candles",
+                        decision.id, decision.symbol
                     )
-                    row = existing.fetchone()
-                    if row and row.cnt > 0:
-                        skipped += 1
-                        continue
-
-                # Run simulation
-                records = await self.simulate_decision(decision, config, exchange)
-
-                if records:
+                else:
                     all_records.extend(records)
                     simulated += len(records)
                     logger.debug(
                         "[Simulation] SUCCESS | decision_id=%s | symbol=%s | records=%d",
                         decision.id, decision.symbol, len(records)
                     )
-                else:
-                    skipped_no_candles += 1
-                    logger.debug(
-                        "[Simulation] SKIP | decision_id=%s | symbol=%s | reason=no_candles",
-                        decision.id, decision.symbol
-                    )
-
-                processed += 1
 
                 # Log progress every 10 decisions
                 if processed % 10 == 0:
@@ -369,10 +419,23 @@ class SimulationService:
                 skip_rate, total_skipped, total_attempts
             )
 
-        # Bulk insert results
+        # Bulk insert runs in its own dedicated session/transaction so an
+        # insert failure cannot corrupt any of the read-side work above.
+        records_inserted = 0
         if all_records:
-            inserted = await self.repository.bulk_insert_simulations(all_records)
-            logger.info("[Simulation] Bulk insert complete: %d records", inserted)
+            try:
+                async with session_factory() as insert_session:
+                    async with insert_session.begin():
+                        from ..repositories.simulation_repository import SimulationRepository
+                        repo = SimulationRepository(insert_session)
+                        records_inserted = await repo.bulk_insert_simulations(all_records)
+                logger.info("[Simulation] Bulk insert complete: %d records", records_inserted)
+            except Exception as e:
+                logger.error(
+                    "[Simulation] Bulk insert FAILED: %d records lost | error=%s",
+                    len(all_records), str(e), exc_info=True
+                )
+                errors += 1
 
         # Final summary
         logger.info(
@@ -387,7 +450,7 @@ class SimulationService:
             "skipped": skipped,
             "simulated": simulated,
             "errors": errors,
-            "records_inserted": len(all_records),
+            "records_inserted": records_inserted,
             "skipped_no_candles": skipped_no_candles,
             "skip_rate": round(skip_rate, 2),
         }
