@@ -292,7 +292,8 @@ async def get_pipeline_assets(
                    volume_24h, market_cap, alpha_score, entered_at,
                    level_direction, previous_level, level_change_at,
                    score_long, score_short, confidence_score,
-                   futures_direction, entry_long_blocked, entry_short_blocked
+                   futures_direction, entry_long_blocked, entry_short_blocked,
+                   engine_tag
             FROM   pipeline_watchlist_assets
             WHERE  watchlist_id = :wid
             ORDER  BY confidence_score DESC NULLS LAST,
@@ -306,7 +307,8 @@ async def get_pipeline_assets(
                    level_direction, previous_level, level_change_at,
                    NULL::numeric AS score_long, NULL::numeric AS score_short,
                    NULL::numeric AS confidence_score, NULL::varchar AS futures_direction,
-                   FALSE AS entry_long_blocked, FALSE AS entry_short_blocked
+                   FALSE AS entry_long_blocked, FALSE AS entry_short_blocked,
+                   engine_tag
             FROM   pipeline_watchlist_assets
             WHERE  watchlist_id = :wid
             ORDER  BY alpha_score DESC NULLS LAST
@@ -550,6 +552,10 @@ async def get_pipeline_assets(
             "indicators":       indicators,
             "indicators_meta":  indicators_meta,
             "score_rules":      score_rules,
+            # Robust Indicators Phase 2 — surfaces "robust" / "legacy" /
+            # null on every asset row so the UI can render the engine
+            # badge inside the score breakdown.
+            "engine_tag":       getattr(r, "engine_tag", None),
         }
 
         # Futures mode fields — always included so the frontend can check market_mode

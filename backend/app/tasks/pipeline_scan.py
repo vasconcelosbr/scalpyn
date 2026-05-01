@@ -1143,6 +1143,105 @@ async def _run_staleness_only(
     await db.commit()
 
 
+def _apply_robust_authoritative_scoring(
+    assets: list,
+    *,
+    score_config: dict | None,
+    is_futures: bool,
+) -> dict[str, int]:
+    """Phase 2 — for bucketed symbols replace the legacy score with the
+    confidence-weighted robust score and tag ``engine_tag`` on each asset.
+
+    Mutates each asset dict in place:
+      * Always sets ``engine_tag`` to ``"robust"`` or ``"legacy"`` so the
+        upsert path can persist the column for the asset row.
+      * For bucketed-and-robust-succeeded assets, overrides ``_score`` /
+        ``alpha_score`` (spot) and ``confidence_score`` /
+        ``score_long`` / ``score_short`` (futures) with the robust score.
+        For futures, ``score_long`` / ``score_short`` are scaled in the
+        same direction as the legacy split so the entry gate (LONG vs
+        SHORT) keeps the legacy direction signal but the magnitude is
+        re-grounded on the validated confidence-weighted total.
+      * For bucketed-but-failed assets, leaves the legacy score alone
+        and bumps the silent-fallback counter (already done inside
+        ``select_authoritative_score``).
+
+    Returns counters: ``{"bucketed", "robust_used", "fallbacks", "legacy"}``
+    so the caller can log a single "rollout summary" line per scan.
+    """
+    from ..services.robust_indicators import select_authoritative_score
+
+    counters = {"bucketed": 0, "robust_used": 0, "fallbacks": 0, "legacy": 0}
+    if not assets:
+        return counters
+
+    for asset in assets:
+        symbol = asset.get("symbol")
+        if not symbol:
+            continue
+        indicators = asset.get("indicators") or {}
+        legacy_score = (
+            asset.get("confidence_score")
+            if is_futures and asset.get("confidence_score") is not None
+            else asset.get("_score", asset.get("score"))
+        )
+        flow_hint = (
+            indicators.get("taker_source")
+            if isinstance(indicators, dict) else None
+        )
+        result = select_authoritative_score(
+            str(symbol),
+            indicators,
+            legacy_score=legacy_score,
+            score_config=score_config,
+            flow_source_hint=flow_hint,
+        )
+
+        asset["engine_tag"] = result.engine_tag
+        if result.bucketed:
+            counters["bucketed"] += 1
+            if result.fell_back:
+                counters["fallbacks"] += 1
+            else:
+                counters["robust_used"] += 1
+        else:
+            counters["legacy"] += 1
+
+        if result.engine_tag != "robust" or result.score is None:
+            continue
+
+        new_score = float(result.score)
+        if is_futures:
+            old_long = asset.get("score_long")
+            old_short = asset.get("score_short")
+            old_conf = asset.get("confidence_score")
+            asset["confidence_score"] = round(new_score, 2)
+            # Preserve direction: scale LONG/SHORT proportionally so the
+            # entry gate keeps the legacy direction signal but its
+            # magnitude is grounded on the robust score.
+            if old_conf and old_conf > 0:
+                ratio = new_score / float(old_conf)
+            else:
+                ratio = 1.0
+            if old_long is not None:
+                asset["score_long"] = round(
+                    max(0.0, min(100.0, float(old_long) * ratio)), 2
+                )
+            if old_short is not None:
+                asset["score_short"] = round(
+                    max(0.0, min(100.0, float(old_short) * ratio)), 2
+                )
+        # For both spot and futures, override the canonical alpha_score
+        # column read by downstream consumers (evaluate_signals, UI, etc.)
+        asset["_score"] = new_score
+        asset["score"] = new_score
+        asset["alpha_score"] = new_score
+        if result.robust_score is not None:
+            asset["_robust_score"] = result.robust_score.to_dict()
+
+    return counters
+
+
 async def _replace_rejection_snapshot(
     db,
     watchlist_id: str,
@@ -1163,13 +1262,14 @@ async def _replace_rejection_snapshot(
             INSERT INTO pipeline_watchlist_rejections (
                 id, watchlist_id, user_id, profile_id, symbol, stage,
                 failed_type, failed_indicator, condition_text, current_value,
-                expected_value, evaluation_trace, analysis_snapshot, recorded_at, execution_id
+                expected_value, evaluation_trace, analysis_snapshot, recorded_at, execution_id,
+                engine_tag
             )
             VALUES (
                 :id, :watchlist_id, :user_id, :profile_id, :symbol, :stage,
                 :failed_type, :failed_indicator, :condition_text, CAST(:current_value AS jsonb),
                 :expected_value, CAST(:evaluation_trace AS jsonb), CAST(:analysis_snapshot AS jsonb),
-                :recorded_at, :execution_id
+                :recorded_at, :execution_id, :engine_tag
             )
         """), {
             "id": str(uuid4()),
@@ -1187,6 +1287,7 @@ async def _replace_rejection_snapshot(
             "analysis_snapshot": json.dumps(_jsonable(row.get("analysis_snapshot") or {})),
             "recorded_at": now,
             "execution_id": execution_id,
+            "engine_tag": row.get("engine_tag"),
         })
 
 
@@ -1275,12 +1376,14 @@ async def _upsert_assets(
                       volume_24h, market_cap, alpha_score, entered_at, refreshed_at,
                       level_direction, analysis_snapshot, execution_id,
                       score_long, score_short, confidence_score,
-                      futures_direction, entry_long_blocked, entry_short_blocked)
+                      futures_direction, entry_long_blocked, entry_short_blocked,
+                      engine_tag)
                 VALUES
                     (gen_random_uuid(), :wid, :sym, :price, :chg,
                      :vol, :mc, :score, :now, :now, NULL, CAST(:analysis_snapshot AS jsonb), :execution_id,
                      :score_long, :score_short, :confidence_score,
-                     :futures_direction, :entry_long_blocked, :entry_short_blocked)
+                     :futures_direction, :entry_long_blocked, :entry_short_blocked,
+                     :engine_tag)
                 ON CONFLICT (watchlist_id, symbol)
                 DO UPDATE SET
                     current_price       = EXCLUDED.current_price,
@@ -1297,7 +1400,8 @@ async def _upsert_assets(
                     confidence_score    = EXCLUDED.confidence_score,
                     futures_direction   = EXCLUDED.futures_direction,
                     entry_long_blocked  = EXCLUDED.entry_long_blocked,
-                    entry_short_blocked = EXCLUDED.entry_short_blocked
+                    entry_short_blocked = EXCLUDED.entry_short_blocked,
+                    engine_tag          = EXCLUDED.engine_tag
             """), {
                 "wid":                watchlist_id,
                 "sym":                a["symbol"],
@@ -1315,6 +1419,7 @@ async def _upsert_assets(
                 "futures_direction":  a.get("futures_direction"),
                 "entry_long_blocked": bool(a.get("entry_long_blocked", False)),
                 "entry_short_blocked": bool(a.get("entry_short_blocked", False)),
+                "engine_tag":         a.get("engine_tag"),
             })
 
         # Mark symbols that are no longer passing as 'down'
@@ -1907,6 +2012,36 @@ async def _run_pipeline_scan():
                             "[PipelineScan] %s (%s): shadow scan dispatch failed (%s) — "
                             "legacy pipeline unaffected",
                             wl.name, effective_level, _shadow_exc,
+                        )
+
+                    # ── Robust indicators (Phase 2) — gradual rollout ─────
+                    # Apply the deterministic per-symbol bucketing AFTER
+                    # the shadow snapshot so divergence comparisons keep
+                    # seeing the original legacy score. For symbols in the
+                    # rollout bucket the robust confidence-weighted score
+                    # becomes authoritative on the asset dict; downstream
+                    # rejection/upsert/UI all read from the mutated dict.
+                    try:
+                        rollout_counters = _apply_robust_authoritative_scoring(
+                            assets,
+                            score_config=score_config,
+                            is_futures=is_futures,
+                        )
+                        if rollout_counters["bucketed"] or rollout_counters["fallbacks"]:
+                            logger.info(
+                                "[PipelineScan] %s (%s): rollout — bucketed=%d "
+                                "robust_used=%d fallbacks=%d legacy=%d",
+                                wl.name, effective_level,
+                                rollout_counters["bucketed"],
+                                rollout_counters["robust_used"],
+                                rollout_counters["fallbacks"],
+                                rollout_counters["legacy"],
+                            )
+                    except Exception as _rollout_exc:
+                        logger.warning(
+                            "[PipelineScan] %s (%s): robust rollout step failed "
+                            "(%s) — legacy scores retained",
+                            wl.name, effective_level, _rollout_exc,
                         )
 
                     if effective_level == "custom":

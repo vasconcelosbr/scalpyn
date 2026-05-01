@@ -70,6 +70,16 @@ async def _evaluate_async():
                 """))
                 candidates = ranked.fetchall()
 
+                # Robust Indicators Phase 2 — score read point.
+                # When a symbol is bucketed into the rollout, replace
+                # ``alpha_score`` (read from ``alpha_scores``) with the
+                # confidence-weighted robust score derived from the same
+                # ``indicators_json`` row. Failures fall back silently to
+                # the legacy score and bump the silent-fallback counter,
+                # so signal evaluation can NEVER hard-stop on a bucketed
+                # symbol.
+                from ..services.robust_indicators import select_authoritative_score
+
                 for candidate in candidates:
                     symbol = candidate.symbol
                     alpha_score = float(candidate.score)
@@ -78,6 +88,15 @@ async def _evaluate_async():
 
                     if current_price <= 0:
                         continue
+
+                    sel = select_authoritative_score(
+                        symbol,
+                        indicators,
+                        legacy_score=alpha_score,
+                        flow_source_hint=indicators.get("taker_source"),
+                    )
+                    if sel.engine_tag == "robust" and sel.score is not None:
+                        alpha_score = float(sel.score)
 
                     # 1. Evaluate signal
                     signal_result = signal_engine.evaluate(indicators, alpha_score)

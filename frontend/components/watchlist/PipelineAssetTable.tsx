@@ -70,6 +70,11 @@ export interface PipelineAssetWithScore {
   score_rules: ScoreRule[];
   score_classification?: string | null;
   evaluation_trace?: EvaluationTraceItem[];
+  /** Robust Indicators Phase 2 — "robust" when the symbol's score
+   *  was produced by the rollout pipeline, "legacy" when the legacy
+   *  ScoreEngine produced it. ``null`` for rows persisted before the
+   *  rollout columns were added (Migration 028). */
+  engine_tag?: 'robust' | 'legacy' | string | null;
 }
 
 export interface IndicatorColumn {
@@ -634,9 +639,29 @@ export function PipelineAssetTable({
                       )}
                     </div>
                     {showScore && rules.length > 0 && (
-                      <div className="mt-0.5 text-[10px] text-[#334155]">
-                        {earnedPts(rules).toFixed(0)}/{totalPts(rules).toFixed(0)} pts
-                        {weakness ? ` · ${weakness}` : ''}
+                      <div className="mt-0.5 text-[10px] text-[#334155] flex items-center gap-1.5">
+                        <span>
+                          {earnedPts(rules).toFixed(0)}/{totalPts(rules).toFixed(0)} pts
+                          {weakness ? ` · ${weakness}` : ''}
+                        </span>
+                        {asset.engine_tag === 'robust' && (
+                          <span
+                            className="text-[9px] px-1 py-0.5 rounded bg-[#34D399]/10 text-[#34D399] border border-[#34D399]/20 font-semibold tracking-wide"
+                            title="Score produzido pelo Robust Indicator Pipeline (Phase 2)"
+                            data-testid={`engine-badge-robust-${asset.symbol}`}
+                          >
+                            ROBUST
+                          </span>
+                        )}
+                        {asset.engine_tag === 'legacy' && (
+                          <span
+                            className="text-[9px] px-1 py-0.5 rounded bg-[#1A2035] text-[#94A3B8] border border-[#1A2035] font-semibold tracking-wide"
+                            title="Score produzido pelo motor legado (não bucketed no rollout)"
+                            data-testid={`engine-badge-legacy-${asset.symbol}`}
+                          >
+                            LEGACY
+                          </span>
+                        )}
                       </div>
                     )}
                   </td>

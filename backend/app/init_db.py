@@ -34,6 +34,17 @@ async def backfill_execution_tracking_columns(db: Union[AsyncSession, AsyncConne
         ALTER TABLE pipeline_watchlist_rejections
         ADD COLUMN IF NOT EXISTS execution_id UUID;
     """))
+    # Robust Indicators Phase 2 — engine_tag mirrors Alembic migration 028.
+    # Kept in init_db so fresh containers without the migration history still
+    # carry the column needed by the rollout bucketing path.
+    await db.execute(text("""
+        ALTER TABLE pipeline_watchlist_assets
+        ADD COLUMN IF NOT EXISTS engine_tag VARCHAR(16);
+    """))
+    await db.execute(text("""
+        ALTER TABLE pipeline_watchlist_rejections
+        ADD COLUMN IF NOT EXISTS engine_tag VARCHAR(16);
+    """))
 
 
 async def init_db():

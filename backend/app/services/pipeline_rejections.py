@@ -740,6 +740,12 @@ def evaluate_rejections(
                 "current_values": analysis_snapshot["current_values"],
                 "expected_values": analysis_snapshot["expected_values"],
                 "analysis_snapshot": analysis_snapshot,
+                # Phase 2 — carry over the rollout engine tag from the
+                # source asset so the rejection row records which engine
+                # produced the score that was rejected. Falls through as
+                # None for assets evaluated before the rollout was wired
+                # into the upstream stage.
+                "engine_tag": asset.get("engine_tag"),
             }
         )
 

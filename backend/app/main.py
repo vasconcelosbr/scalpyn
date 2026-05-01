@@ -262,6 +262,10 @@ app.include_router(debug_indicators.router)
 # Prometheus /metrics (robust-indicators Phase 1)
 app.include_router(metrics_api.router)
 
+# Robust Indicators Phase 2 admin endpoints (rollout status + preflight).
+from .api import admin_robust_indicators as _admin_robust_indicators  # noqa: E402
+app.include_router(_admin_robust_indicators.router)
+
 # WebSocket
 app.include_router(websocket.router)
 

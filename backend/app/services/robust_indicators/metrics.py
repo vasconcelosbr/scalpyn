@@ -80,6 +80,13 @@ if _PROMETHEUS_AVAILABLE:
         labelnames=("bucket",),
         registry=REGISTRY,
     )
+    ROBUST_SILENT_FALLBACK_TOTAL = Counter(
+        "robust_silent_fallback_total",
+        "Times a bucketed symbol fell back to the legacy score because "
+        "the robust pipeline could not produce a usable score.",
+        labelnames=("reason",),
+        registry=REGISTRY,
+    )
 else:  # pragma: no cover — exercised when extra is missing
     REGISTRY = None  # type: ignore[assignment]
     INDICATOR_COMPUTATION_DURATION = None
@@ -87,6 +94,13 @@ else:  # pragma: no cover — exercised when extra is missing
     INDICATOR_STALENESS = None
     SCORE_REJECTION_TOTAL = None
     ROBUST_VS_LEGACY_DIVERGENCE_TOTAL = None
+    ROBUST_SILENT_FALLBACK_TOTAL = None
+
+
+# ── Process-local fallback counter (always available) ─────────────────────
+# Keeps a per-reason tally even when prometheus-client is missing so the
+# admin endpoint can still surface the silent-fallback rate.
+_SILENT_FALLBACK_LOCAL: dict[str, int] = {}
 
 
 def observe_compute_duration(
@@ -154,6 +168,33 @@ def increment_divergence(bucket: str) -> None:
         logger.debug("metrics: increment_divergence failed: %s", exc)
 
 
+def increment_silent_fallback(reason: str) -> None:
+    """Bump the silent-fallback counter for ``reason``.
+
+    Always records into the in-process tally (so the admin endpoint can
+    surface fallback rates even without prometheus-client installed),
+    and additionally bumps the Prometheus counter when available.
+    """
+    label = (reason or "unknown")[:60]
+    _SILENT_FALLBACK_LOCAL[label] = _SILENT_FALLBACK_LOCAL.get(label, 0) + 1
+    if ROBUST_SILENT_FALLBACK_TOTAL is None:
+        return
+    try:
+        ROBUST_SILENT_FALLBACK_TOTAL.labels(reason=label).inc()
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.debug("metrics: increment_silent_fallback failed: %s", exc)
+
+
+def silent_fallback_snapshot() -> dict[str, int]:
+    """Return a copy of the in-process silent-fallback tally."""
+    return dict(_SILENT_FALLBACK_LOCAL)
+
+
+def reset_silent_fallback() -> None:
+    """Reset the in-process silent-fallback tally (test helper)."""
+    _SILENT_FALLBACK_LOCAL.clear()
+
+
 def render_metrics() -> tuple[bytes, str]:
     """Return ``(body, content_type)`` for the FastAPI handler."""
     if not _PROMETHEUS_AVAILABLE or REGISTRY is None:
@@ -170,8 +211,11 @@ __all__ = [
     "divergence_bucket",
     "increment_divergence",
     "increment_rejection",
+    "increment_silent_fallback",
     "observe_compute_duration",
     "render_metrics",
+    "reset_silent_fallback",
     "set_indicator_confidence",
     "set_indicator_staleness",
+    "silent_fallback_snapshot",
 ]

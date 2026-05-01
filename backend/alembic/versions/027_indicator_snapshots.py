@@ -1,77 +1,82 @@
-"""indicator_snapshots table
+"""Add indicator_snapshots table for robust-indicator shadow mode.
 
 Revision ID: 027_indicator_snapshots
 Revises: 026_decisions_log_direction_event_type
-Create Date: 2026-05-01 18:00:00.000000
-
+Create Date: 2026-05-01
 """
+
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
-# revision identifiers, used by Alembic.
-revision = '027_indicator_snapshots'
-down_revision = '026_decisions_log_direction_event_type'
+revision = "027_indicator_snapshots"
+down_revision = "026_decisions_log_direction_event_type"
 branch_labels = None
 depends_on = None
 
 
-def upgrade():
-    # Create indicator_snapshots table
-    op.create_table(
-        'indicator_snapshots',
-        sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column('symbol', sa.String(length=20), nullable=False),
-        sa.Column('timestamp', sa.DateTime(timezone=True), nullable=False),
-        sa.Column('indicators_json', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
-        sa.Column('global_confidence', sa.Numeric(precision=5, scale=4), nullable=False),
-        sa.Column('valid_indicators', sa.Integer(), nullable=False),
-        sa.Column('total_indicators', sa.Integer(), nullable=False),
-        sa.Column('validation_passed', sa.Boolean(), nullable=False),
-        sa.Column('validation_errors', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-        sa.Column('score', sa.Numeric(precision=10, scale=2), nullable=True),
-        sa.Column('score_confidence', sa.Numeric(precision=5, scale=4), nullable=True),
-        sa.Column('can_trade', sa.Boolean(), nullable=False),
-        sa.PrimaryKeyConstraint('id')
-    )
+def upgrade() -> None:
+    op.execute(sa.text("SET LOCAL lock_timeout = '5s'"))
+    op.execute(sa.text(
+        """
+        CREATE TABLE IF NOT EXISTS indicator_snapshots (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            symbol VARCHAR(40) NOT NULL,
+            timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
+            indicators_json JSONB NOT NULL,
+            global_confidence NUMERIC(6,4),
+            valid_indicators INTEGER,
+            total_indicators INTEGER,
+            validation_passed BOOLEAN,
+            validation_errors JSONB,
+            score NUMERIC(7,4),
+            score_confidence NUMERIC(6,4),
+            can_trade BOOLEAN,
+            legacy_score NUMERIC(7,4),
+            divergence_bucket VARCHAR(16),
+            rejection_reason VARCHAR(255),
+            user_id UUID,
+            watchlist_id UUID
+        );
+        """
+    ))
+    op.execute(sa.text(
+        """
+        CREATE INDEX IF NOT EXISTS ix_indicator_snapshots_symbol_time
+            ON indicator_snapshots (symbol, timestamp DESC);
+        """
+    ))
+    # Best-effort TimescaleDB hypertable conversion. The legacy `indicators`
+    # table is a hypertable on the same column, so where Timescale is
+    # available we follow the same convention. Wrapped in a DO block so
+    # missing extension is non-fatal.
+    op.execute(sa.text(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'
+            ) THEN
+                BEGIN
+                    PERFORM create_hypertable(
+                        'indicator_snapshots', 'timestamp',
+                        if_not_exists => TRUE,
+                        migrate_data => TRUE
+                    );
+                EXCEPTION WHEN OTHERS THEN
+                    -- Hypertable conversion is best-effort; ignore failures.
+                    NULL;
+                END;
+            END IF;
+        END
+        $$;
+        """
+    ))
 
-    # Create indexes
-    op.create_index(
-        'idx_indicator_snapshots_symbol_timestamp',
-        'indicator_snapshots',
-        ['symbol', 'timestamp'],
-        unique=False
-    )
-    op.create_index(
-        'idx_indicator_snapshots_can_trade',
-        'indicator_snapshots',
-        ['can_trade', 'timestamp'],
-        unique=False
-    )
-    op.create_index(
-        'idx_indicator_snapshots_validation',
-        'indicator_snapshots',
-        ['validation_passed', 'timestamp'],
-        unique=False
-    )
-    op.create_index(
-        'ix_indicator_snapshots_symbol',
-        'indicator_snapshots',
-        ['symbol'],
-        unique=False
-    )
-    op.create_index(
-        'ix_indicator_snapshots_timestamp',
-        'indicator_snapshots',
-        ['timestamp'],
-        unique=False
-    )
 
-
-def downgrade():
-    op.drop_index('ix_indicator_snapshots_timestamp', table_name='indicator_snapshots')
-    op.drop_index('ix_indicator_snapshots_symbol', table_name='indicator_snapshots')
-    op.drop_index('idx_indicator_snapshots_validation', table_name='indicator_snapshots')
-    op.drop_index('idx_indicator_snapshots_can_trade', table_name='indicator_snapshots')
-    op.drop_index('idx_indicator_snapshots_symbol_timestamp', table_name='indicator_snapshots')
-    op.drop_table('indicator_snapshots')
+def downgrade() -> None:
+    op.execute(sa.text(
+        "DROP INDEX IF EXISTS ix_indicator_snapshots_symbol_time;"
+    ))
+    op.execute(sa.text(
+        "DROP TABLE IF EXISTS indicator_snapshots;"
+    ))

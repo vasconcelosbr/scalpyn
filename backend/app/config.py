@@ -16,6 +16,18 @@ class Settings(BaseSettings):
     # of this flag.
     USE_ROBUST_INDICATORS: bool = False
 
+    # ── Robust-indicator pipeline (Phase 2 — gradual rollout) ────────────────
+    # Percentage of symbols (0–100) bucketed into the robust pipeline as the
+    # authoritative score source. Bucketing is deterministic per-symbol via
+    # ``int(sha1(symbol).hexdigest(), 16) % 100 < percent``. The recommended
+    # ramp is 10 → 50 → 100 with the pre-flight guard between each step.
+    USE_ROBUST_INDICATORS_PERCENT: int = 0
+
+    # When True, the pre-flight safety guard for raising the rollout
+    # percent is bypassed (still evaluates and reports unsafe reasons,
+    # just doesn't block). Use only for emergency rollbacks.
+    FORCE_ROLLOUT_RAISE: bool = False
+
     # Single ops-only Slack webhook for robust-indicator divergence /
     # alert notifications. When unset, alerts are logged at INFO and
     # dropped — they are NEVER broadcast to per-user webhooks (would
