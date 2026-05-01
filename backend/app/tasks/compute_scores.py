@@ -50,7 +50,13 @@ async def _score_async():
         except Exception as _e:
             logger.debug("compute_scores: could not load user score config: %s", _e)
 
-        engine = ScoreEngine(score_config)
+        # Check confidence weighting config
+        confidence_config = score_config.get("confidence_weighting", {})
+        confidence_enabled = confidence_config.get("enabled", False)
+        dual_write_mode = confidence_config.get("dual_write_mode", False)
+        min_confidence = confidence_config.get("min_confidence", 0.5)
+
+        engine = ScoreEngine(score_config, min_confidence=min_confidence)
 
         result = await db.execute(text("""
             SELECT DISTINCT ON (symbol) symbol, indicators_json, time
@@ -66,8 +72,31 @@ async def _score_async():
         for row in rows:
             try:
                 indicators = row.indicators_json or {}
-                score_result = engine.compute_alpha_score(indicators)
-                components = score_result.get("components", {})
+
+                # Compute legacy score (always)
+                score_result_v1 = engine.compute_alpha_score(indicators, use_confidence_weighting=False)
+                components_v1 = score_result_v1.get("components", {})
+
+                # Compute confidence-weighted score if enabled
+                score_result_v2 = None
+                confidence_metrics = None
+                scoring_version = "v1"
+
+                if confidence_enabled or dual_write_mode:
+                    score_result_v2 = engine.compute_alpha_score(indicators, use_confidence_weighting=True)
+                    confidence_metrics = score_result_v2.get("confidence_metrics")
+
+                    if dual_write_mode:
+                        scoring_version = "dual"
+                        # Log significant score deltas for monitoring
+                        delta = abs(score_result_v2["total_score"] - score_result_v1["total_score"])
+                        if delta > 10:
+                            logger.info(
+                                f"[score-delta] {row.symbol}: v1={score_result_v1['total_score']:.2f}, "
+                                f"v2={score_result_v2['total_score']:.2f}, delta={delta:.2f}"
+                            )
+                    elif confidence_enabled:
+                        scoring_version = "v2"
 
                 # Each insert is isolated in its own SAVEPOINT so a failure
                 # for one symbol does not abort the whole transaction.
@@ -75,21 +104,26 @@ async def _score_async():
                     await db.execute(text("""
                         INSERT INTO alpha_scores
                             (time, symbol, score, liquidity_score, market_structure_score,
-                             momentum_score, signal_score, components_json)
+                             momentum_score, signal_score, components_json,
+                             alpha_score_v2, confidence_metrics, scoring_version)
                         VALUES
-                            (:time, :symbol, :score, :liq, :ms, :mom, :sig, :components)
+                            (:time, :symbol, :score, :liq, :ms, :mom, :sig, :components,
+                             :score_v2, :conf_metrics, :version)
                     """), {
                         "time": now,
                         "symbol": row.symbol,
-                        "score": score_result["total_score"],
-                        "liq": components.get("liquidity_score", 0),
-                        "ms": components.get("market_structure_score", 0),
-                        "mom": components.get("momentum_score", 0),
-                        "sig": components.get("signal_score", 0),
+                        "score": score_result_v1["total_score"],
+                        "liq": components_v1.get("liquidity_score", 0),
+                        "ms": components_v1.get("market_structure_score", 0),
+                        "mom": components_v1.get("momentum_score", 0),
+                        "sig": components_v1.get("signal_score", 0),
                         "components": json.dumps({
-                            "classification": score_result.get("classification"),
-                            "matched_rules": score_result.get("matched_rules", []),
+                            "classification": score_result_v1.get("classification"),
+                            "matched_rules": score_result_v1.get("matched_rules", []),
                         }),
+                        "score_v2": score_result_v2["total_score"] if score_result_v2 else None,
+                        "conf_metrics": json.dumps(confidence_metrics) if confidence_metrics else None,
+                        "version": scoring_version,
                     })
 
                 _scored += 1

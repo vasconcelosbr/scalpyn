@@ -53,7 +53,12 @@ DEFAULT_SCORE = {
     ],
     "thresholds": {"strong_buy": 80, "buy": 65, "neutral": 40},
     "auto_select_top_n": 5,
-    "auto_select_min_score": 80
+    "auto_select_min_score": 80,
+    "confidence_weighting": {
+        "enabled": False,  # Feature flag for confidence-weighted scoring
+        "min_confidence": 0.5,  # Minimum confidence threshold
+        "dual_write_mode": False,  # Compute both legacy and new scores for comparison
+    }
 }
 
 DEFAULT_SIGNAL = {
