@@ -1,0 +1,217 @@
+You are a senior backend engineer specialized in PostgreSQL, SQLAlchemy async, and distributed systems.
+
+Your task is to FIX all database transaction, session, and concurrency issues in SCALPYN.
+
+---
+
+# 🚨 CONTEXT
+
+System is showing recurring DB errors:
+
+* InFailedSQLTransactionError
+* aborted transaction blocks
+* cascading failures after first DB error
+* inconsistent writes (decision_logs empty or partial)
+
+This indicates systemic issues, not isolated bugs.
+
+---
+
+# 🎯 OBJECTIVE
+
+Make database operations:
+
+* safe
+* isolated
+* idempotent
+* resilient to failure
+* concurrency-safe
+
+---
+
+# 🔍 ROOT PROBLEMS TO FIX
+
+1. Sessions reused after failure
+2. Missing rollback in async context
+3. Long-lived sessions shared across tasks
+4. Nested transactions misused
+5. Celery tasks using unsafe DB sessions
+6. Connection pool misuse
+7. Silent failures masking real issues
+
+---
+
+# 🧱 REQUIRED ARCHITECTURE
+
+## PART 1 — SESSION LIFECYCLE (CRITICAL)
+
+Each operation MUST use its own session:
+
+Example:
+
+async def handler():
+async with async_session() as session:
+async with session.begin():
+...
+
+RULE:
+
+* NEVER reuse session across tasks
+* NEVER keep session global
+* NEVER share session between coroutines
+
+---
+
+## PART 2 — REMOVE MANUAL COMMIT/ROLLBACK CHAOS
+
+Replace:
+
+await session.commit()
+await session.rollback()
+
+WITH:
+
+async with session.begin():
+
+Let SQLAlchemy handle commit/rollback automatically.
+
+---
+
+## PART 3 — FIX ERROR HANDLING
+
+Inside transactions:
+
+try:
+async with session.begin():
+...
+except Exception:
+logger.error("DB ERROR", exc_info=True)
+raise
+
+DO NOT manually rollback inside begin()
+
+---
+
+## PART 4 — CELERY TASK SAFETY
+
+Each Celery task must:
+
+* create its own DB session
+* close session after execution
+
+Example:
+
+@celery.task
+async def run_task():
+async with async_session() as session:
+async with session.begin():
+...
+
+---
+
+## PART 5 — REMOVE SESSION POISONING
+
+After any exception:
+
+* session must not be reused
+* enforce session disposal
+
+---
+
+## PART 6 — FIX PIPELINE SCAN
+
+In pipeline_scan.py:
+
+* DO NOT reuse same session across loop iterations
+* Each batch must run in isolated transaction
+* Decision persistence must not poison next operations
+
+---
+
+## PART 7 — FIX SIMULATION ENGINE
+
+In simulation_service.py:
+
+* each simulation batch = new session
+* bulk inserts must be wrapped in safe transaction
+* partial failures must not break entire batch
+
+---
+
+## PART 8 — CONNECTION POOL CONFIG
+
+Adjust:
+
+engine = create_engine(
+DATABASE_URL,
+pool_size=5,
+max_overflow=5,
+pool_timeout=30,
+pool_recycle=1800,
+)
+
+Ensure:
+
+* no connection leaks
+* sessions always closed
+
+---
+
+## PART 9 — ADD SAFE DB WRAPPER
+
+Create utility:
+
+async def run_db_task(fn):
+async with async_session() as session:
+async with session.begin():
+return await fn(session)
+
+---
+
+## PART 10 — LOGGING
+
+Log ALL:
+
+* DB errors
+* transaction failures
+* retries
+
+NO silent failures allowed
+
+---
+
+## PART 11 — TESTING
+
+Simulate:
+
+1. force insert error
+2. verify:
+
+   * transaction rolled back
+   * next operation succeeds
+   * no cascade failure
+
+---
+
+# 🚨 RULES
+
+* NEVER reuse broken session
+* NEVER suppress DB errors
+* NEVER mix transactions across async tasks
+* ALWAYS isolate DB operations
+
+---
+
+# 📊 OUTPUT REQUIRED
+
+Return:
+
+1. root cause summary
+2. all files affected
+3. corrected code snippets
+4. validation steps
+5. concurrency safety explanation
+
+---
+
+Now fix the system completely.
