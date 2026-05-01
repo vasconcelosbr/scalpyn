@@ -34,6 +34,10 @@ DEFAULT_INDICATORS = {
         "binance_trade_limit": 500,
         "max_cache_entries": 1000,
         "confidence_scores": {"gate": 0.7, "binance": 0.9, "mixed": 0.85},
+        # NEW: Control fallback behavior
+        "allow_candle_fallback_taker_ratio": False,  # Disable imprecise candle fallback
+        "allow_candle_fallback_volume_delta": False,  # Disable imprecise candle fallback
+        "min_trades_required_taker_ratio": 100,      # Minimum trades for reliable taker ratio
     },
     "orderbook_imbalance": {"enabled": False, "depth_levels": 10},
     "funding_rate": {"enabled": True},

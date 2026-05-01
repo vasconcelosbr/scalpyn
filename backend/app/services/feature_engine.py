@@ -356,10 +356,19 @@ class FeatureEngine:
             else None
         )
 
+        # NORMALIZED: histogram as % of price (for cross-pair comparison)
+        current_price = float(df["close"].iloc[-1])
+        hist_normalized = (
+            round((float(hist_val) / current_price * 100), 4)
+            if pd.notna(hist_val) and current_price > 0
+            else None
+        )
+
         return {
             "macd": round(float(macd_val), 8) if pd.notna(macd_val) else None,
             "macd_signal_line": round(float(sig_val), 8) if pd.notna(sig_val) else None,
             "macd_histogram": round(float(hist_val), 8) if pd.notna(hist_val) else None,
+            "macd_histogram_pct": hist_normalized,  # NEW: normalized for comparison
             "macd_signal": "positive" if pd.notna(macd_val) and macd_val > sig_val else "negative",
             "macd_histogram_prev": round(float(hist_prev), 8) if hist_prev is not None and pd.notna(hist_prev) else None,
             "macd_histogram_slope": hist_slope,
@@ -474,7 +483,28 @@ class FeatureEngine:
         return {"zscore": round(float(val), 4) if pd.notna(val) else None}
 
     def _calc_volume_delta(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Approximated volume delta using candle direction."""
+        """Approximated volume delta using candle direction.
+
+        IMPORTANT: This is a LOW-CONFIDENCE approximation. Real volume delta from
+        MarketDataService (Binance aggTrades) should override this value.
+
+        Uses sign(close - open) × volume as a proxy for buy/sell pressure.
+
+        NOTE: This fallback is DISABLED by default in robust mode. It will only
+        compute if allow_candle_fallback_volume_delta is explicitly enabled.
+        """
+        fallback_config = self.config.get("market_data_fallback", {})
+        allow_fallback = fallback_config.get("allow_candle_fallback_volume_delta", False)
+
+        if not allow_fallback:
+            # Return empty dict - will be populated by market_data if available
+            logger.debug(
+                "Volume delta candle fallback disabled. "
+                "Value will come from market_data or remain None."
+            )
+            return {}
+
+        # Legacy fallback (low confidence)
         direction = np.sign(df["close"] - df["open"])
         delta = (direction * self._base_volume(df)).iloc[-1]
         return {"volume_delta": round(float(delta), 2) if pd.notna(delta) else 0}
@@ -493,9 +523,27 @@ class FeatureEngine:
     def _calc_taker_ratio(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Approximate taker buy ratio from candle direction over last 20 periods.
 
+        IMPORTANT: This is a LOW-CONFIDENCE approximation. Real taker data from
+        MarketDataService (Binance trades) should override this value.
+
         Uses bullish candle volume / total volume as a proxy for buy pressure.
         Returns value between 0.0 and 1.0 where > 0.5 indicates net buying.
+
+        NOTE: This fallback is DISABLED by default in robust mode. It will only
+        compute if allow_candle_fallback_taker_ratio is explicitly enabled.
         """
+        fallback_config = self.config.get("market_data_fallback", {})
+        allow_fallback = fallback_config.get("allow_candle_fallback_taker_ratio", False)
+
+        if not allow_fallback:
+            # Return empty dict - will be populated by market_data if available
+            logger.debug(
+                "Taker ratio candle fallback disabled. "
+                "Value will come from market_data or remain None."
+            )
+            return {}
+
+        # Legacy fallback (low confidence)
         lookback = min(max(int(self.config.get("taker_ratio", {}).get("lookback", 20)), 1), len(df))
         recent = df.tail(lookback)
         volume = self._base_volume(recent)
