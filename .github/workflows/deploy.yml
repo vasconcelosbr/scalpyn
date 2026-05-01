@@ -59,6 +59,7 @@ jobs:
             --allow-unauthenticated \
             --port 8080 \
             --timeout 300 \
+            --timeout-startup 240 \
             --memory 2Gi \
             --min-instances 1 \
             --no-cpu-throttling \
@@ -107,6 +108,8 @@ jobs:
             --platform managed \
             --allow-unauthenticated \
             --port 8080 \
+            --timeout 300 \
+            --timeout-startup 240 \
             --memory 2Gi \
             --min-instances 1 \
             --no-cpu-throttling \
