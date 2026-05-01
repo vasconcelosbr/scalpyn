@@ -1560,6 +1560,11 @@ async def _run_pipeline_scan():
     execution_id = str(uuid4())
     stats = {"watchlists": 0, "new_signals": 0, "errors": 0, "funnels": [], "execution_id": execution_id}
 
+    # Robust-indicators (Phase 1) shadow tasks accumulate here and are
+    # awaited once at the very end of the scan so they run *concurrently*
+    # with subsequent watchlist iterations rather than blocking each one.
+    _shadow_tasks: list = []
+
     async with AsyncSessionLocal() as db:
         global _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY
         if not _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY:
@@ -1838,6 +1843,71 @@ async def _run_pipeline_scan():
                                 "[PipelineScan] %s (%s): tagged futures scores on %d assets",
                                 wl.name, effective_level, len(assets),
                             )
+
+                    # ── Robust indicators (Phase 1) — shadow mode ─────────
+                    # Best-effort, gated by USE_ROBUST_INDICATORS. We
+                    # snapshot the asset list *now* (so subsequent legacy
+                    # mutations can't race the shadow path) and dispatch
+                    # the work as a background asyncio task so legacy scan
+                    # progress is never blocked. The whole block is wrapped
+                    # in try/except so any failure here can NEVER cascade
+                    # into the legacy pipeline.
+                    try:
+                        from ..services.robust_indicators import is_shadow_enabled as _is_shadow_enabled
+                        if _is_shadow_enabled() and assets:
+                            from ..services.robust_indicators import run_shadow_scan
+                            from ..database import CeleryAsyncSessionLocal as _ShadowSessionLocal
+                            indicators_cfg: dict = {}
+                            try:
+                                from ..services.config_service import config_service
+                                async with db.begin_nested():
+                                    indicators_cfg = (
+                                        await config_service.get_config(db, "indicators", wl.user_id)
+                                    ) or {}
+                            except Exception:
+                                indicators_cfg = {}
+                            # Capture immutable copies for the background task.
+                            shadow_assets = [dict(a) for a in assets]
+                            shadow_score_cfg = dict(score_config or {})
+                            shadow_user_id = wl.user_id
+                            shadow_wl_id = wl_id
+                            shadow_level = effective_level
+                            # Phase 1: shadow mode runs for both spot AND
+                            # futures watchlists. The futures asset dicts
+                            # carry score_long/score_short/confidence_score
+                            # which run_shadow_scan picks up via its
+                            # _legacy_score helper for divergence bucketing.
+                            shadow_market_mode = getattr(wl, "market_mode", None) or "spot"
+
+                            async def _shadow_runner():
+                                # Use an isolated session so a parent-tx
+                                # rollback can never poison the shadow write.
+                                try:
+                                    async with _ShadowSessionLocal() as shadow_db:
+                                        await run_shadow_scan(
+                                            shadow_db,
+                                            assets=shadow_assets,
+                                            score_config=shadow_score_cfg,
+                                            indicators_config=indicators_cfg,
+                                            user_id=shadow_user_id,
+                                            watchlist_id=shadow_wl_id,
+                                            watchlist_level=shadow_level,
+                                            market_mode=shadow_market_mode,
+                                        )
+                                        await shadow_db.commit()
+                                except Exception as _shadow_inner:
+                                    logger.debug(
+                                        "[PipelineScan] shadow runner failed for %s: %s",
+                                        shadow_wl_id, _shadow_inner,
+                                    )
+
+                            _shadow_tasks.append(asyncio.create_task(_shadow_runner()))
+                    except Exception as _shadow_exc:
+                        logger.debug(
+                            "[PipelineScan] %s (%s): shadow scan dispatch failed (%s) — "
+                            "legacy pipeline unaffected",
+                            wl.name, effective_level, _shadow_exc,
+                        )
 
                     if effective_level == "custom":
                         existing_symbols = {a.get("symbol") for a in assets}
@@ -2130,6 +2200,19 @@ async def _run_pipeline_scan():
                 profile_config_map=profile_config_map,
                 execution_id=execution_id,
             )
+
+    # Drain any in-flight shadow tasks. Bounded by a generous timeout so a
+    # single hung shadow run can't stall the next pipeline tick.
+    if _shadow_tasks:
+        try:
+            done, pending = await asyncio.wait(_shadow_tasks, timeout=30)
+            if pending:
+                logger.info(
+                    "[PipelineScan] %d shadow task(s) still running after 30s — leaving in background",
+                    len(pending),
+                )
+        except Exception as _gather_exc:
+            logger.debug("[PipelineScan] shadow gather failed: %s", _gather_exc)
 
     logger.info(
         "[PipelineScan] Done — watchlists=%d  new_signals=%d  errors=%d",

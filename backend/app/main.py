@@ -34,6 +34,7 @@ from .api import (
     spot_engine,
     futures_engine,
     system,
+    metrics as metrics_api,
 )
 
 
@@ -257,6 +258,9 @@ app.include_router(ai_skills.router)
 
 # Debug / Diagnostic endpoints
 app.include_router(debug_indicators.router)
+
+# Prometheus /metrics (robust-indicators Phase 1)
+app.include_router(metrics_api.router)
 
 # WebSocket
 app.include_router(websocket.router)

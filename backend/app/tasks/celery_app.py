@@ -22,6 +22,7 @@ celery_app = Celery(
         "app.tasks.pipeline_scan",
         "app.tasks.ohlcv_backfill",
         "app.tasks.simulation",
+        "app.tasks.robust_alerts",
     ],
 )
 
@@ -114,5 +115,10 @@ celery_app.conf.beat_schedule = {
             "limit": 200,
             "skip_existing": True,
         },
+    },
+    # Robust-indicator alert evaluator (Phase 1) every 90 seconds.
+    "robust_indicator_alerts": {
+        "task": "app.tasks.robust_alerts.evaluate",
+        "schedule": 90.0,
     },
 }

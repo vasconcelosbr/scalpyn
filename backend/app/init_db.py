@@ -346,11 +346,46 @@ async def init_db():
             )
 
     # Attempt to create hypertables in separate transactions so failures don't abort the connection
-    tables_to_hyper = ['ohlcv', 'indicators', 'alpha_scores', 'funding_rates']
+    # ── Robust indicators (Phase 1): indicator_snapshots ─────────────────
+    # Mirrors alembic revision 027. Best-effort so dev DBs that have not yet
+    # run `alembic upgrade head` still get the table.
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS indicator_snapshots (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    symbol VARCHAR(40) NOT NULL,
+                    timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    indicators_json JSONB NOT NULL,
+                    global_confidence NUMERIC(6,4),
+                    valid_indicators INTEGER,
+                    total_indicators INTEGER,
+                    validation_passed BOOLEAN,
+                    validation_errors JSONB,
+                    score NUMERIC(7,4),
+                    score_confidence NUMERIC(6,4),
+                    can_trade BOOLEAN,
+                    legacy_score NUMERIC(7,4),
+                    divergence_bucket VARCHAR(16),
+                    rejection_reason VARCHAR(255),
+                    user_id UUID,
+                    watchlist_id UUID
+                );
+            """))
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS ix_indicator_snapshots_symbol_time
+                    ON indicator_snapshots (symbol, timestamp DESC);
+            """))
+    except Exception as e:
+        logger.warning("Could not create indicator_snapshots table (non-fatal): %s", e)
+
+    tables_to_hyper = ['ohlcv', 'indicators', 'alpha_scores', 'funding_rates', 'indicator_snapshots']
     for table in tables_to_hyper:
+        # indicator_snapshots uses 'timestamp' as the time column; the rest use 'time'.
+        time_col = 'timestamp' if table == 'indicator_snapshots' else 'time'
         try:
             async with engine.begin() as conn:
-                await conn.execute(text(f"SELECT create_hypertable('{table}', 'time', if_not_exists => TRUE);"))
+                await conn.execute(text(f"SELECT create_hypertable('{table}', '{time_col}', if_not_exists => TRUE);"))
         except Exception as e:
             logger.warning(f"TimescaleDB hypertable for {table} skipped or unavailable: {e}")
 

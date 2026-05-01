@@ -22,10 +22,16 @@ DEFAULT_INDICATORS = {
     "parabolic_sar": {"enabled": True, "step": 0.02, "max_step": 0.2},
     "bollinger": {"enabled": True, "period": 20, "deviation": 2.0},
     "zscore": {"enabled": False, "lookback": 20},
-    "volume_delta": {"enabled": True},
+    # Robust indicators (Phase 1): the candle-based approximation for
+    # volume_delta / taker_ratio is opt-in. With allow_candle_fallback=False
+    # the FeatureEngine returns None when no real flow data is available,
+    # so the envelope tags the indicator as NO_DATA instead of a proxy.
+    # min_trades_required is honored downstream in robust_indicators when
+    # wrapping order_flow_service output.
+    "volume_delta": {"enabled": True, "allow_candle_fallback": False, "min_trades_required": 100},
     "volume_metrics": {"enabled": True, "min_coverage_hours": 23.5},
     "volume_spike": {"enabled": True, "lookback": 20},
-    "taker_ratio": {"enabled": True, "lookback": 20},
+    "taker_ratio": {"enabled": True, "lookback": 20, "allow_candle_fallback": False, "min_trades_required": 100},
     "market_data_fallback": {
         "orderbook_depth_levels": 10,
         "ticker_cache_ttl_seconds": 5,

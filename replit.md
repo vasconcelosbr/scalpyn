@@ -52,6 +52,17 @@ The frontend proxies all `/api/*` requests to the FastAPI backend via `frontend/
 - The DATABASE_URL validator in `backend/app/config.py` automatically converts `postgresql://` to `postgresql+asyncpg://` (required by asyncpg).
 - CORS allows all `*.replit.app`, `*.replit.dev`, and `*.repl.co` domains.
 
+## Robust Indicators — Phase 1 (shadow mode, task #143)
+- New package: `backend/app/services/robust_indicators/` (envelope, validation, score, compute, metrics, snapshot, shadow). Wraps each indicator in `IndicatorEnvelope` (source + timestamp + confidence) and runs a confidence-weighted score in parallel with the legacy path.
+- Gated by `USE_ROBUST_INDICATORS` env flag (default `false`). When false the shadow runner is a no-op; legacy scoring stays authoritative.
+- New table `indicator_snapshots` (alembic 027 + best-effort init_db) records `{indicators_json, score, score_confidence, can_trade, legacy_score, divergence_bucket, validation_errors, ...}` per scan iteration.
+- New `/metrics` endpoint exposes Prometheus metrics: `indicator_computation_duration_seconds`, `indicator_confidence`, `indicator_staleness_seconds`, `score_rejection_total`, `robust_vs_legacy_divergence_total` (uses `prometheus-client`, optional dep — degrades to a stub when missing).
+- New Celery beat task `app.tasks.robust_alerts.evaluate` (every 90 s) inspects recent snapshots and fires Slack alerts for stale data, low confidence, high rejection rate or > 10 % divergence (rate-limited to 1 alert per condition per 15 min via Redis with in-process fallback).
+- `FeatureEngine._calc_taker_ratio` and `_calc_volume_delta` now honour `allow_candle_fallback` (default `false` in `seed_service.DEFAULT_INDICATORS`) and return `None` instead of a candle approximation when disabled — the envelope tags it as `NO_DATA`. New `macd_histogram_pct` (= raw histogram / close × 100) added to MACD output for cross-symbol comparability.
+- Pipeline integration: `pipeline_scan` calls `run_shadow_scan(...)` once per watchlist scan after legacy scoring, wrapped in try/except. Never blocks legacy on failure.
+- Tests in `backend/tests/test_robust_indicators.py` cover envelope wrapping, all 5 validation rules, both score-engine gates, divergence bucketing and the shadow-disabled-by-default flag.
+- Full design notes in `backend/docs/robust_indicators_phase1.md`.
+
 ## Watchlist Trace Asset (task #69)
 - `pipeline_rejections.build_trace_asset(symbol, indicators, meta, alpha_score)` is the SINGLE source for building the asset dict consumed by `build_asset_evaluation_trace` and `_passes_profile_filters`.
 - Merge contract:
