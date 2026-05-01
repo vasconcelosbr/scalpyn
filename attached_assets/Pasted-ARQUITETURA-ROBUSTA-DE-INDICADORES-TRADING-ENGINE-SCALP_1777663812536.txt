@@ -1,0 +1,702 @@
+ARQUITETURA ROBUSTA DE INDICADORES — TRADING ENGINE SCALPYN
+1. ARQUITETURA GERAL
+1.1 Componentes Principais
+Code
+┌─────────────────────────────────────────────────────────────┐
+│                    DATA COLLECTION LAYER                     │
+├─────────────────────────────────────────────────────────────┤
+│  ┌──────────┐  ┌──────────┐  ┌─────────────────┐          │
+│  │ Binance  │  │ Gate.io  │  │ Candle Fallback │          │
+│  │ Adapter  │  │ Adapter  │  │ (low confidence)│          │
+│  └────┬─────┘  └────┬─────┘  └────────┬────────┘          │
+│       │             │                  │                    │
+│       └─────────────┴──────────────────┘                    │
+│                     │                                        │
+├─────────────────────┼────────────────────────────────────────┤
+│                     ▼                                        │
+│            ┌─────────────────┐                              │
+│            │ INDICATOR ENVELOPE                              │
+│            │ (validation wrapper)                           │
+│            └────────┬────────┘                              │
+│                     │                                        │
+├─────────────────────┼────────────────────────────────────────┤
+│                     ▼                                        │
+│            ┌─────────────────┐                              │
+│            │ QUALITY ENGINE   │                             │
+│            │ (staleness check)│                             │
+│            └────────┬────────┘                              │
+│                     │                                        │
+├─────────────────────┼────────────────────────────────────────┤
+│                     ▼                                        │
+│            ┌─────────────────┐                              │
+│            │ VALIDATION ENGINE│                             │
+│            │ (integrity check)│                             │
+│            └────────┬────────┘                              │
+│                     │                                        │
+├─────────────────────┼────────────────────────────────────────┤
+│                     ▼                                        │
+│            ┌─────────────────┐                              │
+│            │  SCORE ENGINE    │                             │
+│            │ (confidence-weighted)                          │
+│            └─────────────────┘                              │
+└─────────────────────────────────────────────────────────────┘
+2. ESTRUTURA DE DADOS — INDICATOR ENVELOPE
+2.1 Schema Base
+Python
+@dataclass
+class IndicatorEnvelope:
+    """Envelope padrão para TODOS os indicadores."""
+    
+    # Identificação
+    name: str                    # ex: "rsi", "volume_24h_usdt"
+    category: str                # "liquidity", "momentum", "structure", "flow", "volatility"
+    
+    # Valor e Status
+    value: Optional[float]       # None se não disponível
+    status: IndicatorStatus      # PASS | FAIL | NO_DATA | ERROR | STALE
+    
+    # Rastreabilidade
+    source: DataSource          # BINANCE | GATE | CANDLE_APPROX | DERIVED
+    source_detail: str          # ex: "binance_trades_500", "gate_ticker", "candle_fallback_20"
+    timestamp: datetime         # quando foi coletado/calculado
+    collection_latency_ms: int  # latência da coleta
+    
+    # Confiabilidade
+    confidence: float           # 0.0 - 1.0
+    valid: bool                 # False se stale, error, ou low confidence
+    
+    # Metadados para debug
+    raw_value: Any             # valor antes de processamento
+    error_msg: Optional[str]   # se status == ERROR
+    threshold_used: Optional[float]  # threshold aplicado (se aplicável)
+    
+    # Dependências (para indicadores derivados)
+    dependencies: List[str]    # ex: ["ema50", "ema200"] para ema50_gt_ema200
+    
+    # Validação
+    min_candles_required: Optional[int]  # ex: 200 para EMA200
+    actual_candles: Optional[int]        # quantos candles foram usados
+2.2 Enums
+Python
+class IndicatorStatus(Enum):
+    PASS = "PASS"           # valor válido e dentro do threshold
+    FAIL = "FAIL"           # valor válido mas fora do threshold
+    NO_DATA = "NO_DATA"     # não foi possível obter dados
+    ERROR = "ERROR"         # erro durante cálculo
+    STALE = "STALE"         # dado muito antigo
+    
+class DataSource(Enum):
+    BINANCE = "binance"               # dados reais Binance
+    GATE = "gate"                     # dados reais Gate.io
+    CANDLE_APPROX = "candle_approx"   # aproximação via candles (baixa confiança)
+    DERIVED = "derived"               # calculado de outros indicadores
+    MERGED = "merged"                 # merge de múltiplas fontes
+2.3 Confidence Mapping
+Python
+CONFIDENCE_MAP = {
+    # Dados primários
+    DataSource.BINANCE: 0.95,           # mais confiável (aggTrades, orderbook direto)
+    DataSource.GATE: 0.85,              # confiável mas pode ter gaps
+    DataSource.MERGED: 0.80,            # merge é bom mas não perfeito
+    
+    # Fallbacks
+    DataSource.CANDLE_APPROX: 0.40,     # aproximação — baixa confiança
+    DataSource.DERIVED: 0.90,           # se dependências forem confiáveis
+}
+
+# Penalidades
+STALENESS_PENALTY = {
+    "< 1min": 1.0,      # sem penalidade
+    "1-5min": 0.8,      # leve
+    "5-10min": 0.5,     # média
+    "> 10min": 0.2,     # crítica
+}
+3. FLUXO DE DADOS
+3.1 Pipeline Completo
+Python
+async def compute_indicators_robust(symbol: str, timeframe: str) -> Dict[str, IndicatorEnvelope]:
+    """Pipeline robusto de cálculo de indicadores."""
+    
+    # FASE 1: COLETA DE DADOS
+    raw_data = await collect_market_data(symbol, timeframe)
+    # └─> {ohlcv: df, ticker: dict, orderbook: dict, trades: list}
+    
+    # FASE 2: WRAPPING EM ENVELOPES
+    envelopes = {}
+    
+    # 2.1 Indicadores de candles (RSI, MACD, EMA, etc)
+    candle_indicators = await compute_candle_indicators(raw_data.ohlcv)
+    for name, result in candle_indicators.items():
+        envelopes[name] = wrap_indicator(
+            name=name,
+            value=result["value"],
+            source=detect_source(raw_data.ohlcv),  # GATE, BINANCE, ou MERGED
+            timestamp=raw_data.ohlcv.attrs.get("timestamp"),
+            raw_value=result,
+            min_candles_required=result.get("min_candles"),
+            actual_candles=len(raw_data.ohlcv),
+        )
+    
+    # 2.2 Indicadores de orderbook (spread, depth)
+    orderbook_indicators = await compute_orderbook_indicators(raw_data.orderbook)
+    for name, result in orderbook_indicators.items():
+        envelopes[name] = wrap_indicator(
+            name=name,
+            value=result["value"],
+            source=DataSource.GATE if raw_data.orderbook.get("source") == "gate" else DataSource.BINANCE,
+            timestamp=raw_data.orderbook.get("timestamp"),
+            raw_value=result,
+        )
+    
+    # 2.3 Indicadores de fluxo (taker ratio, volume delta)
+    flow_indicators = await compute_flow_indicators(raw_data.trades, raw_data.ohlcv)
+    for name, result in flow_indicators.items():
+        source = DataSource.BINANCE if raw_data.trades else DataSource.CANDLE_APPROX
+        envelopes[name] = wrap_indicator(
+            name=name,
+            value=result["value"],
+            source=source,
+            source_detail=f"{source.value}_trades_{len(raw_data.trades)}" if raw_data.trades else "candle_fallback",
+            timestamp=raw_data.trades[0].get("timestamp") if raw_data.trades else raw_data.ohlcv.attrs.get("timestamp"),
+            raw_value=result,
+        )
+    
+    # FASE 3: QUALITY CHECK (staleness)
+    now = datetime.now(timezone.utc)
+    for name, envelope in envelopes.items():
+        age_seconds = (now - envelope.timestamp).total_seconds()
+        
+        if age_seconds > 600:  # > 10 min
+            envelope.status = IndicatorStatus.STALE
+            envelope.confidence *= STALENESS_PENALTY["> 10min"]
+            envelope.valid = False
+        elif age_seconds > 300:  # 5-10 min
+            envelope.confidence *= STALENESS_PENALTY["5-10min"]
+        elif age_seconds > 60:  # 1-5 min
+            envelope.confidence *= STALENESS_PENALTY["1-5min"]
+    
+    # FASE 4: VALIDATION (integridade)
+    validation_result = validate_indicator_integrity(envelopes)
+    if not validation_result.valid:
+        logger.error(f"Integrity check failed: {validation_result.errors}")
+        # Marca indicadores problemáticos como ERROR
+        for error in validation_result.errors:
+            if error.indicator_name in envelopes:
+                envelopes[error.indicator_name].status = IndicatorStatus.ERROR
+                envelopes[error.indicator_name].valid = False
+                envelopes[error.indicator_name].error_msg = error.message
+    
+    # FASE 5: THRESHOLD APPLICATION
+    thresholds = load_thresholds(symbol)
+    for name, envelope in envelopes.items():
+        if envelope.value is not None and name in thresholds:
+            threshold = thresholds[name]
+            envelope.threshold_used = threshold.value
+            
+            if threshold.operator == ">=":
+                envelope.status = IndicatorStatus.PASS if envelope.value >= threshold.value else IndicatorStatus.FAIL
+            elif threshold.operator == "<=":
+                envelope.status = IndicatorStatus.PASS if envelope.value <= threshold.value else IndicatorStatus.FAIL
+            # ... outros operadores
+        elif envelope.value is None:
+            envelope.status = IndicatorStatus.NO_DATA
+            envelope.valid = False
+    
+    return envelopes
+4. VALIDAÇÃO DE INTEGRIDADE
+4.1 Regras de Validação
+Python
+@dataclass
+class ValidationRule:
+    name: str
+    check: Callable[[Dict[str, IndicatorEnvelope]], bool]
+    severity: str  # "CRITICAL" | "WARNING"
+    error_message: str
+
+VALIDATION_RULES = [
+    # Regra 1: Volume Delta Exclusivity
+    ValidationRule(
+        name="volume_delta_bucket_exclusivity",
+        check=lambda envs: sum(
+            1 for k in envs 
+            if k.startswith("volume_delta_") and envs[k].status == IndicatorStatus.PASS
+        ) <= 1,
+        severity="CRITICAL",
+        error_message="Multiple volume_delta buckets are PASS simultaneously",
+    ),
+    
+    # Regra 2: NO_DATA em indicadores críticos
+    ValidationRule(
+        name="critical_indicators_available",
+        check=lambda envs: all(
+            envs.get(ind, IndicatorEnvelope(status=IndicatorStatus.NO_DATA)).status != IndicatorStatus.NO_DATA
+            for ind in ["volume_24h_usdt", "rsi", "adx"]
+        ),
+        severity="CRITICAL",
+        error_message="Critical indicators have NO_DATA",
+    ),
+    
+    # Regra 3: Candle fallback para flow não domina
+    ValidationRule(
+        name="flow_indicators_primary_source",
+        check=lambda envs: not any(
+            envs.get(ind, IndicatorEnvelope(source=DataSource.BINANCE)).source == DataSource.CANDLE_APPROX
+            and envs[ind].confidence > 0.6
+            for ind in ["taker_ratio", "volume_delta"]
+        ),
+        severity="WARNING",
+        error_message="Flow indicators using candle fallback with high confidence",
+    ),
+    
+    # Regra 4: Dependências satisfeitas
+    ValidationRule(
+        name="derived_indicators_dependencies",
+        check=lambda envs: all(
+            all(dep in envs and envs[dep].valid for dep in env.dependencies)
+            for env in envs.values()
+            if env.source == DataSource.DERIVED
+        ),
+        severity="CRITICAL",
+        error_message="Derived indicators have invalid dependencies",
+    ),
+    
+    # Regra 5: Sufficient candles
+    ValidationRule(
+        name="sufficient_candles_for_calculation",
+        check=lambda envs: all(
+            env.actual_candles >= env.min_candles_required
+            for env in envs.values()
+            if env.min_candles_required is not None
+        ),
+        severity="CRITICAL",
+        error_message="Insufficient candles for indicator calculation",
+    ),
+]
+
+def validate_indicator_integrity(envelopes: Dict[str, IndicatorEnvelope]) -> ValidationResult:
+    """Executa todas as regras de validação."""
+    errors = []
+    warnings = []
+    
+    for rule in VALIDATION_RULES:
+        try:
+            if not rule.check(envelopes):
+                if rule.severity == "CRITICAL":
+                    errors.append(ValidationError(
+                        rule_name=rule.name,
+                        indicator_name=None,  # ou detectar qual
+                        message=rule.error_message,
+                    ))
+                else:
+                    warnings.append(rule.error_message)
+        except Exception as e:
+            errors.append(ValidationError(
+                rule_name=rule.name,
+                indicator_name=None,
+                message=f"Validation rule failed: {e}",
+            ))
+    
+    return ValidationResult(
+        valid=len(errors) == 0,
+        errors=errors,
+        warnings=warnings,
+    )
+5. SCORE ENGINE COM CONFIDENCE
+5.1 Score Ponderado por Confiança
+Python
+def calculate_score_with_confidence(
+    envelopes: Dict[str, IndicatorEnvelope],
+    scoring_rules: List[ScoringRule],
+) -> ScoreResult:
+    """Calcula score ponderado pela confiança dos indicadores."""
+    
+    # GATE 1: Bloqueio por indicadores críticos inválidos
+    critical_indicators = ["volume_24h_usdt", "orderbook_depth_usdt", "rsi", "adx"]
+    for ind_name in critical_indicators:
+        if ind_name not in envelopes or not envelopes[ind_name].valid:
+            return ScoreResult(
+                score=0,
+                status="REJECTED",
+                reason=f"Critical indicator {ind_name} is invalid",
+                confidence=0.0,
+                can_trade=False,
+            )
+    
+    # GATE 2: Confiança mínima global
+    global_confidence = sum(env.confidence for env in envelopes.values()) / len(envelopes)
+    if global_confidence < 0.6:
+        return ScoreResult(
+            score=0,
+            status="REJECTED",
+            reason=f"Global confidence too low: {global_confidence:.2f}",
+            confidence=global_confidence,
+            can_trade=False,
+        )
+    
+    # Cálculo do score
+    total_score = 0.0
+    total_weight = 0.0
+    score_breakdown = []
+    
+    for rule in scoring_rules:
+        envelope = envelopes.get(rule.indicator)
+        if not envelope or not envelope.valid:
+            # Indicador não disponível ou inválido → 0 pontos
+            continue
+        
+        # Avalia se o indicador passa no threshold da regra
+        if evaluate_rule(envelope.value, rule.operator, rule.value):
+            # Pontos ponderados pela confiança
+            weighted_points = rule.points * envelope.confidence
+            total_score += weighted_points
+            total_weight += rule.points
+            
+            score_breakdown.append({
+                "rule_id": rule.id,
+                "indicator": rule.indicator,
+                "value": envelope.value,
+                "raw_points": rule.points,
+                "confidence": envelope.confidence,
+                "weighted_points": weighted_points,
+                "source": envelope.source.value,
+            })
+    
+    # Normaliza score (0-100)
+    final_score = (total_score / total_weight * 100) if total_weight > 0 else 0
+    
+    # Confiança do score = média ponderada das confiâncias dos indicadores usados
+    indicators_used = [env for env in envelopes.values() if env.valid]
+    score_confidence = (
+        sum(env.confidence for env in indicators_used) / len(indicators_used)
+        if indicators_used else 0.0
+    )
+    
+    return ScoreResult(
+        score=final_score,
+        status="PASS" if final_score >= 65 else "FAIL",
+        confidence=score_confidence,
+        breakdown=score_breakdown,
+        can_trade=final_score >= 65 and score_confidence >= 0.7,
+        indicators_used=len(indicators_used),
+        indicators_total=len(envelopes),
+    )
+6. ELIMINAÇÃO DE FALLBACK IMPRECISO
+6.1 Estratégia de Degradação Graceful
+Python
+class FlowIndicatorStrategy:
+    """Estratégia para indicadores de fluxo (taker ratio, volume delta)."""
+    
+    @staticmethod
+    async def compute(trades: List[dict], candles: pd.DataFrame) -> IndicatorEnvelope:
+        # PRIORIDADE 1: Dados reais de trades
+        if trades and len(trades) >= 100:  # mínimo de trades para confiança
+            taker_ratio = compute_taker_ratio_from_trades(trades)
+            return IndicatorEnvelope(
+                name="taker_ratio",
+                value=taker_ratio,
+                source=DataSource.BINANCE,
+                source_detail=f"binance_trades_{len(trades)}",
+                confidence=0.95,
+                valid=True,
+                status=IndicatorStatus.PASS,
+                timestamp=datetime.now(timezone.utc),
+            )
+        
+        # PRIORIDADE 2: Sem dados reais → marcar como NO_DATA em vez de fallback
+        else:
+            logger.warning(
+                f"No trade data available for taker_ratio (trades={len(trades)}). "
+                "Marking as NO_DATA instead of using candle approximation."
+            )
+            return IndicatorEnvelope(
+                name="taker_ratio",
+                value=None,
+                source=DataSource.CANDLE_APPROX,  # marca a fonte tentada
+                source_detail="insufficient_data",
+                confidence=0.0,
+                valid=False,
+                status=IndicatorStatus.NO_DATA,
+                timestamp=datetime.now(timezone.utc),
+                error_msg="Insufficient trade data for reliable calculation",
+            )
+        
+        # REMOVIDO: fallback via candles
+        # Justificativa: candles não medem agressão real, apenas direção de preço
+6.2 Config para Habilitar Fallback (opt-in)
+Python
+# Em seed_service.py DEFAULT_INDICATORS
+"taker_ratio": {
+    "enabled": True,
+    "lookback": 20,
+    "allow_candle_fallback": False,  # NOVO: desabilitado por padrão
+    "min_trades_required": 100,      # NOVO: mínimo para confiança
+}
+7. NORMALIZAÇÃO DE INDICADORES
+7.1 MACD Histogram Normalizado
+Python
+def _calc_macd(self, df: pd.DataFrame) -> Dict[str, Any]:
+    """Calcula MACD com histogram normalizado."""
+    cfg = self.config["macd"]
+    fast, slow, signal_p = cfg.get("fast", 12), cfg.get("slow", 26), cfg.get("signal", 9)
+    
+    # Cálculo padrão
+    ema_fast = df["close"].ewm(span=fast, adjust=False).mean()
+    ema_slow = df["close"].ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal_p, adjust=False).mean()
+    histogram = macd_line - signal_line
+    
+    current_price = float(df["close"].iloc[-1])
+    hist_val = float(histogram.iloc[-1])
+    
+    # NORMALIZAÇÃO: histogram como % do preço
+    hist_normalized = (hist_val / current_price * 100) if current_price > 0 else 0.0
+    
+    return {
+        "macd": round(float(macd_line.iloc[-1]), 8),
+        "macd_signal_line": round(float(signal_line.iloc[-1]), 8),
+        "macd_histogram": round(hist_val, 8),                      # valor absoluto (legacy)
+        "macd_histogram_pct": round(hist_normalized, 4),          # NOVO: normalizado
+        "macd_histogram_prev": round(float(histogram.iloc[-2]), 8) if len(histogram) >= 2 else None,
+        # ... resto dos campos
+    }
+8. MIGRAÇÃO SEM QUEBRAR PRODUÇÃO
+8.1 Fases de Rollout
+Code
+FASE 1: DUAL WRITE (2 semanas)
+├─ Sistema antigo continua funcionando
+├─ Novo sistema roda em paralelo (shadow mode)
+├─ Logs comparam resultados antigo vs novo
+└─ Alertas se divergência > 10%
+
+FASE 2: GRADUAL ROLLOUT (2 semanas)
+├─ 10% do tráfego usa novo sistema
+├─ 90% usa sistema antigo
+├─ Monitoramento de falhas, latência, accuracy
+└─ Se estável → aumenta para 50%, depois 100%
+
+FASE 3: DEPRECATION (1 semana)
+├─ 100% no novo sistema
+├─ Sistema antigo em standby
+└─ Rollback rápido se necessário
+
+FASE 4: CLEANUP (1 semana)
+├─ Remove código antigo
+└─ Atualiza documentação
+8.2 Feature Flag
+Python
+# Em config
+USE_ROBUST_INDICATORS = os.getenv("USE_ROBUST_INDICATORS", "false").lower() == "true"
+
+# No código
+if USE_ROBUST_INDICATORS:
+    indicators = await compute_indicators_robust(symbol, timeframe)
+else:
+    indicators = await compute_indicators_legacy(symbol, timeframe)
+9. MONITORAMENTO E OBSERVABILIDADE
+9.1 Métricas Chave
+Python
+# Prometheus metrics
+indicator_computation_duration = Histogram(
+    "indicator_computation_duration_seconds",
+    "Time to compute indicators",
+    ["symbol", "indicator", "source"]
+)
+
+indicator_confidence = Gauge(
+    "indicator_confidence",
+    "Confidence score of indicator",
+    ["symbol", "indicator", "source"]
+)
+
+indicator_staleness = Gauge(
+    "indicator_staleness_seconds",
+    "Age of indicator data",
+    ["symbol", "indicator"]
+)
+
+score_rejection_total = Counter(
+    "score_rejection_total",
+    "Number of scores rejected",
+    ["reason"]
+)
+9.2 Alertas
+YAML
+# Alertmanager rules
+- alert: HighIndicatorStaleness
+  expr: indicator_staleness_seconds > 300
+  for: 2m
+  annotations:
+    summary: "Indicator {{ $labels.indicator }} for {{ $labels.symbol }} is stale"
+
+- alert: LowGlobalConfidence
+  expr: avg(indicator_confidence) < 0.6
+  for: 5m
+  annotations:
+    summary: "Global indicator confidence is below 60%"
+
+- alert: HighRejectionRate
+  expr: rate(score_rejection_total[5m]) > 0.5
+  for: 5m
+  annotations:
+    summary: "More than 50% of scores are being rejected"
+10. PSEUDOCÓDIGO COMPLETO DO SISTEMA CORRIGIDO
+Python
+# ============================================================
+# MAIN ENTRY POINT
+# ============================================================
+
+async def evaluate_trading_opportunity(symbol: str) -> TradingDecision:
+    """Entry point principal — decide se deve tradear."""
+    
+    # 1. COLETA DE DADOS COM ENVELOPE
+    try:
+        envelopes = await compute_indicators_robust(symbol, timeframe="1h")
+    except Exception as e:
+        logger.exception(f"Failed to compute indicators for {symbol}")
+        return TradingDecision(
+            symbol=symbol,
+            action="REJECT",
+            reason=f"Indicator computation failed: {e}",
+            confidence=0.0,
+        )
+    
+    # 2. VALIDAÇÃO DE INTEGRIDADE
+    validation = validate_indicator_integrity(envelopes)
+    if not validation.valid:
+        logger.error(f"Integrity validation failed for {symbol}: {validation.errors}")
+        return TradingDecision(
+            symbol=symbol,
+            action="REJECT",
+            reason=f"Integrity check failed: {validation.errors[0].message}",
+            confidence=0.0,
+            validation_errors=validation.errors,
+        )
+    
+    # 3. LOG DE WARNINGS (não bloqueia, mas alerta)
+    if validation.warnings:
+        for warning in validation.warnings:
+            logger.warning(f"{symbol}: {warning}")
+    
+    # 4. CÁLCULO DE SCORE COM CONFIDENCE
+    scoring_rules = load_scoring_rules(symbol)
+    score_result = calculate_score_with_confidence(envelopes, scoring_rules)
+    
+    # 5. DECISÃO FINAL
+    if not score_result.can_trade:
+        return TradingDecision(
+            symbol=symbol,
+            action="REJECT",
+            reason=score_result.reason,
+            score=score_result.score,
+            confidence=score_result.confidence,
+            indicators=envelopes,
+        )
+    
+    # 6. APROVADO
+    return TradingDecision(
+        symbol=symbol,
+        action="BUY",
+        score=score_result.score,
+        confidence=score_result.confidence,
+        indicators=envelopes,
+        score_breakdown=score_result.breakdown,
+    )
+
+
+# ============================================================
+# HELPERS
+# ============================================================
+
+def wrap_indicator(
+    name: str,
+    value: Optional[float],
+    source: DataSource,
+    timestamp: datetime,
+    **kwargs,
+) -> IndicatorEnvelope:
+    """Cria envelope com defaults seguros."""
+    
+    confidence = CONFIDENCE_MAP.get(source, 0.5)
+    
+    # Aplica penalidade de staleness
+    age_seconds = (datetime.now(timezone.utc) - timestamp).total_seconds()
+    if age_seconds > 600:
+        confidence *= STALENESS_PENALTY["> 10min"]
+        status = IndicatorStatus.STALE
+        valid = False
+    elif age_seconds > 300:
+        confidence *= STALENESS_PENALTY["5-10min"]
+        status = IndicatorStatus.NO_DATA if value is None else IndicatorStatus.PASS
+        valid = value is not None
+    else:
+        status = IndicatorStatus.NO_DATA if value is None else IndicatorStatus.PASS
+        valid = value is not None
+    
+    return IndicatorEnvelope(
+        name=name,
+        value=value,
+        status=status,
+        source=source,
+        timestamp=timestamp,
+        confidence=confidence,
+        valid=valid,
+        **kwargs,
+    )
+
+
+# ============================================================
+# PERSISTENCE (nova tabela)
+# ============================================================
+
+class IndicatorSnapshot(Base):
+    """Armazena snapshot completo dos indicadores com metadata."""
+    
+    __tablename__ = "indicator_snapshots"
+    
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String, nullable=False, index=True)
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+    
+    # JSON com todos os envelopes
+    indicators_json = Column(JSONB, nullable=False)
+    
+    # Agregados
+    global_confidence = Column(Numeric(5, 4), nullable=False)
+    valid_indicators = Column(Integer, nullable=False)
+    total_indicators = Column(Integer, nullable=False)
+    
+    # Resultado de validação
+    validation_passed = Column(Boolean, nullable=False)
+    validation_errors = Column(JSONB, nullable=True)
+    
+    # Score
+    score = Column(Numeric(10, 2), nullable=True)
+    score_confidence = Column(Numeric(5, 4), nullable=True)
+    can_trade = Column(Boolean, nullable=False, default=False)
+11. RESUMO DAS CORREÇÕES
+Problema	Solução
+Fallback impreciso (candle ≠ flow)	Marcar como NO_DATA em vez de aproximação. Config opt-in para fallback.
+Sistema não diferencia fonte	IndicatorEnvelope.source + source_detail
+NO_DATA ainda pontua	Gate crítico: bloqueia se indicador crítico inválido
+Sem validação de staleness	IndicatorEnvelope.timestamp + penalidade automática
+Score não considera confiança	weighted_points = raw_points × confidence
+Indicadores derivados não exclusivos	Regra de validação volume_delta_bucket_exclusivity
+Thresholds inconsistentes	Documentar threshold real em IndicatorEnvelope.threshold_used
+MACD não normalizado	Novo campo macd_histogram_pct
+12. CHECKLIST DE IMPLEMENTAÇÃO
+ Criar dataclasses IndicatorEnvelope, ValidationRule, ScoreResult
+ Implementar compute_indicators_robust() com wrapping
+ Adicionar staleness check com penalidades
+ Criar validate_indicator_integrity() com regras
+ Refatorar calculate_score() para usar confidence weighting
+ Remover fallback candle de taker_ratio e volume_delta
+ Adicionar macd_histogram_pct normalizado
+ Criar tabela indicator_snapshots (migration)
+ Adicionar feature flag USE_ROBUST_INDICATORS
+ Implementar dual-write para comparação
+ Adicionar métricas Prometheus
+ Configurar alertas Alertmanager
+ Testar com símbolos: BTC, ETH, XRP, low-cap coin
+ Documentar novo sistema
+</plan>
