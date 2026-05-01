@@ -4,7 +4,7 @@ import logging
 from typing import Optional
 
 from .celery_app import celery_app
-from ..database import CeleryAsyncSessionLocal
+from ..database import run_db_task
 from ..services.simulation_service import SimulationService
 
 logger = logging.getLogger(__name__)
@@ -28,51 +28,44 @@ def run_trade_simulation(
     from sqlalchemy import select
     from ..models.backoffice import DecisionLog
 
-    async def _run():
-        async with CeleryAsyncSessionLocal() as session:
-            # Fetch decision
-            result = await session.execute(
-                select(DecisionLog).where(DecisionLog.id == decision_id)
-            )
-            decision = result.scalars().first()
+    async def _inner(session):
+        result = await session.execute(
+            select(DecisionLog).where(DecisionLog.id == decision_id)
+        )
+        decision = result.scalars().first()
 
-            if not decision:
-                logger.error("Decision %s not found", decision_id)
-                return {
-                    "status": "error",
-                    "message": f"Decision {decision_id} not found"
-                }
-
-            # Get config
-            service = SimulationService(session)
-            config = await service.get_simulation_config(user_id)
-
-            # Run simulation
-            records = await service.simulate_decision(decision, config, exchange)
-
-            if not records:
-                logger.warning("No simulation records generated for decision %s", decision_id)
-                return {
-                    "status": "skipped",
-                    "decision_id": decision_id,
-                    "message": "No valid simulation records"
-                }
-
-            # Insert records
-            inserted = await service.repository.bulk_insert_simulations(records)
-
-            logger.info(
-                "Simulated decision %s: %d records inserted",
-                decision_id, inserted
-            )
-
+        if not decision:
+            logger.error("Decision %s not found", decision_id)
             return {
-                "status": "success",
-                "decision_id": decision_id,
-                "records_inserted": inserted,
+                "status": "error",
+                "message": f"Decision {decision_id} not found",
             }
 
-    return asyncio.run(_run())
+        service = SimulationService(session)
+        config = await service.get_simulation_config(user_id)
+        records = await service.simulate_decision(decision, config, exchange)
+
+        if not records:
+            logger.warning(
+                "No simulation records generated for decision %s", decision_id
+            )
+            return {
+                "status": "skipped",
+                "decision_id": decision_id,
+                "message": "No valid simulation records",
+            }
+
+        inserted = await service.repository.bulk_insert_simulations(records)
+        logger.info(
+            "Simulated decision %s: %d records inserted", decision_id, inserted
+        )
+        return {
+            "status": "success",
+            "decision_id": decision_id,
+            "records_inserted": inserted,
+        }
+
+    return asyncio.run(run_db_task(_inner, celery=True))
 
 
 @celery_app.task(
@@ -80,8 +73,8 @@ def run_trade_simulation(
     bind=True,
     max_retries=3,
     default_retry_delay=60,
-    time_limit=600,  # 10 minutes max
-    soft_time_limit=540,  # 9 minutes soft limit
+    time_limit=600,
+    soft_time_limit=540,
 )
 def run_simulation_batch(
     self,
@@ -105,61 +98,53 @@ def run_simulation_batch(
     import asyncio
     from datetime import datetime, timezone
 
-    # Enforce maximum batch size
     limit = min(limit, 1000)
-
     start_time = datetime.now(timezone.utc)
     logger.info(
         "[Simulation] Starting batch simulation: limit=%d, skip_existing=%s, exchange=%s",
-        limit, skip_existing, exchange
+        limit, skip_existing, exchange,
     )
 
     async def _run():
-        async with CeleryAsyncSessionLocal() as session:
-            try:
-                service = SimulationService(session)
-                result = await service.run_simulation_batch(
-                    limit=limit,
-                    skip_existing=skip_existing,
-                    user_id=user_id,
-                    exchange=exchange,
-                )
+        async def _inner(session):
+            service = SimulationService(session)
+            return await service.run_simulation_batch(
+                limit=limit,
+                skip_existing=skip_existing,
+                user_id=user_id,
+                exchange=exchange,
+            )
 
-                # Enhanced logging
-                duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+        try:
+            result = await run_db_task(_inner, celery=True)
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+            logger.info(
+                "[Simulation] Batch complete in %.2fs: processed=%d, skipped=%d, "
+                "simulated=%d, errors=%d, records_inserted=%d",
+                duration,
+                result.get("processed", 0),
+                result.get("skipped", 0),
+                result.get("simulated", 0),
+                result.get("errors", 0),
+                result.get("records_inserted", 0),
+            )
+            result["last_run"] = start_time.isoformat()
+            result["duration_seconds"] = duration
+            return result
+
+        except Exception as exc:
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+            logger.error(
+                "[Simulation] Batch failed after %.2fs: %s",
+                duration, exc, exc_info=True,
+            )
+            if self.request.retries < self.max_retries:
                 logger.info(
-                    "[Simulation] Batch complete in %.2fs: processed=%d, skipped=%d, "
-                    "simulated=%d, errors=%d, records_inserted=%d",
-                    duration,
-                    result.get("processed", 0),
-                    result.get("skipped", 0),
-                    result.get("simulated", 0),
-                    result.get("errors", 0),
-                    result.get("records_inserted", 0),
+                    "[Simulation] Retrying batch (attempt %d/%d)",
+                    self.request.retries + 1, self.max_retries,
                 )
-
-                # Store last run info in result for status endpoint
-                result["last_run"] = start_time.isoformat()
-                result["duration_seconds"] = duration
-
-                return result
-
-            except Exception as exc:
-                duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-                logger.error(
-                    "[Simulation] Batch failed after %.2fs: %s",
-                    duration, exc, exc_info=True
-                )
-
-                # Retry on transient errors
-                if self.request.retries < self.max_retries:
-                    logger.info(
-                        "[Simulation] Retrying batch (attempt %d/%d)",
-                        self.request.retries + 1, self.max_retries
-                    )
-                    raise self.retry(exc=exc)
-
-                raise
+                raise self.retry(exc=exc)
+            raise
 
     try:
         return asyncio.run(_run())
@@ -178,10 +163,8 @@ def get_simulation_stats():
     """
     import asyncio
 
-    async def _run():
-        async with CeleryAsyncSessionLocal() as session:
-            service = SimulationService(session)
-            stats = await service.get_stats()
-            return stats
+    async def _inner(session):
+        service = SimulationService(session)
+        return await service.get_stats()
 
-    return asyncio.run(_run())
+    return asyncio.run(run_db_task(_inner, celery=True))

@@ -27,6 +27,11 @@ class SimulationRepository:
         """
         Bulk insert simulation records with ON CONFLICT DO NOTHING for idempotency.
 
+        Commit responsibility belongs to the caller's transaction block.
+        Do NOT call ``await session.commit()`` inside this method — the caller
+        must wrap the call in ``async with session.begin():`` or
+        ``run_db_task(...)`` so the transaction lifecycle is managed uniformly.
+
         Args:
             records: List of dicts with simulation data
             batch_size: Number of records per insert batch
@@ -81,7 +86,6 @@ class SimulationRepository:
             await self.session.execute(query, params)
             total += len(batch)
 
-        await self.session.commit()
         return total
 
     async def get_existing_simulations(
@@ -194,6 +198,11 @@ class SimulationRepository:
         """
         Delete all simulations for a specific symbol.
 
+        Commit responsibility belongs to the caller's transaction block.
+        Do NOT call ``await session.commit()`` inside this method — the caller
+        must wrap the call in ``async with session.begin():`` or
+        ``run_db_task(...)`` so the transaction lifecycle is managed uniformly.
+
         Args:
             symbol: Trading symbol
 
@@ -204,5 +213,4 @@ class SimulationRepository:
             text("DELETE FROM trade_simulations WHERE symbol = :symbol"),
             {"symbol": symbol}
         )
-        await self.session.commit()
         return result.rowcount

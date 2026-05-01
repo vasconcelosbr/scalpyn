@@ -54,113 +54,112 @@ async def _fetch_from_gate(symbols: set[str] | None = None) -> dict[str, float]:
 
 async def _fetch_market_caps_async() -> dict:
     from sqlalchemy import select, text
-    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
+    from ..database import run_db_task
     from ..models.ai_provider_key import AIProviderKey
     from ..services.ai_keys_service import decrypt_value
 
-    stats = {
-        "source": "coinmarketcap",
-        "updated_metadata": 0,
-        "updated_pipeline": 0,
-        "error": None,
-        "warning": None,
-    }
+    async def _inner(db) -> dict:
+        stats = {
+            "source": "coinmarketcap",
+            "updated_metadata": 0,
+            "updated_pipeline": 0,
+            "error": None,
+            "warning": None,
+        }
 
-    async with AsyncSessionLocal() as db:
-        try:
-            mm_symbols = await _get_distinct_symbols(db, "market_metadata")
-            pwa_symbols = await _get_distinct_symbols(db, "pipeline_watchlist_assets")
-            all_pairs = set(mm_symbols) | set(pwa_symbols)
-            requested_bases = list({_base_from_pair(symbol_pair) for symbol_pair in all_pairs if symbol_pair})
-            used_cmc = False
-            used_gate = False
+        mm_symbols = await _get_distinct_symbols(db, "market_metadata")
+        pwa_symbols = await _get_distinct_symbols(db, "pipeline_watchlist_assets")
+        all_pairs = set(mm_symbols) | set(pwa_symbols)
+        requested_bases = list({_base_from_pair(s) for s in all_pairs if s})
+        used_cmc = False
+        used_gate = False
 
-            cmc_row_res = await db.execute(
-                select(AIProviderKey).where(
-                    AIProviderKey.provider == "coinmarketcap",
-                    AIProviderKey.is_active == True,
-                ).limit(1)
-            )
-            cmc_row = cmc_row_res.scalars().first()
+        cmc_row_res = await db.execute(
+            select(AIProviderKey).where(
+                AIProviderKey.provider == "coinmarketcap",
+                AIProviderKey.is_active == True,
+            ).limit(1)
+        )
+        cmc_row = cmc_row_res.scalars().first()
 
-            market_caps: dict[str, float] = {}
-            if cmc_row:
-                try:
-                    raw = bytes(cmc_row.api_key_encrypted) if isinstance(cmc_row.api_key_encrypted, memoryview) else cmc_row.api_key_encrypted
-                    cmc_key = decrypt_value(raw).strip()
-                    market_caps = await fetch_cmc_market_caps(requested_bases, cmc_key)
-                    used_cmc = bool(market_caps)
-                except Exception as exc:
-                    stats["warning"] = "cmc_fetch_failed"
-                    logger.error("Failed to fetch market caps from CoinMarketCap: %s", exc)
-            else:
-                stats["warning"] = "cmc_key_missing"
-                logger.warning("CoinMarketCap key not configured; using Gate.io fallback only.")
+        market_caps: dict[str, float] = {}
+        if cmc_row:
+            try:
+                raw = (
+                    bytes(cmc_row.api_key_encrypted)
+                    if isinstance(cmc_row.api_key_encrypted, memoryview)
+                    else cmc_row.api_key_encrypted
+                )
+                cmc_key = decrypt_value(raw).strip()
+                market_caps = await fetch_cmc_market_caps(requested_bases, cmc_key)
+                used_cmc = bool(market_caps)
+            except Exception as exc:
+                stats["warning"] = "cmc_fetch_failed"
+                logger.error("Failed to fetch market caps from CoinMarketCap: %s", exc)
+        else:
+            stats["warning"] = "cmc_key_missing"
+            logger.warning("CoinMarketCap key not configured; using Gate.io fallback only.")
 
-            missing_bases = set(requested_bases) - set(market_caps)
-            if missing_bases:
-                gate_caps = await _fetch_from_gate(missing_bases)
-                if gate_caps:
-                    market_caps.update(gate_caps)
-                    used_gate = True
-                    logger.info(
-                        "Gate.io fallback filled %d/%d missing market caps.",
-                        len([base for base in missing_bases if base in gate_caps]),
-                        len(missing_bases),
-                    )
+        missing_bases = set(requested_bases) - set(market_caps)
+        if missing_bases:
+            gate_caps = await _fetch_from_gate(missing_bases)
+            if gate_caps:
+                market_caps.update(gate_caps)
+                used_gate = True
+                logger.info(
+                    "Gate.io fallback filled %d/%d missing market caps.",
+                    len([b for b in missing_bases if b in gate_caps]),
+                    len(missing_bases),
+                )
 
-            if not market_caps:
-                stats["error"] = "no_data"
-                return stats
+        if not market_caps:
+            stats["error"] = "no_data"
+            return stats
 
-            if used_cmc and used_gate:
-                stats["source"] = "coinmarketcap+gate.io-fallback"
-            elif used_gate:
-                stats["source"] = "gate.io"
-            else:
-                stats["source"] = "coinmarketcap"
+        if used_cmc and used_gate:
+            stats["source"] = "coinmarketcap+gate.io-fallback"
+        elif used_gate:
+            stats["source"] = "gate.io"
+        else:
+            stats["source"] = "coinmarketcap"
 
-            # 3. Update market_metadata
-            for symbol_pair in mm_symbols:
-                try:
-                    base = _base_from_pair(symbol_pair)
-                    mcap = market_caps.get(base)
-                    if mcap:
+        # Update market_metadata — each symbol isolated in its own SAVEPOINT
+        for symbol_pair in mm_symbols:
+            try:
+                base = _base_from_pair(symbol_pair)
+                mcap = market_caps.get(base)
+                if mcap:
+                    async with db.begin_nested():
                         await db.execute(text(
                             "UPDATE market_metadata SET market_cap = :mcap WHERE symbol = :symbol"
                         ), {"mcap": mcap, "symbol": symbol_pair})
-                        stats["updated_metadata"] += 1
-                except Exception as e:
-                    logger.debug("Failed to update market_metadata for %s: %s", symbol_pair, e)
-                    await db.rollback()
-                    continue
+                    stats["updated_metadata"] += 1
+            except Exception as e:
+                logger.debug("Failed to update market_metadata for %s: %s", symbol_pair, e)
+                continue
 
-            # 4. Update pipeline_watchlist_assets
-            for symbol_pair in pwa_symbols:
-                try:
-                    base = _base_from_pair(symbol_pair)
-                    mcap = market_caps.get(base)
-                    if mcap:
+        # Update pipeline_watchlist_assets — each symbol isolated in its own SAVEPOINT
+        for symbol_pair in pwa_symbols:
+            try:
+                base = _base_from_pair(symbol_pair)
+                mcap = market_caps.get(base)
+                if mcap:
+                    async with db.begin_nested():
                         await db.execute(text(
                             "UPDATE pipeline_watchlist_assets SET market_cap = :mcap WHERE symbol = :symbol"
                         ), {"mcap": mcap, "symbol": symbol_pair})
-                        stats["updated_pipeline"] += 1
-                except Exception as e:
-                    logger.debug("Failed to update pipeline_watchlist_assets for %s: %s", symbol_pair, e)
-                    await db.rollback()
-                    continue
+                    stats["updated_pipeline"] += 1
+            except Exception as e:
+                logger.debug("Failed to update pipeline_watchlist_assets for %s: %s", symbol_pair, e)
+                continue
 
-            await db.commit()
-        except Exception as e:
-            logger.error("Market cap fetch failed: %s", e)
-            await db.rollback()
-            raise
+        logger.info(
+            "Market cap update complete — source=%s  metadata=%d  pipeline=%d",
+            stats["source"], stats["updated_metadata"], stats["updated_pipeline"],
+        )
+        return stats
 
-    logger.info(
-        "Market cap update complete — source=%s  metadata=%d  pipeline=%d",
-        stats["source"], stats["updated_metadata"], stats["updated_pipeline"],
-    )
-    return stats
+    return await run_db_task(_inner, celery=True)
 
 
 def _base_from_pair(symbol: str) -> str:

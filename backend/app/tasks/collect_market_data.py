@@ -20,7 +20,7 @@ def _run_async(coro):
 
 async def _collect_all_async():
     from ..services.market_data_service import market_data_service
-    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
+    from ..database import run_db_task
     from ..services.config_service import config_service
     from sqlalchemy import text
 
@@ -38,18 +38,20 @@ async def _collect_all_async():
         return 0
 
     logger.info(f"Collecting data for {len(symbols)} symbols")
-    collected = 0
 
-    # Fetch and store OHLCV for each symbol
-    async with AsyncSessionLocal() as db:
-        try:
-            for symbol in symbols[:50]:  # Limit to avoid rate limits
-                try:
-                    df = await market_data_service.fetch_ohlcv(symbol, "1h", limit=100)
-                    if df is None or df.empty:
-                        continue
+    async def _inner(db) -> int:
+        collected = 0
 
-                    ohlcv_exchange = df.attrs.get("exchange", "gate.io")
+        for symbol in symbols[:50]:  # Limit to avoid rate limits
+            try:
+                df = await market_data_service.fetch_ohlcv(symbol, "1h", limit=100)
+                if df is None or df.empty:
+                    continue
+
+                ohlcv_exchange = df.attrs.get("exchange", "gate.io")
+                # Each symbol's writes are isolated in a SAVEPOINT so that a
+                # single failure never aborts the whole collection transaction.
+                async with db.begin_nested():
                     for _, row in df.iterrows():
                         await db.execute(text("""
                             INSERT INTO ohlcv (time, symbol, exchange, timeframe, open, high, low, close, volume, quote_volume)
@@ -82,37 +84,37 @@ async def _collect_all_async():
                         "updated": datetime.now(timezone.utc),
                     })
 
-                    collected += 1
-                except Exception as e:
-                    logger.warning(f"Failed to collect {symbol}: {e}")
-                    await db.rollback()
-                    continue
+                collected += 1
+            except Exception as e:
+                logger.warning(f"Failed to collect {symbol}: {e}")
+                continue
 
-            # Also fetch tickers for metadata (price, volume, change + spread_pct from bid/ask)
-            # Process ALL tickers (not capped) so every pool coin gets market data,
-            # even niche coins beyond the top-500.
-            try:
+        # Also fetch tickers for metadata (price, volume, change + spread_pct from bid/ask)
+        # Process ALL tickers (not capped) so every pool coin gets market data,
+        # even niche coins beyond the top-500.
+        try:
+            tickers = await market_data_service.fetch_all_tickers()
+            if not tickers:
+                logger.warning("fetch_all_tickers returned empty — retrying once after 3 s…")
+                await asyncio.sleep(3)
                 tickers = await market_data_service.fetch_all_tickers()
-                if not tickers:
-                    logger.warning("fetch_all_tickers returned empty — retrying once after 3 s…")
-                    await asyncio.sleep(3)
-                    tickers = await market_data_service.fetch_all_tickers()
 
-                now_ts = datetime.now(timezone.utc)
-                ticker_ok = 0
-                for ticker in tickers:
-                    try:
-                        pair = ticker.get("currency_pair", "")
-                        if not pair.endswith("_USDT"):
-                            continue
-                        symbol = pair  # keep BTC_USDT format (with underscore)
-                        price = float(ticker.get("last", 0) or 0)
-                        change = float(ticker.get("change_percentage", 0) or 0)
-                        volume = float(ticker.get("quote_volume", 0) or 0)
-                        # Compute spread from tickers bid/ask (no extra API call needed)
-                        spread = market_data_service.compute_spread_from_ticker(ticker)
+            now_ts = datetime.now(timezone.utc)
+            ticker_ok = 0
+            for ticker in tickers:
+                try:
+                    pair = ticker.get("currency_pair", "")
+                    if not pair.endswith("_USDT"):
+                        continue
+                    sym = pair  # keep BTC_USDT format (with underscore)
+                    price = float(ticker.get("last", 0) or 0)
+                    change = float(ticker.get("change_percentage", 0) or 0)
+                    volume = float(ticker.get("quote_volume", 0) or 0)
+                    # Compute spread from tickers bid/ask (no extra API call needed)
+                    spread = market_data_service.compute_spread_from_ticker(ticker)
 
-                        if price > 0:
+                    if price > 0:
+                        async with db.begin_nested():
                             await db.execute(text("""
                                 INSERT INTO market_metadata
                                     (symbol, price, price_change_24h, volume_24h,
@@ -125,40 +127,35 @@ async def _collect_all_async():
                                     last_updated = :updated,
                                     volume_24h_updated_at = :updated
                             """), {
-                                "symbol": symbol,
+                                "symbol": sym,
                                 "price":  price,
                                 "change": change,
                                 "volume": volume,
                                 "spread": spread,
                                 "updated": now_ts,
                             })
-                            ticker_ok += 1
-                    except Exception as te:
-                        logger.debug("Ticker metadata upsert failed for %s: %s",
-                                     ticker.get("currency_pair", "?"), te)
-                        await db.rollback()
-                        continue
+                        ticker_ok += 1
+                except Exception as te:
+                    logger.debug("Ticker metadata upsert failed for %s: %s",
+                                 ticker.get("currency_pair", "?"), te)
+                    continue
 
-                if ticker_ok:
-                    logger.info("market_metadata: upserted %d/%d tickers", ticker_ok, len(tickers))
-                else:
-                    logger.error(
-                        "market_metadata: 0 tickers upserted (fetched %d) — "
-                        "collect_5m backup pathway will provide fallback metadata.",
-                        len(tickers),
-                    )
-            except Exception as e:
-                logger.error("Failed to fetch/update metadata from tickers: %s", e)
-                await db.rollback()
-
-            await db.commit()
+            if ticker_ok:
+                logger.info("market_metadata: upserted %d/%d tickers", ticker_ok, len(tickers))
+            else:
+                logger.error(
+                    "market_metadata: 0 tickers upserted (fetched %d) — "
+                    "collect_5m backup pathway will provide fallback metadata.",
+                    len(tickers),
+                )
         except Exception as e:
-            logger.error("Market data collection failed: %s", e)
-            await db.rollback()
-            raise
+            logger.error("Failed to fetch/update metadata from tickers: %s", e)
+        # run_db_task auto-commits all successful writes on exit
 
-    logger.info(f"Market data collection complete: {collected} symbols")
-    return collected
+        logger.info(f"Market data collection complete: {collected} symbols")
+        return collected
+
+    return await run_db_task(_inner, celery=True)
 
 
 @celery_app.task(name="app.tasks.collect_market_data.collect_all")
@@ -178,7 +175,7 @@ async def _collect_5m_async():
     """
     from ..services.market_data_service import market_data_service
     from ..utils.symbol_filters import filter_real_assets
-    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
+    from ..database import run_db_task
     from sqlalchemy import text
 
     logger.info("Starting 5m market data collection...")
@@ -189,10 +186,13 @@ async def _collect_5m_async():
     })
 
     # Also include all active pool coin symbols so lower-volume assets get data
-    async with AsyncSessionLocal() as db:
-        pool_rows = (await db.execute(text(
+    async def _load_pool_syms(db):
+        return (await db.execute(text(
             "SELECT DISTINCT symbol FROM pool_coins WHERE is_active = true"
         ))).fetchall()
+
+    pool_rows = await run_db_task(_load_pool_syms, celery=True)
+
     # Normalize pool symbols to BTC_USDT format (market_metadata uses underscores)
     def _norm_sym(s: str) -> str:
         s = s.upper().strip()
@@ -210,16 +210,21 @@ async def _collect_5m_async():
     logger.info("5m collection universe: %d symbols (%d from universe, %d from pools)",
                 len(symbols), len(universe), len(pool_syms))
 
-    collected = 0
-    async with AsyncSessionLocal() as db:
-        try:
-            for symbol in symbols:  # no cap — process all pool symbols
-                try:
-                    df = await market_data_service.fetch_ohlcv(symbol, "5m", limit=288)
-                    if df is None or df.empty:
-                        continue
+    async def _inner(db) -> int:
+        collected = 0
 
-                    ohlcv_exchange = df.attrs.get("exchange", "gate.io")
+        for symbol in symbols:  # no cap — process all pool symbols
+            try:
+                df = await market_data_service.fetch_ohlcv(symbol, "5m", limit=288)
+                if df is None or df.empty:
+                    continue
+
+                ohlcv_exchange = df.attrs.get("exchange", "gate.io")
+
+                # SAVEPOINT 1: OHLCV candles + price seed.
+                # Isolated so a single symbol failure never aborts the whole
+                # collection transaction.
+                async with db.begin_nested():
                     # Bulk-insert all returned candles (ON CONFLICT DO NOTHING is idempotent)
                     for _, row in df.iterrows():
                         await db.execute(text("""
@@ -255,15 +260,16 @@ async def _collect_5m_async():
                         "ts":    datetime.now(timezone.utc),
                     })
 
-                    # Fetch orderbook metrics (spread + depth) and update market_metadata.
-                    # Non-blocking: failure here must never abort 5m OHLCV collection.
-                    # fetch_orderbook_metrics internally retries (Gate → Binance fallback)
-                    # via resilient_data_service; missing depth lands as NULL in DB, which
-                    # the pipeline treats as UNKNOWN (not FAIL) since orderbook_depth_usdt
-                    # is no longer in STRICT_META.
-                    try:
-                        ob = await market_data_service.fetch_orderbook_metrics(symbol, depth=10)
-                        if ob:
+                # SAVEPOINT 2: orderbook metrics (separate SAVEPOINT so that a
+                # DB failure here never rolls back the OHLCV + price writes above).
+                # fetch_orderbook_metrics internally retries (Gate → Binance fallback)
+                # via resilient_data_service; missing depth lands as NULL in DB, which
+                # the pipeline treats as UNKNOWN (not FAIL) since orderbook_depth_usdt
+                # is no longer in STRICT_META.
+                try:
+                    ob = await market_data_service.fetch_orderbook_metrics(symbol, depth=10)
+                    if ob:
+                        async with db.begin_nested():
                             await db.execute(text("""
                                 INSERT INTO market_metadata (symbol, spread_pct, orderbook_depth_usdt, last_updated)
                                 VALUES (:sym, :spread, :depth, :ts)
@@ -277,44 +283,44 @@ async def _collect_5m_async():
                                 "depth":  ob.get("orderbook_depth_usdt"),
                                 "ts":     datetime.now(timezone.utc),
                             })
-                        else:
-                            logger.warning(
-                                "[DATA_UNKNOWN] orderbook metrics unavailable for %s "
-                                "(Gate + Binance both failed — depth will be NULL this cycle)",
-                                symbol,
-                            )
-                    except Exception as exc:
+                    else:
                         logger.warning(
-                            "[DATA_FAIL] orderbook upsert failed for %s: %s",
-                            symbol, exc,
+                            "[DATA_UNKNOWN] orderbook metrics unavailable for %s "
+                            "(Gate + Binance both failed — depth will be NULL this cycle)",
+                            symbol,
                         )
+                except Exception as exc:
+                    logger.warning(
+                        "[DATA_FAIL] orderbook upsert failed for %s: %s",
+                        symbol, exc,
+                    )
 
-                    collected += 1
-                except Exception as e:
-                    logger.warning(f"Failed to collect 5m data for {symbol}: {e}")
-                    await db.rollback()
-                    continue
+                collected += 1
+            except Exception as e:
+                logger.warning(f"Failed to collect 5m data for {symbol}: {e}")
+                continue
 
-            # ── Backup metadata pathway: fetch tickers for volume_24h + spread ───
-            # Ensures pool coins get volume_24h populated even when collect_all's
-            # tickers block has failed.  Without volume_24h, strict profile filters
-            # reject the asset even though a metadata row exists from the OHLCV seed.
-            try:
-                tickers = await market_data_service.fetch_all_tickers()
-                if tickers:
-                    now_ts = datetime.now(timezone.utc)
-                    ticker_ok = 0
-                    for ticker in tickers:
-                        try:
-                            pair = ticker.get("currency_pair", "")
-                            if not pair.endswith("_USDT"):
-                                continue
-                            price = float(ticker.get("last", 0) or 0)
-                            if price <= 0:
-                                continue
-                            volume = float(ticker.get("quote_volume", 0) or 0)
-                            change = float(ticker.get("change_percentage", 0) or 0)
-                            spread = market_data_service.compute_spread_from_ticker(ticker)
+        # ── Backup metadata pathway: fetch tickers for volume_24h + spread ───
+        # Ensures pool coins get volume_24h populated even when collect_all's
+        # tickers block has failed.  Without volume_24h, strict profile filters
+        # reject the asset even though a metadata row exists from the OHLCV seed.
+        try:
+            tickers = await market_data_service.fetch_all_tickers()
+            if tickers:
+                now_ts = datetime.now(timezone.utc)
+                ticker_ok = 0
+                for ticker in tickers:
+                    try:
+                        pair = ticker.get("currency_pair", "")
+                        if not pair.endswith("_USDT"):
+                            continue
+                        price = float(ticker.get("last", 0) or 0)
+                        if price <= 0:
+                            continue
+                        volume = float(ticker.get("quote_volume", 0) or 0)
+                        change = float(ticker.get("change_percentage", 0) or 0)
+                        spread = market_data_service.compute_spread_from_ticker(ticker)
+                        async with db.begin_nested():
                             await db.execute(text("""
                                 INSERT INTO market_metadata
                                     (symbol, price, price_change_24h, volume_24h,
@@ -336,46 +342,45 @@ async def _collect_5m_async():
                                 "spread": spread,
                                 "updated": now_ts,
                             })
-                            ticker_ok += 1
-                        except Exception as te:
-                            logger.debug("5m: backup ticker upsert failed for %s: %s",
-                                         ticker.get("currency_pair", "?"), te)
-                            await db.rollback()
-                            continue
-                    logger.info("5m: backup ticker metadata upserted for %d symbols", ticker_ok)
-            except Exception as e:
-                logger.debug("5m: backup ticker fetch failed (non-blocking): %s", e)
-                await db.rollback()
+                        ticker_ok += 1
+                    except Exception as te:
+                        logger.debug("5m: backup ticker upsert failed for %s: %s",
+                                     ticker.get("currency_pair", "?"), te)
+                        continue
+                logger.info("5m: backup ticker metadata upserted for %d symbols", ticker_ok)
+        except Exception as e:
+            logger.debug("5m: backup ticker fetch failed (non-blocking): %s", e)
 
-            # Per-symbol Gate ticker fallback for long-tail pairs missing from the
-            # batch endpoint. Staleness is checked against `volume_24h_updated_at`
-            # (written only by ticker writers) — NOT `last_updated`, which is
-            # touched by price/orderbook seeds in this same task and would
-            # otherwise mask stale volume figures.
-            try:
-                stale_rows = (await db.execute(text("""
-                    SELECT symbol
-                    FROM market_metadata
-                    WHERE symbol = ANY(:syms)
-                      AND (
-                            volume_24h IS NULL
-                         OR volume_24h_updated_at IS NULL
-                         OR volume_24h_updated_at < now() - interval '10 minutes'
-                      )
-                """), {"syms": symbols})).fetchall()
-                stale_syms = [r.symbol for r in stale_rows]
-                if stale_syms:
-                    logger.info("5m: per-symbol Gate ticker fallback for %d stale symbols", len(stale_syms))
-                    refreshed = 0
-                    for sym in stale_syms:
-                        try:
-                            ticker = await market_data_service._fetch_gate_ticker(sym)
-                            if not ticker:
-                                continue
-                            price = float(ticker.get("last", 0) or 0)
-                            volume = float(ticker.get("quote_volume", 0) or 0)
-                            if price <= 0 or volume <= 0:
-                                continue
+        # Per-symbol Gate ticker fallback for long-tail pairs missing from the
+        # batch endpoint. Staleness is checked against `volume_24h_updated_at`
+        # (written only by ticker writers) — NOT `last_updated`, which is
+        # touched by price/orderbook seeds in this same task and would
+        # otherwise mask stale volume figures.
+        try:
+            stale_rows = (await db.execute(text("""
+                SELECT symbol
+                FROM market_metadata
+                WHERE symbol = ANY(:syms)
+                  AND (
+                        volume_24h IS NULL
+                     OR volume_24h_updated_at IS NULL
+                     OR volume_24h_updated_at < now() - interval '10 minutes'
+                  )
+            """), {"syms": symbols})).fetchall()
+            stale_syms = [r.symbol for r in stale_rows]
+            if stale_syms:
+                logger.info("5m: per-symbol Gate ticker fallback for %d stale symbols", len(stale_syms))
+                refreshed = 0
+                for sym in stale_syms:
+                    try:
+                        ticker = await market_data_service._fetch_gate_ticker(sym)
+                        if not ticker:
+                            continue
+                        price = float(ticker.get("last", 0) or 0)
+                        volume = float(ticker.get("quote_volume", 0) or 0)
+                        if price <= 0 or volume <= 0:
+                            continue
+                        async with db.begin_nested():
                             await db.execute(text("""
                                 UPDATE market_metadata
                                 SET price = :price,
@@ -389,24 +394,19 @@ async def _collect_5m_async():
                                 "volume": volume,
                                 "ts":     datetime.now(timezone.utc),
                             })
-                            refreshed += 1
-                        except Exception as se:
-                            logger.debug("5m: per-symbol fallback failed for %s: %s", sym, se)
-                            await db.rollback()
-                            continue
-                    logger.info("5m: per-symbol Gate ticker fallback refreshed %d symbols", refreshed)
-            except Exception as e:
-                logger.debug("5m: per-symbol stale-check skipped (non-blocking): %s", e)
-                await db.rollback()
-
-            await db.commit()
+                        refreshed += 1
+                    except Exception as se:
+                        logger.debug("5m: per-symbol fallback failed for %s: %s", sym, se)
+                        continue
+                logger.info("5m: per-symbol Gate ticker fallback refreshed %d symbols", refreshed)
         except Exception as e:
-            logger.error("5m collection failed: %s", e)
-            await db.rollback()
-            raise
+            logger.debug("5m: per-symbol stale-check skipped (non-blocking): %s", e)
+        # run_db_task auto-commits all successful writes on exit
 
-    logger.info(f"5m collection complete: {collected} symbols")
-    return collected
+        logger.info(f"5m collection complete: {collected} symbols")
+        return collected
+
+    return await run_db_task(_inner, celery=True)
 
 
 @celery_app.task(name="app.tasks.collect_market_data.collect_5m")

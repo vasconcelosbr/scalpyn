@@ -53,7 +53,7 @@ def _run_async(coro) -> Any:
 async def _monitor_async() -> int:
     from sqlalchemy import text, select
 
-    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
+    from ..database import run_db_task
     from ..models.trade import Trade
     from ..models.exchange_connection import ExchangeConnection
     from ..exchange_adapters.gate_adapter import GateAdapter
@@ -61,9 +61,8 @@ async def _monitor_async() -> int:
     from ..websocket.scalpyn_ws_server import broadcast_alert
 
     logger.info("Anti-liq monitor: starting scan of open futures positions")
-    checked = 0
 
-    async with AsyncSessionLocal() as db:
+    async def _inner(db) -> int:
         # ── 1. Load all open futures positions that have a liq_price ─────────
         result = await db.execute(
             select(Trade).where(
@@ -73,7 +72,6 @@ async def _monitor_async() -> int:
         )
         trades: list[Trade] = result.scalars().all()
 
-        futures_trades = [t for t in trades if t.take_profit_price is not None or True]
         # Filter in Python to only those with a stored liq_price in indicators.
         # liq_price is stored in indicators_at_entry JSONB under key "liq_price".
         futures_trades = [
@@ -86,8 +84,12 @@ async def _monitor_async() -> int:
             return 0
 
         logger.info("Anti-liq monitor: checking %d positions", len(futures_trades))
+        checked = 0
 
         for trade in futures_trades:
+            # Each trade is processed in full isolation.  Any DB failure is
+            # caught AFTER the SAVEPOINT has already rolled back, so the outer
+            # transaction stays clean for subsequent trades.
             try:
                 checked += 1
                 liq_price: float = float(trade.indicators_at_entry["liq_price"])
@@ -95,24 +97,33 @@ async def _monitor_async() -> int:
                 user_id: str = str(trade.user_id)
                 direction: str = (trade.direction or "long").lower()
 
-                # ── 2. Fetch current price from market_metadata (no API call) ─
-                price_row = await db.execute(
-                    text("SELECT price FROM market_metadata WHERE symbol = :sym"),
-                    {"sym": symbol},
-                )
-                price_row = price_row.fetchone()
-                if not price_row:
+                # ── 2. Fetch current price — isolated in its own SAVEPOINT ────
+                # If this SELECT fails (connection drop, etc.) the SAVEPOINT is
+                # rolled back before the exception reaches the outer except, so
+                # the outer begin() transaction is never poisoned.
+                current_price: float = 0.0
+                found_price: bool = False
+                async with db.begin_nested():
+                    price_row = await db.execute(
+                        text("SELECT price FROM market_metadata WHERE symbol = :sym"),
+                        {"sym": symbol},
+                    )
+                    row = price_row.fetchone()
+                    if row:
+                        current_price = float(row.price)
+                        found_price = True
+
+                if not found_price:
                     logger.debug(
                         "Anti-liq monitor: no market_metadata price for %s — skipping",
                         symbol,
                     )
                     continue
 
-                current_price: float = float(price_row.price)
                 if current_price <= 0 or liq_price <= 0:
                     continue
 
-                # ── 3. Compute distance to liquidation ────────────────────────
+                # ── 3. Compute distance to liquidation (pure Python, no DB) ───
                 if direction == "long":
                     distance_pct = (
                         (current_price - liq_price) / current_price * 100
@@ -137,6 +148,8 @@ async def _monitor_async() -> int:
                 }
 
                 # ── 4a. EMERGENCY: force close immediately ────────────────────
+                # _execute_emergency_close wraps its own DB write in a nested
+                # SAVEPOINT, so adapter or DB failures are fully isolated.
                 if distance_pct <= _EMERGENCY_PCT:
                     logger.critical(
                         "ANTI-LIQ EMERGENCY: %s distance_pct=%.2f%% — force closing",
@@ -167,9 +180,11 @@ async def _monitor_async() -> int:
                     getattr(trade, "id", "?"),
                     exc,
                 )
+        # run_db_task auto-commits all emergency-close DB writes on exit
+        logger.info("Anti-liq monitor: scan complete — %d positions checked", checked)
+        return checked
 
-    logger.info("Anti-liq monitor: scan complete — %d positions checked", checked)
-    return checked
+    return await run_db_task(_inner, celery=True)
 
 
 async def _execute_emergency_close(
@@ -196,13 +211,25 @@ async def _execute_emergency_close(
     symbol: str = trade.symbol
 
     # ── Load the user's active exchange connection ────────────────────────────
-    conn_result = await db.execute(
-        select(ExchangeConnection).where(
-            ExchangeConnection.user_id == trade.user_id,
-            ExchangeConnection.is_active == True,  # noqa: E712
-        ).order_by(ExchangeConnection.execution_priority).limit(1)
-    )
-    conn = conn_result.scalars().first()
+    # Wrapped in its own SAVEPOINT so a DB error here does not abort the outer
+    # transaction and block subsequent emergency-close attempts for other trades.
+    conn = None
+    try:
+        async with db.begin_nested():
+            conn_result = await db.execute(
+                select(ExchangeConnection).where(
+                    ExchangeConnection.user_id == trade.user_id,
+                    ExchangeConnection.is_active == True,  # noqa: E712
+                ).order_by(ExchangeConnection.execution_priority).limit(1)
+            )
+            conn = conn_result.scalars().first()
+    except SQLAlchemyError as exc:
+        logger.error(
+            "Anti-liq EMERGENCY: cannot load exchange connection for user %s: %s — "
+            "will skip API close and attempt DB mark only",
+            user_id,
+            exc,
+        )
 
     if conn:
         try:
@@ -233,39 +260,41 @@ async def _execute_emergency_close(
         )
 
     # ── Mark trade CLOSED in DB ───────────────────────────────────────────────
+    # Use a SAVEPOINT so that a failure here does not abort the outer
+    # transaction (which may be committing other emergency closes too).
     try:
-        now = datetime.now(timezone.utc)
-        entry_price = float(trade.entry_price)
-        qty = float(trade.quantity)
-        direction = (trade.direction or "long").lower()
+        async with db.begin_nested():
+            now = datetime.now(timezone.utc)
+            entry_price = float(trade.entry_price)
+            qty = float(trade.quantity)
+            direction = (trade.direction or "long").lower()
 
-        if direction == "long":
-            raw_pnl = (current_price - entry_price) * qty
-        else:
-            raw_pnl = (entry_price - current_price) * qty
+            if direction == "long":
+                raw_pnl = (current_price - entry_price) * qty
+            else:
+                raw_pnl = (entry_price - current_price) * qty
 
-        pnl_pct = (
-            (current_price - entry_price) / entry_price * 100
-            if direction == "long"
-            else (entry_price - current_price) / entry_price * 100
-        )
+            pnl_pct = (
+                (current_price - entry_price) / entry_price * 100
+                if direction == "long"
+                else (entry_price - current_price) / entry_price * 100
+            )
 
-        trade.status = "CLOSED"
-        trade.exit_price = current_price
-        trade.exit_at = now
-        trade.profit_loss = round(raw_pnl, 2)
-        trade.profit_loss_pct = round(pnl_pct, 4)
-        trade.holding_seconds = int((now - trade.entry_at).total_seconds()) if trade.entry_at else None
+            trade.status = "CLOSED"
+            trade.exit_price = current_price
+            trade.exit_at = now
+            trade.profit_loss = round(raw_pnl, 2)
+            trade.profit_loss_pct = round(pnl_pct, 4)
+            trade.holding_seconds = int((now - trade.entry_at).total_seconds()) if trade.entry_at else None
 
-        # Persist the exit reason in indicators_at_entry to avoid a schema change.
-        indicators = dict(trade.indicators_at_entry or {})
-        indicators["exit_reason"] = "anti_liq_emergency"
-        trade.indicators_at_entry = indicators
+            # Persist the exit reason in indicators_at_entry to avoid a schema change.
+            indicators = dict(trade.indicators_at_entry or {})
+            indicators["exit_reason"] = "anti_liq_emergency"
+            trade.indicators_at_entry = indicators
+            # begin_nested() auto-releases the SAVEPOINT on successful exit
 
-        await db.commit()
         logger.info("Anti-liq EMERGENCY: trade %s marked CLOSED in DB", trade.id)
     except SQLAlchemyError as exc:
-        await db.rollback()
         logger.exception(
             "Anti-liq EMERGENCY: DB update failed for trade %s: %s",
             trade.id,

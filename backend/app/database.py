@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from typing import Any, Callable
 
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.orm import declarative_base
@@ -151,13 +152,69 @@ CeleryAsyncSessionLocal = async_sessionmaker(_celery_engine, expire_on_commit=Fa
 
 Base = declarative_base()
 
+# ── Session lifecycle — three valid patterns ──────────────────────────────────
+#
+# (a) FastAPI request handler
+#       Use the ``get_db`` dependency.  It yields a session, rolls back on any
+#       exception, and closes the connection before the response is sent.
+#       Route handlers must still call ``await db.commit()`` after mutations.
+#
+# (b) Celery task (sync wrapper calling asyncio.run / loop.run_until_complete)
+#       Use ``run_db_task(fn, celery=True)``.  This opens a session from the
+#       NullPool ``CeleryAsyncSessionLocal`` factory (safe across event loops),
+#       wraps execution in ``async with session.begin()`` (auto-commit on
+#       success, auto-rollback on error), then closes the session.
+#       Never call ``await session.commit()`` or ``await session.rollback()``
+#       inside the callback — let the context manager handle it.
+#
+# (c) Ad-hoc background coroutine (asyncio task in the uvicorn event loop)
+#       Use ``run_db_task(fn, celery=False)`` (the default).  Behaviour is
+#       identical to (b) but uses the regular pooled engine so uvicorn workers
+#       share connections efficiently.
+#
+# The helper below is the single documented entry-point for (b) and (c).
+# Do NOT add new bare ``async with AsyncSessionLocal() as db: … await db.commit()``
+# blocks to services or tasks — always go through ``run_db_task``.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def run_db_task(fn: Callable, *, celery: bool = False) -> Any:
+    """Open a session, run *fn(session)* inside a transaction, then close.
+
+    Commit is automatic on success; rollback is automatic on any exception.
+    The exception is re-raised so callers can handle / log it.
+
+    Args:
+        fn:     An async callable that accepts a single ``AsyncSession`` arg.
+        celery: When True, use ``CeleryAsyncSessionLocal`` (NullPool — safe
+                inside ``asyncio.run()`` / Celery worker event loops).
+                When False (default), use ``AsyncSessionLocal`` (pooled —
+                correct for coroutines running inside the uvicorn event loop).
+
+    Example::
+
+        async def _write(db: AsyncSession) -> None:
+            db.add(MyModel(name="x"))
+
+        await run_db_task(_write)                   # uvicorn background task
+        await run_db_task(_write, celery=True)       # Celery async helper
+    """
+    factory = CeleryAsyncSessionLocal if celery else AsyncSessionLocal
+    async with factory() as session:
+        async with session.begin():
+            return await fn(session)
+
 
 async def _safe_rollback(session) -> None:
     """Best-effort rollback so a poisoned transaction never survives back into
     the connection pool.  asyncpg raises InFailedSQLTransactionError on every
     subsequent statement until rollback is called.  Failures here are logged
     but never re-raised — the surrounding ``async with AsyncSessionLocal()``
-    will close the session and discard the broken connection from the pool."""
+    will close the session and discard the broken connection from the pool.
+
+    Note: ``run_db_task`` and ``async with session.begin()`` blocks handle
+    rollback automatically.  This helper is only used by ``get_db`` below.
+    """
     try:
         await session.rollback()
     except Exception as rollback_exc:
@@ -165,12 +222,15 @@ async def _safe_rollback(session) -> None:
 
 
 async def get_db():
-    """FastAPI DB dependency.
+    """FastAPI DB dependency — pattern (a) in the session lifecycle note above.
 
     Always rolls back on any exception raised by the route — including
     HTTPException and CancelledError — *before* the connection is returned
     to the pool.  Without this, asyncpg's ``InFailedSQLTransactionError``
     cascades to the next caller that picks up the same connection.
+
+    Route handlers that mutate data must still call ``await db.commit()``
+    explicitly — this dependency does not auto-commit.
     """
     try:
         async with AsyncSessionLocal() as session:

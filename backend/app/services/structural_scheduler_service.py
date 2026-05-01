@@ -123,7 +123,7 @@ async def _refresh_market_metadata(db, symbol: str, df: pd.DataFrame, when: date
 
 
 async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
-    from ..database import AsyncSessionLocal
+    from ..database import run_db_task
     from ..services.feature_engine import FeatureEngine
     from ..services.market_data_service import market_data_service
     from ..services.seed_service import DEFAULT_INDICATORS
@@ -147,21 +147,22 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
             results = {}
 
         now = datetime.now(timezone.utc)
-        async with AsyncSessionLocal() as db:
+
+        async def _persist(db) -> None:
             await _persist_indicators(db, symbol, results, now)
             await _refresh_market_metadata(db, symbol, df, now)
-            await db.commit()
+
+        await run_db_task(_persist, celery=False)
 
         return f"{symbol}: ok indicators={len(results)}"
 
 
 async def _run_one_cycle(concurrency: int) -> None:
-    from ..database import AsyncSessionLocal
+    from ..database import run_db_task
 
     cycle_start = datetime.now(timezone.utc)
     try:
-        async with AsyncSessionLocal() as db:
-            symbols = await _collect_symbols(db)
+        symbols = await run_db_task(_collect_symbols, celery=False)
 
         if not symbols:
             logger.info("[STRUCT-SCHED] no symbols to refresh — skipping cycle")

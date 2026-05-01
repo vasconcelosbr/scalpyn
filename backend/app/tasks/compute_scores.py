@@ -21,51 +21,57 @@ def _run_async(coro):
 
 
 async def _score_async():
-    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
+    from ..database import run_db_task
     from ..services.score_engine import ScoreEngine
     from ..services.seed_service import DEFAULT_SCORE
 
     logger.info("Starting Alpha Score computation...")
 
-    async with AsyncSessionLocal() as db:
+    # Shared state captured by the two phase closures below.
+    rows: list = []
+    scored: int = 0
+    score_config: dict = DEFAULT_SCORE
+
+    # ── Phase 1: score computation ─────────────────────────────────────────────
+    # run_db_task opens a fresh Celery-safe session, begins a transaction,
+    # runs the function, then auto-commits (or rolls back on exception).
+    async def _phase1(db):
+        nonlocal rows, scored, score_config
+
         try:
-            # Load score config from the first user who has it configured
-            score_config = DEFAULT_SCORE
+            from ..services.config_service import config_service
+            user_row = (await db.execute(
+                text("SELECT DISTINCT user_id FROM pipeline_watchlists LIMIT 1")
+            )).fetchone()
+            if user_row:
+                cfg = await config_service.get_config(db, "score", user_row.user_id)
+                if cfg and cfg.get("scoring_rules"):
+                    score_config = cfg
+        except Exception as _e:
+            logger.debug("compute_scores: could not load user score config: %s", _e)
+
+        engine = ScoreEngine(score_config)
+
+        result = await db.execute(text("""
+            SELECT DISTINCT ON (symbol) symbol, indicators_json, time
+            FROM indicators
+            WHERE time > now() - interval '2 hours'
+            ORDER BY symbol, time DESC
+        """))
+        rows = result.fetchall()
+
+        now = datetime.now(timezone.utc)
+        _scored = 0
+
+        for row in rows:
             try:
-                from ..services.config_service import config_service
-                from ..models.pipeline_watchlist import PipelineWatchlist
-                from sqlalchemy import select as sa_select
-                user_row = (await db.execute(
-                    text("SELECT DISTINCT user_id FROM pipeline_watchlists LIMIT 1")
-                )).fetchone()
-                if user_row:
-                    cfg = await config_service.get_config(db, "score", user_row.user_id)
-                    if cfg and cfg.get("scoring_rules"):
-                        score_config = cfg
-            except Exception as _e:
-                logger.debug("compute_scores: could not load user score config: %s", _e)
+                indicators = row.indicators_json or {}
+                score_result = engine.compute_alpha_score(indicators)
+                components = score_result.get("components", {})
 
-            engine = ScoreEngine(score_config)
-            scored = 0
-
-            # Get latest indicators for all symbols
-            result = await db.execute(text("""
-                SELECT DISTINCT ON (symbol) symbol, indicators_json, time
-                FROM indicators
-                WHERE time > now() - interval '2 hours'
-                ORDER BY symbol, time DESC
-            """))
-            rows = result.fetchall()
-
-            now = datetime.now(timezone.utc)
-
-            for row in rows:
-                try:
-                    indicators = row.indicators_json or {}
-                    score_result = engine.compute_alpha_score(indicators)
-
-                    components = score_result.get("components", {})
-
+                # Each insert is isolated in its own SAVEPOINT so a failure
+                # for one symbol does not abort the whole transaction.
+                async with db.begin_nested():
                     await db.execute(text("""
                         INSERT INTO alpha_scores
                             (time, symbol, score, liquidity_score, market_structure_score,
@@ -86,29 +92,28 @@ async def _score_async():
                         }),
                     })
 
-                    scored += 1
+                _scored += 1
 
-                except Exception as e:
-                    logger.warning(f"Failed to compute score for {row.symbol}: {e}")
-                    await db.rollback()
-                    continue
-
-            await db.commit()
-
-            logger.info(f"Alpha Score computation complete: {scored} symbols")
-
-            # ── Level transition detection ────────────────────────────────────────
-            # Compare fresh scores against pipeline_watchlist_assets to detect
-            # assets entering / leaving criteria (min_score from profile config).
-            # Must run inside the same session so the DB connection is still open.
-            try:
-                await _detect_level_transitions(db, rows, score_config)
             except Exception as e:
-                logger.warning(f"Level transition detection failed: {e}")
-        except Exception as e:
-            logger.error("Alpha Score computation failed: %s", e)
-            await db.rollback()
-            raise
+                logger.warning(f"Failed to compute score for {row.symbol}: {e}")
+                continue
+
+        scored = _scored
+        return scored
+
+    await run_db_task(_phase1, celery=True)
+    logger.info(f"Alpha Score computation complete: {scored} symbols")
+
+    # ── Phase 2: level transition detection (separate transaction) ─────────────
+    # Compare fresh scores against pipeline_watchlist_assets to detect
+    # assets entering / leaving criteria (min_score from profile config).
+    async def _phase2(db):
+        await _detect_level_transitions(db, rows, score_config)
+
+    try:
+        await run_db_task(_phase2, celery=True)
+    except Exception as e:
+        logger.warning(f"Level transition detection failed: {e}")
 
     return scored
 
@@ -201,9 +206,6 @@ async def _detect_level_transitions(db, scored_rows, score_config=None) -> None:
             "direction": direction,
             "level": ar.level,
         })
-
-    if changed:
-        await db.commit()
 
     # Broadcast WebSocket events
     for ch in changed:
