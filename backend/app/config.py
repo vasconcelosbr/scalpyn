@@ -16,17 +16,27 @@ class Settings(BaseSettings):
     # of this flag.
     USE_ROBUST_INDICATORS: bool = False
 
-    # ── Robust-indicator pipeline (Phase 2 — gradual rollout) ────────────────
-    # Percentage of symbols (0–100) bucketed into the robust pipeline as the
-    # authoritative score source. Bucketing is deterministic per-symbol via
-    # ``int(sha1(symbol).hexdigest(), 16) % 100 < percent``. The recommended
-    # ramp is 10 → 50 → 100 with the pre-flight guard between each step.
-    USE_ROBUST_INDICATORS_PERCENT: int = 0
+    # ── Robust-indicator pipeline (Phase 3 — deprecation, robust default) ────
+    # Phase 3 makes the robust engine the formal default everywhere. The
+    # historic per-symbol bucket math (``int(sha1(symbol).hexdigest(),
+    # 16) % 100 < percent``) is preserved as a diagnostic utility but is
+    # no longer on the hot path: every score read returns the robust
+    # engine result unless ``LEGACY_PIPELINE_ROLLBACK`` is set.
+    USE_ROBUST_INDICATORS_PERCENT: int = 100
 
     # When True, the pre-flight safety guard for raising the rollout
     # percent is bypassed (still evaluates and reports unsafe reasons,
     # just doesn't block). Use only for emergency rollbacks.
     FORCE_ROLLOUT_RAISE: bool = False
+
+    # ── Phase 3 emergency rollback ───────────────────────────────────────────
+    # Single-flag rollback to the legacy ScoreEngine / futures_pipeline_scorer
+    # path. When True, every authoritative-score read short-circuits to the
+    # legacy result regardless of bucketing. This is the ONLY way to revive
+    # the legacy engine in production. Default ``False`` — flipping it is
+    # an emergency-only operation and triggers a daily standby alert if it
+    # stays True for more than 24h (see ``app.tasks.robust_alerts``).
+    LEGACY_PIPELINE_ROLLBACK: bool = False
 
     # Single ops-only Slack webhook for robust-indicator divergence /
     # alert notifications. When unset, alerts are logged at INFO and

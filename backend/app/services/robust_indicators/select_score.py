@@ -1,7 +1,8 @@
-"""Authoritative-score selection for Phase 2 rollout.
+"""Authoritative-score selection (Phase 3 — robust default, legacy on standby).
 
-For symbols bucketed into the robust pipeline we want to use the new
-confidence-weighted score everywhere a "score read point" exists:
+The robust confidence-weighted score is the only authority outside the
+``LEGACY_PIPELINE_ROLLBACK`` emergency flag. The selector is invoked at
+every "score read point" in the pipeline:
 
   * ``pipeline_scan`` — when persisting ``alpha_score`` to
     ``pipeline_watchlist_assets``.
@@ -18,13 +19,23 @@ This module exposes a single, side-effect-free helper:
         percent=None,
     ) -> SelectScoreResult
 
-It returns the score to use, the engine tag (``"robust"`` or
-``"legacy"``), and — when robust failed silently and we fell back to
-legacy — bumps the ``robust_silent_fallback_total`` counter.
+The result tells the caller which score to use and which engine
+produced it. The contract:
 
-Selection NEVER raises into the caller; on any internal failure it
-returns the legacy score with ``engine_tag="legacy"`` and the
-silent-fallback counter is incremented.
+  * ``engine_tag="robust"``, ``score=<float>`` — usable robust score.
+  * ``engine_tag="robust"``, ``score=None`` — robust-tagged sentinel
+    (rejection): the engine could not produce a value (missing
+    indicators, compute exception, empty symbol). Callers MUST treat
+    this as a non-trade signal — the legacy score is **never**
+    substituted outside rollback.
+  * ``engine_tag="legacy"``, ``score=<float>`` — only emitted while
+    ``LEGACY_PIPELINE_ROLLBACK`` is active (``fell_back=True``,
+    ``fallback_reason="legacy_rollback"``).
+
+Selection NEVER raises into the caller. The
+``robust_silent_fallback_total`` counter is bumped for every robust
+failure (with the matching reason) and for every rollback override
+so ops can see both signals on the admin endpoint and Prometheus.
 """
 
 from __future__ import annotations
@@ -34,7 +45,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional
 
-from .bucketing import should_use_robust
+from .bucketing import is_legacy_rollback_active, should_use_robust
 from .compute import envelope_indicators
 from .metrics import increment_silent_fallback
 from .score import ScoreResult, calculate_score_with_confidence
@@ -84,9 +95,11 @@ def compute_robust_score(
 ) -> Optional[ScoreResult]:
     """Wrap ``indicators`` into envelopes and compute a robust score.
 
-    Returns ``None`` when no envelopes could be produced (so the caller
-    knows to fall back to the legacy score and bump the silent-fallback
-    counter).
+    Returns ``None`` when no envelopes could be produced. Callers
+    treat ``None`` as a Phase 3 sentinel (engine declined to produce
+    a value) and bump the ``robust_silent_fallback_total`` counter
+    with the matching reason — outside ``LEGACY_PIPELINE_ROLLBACK``
+    the legacy score is **never** substituted.
     """
     if not symbol or not indicators:
         return None
@@ -131,29 +144,74 @@ def select_authoritative_score(
 ) -> SelectScoreResult:
     """Return the authoritative score + engine tag for ``symbol``.
 
-    Bucketing is computed via :func:`should_use_robust`. When the symbol
-    is bucketed but the robust score cannot be produced (missing
-    indicators, validation gate failure, exception) the legacy score is
-    returned and ``robust_silent_fallback_total`` is incremented with
-    the appropriate reason label.
+    Phase 3 contract: the robust engine is the **formal default and the
+    only authority** in normal operation. The selector returns a
+    ``"legacy"``-tagged result in exactly one case — the operator has
+    flipped ``LEGACY_PIPELINE_ROLLBACK=true`` for an emergency standby
+    revert. When it does, every symbol receives the legacy score
+    regardless of bucketing or percent, the result is tagged
+    ``engine_tag="legacy"``, ``fell_back=True``,
+    ``fallback_reason="legacy_rollback"``, and
+    ``robust_silent_fallback_total{reason="legacy_rollback"}`` is
+    incremented so the admin status endpoint and Prometheus both
+    surface the override.
+
+    Outside rollback, every result is tagged ``engine_tag="robust"``.
+    Robust failures (missing indicators, compute exception) surface as
+    a robust-tagged sentinel — ``score=None``, ``fell_back=False``,
+    ``fallback_reason`` kept purely for telemetry. The
+    ``robust_silent_fallback_total`` counter is still bumped with the
+    matching reason so ops can see how often the robust engine cannot
+    produce a value, but the legacy score is **never** returned in
+    place of the missing robust score outside rollback. Callers that
+    need a numeric score must treat ``score is None`` as a rejection
+    (the consumer in ``pipeline_scan._apply_robust_authoritative_scoring``
+    explicitly does this).
+
+    Critical-gate / confidence-gate rejections from the robust engine
+    are also robust-tagged (``score=0.0`` from the engine, ``rejected=True``
+    on the underlying ``robust_score``).
     """
     legacy = _coerce_float(legacy_score)
-    bucketed = should_use_robust(symbol, percent=percent)
 
-    if not bucketed:
+    if is_legacy_rollback_active():
+        # Emergency revert — every symbol resolves to legacy. We bump
+        # the silent-fallback counter with a dedicated reason so the
+        # admin endpoint and Prometheus surface the override.
+        increment_silent_fallback("legacy_rollback")
         return SelectScoreResult(
             score=legacy,
             engine_tag="legacy",
             bucketed=False,
+            fell_back=True,
+            fallback_reason="legacy_rollback",
+        )
+
+    bucketed = should_use_robust(symbol, percent=percent)
+
+    if not bucketed:
+        # ``should_use_robust`` only returns False for an empty symbol
+        # outside rollback (Phase 3). We still tag the result as
+        # ``robust`` because the legacy engine is on standby and must
+        # not be re-introduced as a routine fallback. The score is
+        # ``None`` so the caller treats this as a non-trade signal.
+        return SelectScoreResult(
+            score=None,
+            engine_tag="robust",
+            bucketed=False,
+            fell_back=False,
+            fallback_reason="empty_symbol",
         )
 
     if not indicators:
+        # Robust failure outside rollback — surface as a robust-tagged
+        # sentinel. Counter still bumped for telemetry.
         increment_silent_fallback("missing_indicators")
         return SelectScoreResult(
-            score=legacy,
-            engine_tag="legacy",
+            score=None,
+            engine_tag="robust",
             bucketed=True,
-            fell_back=True,
+            fell_back=False,
             fallback_reason="missing_indicators",
         )
 
@@ -165,12 +223,14 @@ def select_authoritative_score(
     )
 
     if robust is None:
+        # Robust failure outside rollback — surface as a robust-tagged
+        # sentinel. Counter still bumped for telemetry.
         increment_silent_fallback("compute_failed")
         return SelectScoreResult(
-            score=legacy,
-            engine_tag="legacy",
+            score=None,
+            engine_tag="robust",
             bucketed=True,
-            fell_back=True,
+            fell_back=False,
             fallback_reason="compute_failed",
         )
 

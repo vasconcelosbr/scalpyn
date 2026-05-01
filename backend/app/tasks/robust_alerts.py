@@ -17,6 +17,14 @@ most recent 1-minute sub-window — a momentary blip does not page anyone.
                            ``ROBUST_ALERT_DIVERGENCE_PCT`` over 5 min
                            AND in the most recent 1-min sub-window.
 
+Phase 3 (deprecation) adds a separate **hourly standby check** —
+``check_legacy_rollback_standby`` — that asserts the emergency
+``LEGACY_PIPELINE_ROLLBACK`` flag is False in production. The check
+records the first time the flag is seen as True in Redis and pages
+ops if the rollback stays True for more than 24 hours. The check runs
+hourly via the ``robust_indicator_legacy_rollback_check`` beat entry
+so a single failed beat tick still leaves us inside the 24-hour SLA.
+
 Alerts are rate-limited per condition to one Slack notification every 15
 minutes, using a Redis key when Redis is reachable and an in-process dict
 as a fallback. Slack delivery is restricted to a single ops-only webhook
@@ -54,13 +62,25 @@ def _ops_webhook_url() -> Optional[str]:
     return url.strip() if isinstance(url, str) and url.strip() else None
 
 
-async def _rate_limit_check_async(condition: str, redis_client) -> bool:
-    """Return True when the alert is permitted (rate-limit window open)."""
+async def _rate_limit_check_async(
+    condition: str,
+    redis_client,
+    ttl_seconds: int = _RATE_LIMIT_SECONDS,
+) -> bool:
+    """Return True when the alert is permitted (rate-limit window open).
+
+    ``ttl_seconds`` is per-call so callers can register a different
+    window for low-frequency alerts (e.g. the 6-hour window used by the
+    Phase 3 legacy-rollback standby check) without mutating any global
+    state. Defaults to the 15-minute window used by the high-frequency
+    sustained-condition alerts.
+    """
+    ttl = int(ttl_seconds) if ttl_seconds and ttl_seconds > 0 else _RATE_LIMIT_SECONDS
     if redis_client is not None:
         key = f"robust_alerts:rl:{condition}"
         try:
             ok = await redis_client.set(
-                key, "1", ex=_RATE_LIMIT_SECONDS, nx=True
+                key, "1", ex=ttl, nx=True
             )
             return bool(ok)
         except Exception as exc:
@@ -68,7 +88,7 @@ async def _rate_limit_check_async(condition: str, redis_client) -> bool:
 
     now = datetime.now(timezone.utc).timestamp()
     last = _LOCAL_RATE_LIMIT.get(condition, 0.0)
-    if now - last < _RATE_LIMIT_SECONDS:
+    if now - last < ttl:
         return False
     _LOCAL_RATE_LIMIT[condition] = now
     return True
@@ -260,4 +280,183 @@ def evaluate() -> dict:
         return {"checked": 0, "fired": [], "error": str(exc)}
     if report.get("fired"):
         logger.info("[robust_alerts] fired alerts: %s", report["fired"])
+    return report
+
+
+# ─── Phase 3: legacy-rollback standby check ──────────────────────────────────
+
+# 24h SLA for the emergency rollback. If LEGACY_PIPELINE_ROLLBACK has
+# been observed True for longer than this we page ops every check tick
+# (rate-limited to one alert per 6 hours so the channel doesn't spam).
+_ROLLBACK_STANDBY_SECONDS = 24 * 60 * 60
+_ROLLBACK_FIRST_SEEN_KEY = "robust_alerts:legacy_rollback:first_seen"
+_ROLLBACK_RATE_LIMIT_SECONDS = 6 * 60 * 60
+_LOCAL_ROLLBACK_FIRST_SEEN: dict[str, float] = {}
+
+
+async def _record_rollback_first_seen(redis_client, now: float) -> Optional[float]:
+    """Persist the first-seen timestamp for an active rollback.
+
+    Returns the recorded first-seen timestamp (which may pre-date
+    ``now`` if the flag has been on for a while). Falls back to an
+    in-process dict when Redis is unreachable so a Redis blip doesn't
+    silently mask a stale rollback.
+    """
+    if redis_client is not None:
+        try:
+            await redis_client.set(
+                _ROLLBACK_FIRST_SEEN_KEY, str(now), nx=True
+            )
+            stored = await redis_client.get(_ROLLBACK_FIRST_SEEN_KEY)
+            if stored is not None:
+                return float(stored)
+        except Exception as exc:
+            logger.debug(
+                "[robust_alerts] redis rollback first-seen failed: %s", exc
+            )
+
+    if _ROLLBACK_FIRST_SEEN_KEY not in _LOCAL_ROLLBACK_FIRST_SEEN:
+        _LOCAL_ROLLBACK_FIRST_SEEN[_ROLLBACK_FIRST_SEEN_KEY] = now
+    return _LOCAL_ROLLBACK_FIRST_SEEN[_ROLLBACK_FIRST_SEEN_KEY]
+
+
+async def _clear_rollback_first_seen(redis_client) -> None:
+    """Clear the first-seen timestamp once the rollback is unset."""
+    if redis_client is not None:
+        try:
+            await redis_client.delete(_ROLLBACK_FIRST_SEEN_KEY)
+        except Exception as exc:
+            logger.debug(
+                "[robust_alerts] redis rollback clear failed: %s", exc
+            )
+    _LOCAL_ROLLBACK_FIRST_SEEN.pop(_ROLLBACK_FIRST_SEEN_KEY, None)
+
+
+def _standby_check_environment() -> str:
+    """Return the deployment environment for the standby check.
+
+    Reads ``ROBUST_ALERTS_ENVIRONMENT`` first (explicit gating),
+    falls back to ``APP_ENV`` / ``ENVIRONMENT`` / ``ENV``. Defaults
+    to ``"production"`` so existing production deployments keep
+    paging without configuration changes.
+    """
+    for var in ("ROBUST_ALERTS_ENVIRONMENT", "APP_ENV", "ENVIRONMENT", "ENV"):
+        val = os.environ.get(var)
+        if val and val.strip():
+            return val.strip().lower()
+    return "production"
+
+
+def _standby_alerts_enabled() -> bool:
+    """Phase 3 gate: only emit standby ops alerts in production.
+
+    Non-production environments (dev / staging / test) frequently
+    flip ``LEGACY_PIPELINE_ROLLBACK`` while validating the runbook.
+    Without this gate, every >24h test session would page ops. The
+    gate can be overridden by setting
+    ``ROBUST_ALERTS_FORCE_STANDBY=true`` (e.g. for a staging fire
+    drill).
+    """
+    force = os.environ.get("ROBUST_ALERTS_FORCE_STANDBY", "").strip().lower()
+    if force in ("1", "true", "yes", "on"):
+        return True
+    return _standby_check_environment() in ("production", "prod")
+
+
+async def _check_legacy_rollback_standby_async() -> dict:
+    """Inspect the rollback flag and page ops if it has been on >24h.
+
+    Production-gated: ops alerts only fire when
+    ``_standby_alerts_enabled()`` returns True (production env, or
+    ``ROBUST_ALERTS_FORCE_STANDBY=true``). The first-seen bookkeeping
+    still runs in non-prod so we can introspect the report shape, but
+    the slack/webhook page is suppressed with ``skipped="non_production"``.
+    """
+    from ..services.robust_indicators import is_legacy_rollback_active
+
+    report: dict = {"rollback_active": False, "fired": False}
+    rollback_active = False
+    try:
+        rollback_active = bool(is_legacy_rollback_active())
+    except Exception as exc:
+        logger.warning("[robust_alerts] rollback flag read failed: %s", exc)
+        report["error"] = str(exc)
+        return report
+
+    report["rollback_active"] = rollback_active
+    report["environment"] = _standby_check_environment()
+
+    try:
+        from ..services.config_service import _make_redis_client
+        redis_client = _make_redis_client()
+    except Exception:
+        redis_client = None
+
+    if not rollback_active:
+        await _clear_rollback_first_seen(redis_client)
+        return report
+
+    now = datetime.now(timezone.utc).timestamp()
+    first_seen = await _record_rollback_first_seen(redis_client, now)
+    if first_seen is None:
+        first_seen = now
+
+    age_seconds = max(0.0, now - first_seen)
+    report["age_seconds"] = age_seconds
+    report["first_seen"] = first_seen
+
+    if age_seconds < _ROLLBACK_STANDBY_SECONDS:
+        return report
+
+    # Production gate: suppress the page in non-prod environments so a
+    # staging or local validation of the runbook doesn't wake ops.
+    if not _standby_alerts_enabled():
+        report["skipped"] = "non_production"
+        logger.info(
+            "[robust_alerts] standby alert suppressed in env=%s "
+            "(set ROBUST_ALERTS_FORCE_STANDBY=true to override)",
+            report["environment"],
+        )
+        return report
+
+    # Use the per-call ttl_seconds parameter so the standby alert's
+    # 6-hour rate-limit window is registered cleanly without touching
+    # the global ``_RATE_LIMIT_SECONDS`` used by the high-frequency
+    # sustained-condition alerts.
+    rl_key = "legacy_rollback_standby"
+    if await _rate_limit_check_async(
+        rl_key, redis_client, ttl_seconds=_ROLLBACK_RATE_LIMIT_SECONDS
+    ):
+        hours = age_seconds / 3600.0
+        msg = (
+            ":rotating_light: *Robust indicators* — "
+            "`LEGACY_PIPELINE_ROLLBACK` has been ACTIVE for "
+            f"{hours:.1f}h (>24h SLA). Every score read is being "
+            "served by the legacy engine. Confirm intent and unset "
+            "the flag once the incident is resolved."
+        )
+        await _send_ops_alert(msg)
+        report["fired"] = True
+
+    return report
+
+
+@celery_app.task(name="app.tasks.robust_alerts.check_legacy_rollback_standby")
+def check_legacy_rollback_standby() -> dict:
+    """Celery task entry point — runs the hourly rollback standby check.
+
+    Scheduled hourly via ``robust_indicator_legacy_rollback_check`` so
+    a single failed beat tick still leaves us inside the 24-hour SLA.
+    """
+    try:
+        report = _run_async(_check_legacy_rollback_standby_async())
+    except Exception as exc:
+        logger.warning(
+            "[robust_alerts] rollback standby crashed: %s", exc, exc_info=True
+        )
+        return {"rollback_active": False, "fired": False, "error": str(exc)}
+    if report.get("fired"):
+        logger.warning(
+            "[robust_alerts] legacy rollback standby alert fired: %s", report
+        )
     return report

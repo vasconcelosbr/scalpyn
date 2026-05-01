@@ -121,4 +121,13 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.robust_alerts.evaluate",
         "schedule": 90.0,
     },
+    # Robust-indicator legacy-rollback standby check (Phase 3) — hourly.
+    # Pages ops if LEGACY_PIPELINE_ROLLBACK has been ACTIVE for >24h.
+    # Hourly cadence keeps a single failed beat tick well inside the
+    # 24-hour SLA. The task itself rate-limits Slack delivery to one
+    # alert per 6 hours.
+    "robust_indicator_legacy_rollback_check": {
+        "task": "app.tasks.robust_alerts.check_legacy_rollback_standby",
+        "schedule": 3600.0,
+    },
 }

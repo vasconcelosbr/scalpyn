@@ -1,5 +1,13 @@
 # Robust Indicators — Phase 1 (Shadow Mode)
 
+> **Status — superseded by Phase 3 (deprecation).** The robust engine
+> is now the formal default for every symbol; the legacy pipeline is
+> on standby behind the single ``LEGACY_PIPELINE_ROLLBACK`` flag. This
+> document is preserved as the historical record of the shadow-mode
+> design and the per-symbol bucket math (still used as a diagnostic).
+> See ``backend/docs/phase3_deprecation.md`` for the current contract,
+> rollback runbook, and 7-day observation checklist.
+
 ## Why this exists
 
 The legacy `feature_engine` + `score_engine` produces a single flat dict of

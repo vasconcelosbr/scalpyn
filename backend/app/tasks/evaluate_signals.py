@@ -20,6 +20,55 @@ def _run_async(coro):
         loop.close()
 
 
+def _resolve_signal_score(
+    symbol: str,
+    indicators: dict,
+    legacy_alpha_score: float,
+    selector=None,
+) -> float | None:
+    """Phase 3 score-resolution for the per-candidate signal loop.
+
+    Returns the score to use, or ``None`` when the candidate must be
+    skipped because the robust engine declined to produce a value.
+    The legacy ``alpha_score`` from ``alpha_scores`` is **never**
+    substituted outside ``LEGACY_PIPELINE_ROLLBACK`` — that's the
+    explicit Phase 3 contract enforced here.
+
+    The ``selector`` argument is the ``select_authoritative_score``
+    callable; it's a kwarg so unit tests can drive the three
+    contract branches (robust value / robust sentinel / legacy under
+    rollback) without touching the real engine.
+    """
+    if selector is None:
+        from ..services.robust_indicators import select_authoritative_score
+        selector = select_authoritative_score
+
+    sel = selector(
+        symbol,
+        indicators,
+        legacy_score=legacy_alpha_score,
+        flow_source_hint=indicators.get("taker_source") if indicators else None,
+    )
+
+    if sel.engine_tag == "robust":
+        if sel.score is None:
+            # Phase 3 sentinel — robust declined to score this symbol.
+            # Never substitute legacy. The caller skips the candidate.
+            logger.debug(
+                "[evaluate_signals] skip %s — robust sentinel (%s)",
+                symbol, sel.fallback_reason,
+            )
+            return None
+        return float(sel.score)
+
+    # engine_tag == "legacy" — only reachable while
+    # LEGACY_PIPELINE_ROLLBACK is active. Use the legacy score as the
+    # explicit emergency fallback the operator requested.
+    if sel.score is None:
+        return None
+    return float(sel.score)
+
+
 async def _evaluate_async():
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.signal_engine import SignalEngine
@@ -57,46 +106,74 @@ async def _evaluate_async():
                 # Get daily summary for circuit breaker data
                 daily = await analytics_service.get_daily_summary(db, user.id)
 
-                # Get latest scores + indicators
-                ranked = await db.execute(text("""
-                    SELECT DISTINCT ON (a.symbol)
-                        a.symbol, a.score, i.indicators_json
-                    FROM alpha_scores a
-                    JOIN indicators i ON a.symbol = i.symbol
-                    WHERE a.time > now() - interval '2 hours'
-                      AND i.time > now() - interval '2 hours'
-                      AND a.score >= 60
-                    ORDER BY a.symbol, a.time DESC
-                """))
+                # Robust Indicators Phase 3 — candidate selection.
+                # Outside ``LEGACY_PIPELINE_ROLLBACK`` the candidate
+                # query must NOT prefilter on the legacy
+                # ``alpha_scores.score`` column — that would let
+                # legacy values decide which symbols even reach the
+                # robust selector, defeating the Phase 3 contract.
+                # We pull every recent-indicator symbol and let
+                # ``_resolve_signal_score`` (robust authoritative) plus
+                # the SignalEngine's own thresholds gate inclusion.
+                # Only when the operator has explicitly armed the
+                # rollback do we restore the legacy score prefilter.
+                from ..services.robust_indicators import is_legacy_rollback_active
+                rollback_on = bool(is_legacy_rollback_active())
+
+                if rollback_on:
+                    ranked = await db.execute(text("""
+                        SELECT DISTINCT ON (a.symbol)
+                            a.symbol, a.score, i.indicators_json
+                        FROM alpha_scores a
+                        JOIN indicators i ON a.symbol = i.symbol
+                        WHERE a.time > now() - interval '2 hours'
+                          AND i.time > now() - interval '2 hours'
+                          AND a.score >= 60
+                        ORDER BY a.symbol, a.time DESC
+                    """))
+                else:
+                    # Robust authority: query indicators directly. We
+                    # still LEFT JOIN ``alpha_scores`` so the row shape
+                    # is unchanged for downstream code, but the legacy
+                    # score is purely informational (and is in fact
+                    # ignored by ``_resolve_signal_score`` outside
+                    # rollback). NULL legacy scores are surfaced as
+                    # 0.0 so the helper has a numeric type.
+                    ranked = await db.execute(text("""
+                        SELECT DISTINCT ON (i.symbol)
+                            i.symbol,
+                            COALESCE(a.score, 0.0) AS score,
+                            i.indicators_json
+                        FROM indicators i
+                        LEFT JOIN alpha_scores a
+                          ON a.symbol = i.symbol
+                         AND a.time > now() - interval '2 hours'
+                        WHERE i.time > now() - interval '2 hours'
+                        ORDER BY i.symbol, i.time DESC, a.time DESC
+                    """))
                 candidates = ranked.fetchall()
 
-                # Robust Indicators Phase 2 — score read point.
-                # When a symbol is bucketed into the rollout, replace
-                # ``alpha_score`` (read from ``alpha_scores``) with the
-                # confidence-weighted robust score derived from the same
-                # ``indicators_json`` row. Failures fall back silently to
-                # the legacy score and bump the silent-fallback counter,
-                # so signal evaluation can NEVER hard-stop on a bucketed
-                # symbol.
-                from ..services.robust_indicators import select_authoritative_score
-
+                # Robust Indicators Phase 3 — authoritative score read.
+                # ``_resolve_signal_score`` enforces the Phase 3
+                # contract: outside ``LEGACY_PIPELINE_ROLLBACK`` the
+                # legacy ``alpha_scores`` value is NEVER substituted —
+                # a robust-tagged sentinel (engine declined to score)
+                # returns ``None`` and we skip the candidate.
                 for candidate in candidates:
                     symbol = candidate.symbol
-                    alpha_score = float(candidate.score)
+                    legacy_alpha = float(candidate.score)
                     indicators = candidate.indicators_json or {}
                     current_price = indicators.get("close", 0)
 
                     if current_price <= 0:
                         continue
 
-                    sel = select_authoritative_score(
-                        symbol,
-                        indicators,
-                        legacy_score=alpha_score,
-                        flow_source_hint=indicators.get("taker_source"),
+                    resolved = _resolve_signal_score(
+                        symbol, indicators, legacy_alpha,
                     )
-                    if sel.engine_tag == "robust" and sel.score is not None:
-                        alpha_score = float(sel.score)
+                    if resolved is None:
+                        continue
+                    alpha_score = resolved
 
                     # 1. Evaluate signal
                     signal_result = signal_engine.evaluate(indicators, alpha_score)

@@ -1143,28 +1143,110 @@ async def _run_staleness_only(
     await db.commit()
 
 
+def _robust_futures_direction_bias(indicators: dict) -> float:
+    """Phase 3 — derive a direction bias in ``[-1.0, +1.0]`` from
+    indicator envelopes ALONE (no dependency on legacy
+    ``score_long`` / ``score_short`` / ``confidence_score`` columns).
+
+    Positive values lean LONG, negative lean SHORT, ``0.0`` is
+    neutral. The bias is computed from a small, deterministic set of
+    indicators that the robust engine already validates:
+
+      * ``ema9_gt_ema50``      (bool)  — short-term trend
+      * ``ema50_gt_ema200``    (bool)  — long-term trend
+      * ``macd_histogram``     (float) — momentum impulse sign
+      * ``rsi``                (float) — overbought/oversold zone
+
+    Each indicator contributes a vote in ``[-1, +1]``; the bias is the
+    average of the available votes. Indicators that are missing or
+    not numeric/boolean simply abstain — they do NOT bias the result
+    toward long or short. This guarantees that the robust authoritative
+    output is independent of legacy scorer state.
+    """
+    if not isinstance(indicators, dict):
+        return 0.0
+
+    votes: list[float] = []
+
+    def _get(name):
+        v = indicators.get(name)
+        if isinstance(v, dict):
+            v = v.get("value")
+        return v
+
+    e9_50 = _get("ema9_gt_ema50")
+    if e9_50 is True:
+        votes.append(+1.0)
+    elif e9_50 is False:
+        votes.append(-1.0)
+
+    e50_200 = _get("ema50_gt_ema200")
+    if e50_200 is True:
+        votes.append(+1.0)
+    elif e50_200 is False:
+        votes.append(-1.0)
+
+    macd_hist = _get("macd_histogram")
+    try:
+        if macd_hist is not None:
+            mh = float(macd_hist)
+            if mh > 0:
+                votes.append(+1.0)
+            elif mh < 0:
+                votes.append(-1.0)
+    except (TypeError, ValueError):
+        pass
+
+    rsi = _get("rsi")
+    try:
+        if rsi is not None:
+            r = float(rsi)
+            if r > 55.0:
+                votes.append(+1.0)
+            elif r < 45.0:
+                votes.append(-1.0)
+            # 45..55 is neutral — abstain
+    except (TypeError, ValueError):
+        pass
+
+    if not votes:
+        return 0.0
+    bias = sum(votes) / len(votes)
+    # Clamp into [-1, 1] for safety.
+    return max(-1.0, min(1.0, bias))
+
+
 def _apply_robust_authoritative_scoring(
     assets: list,
     *,
     score_config: dict | None,
     is_futures: bool,
 ) -> dict[str, int]:
-    """Phase 2 — for bucketed symbols replace the legacy score with the
-    confidence-weighted robust score and tag ``engine_tag`` on each asset.
+    """Phase 3 — apply the authoritative robust score to every asset.
 
     Mutates each asset dict in place:
-      * Always sets ``engine_tag`` to ``"robust"`` or ``"legacy"`` so the
-        upsert path can persist the column for the asset row.
-      * For bucketed-and-robust-succeeded assets, overrides ``_score`` /
-        ``alpha_score`` (spot) and ``confidence_score`` /
-        ``score_long`` / ``score_short`` (futures) with the robust score.
-        For futures, ``score_long`` / ``score_short`` are scaled in the
-        same direction as the legacy split so the entry gate (LONG vs
-        SHORT) keeps the legacy direction signal but the magnitude is
-        re-grounded on the validated confidence-weighted total.
-      * For bucketed-but-failed assets, leaves the legacy score alone
-        and bumps the silent-fallback counter (already done inside
-        ``select_authoritative_score``).
+      * Always sets ``engine_tag`` to ``"robust"`` or ``"legacy"`` so
+        the upsert path can persist the column for the asset row.
+      * For robust-succeeded assets (``engine_tag="robust"`` and
+        ``score`` is a float), overrides ``_score`` / ``alpha_score``
+        (spot) and ``confidence_score`` / ``score_long`` /
+        ``score_short`` (futures) with the robust score. For futures,
+        the LONG / SHORT split is derived **from indicator envelopes
+        directly** via ``_robust_futures_direction_bias`` — the
+        legacy ``score_long`` / ``score_short`` / ``confidence_score``
+        columns are NEVER read on the non-rollback path, so the
+        authoritative output is independent of legacy scorer state.
+      * For the Phase 3 robust-tagged sentinel
+        (``engine_tag="robust"`` and ``score is None`` — robust engine
+        declined to produce a value: missing indicators / compute
+        failure / empty symbol), zeroes out every score column on the
+        asset so a pre-existing legacy numeric value is never
+        persisted under the ``robust`` engine tag and the symbol is
+        naturally suppressed downstream.
+      * For ``engine_tag="legacy"`` (only emitted while
+        ``LEGACY_PIPELINE_ROLLBACK`` is active), leaves the legacy
+        score alone — that is the explicit emergency fallback the
+        operator requested.
 
     Returns counters: ``{"bucketed", "robust_used", "fallbacks", "legacy"}``
     so the caller can log a single "rollout summary" line per scan.
@@ -1180,6 +1262,12 @@ def _apply_robust_authoritative_scoring(
         if not symbol:
             continue
         indicators = asset.get("indicators") or {}
+        # Phase 3: ``legacy_score`` is the value the selector uses ONLY
+        # when ``LEGACY_PIPELINE_ROLLBACK`` is active (the rollback
+        # short-circuit). On the normal Phase 3 path (rollback off)
+        # the selector ignores this argument and produces a robust
+        # score from the envelopes alone, so the futures path no
+        # longer needs to feed in ``confidence_score`` here.
         legacy_score = (
             asset.get("confidence_score")
             if is_futures and asset.get("confidence_score") is not None
@@ -1198,39 +1286,70 @@ def _apply_robust_authoritative_scoring(
         )
 
         asset["engine_tag"] = result.engine_tag
+        # Phase 3: a robust-tagged sentinel (score=None outside
+        # rollback) means the robust engine could not produce a
+        # value — missing indicators, compute exception, etc. We
+        # MUST NOT silently keep the pre-existing legacy score on
+        # the asset (that would persist a legacy number tagged
+        # "robust"). Zero out the asset score so the symbol is
+        # naturally suppressed downstream and the engine_tag stays
+        # truthful. Sentinel cases are accounted as ``fallbacks``
+        # only — never ``robust_used`` — so the rollout summary
+        # log line reflects how many symbols actually ran end-to-end
+        # vs. how many had no robust score to apply.
+        is_sentinel = (
+            result.engine_tag == "robust" and result.score is None
+        )
         if result.bucketed:
             counters["bucketed"] += 1
-            if result.fell_back:
+            if result.fell_back or is_sentinel:
                 counters["fallbacks"] += 1
             else:
                 counters["robust_used"] += 1
         else:
             counters["legacy"] += 1
 
+        if is_sentinel:
+            asset["_score"] = 0.0
+            asset["score"] = 0.0
+            asset["alpha_score"] = 0.0
+            if is_futures:
+                asset["confidence_score"] = 0.0
+                if asset.get("score_long") is not None:
+                    asset["score_long"] = 0.0
+                if asset.get("score_short") is not None:
+                    asset["score_short"] = 0.0
+            continue
+
         if result.engine_tag != "robust" or result.score is None:
             continue
 
         new_score = float(result.score)
         if is_futures:
-            old_long = asset.get("score_long")
-            old_short = asset.get("score_short")
-            old_conf = asset.get("confidence_score")
+            # Phase 3: derive the LONG/SHORT split from indicator
+            # envelopes ALONE — never from the previously-stored
+            # legacy ``score_long`` / ``score_short`` / ``confidence_score``
+            # values. The bias lives in ``[-1, +1]``; we map it to a
+            # symmetric split around the robust magnitude:
+            #
+            #     fully long  (bias = +1)  → long = robust, short = 0
+            #     neutral     (bias =  0)  → long = robust, short = robust
+            #     fully short (bias = -1)  → long = 0,      short = robust
+            #
+            # The "neutral → both = robust" choice keeps the entry
+            # gate available for both sides when indicators are
+            # ambiguous, matching the behaviour the existing entry
+            # gate already expects when score_long ≈ score_short.
             asset["confidence_score"] = round(new_score, 2)
-            # Preserve direction: scale LONG/SHORT proportionally so the
-            # entry gate keeps the legacy direction signal but its
-            # magnitude is grounded on the robust score.
-            if old_conf and old_conf > 0:
-                ratio = new_score / float(old_conf)
-            else:
-                ratio = 1.0
-            if old_long is not None:
-                asset["score_long"] = round(
-                    max(0.0, min(100.0, float(old_long) * ratio)), 2
-                )
-            if old_short is not None:
-                asset["score_short"] = round(
-                    max(0.0, min(100.0, float(old_short) * ratio)), 2
-                )
+            bias = _robust_futures_direction_bias(indicators)
+            long_mult = 1.0 - max(0.0, -bias)   # bias < 0 reduces long
+            short_mult = 1.0 - max(0.0, bias)   # bias > 0 reduces short
+            asset["score_long"] = round(
+                max(0.0, min(100.0, new_score * long_mult)), 2
+            )
+            asset["score_short"] = round(
+                max(0.0, min(100.0, new_score * short_mult)), 2
+            )
         # For both spot and futures, override the canonical alpha_score
         # column read by downstream consumers (evaluate_signals, UI, etc.)
         asset["_score"] = new_score
@@ -2014,13 +2133,19 @@ async def _run_pipeline_scan():
                             wl.name, effective_level, _shadow_exc,
                         )
 
-                    # ── Robust indicators (Phase 2) — gradual rollout ─────
-                    # Apply the deterministic per-symbol bucketing AFTER
-                    # the shadow snapshot so divergence comparisons keep
-                    # seeing the original legacy score. For symbols in the
-                    # rollout bucket the robust confidence-weighted score
-                    # becomes authoritative on the asset dict; downstream
-                    # rejection/upsert/UI all read from the mutated dict.
+                    # ── Robust indicators (Phase 3) — robust authoritative ─
+                    # Apply the robust-engine selection AFTER the shadow
+                    # snapshot so divergence comparisons keep seeing the
+                    # original legacy score. The robust confidence-weighted
+                    # score becomes authoritative on the asset dict;
+                    # downstream rejection/upsert/UI all read from the
+                    # mutated dict. Phase 3 contract: legacy data is
+                    # NEVER preserved outside ``LEGACY_PIPELINE_ROLLBACK``,
+                    # so when this step itself fails we fail-closed by
+                    # zeroing every asset score and tagging the asset as
+                    # ``robust`` with a synthetic ``rollout_step_failed``
+                    # signal — never silently retain pre-existing legacy
+                    # numbers under a future Phase 3 audit.
                     try:
                         rollout_counters = _apply_robust_authoritative_scoring(
                             assets,
@@ -2038,11 +2163,44 @@ async def _run_pipeline_scan():
                                 rollout_counters["legacy"],
                             )
                     except Exception as _rollout_exc:
-                        logger.warning(
-                            "[PipelineScan] %s (%s): robust rollout step failed "
-                            "(%s) — legacy scores retained",
-                            wl.name, effective_level, _rollout_exc,
+                        # Fail-closed under Phase 3 unless the operator
+                        # has explicitly armed the rollback flag. Either
+                        # way, log the failure loudly so ops sees it.
+                        from ..services.robust_indicators import is_legacy_rollback_active
+                        from ..services.robust_indicators.metrics import (
+                            increment_silent_fallback as _inc_fallback,
                         )
+                        rollback_armed = is_legacy_rollback_active()
+                        try:
+                            _inc_fallback("rollout_step_failed")
+                        except Exception:
+                            pass
+                        if rollback_armed:
+                            logger.error(
+                                "[PipelineScan] %s (%s): robust rollout step failed "
+                                "(%s) — LEGACY_PIPELINE_ROLLBACK is ACTIVE so "
+                                "legacy scores retained as the operator-requested "
+                                "emergency fallback",
+                                wl.name, effective_level, _rollout_exc,
+                            )
+                        else:
+                            logger.error(
+                                "[PipelineScan] %s (%s): robust rollout step failed "
+                                "(%s) — failing CLOSED (Phase 3 contract: legacy "
+                                "must never be revived without LEGACY_PIPELINE_ROLLBACK)",
+                                wl.name, effective_level, _rollout_exc,
+                            )
+                            for asset in assets:
+                                asset["engine_tag"] = "robust"
+                                asset["_score"] = 0.0
+                                asset["score"] = 0.0
+                                asset["alpha_score"] = 0.0
+                                if is_futures:
+                                    asset["confidence_score"] = 0.0
+                                    if asset.get("score_long") is not None:
+                                        asset["score_long"] = 0.0
+                                    if asset.get("score_short") is not None:
+                                        asset["score_short"] = 0.0
 
                     if effective_level == "custom":
                         existing_symbols = {a.get("symbol") for a in assets}

@@ -82,8 +82,13 @@ if _PROMETHEUS_AVAILABLE:
     )
     ROBUST_SILENT_FALLBACK_TOTAL = Counter(
         "robust_silent_fallback_total",
-        "Times a bucketed symbol fell back to the legacy score because "
-        "the robust pipeline could not produce a usable score.",
+        "Robust-engine score-selection failures, by reason. Phase 3: "
+        "outside ``LEGACY_PIPELINE_ROLLBACK`` these no longer fall "
+        "back to legacy — the result is a robust-tagged sentinel — "
+        "but the counter remains the canonical signal for ops to see "
+        "how often the robust engine cannot produce a value. The "
+        "``legacy_rollback`` reason is bumped exactly once per call "
+        "while the rollback flag is active.",
         labelnames=("reason",),
         registry=REGISTRY,
     )

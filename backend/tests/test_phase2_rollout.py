@@ -1,8 +1,15 @@
-"""Phase 2 rollout tests — bucketing, score selection, fallback, preflight.
+"""Phase 2 rollout tests — bucketing math, score selection, fallback, preflight.
 
-Pure-Python tests that don't require a database connection except for
-the preflight guard, which is exercised against an in-memory async
-session stub.
+Phase 3 (deprecation) flipped the runtime default to ``robust`` for
+every symbol and reduced :func:`should_use_robust` to a thin wrapper
+around :func:`is_legacy_rollback_active`. The Phase 2 per-symbol bucket
+math is preserved as :func:`is_symbol_in_robust_bucket` so this file —
+which used to test the bucket math directly through
+``should_use_robust`` — now exercises the same invariants through the
+diagnostic helper. Score-selection tests assert the new "robust by
+default unless rollback" behaviour.
+
+The preflight guard is unchanged in Phase 3 and is still tested here.
 """
 
 from __future__ import annotations
@@ -20,6 +27,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from app.services.robust_indicators import (  # noqa: E402
     bucketed_symbols,
     get_rollout_percent,
+    is_legacy_rollback_active,
+    is_symbol_in_robust_bucket,
     select_authoritative_score,
     should_use_robust,
 )
@@ -47,13 +56,31 @@ SAMPLE_SYMBOLS = [
 ]
 
 
-# ── bucketing determinism ────────────────────────────────────────────────────
+@pytest.fixture(autouse=True)
+def _clean_rollback_env(monkeypatch):
+    """Every test starts with the legacy-rollback flag OFF.
+
+    Phase 3 made ``should_use_robust`` depend on
+    ``LEGACY_PIPELINE_ROLLBACK``; without this fixture a stray env var
+    or settings mutation from a previous test would silently flip the
+    bucket math tests into the wrong branch.
+    """
+    monkeypatch.delenv("LEGACY_PIPELINE_ROLLBACK", raising=False)
+    from app.services.robust_indicators import bucketing as bucketing_mod
+    monkeypatch.setattr(
+        bucketing_mod.settings, "LEGACY_PIPELINE_ROLLBACK", False, raising=False
+    )
+    assert is_legacy_rollback_active() is False
+    yield
+
+
+# ── bucket-math determinism (preserved as a diagnostic) ─────────────────────
 
 
 def test_bucket_index_is_deterministic_per_symbol():
     """Same symbol → same bucket no matter how many times we ask."""
     for sym in SAMPLE_SYMBOLS[:10]:
-        seen = {should_use_robust(sym, percent=37) for _ in range(20)}
+        seen = {is_symbol_in_robust_bucket(sym, percent=37) for _ in range(20)}
         assert len(seen) == 1, f"Bucket flapped for {sym}: {seen}"
 
 
@@ -61,29 +88,27 @@ def test_bucket_uses_sha1_modulo_100():
     """Implementation contract: ``int(sha1(SYM).hex,16) % 100 < percent``."""
     sym = "BTC_USDT"
     expected_index = int(hashlib.sha1(sym.encode()).hexdigest(), 16) % 100
-    # If the index is N, then for percent=N+1 the symbol IS bucketed and
-    # for percent=N it is NOT.
-    assert should_use_robust(sym, percent=expected_index + 1)
-    assert not should_use_robust(sym, percent=expected_index)
+    assert is_symbol_in_robust_bucket(sym, percent=expected_index + 1)
+    assert not is_symbol_in_robust_bucket(sym, percent=expected_index)
 
 
 def test_bucket_extreme_percentages():
     for sym in SAMPLE_SYMBOLS:
-        assert should_use_robust(sym, percent=100), sym
-        assert not should_use_robust(sym, percent=0), sym
+        assert is_symbol_in_robust_bucket(sym, percent=100), sym
+        assert not is_symbol_in_robust_bucket(sym, percent=0), sym
 
 
 def test_bucketing_is_monotonic_with_percent():
     """Symbol bucketed at percent=N must also be bucketed at percent=N+k."""
     for sym in SAMPLE_SYMBOLS:
         first = next(
-            (p for p in range(0, 101) if should_use_robust(sym, percent=p)),
+            (p for p in range(0, 101) if is_symbol_in_robust_bucket(sym, percent=p)),
             None,
         )
         if first is None:
-            continue  # only happens if % == 0 always; impossible here
+            continue
         for p in range(first, 101):
-            assert should_use_robust(sym, percent=p), (sym, p)
+            assert is_symbol_in_robust_bucket(sym, percent=p), (sym, p)
 
 
 @pytest.mark.parametrize("percent,tolerance", [(10, 0.05), (50, 0.05), (90, 0.05)])
@@ -100,19 +125,18 @@ def test_bucketing_distribution_matches_percent(percent: int, tolerance: float):
 
 def test_force_symbol_override(monkeypatch):
     sym = "FORCED_USDT"
-    # By default at percent=0 the symbol is NOT bucketed.
-    assert not should_use_robust(sym, percent=0)
+    assert not is_symbol_in_robust_bucket(sym, percent=0)
     monkeypatch.setenv("ROBUST_FORCE_SYMBOLS", "FORCED_USDT,OTHER_USDT")
-    assert should_use_robust(sym, percent=0)
-    assert should_use_robust("other_usdt", percent=0)
-    assert not should_use_robust("UNRELATED_USDT", percent=0)
+    assert is_symbol_in_robust_bucket(sym, percent=0)
+    assert is_symbol_in_robust_bucket("other_usdt", percent=0)
+    assert not is_symbol_in_robust_bucket("UNRELATED_USDT", percent=0)
 
 
 def test_exclude_symbol_override(monkeypatch):
     sym = "EXCLUDED_USDT"
-    assert should_use_robust(sym, percent=100)
+    assert is_symbol_in_robust_bucket(sym, percent=100)
     monkeypatch.setenv("ROBUST_EXCLUDE_SYMBOLS", "EXCLUDED_USDT")
-    assert not should_use_robust(sym, percent=100)
+    assert not is_symbol_in_robust_bucket(sym, percent=100)
 
 
 def test_get_rollout_percent_clamps_and_parses(monkeypatch):
@@ -130,6 +154,32 @@ def test_get_rollout_percent_clamps_and_parses(monkeypatch):
     assert get_rollout_percent() == 0
     # Explicit override always wins.
     assert get_rollout_percent(42) == 42
+
+
+# ── Phase 3 hot-path: should_use_robust is a thin wrapper ──────────────────
+
+
+def test_should_use_robust_is_true_by_default_for_every_symbol():
+    """Phase 3: every non-empty symbol uses the robust engine by default."""
+    for sym in SAMPLE_SYMBOLS:
+        assert should_use_robust(sym) is True, sym
+    # The percent argument is accepted for backwards compatibility but
+    # MUST NOT downshift symbols off the robust engine in Phase 3.
+    for sym in SAMPLE_SYMBOLS[:5]:
+        assert should_use_robust(sym, percent=0) is True
+        assert should_use_robust(sym, percent=10) is True
+        assert should_use_robust(sym, percent=100) is True
+
+
+def test_should_use_robust_returns_false_under_rollback(monkeypatch):
+    monkeypatch.setenv("LEGACY_PIPELINE_ROLLBACK", "true")
+    for sym in SAMPLE_SYMBOLS:
+        assert should_use_robust(sym) is False, sym
+
+
+def test_should_use_robust_empty_symbol_is_false():
+    assert should_use_robust("") is False
+    assert should_use_robust("   ") is False
 
 
 # ── score selection ──────────────────────────────────────────────────────────
@@ -164,23 +214,12 @@ _RULES_OK = [
 ]
 
 
-def test_select_score_legacy_when_not_bucketed():
+def test_select_score_robust_by_default():
+    """Phase 3: with no rollback set the robust engine is authoritative."""
     reset_silent_fallback()
     res = select_authoritative_score(
         "BTC_USDT", _INDICATORS_OK, legacy_score=72.5,
-        score_config={"scoring_rules": _RULES_OK}, percent=0,
-    )
-    assert res.bucketed is False
-    assert res.engine_tag == "legacy"
-    assert res.score == pytest.approx(72.5)
-    assert silent_fallback_snapshot() == {}
-
-
-def test_select_score_robust_when_bucketed():
-    reset_silent_fallback()
-    res = select_authoritative_score(
-        "BTC_USDT", _INDICATORS_OK, legacy_score=72.5,
-        score_config={"scoring_rules": _RULES_OK}, percent=100,
+        score_config={"scoring_rules": _RULES_OK},
     )
     assert res.bucketed is True
     assert res.engine_tag == "robust"
@@ -190,23 +229,57 @@ def test_select_score_robust_when_bucketed():
     assert silent_fallback_snapshot() == {}
 
 
-def test_select_score_silent_fallback_missing_indicators():
+def test_select_score_legacy_rollback_short_circuits(monkeypatch):
+    """Setting LEGACY_PIPELINE_ROLLBACK forces every result to legacy."""
+    reset_silent_fallback()
+    monkeypatch.setenv("LEGACY_PIPELINE_ROLLBACK", "true")
+    res = select_authoritative_score(
+        "BTC_USDT", _INDICATORS_OK, legacy_score=72.5,
+        score_config={"scoring_rules": _RULES_OK},
+    )
+    assert res.engine_tag == "legacy"
+    assert res.bucketed is False
+    assert res.score == pytest.approx(72.5)
+    assert res.fell_back is True
+    assert res.fallback_reason == "legacy_rollback"
+    snap = silent_fallback_snapshot()
+    assert snap.get("legacy_rollback", 0) >= 1
+
+
+def test_select_score_explicit_percent_does_not_downshift_in_phase3():
+    """percent=0 used to force legacy; in Phase 3 it must stay robust."""
+    reset_silent_fallback()
+    res = select_authoritative_score(
+        "BTC_USDT", _INDICATORS_OK, legacy_score=72.5,
+        score_config={"scoring_rules": _RULES_OK}, percent=0,
+    )
+    assert res.engine_tag == "robust"
+    assert res.bucketed is True
+
+
+def test_select_score_missing_indicators_is_robust_sentinel():
+    """Phase 3: missing indicators outside rollback yields a robust-tagged
+    sentinel (engine_tag="robust", score=None) — legacy is NOT returned.
+    """
     reset_silent_fallback()
     res = select_authoritative_score(
         "BTC_USDT", {}, legacy_score=70.0,
-        score_config={"scoring_rules": _RULES_OK}, percent=100,
+        score_config={"scoring_rules": _RULES_OK},
     )
     assert res.bucketed is True
-    assert res.engine_tag == "legacy"
-    assert res.score == pytest.approx(70.0)
-    assert res.fell_back is True
+    assert res.engine_tag == "robust"
+    assert res.score is None
+    assert res.fell_back is False
     assert res.fallback_reason == "missing_indicators"
+    # Counter still bumped for ops visibility.
     snap = silent_fallback_snapshot()
     assert snap.get("missing_indicators", 0) >= 1
 
 
-def test_select_score_silent_fallback_compute_failure(monkeypatch):
-    """When compute_robust_score raises, fall back and bump compute_failed."""
+def test_select_score_compute_failure_is_robust_sentinel(monkeypatch):
+    """Phase 3: compute exceptions outside rollback yield a robust-tagged
+    sentinel — legacy score is NEVER substituted.
+    """
     reset_silent_fallback()
 
     def _boom(*args, **kwargs):
@@ -218,10 +291,11 @@ def test_select_score_silent_fallback_compute_failure(monkeypatch):
     )
     res = select_authoritative_score(
         "BTC_USDT", _INDICATORS_OK, legacy_score=70.0,
-        score_config={"scoring_rules": _RULES_OK}, percent=100,
+        score_config={"scoring_rules": _RULES_OK},
     )
-    assert res.engine_tag == "legacy"
-    assert res.fell_back is True
+    assert res.engine_tag == "robust"
+    assert res.score is None
+    assert res.fell_back is False
     assert res.fallback_reason == "compute_failed"
     assert silent_fallback_snapshot().get("compute_failed", 0) >= 1
 
@@ -234,7 +308,7 @@ def test_select_score_robust_rejected_is_authoritative():
     bad.pop("adx")
     res = select_authoritative_score(
         "BTC_USDT", bad, legacy_score=70.0,
-        score_config={"scoring_rules": _RULES_OK}, percent=100,
+        score_config={"scoring_rules": _RULES_OK},
     )
     assert res.bucketed is True
     assert res.engine_tag == "robust"
@@ -243,7 +317,7 @@ def test_select_score_robust_rejected_is_authoritative():
     assert silent_fallback_snapshot() == {}
 
 
-# ── preflight guard ──────────────────────────────────────────────────────────
+# ── preflight guard (unchanged in Phase 3) ──────────────────────────────────
 
 
 class _StubRow:

@@ -36,6 +36,8 @@ from .shadow import is_shadow_enabled, run_shadow_scan
 from .bucketing import (
     bucketed_symbols,
     get_rollout_percent,
+    is_legacy_rollback_active,
+    is_symbol_in_robust_bucket,
     should_use_robust,
 )
 from .select_score import (
@@ -67,7 +69,9 @@ __all__ = [
     "compute_indicators_robust",
     "compute_robust_score",
     "get_rollout_percent",
+    "is_legacy_rollback_active",
     "is_shadow_enabled",
+    "is_symbol_in_robust_bucket",
     "persist_snapshot",
     "run_shadow_scan",
     "select_authoritative_score",
