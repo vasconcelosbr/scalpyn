@@ -4,7 +4,7 @@ from copy import deepcopy
 import logging
 import math
 import operator as op
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, List, Optional, Set, Union
 
 # ── Display labels per indicator name ─────────────────────────────────────────
 _IND_LABELS: Dict[str, str] = {
@@ -241,7 +241,7 @@ OPERATORS = {
 class ScoreEngine:
     """Calculates Alpha Score using weights and scoring rules from config."""
 
-    def __init__(self, score_config: Dict[str, Any]):
+    def __init__(self, score_config: Dict[str, Any], min_confidence: float = 0.5):
         self.config = score_config
         self.weights = score_config.get("weights", {
             "liquidity": 35, "market_structure": 25, "momentum": 25, "signal": 15
@@ -255,18 +255,67 @@ class ScoreEngine:
         self.thresholds = score_config.get("thresholds", {
             "strong_buy": 80, "buy": 65, "neutral": 40
         })
+        self.min_confidence = min_confidence  # Minimum confidence to use an indicator
 
-    def compute_alpha_score(self, indicators: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_value_and_confidence(
+        self, indicators: Dict[str, Any], indicator_name: str
+    ) -> tuple[Optional[Any], float, bool]:
+        """Extract value, confidence, and validity from indicator data.
+
+        Supports both raw indicator dicts and IndicatorEnvelope objects.
+
+        Returns:
+            (value, confidence, valid) tuple
+        """
+        indicator_data = indicators.get(indicator_name)
+
+        if indicator_data is None:
+            return (None, 0.0, False)
+
+        # Check if it's an IndicatorEnvelope (dict with 'value', 'confidence', 'valid' keys)
+        if isinstance(indicator_data, dict) and 'confidence' in indicator_data:
+            return (
+                indicator_data.get('value'),
+                float(indicator_data.get('confidence', 0.0)),
+                bool(indicator_data.get('valid', False))
+            )
+
+        # Raw indicator value (legacy path)
+        return (indicator_data, 1.0, True)
+
+    def _is_confidence_weighted_mode(self, indicators: Dict[str, Any]) -> bool:
+        """Detect if indicators dict contains IndicatorEnvelope objects."""
+        if not indicators:
+            return False
+        # Check first indicator for envelope structure
+        first_value = next(iter(indicators.values()), None)
+        return isinstance(first_value, dict) and 'confidence' in first_value
+
+    def compute_alpha_score(
+        self,
+        indicators: Dict[str, Any],
+        use_confidence_weighting: bool = False
+    ) -> Dict[str, Any]:
         """Compute the composite Alpha Score from indicator values.
 
+        Supports both raw indicators (legacy) and IndicatorEnvelope dicts.
+        Auto-detects mode or can be explicitly set via use_confidence_weighting.
+
+        Args:
+            indicators: Dict of indicator_name -> value or IndicatorEnvelope dict
+            use_confidence_weighting: Force confidence weighting mode (overrides auto-detect)
+
         Returns dict with: total_score, classification, component scores,
-        category_summaries (debug/drilldown), matched rules.
+        category_summaries (debug/drilldown), matched rules, confidence_metrics.
         """
         if not indicators:
             return {"total_score": 0, "classification": "no_data", "components": {}}
 
+        # Auto-detect or use explicit flag
+        confidence_mode = use_confidence_weighting or self._is_confidence_weighted_mode(indicators)
+
         category_summaries = {
-            category: self._evaluate_category_rules(indicators, category)
+            category: self._evaluate_category_rules(indicators, category, confidence_mode)
             for category in ("liquidity", "market_structure", "momentum", "signal")
         }
 
@@ -300,7 +349,12 @@ class ScoreEngine:
         # Classification
         classification = self._classify(total_score) if total_weight > 0 else "no_data"
 
-        return {
+        # Confidence metrics (only in confidence mode)
+        confidence_metrics = None
+        if confidence_mode:
+            confidence_metrics = self._compute_confidence_metrics(category_summaries)
+
+        result = {
             "total_score": total_score,
             "classification": classification,
             "components": {
@@ -310,10 +364,42 @@ class ScoreEngine:
                 "signal_score": component_scores["signal"],
             },
             "category_summaries": category_summaries,
-            "matched_rules": self._get_matched_rules(indicators),
+            "matched_rules": self._get_matched_rules(indicators, confidence_mode),
+            "confidence_weighted": confidence_mode,
         }
 
-    def _evaluate_category_rules(self, indicators: Dict[str, Any], category: str) -> Dict[str, Any]:
+        if confidence_metrics:
+            result["confidence_metrics"] = confidence_metrics
+
+        return result
+
+    def _compute_confidence_metrics(self, category_summaries: Dict[str, Any]) -> Dict[str, Any]:
+        """Compute overall confidence metrics from category summaries."""
+        total_weight = sum(self.weights.get(cat, 25) for cat in category_summaries.keys())
+        if total_weight == 0:
+            return {"overall_confidence": 0.0, "category_confidences": {}}
+
+        # Weighted average of category confidences
+        weighted_conf = sum(
+            category_summaries[cat].get("avg_confidence", 1.0) * self.weights.get(cat, 25)
+            for cat in category_summaries.keys()
+        ) / total_weight
+
+        return {
+            "overall_confidence": round(weighted_conf, 4),
+            "category_confidences": {
+                cat: round(summary.get("avg_confidence", 1.0), 4)
+                for cat, summary in category_summaries.items()
+            },
+            "low_confidence_rules": sum(
+                summary.get("low_confidence_count", 0)
+                for summary in category_summaries.values()
+            ),
+        }
+
+    def _evaluate_category_rules(
+        self, indicators: Dict[str, Any], category: str, confidence_mode: bool = False
+    ) -> Dict[str, Any]:
         """Evaluate scoring rules and summarise earned vs possible points.
 
         Uses three separate accumulators to correctly handle penalty rules
@@ -356,6 +442,11 @@ class ScoreEngine:
         rules_passed      = 0
         rules_failed      = 0
 
+        # Confidence tracking (only in confidence mode)
+        confidence_sum = 0.0
+        confidence_count = 0
+        low_confidence_count = 0
+
         for rule in self.rules:
             # Use _IND_CATEGORY as the single source of truth for which
             # category an indicator belongs to.  Default to "other" so that
@@ -365,18 +456,41 @@ class ScoreEngine:
                 continue
 
             points = float(rule.get("points") if rule.get("points") is not None else 0)
-            matched = self._evaluate_rule(rule, indicators)
+
+            # In confidence mode, check indicator confidence and validity
+            confidence = 1.0
+            if confidence_mode:
+                indicator_name = rule.get("indicator", "")
+                _, confidence, valid = self._extract_value_and_confidence(indicators, indicator_name)
+
+                # Skip rules with low confidence or invalid indicators
+                if not valid or confidence < self.min_confidence:
+                    logger.debug(
+                        f"[score] Skipping rule for {indicator_name} in {category}: "
+                        f"confidence={confidence:.2f}, valid={valid}"
+                    )
+                    low_confidence_count += 1
+                    continue
+
+                confidence_sum += confidence
+                confidence_count += 1
+
+            matched = self._evaluate_rule(rule, indicators, confidence_mode)
 
             if points > 0:
-                positive_possible += points
+                # Apply confidence multiplier to points in confidence mode
+                effective_points = points * confidence if confidence_mode else points
+                positive_possible += effective_points
                 if matched:
-                    earned_positive += points
+                    earned_positive += effective_points
                     rules_passed += 1
                 else:
                     rules_failed += 1
             elif points < 0:
+                # Penalties also get confidence multiplier
+                effective_points = points * confidence if confidence_mode else points
                 if matched:
-                    penalties += points  # already negative → subtracts from numerator
+                    penalties += effective_points  # already negative → subtracts from numerator
                     rules_passed += 1
                 else:
                     rules_failed += 1
@@ -411,7 +525,7 @@ class ScoreEngine:
             category, positive_possible, earned_positive, penalties, category_score,
         )
 
-        return {
+        result = {
             "positive_possible": float(positive_possible),
             "earned_positive":   float(earned_positive),
             "penalties":         float(penalties),
@@ -420,26 +534,52 @@ class ScoreEngine:
             "rules_failed":      int(rules_failed),
         }
 
-    def _evaluate_rule(self, rule: Dict[str, Any], indicators: Dict[str, Any]) -> bool:
-        """Evaluate a single scoring rule against indicator values."""
+        # Add confidence metrics if in confidence mode
+        if confidence_mode:
+            avg_confidence = confidence_sum / confidence_count if confidence_count > 0 else 1.0
+            result["avg_confidence"] = float(avg_confidence)
+            result["low_confidence_count"] = int(low_confidence_count)
+
+        return result
+
+    def _evaluate_rule(
+        self, rule: Dict[str, Any], indicators: Dict[str, Any], confidence_mode: bool = False
+    ) -> bool:
+        """Evaluate a single scoring rule against indicator values.
+
+        Args:
+            rule: Rule dict with indicator, operator, value
+            indicators: Dict of indicators (raw values or envelopes)
+            confidence_mode: If True, extract values from envelopes
+
+        Returns:
+            True if rule matches, False otherwise
+        """
         indicator_name = rule.get("indicator", "")
         operator_str = rule.get("operator", "")
         target_value = rule.get("value")
 
+        # Extract actual value (handles both raw and envelope modes)
+        def get_indicator_value(name: str) -> Any:
+            if confidence_mode:
+                value, _, valid = self._extract_value_and_confidence(indicators, name)
+                return value if valid else None
+            return indicators.get(name)
+
         # Special EMA trend operators
         if operator_str == "ema9>ema50>ema200":
-            return bool(indicators.get("ema_full_alignment", False))
+            return bool(get_indicator_value("ema_full_alignment") or False)
         elif operator_str == "ema9>ema50":
-            return bool(indicators.get("ema9_gt_ema50", False))
+            return bool(get_indicator_value("ema9_gt_ema50") or False)
         elif operator_str == "ema50>ema200":
-            return bool(indicators.get("ema50_gt_ema200", False))
+            return bool(get_indicator_value("ema50_gt_ema200") or False)
         elif operator_str == "ema9<ema50":
-            return not bool(indicators.get("ema9_gt_ema50", True))
+            return not bool(get_indicator_value("ema9_gt_ema50") or True)
 
         # DI directional comparison: DI+ > DI- (real trend confirmation, not just DI+ > 0)
         if operator_str == "di+>di-":
-            di_plus = indicators.get("di_plus")
-            di_minus = indicators.get("di_minus")
+            di_plus = get_indicator_value("di_plus")
+            di_minus = get_indicator_value("di_minus")
             if di_plus is None or di_minus is None:
                 return False
             try:
@@ -447,8 +587,8 @@ class ScoreEngine:
             except (TypeError, ValueError):
                 return False
         if operator_str == "di->di+":
-            di_plus = indicators.get("di_plus")
-            di_minus = indicators.get("di_minus")
+            di_plus = get_indicator_value("di_plus")
+            di_minus = get_indicator_value("di_minus")
             if di_plus is None or di_minus is None:
                 return False
             try:
@@ -458,22 +598,22 @@ class ScoreEngine:
 
         # ADX acceleration operators
         if operator_str == ">prev+" and indicator_name == "adx_acceleration":
-            accel = indicators.get("adx_acceleration")
+            accel = get_indicator_value("adx_acceleration")
             if accel is None:
                 return False
             return accel > (target_value or 0)
         elif operator_str == ">prev" and indicator_name == "adx_acceleration":
-            accel = indicators.get("adx_acceleration")
+            accel = get_indicator_value("adx_acceleration")
             if accel is None:
                 return False
             return accel > 0
 
         # String equality (e.g., macd_signal = "positive")
         if operator_str == "=" and isinstance(target_value, str):
-            return indicators.get(indicator_name) == target_value
+            return get_indicator_value(indicator_name) == target_value
 
         # Standard numeric operators
-        actual_value = indicators.get(indicator_name)
+        actual_value = get_indicator_value(indicator_name)
         if actual_value is None:
             return False
 
@@ -501,11 +641,13 @@ class ScoreEngine:
 
         return False
 
-    def _get_matched_rules(self, indicators: Dict[str, Any]) -> List[str]:
+    def _get_matched_rules(
+        self, indicators: Dict[str, Any], confidence_mode: bool = False
+    ) -> List[str]:
         """Return list of rule IDs that matched."""
         matched = []
         for rule in self.rules:
-            if self._evaluate_rule(rule, indicators):
+            if self._evaluate_rule(rule, indicators, confidence_mode):
                 matched.append(rule.get("id", "unknown"))
         return matched
 
