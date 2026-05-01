@@ -57,7 +57,12 @@ jobs:
             --region ${{ vars.GCP_REGION }} \
             --platform managed \
             --allow-unauthenticated \
-            --port 8080
+            --port 8080 \
+            --timeout 300 \
+            --memory 2Gi \
+            --min-instances 1 \
+            --no-cpu-throttling \
+            --cpu-boost
 
   # ── Backend (SA Key fallback): uses GCP_SA_KEY secret ─────
   deploy-backend-sa:
