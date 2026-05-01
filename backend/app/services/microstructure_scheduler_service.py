@@ -102,7 +102,7 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
                 "grp": SCHEDULER_GROUP,
             })
     except Exception as exc:
-        logger.warning("[MICRO-SCHED] indicators insert failed for %s: %s", symbol, exc)
+        logger.error("[MICRO-SCHED] indicators insert failed for %s: %s", symbol, exc, exc_info=True)
 
 
 async def _refresh_market_metadata(db, symbol: str,
@@ -130,7 +130,7 @@ async def _refresh_market_metadata(db, symbol: str,
                 "updated": when,
             })
     except Exception as exc:
-        logger.debug("[MICRO-SCHED] market_metadata upsert skipped for %s: %s", symbol, exc)
+        logger.error("[MICRO-SCHED] market_metadata upsert failed for %s: %s", symbol, exc, exc_info=True)
 
 
 async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:

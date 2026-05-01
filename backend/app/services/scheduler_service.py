@@ -123,8 +123,10 @@ async def _persist_ohlcv(db, symbol: str, df: pd.DataFrame, exchange: str) -> No
                 ),
             })
         except Exception as exc:
-            logger.debug("[SCHED] OHLCV insert skipped for %s @ %s: %s",
-                         symbol, row.get("time"), exc)
+            logger.error(
+                "[SCHED] OHLCV insert failed for %s @ %s: %s",
+                symbol, row.get("time"), exc, exc_info=True,
+            )
 
 
 async def _persist_indicators(db, symbol: str, results: dict, when: datetime) -> None:
@@ -149,7 +151,7 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
                 "payload": json.dumps(results, default=str),
             })
     except Exception as exc:
-        logger.warning("[SCHED] indicators insert failed for %s: %s", symbol, exc)
+        logger.error("[SCHED] indicators insert failed for %s: %s", symbol, exc, exc_info=True)
 
 
 async def _refresh_market_metadata(db, symbol: str, df: pd.DataFrame,
@@ -187,7 +189,7 @@ async def _refresh_market_metadata(db, symbol: str, df: pd.DataFrame,
                 "updated": when,
             })
     except Exception as exc:
-        logger.warning("[SCHED] market_metadata upsert failed for %s: %s", symbol, exc)
+        logger.error("[SCHED] market_metadata upsert failed for %s: %s", symbol, exc, exc_info=True)
 
 
 async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:

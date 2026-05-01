@@ -59,13 +59,14 @@ _connect_args.setdefault("command_timeout", 60)
 # their own processes alongside.  The total upper bound on simultaneous
 # Postgres connections from this app is therefore:
 #
-#   uvicorn_workers * (DB_POOL_SIZE + DB_MAX_OVERFLOW)
-#       + celery_workers (NullPool, ~one connection per active task)
-#       + celery_beat
+#   WEB_CONCURRENCY * (DB_POOL_SIZE + DB_MAX_OVERFLOW)
+#       + CELERY_CONCURRENCY  (NullPool, ~one connection per active task slot)
+#       + 1                   (celery beat)
 #
-# This must stay below the Cloud SQL tier's `max_connections`.  Always run
-# `SHOW max_connections;` against the live instance before raising the
-# defaults — db-f1-micro = 25, db-g1-small = 50, db-n1-standard-1 = 100.
+# See docs/db-pool-budget.md for the current production numbers and Cloud SQL
+# tier comparison.  This must stay below the Cloud SQL tier's `max_connections`.
+# Always run `SHOW max_connections;` against the live instance before raising
+# the defaults — db-f1-micro = 25, db-g1-small = 50, db-n1-standard-1 = 100.
 #
 # Defaults bumped to 10 + 10 (was 5 + 5) to give API request handlers,
 # WebSocket event handlers and the in-process indicator schedulers
@@ -89,9 +90,25 @@ engine = create_async_engine(
 )
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
+_uvicorn_workers = _env_int("WEB_CONCURRENCY", 2)  # matches Dockerfile runtime stage ENV and start.sh
+# Celery uses NullPool — each active task slot opens one connection.
+# CELERY_CONCURRENCY matches the --concurrency flag in start.sh (default 1).
+# CELERY_WORKERS here means "number of Celery task slots", not process count.
+_celery_concurrency = _env_int("CELERY_CONCURRENCY", 1)
+_celery_beat = 1  # beat always holds at most 1 connection
+_connection_budget = (
+    _uvicorn_workers * (_pool_size + _max_overflow)
+    + _celery_concurrency
+    + _celery_beat
+)
+
 logger.info(
-    "DB pool configured: pool_size=%d max_overflow=%d pool_timeout=%ds",
+    "DB pool configured: pool_size=%d max_overflow=%d pool_timeout=%ds | "
+    "connection budget: uvicorn_workers=%d × (pool_size+max_overflow)=%d "
+    "+ celery_concurrency=%d + beat=%d = %d total ceiling",
     _pool_size, _max_overflow, _pool_timeout,
+    _uvicorn_workers, _pool_size + _max_overflow,
+    _celery_concurrency, _celery_beat, _connection_budget,
 )
 
 
@@ -99,18 +116,52 @@ logger.info(
 # Periodic logger so we can correlate `QueuePool limit … reached` errors with
 # actual pool utilisation.  Disabled when DB_POOL_STATS_INTERVAL_SECONDS=0.
 
+# Track saturation state to warn only on transitions (not every tick).
+_pool_saturated: bool = False
+_pool_overflow_exhausted: bool = False
+
+
 def log_pool_stats() -> None:
-    """Log a snapshot of the engine's connection pool state."""
+    """Log a snapshot of the engine's connection pool state.
+
+    Emits a WARNING (once per transition) when:
+      - checked_out >= pool_size  (pool is saturated, overflow in use)
+      - overflow == max_overflow  (all overflow slots consumed, next request will block/timeout)
+    """
+    global _pool_saturated, _pool_overflow_exhausted
     try:
         pool = engine.pool
+        checked_out = pool.checkedout()
+        overflow = pool.overflow()
         logger.info(
             "DB pool stats: size=%d checked_out=%d overflow=%d checked_in=%d status=%r",
             pool.size(),
-            pool.checkedout(),
-            pool.overflow(),
+            checked_out,
+            overflow,
             pool.checkedin(),
             pool.status(),
         )
+
+        # Warn on transition into pool-saturated state (overflow is being used).
+        now_saturated = checked_out >= _pool_size
+        if now_saturated and not _pool_saturated:
+            logger.warning(
+                "DB pool SATURATED: checked_out=%d >= pool_size=%d — overflow connections in use "
+                "(budget ceiling: %d)",
+                checked_out, _pool_size, _connection_budget,
+            )
+        _pool_saturated = now_saturated
+
+        # Warn on transition into overflow-exhausted state (next request will block/timeout).
+        now_overflow_exhausted = overflow >= _max_overflow
+        if now_overflow_exhausted and not _pool_overflow_exhausted:
+            logger.warning(
+                "DB pool OVERFLOW EXHAUSTED: overflow=%d >= max_overflow=%d — next requests will "
+                "block until pool_timeout=%ds expires (budget ceiling: %d)",
+                overflow, _max_overflow, _pool_timeout, _connection_budget,
+            )
+        _pool_overflow_exhausted = now_overflow_exhausted
+
     except Exception as exc:  # pragma: no cover — diagnostics only
         logger.warning("Failed to log DB pool stats: %s", exc)
 

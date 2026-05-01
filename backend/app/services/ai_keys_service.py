@@ -131,7 +131,7 @@ async def get_ai_key_info(db: AsyncSession, user_id: UUID, provider: str) -> Opt
         r = await _get_record(db, user_id, provider)
         return _safe(r) if r else None
     except Exception as exc:
-        logger.warning("[AIKeys] get_ai_key_info(%s) failed: %s", provider, exc)
+        logger.error("[AIKeys] get_ai_key_info(%s) DB error: %s", provider, exc, exc_info=True)
         return None
 
 

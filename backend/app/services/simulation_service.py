@@ -49,7 +49,10 @@ class SimulationService:
                 if row and row.config_json:
                     return row.config_json
             except Exception as e:
-                logger.warning("Failed to get config from DB: %s", e)
+                logger.error(
+                    "Failed to get config from DB: user_id=%s error=%s",
+                    user_id, e, exc_info=True,
+                )
 
         # Default config
         return {

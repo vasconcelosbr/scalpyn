@@ -77,8 +77,8 @@ async def _count_active_watchlists() -> Optional[int]:
             ))).first()
             return int(row[0]) if row else 0
     except Exception as exc:
-        logger.debug(
-            "[PIPELINE-SCHED] active-watchlist count query failed: %s", exc
+        logger.error(
+            "[PIPELINE-SCHED] active-watchlist count query failed: %s", exc, exc_info=True,
         )
         return None
 

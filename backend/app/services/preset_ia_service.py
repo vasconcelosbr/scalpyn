@@ -509,7 +509,7 @@ async def run_preset_ia(
                 system_prompt = skill.prompt_text
                 logger.info(f'[PresetIA] Usando Skill personalizada "{skill.name}" para role={profile_role}')
     except Exception as e:
-        logger.warning(f'[PresetIA] Falha ao buscar Skill do DB: {e}')
+        logger.error('[PresetIA] Falha ao buscar Skill do DB: %s', e, exc_info=True)
 
     if system_prompt is None:
         system_prompt = ROLE_PROMPTS.get(

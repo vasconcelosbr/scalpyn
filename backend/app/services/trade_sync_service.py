@@ -283,7 +283,7 @@ class TradeSyncService:
             await db.commit()
         except Exception as exc:
             await db.rollback()
-            logger.error(f"DB commit failed during trade sync: {exc}")
+            logger.error("DB commit failed during trade sync: %s", exc, exc_info=True)
             return {"success": False, "error": f"Database error: {exc}"}
 
         return {
