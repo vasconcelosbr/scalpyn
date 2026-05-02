@@ -77,6 +77,16 @@ run_alembic_upgrade() {
     return 1
 }
 
+validate_critical_schema() {
+    echo "==> [schema] Validating critical schema..."
+    if ! python3 -m scripts.check_critical_schema; then
+        echo "==> Aborting startup: critical schema drift detected." >&2
+        echo "==> See docs/runbooks/scheduler-group-drift.md to apply missing DDL manually." >&2
+        exit 1
+    fi
+    echo "==> [schema] Critical schema OK."
+}
+
 if ! run_alembic_upgrade; then
     # ── Stamp fallback ────────────────────────────────────────────────────
     # If alembic upgrade head fails (typically lock contention from the old
@@ -92,25 +102,20 @@ if ! run_alembic_upgrade; then
     echo "==> [migrations] Rationale: DDL may already exist from a previous init_db.py run." >&2
     if timeout 30s alembic stamp head 2>&1; then
         echo "==> [migrations] Stamped at head."
-        # Stamp head only writes to alembic_version — it never runs DDL.  A
-        # successful stamp on a database that is missing critical columns
-        # produces silent schema drift and the cascade documented in Task
-        # #178 (~30k UndefinedColumnError/day, InFailedSQLTransaction +
-        # QueuePool exhaustion).  Probe information_schema directly for
-        # every column the app requires and abort the boot if any are
-        # missing — Cloud Run will roll back to the previous revision.
-        echo "==> [migrations] Validating critical schema after stamp fallback..."
-        if ! python3 -m scripts.check_critical_schema; then
-            echo "==> Aborting startup: schema drift detected after stamp head." >&2
-            echo "==> See docs/runbooks/scheduler-group-drift.md to apply DDL manually." >&2
-            exit 1
-        fi
-        echo "==> [migrations] Critical schema OK. Proceeding with startup."
+        # Stamp head only writes to alembic_version — it never runs DDL.
+        validate_critical_schema
     else
         echo "==> Aborting startup: cannot upgrade or stamp schema." >&2
         exit 1
     fi
 fi
+
+# Even when `alembic upgrade head` succeeds, the database may already be
+# drifted from a previous `stamp head` incident (e.g. version table advanced
+# to 032 while indicators.scheduler_group never existed). In that case Alembic
+# will happily apply only newer revisions and the app would boot broken unless
+# we probe information_schema here as well.
+validate_critical_schema
 
 # ── Start Celery worker ──────────────────────────────────────────────────────
 echo "==> Starting Celery worker..."
