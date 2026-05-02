@@ -18,15 +18,10 @@ Prometheus metric or PostgreSQL column — there are no fictitious series.
 
 ## WebSocket scope note
 
-The task requirement to "wrap the existing Binance and Gate REST/WS call
-sites" is fully satisfied: the codebase has **no WebSocket call sites** in
-either exchange adapter (`rg websocket backend/app/exchange_adapters/`
-returns no matches — the live data and order paths are entirely REST,
-driven from the structural / pipeline schedulers). REST coverage in
-`gate_adapter._request`, `gate_adapter._public_get` and
-`binance_adapter._request` is therefore 100 % of the surface that emits
-exchange traffic, and the A4 error-rate alert denominator reflects every
-outbound exchange call the engine makes.
+The exchange adapters are REST-only (`rg websocket backend/app/exchange_adapters/`
+returns no matches), so REST instrumentation in `gate_adapter._request`,
+`gate_adapter._public_get` and `binance_adapter._request` covers 100 % of
+exchange traffic and feeds the A4 error-rate denominator.
 
 ---
 

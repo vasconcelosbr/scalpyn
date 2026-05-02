@@ -240,6 +240,14 @@ psql "host=... user=grafana_ro dbname=scalpyn sslmode=require" \
 # 3. Open the dashboard — every panel should render within 5s and the
 #    "No data" badge must not appear on Score Médio, Confidence Média, or
 #    the Exchanges table once the engine has run for a few minutes.
+
+# 4. Alert binding check — open Alerting → Alert rules and confirm the
+#    four "[Scalpyn] …" rules show state "Normal" (not "Error"). An
+#    "Error" state usually means the embedded ${prometheus}/${postgres}
+#    template variables didn't resolve to concrete datasource UIDs at
+#    import time. Fix by either (a) re-importing after binding the
+#    variables in the import wizard, or (b) provisioning the rules via
+#    alert-rules.yaml (see §5) which uses literal datasource UIDs.
 ```
 
 If a panel shows `No data`:
