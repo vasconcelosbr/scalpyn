@@ -98,7 +98,7 @@ The Rejected tab endpoint (`_get_watchlist_rejections_payload` in `backend/app/a
 
 ## Grafana Monitoring (task #166)
 - Production-grade dashboard ships in `docs/grafana/`:
-  - `scalpyn-trading-engine.json` — 7 panel-group rows + 14 visual panels (Status Geral · Data Quality Gauges · Confidence ao longo do tempo · Exchange Status · Score por símbolo · Critical Indicators · Rejection Reasons), Grafana 10 schema, dark theme. **All four alerts (A1 Confidence < 0.6, A2 NO_DATA > 25%, A3 Rejection rate > 50%, A4 Exchange error > 10%) are embedded inside the dashboard JSON** in Grafana 10 unified-alerting schema (`alert.data` array of query + `__expr__` reduce + threshold nodes, `alert.condition` referencing the threshold).
+  - `scalpyn-trading-engine.json` — **8 panel-group rows** + 14 visual panels (Status Geral · Data Quality Gauges · Confidence ao longo do tempo · Exchange Status · Score por símbolo · Critical Indicators · Rejection Reasons · Alertas A1–A4 reference row), Grafana 10 schema, dark theme. **All four alerts (A1 Confidence < 0.6, A2 NO_DATA > 25%, A3 Rejection rate > 50%, A4 Exchange error > 10%) are embedded inside the dashboard JSON** in Grafana 10 unified-alerting schema (`alert.data` array of query + `__expr__` reduce + threshold nodes, `alert.condition` referencing the threshold).
   - `alert-rules.yaml` — companion provisioning file with the same four unified-alerting rules and matching UIDs, for repeatable production deploys (templated datasource UIDs — see README §5).
   - `queries.md` — per-panel verbatim PromQL/SQL + threshold table.
   - `README.md` — Prometheus scrape config, `grafana_ro` Postgres role, datasource setup, import workflow, smoke test, and the **22-connection Cloud SQL ceiling** caveat (`db-pool-budget.md`).

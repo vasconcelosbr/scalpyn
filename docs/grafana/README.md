@@ -5,7 +5,7 @@ This directory ships:
 
 | File | Purpose |
 |------|---------|
-| `scalpyn-trading-engine.json` | Importable dashboard model — 7 panel-group rows, 14 visual panels, **all four alerts (A1–A4) embedded** in the Grafana 10 unified-alerting schema. |
+| `scalpyn-trading-engine.json` | Importable dashboard model — **8 panel-group rows** (sections 1–7 visual + section 8 collapsed alerts reference), 14 visual panels, **all four alerts (A1–A4) embedded** in the Grafana 10 unified-alerting schema. |
 | `queries.md` | One section per panel: title, datasource, full PromQL/SQL, refresh interval, thresholds. |
 | `alert-rules.yaml` | Grafana provisioning file with the four unified-alerting rules (A1–A4) for repeatable deploys. |
 | `README.md` | This file — setup, datasource creation, import, and operational caveats. |
