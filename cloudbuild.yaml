@@ -78,6 +78,15 @@ steps:
       #     --role=roles/secretmanager.secretAccessor --project clickrate-477217
       - '--update-secrets'
       - 'PROMETHEUS_BEARER_TOKEN=prometheus-bearer-token:latest'
+      # Force-restart marker. Bumping this string on every recovery deploy
+      # guarantees Cloud Run rolls out a fresh revision even when the image
+      # SHA is unchanged, which kills any poisoned Celery worker and recycles
+      # the asyncpg connection pool from the previous container. Bumped on
+      # 2026-05-02 to recover from the collector stall documented in
+      # `.local/tasks/diagnose-collector-stalled-prod.md` (decisions paused
+      # 2026-04-29T13:48:16Z, lag 4754 min, schema confirmed OK in prod).
+      - '--update-env-vars'
+      - 'FORCE_RESTART=2026-05-02T21:15:00Z'
 
 substitutions:
   _REGION: us-central1
