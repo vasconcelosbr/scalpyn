@@ -171,7 +171,22 @@ class GateWSClient:
     # ── Internal: backoff wrapper ─────────────────────────────────────────────
 
     async def _run_with_backoff(self, market: str, coro_factory: Callable) -> None:
-        """Run *coro_factory* with exponential backoff on failure."""
+        """Run *coro_factory* with exponential backoff on failure.
+
+        Never-die contract (Task #180): this loop MUST keep retrying
+        indefinitely while ``self._running`` is True.  ``RECONNECT_MAX_RETRIES``
+        is no longer a kill-switch — it is now only the cadence at which
+        we emit a CRITICAL log so the on-call gets a fresh page roughly
+        every ``MAX_RETRIES * RECONNECT_MAX_DELAY`` seconds (≈20 min at
+        default settings) instead of being silenced after the first 20
+        failures, while every individual retry stays at WARN level to
+        avoid drowning Sentry.
+
+        On a successful connection (``coro_factory`` returns without
+        raising while still running), the attempt counter and backoff
+        delay are reset so the next reconnect starts fast — mirroring
+        how a fresh process would behave.
+        """
         attempt = 0
         delay = RECONNECT_BASE_DELAY
 
@@ -181,24 +196,34 @@ class GateWSClient:
                 # If coro returns normally (e.g. stop() was called), exit.
                 if not self._running:
                     break
-                # Unexpected clean exit — treat as a failure and reconnect.
-                logger.warning("[%s] WS loop exited cleanly but client is still running; reconnecting", market)
+                # Unexpected clean exit — treat as a transient drop, reset
+                # the backoff so we reconnect immediately next loop, and
+                # log at WARN.
+                logger.warning(
+                    "[%s] WS exited cleanly but still running — reconnecting",
+                    market,
+                )
+                attempt = 0
+                delay = RECONNECT_BASE_DELAY
             except asyncio.CancelledError:
                 logger.info("[%s] WS task cancelled", market)
                 return
             except Exception as exc:
                 attempt += 1
-                if attempt >= RECONNECT_MAX_RETRIES:
+
+                # Page on every multiple of MAX_RETRIES (20, 40, 60, …)
+                # so we keep a CRITICAL signal in Sentry without storming
+                # it on every single retry.
+                if attempt % RECONNECT_MAX_RETRIES == 0:
                     logger.critical(
-                        "[%s] WS connection failed after %d retries — giving up. Last error: %s",
+                        "[%s] WS failed %d times — STILL RETRYING. Last error: %s",
                         market, attempt, exc,
                     )
-                    return
-
-                logger.warning(
-                    "[%s] WS connection lost (attempt %d/%d): %s — retrying in %.1fs",
-                    market, attempt, RECONNECT_MAX_RETRIES, exc, delay,
-                )
+                else:
+                    logger.warning(
+                        "[%s] WS lost (attempt %d): %s — retry in %.1fs",
+                        market, attempt, exc, delay,
+                    )
 
             if not self._running:
                 break

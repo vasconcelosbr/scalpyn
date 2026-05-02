@@ -110,6 +110,17 @@ if _PROMETHEUS_AVAILABLE:
         labelnames=("market", "instance"),
         registry=REGISTRY,
     )
+    # Task #180: leader-election state, surfaced as a Prometheus gauge so
+    # multi-replica deployments can alert on "leader declared but no
+    # trades arriving" (i.e. the WS died but the lock is still held by
+    # the same instance) and on "no replica claims leadership" (sum of
+    # the gauge across instances stays at 0).
+    GATE_WS_IS_LEADER = Gauge(
+        "gate_ws_is_leader",
+        "Gate.io WebSocket leader-election state (1 = this replica is the active leader, 0 = candidate / reader).",
+        labelnames=("instance",),
+        registry=REGISTRY,
+    )
     GATE_TRADES_RECEIVED_TOTAL = Counter(
         "gate_trades_received_total",
         "Total spot trades received via Gate.io WebSocket and persisted to the Redis buffer, by symbol.",
@@ -132,6 +143,7 @@ else:  # pragma: no cover — exercised when extra is missing
     EXCHANGE_REQUEST_ERRORS = None
     GATE_WS_CONNECTED = None
     GATE_WS_AUTH_OK = None
+    GATE_WS_IS_LEADER = None
     GATE_TRADES_RECEIVED_TOTAL = None
     GATE_LAST_TRADE_TIMESTAMP_SECONDS = None
 
@@ -234,6 +246,22 @@ def set_ws_auth_ok(market: str, auth_ok: bool, instance: str = "default") -> Non
         logger.debug("metrics: set_ws_auth_ok failed: %s", exc)
 
 
+def set_ws_is_leader(is_leader: bool, instance: str = "default") -> None:
+    """Record whether *this* replica currently holds the Gate WS leader lock.
+
+    Called from ``services/gate_ws_leader._GateWSSupervisor`` on every
+    leadership transition.  The ``instance`` label is the supervisor's
+    ``instance_id`` so Grafana / alerting can sum across replicas to
+    detect "no replica is leader" (Task #180).
+    """
+    if GATE_WS_IS_LEADER is None:
+        return
+    try:
+        GATE_WS_IS_LEADER.labels(instance=instance).set(1.0 if is_leader else 0.0)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.debug("metrics: set_ws_is_leader failed: %s", exc)
+
+
 def incr_trades_received(symbol: str, n: int = 1) -> None:
     """Increment the per-symbol counter of trades persisted to the Redis buffer."""
     if GATE_TRADES_RECEIVED_TOTAL is None:
@@ -278,4 +306,5 @@ __all__ = [
     "set_last_trade_timestamp",
     "set_ws_auth_ok",
     "set_ws_connected",
+    "set_ws_is_leader",
 ]

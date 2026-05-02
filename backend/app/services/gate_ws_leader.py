@@ -323,11 +323,20 @@ class _GateWSSupervisor:
             self._task = None
 
     async def _run(self) -> None:
+        # Lazy import — keep this module decoupled from prometheus at
+        # import time (the metrics module degrades to no-ops when
+        # prometheus-client is missing, so this call is always safe).
+        from .robust_indicators.metrics import set_ws_is_leader
+
+        # Initialise the gauge to 0 so a freshly started reader replica
+        # is observable immediately, before the first acquire attempt.
+        set_ws_is_leader(False, self._instance_id)
         try:
             while not self._stopping.is_set():
                 acquired = await _try_acquire_leader(self._redis, self._instance_id)
                 if acquired:
                     self._is_leader = True
+                    set_ws_is_leader(True, self._instance_id)
                     logger.info(
                         "[gate-ws-leader] acquired gate_ws:leader (instance=%s)",
                         self._instance_id,
@@ -336,6 +345,7 @@ class _GateWSSupervisor:
                         await self._serve_as_leader()
                     finally:
                         self._is_leader = False
+                        set_ws_is_leader(False, self._instance_id)
                 else:
                     logger.debug(
                         "[gate-ws-leader] candidate: another instance holds the lock (instance=%s)",

@@ -281,6 +281,15 @@ async def get_order_flow_data(
     if buffered is not None:
         return buffered
 
+    # Buffer empty / unavailable → REST fallback. Logged at INFO so the
+    # diagnostic shows up in default log dashboards (Task #180); a sharp
+    # rise in this line in production typically means the WS leader is
+    # down or the trades buffer TTL has expired.
+    logger.info(
+        "[OrderFlow] buffer empty for %s (window=%ds) — using REST fallback",
+        symbol, window_seconds,
+    )
+
     empty = {
         "taker_buy_volume":  None,
         "taker_sell_volume": None,
