@@ -80,7 +80,7 @@ async def get_watchlist(
         for row in metadata_rows:
             symbol = row.symbol
             inds = indicators_map.get(symbol, {})
-            score_result = score_engine.compute_alpha_score(_build_eval_data(row, inds))
+            score_result = score_engine.compute_score(_build_eval_data(row, inds))
             components = score_result.get("components", {})
             score_val = float(score_result.get("total_score", 0) or 0)
             score_data = {
@@ -150,7 +150,7 @@ async def get_symbol_detail(
         score_engine = await _load_score_engine(db, user_id)
         indicators = row.indicators_json if row else {}
         eval_data = _build_eval_data(metadata_row, indicators) if metadata_row else indicators
-        score = score_engine.compute_alpha_score(eval_data)
+        score = score_engine.compute_score(eval_data)
         components = score.get("components", {})
 
         return {

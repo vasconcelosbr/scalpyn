@@ -1,8 +1,4 @@
-"""Robust Indicators — Phase 1 (shadow mode).
-
-This package implements the new indicator architecture in parallel with the
-legacy ``feature_engine`` / ``score_engine`` path. Phase 1 only reads, computes,
-persists snapshots and logs divergence; legacy scoring stays authoritative.
+"""Robust Indicators package — authoritative confidence-weighted scoring path.
 
 Public surface (re-exported here for convenience):
     * IndicatorEnvelope, ValidationRule, ValidationResult, ScoreResult
@@ -12,8 +8,8 @@ Public surface (re-exported here for convenience):
     * validate_indicator_integrity
     * calculate_score_with_confidence
     * compute_indicators_robust
+    * envelope_indicators
     * persist_snapshot
-    * run_shadow_scan
 """
 
 from .envelope import (
@@ -30,26 +26,9 @@ from .validation import (
     validate_indicator_integrity,
 )
 from .score import ScoreResult, calculate_score_with_confidence
-from .compute import compute_indicators_robust
+from .compute import compute_indicators_robust, envelope_indicators
 from .snapshot import persist_snapshot
-from .shadow import is_shadow_enabled, run_shadow_scan
-from .bucketing import (
-    bucketed_symbols,
-    get_rollout_percent,
-    is_legacy_rollback_active,
-    is_symbol_in_robust_bucket,
-    should_use_robust,
-)
-from .select_score import (
-    SelectScoreResult,
-    compute_robust_score,
-    select_authoritative_score,
-)
-from .preflight import (
-    PreflightResult,
-    check_safe_to_raise,
-    collect_window_metrics,
-)
+from .asset_score import compute_asset_score, robust_futures_direction_bias
 
 __all__ = [
     "CONFIDENCE_MAP",
@@ -57,25 +36,15 @@ __all__ = [
     "DataSource",
     "IndicatorEnvelope",
     "IndicatorStatus",
-    "PreflightResult",
     "ScoreResult",
-    "SelectScoreResult",
     "ValidationResult",
     "ValidationRule",
-    "bucketed_symbols",
     "calculate_score_with_confidence",
-    "check_safe_to_raise",
-    "collect_window_metrics",
+    "compute_asset_score",
     "compute_indicators_robust",
-    "compute_robust_score",
-    "get_rollout_percent",
-    "is_legacy_rollback_active",
-    "is_shadow_enabled",
-    "is_symbol_in_robust_bucket",
+    "envelope_indicators",
     "persist_snapshot",
-    "run_shadow_scan",
-    "select_authoritative_score",
-    "should_use_robust",
+    "robust_futures_direction_bias",
     "validate_indicator_integrity",
     "wrap_indicator",
 ]

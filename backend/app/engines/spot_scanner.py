@@ -235,7 +235,7 @@ class SpotScanner:
 
             # Get fresh indicators for this symbol
             indicators = await self._get_indicators(pos.symbol, market="spot")
-            score_result = self._score_engine.compute_alpha_score(indicators)
+            score_result = self._score_engine.compute_score(indicators)
             current_score = score_result["total_score"]
 
             decision = self._sell_mgr.evaluate(pos, current_price, indicators, current_score)
@@ -262,7 +262,7 @@ class SpotScanner:
                 indicators = await self._get_indicators(symbol, market="spot")
                 if not indicators:
                     continue
-                score_result  = self._score_engine.compute_alpha_score(indicators)
+                score_result  = self._score_engine.compute_score(indicators)
                 results.append({
                     "symbol":     symbol,
                     "score":      score_result["total_score"],

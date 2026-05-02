@@ -1,10 +1,9 @@
 """Persist robust-pipeline outputs to the ``indicator_snapshots`` table.
 
-The table is created lazily by :func:`ensure_snapshot_table` so the shadow
+The table is created lazily by :func:`ensure_snapshot_table` so the
 runner stays non-fatal even on a database where Alembic has not yet caught
 up. ``persist_snapshot`` opens its own short transaction (via the supplied
-session factory) so it never participates in the legacy pipeline's session
-state.
+session) so it never participates in the legacy pipeline's session state.
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Mapping, Optional
+from typing import Mapping, Optional
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,8 +38,6 @@ CREATE TABLE IF NOT EXISTS indicator_snapshots (
     score NUMERIC(7,4),
     score_confidence NUMERIC(6,4),
     can_trade BOOLEAN,
-    legacy_score NUMERIC(7,4),
-    divergence_bucket VARCHAR(16),
     rejection_reason VARCHAR(255),
     user_id UUID,
     watchlist_id UUID
@@ -59,9 +56,9 @@ _table_ready_lock = False  # in-process flag; per-worker is fine.
 async def ensure_snapshot_table(db: AsyncSession) -> None:
     """Best-effort creation of the snapshot table + index.
 
-    Production environments will get the table from Alembic migration 027 —
-    this function exists so dev / fresh DBs (where ``alembic upgrade head``
-    has not yet run for the new revision) still receive snapshots.
+    Production environments will get the table from Alembic — this function
+    exists so dev / fresh DBs (where ``alembic upgrade head`` has not yet
+    run for the new revision) still receive snapshots.
     """
     global _table_ready_lock
     if _table_ready_lock:
@@ -82,8 +79,6 @@ async def persist_snapshot(
     envelopes: Mapping[str, IndicatorEnvelope],
     validation: ValidationResult,
     score: ScoreResult,
-    legacy_score: Optional[float] = None,
-    divergence_bucket: Optional[str] = None,
     user_id: Optional[uuid.UUID] = None,
     watchlist_id: Optional[uuid.UUID] = None,
     timestamp: Optional[datetime] = None,
@@ -110,7 +105,7 @@ async def persist_snapshot(
                         valid_indicators, total_indicators,
                         validation_passed, validation_errors,
                         score, score_confidence, can_trade,
-                        legacy_score, divergence_bucket, rejection_reason,
+                        rejection_reason,
                         user_id, watchlist_id
                     ) VALUES (
                         :id, :symbol, :timestamp,
@@ -118,7 +113,7 @@ async def persist_snapshot(
                         :valid_indicators, :total_indicators,
                         :validation_passed, CAST(:validation_errors AS jsonb),
                         :score, :score_confidence, :can_trade,
-                        :legacy_score, :divergence_bucket, :rejection_reason,
+                        :rejection_reason,
                         :user_id, :watchlist_id
                     )
                     """
@@ -141,8 +136,6 @@ async def persist_snapshot(
                     "score": float(score.score),
                     "score_confidence": float(score.score_confidence),
                     "can_trade": bool(score.can_trade),
-                    "legacy_score": float(legacy_score) if legacy_score is not None else None,
-                    "divergence_bucket": divergence_bucket,
                     "rejection_reason": score.rejection_reason,
                     "user_id": user_id,
                     "watchlist_id": watchlist_id,

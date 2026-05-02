@@ -1,4 +1,13 @@
-"""Celery Task — compute Alpha Scores using Score Engine."""
+"""Celery Task — compute Alpha Scores via the robust engine.
+
+Phase 4 cleanup: this task no longer runs the legacy ``ScoreEngine`` math.
+For every fresh row in ``indicators`` it asks the robust engine to wrap the
+indicator dict, validate, and emit a confidence-weighted score, and then
+persists the result in ``alpha_scores`` (always ``scoring_version='v1'`` —
+the legacy dual-write columns are written as ``NULL``). The same robust
+score is reused by the level-transition detector so a single computation
+drives both downstream consumers.
+"""
 
 import asyncio
 import json
@@ -20,24 +29,35 @@ def _run_async(coro):
         loop.close()
 
 
+def _robust_score_for(symbol: str, indicators: dict, rules: list) -> dict | None:
+    """Return ``{score, score_confidence, global_confidence, matched_rules}``
+    or ``None`` when the robust engine rejects the indicators.
+
+    Thin wrapper around ``compute_asset_score`` so callers don't have to
+    construct envelopes themselves.
+    """
+    from ..services.robust_indicators import compute_asset_score
+
+    return compute_asset_score(symbol, indicators or {}, rules, is_futures=False)
+
+
 async def _score_async():
     from ..database import run_db_task
-    from ..services.score_engine import ScoreEngine
     from ..services.seed_service import DEFAULT_SCORE
 
-    logger.info("Starting Alpha Score computation...")
+    logger.info("Starting Alpha Score computation (robust engine)...")
 
-    # Shared state captured by the two phase closures below.
     rows: list = []
     scored: int = 0
-    score_config: dict = DEFAULT_SCORE
+    rules: list = []
+    cached_scores: dict[str, float] = {}
 
-    # ── Phase 1: score computation ─────────────────────────────────────────────
-    # run_db_task opens a fresh Celery-safe session, begins a transaction,
-    # runs the function, then auto-commits (or rolls back on exception).
     async def _phase1(db):
-        nonlocal rows, scored, score_config
+        nonlocal rows, scored, rules
 
+        # Score config — only the ``scoring_rules`` list matters to the
+        # robust engine. Prefer a user override when one exists.
+        score_config: dict = DEFAULT_SCORE
         try:
             from ..services.config_service import config_service
             user_row = (await db.execute(
@@ -50,13 +70,12 @@ async def _score_async():
         except Exception as _e:
             logger.debug("compute_scores: could not load user score config: %s", _e)
 
-        # Check confidence weighting config
-        confidence_config = score_config.get("confidence_weighting", {})
-        confidence_enabled = confidence_config.get("enabled", False)
-        dual_write_mode = confidence_config.get("dual_write_mode", False)
-        min_confidence = confidence_config.get("min_confidence", 0.5)
-
-        engine = ScoreEngine(score_config, min_confidence=min_confidence)
+        rules = (
+            score_config.get("scoring_rules")
+            or score_config.get("rules")
+            or DEFAULT_SCORE.get("scoring_rules")
+            or []
+        )
 
         result = await db.execute(text("""
             SELECT DISTINCT ON (symbol) symbol, indicators_json, time
@@ -72,31 +91,9 @@ async def _score_async():
         for row in rows:
             try:
                 indicators = row.indicators_json or {}
-
-                # Compute legacy score (always)
-                score_result_v1 = engine.compute_alpha_score(indicators, use_confidence_weighting=False)
-                components_v1 = score_result_v1.get("components", {})
-
-                # Compute confidence-weighted score if enabled
-                score_result_v2 = None
-                confidence_metrics = None
-                scoring_version = "v1"
-
-                if confidence_enabled or dual_write_mode:
-                    score_result_v2 = engine.compute_alpha_score(indicators, use_confidence_weighting=True)
-                    confidence_metrics = score_result_v2.get("confidence_metrics")
-
-                    if dual_write_mode:
-                        scoring_version = "dual"
-                        # Log significant score deltas for monitoring
-                        delta = abs(score_result_v2["total_score"] - score_result_v1["total_score"])
-                        if delta > 10:
-                            logger.info(
-                                f"[score-delta] {row.symbol}: v1={score_result_v1['total_score']:.2f}, "
-                                f"v2={score_result_v2['total_score']:.2f}, delta={delta:.2f}"
-                            )
-                    elif confidence_enabled:
-                        scoring_version = "v2"
+                scored_payload = _robust_score_for(row.symbol, indicators, rules)
+                if scored_payload is None:
+                    continue
 
                 # Each insert is isolated in its own SAVEPOINT so a failure
                 # for one symbol does not abort the whole transaction.
@@ -107,25 +104,24 @@ async def _score_async():
                              momentum_score, signal_score, components_json,
                              alpha_score_v2, confidence_metrics, scoring_version)
                         VALUES
-                            (:time, :symbol, :score, :liq, :ms, :mom, :sig, :components,
-                             :score_v2, :conf_metrics, :version)
+                            (:time, :symbol, :score, NULL, NULL, NULL, NULL, :components,
+                             NULL, NULL, 'v1')
                     """), {
                         "time": now,
                         "symbol": row.symbol,
-                        "score": score_result_v1["total_score"],
-                        "liq": components_v1.get("liquidity_score", 0),
-                        "ms": components_v1.get("market_structure_score", 0),
-                        "mom": components_v1.get("momentum_score", 0),
-                        "sig": components_v1.get("signal_score", 0),
+                        "score": scored_payload["score"],
                         "components": json.dumps({
-                            "classification": score_result_v1.get("classification"),
-                            "matched_rules": score_result_v1.get("matched_rules", []),
+                            "engine": "robust",
+                            "score_confidence": scored_payload["score_confidence"],
+                            "global_confidence": scored_payload["global_confidence"],
+                            "matched_rules": scored_payload["matched_rules"],
                         }),
-                        "score_v2": score_result_v2["total_score"] if score_result_v2 else None,
-                        "conf_metrics": json.dumps(confidence_metrics) if confidence_metrics else None,
-                        "version": scoring_version,
                     })
 
+                # Cache the score so _detect_level_transitions doesn't need
+                # to re-run the robust engine for the same row. SQLAlchemy
+                # ``Row`` objects are immutable, so use an external dict.
+                cached_scores[row.symbol] = scored_payload["score"]
                 _scored += 1
 
             except Exception as e:
@@ -139,10 +135,8 @@ async def _score_async():
     logger.info(f"Alpha Score computation complete: {scored} symbols")
 
     # ── Phase 2: level transition detection (separate transaction) ─────────────
-    # Compare fresh scores against pipeline_watchlist_assets to detect
-    # assets entering / leaving criteria (min_score from profile config).
     async def _phase2(db):
-        await _detect_level_transitions(db, rows, score_config)
+        await _detect_level_transitions(db, rows, rules, cached_scores)
 
     try:
         await run_db_task(_phase2, celery=True)
@@ -152,41 +146,24 @@ async def _score_async():
     return scored
 
 
-async def _detect_level_transitions(db, scored_rows, score_config=None) -> None:
+async def _detect_level_transitions(db, scored_rows, rules, cached_scores: dict) -> None:
+    """For each symbol that just got a new score, check whether the asset's
+    qualifying status (against the profile's ``min_score`` filter) changed
+    and broadcast a ``level_change`` event when it did.
     """
-    For each symbol that just got a new score, check if its position in the
-    pipeline has changed.  We look at pipeline_watchlist_assets rows and compare
-    the new score against the PROFILE's min_score filter (not the watchlist's
-    filters_json, which is no longer used for filtering).
-
-    When a transition is detected:
-      - Update level_direction + level_change_at in pipeline_watchlist_assets
-      - Broadcast a WebSocket 'level_change' event via the alerts channel
-    """
-    from ..models.pipeline_watchlist import PipelineWatchlistAsset, PipelineWatchlist
-
     now = datetime.now(timezone.utc)
 
-    # Build a quick symbol → new_score map from the rows we just scored
-    # Use the same score config that was used to compute and store the scores,
-    # so transition detection is consistent with the stored alpha_scores.
-    new_scores: dict = {}
-    from ..services.score_engine import ScoreEngine
-    from ..services.seed_service import DEFAULT_SCORE
-    _engine = ScoreEngine(score_config or DEFAULT_SCORE)
+    new_scores: dict = dict(cached_scores)
     for row in scored_rows:
-        try:
-            indicators = row.indicators_json or {}
-            result = _engine.compute_alpha_score(indicators)
-            new_scores[row.symbol] = result.get("total_score", 0)
-        except Exception:
+        if row.symbol in new_scores:
             continue
+        scored_payload = _robust_score_for(row.symbol, row.indicators_json or {}, rules)
+        if scored_payload is not None:
+            new_scores[row.symbol] = scored_payload["score"]
 
     if not new_scores:
         return
 
-    # Fetch all pipeline_watchlist_assets for symbols with new scores,
-    # including the profile config to get the min_score threshold.
     result = await db.execute(
         text("""
             SELECT pwa.id, pwa.watchlist_id, pwa.symbol,
@@ -209,20 +186,17 @@ async def _detect_level_transitions(db, scored_rows, score_config=None) -> None:
         new_score = new_scores.get(symbol, 0)
         old_score = float(ar.alpha_score or 0)
 
-        # Get min_score from the PROFILE (single source of truth)
         profile_cfg = ar.profile_config or {}
         min_score = float((profile_cfg.get("filters") or {}).get("min_score", 0))
 
-        # Determine if asset currently meets profile criteria
         was_qualifying = old_score >= min_score if min_score > 0 else True
         now_qualifying = new_score >= min_score if min_score > 0 else True
 
         if was_qualifying == now_qualifying:
-            continue  # No change
+            continue
 
         direction = "up" if now_qualifying else "down"
 
-        # Update the asset row
         await db.execute(
             text("""
                 UPDATE pipeline_watchlist_assets
@@ -241,7 +215,6 @@ async def _detect_level_transitions(db, scored_rows, score_config=None) -> None:
             "level": ar.level,
         })
 
-    # Broadcast WebSocket events
     for ch in changed:
         try:
             from ..websocket.scalpyn_ws_server import broadcast_alert
@@ -255,7 +228,7 @@ async def _detect_level_transitions(db, scored_rows, score_config=None) -> None:
                 },
             )
         except Exception:
-            pass  # WS not critical path
+            pass
 
 
 @celery_app.task(name="app.tasks.compute_scores.score")

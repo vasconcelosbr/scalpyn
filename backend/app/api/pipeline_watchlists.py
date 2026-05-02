@@ -440,7 +440,7 @@ async def get_pipeline_assets(
             **ind_data,
         }
 
-        score_result = se.compute_alpha_score(eval_dict) if se else None
+        score_result = se.compute_score(eval_dict) if se else None
         fresh_score = (
             float(score_result.get("total_score"))
             if score_result and score_result.get("total_score") is not None
@@ -577,11 +577,20 @@ async def get_pipeline_assets(
             block_reasons_long: List[str] = []
             block_reasons_short: List[str] = []
             try:
-                from ..scoring.futures_pipeline_scorer import score_futures as _score_futures
+                from ..services.robust_indicators import robust_futures_direction_bias
                 _profile_cfg = profile_config or {}
                 _scoring_futures = _profile_cfg.get("scoring_futures") or {}
-                _futures_result = _score_futures(ind_data, scoring_futures=_scoring_futures)
-                futures_components = _futures_result.get("components", {})
+
+                # Drilldown components — derived from the robust direction bias
+                # over indicator envelopes, no dependency on the legacy
+                # ``futures_pipeline_scorer``.
+                _bias = robust_futures_direction_bias(ind_data)
+                futures_components = {
+                    "engine": "robust",
+                    "direction_bias": round(_bias, 4),
+                    "long_weight": round(1.0 - max(0.0, -_bias), 4),
+                    "short_weight": round(1.0 - max(0.0, _bias), 4),
+                }
 
                 # Compute human-readable block reasons
                 _adx_min   = float(_scoring_futures.get("entry_adx_min", 15.0))

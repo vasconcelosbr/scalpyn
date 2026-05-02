@@ -22,16 +22,13 @@ DEFAULT_INDICATORS = {
     "parabolic_sar": {"enabled": True, "step": 0.02, "max_step": 0.2},
     "bollinger": {"enabled": True, "period": 20, "deviation": 2.0},
     "zscore": {"enabled": False, "lookback": 20},
-    # Robust indicators (Phase 1): the candle-based approximation for
-    # volume_delta / taker_ratio is opt-in. With allow_candle_fallback=False
-    # the FeatureEngine returns None when no real flow data is available,
-    # so the envelope tags the indicator as NO_DATA instead of a proxy.
-    # min_trades_required is honored downstream in robust_indicators when
-    # wrapping order_flow_service output.
-    "volume_delta": {"enabled": True, "allow_candle_fallback": False, "min_trades_required": 100},
+    # Robust indicators: when no real trade-flow data is available the
+    # FeatureEngine returns None and the envelope tags the indicator as
+    # NO_DATA. Candle-derived approximations are no longer supported.
+    "volume_delta": {"enabled": True},
     "volume_metrics": {"enabled": True, "min_coverage_hours": 23.5},
     "volume_spike": {"enabled": True, "lookback": 20},
-    "taker_ratio": {"enabled": True, "lookback": 20, "allow_candle_fallback": False, "min_trades_required": 100},
+    "taker_ratio": {"enabled": True, "lookback": 20},
     "market_data_fallback": {
         "orderbook_depth_levels": 10,
         "ticker_cache_ttl_seconds": 5,
@@ -40,10 +37,6 @@ DEFAULT_INDICATORS = {
         "binance_trade_limit": 500,
         "max_cache_entries": 1000,
         "confidence_scores": {"gate": 0.7, "binance": 0.9, "mixed": 0.85},
-        # NEW: Control fallback behavior
-        "allow_candle_fallback_taker_ratio": False,  # Disable imprecise candle fallback
-        "allow_candle_fallback_volume_delta": False,  # Disable imprecise candle fallback
-        "min_trades_required_taker_ratio": 100,      # Minimum trades for reliable taker ratio
     },
     "orderbook_imbalance": {"enabled": False, "depth_levels": 10},
     "funding_rate": {"enabled": True},
@@ -60,11 +53,6 @@ DEFAULT_SCORE = {
     "thresholds": {"strong_buy": 80, "buy": 65, "neutral": 40},
     "auto_select_top_n": 5,
     "auto_select_min_score": 80,
-    "confidence_weighting": {
-        "enabled": False,  # Feature flag for confidence-weighted scoring
-        "min_confidence": 0.5,  # Minimum confidence threshold
-        "dual_write_mode": False,  # Compute both legacy and new scores for comparison
-    }
 }
 
 DEFAULT_SIGNAL = {

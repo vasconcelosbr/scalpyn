@@ -1489,7 +1489,7 @@ async def _resolve_and_persist(
                 "market_cap": meta.get("market_cap", 0),
                 "change_24h": meta.get("price_change_24h", 0),
             }
-            r = _score_engine.compute_alpha_score(eval_data)
+            r = _score_engine.compute_score(eval_data)
             live_score_map[sym] = round(r.get("total_score", 0), 1)
             score_rules_map[sym] = _score_engine.get_full_breakdown(eval_data)
         else:
@@ -1704,25 +1704,35 @@ async def _resolve_and_persist(
     # Mirrors the same config-guard used in pipeline_scan (no scoring_futures
     # key → degrade silently to spot, not run with unknown defaults).
     if assets_out and getattr(wl, "market_mode", "spot") == "futures":
-        _futures_cfg = merged_score_config.get("scoring_futures")
-        if _futures_cfg is not None:
-            try:
-                from ..scoring.futures_pipeline_scorer import score_futures as _score_futures
-                for _asset in assets_out:
-                    _ind = ind_map.get(_asset["symbol"], {})
-                    _fr = _score_futures(
-                        _ind,
-                        watchlist_level=effective_level,
-                        scoring_futures=_futures_cfg,
-                    )
-                    _asset["score_long"]          = _fr["score_long"]
-                    _asset["score_short"]         = _fr["score_short"]
-                    _asset["confidence_score"]    = _fr["confidence_score"]
-                    _asset["futures_direction"]   = _fr["futures_direction"]
-                    _asset["entry_long_blocked"]  = _fr["entry_long_blocked"]
-                    _asset["entry_short_blocked"] = _fr["entry_short_blocked"]
-            except Exception as _e:
-                logger.debug("[Pipeline] on-demand futures scoring error: %s", _e)
+        try:
+            from ..services.robust_indicators import compute_asset_score
+            _rules = (
+                (merged_score_config or {}).get("scoring_rules")
+                or (merged_score_config or {}).get("rules")
+                or DEFAULT_SCORE.get("scoring_rules")
+                or []
+            )
+            for _asset in assets_out:
+                _ind = ind_map.get(_asset["symbol"], {})
+                _fr = compute_asset_score(
+                    _asset["symbol"], _ind, _rules, is_futures=True,
+                )
+                if _fr is None:
+                    # Robust engine couldn't score — leave the persisted
+                    # values from the last pipeline_scan in place.
+                    continue
+                _asset["score_long"]          = _fr["score_long"]
+                _asset["score_short"]         = _fr["score_short"]
+                _asset["confidence_score"]    = _fr["confidence_score"]
+                _asset["futures_direction"]   = _fr["futures_direction"]
+                # ENTRY-block gates were a property of the legacy futures
+                # scorer; under the robust engine the bias model itself
+                # produces the LONG/SHORT split, so the boolean gates are
+                # always False unless an upstream layer fills them in.
+                _asset.setdefault("entry_long_blocked", False)
+                _asset.setdefault("entry_short_blocked", False)
+        except Exception as _e:
+            logger.debug("[Pipeline] on-demand robust futures scoring error: %s", _e)
 
     for _rrow in rejected_rows:
         _rsym = _rrow.get("symbol")
@@ -1916,7 +1926,7 @@ async def get_watchlist_assets(
                     "change_24h": float(a.price_change_24h) if a.price_change_24h else 0.0,
                     **ind,
                 }
-                result = _score_engine.compute_alpha_score(eval_data)
+                result = _score_engine.compute_score(eval_data)
                 fresh_score = result.get("total_score")
                 if fresh_score is not None:
                     score_override[a.symbol] = round(float(fresh_score), 1)
@@ -2386,7 +2396,7 @@ async def _get_watchlist_rejections_payload(
             "change_24h": meta.get("price_change_24h", 0),
         }
         try:
-            result = _rejection_se.compute_alpha_score(eval_data)
+            result = _rejection_se.compute_score(eval_data)
             return round(float(result.get("total_score", 0)), 1)
         except Exception:
             return None

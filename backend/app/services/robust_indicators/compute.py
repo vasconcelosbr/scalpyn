@@ -5,14 +5,10 @@ Re-uses the existing ``FeatureEngine``, ``OrderFlowService`` and
 each value into an :class:`IndicatorEnvelope` carrying source + timestamp.
 
 The function exposed here is the *adapter*: it takes a flat indicator dict
-already produced by the legacy pipeline (so we keep the shadow path lean — no
-extra exchange traffic) and converts it into the envelope shape. This is
-sufficient for Phase 1's snapshot/divergence requirements.
-
-The full ``compute_indicators_robust(symbol, timeframe)`` async helper is also
-provided for use in tests / future Phase 2 work; it pulls indicators on demand
-via ``MarketDataService`` + ``FeatureEngine`` + ``OrderFlowService`` exactly
-the way the legacy ``compute_indicators`` task does.
+already produced by the legacy pipeline and converts it into the envelope
+shape. The full ``compute_indicators_robust(symbol, timeframe)`` async helper
+is also provided for use in tests; it pulls indicators on demand via
+``MarketDataService`` + ``FeatureEngine`` + ``OrderFlowService``.
 """
 
 from __future__ import annotations
@@ -22,7 +18,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Mapping, Optional
 
-from .envelope import DataSource, IndicatorEnvelope, IndicatorStatus, wrap_indicator
+from .envelope import DataSource, IndicatorEnvelope, wrap_indicator
 from .metrics import observe_compute_duration
 
 logger = logging.getLogger(__name__)
@@ -95,7 +91,6 @@ def _coerce_source_string(raw: Optional[str]) -> DataSource:
     if not raw:
         return DataSource.UNKNOWN
     raw_l = raw.strip().lower()
-    # Map a few legacy strings to enum values.
     mapping = {
         "gate": DataSource.GATE_TRADES,
         "gate_io": DataSource.GATE_TRADES,
@@ -106,7 +101,6 @@ def _coerce_source_string(raw: Optional[str]) -> DataSource:
         "merged": DataSource.MERGED,
         "candle": DataSource.GATE_CANDLES,
         "candles": DataSource.GATE_CANDLES,
-        "candle_fallback": DataSource.CANDLE_FALLBACK,
     }
     if raw_l in mapping:
         return mapping[raw_l]
@@ -123,34 +117,8 @@ def envelope_indicators(
     timestamp: Optional[datetime] = None,
     source_timestamps: Optional[Mapping[str, datetime]] = None,
     flow_source_hint: Optional[str] = None,
-    candle_fallback_keys: Optional[set[str]] = None,
 ) -> Dict[str, IndicatorEnvelope]:
-    """Wrap a flat indicator dict into a name -> envelope mapping.
-
-    Args:
-        symbol:                Symbol the indicators belong to (used only for
-                               metric labels).
-        indicators:            Flat dict produced by ``FeatureEngine.calculate``
-                               + ``MarketDataService`` overrides.
-        timestamp:             Reference "now" used as the staleness clock and
-                               as the per-indicator timestamp fallback when
-                               ``source_timestamps`` does not have an entry
-                               for a given key.
-        source_timestamps:     Optional per-indicator timestamp mapping. When
-                               provided, each envelope's ``timestamp`` (and
-                               therefore its staleness penalty) reflects the
-                               real source freshness instead of a single
-                               wall-clock value applied to every indicator.
-        flow_source_hint:      Optional value of the ``taker_source`` field
-                               carried by ``order_flow_service``. Used to
-                               override the default flow source.
-        candle_fallback_keys:  Set of indicator names whose value in
-                               ``indicators`` was produced by a candle-based
-                               approximation (so we tag them
-                               ``CANDLE_FALLBACK`` instead of their natural
-                               source).
-    """
-    candle_fallback_keys = set(candle_fallback_keys or ())
+    """Wrap a flat indicator dict into a name -> envelope mapping."""
     if timestamp is None:
         timestamp = datetime.now(timezone.utc)
     flow_src = _coerce_source_string(flow_source_hint) if flow_source_hint else None
@@ -166,16 +134,12 @@ def envelope_indicators(
                     "market_data_confidence", "taker_source", "taker_window",
                     "taker_window_end"):
             continue
-        # Per-indicator sibling timestamps are addressed via source_timestamps
-        # — drop them so they don't show up as their own envelope.
         if name.endswith("_timestamp"):
             continue
 
-        if name in candle_fallback_keys:
-            source: DataSource = DataSource.CANDLE_FALLBACK
-        elif flow_src and name in {"taker_ratio", "buy_pressure",
-                                    "taker_buy_volume", "taker_sell_volume",
-                                    "volume_delta"}:
+        if flow_src and name in {"taker_ratio", "buy_pressure",
+                                  "taker_buy_volume", "taker_sell_volume",
+                                  "volume_delta"}:
             source = flow_src
         else:
             source = _DEFAULT_SOURCE_BY_INDICATOR.get(name, DataSource.UNKNOWN)
@@ -196,12 +160,12 @@ async def compute_indicators_robust(
     db_session=None,
     user_id=None,
 ) -> Dict[str, IndicatorEnvelope]:
-    """Pull live data and produce envelopes (used by tests / Phase 2).
+    """Pull live data and produce envelopes (used by tests / on-demand callers).
 
-    Phase 1's shadow runner does not call this — it reuses the indicators that
-    the legacy pipeline already produced (no extra exchange traffic). The
-    helper exists so a future task can flip a feature flag and start using the
-    robust pipeline as the source of truth.
+    Candle-derived approximations of taker_ratio / volume_delta are NOT
+    supported: when the order-flow primary source is missing we drop those
+    keys so the envelope marks them ``NO_DATA`` rather than producing a
+    fake signal.
     """
     from ..feature_engine import FeatureEngine
     from ..market_data_service import MarketDataService
@@ -209,7 +173,6 @@ async def compute_indicators_robust(
     from ..config_service import config_service
     from ..seed_service import DEFAULT_INDICATORS
 
-    # Load indicator config — fall back to seed defaults.
     indicators_config = DEFAULT_INDICATORS
     if db_session is not None and user_id is not None:
         try:
@@ -234,6 +197,7 @@ async def compute_indicators_robust(
 
     market_data: Dict[str, Any] = {}
     flow_source: Optional[str] = None
+    flow = None
     try:
         flow = await get_order_flow_data(symbol)
         if flow:
@@ -250,24 +214,17 @@ async def compute_indicators_robust(
     duration = time.perf_counter() - started
     observe_compute_duration(symbol, "all", "live", duration)
 
-    candle_fallbacks: set[str] = set()
     if not flow:
-        # When live order flow is missing, taker_ratio / volume_delta in
-        # ``raw`` came from the candle approximation — flag accordingly.
-        if not indicators_config.get("taker_ratio", {}).get("allow_candle_fallback", False):
-            raw.pop("taker_ratio", None)
-        else:
-            candle_fallbacks.add("taker_ratio")
-        if not indicators_config.get("volume_delta", {}).get("allow_candle_fallback", False):
-            raw.pop("volume_delta", None)
-        else:
-            candle_fallbacks.add("volume_delta")
+        # Without primary order-flow data we MUST NOT emit candle
+        # approximations of taker_ratio / volume_delta — drop the keys
+        # so the envelope marks them NO_DATA.
+        raw.pop("taker_ratio", None)
+        raw.pop("volume_delta", None)
 
     return envelope_indicators(
         symbol,
         raw,
         flow_source_hint=flow_source,
-        candle_fallback_keys=candle_fallbacks,
     )
 
 

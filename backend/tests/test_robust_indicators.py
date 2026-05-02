@@ -1,9 +1,8 @@
-"""Phase 1 unit tests for the robust indicator pipeline.
+"""Unit tests for the robust indicator pipeline.
 
 Tests are pure-Python and do not require a database connection — they cover
 the envelope wrapper, validation rules and the confidence-weighted score
-engine. The shadow-runner integration is tested smoke-style (assert that the
-public API is importable and behaves as documented when shadow mode is off).
+engine.
 """
 
 from __future__ import annotations
@@ -282,158 +281,26 @@ def test_score_can_trade_threshold():
     assert out2.can_trade is False
 
 
-# ── divergence bucketing ──────────────────────────────────────────────────────
+# ── package surface ───────────────────────────────────────────────────────────
 
 
-def test_divergence_bucket_thresholds():
-    from app.services.robust_indicators.metrics import divergence_bucket
-    assert divergence_bucket(50.0, 50.4) == "<1%"
-    assert divergence_bucket(50.0, 51.5) == "1-5%"
-    assert divergence_bucket(50.0, 53.0) == "5-10%"
-    assert divergence_bucket(50.0, 60.0) == ">10%"
-    assert divergence_bucket(None, 50.0) == "unknown"
-
-
-# ── shadow mode flag ──────────────────────────────────────────────────────────
-
-
-def test_shadow_disabled_by_default():
-    from app.services.robust_indicators import shadow as shadow_mod
-    # USE_ROBUST_INDICATORS defaults to False.
-    assert shadow_mod.is_shadow_enabled() is False
-
-
-def test_public_api_reexports_is_shadow_enabled():
-    """Regression test: pipeline_scan imports ``is_shadow_enabled`` from
-    the package root. If this import breaks, shadow mode silently disables
-    itself because pipeline_scan's broad try/except swallows the
-    ImportError. Keep both names accessible from the package root.
+def test_phase4_removed_symbols_not_exported():
+    """Phase 4 cleanup contract: the rollout/shadow/divergence symbols
+    are gone from the public surface and must not be re-introduced.
     """
-    from app.services.robust_indicators import is_shadow_enabled, run_shadow_scan
-    assert callable(is_shadow_enabled)
-    assert callable(run_shadow_scan)
-    # The flag default value contract.
-    assert is_shadow_enabled() is False
-
-
-def test_shadow_runner_executes_when_flag_enabled(monkeypatch):
-    """When USE_ROBUST_INDICATORS is enabled, ``run_shadow_scan`` walks
-    the asset list and attempts to persist a snapshot. We stub the
-    persistence layer so the test stays DB-free, then assert the runner
-    invoked it once per asset and emitted the correct divergence bucket.
-    """
-    from app.services.robust_indicators import shadow as shadow_mod
-
-    monkeypatch.setattr(shadow_mod.settings, "USE_ROBUST_INDICATORS", True)
-    assert shadow_mod.is_shadow_enabled() is True
-
-    persisted: list[dict] = []
-
-    async def _fake_persist(db, **kwargs):
-        persisted.append(dict(kwargs))
-        return "fake-id"
-
-    monkeypatch.setattr(shadow_mod, "persist_snapshot", _fake_persist)
-    # Stop the ops-only Slack dispatch (no DB / no slack in tests).
-    sent_alerts: list[str] = []
-
-    async def _fake_alert(message):
-        sent_alerts.append(message)
-
-    monkeypatch.setattr(shadow_mod, "_send_ops_alert", _fake_alert)
-
-    indicators = {
-        "rsi": 25.0, "adx": 30.0, "macd": 0.5,
-        "macd_signal_line": 0.4, "macd_histogram": 0.1,
-        "ema9": 100.0, "ema50": 99.0, "ema200": 95.0,
-        "taker_ratio": 0.55, "buy_pressure": 0.55, "volume_delta": 12.3,
-        "taker_source": "gate_io_trades",
-    }
-    asset = {
-        "symbol": "BTC_USDT",
-        "indicators": indicators,
-        "alpha_score": 80.0,  # legacy score → divergence will be measurable
-    }
-
-    import asyncio
-    written = asyncio.run(
-        shadow_mod.run_shadow_scan(
-            db=object(),  # never used because persist_snapshot is stubbed
-            assets=[asset],
-            score_config={
-                "scoring_rules": _SAMPLE_RULES,
-                "weights": {"liquidity": 25, "market_structure": 25, "momentum": 25, "signal": 25},
-                "thresholds": {"buy": 65},
-            },
+    from app.services import robust_indicators as pkg
+    for removed in (
+        "is_shadow_enabled",
+        "run_shadow_scan",
+        "is_legacy_rollback_active",
+        "select_authoritative_score",
+    ):
+        assert not hasattr(pkg, removed), (
+            f"robust_indicators.{removed} must remain removed after Phase 4"
         )
-    )
-    assert written == 1
-    assert len(persisted) == 1
-    payload = persisted[0]
-    assert payload["symbol"] == "BTC_USDT"
-    assert payload["legacy_score"] == 80.0
-    assert payload["divergence_bucket"] in ("<1%", "1-5%", "5-10%", ">10%")
 
-
-def test_shadow_runner_picks_up_futures_legacy_score(monkeypatch):
-    """Futures watchlists set ``confidence_score`` (= max of long/short)
-    instead of ``alpha_score``. The shadow runner must read it so divergence
-    bucketing works for futures-mode assets too — not just spot.
-    """
-    from app.services.robust_indicators import shadow as shadow_mod
-
-    monkeypatch.setattr(shadow_mod.settings, "USE_ROBUST_INDICATORS", True)
-
-    persisted: list[dict] = []
-
-    async def _fake_persist(db, **kwargs):
-        persisted.append(dict(kwargs))
-        return "fake-id"
-
-    async def _fake_alert(message):
-        return None
-
-    monkeypatch.setattr(shadow_mod, "persist_snapshot", _fake_persist)
-    monkeypatch.setattr(shadow_mod, "_send_ops_alert", _fake_alert)
-
-    indicators = {
-        "rsi": 25.0, "adx": 30.0, "macd": 0.5,
-        "macd_signal_line": 0.4, "macd_histogram": 0.1,
-        "ema9": 100.0, "ema50": 99.0, "ema200": 95.0,
-        "taker_ratio": 0.55, "buy_pressure": 0.55, "volume_delta": 12.3,
-        "taker_source": "gate_io_trades",
-    }
-    futures_asset = {
-        "symbol": "BTC_USDT",
-        "indicators": indicators,
-        "score_long": 72.0,
-        "score_short": 65.0,
-        "confidence_score": 72.0,  # futures pipeline output
-    }
-
-    import asyncio
-    written = asyncio.run(
-        shadow_mod.run_shadow_scan(
-            db=object(),
-            assets=[futures_asset],
-            score_config={"scoring_rules": _SAMPLE_RULES, "thresholds": {"buy": 65}},
-            market_mode="futures",
+    from app.services.robust_indicators import metrics as metrics_mod
+    for removed in ("divergence_bucket", "increment_divergence"):
+        assert not hasattr(metrics_mod, removed), (
+            f"robust_indicators.metrics.{removed} must remain removed after Phase 4"
         )
-    )
-    assert written == 1
-    assert persisted[0]["legacy_score"] == 72.0
-    assert persisted[0]["divergence_bucket"] != "unknown"
-
-
-def test_shadow_runner_no_per_user_slack_broadcast(monkeypatch):
-    """Cross-tenant safety: the shadow runner must not iterate
-    NotificationSetting rows or per-user webhooks. Only ``_send_ops_alert``
-    is allowed to talk to Slack.
-    """
-    from app.services.robust_indicators import shadow as shadow_mod
-
-    # The module must not export the per-user broadcast helper anymore.
-    assert not hasattr(shadow_mod, "_broadcast_divergence_alert")
-    assert not hasattr(shadow_mod, "_broadcast_alert")
-    # The single ops-only entry point exists and is callable.
-    assert callable(getattr(shadow_mod, "_send_ops_alert"))

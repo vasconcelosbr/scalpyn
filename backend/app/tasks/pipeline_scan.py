@@ -656,6 +656,53 @@ def _check_condition_would_fail(cond: dict, actual_value) -> bool:
     except (TypeError, ValueError):
         return False
 
+class _RobustScoreShim:
+    """Stand-in for ``ScoreEngine`` used inside ``ProfileEngine`` after
+    the Phase 4 cleanup.
+
+    Returns the pre-computed robust score that ``_apply_robust_authoritative_scoring``
+    already wrote onto each asset (under ``_score`` / ``alpha_score`` /
+    ``score``). The legacy 4-bucket math is *not* executed — keeps the
+    robust engine the single source of truth for L2 / L3 gating and for
+    every score consumed by signal / entry evaluation.
+    """
+
+    def __init__(self, thresholds: Optional[dict] = None) -> None:
+        self.thresholds = thresholds or {
+            "strong_buy": 80,
+            "buy": 65,
+            "neutral": 40,
+        }
+
+    def _classify(self, score: float) -> str:
+        if score >= self.thresholds.get("strong_buy", 80):
+            return "strong_buy"
+        if score >= self.thresholds.get("buy", 65):
+            return "buy"
+        if score >= self.thresholds.get("neutral", 40):
+            return "neutral"
+        return "avoid"
+
+    def compute_score(self, eval_data: dict) -> dict:
+        raw = (
+            eval_data.get("_score")
+            if eval_data.get("_score") is not None
+            else eval_data.get("alpha_score")
+            if eval_data.get("alpha_score") is not None
+            else eval_data.get("score")
+        )
+        try:
+            score = float(raw) if raw is not None else 0.0
+        except (TypeError, ValueError):
+            score = 0.0
+        return {
+            "total_score": round(score, 2),
+            "components": {"engine": "robust"},
+            "matched_rules": [],
+            "classification": self._classify(score),
+        }
+
+
 def _apply_level_filter(
     assets: list,
     profile_config: Optional[dict],
@@ -667,19 +714,22 @@ def _apply_level_filter(
     Apply ProfileEngine filters for a given level.
     Returns (passed, all_scored).
 
-    score_config: when provided, overrides the ProfileEngine's internal score engine
-    with the user's global /settings/score configuration.  Profile-level
-    Alpha Score Weights are merged in so they are respected.
+    score_config: thresholds-only — used to drive the score classification
+    bands. The actual numeric score comes from the robust engine
+    (``asset["_score"]``) via ``_RobustScoreShim``; legacy ``ScoreEngine``
+    rule math is no longer invoked.
     """
     from ..services.profile_engine import ProfileEngine
-    from ..services.score_engine import ScoreEngine, merge_score_config
 
     engine = ProfileEngine(profile_config)
 
-    # Merge global scoring rules with profile weights so both are respected
-    if score_config:
-        merged = merge_score_config(score_config, profile_config)
-        engine.score_engine = ScoreEngine(merged)
+    # Replace the profile's internal ScoreEngine with a thin shim that
+    # returns the asset's pre-computed robust score. This guarantees L2 /
+    # L3 gating reads the robust value, not the legacy 4-bucket math.
+    engine.score_engine = _RobustScoreShim(
+        thresholds=(score_config or {}).get("thresholds")
+        or (profile_config or {}).get("scoring", {}).get("thresholds"),
+    )
 
     min_score = 0.0
 
@@ -770,19 +820,15 @@ def _evaluate_l3_signals(assets: list, profile_config: Optional[dict], score_con
     This prevents L3 from being permanently empty just because no signal conditions
     have been set up yet.
 
-    score_config: when provided, overrides the ProfileEngine's internal score engine
-    with the user's global /settings/score configuration.  Profile-level
-    Alpha Score Weights are merged in so they are respected.
+    Score values come from the robust engine via ``_RobustScoreShim``.
     """
     from ..services.profile_engine import ProfileEngine
-    from ..services.score_engine import ScoreEngine, merge_score_config
 
     engine = ProfileEngine(profile_config)
-
-    # Merge global scoring rules with profile weights so both are respected
-    if score_config:
-        merged = merge_score_config(score_config, profile_config)
-        engine.score_engine = ScoreEngine(merged)
+    engine.score_engine = _RobustScoreShim(
+        thresholds=(score_config or {}).get("thresholds")
+        or (profile_config or {}).get("scoring", {}).get("thresholds"),
+    )
 
     # Check if the profile has any signal conditions at all.
     # Signal conditions may be stored under 'entry_triggers' OR 'signals'.
@@ -914,12 +960,12 @@ def _evaluate_l3_decisions(
     score_config: Optional[dict] = None,
 ) -> list[dict]:
     from ..services.profile_engine import ProfileEngine
-    from ..services.score_engine import ScoreEngine, merge_score_config
 
     engine = ProfileEngine(profile_config)
-    if score_config:
-        merged = merge_score_config(score_config, profile_config)
-        engine.score_engine = ScoreEngine(merged)
+    engine.score_engine = _RobustScoreShim(
+        thresholds=(score_config or {}).get("thresholds")
+        or (profile_config or {}).get("scoring", {}).get("thresholds"),
+    )
 
     sig_conditions = (
         (profile_config or {}).get("entry_triggers", {}).get("conditions")
@@ -1143,173 +1189,150 @@ async def _run_staleness_only(
     await db.commit()
 
 
-def _robust_futures_direction_bias(indicators: dict) -> float:
-    """Phase 3 — derive a direction bias in ``[-1.0, +1.0]`` from
-    indicator envelopes ALONE (no dependency on legacy
-    ``score_long`` / ``score_short`` / ``confidence_score`` columns).
-
-    Positive values lean LONG, negative lean SHORT, ``0.0`` is
-    neutral. The bias is computed from a small, deterministic set of
-    indicators that the robust engine already validates:
-
-      * ``ema9_gt_ema50``      (bool)  — short-term trend
-      * ``ema50_gt_ema200``    (bool)  — long-term trend
-      * ``macd_histogram``     (float) — momentum impulse sign
-      * ``rsi``                (float) — overbought/oversold zone
-
-    Each indicator contributes a vote in ``[-1, +1]``; the bias is the
-    average of the available votes. Indicators that are missing or
-    not numeric/boolean simply abstain — they do NOT bias the result
-    toward long or short. This guarantees that the robust authoritative
-    output is independent of legacy scorer state.
-    """
-    if not isinstance(indicators, dict):
-        return 0.0
-
-    votes: list[float] = []
-
-    def _get(name):
-        v = indicators.get(name)
-        if isinstance(v, dict):
-            v = v.get("value")
-        return v
-
-    e9_50 = _get("ema9_gt_ema50")
-    if e9_50 is True:
-        votes.append(+1.0)
-    elif e9_50 is False:
-        votes.append(-1.0)
-
-    e50_200 = _get("ema50_gt_ema200")
-    if e50_200 is True:
-        votes.append(+1.0)
-    elif e50_200 is False:
-        votes.append(-1.0)
-
-    macd_hist = _get("macd_histogram")
-    try:
-        if macd_hist is not None:
-            mh = float(macd_hist)
-            if mh > 0:
-                votes.append(+1.0)
-            elif mh < 0:
-                votes.append(-1.0)
-    except (TypeError, ValueError):
-        pass
-
-    rsi = _get("rsi")
-    try:
-        if rsi is not None:
-            r = float(rsi)
-            if r > 55.0:
-                votes.append(+1.0)
-            elif r < 45.0:
-                votes.append(-1.0)
-            # 45..55 is neutral — abstain
-    except (TypeError, ValueError):
-        pass
-
-    if not votes:
-        return 0.0
-    bias = sum(votes) / len(votes)
-    # Clamp into [-1, 1] for safety.
-    return max(-1.0, min(1.0, bias))
+# NOTE: ``_robust_futures_direction_bias`` was lifted into
+# ``app.services.robust_indicators.asset_score.robust_futures_direction_bias``
+# in Phase 4 so the API drilldown panels can import it without depending on
+# the Celery task module. This shim is kept only for historical references.
+from ..services.robust_indicators import (
+    robust_futures_direction_bias as _robust_futures_direction_bias,
+)
 
 
-def _apply_robust_authoritative_scoring(
+async def _apply_robust_authoritative_scoring(
     assets: list,
     *,
     score_config: dict | None,
     is_futures: bool,
+    db=None,
+    user_id=None,
+    watchlist_id=None,
 ) -> dict[str, int]:
-    """Phase 3 — apply the authoritative robust score to every asset.
+    """Apply the authoritative robust score to every asset.
 
-    Mutates each asset dict in place:
-      * Always sets ``engine_tag`` to ``"robust"`` or ``"legacy"`` so
-        the upsert path can persist the column for the asset row.
-      * For robust-succeeded assets (``engine_tag="robust"`` and
-        ``score`` is a float), overrides ``_score`` / ``alpha_score``
-        (spot) and ``confidence_score`` / ``score_long`` /
-        ``score_short`` (futures) with the robust score. For futures,
-        the LONG / SHORT split is derived **from indicator envelopes
-        directly** via ``_robust_futures_direction_bias`` — the
-        legacy ``score_long`` / ``score_short`` / ``confidence_score``
-        columns are NEVER read on the non-rollback path, so the
-        authoritative output is independent of legacy scorer state.
-      * For the Phase 3 robust-tagged sentinel
-        (``engine_tag="robust"`` and ``score is None`` — robust engine
-        declined to produce a value: missing indicators / compute
-        failure / empty symbol), zeroes out every score column on the
-        asset so a pre-existing legacy numeric value is never
-        persisted under the ``robust`` engine tag and the symbol is
-        naturally suppressed downstream.
-      * For ``engine_tag="legacy"`` (only emitted while
-        ``LEGACY_PIPELINE_ROLLBACK`` is active), leaves the legacy
-        score alone — that is the explicit emergency fallback the
-        operator requested.
+    Mutates each asset dict in place, persists the per-symbol envelope
+    snapshot to ``indicator_snapshots`` (best-effort), and emits the
+    standard robust-engine metrics.
 
-    Returns counters: ``{"bucketed", "robust_used", "fallbacks", "legacy"}``
+      * Always sets ``engine_tag = "robust"`` so the upsert path can
+        persist the column for the asset row.
+      * For robust-succeeded assets, overrides ``_score`` /
+        ``alpha_score`` (spot) and ``confidence_score`` /
+        ``score_long`` / ``score_short`` (futures) with the robust
+        score. For futures, the LONG / SHORT split is derived from
+        indicator envelopes via ``_robust_futures_direction_bias`` —
+        legacy score columns are never read.
+      * When the robust engine cannot produce a value (missing
+        indicators, validation failure, etc.) every score column is
+        zeroed so a pre-existing legacy numeric value is never
+        persisted and the symbol is naturally suppressed downstream.
+
+    Returns counters: ``{"bucketed", "robust_used", "fallbacks"}``
     so the caller can log a single "rollout summary" line per scan.
     """
-    from ..services.robust_indicators import select_authoritative_score
+    from ..services.robust_indicators import (
+        calculate_score_with_confidence,
+        envelope_indicators,
+        persist_snapshot,
+        validate_indicator_integrity,
+    )
+    from ..services.robust_indicators.metrics import (
+        increment_rejection,
+        set_indicator_confidence,
+        set_indicator_staleness,
+    )
+    from ..services.seed_service import DEFAULT_SCORE
 
-    counters = {"bucketed": 0, "robust_used": 0, "fallbacks": 0, "legacy": 0}
+    counters = {"bucketed": 0, "robust_used": 0, "fallbacks": 0}
     if not assets:
         return counters
+
+    rules = (
+        (score_config or {}).get("scoring_rules")
+        or (score_config or {}).get("rules")
+        or DEFAULT_SCORE.get("scoring_rules")
+        or []
+    )
 
     for asset in assets:
         symbol = asset.get("symbol")
         if not symbol:
             continue
+
         indicators = asset.get("indicators") or {}
-        # Phase 3: ``legacy_score`` is the value the selector uses ONLY
-        # when ``LEGACY_PIPELINE_ROLLBACK`` is active (the rollback
-        # short-circuit). On the normal Phase 3 path (rollback off)
-        # the selector ignores this argument and produces a robust
-        # score from the envelopes alone, so the futures path no
-        # longer needs to feed in ``confidence_score`` here.
-        legacy_score = (
-            asset.get("confidence_score")
-            if is_futures and asset.get("confidence_score") is not None
-            else asset.get("_score", asset.get("score"))
-        )
         flow_hint = (
             indicators.get("taker_source")
             if isinstance(indicators, dict) else None
         )
-        result = select_authoritative_score(
-            str(symbol),
-            indicators,
-            legacy_score=legacy_score,
-            score_config=score_config,
-            flow_source_hint=flow_hint,
-        )
+        asset["engine_tag"] = "robust"
+        counters["bucketed"] += 1
 
-        asset["engine_tag"] = result.engine_tag
-        # Phase 3: a robust-tagged sentinel (score=None outside
-        # rollback) means the robust engine could not produce a
-        # value — missing indicators, compute exception, etc. We
-        # MUST NOT silently keep the pre-existing legacy score on
-        # the asset (that would persist a legacy number tagged
-        # "robust"). Zero out the asset score so the symbol is
-        # naturally suppressed downstream and the engine_tag stays
-        # truthful. Sentinel cases are accounted as ``fallbacks``
-        # only — never ``robust_used`` — so the rollout summary
-        # log line reflects how many symbols actually ran end-to-end
-        # vs. how many had no robust score to apply.
-        is_sentinel = (
-            result.engine_tag == "robust" and result.score is None
-        )
-        if result.bucketed:
-            counters["bucketed"] += 1
-            if result.fell_back or is_sentinel:
-                counters["fallbacks"] += 1
-            else:
-                counters["robust_used"] += 1
-        else:
-            counters["legacy"] += 1
+        envelopes = None
+        validation = None
+        result = None
+        new_score: float | None = None
 
-        if is_sentinel:
+        try:
+            envelopes = envelope_indicators(
+                str(symbol), indicators, flow_source_hint=flow_hint,
+            )
+            validation = validate_indicator_integrity(envelopes)
+            result = calculate_score_with_confidence(envelopes, rules)
+            if not result.rejected and result.score is not None:
+                new_score = float(result.score)
+        except Exception as exc:
+            logger.debug(
+                "[PipelineScan] robust score failed for %s: %s",
+                symbol, exc,
+            )
+
+        # Emit retained Phase 1 metrics for every symbol with envelopes.
+        if envelopes:
+            try:
+                if result is not None:
+                    set_indicator_confidence(
+                        str(symbol), float(result.global_confidence)
+                    )
+                for name, env in envelopes.items():
+                    set_indicator_staleness(
+                        str(symbol), name, float(env.staleness_seconds or 0.0)
+                    )
+            except Exception:
+                pass
+
+        if result is not None and result.rejected and result.rejection_reason:
+            try:
+                reason_key = result.rejection_reason.split(":", 1)[0]
+                increment_rejection(reason_key)
+            except Exception:
+                pass
+
+        # Best-effort snapshot persistence for ops visibility. Skipped
+        # silently when the caller did not pass a session — keeps the
+        # function callable from places that lack a DB handle.
+        if (
+            db is not None
+            and envelopes is not None
+            and validation is not None
+            and result is not None
+        ):
+            try:
+                await persist_snapshot(
+                    db,
+                    symbol=str(symbol),
+                    envelopes=envelopes,
+                    validation=validation,
+                    score=result,
+                    user_id=user_id,
+                    watchlist_id=watchlist_id,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "[PipelineScan] snapshot persist failed for %s: %s",
+                    symbol, exc,
+                )
+
+        if new_score is None:
+            counters["fallbacks"] += 1
             asset["_score"] = 0.0
             asset["score"] = 0.0
             asset["alpha_score"] = 0.0
@@ -1321,42 +1344,35 @@ def _apply_robust_authoritative_scoring(
                     asset["score_short"] = 0.0
             continue
 
-        if result.engine_tag != "robust" or result.score is None:
-            continue
+        counters["robust_used"] += 1
 
-        new_score = float(result.score)
         if is_futures:
-            # Phase 3: derive the LONG/SHORT split from indicator
-            # envelopes ALONE — never from the previously-stored
-            # legacy ``score_long`` / ``score_short`` / ``confidence_score``
-            # values. The bias lives in ``[-1, +1]``; we map it to a
-            # symmetric split around the robust magnitude:
-            #
-            #     fully long  (bias = +1)  → long = robust, short = 0
-            #     neutral     (bias =  0)  → long = robust, short = robust
-            #     fully short (bias = -1)  → long = 0,      short = robust
-            #
-            # The "neutral → both = robust" choice keeps the entry
-            # gate available for both sides when indicators are
-            # ambiguous, matching the behaviour the existing entry
-            # gate already expects when score_long ≈ score_short.
             asset["confidence_score"] = round(new_score, 2)
             bias = _robust_futures_direction_bias(indicators)
-            long_mult = 1.0 - max(0.0, -bias)   # bias < 0 reduces long
-            short_mult = 1.0 - max(0.0, bias)   # bias > 0 reduces short
+            long_mult = 1.0 - max(0.0, -bias)
+            short_mult = 1.0 - max(0.0, bias)
             asset["score_long"] = round(
                 max(0.0, min(100.0, new_score * long_mult)), 2
             )
             asset["score_short"] = round(
                 max(0.0, min(100.0, new_score * short_mult)), 2
             )
-        # For both spot and futures, override the canonical alpha_score
-        # column read by downstream consumers (evaluate_signals, UI, etc.)
+            # Direction tag derived from the robust bias — replaces the
+            # legacy ``futures_direction`` field that used to come from
+            # ``score_futures``. Threshold mirrors the spirit of the old
+            # ``direction_gap_min`` (small bias → NEUTRAL).
+            if bias >= 0.1:
+                asset["futures_direction"] = "LONG"
+            elif bias <= -0.1:
+                asset["futures_direction"] = "SHORT"
+            else:
+                asset["futures_direction"] = "NEUTRAL"
+            asset.setdefault("block_both", False)
+            asset.setdefault("entry_long_blocked", False)
+            asset.setdefault("entry_short_blocked", False)
         asset["_score"] = new_score
         asset["score"] = new_score
         asset["alpha_score"] = new_score
-        if result.robust_score is not None:
-            asset["_robust_score"] = result.robust_score.to_dict()
 
     return counters
 
@@ -1412,57 +1428,10 @@ async def _replace_rejection_snapshot(
 
 # ─── Futures scoring injection ────────────────────────────────────────────────
 
-def _tag_futures_scores(
-    assets: list,
-    watchlist_level: str,
-    scoring_futures: Optional[dict] = None,
-) -> None:
-    """Mutate each asset dict to add futures score fields.
-
-    Reads the pre-computed ``indicators`` sub-dict (populated by
-    ``_build_pipeline_asset`` from the ``indicators`` table) and adds
-    (in BLOCK > ENTRY > SCORE priority order):
-      block_both            — shared BLOCK gate (ADX < adx_min); pre-empts both dirs
-      entry_long_blocked    — ENTRY gate LONG (includes block_both)
-      entry_short_blocked   — ENTRY gate SHORT (includes block_both)
-      score_long, score_short, confidence_score  — SCORE layer (display)
-      futures_direction     — LONG | SHORT | NEUTRAL (L3 only); None for non-L3
-
-    Called only when ``wl.market_mode == 'futures'``.
-    Direction is 'LONG' | 'SHORT' | 'NEUTRAL' for L3;
-    None for non-L3 (not yet evaluated at that stage).
-
-    Parameters
-    ----------
-    scoring_futures:
-        Optional sub-dict from profile/global config with futures-specific
-        thresholds (direction_gap_min, entry_adx_min, etc.).  If None,
-        defaults defined in ``score_futures`` are used.
-    """
-    try:
-        from ..scoring.futures_pipeline_scorer import score_futures
-    except ImportError as exc:
-        logger.warning("[PipelineScan] futures scorer unavailable: %s", exc)
-        return
-
-    for asset in assets:
-        ind = asset.get("indicators") or {}
-        try:
-            result = score_futures(
-                ind,
-                watchlist_level=watchlist_level,
-                scoring_futures=scoring_futures,
-            )
-            asset["score_long"]          = result["score_long"]
-            asset["score_short"]         = result["score_short"]
-            asset["confidence_score"]    = result["confidence_score"]
-            asset["futures_direction"]   = result["futures_direction"]
-            # BLOCK > ENTRY priority: block_both is the shared BLOCK gate
-            asset["block_both"]          = result["block_both"]
-            asset["entry_long_blocked"]  = result["entry_long_blocked"]
-            asset["entry_short_blocked"] = result["entry_short_blocked"]
-        except Exception as exc:
-            logger.debug("[PipelineScan] futures scorer error for %s: %s", asset.get("symbol"), exc)
+# NOTE: The legacy ``_tag_futures_scores`` helper that wrapped
+# ``app.scoring.futures_pipeline_scorer.score_futures`` was removed in
+# Phase 4 — futures direction + score split are now derived directly
+# from the robust envelopes inside ``_apply_robust_authoritative_scoring``.
 
 
 # ─── DB upsert ────────────────────────────────────────────────────────────────
@@ -1784,11 +1753,6 @@ async def _run_pipeline_scan():
     execution_id = str(uuid4())
     stats = {"watchlists": 0, "new_signals": 0, "errors": 0, "funnels": [], "execution_id": execution_id}
 
-    # Robust-indicators (Phase 1) shadow tasks accumulate here and are
-    # awaited once at the very end of the scan so they run *concurrently*
-    # with subsequent watchlist iterations rather than blocking each one.
-    _shadow_tasks: list = []
-
     async with AsyncSessionLocal() as db:
         global _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY
         if not _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY:
@@ -2046,161 +2010,54 @@ async def _run_pipeline_scan():
                         )
                         score_config = DEFAULT_SCORE
 
-                    # Futures mode: compute dual LONG/SHORT scores for all assets.
-                    # Must run BEFORE upsert so scores are persisted to DB.
-                    # Direction: LONG|SHORT|NEUTRAL at L3; None for non-L3 (pre-rating).
-                    # Placed after score_config load so scoring_futures config is available.
                     is_futures = getattr(wl, "market_mode", "spot") == "futures"
-                    if is_futures and assets:
-                        # scoring_futures key must be present in config; if absent, degrade
-                        # silently to spot behavior rather than running with unknown defaults.
-                        futures_cfg = (score_config or {}).get("scoring_futures")
-                        if futures_cfg is None:
-                            logger.info(
-                                "[PipelineScan] %s: scoring_futures config absent — "
-                                "skipping futures scoring (spot fallback)",
-                                wl.name,
-                            )
-                        else:
-                            _tag_futures_scores(assets, effective_level, scoring_futures=futures_cfg)
-                            logger.info(
-                                "[PipelineScan] %s (%s): tagged futures scores on %d assets",
-                                wl.name, effective_level, len(assets),
-                            )
 
-                    # ── Robust indicators (Phase 1) — shadow mode ─────────
-                    # Best-effort, gated by USE_ROBUST_INDICATORS. We
-                    # snapshot the asset list *now* (so subsequent legacy
-                    # mutations can't race the shadow path) and dispatch
-                    # the work as a background asyncio task so legacy scan
-                    # progress is never blocked. The whole block is wrapped
-                    # in try/except so any failure here can NEVER cascade
-                    # into the legacy pipeline.
+                    # ── Robust authoritative scoring ─────────────────────
+                    # The robust confidence-weighted score becomes the
+                    # authoritative value on the asset dict; downstream
+                    # rejection / upsert / UI all read from the mutated
+                    # dict. For futures the LONG / SHORT split + direction
+                    # tag are derived from the robust direction bias —
+                    # the legacy ``futures_pipeline_scorer`` is no longer
+                    # invoked. When the robust step itself raises we
+                    # fail-closed: every asset score is zeroed and the
+                    # row is tagged ``robust`` so a pre-existing legacy
+                    # number is never persisted under an audited tag.
                     try:
-                        from ..services.robust_indicators import is_shadow_enabled as _is_shadow_enabled
-                        if _is_shadow_enabled() and assets:
-                            from ..services.robust_indicators import run_shadow_scan
-                            from ..database import CeleryAsyncSessionLocal as _ShadowSessionLocal
-                            indicators_cfg: dict = {}
-                            try:
-                                from ..services.config_service import config_service
-                                async with db.begin_nested():
-                                    indicators_cfg = (
-                                        await config_service.get_config(db, "indicators", wl.user_id)
-                                    ) or {}
-                            except Exception:
-                                indicators_cfg = {}
-                            # Capture immutable copies for the background task.
-                            shadow_assets = [dict(a) for a in assets]
-                            shadow_score_cfg = dict(score_config or {})
-                            shadow_user_id = wl.user_id
-                            shadow_wl_id = wl_id
-                            shadow_level = effective_level
-                            # Phase 1: shadow mode runs for both spot AND
-                            # futures watchlists. The futures asset dicts
-                            # carry score_long/score_short/confidence_score
-                            # which run_shadow_scan picks up via its
-                            # _legacy_score helper for divergence bucketing.
-                            shadow_market_mode = getattr(wl, "market_mode", None) or "spot"
-
-                            async def _shadow_runner():
-                                # Use an isolated session so a parent-tx
-                                # rollback can never poison the shadow write.
-                                try:
-                                    async with _ShadowSessionLocal() as shadow_db:
-                                        await run_shadow_scan(
-                                            shadow_db,
-                                            assets=shadow_assets,
-                                            score_config=shadow_score_cfg,
-                                            indicators_config=indicators_cfg,
-                                            user_id=shadow_user_id,
-                                            watchlist_id=shadow_wl_id,
-                                            watchlist_level=shadow_level,
-                                            market_mode=shadow_market_mode,
-                                        )
-                                        await shadow_db.commit()
-                                except Exception as _shadow_inner:
-                                    logger.debug(
-                                        "[PipelineScan] shadow runner failed for %s: %s",
-                                        shadow_wl_id, _shadow_inner,
-                                    )
-
-                            _shadow_tasks.append(asyncio.create_task(_shadow_runner()))
-                    except Exception as _shadow_exc:
-                        logger.debug(
-                            "[PipelineScan] %s (%s): shadow scan dispatch failed (%s) — "
-                            "legacy pipeline unaffected",
-                            wl.name, effective_level, _shadow_exc,
-                        )
-
-                    # ── Robust indicators (Phase 3) — robust authoritative ─
-                    # Apply the robust-engine selection AFTER the shadow
-                    # snapshot so divergence comparisons keep seeing the
-                    # original legacy score. The robust confidence-weighted
-                    # score becomes authoritative on the asset dict;
-                    # downstream rejection/upsert/UI all read from the
-                    # mutated dict. Phase 3 contract: legacy data is
-                    # NEVER preserved outside ``LEGACY_PIPELINE_ROLLBACK``,
-                    # so when this step itself fails we fail-closed by
-                    # zeroing every asset score and tagging the asset as
-                    # ``robust`` with a synthetic ``rollout_step_failed``
-                    # signal — never silently retain pre-existing legacy
-                    # numbers under a future Phase 3 audit.
-                    try:
-                        rollout_counters = _apply_robust_authoritative_scoring(
+                        rollout_counters = await _apply_robust_authoritative_scoring(
                             assets,
                             score_config=score_config,
                             is_futures=is_futures,
+                            db=db,
+                            user_id=getattr(wl, "user_id", None),
+                            watchlist_id=wl_id,
                         )
                         if rollout_counters["bucketed"] or rollout_counters["fallbacks"]:
                             logger.info(
-                                "[PipelineScan] %s (%s): rollout — bucketed=%d "
-                                "robust_used=%d fallbacks=%d legacy=%d",
+                                "[PipelineScan] %s (%s): robust scoring — bucketed=%d "
+                                "robust_used=%d fallbacks=%d",
                                 wl.name, effective_level,
                                 rollout_counters["bucketed"],
                                 rollout_counters["robust_used"],
                                 rollout_counters["fallbacks"],
-                                rollout_counters["legacy"],
                             )
                     except Exception as _rollout_exc:
-                        # Fail-closed under Phase 3 unless the operator
-                        # has explicitly armed the rollback flag. Either
-                        # way, log the failure loudly so ops sees it.
-                        from ..services.robust_indicators import is_legacy_rollback_active
-                        from ..services.robust_indicators.metrics import (
-                            increment_silent_fallback as _inc_fallback,
+                        logger.error(
+                            "[PipelineScan] %s (%s): robust scoring step failed "
+                            "(%s) — failing CLOSED (zeroing scores)",
+                            wl.name, effective_level, _rollout_exc,
                         )
-                        rollback_armed = is_legacy_rollback_active()
-                        try:
-                            _inc_fallback("rollout_step_failed")
-                        except Exception:
-                            pass
-                        if rollback_armed:
-                            logger.error(
-                                "[PipelineScan] %s (%s): robust rollout step failed "
-                                "(%s) — LEGACY_PIPELINE_ROLLBACK is ACTIVE so "
-                                "legacy scores retained as the operator-requested "
-                                "emergency fallback",
-                                wl.name, effective_level, _rollout_exc,
-                            )
-                        else:
-                            logger.error(
-                                "[PipelineScan] %s (%s): robust rollout step failed "
-                                "(%s) — failing CLOSED (Phase 3 contract: legacy "
-                                "must never be revived without LEGACY_PIPELINE_ROLLBACK)",
-                                wl.name, effective_level, _rollout_exc,
-                            )
-                            for asset in assets:
-                                asset["engine_tag"] = "robust"
-                                asset["_score"] = 0.0
-                                asset["score"] = 0.0
-                                asset["alpha_score"] = 0.0
-                                if is_futures:
-                                    asset["confidence_score"] = 0.0
-                                    if asset.get("score_long") is not None:
-                                        asset["score_long"] = 0.0
-                                    if asset.get("score_short") is not None:
-                                        asset["score_short"] = 0.0
+                        for asset in assets:
+                            asset["engine_tag"] = "robust"
+                            asset["_score"] = 0.0
+                            asset["score"] = 0.0
+                            asset["alpha_score"] = 0.0
+                            if is_futures:
+                                asset["confidence_score"] = 0.0
+                                if asset.get("score_long") is not None:
+                                    asset["score_long"] = 0.0
+                                if asset.get("score_short") is not None:
+                                    asset["score_short"] = 0.0
 
                     if effective_level == "custom":
                         existing_symbols = {a.get("symbol") for a in assets}
@@ -2330,7 +2187,8 @@ async def _run_pipeline_scan():
                             "market_cap": decision["_asset"].get("market_cap"),
                             "analysis_snapshot": decision["_asset"].get("analysis_snapshot") or {},
                             "matched_conditions": decision["_processed"].get("signal", {}).get("matched_conditions", []),
-                            # Futures scores — non-None only when is_futures and _tag_futures_scores ran
+                            # Futures scores — non-None only when is_futures and the robust
+                            # scorer produced a score for the symbol.
                             "score_long":          decision["_asset"].get("score_long"),
                             "score_short":         decision["_asset"].get("score_short"),
                             "confidence_score":    decision["_asset"].get("confidence_score"),
@@ -2493,19 +2351,6 @@ async def _run_pipeline_scan():
                 profile_config_map=profile_config_map,
                 execution_id=execution_id,
             )
-
-    # Drain any in-flight shadow tasks. Bounded by a generous timeout so a
-    # single hung shadow run can't stall the next pipeline tick.
-    if _shadow_tasks:
-        try:
-            done, pending = await asyncio.wait(_shadow_tasks, timeout=30)
-            if pending:
-                logger.info(
-                    "[PipelineScan] %d shadow task(s) still running after 30s — leaving in background",
-                    len(pending),
-                )
-        except Exception as _gather_exc:
-            logger.debug("[PipelineScan] shadow gather failed: %s", _gather_exc)
 
     logger.info(
         "[PipelineScan] Done — watchlists=%d  new_signals=%d  errors=%d",

@@ -476,7 +476,7 @@ class ProfileEngine:
         eval_data = self._build_eval_data(asset)
 
         # ── Scoring ───────────────────────────────────────────────────────────
-        score_result = self.score_engine.compute_alpha_score(eval_data)
+        score_result = self.score_engine.compute_score(eval_data)
 
         # ── Signals ───────────────────────────────────────────────────────────
         signal_result = self.signal_engine.evaluate(

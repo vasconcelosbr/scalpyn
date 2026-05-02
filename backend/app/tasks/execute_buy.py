@@ -226,56 +226,27 @@ async def _execute_buy_cycle_async() -> dict:
 
                 # 5. Top-scoring candidates (last 2 min) — includes market_cap from metadata.
                 #
-                # Robust Indicators Phase 3 — outside
-                # ``LEGACY_PIPELINE_ROLLBACK`` we MUST NOT prefilter
-                # on the legacy ``alpha_scores.score`` column or
-                # order by it: that would let legacy-engine values
-                # decide which symbols are even considered for
-                # execution, defeating the Phase 3 contract that
-                # robust is the sole authority. Outside rollback we
-                # query indicators directly, surface the legacy score
-                # as informational only, and let the per-row robust
-                # selector + SignalEngine thresholds gate inclusion.
-                from ..services.robust_indicators import is_legacy_rollback_active
-                rollback_on = bool(is_legacy_rollback_active())
-
-                if rollback_on:
-                    ranked_res = await db.execute(text("""
-                        SELECT DISTINCT ON (a.symbol)
-                            a.symbol,
-                            a.score,
-                            i.indicators_json,
-                            mm.market_cap
-                        FROM alpha_scores a
-                        JOIN indicators i ON a.symbol = i.symbol
-                        LEFT JOIN market_metadata mm ON mm.symbol = a.symbol
-                        WHERE a.time > now() - interval '2 minutes'
-                          AND i.time > now() - interval '2 minutes'
-                          AND a.score >= :threshold
-                        ORDER BY a.symbol, a.time DESC, a.score DESC
-                        LIMIT :limit
-                    """), {"threshold": threshold, "limit": max_opps * 5})
-                else:
-                    # Robust authority: pull every recent-indicator
-                    # symbol; legacy ``score`` is LEFT JOINed and
-                    # COALESCEd to 0.0 purely so the row shape stays
-                    # identical for downstream code. ``alpha_score``
-                    # is recomputed below via the robust selector.
-                    ranked_res = await db.execute(text("""
-                        SELECT DISTINCT ON (i.symbol)
-                            i.symbol,
-                            COALESCE(a.score, 0.0) AS score,
-                            i.indicators_json,
-                            mm.market_cap
-                        FROM indicators i
-                        LEFT JOIN alpha_scores a
-                          ON a.symbol = i.symbol
-                         AND a.time > now() - interval '2 minutes'
-                        LEFT JOIN market_metadata mm ON mm.symbol = i.symbol
-                        WHERE i.time > now() - interval '2 minutes'
-                        ORDER BY i.symbol, i.time DESC, a.time DESC
-                        LIMIT :limit
-                    """), {"limit": max_opps * 5})
+                # Robust authority: pull every recent-indicator symbol;
+                # the legacy ``alpha_scores.score`` column is LEFT JOINed
+                # and COALESCEd to 0.0 purely so the row shape stays
+                # identical for downstream code. ``alpha_score`` is
+                # recomputed below via the robust selector and the
+                # operator-configured threshold gates inclusion.
+                ranked_res = await db.execute(text("""
+                    SELECT DISTINCT ON (i.symbol)
+                        i.symbol,
+                        COALESCE(a.score, 0.0) AS score,
+                        i.indicators_json,
+                        mm.market_cap
+                    FROM indicators i
+                    LEFT JOIN alpha_scores a
+                      ON a.symbol = i.symbol
+                     AND a.time > now() - interval '2 minutes'
+                    LEFT JOIN market_metadata mm ON mm.symbol = i.symbol
+                    WHERE i.time > now() - interval '2 minutes'
+                    ORDER BY i.symbol, i.time DESC, a.time DESC
+                    LIMIT :limit
+                """), {"limit": max_opps * 5})
                 candidates = ranked_res.fetchall()
 
                 if not candidates:
@@ -283,13 +254,6 @@ async def _execute_buy_cycle_async() -> dict:
                         "No qualifying candidates for user %s (threshold=%.1f)", user_id, threshold
                     )
                     continue
-
-                # Phase 3: under rollback we still rank by the legacy
-                # score (the operator asked for legacy authority); on
-                # the normal path the legacy ``score`` column is
-                # informational only, so do not order by it.
-                if rollback_on:
-                    candidates = sorted(candidates, key=lambda r: float(r.score), reverse=True)
 
                 # 6. Load entry-trigger + block config from the L3 pipeline watchlist profile
                 # Chain: Pool → L1 pipeline watchlist (source_pool_id) → L2 → L3
@@ -374,16 +338,15 @@ async def _execute_buy_cycle_async() -> dict:
                         user_id, before_l3, len(candidates), before_l3 - len(candidates),
                     )
 
-                # Phase 3 — robust authoritative selector. Imported once
-                # per cycle so the per-row loop just dispatches.
-                from ..tasks.evaluate_signals import _resolve_signal_score
+                # Robust authoritative selector. Imported once per cycle
+                # so the per-row loop just dispatches.
+                from ..tasks.evaluate_signals import _compute_robust_score
 
                 for row in candidates:
                     if buys_this_cycle >= max_opps:
                         break
 
                     symbol         = row.symbol
-                    legacy_score   = float(row.score)
                     indicators     = row.indicators_json or {}
                     candidate_market_cap = float(row.market_cap) if row.market_cap else None
                     current_price  = float(indicators.get("close", 0))
@@ -393,24 +356,18 @@ async def _execute_buy_cycle_async() -> dict:
                         stats["skipped"] += 1
                         continue
 
-                    # Phase 3 authoritative score: robust outside
-                    # rollback (sentinel → skip), legacy under
-                    # rollback. ``_resolve_signal_score`` enforces
-                    # the contract so a robust-tagged sentinel is
-                    # never silently substituted by ``legacy_score``.
-                    resolved = _resolve_signal_score(
-                        symbol, indicators, legacy_score,
-                    )
+                    # Authoritative robust score; ``None`` when the engine
+                    # cannot produce a value, in which case the candidate
+                    # is skipped rather than back-filled from legacy.
+                    resolved = _compute_robust_score(symbol, indicators)
                     if resolved is None:
                         stats["skipped"] += 1
                         continue
                     alpha_score = resolved
 
-                    # Apply the operator-configured threshold against
-                    # the AUTHORITATIVE score on the non-rollback path
-                    # (under rollback the SQL prefilter already gated
-                    # on ``legacy_score >= threshold``).
-                    if not rollback_on and alpha_score < threshold:
+                    # Apply the operator-configured threshold against the
+                    # authoritative robust score.
+                    if alpha_score < threshold:
                         stats["skipped"] += 1
                         continue
 

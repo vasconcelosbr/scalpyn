@@ -488,26 +488,14 @@ class FeatureEngine:
         return {"zscore": round(float(val), 4) if pd.notna(val) else None}
 
     def _calc_volume_delta(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Approximated volume delta using candle direction.
+        """Volume delta requires real taker buy/sell flow.
 
-        The candle approximation is a coarse proxy for real taker buy minus
-        sell flow. Robust indicators (Phase 1) opt out by setting
-        ``allow_candle_fallback=False`` in the indicator config — when the
-        flag is explicitly False we return ``None`` so the envelope tags it
-        as ``NO_DATA`` instead of a fake signal.
-
-        Backward compatibility: when the key is **missing** from the config
-        (i.e. an existing user whose ConfigProfile predates this change)
-        we fall back to the legacy candle approximation so end-user
-        behaviour does not change. New users seeded after this commit get
-        ``allow_candle_fallback=False`` from ``DEFAULT_INDICATORS``.
+        Robust-indicators contract: never approximate from candle direction.
+        When the primary order-flow source has not provided ``volume_delta``,
+        return ``None`` so the envelope tags the indicator as ``NO_DATA``
+        instead of producing a fake signal.
         """
-        cfg = self.config.get("volume_delta", {}) or {}
-        if cfg.get("allow_candle_fallback", True) is False:
-            return {"volume_delta": None}
-        direction = np.sign(df["close"] - df["open"])
-        delta = (direction * self._base_volume(df)).iloc[-1]
-        return {"volume_delta": round(float(delta), 2) if pd.notna(delta) else 0}
+        return {"volume_delta": None}
 
     def _calc_volume_spike(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Volume relative to 20-period average."""
@@ -521,37 +509,14 @@ class FeatureEngine:
         return {"volume_spike": 1.0}
 
     def _calc_taker_ratio(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Approximate taker buy ratio from candle direction over last 20 periods.
+        """Taker ratio requires real taker buy/sell flow.
 
-        IMPORTANT: This is a LOW-CONFIDENCE approximation. Real taker data from
-        MarketDataService (Binance trades) should override this value.
-
-        Uses bullish candle volume / total volume as a proxy for buy pressure.
-        Returns value between 0.0 and 1.0 where > 0.5 indicates net buying.
-
-        Robust indicators (Phase 1): when ``allow_candle_fallback`` is
-        explicitly False we return ``None`` so the envelope tags the
-        indicator as ``NO_DATA`` instead of producing an unreliable proxy
-        that masquerades as real flow.
-
-        Backward compatibility: a missing key (existing ConfigProfiles
-        from before this change) defaults to True so legacy behaviour is
-        preserved. New seed_service.DEFAULT_INDICATORS sets it False.
+        Robust-indicators contract: never approximate from candle direction.
+        When the primary order-flow source has not provided ``taker_ratio``,
+        return ``None`` so the envelope tags the indicator as ``NO_DATA``
+        instead of producing a misleading proxy.
         """
-        cfg = self.config.get("taker_ratio", {}) or {}
-        if cfg.get("allow_candle_fallback", True) is False:
-            return {"taker_ratio": None}
-        lookback = min(max(int(cfg.get("lookback", 20)), 1), len(df))
-        recent = df.tail(lookback)
-        volume = self._base_volume(recent)
-        if recent.empty or volume.sum() == 0:
-            return {"taker_ratio": 0.5}
-
-        bullish_mask = recent["close"] >= recent["open"]
-        buy_volume = volume.loc[bullish_mask].sum()
-        total_volume = volume.sum()
-        ratio = buy_volume / total_volume if total_volume > 0 else 0.5
-        return {"taker_ratio": round(float(ratio), 4)}
+        return {"taker_ratio": None}
 
     def _apply_market_data_overrides(self, market_data: Dict[str, Any]) -> Dict[str, Any]:
         # Canonical ticker values from MarketDataService override candle sums.
