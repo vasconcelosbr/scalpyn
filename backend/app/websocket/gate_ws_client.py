@@ -73,9 +73,18 @@ class GateWSClient:
         registered via ``register_handler(channel, coro)``.
 
     Reconnect policy:
-        Exponential backoff starting at 1 s, doubling each attempt, capped at
-        60 s.  After 20 consecutive failures the connection gives up and logs
-        CRITICAL.
+        Never-die contract (Task #180): the per-market connection loop
+        (``_run_with_backoff``) keeps retrying indefinitely while
+        ``self._running`` is True — there is no kill-switch on the retry
+        count.  Backoff is exponential starting at ``RECONNECT_BASE_DELAY``
+        (1 s), doubling each attempt and capped at ``RECONNECT_MAX_DELAY``
+        (60 s).  ``RECONNECT_MAX_RETRIES`` (20) is now only the cadence
+        for the page-able ``CRITICAL`` log ("STILL RETRYING") so Sentry
+        gets a fresh signal roughly every ``MAX_RETRIES * MAX_DELAY``
+        seconds without storming on every individual retry — in-between
+        retries log at WARN.  A clean return from the inner loop while
+        still running resets both the attempt counter and the delay
+        back to base.
     """
 
     def __init__(
