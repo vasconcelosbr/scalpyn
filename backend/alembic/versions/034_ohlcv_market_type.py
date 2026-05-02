@@ -57,7 +57,7 @@ def upgrade() -> None:
 
     op.execute(sa.text("""
         CREATE INDEX IF NOT EXISTS ix_ohlcv_futures_time
-            ON ohlcv (time DESC)
+            ON ohlcv (symbol, time DESC)
             WHERE market_type = 'futures'
     """))
 

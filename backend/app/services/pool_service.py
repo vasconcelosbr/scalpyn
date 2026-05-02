@@ -62,7 +62,7 @@ async def get_pool_symbols_with_market_type(db) -> dict[str, str]:
     correct market_type without making one DB query per symbol.
 
     Returns:
-        Dict of ``{ "BTC_USDT": "spot", "BTC_USDT": "futures", ... }``.
+        Dict of ``{ "BTC_USDT": "spot", "ETH_USDT": "futures", ... }``.
         When the same symbol appears in both spot and futures pools,
         the last-seen value wins (ambiguous by design — such a symbol
         should appear in both pipelines and callers must decide which
