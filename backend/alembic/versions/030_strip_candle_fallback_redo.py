@@ -1,42 +1,34 @@
-"""Phase 4 cleanup — merge prior heads & strip removed config keys.
+"""Re-run 029's JSONB cleanup deterministically (Task #158 follow-on).
 
-Revision ID: 029
-Revises: 028, 028_robust_engine_tag
-Create Date: 2026-05-01
+Revision ID: 030
+Revises: 029
+Create Date: 2026-05-02
 
-Phase 4 of the Robust Indicators rollout removed:
-  * the candle-derived approximation flag ``allow_candle_fallback`` from
-    indicator configs (volume_delta + taker_ratio now return ``None``
-    when the primary order-flow source is missing);
-  * the dual-write scoring fields ``dual_write_mode`` and
-    ``confidence_weighting`` from score configs (the engine writes the
-    confidence-weighted score directly into ``alpha_scores``).
+Migration ``029_strip_candle_fallback`` originally referenced the wrong
+column (``config`` instead of ``config_json`` — see Task #158). On the
+failed Cloud Run deploy the JSONB ``UPDATE`` aborted with
+``column "config" does not exist``, ``alembic upgrade head`` exited 1,
+and ``backend/start.sh``'s stamp-head fallback wrote ``029`` to
+``alembic_version`` *without* the data changes ever applying.
 
-This migration is idempotent JSONB plumbing — it strips those keys from
-``config_profiles.config_json`` for every row that still carries them.
+Fixing 029 in place is necessary but not sufficient: alembic will not
+re-run a revision that is already stamped. So this revision repeats the
+same idempotent JSONB cleanup with the correct column name. It is a
+no-op on any database that already had 029 apply cleanly (the ``WHERE
+config_json ? :section`` predicates filter out rows without the keys).
 
-NOTE: the JSONB column on ``config_profiles`` is named ``config_json``,
-not ``config`` — see ``backend/app/models/config_profile.py``. Using the
-wrong column name aborted the whole ``alembic upgrade head`` on the
-Cloud Run cold start (Task #158), which rolled the deploy back.
-
-It also acts as the merge point for the two parallel heads at revision
-028 (``028`` adds dual-write columns; ``028_robust_engine_tag`` adds
-``engine_tag`` columns) so subsequent migrations have a single ancestor.
-
-We DO NOT drop the database columns added by 028 / 027 (``alpha_score_v2``,
-``confidence_metrics``, ``scoring_version`` on ``alpha_scores``;
-``divergence_bucket`` on ``indicator_snapshots``) — they remain as
-forward-compatible nullable columns so the cleanup is fully reversible
-without a destructive schema change.
+Removed by Phase 4 of the Robust Indicators rollout:
+  * ``allow_candle_fallback`` from indicator configs (volume_delta and
+    taker_ratio sections);
+  * ``dual_write_mode`` and ``confidence_weighting`` from score configs.
 """
 
 from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision = "029"
-down_revision = ("028", "028_robust_engine_tag")
+revision = "030"
+down_revision = "029"
 branch_labels = None
 depends_on = None
 

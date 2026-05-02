@@ -62,6 +62,14 @@ Every `down_revision` value (or each element of a tuple) must appear as a `revis
 - [ ] I ran `alembic history | head` locally and it printed no warnings or tracebacks.
 - [ ] If I introduced a parallel branch, the merge migration's `down_revision` is a tuple containing both branch heads.
 
+## Known failure modes (from past production incidents)
+
+- **Wrong column name in a JSONB-plumbing migration (Task #158).** Migration `029_strip_candle_fallback.py` shipped with `UPDATE config_profiles SET config = ...`, but the real column on that table is `config_json` (see `backend/app/models/config_profile.py`). PostgreSQL aborts the statement with `column "config" does not exist`, alembic exits 1, `start.sh` retries 3× and then stamps head, but the migration never actually applies and Cloud Run rolls the revision back. Pure `alembic heads` / `alembic history` will NOT catch this — they only verify the graph, not the SQL inside `upgrade()`. The only check that catches it is running `alembic upgrade head` against a real dev DB (or against a fresh local Postgres) before pushing. **Make this part of your loop for any migration that touches data, not just schema.**
+
+## Sixth invariant (data migrations)
+
+6. **Every column / table name you write inside `op.execute(...)` matches the live schema.** Open the relevant ORM model in `backend/app/models/` and copy the `Column(...)` name verbatim — do not infer it from the docstring, the API field, or memory. Then prove the migration runs with `cd backend && alembic upgrade head` against a real DB. Graph-level checks (`alembic heads`, `alembic history`) do not parse SQL; they will green-light a migration that references a column that does not exist.
+
 ## Known fragile spots in this codebase
 
 - `backend/alembic/versions/023_taker_ratio_scale_v2.py` calls `sa.inspect(bind)` inside `upgrade()`, which only works against a real DB connection. `alembic upgrade head --sql` (offline mode) will fail at this revision with `NoInspectionAvailable: ... MockConnection`. This is expected — use the online `alembic upgrade head` against a real dev DB to fully exercise the chain. Do not try to "fix" 023 by removing the inspector; it gates DDL on table presence intentionally.
