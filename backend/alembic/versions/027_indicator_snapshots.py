@@ -9,13 +9,22 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "027_indicator_snapshots"
-down_revision = "026_decisions_log_direction_event_type"
+# NOTE: file `026_decisions_log_direction_event_type.py` defines its
+# revision id as the abbreviated `"026_dl_direction_event_type"` — this
+# down_revision MUST match that string exactly or alembic raises
+# `Can't locate revision identified by '...'` on every cold start.
+down_revision = "026_dl_direction_event_type"
 branch_labels = None
 depends_on = None
 
 
 def upgrade() -> None:
     op.execute(sa.text("SET LOCAL lock_timeout = '5s'"))
+    # gen_random_uuid() lives in pgcrypto on PG <13 and is built-in on PG >=13.
+    # CREATE EXTENSION IF NOT EXISTS is idempotent and a no-op on modern PG, so
+    # this guarantees the DEFAULT below resolves on every Cloud Run cold start
+    # regardless of the target Postgres version.
+    op.execute(sa.text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
     op.execute(sa.text(
         """
         CREATE TABLE IF NOT EXISTS indicator_snapshots (

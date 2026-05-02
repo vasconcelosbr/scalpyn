@@ -1,5 +1,15 @@
 name: Deploy
 
+# Backend deploys to Cloud Run are owned by the Google Cloud Build trigger
+# `rmgpgab-scalpyn-us-central1-vasconcelosbr-scalpyn--majye` (project
+# `clickrate-477217`) — see `cloudbuild.yaml` at the repo root.
+#
+# This workflow USED TO build & deploy the backend in two flavors (Workload
+# Identity Federation + Service Account Key fallback). Both jobs were guarded
+# by `if:` clauses on GCP secrets that aren't configured in this repository,
+# so every push produced a phantom failure check. We removed them; the only
+# job left here is the frontend build validation.
+
 on:
   push:
     branches:
@@ -13,109 +23,6 @@ on:
         type: boolean
 
 jobs:
-  # ── Backend: build, push and deploy to Cloud Run ──────────
-  deploy-backend:
-    name: Deploy Backend (Cloud Run)
-    runs-on: ubuntu-latest
-    if: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '' }}
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
-
-      - name: Build Docker image
-        run: |
-          docker build \
-            -t ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REPO }}/${{ vars.CLOUD_RUN_SERVICE }}:${{ github.sha }} \
-            -t ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REPO }}/${{ vars.CLOUD_RUN_SERVICE }}:latest \
-            backend
-
-      - name: Push Docker image
-        run: |
-          docker push --all-tags \
-            ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REPO }}/${{ vars.CLOUD_RUN_SERVICE }}
-
-      - name: Deploy to Cloud Run
-        run: |
-          gcloud run deploy ${{ vars.CLOUD_RUN_SERVICE }} \
-            --image ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REPO }}/${{ vars.CLOUD_RUN_SERVICE }}:${{ github.sha }} \
-            --region ${{ vars.GCP_REGION }} \
-            --platform managed \
-            --allow-unauthenticated \
-            --port 8080 \
-            --timeout 300 \
-            --timeout-startup 240 \
-            --memory 2Gi \
-            --min-instances 1 \
-            --no-cpu-throttling \
-            --cpu-boost
-
-  # ── Backend (SA Key fallback): uses GCP_SA_KEY secret ─────
-  deploy-backend-sa:
-    name: Deploy Backend via SA Key (Cloud Run)
-    runs-on: ubuntu-latest
-    if: ${{ secrets.GCP_SA_KEY != '' && secrets.GCP_WORKLOAD_IDENTITY_PROVIDER == '' }}
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker for GCR
-        run: gcloud auth configure-docker
-
-      - name: Build Docker image
-        run: |
-          docker build \
-            -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/scalpyn:${{ github.sha }} \
-            -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/scalpyn:latest \
-            backend
-
-      - name: Push Docker image
-        run: |
-          docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/scalpyn:${{ github.sha }}
-          docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/scalpyn:latest
-
-      - name: Deploy to Cloud Run
-        run: |
-          gcloud run deploy scalpyn \
-            --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/scalpyn:${{ github.sha }} \
-            --region us-central1 \
-            --platform managed \
-            --allow-unauthenticated \
-            --port 8080 \
-            --timeout 300 \
-            --timeout-startup 240 \
-            --memory 2Gi \
-            --min-instances 1 \
-            --no-cpu-throttling \
-            --cpu-boost \
-            --add-cloudsql-instances ${{ secrets.GCP_PROJECT_ID }}:us-central1:scalpyn
-
   # ── Frontend: validate build (Vercel deploys automatically) ─
   validate-frontend:
     name: Validate Frontend Build

@@ -1,7 +1,7 @@
 """alpha_scores_confidence_weighting
 
 Revision ID: 028
-Revises: 027
+Revises: 027_indicator_snapshots
 Create Date: 2026-05-01
 
 Add columns for confidence-weighted scoring dual-write mode:
@@ -15,7 +15,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = '028'
-down_revision = '027'
+down_revision = '027_indicator_snapshots'
 branch_labels = None
 depends_on = None
 
