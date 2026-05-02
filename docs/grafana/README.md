@@ -5,7 +5,7 @@ This directory ships:
 
 | File | Purpose |
 |------|---------|
-| `scalpyn-trading-engine.json` | Importable dashboard model — 8 panel groups, two embedded panel-level alerts (A1, A4). |
+| `scalpyn-trading-engine.json` | Importable dashboard model — 7 panel-group rows, 14 visual panels, **all four alerts (A1–A4) embedded** in the Grafana 10 unified-alerting schema. |
 | `queries.md` | One section per panel: title, datasource, full PromQL/SQL, refresh interval, thresholds. |
 | `alert-rules.yaml` | Grafana provisioning file with the four unified-alerting rules (A1–A4) for repeatable deploys. |
 | `README.md` | This file — setup, datasource creation, import, and operational caveats. |
@@ -161,23 +161,58 @@ legacy-to-unified migration step.
 
 ## 5. Provisioning the four alerts repeatably
 
-The dashboard JSON already embeds all four alerts (see step 4 above) and
-Grafana 10 migrates them on import. For repeatable production deploys
-where the dashboard might be re-imported by automation, also drop the
+The dashboard JSON already embeds all four alerts in Grafana 10
+unified-alerting schema (see step 4 above), so importing the dashboard
+is enough for one-off setups. For repeatable production deploys where
+the dashboard might be re-imported by automation, also drop the
 companion provisioning file in place — the rule UIDs match, so the
-embedded blocks and the YAML stay in sync without duplication:
+embedded blocks and the YAML stay in sync without duplication.
+
+### 5.1 Resolve the datasource placeholders
+
+`alert-rules.yaml` ships with two literal placeholders:
+
+```yaml
+datasourceUid: ${DS_PROMETHEUS}    # for A1 (confidence) and A4 (exchange error rate)
+datasourceUid: ${DS_POSTGRES}      # for A2 (NO_DATA) and A3 (rejection rate)
+```
+
+Grafana provisioning does **not** auto-substitute these; you have to
+replace them with the actual datasource UIDs from your Grafana
+instance before dropping the file in
+`/etc/grafana/provisioning/alerting/`. Two practical options:
+
+* **Manual / IaC**: in **Connections → Data sources** click each
+  datasource and copy its `uid` from the URL (e.g.
+  `prometheus-prod-abc123`). Render the file via your IaC tool of
+  choice — `envsubst`, Helm values, Ansible templates, Terraform
+  `templatefile`, etc. Example:
+
+  ```bash
+  export DS_PROMETHEUS=prometheus-prod-abc123
+  export DS_POSTGRES=postgres-prod-def456
+  envsubst < docs/grafana/alert-rules.yaml \
+    > /etc/grafana/provisioning/alerting/scalpyn.yaml
+  sudo systemctl restart grafana-server
+  ```
+
+* **Pinned UIDs**: alternatively, declare the datasources themselves
+  via Grafana provisioning (`/etc/grafana/provisioning/datasources/`)
+  with hard-coded `uid: prometheus-prod` / `uid: postgres-prod` values
+  and replace the placeholders with those literal UIDs once. Keeps
+  every environment identical.
+
+### 5.2 Drop in place and reload
 
 ```bash
-# /etc/grafana/provisioning/alerting/scalpyn.yaml
-cp docs/grafana/alert-rules.yaml /etc/grafana/provisioning/alerting/
-
-# restart Grafana — the four rules appear under the "Scalpyn" group
+cp /tmp/scalpyn.yaml /etc/grafana/provisioning/alerting/scalpyn.yaml
 sudo systemctl restart grafana-server
 ```
 
-Edit the contact-point name (`scalpyn-oncall`) at the top of
-`alert-rules.yaml` to match the receiver you have configured (Slack,
-PagerDuty, Opsgenie, etc.).
+The four rules will appear under the **Scalpyn** rule group. Edit the
+contact-point name (`scalpyn-oncall`) at the top of `alert-rules.yaml`
+to match the receiver you have configured (Slack, PagerDuty,
+Opsgenie, etc.).
 
 ---
 
