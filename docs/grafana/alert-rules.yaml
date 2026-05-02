@@ -2,9 +2,20 @@
 #
 # Drop this into /etc/grafana/provisioning/alerting/ (or whatever path
 # `[paths] provisioning` points to in grafana.ini), then restart Grafana.
-# The four rules below are also referenced from
-# scalpyn-trading-engine.json (A1 + A4 are embedded as panel-level legacy
-# alerts; A2 + A3 require SQL reduction and live only here).
+#
+# All four rules (A1 confidence, A2 NO_DATA, A3 rejection rate, A4
+# exchange error rate) are ALSO embedded inside scalpyn-trading-engine.json
+# in the same Grafana 10 unified-alerting schema (`alert.data` + `condition`
+# + reduce/threshold expression nodes). The rule UIDs match between the two
+# files, so importing both is idempotent — provisioning takes precedence
+# over dashboard-embedded copies on conflict, which is the recommended
+# production deploy path. See README §5 for substitution of the
+# ${DS_PROMETHEUS} / ${DS_POSTGRES} placeholders below.
+#
+# Scope note: the underlying exchange_request_* metrics are emitted from
+# REST chokepoints in backend/app/exchange_adapters/{binance,gate}_adapter.py
+# only. WebSocket failures are NOT instrumented in this task and therefore
+# do not contribute to A4's error-rate denominator.
 
 apiVersion: 1
 
