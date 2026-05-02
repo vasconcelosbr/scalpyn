@@ -81,7 +81,7 @@ validate_critical_schema() {
     echo "==> [schema] Validating critical schema..."
     if ! python3 -m scripts.check_critical_schema; then
         echo "==> Aborting startup: critical schema drift detected." >&2
-        echo "==> See docs/runbooks/scheduler-group-drift.md to apply missing DDL manually." >&2
+        echo "==> See docs/runbooks/critical-schema-drift.md to apply missing DDL manually." >&2
         exit 1
     fi
     echo "==> [schema] Critical schema OK."
@@ -117,10 +117,51 @@ fi
 # we probe information_schema here as well.
 validate_critical_schema
 
+# ── Pre-flight: Redis connectivity (Tarefas 3+7) ─────────────────────────────
+# Hard fail-safe: if the broker is unreachable, abort startup with exit 1
+# instead of letting Celery silently retry-and-give-up
+# (broker_connection_max_retries=10 in celery_app.py). Cloud Run will then
+# roll back to the previous revision automatically. This catches misconfigured
+# REDIS_URL (e.g. missing /0 db suffix) before the pipeline silently stalls.
+echo "==> [redis] Verifying Redis connectivity..."
+if ! python3 - <<'PY'
+import os, sys
+try:
+    import redis
+except ImportError as e:
+    print(f"ERROR: redis package not installed: {e}", file=sys.stderr)
+    sys.exit(1)
+
+url = os.environ.get("REDIS_URL", "")
+if not url:
+    print("ERROR: REDIS_URL is empty -- cannot connect to broker", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    r = redis.from_url(url, socket_connect_timeout=5, socket_timeout=5)
+    if r.ping() is not True:
+        print("ERROR: Redis ping returned False", file=sys.stderr)
+        sys.exit(1)
+    print("[redis] connected OK")
+except Exception as e:
+    # Never log the URL itself -- it carries the broker password.
+    print(f"ERROR: Redis connection failed: {type(e).__name__}: {e}", file=sys.stderr)
+    sys.exit(1)
+PY
+then
+    echo "==> Aborting startup: Redis connection failed" >&2
+    exit 1
+fi
+
+# Loglevel for Celery worker/beat. Default `info`. Set CELERY_LOGLEVEL=debug
+# in Cloud Run env to capture startup-error tracebacks (broker URL parse,
+# import errors, beat schedule wiring) without rebuilding.
+CELERY_LOGLEVEL="${CELERY_LOGLEVEL:-info}"
+
 # ── Start Celery worker ──────────────────────────────────────────────────────
-echo "==> Starting Celery worker..."
+echo "==> STARTING CELERY WORKER (loglevel=${CELERY_LOGLEVEL})..."
 celery -A app.tasks.celery_app worker \
-    --loglevel=info \
+    --loglevel="${CELERY_LOGLEVEL}" \
     --concurrency="${CELERY_CONCURRENCY:-1}" \
     --queues=celery \
     &
@@ -128,41 +169,42 @@ CELERY_WORKER_PID=$!
 echo " Celery worker PID: $CELERY_WORKER_PID"
 
 # ── Start Celery beat ────────────────────────────────────────────────────────
-echo "==> Starting Celery beat..."
+echo "==> STARTING CELERY BEAT (loglevel=${CELERY_LOGLEVEL})..."
 celery -A app.tasks.celery_app beat \
-    --loglevel=info \
+    --loglevel="${CELERY_LOGLEVEL}" \
     &
 CELERY_BEAT_PID=$!
 echo " Celery beat PID: $CELERY_BEAT_PID"
 
-# Early-exit probe: give Celery 10 s to attempt the broker connection.
-# If either process has already exited (or become a zombie) before uvicorn
-# starts, log a structured alert and abort immediately rather than letting
-# the zombie watchdog fail silently after the full grace period.
-#
-# 10 s is sufficient: Celery's first broker retry fires at ~2 s with
-# exponential back-off.  With broker_connection_max_retries=10 and the
-# default backoff cap, all retries exhaust well within 10 s when Redis is
-# unreachable (typicaly < 5 s total).  A healthy Celery process will still
-# be alive and connecting at the 10 s mark, so false positives are
-# effectively zero.
-sleep 10
-EARLY_EXIT=false
-for label in "worker:$CELERY_WORKER_PID" "beat:$CELERY_BEAT_PID"; do
-    name="${label%%:*}"
-    pid="${label##*:}"
-    stat=$(ps -o stat= -p "$pid" 2>/dev/null)
-    if [ -z "$stat" ] || case "$stat" in Z*) true ;; *) false ;; esac; then
-        echo "==> [startup] ALERT: celery $name (PID $pid) exited or is zombie within 10s -- broker connection likely failed" >&2
-        EARLY_EXIT=true
-    else
-        echo " [startup] celery $name (PID $pid) alive (stat=$stat)"
-    fi
-done
-if [ "$EARLY_EXIT" = true ]; then
-    echo "==> [startup] FATAL: Celery failed to start -- aborting to force container restart" >&2
+# ── Fail-fast: 5s post-start liveness check (Tarefas 1, 4, 5) ────────────────
+# If either Celery process dies within 5 seconds of fork, the container exits 1
+# so Cloud Run rolls back to the previous revision. This catches:
+#   - Redis URL malformed (parse error in celery_app.py module load)
+#   - Module import errors (missing dependency, syntax error in tasks)
+#   - Beat schedule wiring errors (invalid cron, missing task ref)
+# Without this gate, the watchdog only catches deaths AFTER the 120s grace
+# period, by which time Cloud Run has already marked the revision Ready.
+echo "==> [celery-check] Waiting 5s for Celery processes to stabilize..."
+sleep 5
+echo "==> [celery-check] ps aux | grep -E 'celery|beat' (excluding grep):"
+ps aux | grep -E 'celery|beat' | grep -v grep || true
+
+CELERY_FAILED=false
+if ! kill -0 "$CELERY_WORKER_PID" 2>/dev/null; then
+    echo "ERROR: Celery WORKER (PID $CELERY_WORKER_PID) died within 5s of start" >&2
+    CELERY_FAILED=true
+fi
+if ! kill -0 "$CELERY_BEAT_PID" 2>/dev/null; then
+    echo "ERROR: Celery BEAT (PID $CELERY_BEAT_PID) died within 5s of start" >&2
+    CELERY_FAILED=true
+fi
+if [ "$CELERY_FAILED" = true ]; then
+    echo "==> CELERY FAILED TO START -- aborting container (Cloud Run will roll back)" >&2
+    echo "==> Check the lines above for the celery worker/beat traceback." >&2
+    echo "==> Re-deploy with CELERY_LOGLEVEL=debug for verbose startup output." >&2
     exit 1
 fi
+echo "==> [celery-check] Worker (PID $CELERY_WORKER_PID) and Beat (PID $CELERY_BEAT_PID) both alive after 5s. ✓"
 
 # Capture the PID that exec uvicorn will inherit (shell PID becomes uvicorn PID)
 MAIN_PID=$$
