@@ -8,6 +8,8 @@ from ..tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
+_REQUIRED_OHLCV_COLUMNS = ["time", "open", "high", "low", "close", "volume"]
+
 
 def _run_async(coro):
     """Run async code in sync Celery task."""
@@ -58,10 +60,9 @@ async def _collect_all_async():
                     continue
 
                 logger.info(f"[PIPELINE] DF_ROWS symbol={symbol} rows={len(df)}")
-                logger.info(f"[PIPELINE] DF_HEAD symbol={symbol} data={df.head(2).to_dict()}")
+                logger.debug(f"[PIPELINE] DF_HEAD symbol={symbol} data={df.head(2).to_dict()}")
 
-                required = ["time", "open", "high", "low", "close", "volume"]
-                missing = [c for c in required if c not in df.columns]
+                missing = [c for c in _REQUIRED_OHLCV_COLUMNS if c not in df.columns]
                 if missing:
                     logger.error(f"[PIPELINE] INVALID_COLUMNS symbol={symbol} missing={missing} columns={list(df.columns)}")
                     continue
@@ -244,8 +245,7 @@ async def _collect_5m_async():
 
                 logger.info(f"[PIPELINE] DF_ROWS symbol={symbol} rows={len(df)}")
 
-                required = ["time", "open", "high", "low", "close", "volume"]
-                missing = [c for c in required if c not in df.columns]
+                missing = [c for c in _REQUIRED_OHLCV_COLUMNS if c not in df.columns]
                 if missing:
                     logger.error(f"[PIPELINE] INVALID_COLUMNS symbol={symbol} missing={missing} columns={list(df.columns)}")
                     continue
