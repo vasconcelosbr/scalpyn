@@ -12,6 +12,10 @@ import httpx
 
 from .base_adapter import BaseExchangeAdapter
 from ..utils.gate_market_data import parse_gate_spot_candle
+from ..services.robust_indicators.metrics import (
+    increment_exchange_error,
+    observe_exchange_latency,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -167,19 +171,28 @@ class GateAdapter(BaseExchangeAdapter):
         if query:
             url += f"?{query}"
 
-        async with httpx.AsyncClient(timeout=15) as client:
-            if method == "GET":
-                r = await client.get(url, headers=headers)
-            elif method == "POST":
-                r = await client.post(url, headers=headers, content=body_str)
-            elif method == "PUT":
-                r = await client.put(url, headers=headers, content=body_str)
-            elif method == "DELETE":
-                r = await client.delete(url, headers=headers)
-            else:
-                raise ValueError(f"Unsupported HTTP method: {method}")
+        _start = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                if method == "GET":
+                    r = await client.get(url, headers=headers)
+                elif method == "POST":
+                    r = await client.post(url, headers=headers, content=body_str)
+                elif method == "PUT":
+                    r = await client.put(url, headers=headers, content=body_str)
+                elif method == "DELETE":
+                    r = await client.delete(url, headers=headers)
+                else:
+                    raise ValueError(f"Unsupported HTTP method: {method}")
+        except Exception:
+            observe_exchange_latency("gate", time.monotonic() - _start)
+            increment_exchange_error("gate", "transport")
+            raise
+
+        observe_exchange_latency("gate", time.monotonic() - _start)
 
         if r.status_code not in (200, 201):
+            increment_exchange_error("gate", "http")
             self._raise_gate_error(r)
 
         return r.json()
@@ -640,13 +653,23 @@ class GateAdapter(BaseExchangeAdapter):
     @staticmethod
     async def _public_get(url: str, params: Optional[Dict] = None) -> Any:
         """Unsigned GET for Gate.io public endpoints."""
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.get(
-                url,
-                params=params,
-                headers={"Accept": "application/json"},
-            )
+        _start = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                r = await client.get(
+                    url,
+                    params=params,
+                    headers={"Accept": "application/json"},
+                )
+        except Exception:
+            observe_exchange_latency("gate", time.monotonic() - _start)
+            increment_exchange_error("gate", "transport")
+            raise
+
+        observe_exchange_latency("gate", time.monotonic() - _start)
+
         if r.status_code != 200:
+            increment_exchange_error("gate", "http")
             raise GateAPIError(r.status_code, "PUBLIC_ERROR", r.text[:300])
         return r.json()
 

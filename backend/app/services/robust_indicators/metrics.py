@@ -8,6 +8,13 @@ Exposed metrics:
   * ``indicator_staleness_seconds`` — gauge, labels: ``symbol``,
     ``indicator``.
   * ``score_rejection_total`` — counter, label: ``reason``.
+  * ``exchange_request_latency_seconds`` — histogram, label: ``exchange``.
+    Wraps every Gate.io and Binance public REST call site so the Grafana
+    Exchange-Status panel can compute p95 latency and request volume.
+  * ``exchange_request_errors_total`` — counter, labels: ``exchange``,
+    ``kind`` (``http`` for non-2xx HTTP responses, ``transport`` for
+    network/timeout/cancel errors). Used by the same panel for the
+    error-rate column and the global error-rate alert.
 
 The metrics live in a shared ``CollectorRegistry`` so they can be scraped
 through the FastAPI ``/metrics`` endpoint regardless of which worker emitted
@@ -69,12 +76,27 @@ if _PROMETHEUS_AVAILABLE:
         labelnames=("reason",),
         registry=REGISTRY,
     )
+    EXCHANGE_REQUEST_LATENCY = Histogram(
+        "exchange_request_latency_seconds",
+        "Latency of public REST requests to a crypto exchange (Gate.io, Binance).",
+        labelnames=("exchange",),
+        buckets=_BUCKETS,
+        registry=REGISTRY,
+    )
+    EXCHANGE_REQUEST_ERRORS = Counter(
+        "exchange_request_errors_total",
+        "Failed exchange REST requests, by exchange and error kind ('http' | 'transport').",
+        labelnames=("exchange", "kind"),
+        registry=REGISTRY,
+    )
 else:  # pragma: no cover — exercised when extra is missing
     REGISTRY = None  # type: ignore[assignment]
     INDICATOR_COMPUTATION_DURATION = None
     INDICATOR_CONFIDENCE = None
     INDICATOR_STALENESS = None
     SCORE_REJECTION_TOTAL = None
+    EXCHANGE_REQUEST_LATENCY = None
+    EXCHANGE_REQUEST_ERRORS = None
 
 
 def observe_compute_duration(
@@ -118,6 +140,30 @@ def increment_rejection(reason: str) -> None:
         logger.debug("metrics: increment_rejection failed: %s", exc)
 
 
+def observe_exchange_latency(exchange: str, seconds: float) -> None:
+    """Record latency (seconds) of a single REST call to ``exchange``."""
+    if EXCHANGE_REQUEST_LATENCY is None:
+        return
+    try:
+        EXCHANGE_REQUEST_LATENCY.labels(exchange=exchange).observe(float(seconds))
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.debug("metrics: observe_exchange_latency failed: %s", exc)
+
+
+def increment_exchange_error(exchange: str, kind: str) -> None:
+    """Increment the failed-request counter for ``exchange``.
+
+    ``kind`` should be ``"http"`` for non-2xx HTTP responses and
+    ``"transport"`` for network/timeout/cancel errors.
+    """
+    if EXCHANGE_REQUEST_ERRORS is None:
+        return
+    try:
+        EXCHANGE_REQUEST_ERRORS.labels(exchange=exchange, kind=kind).inc()
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.debug("metrics: increment_exchange_error failed: %s", exc)
+
+
 def render_metrics() -> tuple[bytes, str]:
     """Return ``(body, content_type)`` for the FastAPI handler."""
     if not _PROMETHEUS_AVAILABLE or REGISTRY is None:
@@ -131,8 +177,10 @@ def render_metrics() -> tuple[bytes, str]:
 __all__ = [
     "CONTENT_TYPE_LATEST",
     "REGISTRY",
+    "increment_exchange_error",
     "increment_rejection",
     "observe_compute_duration",
+    "observe_exchange_latency",
     "render_metrics",
     "set_indicator_confidence",
     "set_indicator_staleness",

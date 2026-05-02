@@ -64,7 +64,7 @@ The frontend proxies all `/api/*` requests to the FastAPI backend via `frontend/
 - Operational alerts (`backend/app/tasks/robust_alerts.py`) keep staleness / low-confidence / rejection-rate, dropped divergence + the hourly `legacy_rollback_standby` beat.
 - Canonical architecture doc: `backend/docs/robust_indicators.md`. Phase-by-phase notes deleted. Tests: deleted `test_phase3_deprecation`, `test_phase2_rollout`, `test_dual_write_scoring`, `test_confidence_weighted_scoring`; trimmed shadow / divergence cases from `test_robust_indicators.py`.
 - `indicator_snapshots` (alembic 027) records `{indicators_json, score, score_confidence, can_trade, validation_errors, ...}` per scan; the legacy `divergence_bucket` column is retained as nullable but no longer written.
-- `/metrics` endpoint still exposes Prometheus counters/histograms (`indicator_computation_duration_seconds`, `indicator_confidence`, `indicator_staleness_seconds`, `score_rejection_total`); the divergence counter was removed with the rest of the dual-write surface.
+- `/metrics` endpoint exposes Prometheus counters/histograms (`indicator_computation_duration_seconds`, `indicator_confidence`, `indicator_staleness_seconds`, `score_rejection_total`, `exchange_request_latency_seconds`, `exchange_request_errors_total`); the divergence counter was removed with the rest of the dual-write surface. The two `exchange_request_*` series are emitted from `_request` / `_public_get` chokepoints in `backend/app/exchange_adapters/{binance_adapter.py,gate_adapter.py}` (label `exchange` ∈ `{binance, gate}`; error `kind` ∈ `{http, transport}`) and feed the Exchange-Status panel + the error-rate alert in the Grafana dashboard below.
 - Celery beat `app.tasks.robust_alerts.evaluate` (every 90 s) inspects recent snapshots and fires Slack alerts to the single ops webhook for stale data, low confidence, or high rejection rate (rate-limited to 1 alert per condition per 15 min via Redis with in-process fallback). Divergence + standby beats are gone.
 - Tests in `backend/tests/test_robust_indicators.py` cover envelope wrapping, all validation rules, both score-engine gates, and the Phase 4 removed-symbol contract. Full design notes: `backend/docs/robust_indicators.md`.
 
@@ -95,6 +95,17 @@ The Rejected tab endpoint (`_get_watchlist_rejections_payload` in `backend/app/a
 - The DB column `pipeline_watchlist_rejections.evaluation_trace` is intentionally **NOT** rewritten on read. The scheduler still owns that column; recompute-on-read is purely a presentation-layer override.
 - Selected filter conditions follow the same `select_profile_filter_conditions` logic used by the live Approved trace (`get_watchlist_assets`), so both tabs stay consistent.
 - Tests: `test_recompute_rejection_trace_uses_current_indicators_for_cascade_label`, `test_recompute_rejection_trace_falls_back_when_indicators_missing`, `test_recompute_rejection_trace_falls_back_when_only_meta_is_present`, `test_recompute_rejection_trace_falls_back_when_profile_config_missing` in `test_pipeline_rejected_snapshot.py`.
+
+## Grafana Monitoring (task #166)
+- Production-grade dashboard ships in `docs/grafana/`:
+  - `scalpyn-trading-engine.json` — 8 panel groups (Status Geral · Data Quality Gauges · Confidence ao longo do tempo · Exchange Status · Score por símbolo · Critical Indicators · Rejection Reasons · Pipeline Performance), Grafana 10 schema, dark theme, two embedded panel-level alerts (A1 Confidence < 0.6, A4 Exchange error > 10%).
+  - `alert-rules.yaml` — Grafana provisioning file with all 4 unified-alerting rules including the two SQL-based ones (A2 NO_DATA > 25%, A3 Rejection rate > 50%) that legacy panel alerts cannot express.
+  - `queries.md` — per-panel verbatim PromQL/SQL + threshold table.
+  - `README.md` — Prometheus scrape config, `grafana_ro` Postgres role, datasource setup, import workflow, smoke test, and the **22-connection Cloud SQL ceiling** caveat (`db-pool-budget.md`).
+- Two datasources required: `${prometheus}` (scrapes `/metrics`) and `${postgres}` (reads `indicator_snapshots` + `decisions_log` only via the `grafana_ro` role).
+- All PromQL aggregates with `sum by (…)` to handle the per-process counters that come from `WEB_CONCURRENCY=2` uvicorn workers — never paste a raw `rate()` series.
+- All SQL touching `indicator_snapshots.score` uses `WHERE score IS NOT NULL` and `NULLIF(..., 0)` denominators, since the column is `NUMERIC(10,2) NULL` and is blank during early pipeline runs.
+- `/metrics` is currently unauthenticated — the README recommends Cloud Run ingress allow-list / VPC connector instead of in-app auth (see follow-up).
 
 ## Schema Bootstrap (Production)
 - **Single source of truth**: Alembic migrations in `backend/alembic/versions/`. New schema changes MUST land as a migration, never only in `init_db.py`.

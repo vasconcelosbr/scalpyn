@@ -1,11 +1,16 @@
 """Binance public market-data adapter used as a fallback for critical indicators."""
 
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 from .base_adapter import BaseExchangeAdapter
+from ..services.robust_indicators.metrics import (
+    increment_exchange_error,
+    observe_exchange_latency,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +35,21 @@ class BinanceAdapter(BaseExchangeAdapter):
 
     async def _request(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Any:
         url = f"{self.SPOT_BASE}{endpoint}"
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.get(url, params=params)
-            response.raise_for_status()
-            return response.json()
+        _start = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.get(url, params=params)
+        except Exception:
+            observe_exchange_latency("binance", time.monotonic() - _start)
+            increment_exchange_error("binance", "transport")
+            raise
+
+        observe_exchange_latency("binance", time.monotonic() - _start)
+
+        if response.status_code >= 400:
+            increment_exchange_error("binance", "http")
+        response.raise_for_status()
+        return response.json()
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str) -> List[Dict[str, Any]]:
         return await self.get_klines(symbol, interval=timeframe, market="spot")

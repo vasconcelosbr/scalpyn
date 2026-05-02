@@ -1,0 +1,218 @@
+# Grafana — Scalpyn Trading Engine Monitoring
+
+Production-grade Grafana 10 dashboard for the Scalpyn trading engine.
+This directory ships:
+
+| File | Purpose |
+|------|---------|
+| `scalpyn-trading-engine.json` | Importable dashboard model — 8 panel groups, two embedded panel-level alerts (A1, A4). |
+| `queries.md` | One section per panel: title, datasource, full PromQL/SQL, refresh interval, thresholds. |
+| `alert-rules.yaml` | Grafana provisioning file with the four unified-alerting rules (A1–A4) for repeatable deploys. |
+| `README.md` | This file — setup, datasource creation, import, and operational caveats. |
+
+---
+
+## 1. Prometheus scrape configuration
+
+The backend exposes Prometheus metrics at **`GET /metrics`** (mounted in
+`backend/app/api/metrics.py`). Six series are scraped:
+
+| Metric | Type | Labels |
+|--------|------|--------|
+| `indicator_computation_duration_seconds` | Histogram | `symbol`, `indicator`, `source` |
+| `indicator_confidence` | Gauge | `symbol` |
+| `indicator_staleness_seconds` | Gauge | `symbol`, `indicator` |
+| `score_rejection_total` | Counter | `reason` |
+| `exchange_request_latency_seconds` | Histogram | `exchange` (`gate` \| `binance`) |
+| `exchange_request_errors_total` | Counter | `exchange`, `kind` (`http` \| `transport`) |
+
+Sample `prometheus.yml` job (Cloud Run target):
+
+```yaml
+scrape_configs:
+  - job_name: 'scalpyn-backend'
+    metrics_path: /metrics
+    scheme: https
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    static_configs:
+      - targets: ['scalpyn-backend-<hash>-uc.a.run.app']
+```
+
+> ### ⚠ `/metrics` is currently unauthenticated
+>
+> `backend/app/api/metrics.py` exposes the endpoint without auth so a stock
+> Prometheus scrape works. **Do not rely on application-level auth** —
+> instead restrict access at the network layer:
+>
+> 1. Set Cloud Run **ingress** to "Internal and Cloud Load Balancing" or
+>    "Internal only", and put Prometheus inside the same VPC connector.
+> 2. Or terminate scraping behind a Cloud Armor / IAP policy that allows
+>    only the Prometheus egress IPs.
+>
+> Adding auth in code would either break the unauthenticated Prometheus
+> client or require a sidecar — a network-level allow-list is simpler and
+> fully recoverable.
+
+### Cloud Run multi-worker note
+
+Cloud Run runs the backend with `WEB_CONCURRENCY=2` uvicorn workers (see
+`backend/Dockerfile`). Prometheus therefore sees **two separate
+`process_*` series and two copies of every counter/histogram per scrape**.
+All PromQL in `queries.md` aggregates with `sum by (…)` for that reason.
+Never paste a raw `rate(metric_name[5m])` query without an aggregator —
+the result will only reflect a single worker.
+
+---
+
+## 2. PostgreSQL read-only role for Grafana
+
+The dashboard touches exactly two tables — `indicator_snapshots` and
+`decisions_log`. Grant the minimum scope:
+
+```sql
+-- run as superuser on the production DB
+CREATE ROLE grafana_ro LOGIN PASSWORD '<rotate-this-secret>';
+GRANT CONNECT ON DATABASE scalpyn TO grafana_ro;
+GRANT USAGE  ON SCHEMA public   TO grafana_ro;
+
+GRANT SELECT ON public.indicator_snapshots TO grafana_ro;
+GRANT SELECT ON public.decisions_log       TO grafana_ro;
+
+-- prevent accidental future grants from leaking via default privileges
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM grafana_ro;
+```
+
+> ### ⚠ Cloud SQL connection budget
+>
+> `docs/db-pool-budget.md` documents a **22-connection ceiling** today
+> (2 uvicorn workers × (5 + 5) pool slots + 1 Celery + 1 beat). Each
+> Grafana datasource pool adds at least 1 connection on every panel
+> render that runs concurrently.
+>
+> | Cloud SQL tier | `max_connections` | Headroom after Grafana (1–4 conns) |
+> |----------------|-------------------|------------------------------------|
+> | `db-f1-micro`  | 25                | 0–2 (**not recommended**)          |
+> | `db-g1-small`  | 50                | 24–27 (safe)                       |
+> | `db-n1-standard-1` | 100           | 74–77 (comfortable)                |
+>
+> Stay on `db-g1-small` or larger; on `db-f1-micro` the headroom is gone
+> the moment a second admin session opens. Configure the Grafana
+> datasource with **Max open = 4**, **Max idle = 1**, **Max lifetime = 1h**.
+
+---
+
+## 3. Datasource setup (Grafana UI)
+
+### Prometheus
+1. **Connections → Data sources → Add → Prometheus**.
+2. URL: `http://<your-prometheus>:9090` (or the Grafana Cloud Prometheus URL).
+3. Scrape interval: `30s` (matches `prometheus.yml`).
+4. Save & test → must show "Data source is working".
+
+### PostgreSQL
+1. **Connections → Data sources → Add → PostgreSQL**.
+2. Host: `<cloud-sql-private-ip>:5432`.
+3. Database: `scalpyn`.
+4. User: `grafana_ro` · Password: the one you set in the `CREATE ROLE` above.
+5. **TLS/SSL Mode:** `require` (or `verify-ca` if you mounted the Cloud SQL CA).
+6. **Connection limits:** Max open `4` · Max idle `1` · Max lifetime `1h`.
+7. **PostgreSQL version:** match the running server (15 / 16 / 17).
+8. **TimescaleDB:** enable the toggle if your prod DB has the extension —
+   the dashboard does not require it, but enabling it lets future panels
+   use `time_bucket()`.
+9. Save & test.
+
+---
+
+## 4. Importing the dashboard
+
+1. **Dashboards → Import**.
+2. Click **Upload JSON file** and choose `scalpyn-trading-engine.json`.
+3. Grafana prompts for the two datasources declared in `__inputs`:
+   * `DS_PROMETHEUS` → pick the Prometheus datasource from step 3.
+   * `DS_POSTGRES`   → pick the PostgreSQL datasource from step 3.
+4. **Import**. The dashboard opens at UID `scalpyn-trading-engine`,
+   default time range `now-1h → now`, refresh `30s`.
+5. Optional: pin it to your Trading folder and star it.
+
+The dashboard ships two embedded panel-level alerts (A1 on `Confidence
+Média`, A4 on the `Exchanges` table). On first save Grafana 10 migrates
+both legacy `panel.alert` blocks into the unified-alerting model under the
+`Scalpyn` alert group automatically.
+
+---
+
+## 5. Provisioning the four alerts repeatably
+
+Panel-level alerts are convenient for two single-query Prometheus panels
+(A1, A4) but cannot reduce a SQL `table` result without a math expression.
+Both SQL alerts (A2 NO_DATA · A3 Rejection rate) therefore live in
+`alert-rules.yaml`, which Grafana picks up via its provisioning system:
+
+```bash
+# /etc/grafana/provisioning/alerting/scalpyn.yaml
+cp docs/grafana/alert-rules.yaml /etc/grafana/provisioning/alerting/
+
+# restart Grafana — the four rules appear under the "Scalpyn" group
+sudo systemctl restart grafana-server
+```
+
+Edit the contact-point name (`scalpyn-oncall`) at the top of
+`alert-rules.yaml` to match the receiver you have configured (Slack,
+PagerDuty, Opsgenie, etc.).
+
+---
+
+## 6. Smoke test after import
+
+```bash
+# 1. Prometheus side — every metric should appear
+curl -s "https://<prom>/api/v1/label/__name__/values" \
+  | jq -r '.data[]' | grep -E '^(indicator_|score_rejection|exchange_request)'
+
+# Expected six metric families:
+#   exchange_request_errors_total
+#   exchange_request_latency_seconds
+#   indicator_computation_duration_seconds
+#   indicator_confidence
+#   indicator_staleness_seconds
+#   score_rejection_total
+
+# 2. SQL side — every query in queries.md must return rows
+psql "host=... user=grafana_ro dbname=scalpyn sslmode=require" \
+  -c "SELECT COUNT(*) FROM indicator_snapshots WHERE timestamp > NOW() - INTERVAL '1 hour';"
+psql "host=... user=grafana_ro dbname=scalpyn sslmode=require" \
+  -c "SELECT COUNT(*) FROM decisions_log WHERE created_at > NOW() - INTERVAL '1 hour';"
+
+# 3. Open the dashboard — every panel should render within 5s and the
+#    "No data" badge must not appear on Score Médio, Confidence Média, or
+#    the Exchanges table once the engine has run for a few minutes.
+```
+
+If a panel shows `No data`:
+1. Check the datasource selector at the top of the dashboard — the two
+   `${prometheus}` and `${postgres}` variables must point to the right
+   datasources.
+2. Check `queries.md` for the panel's exact query and run it directly in
+   the **Explore** tab.
+3. For the Postgres SQL stats with `score`: confirm `score IS NOT NULL`
+   rows exist in the chosen time window — the column is nullable and
+   blank during early pipeline runs.
+
+---
+
+## 7. Operational caveats
+
+* **No fictitious metrics.** Every panel is wired to a series or column
+  that exists today. The two metrics added in this task
+  (`exchange_request_latency_seconds`, `exchange_request_errors_total`) are
+  emitted from `backend/app/exchange_adapters/{binance_adapter.py,gate_adapter.py}`
+  via the `_request` and `_public_get` chokepoints.
+* **Dark theme** is enforced via `style: dark` in the dashboard model.
+* **Time range** defaults to `now-1h`. The `Confidence ao longo do tempo`,
+  `Score por símbolo`, and `Pipeline performance` panels rescale with the
+  picker; the SQL stat panels in section 1 use fixed `INTERVAL '1 hour'`
+  on purpose so they always reflect the same operator-meaningful window.
+* **No frontend / mobile telemetry, log aggregation, or backfilled
+  history** — those are explicitly out of scope (see `task-166.md`).

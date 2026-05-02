@@ -1,0 +1,200 @@
+# Grafana 10 unified-alerting provisioning file for the Scalpyn dashboard.
+#
+# Drop this into /etc/grafana/provisioning/alerting/ (or whatever path
+# `[paths] provisioning` points to in grafana.ini), then restart Grafana.
+# The four rules below are also referenced from
+# scalpyn-trading-engine.json (A1 + A4 are embedded as panel-level legacy
+# alerts; A2 + A3 require SQL reduction and live only here).
+
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: Scalpyn
+    folder: Scalpyn
+    interval: 1m
+    rules:
+      # ── A1 — Confidence baixo ─────────────────────────────────────────
+      - uid: scalpyn-confidence-low
+        title: "[Scalpyn] Confidence baixo (<0.6)"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: ${DS_PROMETHEUS}
+            relativeTimeRange: { from: 300, to: 0 }
+            model:
+              expr: avg(indicator_confidence)
+              instant: true
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [0.6] }
+              refId: C
+        for: 5m
+        noDataState: NoData
+        execErrState: Alerting
+        labels:
+          severity: critical
+          service: trading-engine
+        annotations:
+          summary: "Confidence média < 0.6 por 5m"
+          description: |
+            Average indicator_confidence has been below 0.6 for 5 minutes.
+            Check backend/app/services/robust_indicators/compute.py and the
+            structural / microstructure schedulers for staleness.
+          runbook_url: "https://github.com/<org>/scalpyn/runbooks/grafana#confidence-baixo"
+
+      # ── A2 — NO_DATA alto ─────────────────────────────────────────────
+      - uid: scalpyn-no-data-high
+        title: "[Scalpyn] NO_DATA alto (>25%)"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: ${DS_POSTGRES}
+            relativeTimeRange: { from: 900, to: 0 }
+            model:
+              format: table
+              rawQuery: true
+              rawSql: |
+                SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'NO_DATA')
+                     / NULLIF(COUNT(*),0) AS pct
+                FROM indicator_snapshots, LATERAL jsonb_each(indicators_json)
+                WHERE timestamp > NOW() - INTERVAL '15 minutes';
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [25] }
+              refId: C
+        for: 5m
+        noDataState: NoData
+        execErrState: Alerting
+        labels:
+          severity: critical
+          service: trading-engine
+        annotations:
+          summary: "Mais de 25% dos indicadores em NO_DATA"
+          description: |
+            Indicator pipeline reports >25% NO_DATA over the last 15 minutes.
+            Check Gate.io connectivity, the structural scheduler logs, and
+            recent failures in backend/app/services/scheduler_service.py.
+          runbook_url: "https://github.com/<org>/scalpyn/runbooks/grafana#no-data-alto"
+
+      # ── A3 — Rejection rate alto ──────────────────────────────────────
+      - uid: scalpyn-rejection-rate-high
+        title: "[Scalpyn] Rejection rate alto (>50%)"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: ${DS_POSTGRES}
+            relativeTimeRange: { from: 3600, to: 0 }
+            model:
+              format: table
+              rawQuery: true
+              rawSql: |
+                SELECT 100.0 * COUNT(*) FILTER (WHERE decision = 'REJECT')
+                     / NULLIF(COUNT(*),0) AS pct
+                FROM decisions_log
+                WHERE created_at > NOW() - INTERVAL '1 hour';
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+              refId: B
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: { type: gt, params: [50] }
+              refId: C
+        for: 5m
+        noDataState: NoData
+        execErrState: Alerting
+        labels:
+          severity: warning
+          service: trading-engine
+        annotations:
+          summary: "Mais de 50% das decisões viraram REJECT na última hora"
+          description: |
+            decisions_log shows >50% REJECT over the last hour. Inspect the
+            score-engine rejection donut (panel 7) and recent changes to
+            backend/app/tasks/pipeline_scan.py.
+          runbook_url: "https://github.com/<org>/scalpyn/runbooks/grafana#rejection-rate-alto"
+
+      # ── A4 — Exchange error rate alto ─────────────────────────────────
+      - uid: scalpyn-exchange-error-rate-high
+        title: "[Scalpyn] Exchange error rate alto (>10%)"
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: ${DS_PROMETHEUS}
+            relativeTimeRange: { from: 300, to: 0 }
+            model:
+              expr: |
+                100 * sum(rate(exchange_request_errors_total[5m]))
+                    / sum(rate(exchange_request_latency_seconds_count[5m]))
+              instant: true
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [10] }
+              refId: C
+        for: 5m
+        noDataState: NoData
+        execErrState: Alerting
+        labels:
+          severity: critical
+          service: trading-engine
+        annotations:
+          summary: "Erro de exchange (Gate / Binance) > 10% por 5m"
+          description: |
+            More than 10% of REST requests to Gate.io / Binance failed over
+            the last 5 minutes. Check the public status pages, gate_adapter._request
+            transport errors in Cloud Logging, and Cloud Run egress.
+          runbook_url: "https://github.com/<org>/scalpyn/runbooks/grafana#exchange-error-rate"
+
+# ── Contact point — replace with your real receiver ─────────────────────
+# Once the rules above land, route them to a notification channel by
+# adding a notification policy that matches `service=trading-engine`.
+# Example skeleton (uncomment and adjust):
+#
+# policies:
+#   - orgId: 1
+#     receiver: scalpyn-oncall
+#     group_by: [alertname, service]
+#     matchers:
+#       - service = trading-engine
+#     repeat_interval: 4h
+#
+# contactPoints:
+#   - orgId: 1
+#     name: scalpyn-oncall
+#     receivers:
+#       - uid: scalpyn-slack
+#         type: slack
+#         settings:
+#           url: ${SLACK_WEBHOOK_URL}
+#           title: "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}"
