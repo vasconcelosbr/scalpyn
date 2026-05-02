@@ -62,6 +62,7 @@ Every `down_revision` value (or each element of a tuple) must appear as a `revis
 - [ ] I ran `alembic history | head` locally and it printed no warnings or tracebacks.
 - [ ] If I introduced a parallel branch, the merge migration's `down_revision` is a tuple containing both branch heads.
 - [ ] If this PR adds a new entry to `backend/app/_critical_schema.py::CRITICAL_COLUMNS`, **the migration that creates that column was already merged AND deployed AND verified live** in Cloud SQL — see invariant #7 (rollout order). If not, split into two PRs.
+- [ ] If this migration touches a **hot hypertable** (`ohlcv`, `indicators`, `decisions_log`, `trades`, `pipeline_watchlist_assets`), I applied the idempotent DDL manually in prod Cloud SQL **before** pushing — see invariant #8. Without this, Cloud Run cold start contests locks with the previous revision's Celery / collector and the deploy times out.
 
 ## Known failure modes (from past production incidents)
 
@@ -91,6 +92,26 @@ Every `down_revision` value (or each element of a tuple) must appear as a `revis
    2. **Deploy N+1** adds the `(table, column)` entry to `_critical_schema.py`. Now the boot probe gates against a column that already exists, so it always passes.
 
    The same invariant applies in reverse for column drops: **first** remove the entry from `_critical_schema.py` and deploy, **then** ship the migration that drops the column. Otherwise the post-upgrade probe will flag a column it's still asking for.
+
+## Eighth invariant (DDL on hot hypertables)
+
+8. **Any `ALTER TABLE` / `CREATE INDEX` against a hypertable with continuous writes from the previous-revision Celery (`ohlcv`, `indicators`, `decisions_log`, `trades`) is a deploy-time lock-contention risk and MUST be applied to prod manually before the migration ships.** With `cloudbuild.yaml`'s `--min-instances=1`, the old revision keeps Celery beat (and the OHLCV collector — see `backend/app/tasks/collect_market_data.py`) writing to these tables for the entire duration of the new revision's `start.sh`. The new revision's `alembic upgrade head` will contest the lock, hit `lock_timeout=10s` (`alembic/env.py`), retry 3× per `start.sh`, then fall through to `stamp head`. Even if everything succeeds, total wall-clock is up to ~185 s of alembic alone, which often pushes the cold-start past the 240 s startup probe — the same generic "container failed to start and listen on PORT=8080" symptom from invariant #7, but with a different root cause.
+
+   The hot-table list is small. As of revision 034, treat these tables as hot:
+
+   - `ohlcv` (collector writes every 1m / 5m / 15m / 1h)
+   - `indicators` (structural + microstructure schedulers write every 5m / 15m)
+   - `decisions_log` (every pipeline scan)
+   - `trades` (live trade ingestion)
+   - `pipeline_watchlist_assets` (every pipeline scan)
+
+   For any DDL on these tables, the safe rollout is **always**:
+
+   1. Apply the DDL manually in Cloud SQL **before** the merge / push. Use the idempotent form your migration uses (`ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`). For `CREATE INDEX` on `ohlcv` specifically, prefer `CREATE INDEX CONCURRENTLY` from `psql` (it cannot run inside a Cloud SQL Studio transaction) so live writes are not blocked.
+   2. Push / merge — the Cloud Run cold start hits `IF NOT EXISTS` no-ops and finishes in seconds.
+   3. Alembic still records the revision in `alembic_version` because the migration ran successfully (every statement was a no-op, but `op.execute(...)` returned 0 rows with no error).
+
+   **Cold tables** (`pools`, `pipeline_watchlists`, `watchlist_profiles`, `users`, config / lookup tables) are safe to migrate via the normal Cloud Run path — there is no concurrent writer to contest the lock.
 
 ## Cold-start budget on Cloud Run
 
