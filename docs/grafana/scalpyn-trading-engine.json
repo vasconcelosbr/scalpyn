@@ -75,7 +75,7 @@
       "id": 1,
       "type": "stat",
       "title": "System Status",
-      "description": "3-input composite per spec. A = avg(indicator_confidence) (Prometheus), B = % NO_DATA (Postgres), C = exchange error rate (Prometheus). OK (2) iff A>=0.6 AND B<=25 AND C<=0.05. WARN (1) if any threshold is breached by <=25% (A in [0.45, 0.6), B in (25, 31.25], C in (0.05, 0.0625]). CRIT (0) otherwise.",
+      "description": "3-input composite per spec verbatim. A = avg(indicator_confidence) (Prometheus), B = % NO_DATA (Postgres), C = exchange error rate (Prometheus). OK (2) iff A>0.6 AND B<20 AND C<0.05. WARN (1) if any threshold is breached by <=25% (A in [0.45, 0.6), B in [20, 25], C in [0.05, 0.0625]). CRIT (0) if any threshold breached by >25% (A<0.45 OR B>25 OR C>0.0625).",
       "datasource": { "type": "datasource", "uid": "-- Mixed --" },
       "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
       "targets": [
@@ -96,7 +96,7 @@
         {
           "refId": "C",
           "datasource": { "type": "prometheus", "uid": "${prometheus}" },
-          "expr": "(sum(rate(exchange_request_errors_total[5m])) / sum(rate(exchange_request_latency_seconds_count[5m]))) or on() vector(0)",
+          "expr": "sum(rate(exchange_request_errors_total[5m])) / sum(rate(exchange_request_latency_seconds_count[5m]))",
           "instant": true,
           "legendFormat": "err_rate"
         },
@@ -125,7 +125,7 @@
           "refId": "G",
           "datasource": { "type": "__expr__", "uid": "__expr__" },
           "type": "math",
-          "expression": "2 - min((($D < 0.6) + ($E > 25) + ($F > 0.05)), 1) - min((($D < 0.45) + ($E > 31.25) + ($F > 0.0625)), 1)"
+          "expression": "2 - min((($D < 0.6) + ($E >= 20) + ($F >= 0.05)), 1) - min((($D < 0.45) + ($E > 25) + ($F > 0.0625)), 1)"
         }
       ],
       "options": {

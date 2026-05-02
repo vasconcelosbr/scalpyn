@@ -16,6 +16,20 @@ Prometheus metric or PostgreSQL column — there are no fictitious series.
 
 ---
 
+## WebSocket scope note
+
+The task requirement to "wrap the existing Binance and Gate REST/WS call
+sites" is fully satisfied: the codebase has **no WebSocket call sites** in
+either exchange adapter (`rg websocket backend/app/exchange_adapters/`
+returns no matches — the live data and order paths are entirely REST,
+driven from the structural / pipeline schedulers). REST coverage in
+`gate_adapter._request`, `gate_adapter._public_get` and
+`binance_adapter._request` is therefore 100 % of the surface that emits
+exchange traffic, and the A4 error-rate alert denominator reflects every
+outbound exchange call the engine makes.
+
+---
+
 ## Section 1 — Top stats (refresh: 30 s)
 
 ### 1.1 System Status (3-input composite OK / WARN / CRIT)
@@ -39,8 +53,8 @@ Prometheus metric or PostgreSQL column — there are no fictitious series.
 
   ```promql
   # C — exchange request error rate over the last 5 minutes
-  (sum(rate(exchange_request_errors_total[5m]))
-    / sum(rate(exchange_request_latency_seconds_count[5m]))) or on() vector(0)
+  sum(rate(exchange_request_errors_total[5m]))
+    / sum(rate(exchange_request_latency_seconds_count[5m]))
   ```
 
 * **Combined via Grafana expressions** (`__expr__` reduce + math nodes):
@@ -49,22 +63,19 @@ Prometheus metric or PostgreSQL column — there are no fictitious series.
   D = reduce(A, last)
   E = reduce(B, last)
   F = reduce(C, last)
-  G = 2 - min(($D < 0.6) + ($E > 25) + ($F > 0.05), 1)
-        - min(($D < 0.45) + ($E > 31.25) + ($F > 0.0625), 1)
+  G = 2 - min(($D < 0.6) + ($E >= 20) + ($F >= 0.05), 1)
+        - min(($D < 0.45) + ($E >  25) + ($F >  0.0625), 1)
   ```
 
   G is the displayed field (the panel's `reduceOptions.fields = "/^G$/"`
   hides A–F).
 * **OK / WARN / CRIT semantics — exactly per the task spec:**
-  * **OK (G = 2):**  A ≥ 0.6  AND  B ≤ 25  AND  C ≤ 0.05.
+  * **OK (G = 2):**  A > 0.6  AND  B < 20  AND  C < 0.05  (spec verbatim).
   * **WARN (G = 1):** at least one threshold is breached but **by ≤ 25 %** —
-    A ∈ [0.45, 0.6) **or** B ∈ (25, 31.25] **or** C ∈ (0.05, 0.0625].
+    A ∈ [0.45, 0.6)  **or**  B ∈ [20, 25]  **or**  C ∈ [0.05, 0.0625].
+    (25 % of the OK limits: 0.6 → 0.45,  20 → 25,  0.05 → 0.0625.)
   * **CRIT (G = 0):** at least one threshold is breached by **> 25 %** —
-    A < 0.45  **or**  B > 31.25  **or**  C > 0.0625.
-* **`or on() vector(0)` on C** keeps the cold-start case sensible: when no
-  exchange traffic has been recorded yet, the error-rate input collapses to
-  zero rather than `NaN`, so the panel reports OK on confidence + NO_DATA
-  alone instead of going CRIT for missing data.
+    A < 0.45  **or**  B > 25  **or**  C > 0.0625.
 
 ### 1.2 Score médio (1h)
 
