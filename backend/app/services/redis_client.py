@@ -36,27 +36,39 @@ Usage::
 from __future__ import annotations
 
 import logging
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
 _async_client = None  # type: ignore[var-annotated]
-_init_failed = False
+# Cooldown timestamp (monotonic seconds) — until this point in time we
+# do *not* retry init.  Avoids a hot-loop hammering ``from_url`` while a
+# transient outage is in progress, but unlike a permanent flag it lets
+# the next call after ``INIT_RETRY_COOLDOWN_SECONDS`` self-recover.
+_init_retry_after: float = 0.0
+
+# Time to wait between init attempts after a failure.
+INIT_RETRY_COOLDOWN_SECONDS: float = 30.0
 
 
 async def get_async_redis():
     """Return the shared async Redis client, or ``None`` if it cannot be created.
 
-    The first failure is cached so callers in hot loops do not retry on
-    every message; call :func:`reset_async_redis` to clear the failure
-    and force a reconnect attempt.
+    On init failure the next ``INIT_RETRY_COOLDOWN_SECONDS`` worth of
+    calls return ``None`` immediately, then the next call retries.  This
+    lets a transient Redis startup race resolve itself without forcing a
+    process restart, while still protecting hot loops from retry storms.
+    Call :func:`reset_async_redis` to clear the cooldown and the cached
+    client (used by tests and by the lifespan shutdown).
     """
-    global _async_client, _init_failed
+    global _async_client, _init_retry_after
 
     if _async_client is not None:
         return _async_client
-    if _init_failed:
+    now = time.monotonic()
+    if now < _init_retry_after:
         return None
 
     try:
@@ -72,11 +84,15 @@ async def get_async_redis():
             health_check_interval=30,
         )
         _async_client = client
+        _init_retry_after = 0.0
         logger.info("[redis] async client initialised (url=%s)", _redacted_url(settings.REDIS_URL))
         return _async_client
     except Exception as exc:
-        _init_failed = True
-        logger.warning("[redis] async client init failed: %s — feature degraded", exc)
+        _init_retry_after = now + INIT_RETRY_COOLDOWN_SECONDS
+        logger.warning(
+            "[redis] async client init failed: %s — feature degraded, retrying in %.0fs",
+            exc, INIT_RETRY_COOLDOWN_SECONDS,
+        )
         return None
 
 
@@ -86,10 +102,10 @@ async def reset_async_redis() -> None:
     Used by tests and by the lifespan shutdown so the next process boot
     or test case starts from a clean slate.
     """
-    global _async_client, _init_failed
+    global _async_client, _init_retry_after
     client = _async_client
     _async_client = None
-    _init_failed = False
+    _init_retry_after = 0.0
     if client is not None:
         try:
             # ``aclose`` is the new name in redis-py ≥5.0.1; ``close``
@@ -102,9 +118,9 @@ async def reset_async_redis() -> None:
 
 def set_async_redis(client) -> None:
     """Inject a client (used by tests with ``fakeredis.aioredis``)."""
-    global _async_client, _init_failed
+    global _async_client, _init_retry_after
     _async_client = client
-    _init_failed = False
+    _init_retry_after = 0.0
 
 
 def _redacted_url(url: str) -> str:
