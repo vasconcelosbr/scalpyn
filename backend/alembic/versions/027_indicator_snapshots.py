@@ -1,7 +1,7 @@
 """Add indicator_snapshots table for robust-indicator shadow mode.
 
 Revision ID: 027_indicator_snapshots
-Revises: 026_decisions_log_direction_event_type
+Revises: 026_dl_direction_event_type
 Create Date: 2026-05-01
 """
 
