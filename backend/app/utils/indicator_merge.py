@@ -59,6 +59,11 @@ def _ensure_utc(ts: Optional[datetime]) -> Optional[datetime]:
 # ── Source/confidence tags for known indicator families ───────────────────────
 # Used by write paths (schedulers, Celery tasks) to stamp provenance and by
 # callers that want to build a key_source_map for `envelop_results()`.
+#
+# Confidence defaults are aligned with CONFIDENCE_MAP in
+# ``app/services/robust_indicators/envelope.py``:
+#   GATE_TRADES = 1.00, GATE_ORDERBOOK = 0.90, GATE_CANDLES = 0.85
+# Keep these in sync with any changes to that mapping.
 _ORDER_FLOW_KEYS: frozenset = frozenset({
     "taker_ratio", "buy_pressure", "volume_delta",
     "taker_buy_volume", "taker_sell_volume",
@@ -309,8 +314,18 @@ def merge_indicator_rows(
                 # This entry is newer — use it
                 should_overwrite = True
             elif ts_utc == existing_ts:
-                # Equal timestamps — microstructure is the tiebreak
-                should_overwrite = grp == "microstructure"
+                # Equal timestamps — prefer higher confidence (envelope rows only);
+                # fall back to microstructure tiebreak for legacy flat rows or ties.
+                existing_confidence = existing_meta.get("confidence")
+                if env_confidence is not None and existing_confidence is not None:
+                    if env_confidence > existing_confidence:
+                        should_overwrite = True
+                    elif env_confidence < existing_confidence:
+                        should_overwrite = False
+                    else:
+                        should_overwrite = grp == "microstructure"
+                else:
+                    should_overwrite = grp == "microstructure"
             # else: existing is newer — keep existing (should_overwrite stays False)
 
             if should_overwrite:
