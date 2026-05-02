@@ -16,6 +16,64 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/system", tags=["System"])
 
 
+@router.get("/celery-status")
+async def get_celery_status():
+    """
+    Probe Celery worker and beat health without authentication.
+
+    Pings all active workers via Celery inspect and reports:
+    - Whether any workers responded (worker_alive)
+    - Active task count
+    - Registered task count
+    - Queue depth in Redis (tasks waiting to be consumed)
+
+    Returns HTTP 200 always; check ``worker_alive`` to determine health.
+    This endpoint is intentionally unauthenticated so it can be hit from
+    Cloud Run health checks, Uptime Kuma, or a plain curl without a JWT.
+    """
+    from ..tasks.celery_app import celery_app
+
+    result: Dict[str, Any] = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "worker_alive": False,
+        "worker_count": 0,
+        "active_tasks": 0,
+        "registered_task_count": 0,
+        "queue_depth": None,
+        "error": None,
+    }
+
+    try:
+        inspect = celery_app.control.inspect(timeout=3)
+        ping = inspect.ping()
+        if ping:
+            result["worker_alive"] = True
+            result["worker_count"] = len(ping)
+
+        active = inspect.active()
+        if active:
+            result["active_tasks"] = sum(len(v) for v in active.values())
+
+        registered = inspect.registered()
+        if registered:
+            result["registered_task_count"] = sum(len(v) for v in registered.values())
+
+    except Exception as exc:
+        result["error"] = str(exc)
+        logger.warning("[celery-status] inspect failed: %s", exc)
+
+    # Queue depth: count messages in the default 'celery' queue via Redis
+    try:
+        import redis as _redis
+        from ..config import settings
+        r = _redis.from_url(settings.REDIS_URL, socket_connect_timeout=3)
+        result["queue_depth"] = r.llen("celery")
+    except Exception as exc:
+        logger.warning("[celery-status] redis queue depth check failed: %s", exc)
+
+    return result
+
+
 @router.get("/pipeline-status")
 async def get_pipeline_status(
     db: AsyncSession = Depends(get_db),

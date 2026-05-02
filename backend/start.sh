@@ -135,6 +135,35 @@ celery -A app.tasks.celery_app beat \
 CELERY_BEAT_PID=$!
 echo " Celery beat PID: $CELERY_BEAT_PID"
 
+# Early-exit probe: give Celery 10 s to attempt the broker connection.
+# If either process has already exited (or become a zombie) before uvicorn
+# starts, log a structured alert and abort immediately rather than letting
+# the zombie watchdog fail silently after the full grace period.
+#
+# 10 s is sufficient: Celery's first broker retry fires at ~2 s with
+# exponential back-off.  With broker_connection_max_retries=10 and the
+# default backoff cap, all retries exhaust well within 10 s when Redis is
+# unreachable (typicaly < 5 s total).  A healthy Celery process will still
+# be alive and connecting at the 10 s mark, so false positives are
+# effectively zero.
+sleep 10
+EARLY_EXIT=false
+for label in "worker:$CELERY_WORKER_PID" "beat:$CELERY_BEAT_PID"; do
+    name="${label%%:*}"
+    pid="${label##*:}"
+    stat=$(ps -o stat= -p "$pid" 2>/dev/null)
+    if [ -z "$stat" ] || case "$stat" in Z*) true ;; *) false ;; esac; then
+        echo "==> [startup] ALERT: celery $name (PID $pid) exited or is zombie within 10s -- broker connection likely failed" >&2
+        EARLY_EXIT=true
+    else
+        echo " [startup] celery $name (PID $pid) alive (stat=$stat)"
+    fi
+done
+if [ "$EARLY_EXIT" = true ]; then
+    echo "==> [startup] FATAL: Celery failed to start -- aborting to force container restart" >&2
+    exit 1
+fi
+
 # Capture the PID that exec uvicorn will inherit (shell PID becomes uvicorn PID)
 MAIN_PID=$$
 
@@ -142,6 +171,25 @@ MAIN_PID=$$
 # This allows Celery to retry its Redis connection on startup without
 # triggering an immediate container shutdown.
 WATCHDOG_GRACE=${WATCHDOG_GRACE:-120}
+
+# is_process_alive PID
+# Returns true (0) only when the process EXISTS and is NOT a zombie.
+#
+# Why not just `kill -0 $PID`?
+# When a background process exits while its parent (uvicorn, after `exec`) is
+# alive but never calls waitpid(), the child becomes a zombie — it retains its
+# PID entry in the process table but performs no work.  `kill -0` returns 0
+# (success) for zombie processes because the PID entry still exists, so the
+# watchdog would incorrectly conclude that Celery is healthy.  Checking the
+# `stat` column from `ps` and rejecting entries that start with Z (zombie)
+# prevents this false-positive.
+is_process_alive() {
+    local pid=$1
+    local stat
+    stat=$(ps -o stat= -p "$pid" 2>/dev/null)
+    # Non-empty AND does NOT start with Z (zombie)
+    [ -n "$stat" ] && case "$stat" in Z*) return 1 ;; esac
+}
 
 # Watchdog: wait for grace period, then monitor Celery health.
 # Only kill uvicorn if Celery is STILL dead after retries.
@@ -154,15 +202,15 @@ WATCHDOG_GRACE=${WATCHDOG_GRACE:-120}
         WORKER_OK=true
         BEAT_OK=true
 
-        if ! kill -0 "$CELERY_WORKER_PID" 2>/dev/null; then
+        if ! is_process_alive "$CELERY_WORKER_PID"; then
             WORKER_OK=false
         fi
-        if ! kill -0 "$CELERY_BEAT_PID" 2>/dev/null; then
+        if ! is_process_alive "$CELERY_BEAT_PID"; then
             BEAT_OK=false
         fi
 
         if [ "$WORKER_OK" = false ] || [ "$BEAT_OK" = false ]; then
-            echo "WARNING: Celery process down (worker=$WORKER_OK beat=$BEAT_OK) -- shutting down container"
+            echo "WARNING: Celery process down or zombie (worker=$WORKER_OK beat=$BEAT_OK) -- shutting down container"
             kill -TERM "$MAIN_PID" 2>/dev/null
             break
         fi
