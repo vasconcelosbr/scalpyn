@@ -1922,10 +1922,18 @@ async def _run_pipeline_scan():
                             wl.name, effective_level, source_watchlist_id, len(symbols),
                         )
                     elif source_pool_id:
+                        wl_market_mode = wl.market_mode or "spot"
+                        if not wl.market_mode:
+                            logger.warning(
+                                "[PipelineScan] %s: market_mode is unset — defaulting to 'spot'. "
+                                "Set market_mode explicitly on the watchlist to avoid this fallback.",
+                                wl.name,
+                            )
                         coin_rows = (await db.execute(
                             select(PoolCoin).where(
                                 PoolCoin.pool_id == source_pool_id,
                                 PoolCoin.is_active == True,
+                                PoolCoin.market_type == wl_market_mode,
                             )
                         )).scalars().all()
                         symbols = filter_real_assets([_normalize_sym(c.symbol) for c in coin_rows])

@@ -20,29 +20,29 @@ def _run_async(coro):
 
 async def _collect_all_async():
     from ..services.market_data_service import market_data_service
+    from ..services.pool_service import get_pool_symbols
     from ..database import run_db_task
-    from ..services.config_service import config_service
     from sqlalchemy import text
 
-    logger.info("Starting market data collection...")
+    logger.info("Starting market data collection (spot pool)...")
 
-    # Get universe config (use system default — no user_id for centralized collection)
-    # For centralized collection, we use a broad universe
-    symbols = await market_data_service.get_universe_symbols({
-        "min_volume_24h": 5_000_000,
-        "max_assets": 100,
-    })
+    # pool_coins is the exclusive source of truth for the symbol universe.
+    # Gate.io is a data source only — it never defines which symbols to process.
+    async def _load_spot_syms(db):
+        return await get_pool_symbols(db, "spot")
+
+    symbols = await run_db_task(_load_spot_syms, celery=True)
 
     if not symbols:
-        logger.warning("No symbols to collect data for")
+        logger.warning("No spot pool symbols to collect data for")
         return 0
 
-    logger.info(f"Collecting data for {len(symbols)} symbols")
+    logger.info(f"Collecting spot data for {len(symbols)} pool symbols")
 
     async def _inner(db) -> int:
         collected = 0
 
-        for symbol in symbols[:50]:  # Limit to avoid rate limits
+        for symbol in symbols:  # process all pool symbols — pool size is the cap
             try:
                 df = await market_data_service.fetch_ohlcv(symbol, "1h", limit=100)
                 if df is None or df.empty:
@@ -54,14 +54,15 @@ async def _collect_all_async():
                 async with db.begin_nested():
                     for _, row in df.iterrows():
                         await db.execute(text("""
-                            INSERT INTO ohlcv (time, symbol, exchange, timeframe, open, high, low, close, volume, quote_volume)
-                            VALUES (:time, :symbol, :exchange, :timeframe, :open, :high, :low, :close, :volume, :quote_volume)
+                            INSERT INTO ohlcv (time, symbol, exchange, timeframe, market_type, open, high, low, close, volume, quote_volume)
+                            VALUES (:time, :symbol, :exchange, :timeframe, :market_type, :open, :high, :low, :close, :volume, :quote_volume)
                             ON CONFLICT DO NOTHING
                         """), {
                             "time": row["time"],
                             "symbol": symbol,
                             "exchange": ohlcv_exchange,
                             "timeframe": "1h",
+                            "market_type": "spot",
                             "open": float(row["open"]),
                             "high": float(row["high"]),
                             "low": float(row["low"]),
@@ -169,51 +170,38 @@ def collect_all():
 async def _collect_5m_async():
     """Collect 5-minute OHLCV candles for pipeline scan freshness.
 
-    Universe = top-100 high-volume symbols  UNION  all active pool coin symbols.
-    This ensures every asset in a user's pipeline pool gets indicator data even
-    if its 24h volume is below the universe threshold.
+    Universe = all active pool_coin symbols (spot + futures).
+    pool_coins is the exclusive source of truth — the Gate.io top-volume
+    universe is not used here.
     """
-    from ..services.market_data_service import market_data_service
+    from ..services.pool_service import get_pool_symbols_with_market_type
     from ..utils.symbol_filters import filter_real_assets
     from ..database import run_db_task
     from sqlalchemy import text
 
-    logger.info("Starting 5m market data collection...")
+    logger.info("Starting 5m market data collection (pool-gated)...")
 
-    universe = await market_data_service.get_universe_symbols({
-        "min_volume_24h": 5_000_000,
-        "max_assets": 100,
-    })
+    # Load all active pool symbols with their market_type in a single DB round-trip.
+    async def _load_pool(db):
+        return await get_pool_symbols_with_market_type(db)
 
-    # Also include all active pool coin symbols so lower-volume assets get data
-    async def _load_pool_syms(db):
-        return (await db.execute(text(
-            "SELECT DISTINCT symbol FROM pool_coins WHERE is_active = true"
-        ))).fetchall()
+    symbol_market_type: dict[str, str] = await run_db_task(_load_pool, celery=True)
 
-    pool_rows = await run_db_task(_load_pool_syms, celery=True)
-
-    # Normalize pool symbols to BTC_USDT format (market_metadata uses underscores)
-    def _norm_sym(s: str) -> str:
-        s = s.upper().strip()
-        if "_" not in s and s.endswith("USDT"):
-            return s[:-4] + "_USDT"
-        return s
-    pool_syms = filter_real_assets([_norm_sym(r.symbol) for r in pool_rows])
-
-    symbols = list(dict.fromkeys(universe + pool_syms))  # deduplicate, preserve order
+    pool_syms = filter_real_assets(list(symbol_market_type.keys()))
+    symbols = list(dict.fromkeys(pool_syms))  # deduplicate, preserve order
 
     if not symbols:
         logger.warning("No symbols for 5m collection")
         return 0
 
-    logger.info("5m collection universe: %d symbols (%d from universe, %d from pools)",
-                len(symbols), len(universe), len(pool_syms))
+    logger.info("5m collection universe: %d pool symbols", len(symbols))
 
     async def _inner(db) -> int:
+        from ..services.market_data_service import market_data_service
         collected = 0
 
         for symbol in symbols:  # no cap — process all pool symbols
+            sym_market_type = symbol_market_type.get(symbol, "spot")
             try:
                 df = await market_data_service.fetch_ohlcv(symbol, "5m", limit=288)
                 if df is None or df.empty:
@@ -228,19 +216,20 @@ async def _collect_5m_async():
                     # Bulk-insert all returned candles (ON CONFLICT DO NOTHING is idempotent)
                     for _, row in df.iterrows():
                         await db.execute(text("""
-                            INSERT INTO ohlcv (time, symbol, exchange, timeframe, open, high, low, close, volume, quote_volume)
-                            VALUES (:time, :symbol, :exchange, :timeframe, :open, :high, :low, :close, :volume, :quote_volume)
+                            INSERT INTO ohlcv (time, symbol, exchange, timeframe, market_type, open, high, low, close, volume, quote_volume)
+                            VALUES (:time, :symbol, :exchange, :timeframe, :market_type, :open, :high, :low, :close, :volume, :quote_volume)
                             ON CONFLICT DO NOTHING
                         """), {
-                            "time":      row["time"],
-                            "symbol":    symbol,
-                            "exchange":  ohlcv_exchange,
-                            "timeframe": "5m",
-                            "open":      float(row["open"]),
-                            "high":      float(row["high"]),
-                            "low":       float(row["low"]),
-                            "close":     float(row["close"]),
-                            "volume":    float(row["volume"]),
+                            "time":        row["time"],
+                            "symbol":      symbol,
+                            "exchange":    ohlcv_exchange,
+                            "timeframe":   "5m",
+                            "market_type": sym_market_type,
+                            "open":        float(row["open"]),
+                            "high":        float(row["high"]),
+                            "low":         float(row["low"]),
+                            "close":       float(row["close"]),
+                            "volume":      float(row["volume"]),
                             "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
                         })
 

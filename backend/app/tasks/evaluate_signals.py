@@ -53,7 +53,8 @@ async def _evaluate_async():
                 daily = await analytics_service.get_daily_summary(db, user.id)
 
                 # Robust authoritative scoring: candidates are pulled from the
-                # ``indicators`` table directly. The legacy ``alpha_scores.score``
+                # ``indicators`` table, restricted to pool_coins (pool_coins is
+                # the exclusive source of truth).  The legacy ``alpha_scores.score``
                 # column is LEFT JOINed only so the row shape stays unchanged for
                 # downstream code — it is purely informational and never gates
                 # selection.
@@ -63,10 +64,12 @@ async def _evaluate_async():
                         COALESCE(a.score, 0.0) AS score,
                         i.indicators_json
                     FROM indicators i
+                    JOIN pool_coins p ON i.symbol = p.symbol
                     LEFT JOIN alpha_scores a
                       ON a.symbol = i.symbol
                      AND a.time > now() - interval '2 hours'
-                    WHERE i.time > now() - interval '2 hours'
+                    WHERE p.is_active = true
+                      AND i.time > now() - interval '2 hours'
                     ORDER BY i.symbol, i.time DESC, a.time DESC
                 """))
                 candidates = ranked.fetchall()
