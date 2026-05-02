@@ -103,7 +103,7 @@ steps:
       # `.local/tasks/diagnose-collector-stalled-prod.md` (decisions paused
       # 2026-04-29T13:48:16Z, lag 4754 min, schema confirmed OK in prod).
       - '--update-env-vars'
-      - 'FORCE_RESTART=2026-05-02T21:40:00Z'
+      - 'FORCE_RESTART=2026-05-02T22:05:00Z'
 
 substitutions:
   _REGION: us-central1
