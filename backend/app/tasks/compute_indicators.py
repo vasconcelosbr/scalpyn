@@ -157,12 +157,20 @@ async def _compute_async():
 
     async with AsyncSessionLocal() as db:
         try:
-            # Get all symbols with recent OHLCV data
+            # Get all symbols present in both ohlcv AND pool_coins (spot).
+            # pool_coins is the exclusive source of truth — symbols outside
+            # the pool are never computed even if they have ohlcv rows.
             symbols_result = await db.execute(text("""
-                SELECT DISTINCT symbol FROM ohlcv
-                WHERE time > now() - interval '7 days'
+                SELECT DISTINCT o.symbol, p.market_type
+                FROM ohlcv o
+                JOIN pool_coins p ON o.symbol = p.symbol
+                WHERE p.is_active = true
+                  AND p.market_type = 'spot'
+                  AND o.time > now() - interval '7 days'
             """))
-            symbols = [row.symbol for row in symbols_result.fetchall()]
+            symbol_rows = symbols_result.fetchall()
+            symbols = [row.symbol for row in symbol_rows]
+            symbol_market_type = {row.symbol: row.market_type for row in symbol_rows}
             metadata_map = await _load_market_metadata_map(db)
 
             for symbol in symbols:
@@ -232,7 +240,7 @@ async def _compute_async():
                         "time": now,
                         "symbol": symbol,
                         "timeframe": "1h",
-                        "market_type": "spot",
+                        "market_type": symbol_market_type.get(symbol, "spot"),
                         "indicators": json.dumps(envelop_results(
                             results,
                             default_source="candle_computed",
@@ -283,13 +291,20 @@ async def _compute_5m_async():
 
     async with AsyncSessionLocal() as db:
         try:
-            # Only symbols that have recent 5m candles
+            # Only symbols that have recent 5m candles AND are active in pool_coins.
+            # pool_coins is the exclusive source of truth — symbols outside the
+            # pool are never computed even if they have ohlcv rows.
             symbols_result = await db.execute(text("""
-                SELECT DISTINCT symbol FROM ohlcv
-                WHERE timeframe = '5m'
-                  AND time > now() - interval '2 hours'
+                SELECT DISTINCT o.symbol, p.market_type
+                FROM ohlcv o
+                JOIN pool_coins p ON o.symbol = p.symbol
+                WHERE p.is_active = true
+                  AND o.timeframe = '5m'
+                  AND o.time > now() - interval '2 hours'
             """))
-            symbols = [row.symbol for row in symbols_result.fetchall()]
+            symbol_rows = symbols_result.fetchall()
+            symbols = [row.symbol for row in symbol_rows]
+            symbol_market_type = {row.symbol: row.market_type for row in symbol_rows}
             metadata_map = await _load_market_metadata_map(db)
 
             for symbol in symbols:
@@ -354,7 +369,7 @@ async def _compute_5m_async():
                         "time":        now,
                         "symbol":      symbol,
                         "timeframe":   "5m",
-                        "market_type": "spot",
+                        "market_type": symbol_market_type.get(symbol, "spot"),
                         "indicators":  json.dumps(envelop_results(
                             results,
                             default_source="candle_computed",

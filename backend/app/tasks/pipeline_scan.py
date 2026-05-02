@@ -1926,6 +1926,7 @@ async def _run_pipeline_scan():
                             select(PoolCoin).where(
                                 PoolCoin.pool_id == source_pool_id,
                                 PoolCoin.is_active == True,
+                                PoolCoin.market_type == (wl.market_mode or "spot"),
                             )
                         )).scalars().all()
                         symbols = filter_real_assets([_normalize_sym(c.symbol) for c in coin_rows])

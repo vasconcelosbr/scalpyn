@@ -189,6 +189,7 @@ async def init_db():
               symbol VARCHAR(20) NOT NULL,
               exchange VARCHAR(50) NOT NULL,
               timeframe VARCHAR(10) NOT NULL,
+              market_type VARCHAR(10) NOT NULL DEFAULT 'spot',
               open DECIMAL(20,8),
               high DECIMAL(20,8),
               low DECIMAL(20,8),

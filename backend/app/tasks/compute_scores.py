@@ -78,10 +78,12 @@ async def _score_async():
         )
 
         result = await db.execute(text("""
-            SELECT DISTINCT ON (symbol) symbol, indicators_json, time
-            FROM indicators
-            WHERE time > now() - interval '2 hours'
-            ORDER BY symbol, time DESC
+            SELECT DISTINCT ON (i.symbol) i.symbol, i.indicators_json, i.time
+            FROM indicators i
+            JOIN pool_coins p ON i.symbol = p.symbol
+            WHERE p.is_active = true
+              AND i.time > now() - interval '2 hours'
+            ORDER BY i.symbol, i.time DESC
         """))
         rows = result.fetchall()
 
