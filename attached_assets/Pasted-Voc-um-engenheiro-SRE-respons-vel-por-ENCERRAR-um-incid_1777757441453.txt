@@ -1,0 +1,224 @@
+Você é um engenheiro SRE responsável por ENCERRAR um incidente em produção.
+
+Sintoma confirmado:
+
+* Nenhum dado novo em ohlcv e decisions após redeploy
+* API responde normalmente
+* Banco acessível (validação externa já feita)
+
+Restrições:
+
+* ❌ NÃO executar queries SQL
+* ✔ Pode usar logs, endpoints HTTP, configuração do Cloud Run, env vars e inspeção de processos
+
+Objetivo:
+
+> Provar com evidência por que o pipeline não está executando
+
+---
+
+# 🎯 MISSÃO
+
+Executar TODAS as etapas abaixo e concluir com uma causa raiz comprovada.
+
+---
+
+# 🔍 ETAPA 1 — HEALTH CHECK
+
+```bash
+curl -s https://scalpyn-330575088921.us-central1.run.app/api/health
+```
+
+Responder:
+
+* status geral
+* tempo de resposta
+
+---
+
+# 🔍 ETAPA 2 — STATUS DO PIPELINE
+
+```bash
+curl -s https://scalpyn-330575088921.us-central1.run.app/api/system/pipeline-status
+```
+
+Extrair:
+
+* pipeline_operational
+* last_decision
+* lag_minutes
+* decisions_last_hour
+
+---
+
+# 🔍 ETAPA 3 — LOGS DE EXECUÇÃO (CRÍTICO)
+
+```bash
+gcloud logging read \
+"resource.type=cloud_run_revision
+ AND resource.labels.service_name=scalpyn
+ AND (
+   textPayload:\"Starting market data collection\" OR
+   textPayload:\"Collecting spot data\" OR
+   textPayload:\"No spot pool symbols\" OR
+   textPayload:\"Market data collection complete\" OR
+   textPayload:\"Failed to collect\"
+ )" \
+--freshness=15m --limit=100
+```
+
+Responder:
+
+* logs encontrados (SIM/NÃO)
+* listar linhas relevantes
+
+---
+
+# 🔍 ETAPA 4 — LOGS DE CELERY
+
+```bash
+gcloud logging read \
+"resource.type=cloud_run_revision
+ AND resource.labels.service_name=scalpyn
+ AND (
+   textPayload:\"celery\" OR
+   textPayload:\"worker\" OR
+   textPayload:\"beat\" OR
+   textPayload:\"scheduler\"
+ )" \
+--freshness=30m --limit=100
+```
+
+Responder:
+
+* worker iniciou? (SIM/NÃO)
+* beat iniciou? (SIM/NÃO)
+* erros?
+
+---
+
+# 🔍 ETAPA 5 — CONFIG DO CLOUD RUN
+
+```bash
+gcloud run services describe scalpyn --region us-central1
+```
+
+Extrair:
+
+* command / args do container
+* env vars (especialmente DATABASE_URL e REDIS_URL)
+* revision atual
+* número de containers / services
+
+Responder:
+
+* Celery worker está sendo iniciado? (SIM/NÃO)
+* Celery beat está sendo iniciado? (SIM/NÃO)
+
+---
+
+# 🔍 ETAPA 6 — REDIS
+
+Verificar logs:
+
+```bash
+gcloud logging read \
+"resource.type=cloud_run_revision
+ AND resource.labels.service_name=scalpyn
+ AND textPayload:\"redis\"" \
+--freshness=30m --limit=50
+```
+
+Responder:
+
+* conexão OK ou erro
+
+---
+
+# 🔍 ETAPA 7 — WATCHDOG / AUTO-RECOVERY
+
+Buscar:
+
+```bash
+gcloud logging read \
+"resource.type=cloud_run_revision
+ AND resource.labels.service_name=scalpyn
+ AND textPayload:\"Celery process down\"" \
+--freshness=1h --limit=50
+```
+
+Responder:
+
+* watchdog acionado? (SIM/NÃO)
+
+---
+
+# 🔍 ETAPA 8 — EXECUÇÃO MANUAL (SE DISPONÍVEL)
+
+Verificar se existe endpoint ou comando que dispara coleta manual:
+
+Ex:
+
+* /api/system/run-collector
+* celery call
+
+Responder:
+
+* existe trigger manual? (SIM/NÃO)
+
+---
+
+# 🎯 FORMATO FINAL
+
+Responder obrigatoriamente:
+
+1. API health (OK/FAIL)
+2. Pipeline status (operational / lag / decisões)
+3. Logs de coleta (presentes ou não)
+4. Worker ativo (SIM/NÃO)
+5. Beat ativo (SIM/NÃO)
+6. Redis OK (SIM/NÃO)
+7. Container inicia Celery? (SIM/NÃO)
+
+---
+
+# 🎯 DECISÃO FINAL (OBRIGATÓRIA)
+
+Escolher UMA:
+
+---
+
+## A) ✅ CAUSA RAIZ PROVADA
+
+Explicar com evidência (logs/config):
+
+Exemplo esperado:
+
+* “Celery beat não está rodando — não há logs de scheduler e container inicia apenas uvicorn”
+
+---
+
+## B) ❌ CAUSA RAIZ IDENTIFICADA (parcial)
+
+Explicar o que foi comprovado e o que ainda falta
+
+---
+
+## C) ⚠️ INSUFICIENTE
+
+Listar exatamente:
+
+* quais comandos adicionais executar
+* onde executar
+
+---
+
+# 🚨 PROIBIDO
+
+* usar SQL
+* responder sem logs
+* especular
+
+---
+
+Seu objetivo é fechar o incidente com evidência operacional inequívoca.
