@@ -327,6 +327,11 @@ async def health_check_schema():
         # UndefinedColumnError and poisons the session for the whole scan loop.
         ("decisions_log", "direction"),
         ("decisions_log", "event_type"),
+        # Added by migration 032; without it, both structural and microstructure
+        # schedulers fail every cycle (~30k UndefinedColumnError / day) and
+        # cascade into InFailedSQLTransactionError + QueuePool exhaustion.
+        # Detection here is what start.sh's post-stamp probe relies on as well.
+        ("indicators", "scheduler_group"),
     ]
 
     try:

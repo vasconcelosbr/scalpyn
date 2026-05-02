@@ -34,6 +34,12 @@ _scheduler_task: Optional[asyncio.Task] = None
 
 _first_cycle_done_event: Optional[asyncio.Event] = None
 
+# Boot-once flag so we log the schema-drift error a single time per process,
+# rather than emitting one error per symbol per cycle (~thousands per day).
+# Reset only by container restart — exactly the cadence we want for an
+# operator-actionable alert.  See Task #178 / migration 032.
+_scheduler_group_drift_logged: bool = False
+
 
 def _get_first_cycle_done_event() -> asyncio.Event:
     global _first_cycle_done_event
@@ -129,6 +135,31 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
                 "grp": SCHEDULER_GROUP,
             })
     except Exception as exc:
+        # Schema drift: indicators.scheduler_group column missing in the DB
+        # (migration 032 not applied yet).  Log ONCE per process, force a
+        # rollback on the OUTER session so subsequent statements in the same
+        # _persist callback (_refresh_market_metadata) don't inherit an
+        # InFailedSQLTransactionError, then return cleanly.  Without this,
+        # ~30k errors/day flooded Sentry and the failed transaction state
+        # blocked connections from being recycled to the pool.
+        if "scheduler_group" in str(exc):
+            global _scheduler_group_drift_logged
+            if not _scheduler_group_drift_logged:
+                logger.error(
+                    "[MICRO-SCHED] SCHEMA DRIFT: indicators.scheduler_group column "
+                    "missing — migration 032 has not been applied. Persisting will "
+                    "be skipped for every symbol until the column is added. "
+                    "Hit /api/health/schema for details and see "
+                    "docs/runbooks/scheduler-group-drift.md."
+                )
+                _scheduler_group_drift_logged = True
+            try:
+                await db.rollback()
+            except Exception as rb_exc:
+                logger.warning(
+                    "[MICRO-SCHED] rollback after schema drift failed: %s", rb_exc
+                )
+            return
         logger.error("[MICRO-SCHED] indicators insert failed for %s: %s", symbol, exc, exc_info=True)
 
 

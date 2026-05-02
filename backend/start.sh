@@ -91,8 +91,21 @@ if ! run_alembic_upgrade; then
     echo "==> [migrations] Attempting alembic stamp head fallback..." >&2
     echo "==> [migrations] Rationale: DDL may already exist from a previous init_db.py run." >&2
     if timeout 30s alembic stamp head 2>&1; then
-        echo "==> [migrations] Stamped at head. Proceeding with startup."
-        echo "==> [migrations] WARNING: Validate schema drift via GET /api/health/schema after boot."
+        echo "==> [migrations] Stamped at head."
+        # Stamp head only writes to alembic_version — it never runs DDL.  A
+        # successful stamp on a database that is missing critical columns
+        # produces silent schema drift and the cascade documented in Task
+        # #178 (~30k UndefinedColumnError/day, InFailedSQLTransaction +
+        # QueuePool exhaustion).  Probe information_schema directly for
+        # every column the app requires and abort the boot if any are
+        # missing — Cloud Run will roll back to the previous revision.
+        echo "==> [migrations] Validating critical schema after stamp fallback..."
+        if ! python3 -m scripts.check_critical_schema; then
+            echo "==> Aborting startup: schema drift detected after stamp head." >&2
+            echo "==> See docs/runbooks/scheduler-group-drift.md to apply DDL manually." >&2
+            exit 1
+        fi
+        echo "==> [migrations] Critical schema OK. Proceeding with startup."
     else
         echo "==> Aborting startup: cannot upgrade or stamp schema." >&2
         exit 1
