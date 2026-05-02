@@ -89,6 +89,28 @@ if _PROMETHEUS_AVAILABLE:
         labelnames=("exchange", "kind"),
         registry=REGISTRY,
     )
+    # ── Gate.io WebSocket ingestion (Task #171) ───────────────────────────
+    # ``market`` is "spot" or "futures"; ``instance`` distinguishes leader
+    # vs reader replicas in multi-instance Cloud Run deployments so we can
+    # alert on "leader is down but no reader took over".
+    GATE_WS_CONNECTED = Gauge(
+        "gate_ws_connected",
+        "Gate.io WebSocket connection status (1 = authenticated and subscribed, 0 = disconnected).",
+        labelnames=("market", "instance"),
+        registry=REGISTRY,
+    )
+    GATE_TRADES_RECEIVED_TOTAL = Counter(
+        "gate_trades_received_total",
+        "Total spot trades received via Gate.io WebSocket and persisted to the Redis buffer, by symbol.",
+        labelnames=("symbol",),
+        registry=REGISTRY,
+    )
+    GATE_LAST_TRADE_TIMESTAMP_SECONDS = Gauge(
+        "gate_last_trade_timestamp_seconds",
+        "Unix epoch seconds of the most recent spot trade processed for each symbol.",
+        labelnames=("symbol",),
+        registry=REGISTRY,
+    )
 else:  # pragma: no cover — exercised when extra is missing
     REGISTRY = None  # type: ignore[assignment]
     INDICATOR_COMPUTATION_DURATION = None
@@ -97,6 +119,9 @@ else:  # pragma: no cover — exercised when extra is missing
     SCORE_REJECTION_TOTAL = None
     EXCHANGE_REQUEST_LATENCY = None
     EXCHANGE_REQUEST_ERRORS = None
+    GATE_WS_CONNECTED = None
+    GATE_TRADES_RECEIVED_TOTAL = None
+    GATE_LAST_TRADE_TIMESTAMP_SECONDS = None
 
 
 def observe_compute_duration(
@@ -164,6 +189,42 @@ def increment_exchange_error(exchange: str, kind: str) -> None:
         logger.debug("metrics: increment_exchange_error failed: %s", exc)
 
 
+def set_ws_connected(market: str, connected: bool, instance: str = "default") -> None:
+    """Record the Gate WebSocket connection state for ``market`` (spot/futures).
+
+    Called from ``gate_ws_client`` immediately after a successful auth
+    (connected=True) and from the connection-loop ``finally`` block
+    (connected=False).  The ``instance`` label distinguishes the leader
+    replica from any future reader replicas in multi-instance deployments.
+    """
+    if GATE_WS_CONNECTED is None:
+        return
+    try:
+        GATE_WS_CONNECTED.labels(market=market, instance=instance).set(1.0 if connected else 0.0)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.debug("metrics: set_ws_connected failed: %s", exc)
+
+
+def incr_trades_received(symbol: str, n: int = 1) -> None:
+    """Increment the per-symbol counter of trades persisted to the Redis buffer."""
+    if GATE_TRADES_RECEIVED_TOTAL is None:
+        return
+    try:
+        GATE_TRADES_RECEIVED_TOTAL.labels(symbol=symbol).inc(n)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.debug("metrics: incr_trades_received failed: %s", exc)
+
+
+def set_last_trade_timestamp(symbol: str, ts_seconds: float) -> None:
+    """Update the gauge tracking the epoch-seconds timestamp of the latest trade."""
+    if GATE_LAST_TRADE_TIMESTAMP_SECONDS is None:
+        return
+    try:
+        GATE_LAST_TRADE_TIMESTAMP_SECONDS.labels(symbol=symbol).set(float(ts_seconds))
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.debug("metrics: set_last_trade_timestamp failed: %s", exc)
+
+
 def render_metrics() -> tuple[bytes, str]:
     """Return ``(body, content_type)`` for the FastAPI handler."""
     if not _PROMETHEUS_AVAILABLE or REGISTRY is None:
@@ -177,6 +238,7 @@ def render_metrics() -> tuple[bytes, str]:
 __all__ = [
     "CONTENT_TYPE_LATEST",
     "REGISTRY",
+    "incr_trades_received",
     "increment_exchange_error",
     "increment_rejection",
     "observe_compute_duration",
@@ -184,4 +246,6 @@ __all__ = [
     "render_metrics",
     "set_indicator_confidence",
     "set_indicator_staleness",
+    "set_last_trade_timestamp",
+    "set_ws_connected",
 ]

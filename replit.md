@@ -108,6 +108,39 @@ The Rejected tab endpoint (`_get_watchlist_rejections_payload` in `backend/app/a
 - All SQL touching `indicator_snapshots.score` uses `WHERE score IS NOT NULL` and `NULLIF(..., 0)` denominators, since the column is `NUMERIC(10,2) NULL` and is blank during early pipeline runs.
 - `/metrics` is currently unauthenticated — the README recommends Cloud Run ingress allow-list / VPC connector instead of in-app auth (see follow-up).
 
+## Real-time order flow ingestion — Gate Spot WS + Redis buffer (task #171)
+- **What changed**: `taker_ratio` / `volume_delta` / `taker_buy_volume` / `taker_sell_volume` are no longer fed by REST polling against `GET /spot/trades`. The Gate Spot WebSocket now subscribes to `spot.trades` and every trade is persisted to a per-symbol Redis sorted set; `order_flow_service.get_order_flow_data` reads that buffer first and falls back to the old REST path only when the buffer is empty.
+- **Buffer contract**: Redis key = `trades_buffer:{GateAdapter._normalize_symbol(symbol)}` (e.g. `trades_buffer:BTC_USDT`). Score = trade `create_time_ms`. Member = `{"s":<side>,"a":<amount>,"t":<ts_ms>}|<trade_id>`. TTL = `TRADE_BUFFER_TTL_SECONDS=360s` (≥ the 300s window consumed by `compute_indicators`). Capped per symbol via `ZREMRANGEBYRANK` (env `TRADES_BUFFER_MAX_PER_SYMBOL`, default 5000).
+- **Source tags in envelopes**: `taker_source = "gate_trades_ws"` when the value comes from the WS buffer, `"gate_trades"`/`"gate_io_trades"` when it comes from REST. The score engine treats source as opaque metadata — no strict equality checks anywhere in `scoring/` — so the new tag passes through `layer_order_flow`, `safe_taker_ratio`, blocking rules, and validity gates without any extra config.
+- **Environment variables**:
+  - `REDIS_URL` (existing) — singleton client lives in `services/redis_client.py` (`decode_responses=False`, 3s connect timeout). Both the WS handler and the REST-fallback reader share this one client; never call `redis.asyncio.from_url(...)` in a hot path.
+  - `ENABLE_GATE_WS=1` — feature flag. **Default off**; flip to `1` in production to start the WS in the FastAPI lifespan. Setting it back to `0` is the rollback switch (system goes back to REST polling instantly on the next deploy/restart).
+  - `TRADES_BUFFER_MAX_PER_SYMBOL` — per-symbol entry cap; min 100, default 5000.
+- **Multi-instance leader election** (`services/gate_ws_leader.py`): only the replica that wins `SET gate_ws:leader <instance_id> NX EX 30` opens the WebSocket. A background task renews the TTL every 10s via a Lua check-and-set (so a stalled ex-leader can't extend a peer's lock). Lifespan shutdown releases the lock with the same owner-check. Other replicas stay in reader mode and consume the same Redis buffer the leader populates.
+- **Merge fix in `compute_indicators`** (1h + 5m paths): `_merge_order_flow_into_results()` now preserves a previously-computed valid `taker_ratio` / `buy_pressure` / `volume_delta` / `taker_buy_volume` / `taker_sell_volume` when the new fetch comes back `None`. `taker_source` and `taker_window` are still updated unconditionally (they're metadata about the most recent fetch attempt). The window passed to `get_order_flow_data` is now **300s** in both paths — aligned to the 360s buffer TTL.
+- **Prometheus metrics** (in `services/robust_indicators/metrics.py`, exposed via `/metrics` with bearer token):
+  - `gate_ws_connected{market="spot|futures",instance="..."}` — Gauge 0/1, set to 1 immediately after auth, reset to 0 in the connection-loop `finally`.
+  - `gate_trades_received_total{symbol="..."}` — Counter incremented once per trade after a successful pipeline write.
+  - `gate_last_trade_timestamp_seconds{symbol="..."}` — Gauge (epoch seconds) of the most recent trade processed for that symbol.
+- **Validation queries**:
+  - SQL — confirm the new source is reaching the snapshot table:
+    ```sql
+    SELECT symbol,
+           indicators_json->'taker_ratio'->>'value'  AS taker_ratio,
+           indicators_json->'taker_ratio'->>'source' AS source,
+           indicators_json->'taker_ratio'->>'status' AS status
+    FROM indicators
+    ORDER BY time DESC
+    LIMIT 10;
+    ```
+  - Prometheus — feed health:
+    ```promql
+    gate_ws_connected{market="spot"}
+    rate(gate_trades_received_total[5m])
+    time() - gate_last_trade_timestamp_seconds
+    ```
+- **Out of scope (open follow-ups)**: futures.trades coverage; an L1 in-process buffer in front of Redis; unifying `microstructure_scheduler_service.fetch_orderbook_metrics`'s independent taker source with the WS buffer (spec line 81).
+
 ## Schema Bootstrap (Production)
 - **Single source of truth**: Alembic migrations in `backend/alembic/versions/`. New schema changes MUST land as a migration, never only in `init_db.py`.
 - **Cloud Run boot order** (`backend/start.sh`): `alembic upgrade head` is the ONLY schema gate. Three retries with backoff, time-boxed at 180s per attempt. `exit 1` on persistent failure causes Cloud Run to roll back to the previous revision automatically. Then Celery + uvicorn start.

@@ -140,6 +140,20 @@ async def lifespan(app: FastAPI):
         _log.warning("Pipeline scheduler failed to start: %s", e)
         stop_pipeline_scheduler = None  # type: ignore[assignment]
 
+    # ── Gate.io WebSocket — real-time order flow ingestion (Task #171) ────
+    # Behind ENABLE_GATE_WS=1.  In multi-instance deployments only the
+    # replica that wins the Redis ``gate_ws:leader`` lock opens the WS;
+    # the rest stay as readers of the Redis trade buffer.  Failure to
+    # acquire the lock or to start the WS is logged but never aborts boot
+    # (REST polling continues to feed order flow as before).
+    stop_gate_ws_leader = None
+    try:
+        from .services.gate_ws_leader import start_gate_ws_with_leader_election
+        stop_gate_ws_leader = await start_gate_ws_with_leader_election()
+    except Exception as e:
+        _log.warning("Gate WS leader election failed to start: %s", e)
+        stop_gate_ws_leader = None
+
     # ── Consolidated scheduler startup summary (env-derived intervals) ──────
     _struct_interval   = int(os.environ.get("STRUCTURAL_SCHEDULER_INTERVAL_SECONDS", 900))
     _micro_interval    = int(os.environ.get("MICROSTRUCTURE_SCHEDULER_INTERVAL_SECONDS", 300))
@@ -168,6 +182,7 @@ async def lifespan(app: FastAPI):
             (stop_microstructure_scheduler, "Microstructure scheduler"),
             (stop_background_scheduler, "Combined scheduler"),
             (stop_pipeline_scheduler, "Pipeline scheduler"),
+            (stop_gate_ws_leader, "Gate WS leader"),
         ]:
             if _stop_fn is not None:
                 try:

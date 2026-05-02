@@ -19,6 +19,33 @@ _STOCHASTIC_WARMUP_OVERLAP = 2
 _COMPUTE_KEY_SOURCE_MAP: dict = {k: ("gate_trades", 1.00) for k in _ORDER_FLOW_KEYS}
 
 
+def _merge_order_flow_into_results(results: dict, of_data: dict) -> None:
+    """Merge order-flow payload into ``results`` without overwriting valid values with ``None``.
+
+    Pre-Task #171 the merge was a single ``results.update(...)`` that
+    silently overwrote a previously-computed (and still-valid)
+    ``taker_ratio`` or ``volume_delta`` whenever the new ``of_data`` lookup
+    returned ``None`` (empty 60s window).  Under high cadence + 100+
+    symbols that produced an envelope storm of ``NO_DATA`` rows even when
+    the previous snapshot had a perfectly good signal.
+
+    New contract:
+      * For the five order-flow value keys (``taker_ratio``,
+        ``buy_pressure``, ``volume_delta``, ``taker_buy_volume``,
+        ``taker_sell_volume``): only overwrite when the new value is not
+        ``None`` OR the existing value is missing/``None``.
+      * ``taker_source`` and ``taker_window`` are metadata — always
+        updated so the envelope reflects the actual fetch attempt.
+      * Any other key in ``of_data`` is merged with normal ``update`` semantics.
+    """
+    for key, value in of_data.items():
+        if key in _ORDER_FLOW_KEYS:
+            if value is not None or results.get(key) is None:
+                results[key] = value
+        else:
+            results[key] = value
+
+
 def _calc_stochastic_warmup(stochastic_config: dict) -> int:
     return max(
         # Stochastic uses chained rolling windows (K → smooth → D), so the
@@ -183,12 +210,11 @@ async def _compute_async():
                         results.get("volume_24h_candles"),
                     )
 
-                    # Merge real order flow data (taker_ratio, buy_pressure — 60s trade window)
-                    of_data = await get_order_flow_data(symbol, window_seconds=60)
-                    results.update({k: v for k, v in of_data.items() if v is not None or k in {
-                        "taker_ratio", "buy_pressure", "volume_delta",
-                        "taker_buy_volume", "taker_sell_volume",
-                    }})
+                    # Merge real order flow data (taker_ratio, buy_pressure).
+                    # Window aligned to Redis buffer TTL (Task #171: TRADE_BUFFER_TTL_SECONDS=360,
+                    # max consumed window 300s) so the buffer covers the entire lookback.
+                    of_data = await get_order_flow_data(symbol, window_seconds=300)
+                    _merge_order_flow_into_results(results, of_data)
 
 
                     now = datetime.now(timezone.utc)
@@ -304,12 +330,10 @@ async def _compute_5m_async():
                         results.get("volume_24h_candles"),
                     )
 
-                    # Merge real order flow data (taker_ratio, buy_pressure — 60s trade window)
-                    of_data = await get_order_flow_data(symbol, window_seconds=60)
-                    results.update({k: v for k, v in of_data.items() if v is not None or k in {
-                        "taker_ratio", "buy_pressure", "volume_delta",
-                        "taker_buy_volume", "taker_sell_volume",
-                    }})
+                    # Merge real order flow data (taker_ratio, buy_pressure).
+                    # Window aligned to Redis buffer TTL (Task #171: 300s consumed, 360s TTL).
+                    of_data = await get_order_flow_data(symbol, window_seconds=300)
+                    _merge_order_flow_into_results(results, of_data)
 
                     now = datetime.now(timezone.utc)
                     await _upsert_market_metadata_snapshot(db, symbol, results, now)

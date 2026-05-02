@@ -47,10 +47,16 @@ def _futures_channel_payloads(contracts: list[str]) -> list[tuple[str, list]]:
 
 
 def _spot_channel_payloads(spot_pairs: list[str]) -> list[tuple[str, list]]:
-    """Return (channel, payload) pairs for all spot subscriptions."""
+    """Return (channel, payload) pairs for all spot subscriptions.
+
+    ``spot.trades`` (Task #171) feeds the Redis trade buffer that backs
+    real-time order-flow ingestion, replacing the per-symbol REST polling
+    loop in ``order_flow_service.get_order_flow_data``.
+    """
     return [
         ("spot.tickers", spot_pairs),
         ("spot.orders", spot_pairs),
+        ("spot.trades", spot_pairs),
     ]
 
 
@@ -78,11 +84,16 @@ class GateWSClient:
         api_secret: str,
         contracts: list[str],
         spot_pairs: list[str],
+        instance_id: str = "default",
     ) -> None:
         self._api_key = api_key
         self._api_secret = api_secret
         self._contracts = contracts
         self._spot_pairs = spot_pairs
+        # Label used by the ``gate_ws_connected{instance=…}`` Prometheus
+        # gauge so multi-instance deployments can distinguish the leader
+        # replica from any future reader replicas.
+        self._instance_id = instance_id
 
         # channel → list of async handler coroutines
         self._handlers: dict[str, list[Callable]] = defaultdict(list)
@@ -180,6 +191,8 @@ class GateWSClient:
 
     async def _run_futures_ws(self) -> None:
         """Connect, authenticate, subscribe futures channels, and dispatch messages."""
+        from ..services.robust_indicators.metrics import set_ws_connected
+
         logger.info("Connecting to Gate.io Futures WS: %s", FUTURES_WS_URL)
 
         async with websockets.connect(
@@ -191,6 +204,11 @@ class GateWSClient:
             logger.info("Futures WS connected")
 
             await self._send_auth(ws, "futures")
+            # Auth completed → mark the connection live (Task #171).
+            # The gauge is reset to 0 in ``finally`` so a forced
+            # disconnect surfaces immediately in Prometheus, even before
+            # the backoff loop reconnects.
+            set_ws_connected("futures", True, instance=self._instance_id)
 
             for channel, payload in _futures_channel_payloads(self._contracts):
                 await self._subscribe(ws, channel, payload)
@@ -202,11 +220,14 @@ class GateWSClient:
             try:
                 await self._receive_loop(ws)
             finally:
+                set_ws_connected("futures", False, instance=self._instance_id)
                 ping_task.cancel()
                 await asyncio.gather(ping_task, return_exceptions=True)
 
     async def _run_spot_ws(self) -> None:
         """Connect, authenticate, subscribe spot channels, and dispatch messages."""
+        from ..services.robust_indicators.metrics import set_ws_connected
+
         logger.info("Connecting to Gate.io Spot WS: %s", SPOT_WS_URL)
 
         async with websockets.connect(
@@ -218,6 +239,7 @@ class GateWSClient:
             logger.info("Spot WS connected")
 
             await self._send_auth(ws, "spot")
+            set_ws_connected("spot", True, instance=self._instance_id)
 
             for channel, payload in _spot_channel_payloads(self._spot_pairs):
                 await self._subscribe(ws, channel, payload)
@@ -229,6 +251,7 @@ class GateWSClient:
             try:
                 await self._receive_loop(ws)
             finally:
+                set_ws_connected("spot", False, instance=self._instance_id)
                 ping_task.cancel()
                 await asyncio.gather(ping_task, return_exceptions=True)
 
@@ -390,10 +413,15 @@ async def start_gate_ws(
     api_secret: str,
     contracts: list[str],
     spot_pairs: list[str],
+    instance_id: str = "default",
 ) -> GateWSClient:
     """Create and start the global GateWSClient singleton.
 
     If a client is already running it is returned unchanged.
+
+    ``instance_id`` is forwarded to the Prometheus
+    ``gate_ws_connected{instance=…}`` gauge so multi-instance deployments
+    can distinguish the leader from any reader replicas.
     """
     global _global_client
 
@@ -406,10 +434,11 @@ async def start_gate_ws(
         api_secret=api_secret,
         contracts=contracts,
         spot_pairs=spot_pairs,
+        instance_id=instance_id,
     )
     await client.start()
     _global_client = client
-    logger.info("Global GateWSClient started")
+    logger.info("Global GateWSClient started (instance=%s)", instance_id)
     return client
 
 

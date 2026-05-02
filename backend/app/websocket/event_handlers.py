@@ -9,7 +9,10 @@ and never propagate errors back to the dispatch loop.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
@@ -19,6 +22,12 @@ from sqlalchemy import select, update
 from ..database import AsyncSessionLocal
 from ..models.trade import Trade
 from ..api.websocket import broadcast_trade_event
+from ..exchange_adapters.gate_adapter import GateAdapter
+from ..services.redis_client import get_async_redis
+from ..services.robust_indicators.metrics import (
+    incr_trades_received,
+    set_last_trade_timestamp,
+)
 
 if TYPE_CHECKING:
     from .gate_ws_client import GateWSClient
@@ -601,6 +610,165 @@ async def _process_spot_order(session, order: dict) -> None:
         })
 
 
+# ── Handler: spot.trades ──────────────────────────────────────────────────────
+#
+# Persists every spot trade received over the WS into a per-symbol Redis
+# sorted set so ``order_flow_service.get_order_flow_data`` can read recent
+# taker flow without hammering ``GET /spot/trades`` once per symbol.
+#
+# Buffer contract (Task #171):
+#   key   = ``trades_buffer:{GateAdapter._normalize_symbol(currency_pair)}``
+#   score = trade ``create_time_ms``
+#   member = JSON {"s": side, "a": amount_str, "t": create_time_ms}
+#   TTL   = TRADE_BUFFER_TTL_SECONDS (default 360 s, ≥ max consumed window)
+#   cap   = TRADES_BUFFER_MAX_PER_SYMBOL (default 5000) via ZREMRANGEBYRANK
+#   age   = same TTL via ZREMRANGEBYSCORE on score < cutoff_ms
+#
+# All Redis ops for one WS message are issued through a single
+# ``redis.pipeline(transaction=False)`` so we make one round-trip per
+# Gate frame regardless of the number of trades in it.
+
+TRADE_BUFFER_TTL_SECONDS: int = 360
+"""Sorted-set TTL (s). Must stay ≥ the largest ``window_seconds`` that any
+caller passes to ``get_order_flow_data`` so the buffer always covers the
+entire lookback (Task #171, alert 🟡 #7)."""
+
+
+def _trades_buffer_max_per_symbol() -> int:
+    """Per-symbol cap for the sorted set (env ``TRADES_BUFFER_MAX_PER_SYMBOL``)."""
+    raw = os.environ.get("TRADES_BUFFER_MAX_PER_SYMBOL")
+    if not raw:
+        return 5000
+    try:
+        return max(int(raw), 100)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid TRADES_BUFFER_MAX_PER_SYMBOL=%r — falling back to 5000",
+            raw,
+        )
+        return 5000
+
+
+def _trades_buffer_key(symbol: str) -> str:
+    """Build the Redis key for the per-symbol trade buffer.
+
+    Always normalises the symbol via ``GateAdapter._normalize_symbol`` so
+    that callers passing ``BTCUSDT`` and the WS handler receiving
+    ``BTC_USDT`` resolve to the same key (review risk #1).
+    """
+    return f"trades_buffer:{GateAdapter._normalize_symbol(symbol)}"
+
+
+async def handle_spot_trades(result: list[dict]) -> None:
+    """Persist spot trades from the Gate WS into the Redis order-flow buffer.
+
+    Failure modes are logged and swallowed: a Redis outage must not
+    propagate back into ``GateWSClient._dispatch`` and tear down the
+    WebSocket — the system stays correct (callers fall back to the REST
+    path) but the buffer goes empty until Redis returns.
+    """
+    if not result:
+        return
+
+    redis = await get_async_redis()
+    if redis is None:
+        logger.debug("spot.trades: Redis unavailable — buffer write skipped")
+        return
+
+    cap = _trades_buffer_max_per_symbol()
+    cutoff_ms = (datetime.now(timezone.utc).timestamp() - TRADE_BUFFER_TTL_SECONDS) * 1000.0
+
+    # Group trades by their normalised symbol so we issue one ZADD per
+    # (key, member-batch) pair instead of N separate ZADDs.  The Gate
+    # ``spot.trades`` channel emits one frame per symbol in practice, but
+    # the protocol does not forbid mixed-symbol batches and we want this
+    # handler to be safe against a future change.
+    by_key: dict[str, dict[bytes, float]] = defaultdict(dict)
+    last_ts_by_symbol: dict[str, float] = {}
+    counts_by_symbol: dict[str, int] = defaultdict(int)
+
+    for trade in result:
+        try:
+            currency_pair = trade.get("currency_pair") or trade.get("s")
+            if not currency_pair:
+                continue
+            side = trade.get("side")
+            if side not in ("buy", "sell"):
+                continue
+            amount = trade.get("amount")
+            if amount is None:
+                continue
+            ts_ms_raw = trade.get("create_time_ms")
+            if ts_ms_raw is None:
+                # Some Gate frames only ship ``create_time`` (seconds);
+                # promote to ms so the score still sorts correctly.
+                ts_s = trade.get("create_time")
+                if ts_s is None:
+                    continue
+                ts_ms = float(ts_s) * 1000.0
+            else:
+                ts_ms = float(ts_ms_raw)
+        except (TypeError, ValueError) as exc:
+            logger.debug("spot.trades: skipping malformed trade %r: %s", trade, exc)
+            continue
+
+        symbol = GateAdapter._normalize_symbol(currency_pair)
+        key = f"trades_buffer:{symbol}"
+        # Compact payload — ``order_flow_service`` only consumes side,
+        # amount, and the timestamp (which is also the score).
+        payload = json.dumps({
+            "s": side,
+            "a": str(amount),
+            "t": ts_ms,
+        }, separators=(",", ":")).encode("utf-8")
+        # Same (key, member) pair would be deduplicated by ZADD, so make
+        # the member unique by prefixing a monotonic suffix per batch.
+        # Using the trade ``id`` when present keeps the buffer stable
+        # across reconnects; otherwise fall back to the timestamp + a
+        # per-batch counter.
+        trade_id = trade.get("id")
+        if trade_id is not None:
+            member_key = f"|{trade_id}".encode("utf-8")
+        else:
+            member_key = f"|{ts_ms}|{counts_by_symbol[symbol]}".encode("utf-8")
+        by_key[key][payload + member_key] = ts_ms
+
+        counts_by_symbol[symbol] += 1
+        prev_ts = last_ts_by_symbol.get(symbol)
+        if prev_ts is None or ts_ms > prev_ts:
+            last_ts_by_symbol[symbol] = ts_ms
+
+    if not by_key:
+        return
+
+    try:
+        async with redis.pipeline(transaction=False) as pipe:
+            for key, members in by_key.items():
+                # ZADD all trades for this symbol in one call.
+                pipe.zadd(key, members)
+                # Drop entries older than the TTL window — bounds memory
+                # even if a single symbol streams hot for hours.
+                pipe.zremrangebyscore(key, 0, cutoff_ms)
+                # Hard cap on entries per symbol.  ZREMRANGEBYRANK with
+                # ``0, -(cap+1)`` keeps the newest ``cap`` members.
+                pipe.zremrangebyrank(key, 0, -(cap + 1))
+                pipe.expire(key, TRADE_BUFFER_TTL_SECONDS)
+            await pipe.execute()
+    except Exception as exc:
+        # Any Redis error is logged but never propagated — _dispatch in
+        # ``gate_ws_client`` already catches handler exceptions, but
+        # being defensive here also keeps the metric updates below from
+        # being skipped on a transient redis blip.
+        logger.warning("spot.trades: Redis pipeline failed: %s", exc)
+        return
+
+    # Metrics last so they only reflect successful buffer writes.
+    for symbol, n in counts_by_symbol.items():
+        incr_trades_received(symbol, n=n)
+    for symbol, ts_ms in last_ts_by_symbol.items():
+        set_last_trade_timestamp(symbol, ts_ms / 1000.0)
+
+
 # ── Registration ──────────────────────────────────────────────────────────────
 
 def register_all_handlers(ws_client: "GateWSClient") -> None:
@@ -610,5 +778,6 @@ def register_all_handlers(ws_client: "GateWSClient") -> None:
     ws_client.register_handler("futures.autoorders", handle_futures_autoorders)
     ws_client.register_handler("futures.liquidates", handle_futures_liquidates)
     ws_client.register_handler("spot.orders", handle_spot_orders)
+    ws_client.register_handler("spot.trades", handle_spot_trades)
 
     logger.info("All Gate.io WS event handlers registered")
