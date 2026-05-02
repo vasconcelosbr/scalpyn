@@ -126,7 +126,9 @@ Every `down_revision` value (or each element of a tuple) must appear as a `revis
 | Celery beat spawn | ~**5–10 s** |
 | `uvicorn` boot + FastAPI lifespan (5 schedulers + DB pool warmup + Gate WS leader bootstrap) | ~**10–20 s** |
 
-The happy path lands well under 60 s; the failure path can blow past 240 s and trip the same generic port-bind error. When debugging, prefer the Cloud Run **revision** logs over the build log — the revision logs contain the `start.sh` echo lines (`==> [migrations] attempt 1/3 …`, `==> [schema] Critical schema OK.`, etc.) that pinpoint which stage stalled.
+The happy path lands well under 60 s; the failure path can blow past 240 s and trip the same generic port-bind error. The startup probe deadline lives in `cloudbuild.yaml` as `--timeout-startup` and was raised from 240 s to **540 s** (Cloud Run's max for startup probes) on 2026-05-02 after migrations 033/034 repeatedly timed out even with DDL pre-applied. Do not lower it back without a specific reason — the cost is zero (the probe completes as soon as `0.0.0.0:$PORT` binds, regardless of the deadline) and the headroom prevents flaky deploys when lock contention or scheduler bootstrap is slower than expected.
+
+When debugging, prefer the Cloud Run **revision** logs over the build log — the revision logs contain the `start.sh` echo lines (`==> [migrations] attempt 1/3 …`, `==> [schema] Critical schema OK.`, etc.) that pinpoint which stage stalled. To find them in the GCP console: Cloud Run → service `scalpyn` → Revisions tab → click the failed revision (e.g. `scalpyn-00365-xyz`) → Logs tab. Filter by `severity>=DEFAULT` and look for the most recent `==>` line before silence; that is where the boot stalled.
 
 ## When `alembic upgrade head` fails on Cloud Run
 

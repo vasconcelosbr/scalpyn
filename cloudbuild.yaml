@@ -46,8 +46,15 @@ steps:
       - '8080'
       - '--timeout'
       - '300'
+      # Startup probe deadline. 540s is the Cloud Run max for startup probes.
+      # Bumped from 240s on 2026-05-02 after migrations 033/034 (indicators +
+      # ohlcv market_type) repeatedly tripped the previous budget — even after
+      # the DDL was pre-applied manually, the lifespan + scheduler bootstrap
+      # combined with `--min-instances=1` lock contention made cold starts
+      # flaky. See `.agents/skills/alembic-migration-guardrails/SKILL.md`
+      # "Cold-start budget on Cloud Run" for the per-step breakdown.
       - '--timeout-startup'
-      - '240'
+      - '540'
       # Cloud Run normally throttles CPU / scales to zero between requests.
       # This service embeds Celery worker + beat, so one warm instance with
       # always-on CPU is required for recurring pipeline scans to keep running.
