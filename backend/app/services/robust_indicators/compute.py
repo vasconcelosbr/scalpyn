@@ -211,7 +211,7 @@ async def compute_indicators_robust(
         # 300s).  Default `WINDOW_SECONDS=60` was too short for most
         # symbols and produced spurious VALID↔NO_DATA alternation
         # (Task #180).
-        flow = await get_order_flow_data(symbol, window_seconds=300)
+        flow = await get_order_flow_data(symbol, window_seconds=300, market_type="spot")
         if flow:
             market_data.update(flow)
             flow_source = flow.get("taker_source")

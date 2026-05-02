@@ -213,7 +213,9 @@ async def _compute_async():
                     # Merge real order flow data (taker_ratio, buy_pressure).
                     # Window aligned to Redis buffer TTL (Task #171: TRADE_BUFFER_TTL_SECONDS=360,
                     # max consumed window 300s) so the buffer covers the entire lookback.
-                    of_data = await get_order_flow_data(symbol, window_seconds=300)
+                    of_data = await get_order_flow_data(
+                        symbol, window_seconds=300, market_type="spot"
+                    )
                     _merge_order_flow_into_results(results, of_data)
 
 
@@ -222,12 +224,15 @@ async def _compute_async():
 
                     # Store in TimescaleDB (envelope format — value + source + confidence + status)
                     await db.execute(text("""
-                        INSERT INTO indicators (time, symbol, timeframe, indicators_json)
-                        VALUES (:time, :symbol, :timeframe, :indicators)
+                        INSERT INTO indicators
+                            (time, symbol, timeframe, market_type, indicators_json)
+                        VALUES
+                            (:time, :symbol, :timeframe, :market_type, :indicators)
                     """), {
                         "time": now,
                         "symbol": symbol,
                         "timeframe": "1h",
+                        "market_type": "spot",
                         "indicators": json.dumps(envelop_results(
                             results,
                             default_source="candle_computed",
@@ -332,20 +337,25 @@ async def _compute_5m_async():
 
                     # Merge real order flow data (taker_ratio, buy_pressure).
                     # Window aligned to Redis buffer TTL (Task #171: 300s consumed, 360s TTL).
-                    of_data = await get_order_flow_data(symbol, window_seconds=300)
+                    of_data = await get_order_flow_data(
+                        symbol, window_seconds=300, market_type="spot"
+                    )
                     _merge_order_flow_into_results(results, of_data)
 
                     now = datetime.now(timezone.utc)
                     await _upsert_market_metadata_snapshot(db, symbol, results, now)
                     # Store in TimescaleDB (envelope format — value + source + confidence + status)
                     await db.execute(text("""
-                        INSERT INTO indicators (time, symbol, timeframe, indicators_json)
-                        VALUES (:time, :symbol, :timeframe, :indicators)
+                        INSERT INTO indicators
+                            (time, symbol, timeframe, market_type, indicators_json)
+                        VALUES
+                            (:time, :symbol, :timeframe, :market_type, :indicators)
                     """), {
-                        "time":       now,
-                        "symbol":     symbol,
-                        "timeframe":  "5m",
-                        "indicators": json.dumps(envelop_results(
+                        "time":        now,
+                        "symbol":      symbol,
+                        "timeframe":   "5m",
+                        "market_type": "spot",
+                        "indicators":  json.dumps(envelop_results(
                             results,
                             default_source="candle_computed",
                             default_confidence=0.80,

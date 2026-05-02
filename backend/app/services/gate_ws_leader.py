@@ -184,14 +184,33 @@ async def _load_gate_credentials() -> tuple[str, str]:
         return "", ""
 
 
-async def _resolve_spot_pairs() -> list[str]:
-    """Reuse the same symbol universe as ``microstructure_scheduler_service``.
+async def _resolve_spot_symbols() -> list[str]:
+    """Resolve the SPOT universe from approved pool coins.
 
-    Union of ``pipeline_watchlist_assets.symbol`` and
-    ``market_metadata.symbol``, capped at 500 — the same query lives in
-    ``services/microstructure_scheduler_service._collect_symbols``.
+    Queries ``pool_coins`` joined with ``pools`` where ``market_type = 'spot'``
+    and the coin is active.  Falls back to the legacy union query
+    (``pipeline_watchlist_assets`` ∪ ``market_metadata``) when no spot
+    pool coins exist so that deployments without explicit pool setup keep
+    working.
     """
     try:
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(text("""
+                SELECT DISTINCT pc.symbol
+                FROM pool_coins pc
+                JOIN pools p ON p.id = pc.pool_id
+                WHERE pc.is_active = TRUE
+                  AND p.market_type = 'spot'
+                  AND pc.symbol IS NOT NULL
+                  AND pc.symbol <> ''
+                LIMIT 500
+            """))).fetchall()
+        symbols = [r.symbol for r in rows if r.symbol]
+        if symbols:
+            return symbols
+        # Legacy fallback: no pool_coins with market_type='spot' — fall back
+        # to the pipeline_watchlist_assets ∪ market_metadata universe so
+        # systems without explicit pool configuration keep working.
         async with AsyncSessionLocal() as db:
             rows = (await db.execute(text("""
                 SELECT DISTINCT symbol
@@ -205,7 +224,33 @@ async def _resolve_spot_pairs() -> list[str]:
             """))).fetchall()
         return [r.symbol for r in rows if r.symbol]
     except Exception as exc:
-        logger.warning("[gate-ws-leader] failed to resolve spot_pairs: %s", exc)
+        logger.warning("[gate-ws-leader] failed to resolve spot symbols: %s", exc)
+        return []
+
+
+async def _resolve_futures_symbols() -> list[str]:
+    """Resolve the FUTURES universe from approved pool coins.
+
+    Queries ``pool_coins`` joined with ``pools`` where
+    ``market_type = 'futures'`` and the coin is active.  Returns an
+    empty list when no futures pool coins exist — the WS will not
+    subscribe to any futures contracts in that case.
+    """
+    try:
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(text("""
+                SELECT DISTINCT pc.symbol
+                FROM pool_coins pc
+                JOIN pools p ON p.id = pc.pool_id
+                WHERE pc.is_active = TRUE
+                  AND p.market_type = 'futures'
+                  AND pc.symbol IS NOT NULL
+                  AND pc.symbol <> ''
+                LIMIT 500
+            """))).fetchall()
+        return [r.symbol for r in rows if r.symbol]
+    except Exception as exc:
+        logger.warning("[gate-ws-leader] failed to resolve futures symbols: %s", exc)
         return []
 
 
@@ -376,10 +421,19 @@ class _GateWSSupervisor:
         from ..websocket import gate_ws_client as _ws_client_mod
         from ..websocket.event_handlers import register_all_handlers
 
-        spot_pairs = await _resolve_spot_pairs()
-        if not spot_pairs:
+        # ── ETAPA 1+2: resolve and log both market universes ──────────────
+        spot_pairs, futures_contracts = await asyncio.gather(
+            _resolve_spot_symbols(),
+            _resolve_futures_symbols(),
+        )
+
+        logger.info("[POOL] SPOT symbols: %d", len(spot_pairs))
+        logger.info("[POOL] FUTURES symbols: %d", len(futures_contracts))
+
+        if not spot_pairs and not futures_contracts:
             logger.warning(
-                "[gate-ws-leader] no spot pairs resolved — releasing lock and going back to candidate mode"
+                "[gate-ws-leader] no symbols resolved for either market — "
+                "releasing lock and going back to candidate mode"
             )
             await _release_leader(self._redis, self._instance_id)
             return
@@ -394,14 +448,14 @@ class _GateWSSupervisor:
             await _ws_client_mod.start_gate_ws(
                 api_key=api_key,
                 api_secret=api_secret,
-                contracts=[],   # futures.trades is out of scope for #171
+                contracts=futures_contracts,
                 spot_pairs=spot_pairs,
                 instance_id=self._instance_id,
                 register_handlers=register_all_handlers,
             )
             logger.info(
-                "[gate-ws-leader] Gate WS started (instance=%s, spot_pairs=%d)",
-                self._instance_id, len(spot_pairs),
+                "[gate-ws-leader] Gate WS started (instance=%s, spot_pairs=%d, futures_contracts=%d)",
+                self._instance_id, len(spot_pairs), len(futures_contracts),
             )
         except Exception as exc:
             logger.error(
