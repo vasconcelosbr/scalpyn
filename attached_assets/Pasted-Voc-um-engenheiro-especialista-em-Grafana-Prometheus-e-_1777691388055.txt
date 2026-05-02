@@ -1,0 +1,258 @@
+Você é um engenheiro especialista em Grafana, Prometheus e PostgreSQL.
+
+Sua tarefa é gerar um dashboard COMPLETO, IMPORTÁVEL e FUNCIONAL para monitoramento de um trading engine em produção.
+
+---
+
+# 🎯 CONTEXTO
+
+O sistema já está em produção com:
+
+* Prometheus expondo /metrics
+* PostgreSQL com tabela:
+
+  * indicator_snapshots
+  * decisions_log
+* Métricas existentes:
+
+  * indicator_confidence
+  * indicator_staleness_seconds
+  * score_rejection_total
+  * computation_duration_seconds
+* Novas métricas adicionadas:
+
+  * exchange_request_latency_seconds (Histogram, label: exchange)
+  * exchange_request_errors_total (Counter, labels: exchange, kind)
+
+---
+
+# 🚨 REGRAS CRÍTICAS
+
+* NÃO usar dados fictícios
+* NÃO inventar métricas
+* USAR apenas métricas reais
+* TODAS as queries devem funcionar em produção
+* USAR sum() e aggregation correta (Cloud Run multi-worker)
+* JSON final deve ser IMPORTÁVEL diretamente no Grafana
+
+---
+
+# 📊 DASHBOARD
+
+Nome:
+**Scalpyn Trading Engine - Monitoramento**
+
+Datasource:
+
+* Prometheus
+* PostgreSQL
+
+---
+
+# 🔹 1. TOP STATS (Stat Panels)
+
+Criar 6 painéis:
+
+1. STATUS DO SISTEMA (calculado)
+
+* OK se:
+
+  * avg(confidence) > 0.6
+  * NO_DATA < 20%
+  * error_rate < 5%
+* Caso contrário: WARNING / CRITICAL
+
+---
+
+2. SCORE MÉDIO
+
+PromQL:
+avg(score)
+
+---
+
+3. CONFIDENCE MÉDIA
+
+PromQL:
+avg(indicator_confidence)
+
+---
+
+4. DATA QUALITY
+
+SQL (Postgres):
+
+SELECT
+100 * COUNT(*) FILTER (WHERE indicators_json->'taker_ratio'->>'status' = 'VALID')
+/ COUNT(*)
+FROM indicator_snapshots
+WHERE timestamp > NOW() - INTERVAL '1 hour';
+
+---
+
+5. REJECTION RATE
+
+PromQL:
+
+sum(rate(score_rejection_total[5m]))
+/
+sum(rate(total_trades[5m]))
+
+---
+
+6. TRADES (1h)
+
+SQL:
+
+SELECT decision, COUNT(*)
+FROM decisions_log
+WHERE created_at > NOW() - INTERVAL '1 hour'
+GROUP BY decision;
+
+---
+
+# 🔹 2. DATA QUALITY GAUGES
+
+Criar gauges:
+
+* VALID
+* NO_DATA
+* STALE
+* ERROR
+
+SQL base:
+
+SELECT
+COUNT(*) FILTER (WHERE status = 'VALID'),
+COUNT(*) FILTER (WHERE status = 'NO_DATA'),
+COUNT(*) FILTER (WHERE status = 'STALE'),
+COUNT(*) FILTER (WHERE status = 'ERROR')
+FROM (
+SELECT jsonb_each(indicators_json)
+FROM indicator_snapshots
+) t;
+
+---
+
+# 🔹 3. CONFIDENCE OVER TIME
+
+PromQL:
+
+avg_over_time(indicator_confidence[5m])
+
+Adicionar linha horizontal:
+0.60
+
+---
+
+# 🔹 4. EXCHANGE STATUS TABLE
+
+PromQL:
+
+Latency:
+
+histogram_quantile(
+0.95,
+sum(rate(exchange_request_latency_seconds_bucket[5m])) by (le, exchange)
+)
+
+Errors:
+
+sum(rate(exchange_request_errors_total[5m])) by (exchange)
+
+---
+
+# 🔹 5. SCORE POR ATIVO
+
+SQL:
+
+SELECT
+timestamp,
+symbol,
+score
+FROM indicator_snapshots
+WHERE timestamp > NOW() - INTERVAL '1 hour';
+
+---
+
+# 🔹 6. INDICADORES CRÍTICOS
+
+SQL:
+
+SELECT
+symbol,
+key AS indicator,
+value->>'value',
+value->>'status',
+value->>'source',
+value->>'confidence'
+FROM indicator_snapshots,
+LATERAL jsonb_each(indicators_json)
+WHERE timestamp > NOW() - INTERVAL '5 minutes';
+
+---
+
+# 🔹 7. REJEIÇÕES (DONUT)
+
+PromQL:
+
+sum by (reason) (
+rate(score_rejection_total[5m])
+)
+
+---
+
+# 🔹 8. ALERTAS
+
+Criar alert rules:
+
+1. Confidence baixo:
+   avg(indicator_confidence) < 0.6 for 5m
+
+2. NO_DATA alto:
+
+> 25%
+
+3. Rejection rate:
+
+> 50%
+
+4. Error rate:
+
+> 10%
+
+---
+
+# 🎨 VISUAL
+
+* Tema escuro
+* Verde: OK
+* Amarelo: WARNING
+* Vermelho: CRITICAL
+
+---
+
+# 📦 OUTPUT OBRIGATÓRIO
+
+Gerar:
+
+1. JSON COMPLETO do dashboard Grafana
+2. Queries PromQL e SQL organizadas
+3. Configuração de alertas (embedded)
+4. Instruções de importação
+5. README curto com:
+
+   * setup Prometheus
+   * setup PostgreSQL datasource
+   * cuidado com conexões (máx ~22)
+
+---
+
+# 🚀 RESULTADO FINAL
+
+Dashboard que permita:
+
+* detectar falha em segundos
+* validar qualidade de dados
+* validar score e decisões
+* monitorar exchanges em tempo real
