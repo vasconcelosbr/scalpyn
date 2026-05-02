@@ -82,7 +82,11 @@ async def _collect_symbols(db) -> List[str]:
 async def _persist_indicators(db, symbol: str, results: dict, when: datetime) -> None:
     if not results:
         return
-    payload = json.dumps(results, default=str)
+    from ..utils.indicator_merge import envelop_results
+    payload = json.dumps(
+        envelop_results(results, default_source="gate_candles", default_confidence=0.85),
+        default=str,
+    )
     try:
         # SAVEPOINT: isolates a constraint error so the parent transaction
         # remains healthy for _refresh_market_metadata below.

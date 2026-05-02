@@ -24,8 +24,8 @@ size X reached, connection timed out`.
 
 | Parameter | Value | Source |
 |-----------|-------|--------|
-| `DB_POOL_SIZE` | 10 | `backend/app/database.py` default |
-| `DB_MAX_OVERFLOW` | 10 | `backend/app/database.py` default |
+| `DB_POOL_SIZE` | **5** | `backend/app/database.py` default (reduced from 10 in Task #160) |
+| `DB_MAX_OVERFLOW` | **5** | `backend/app/database.py` default (reduced from 10 in Task #160) |
 | `DB_POOL_TIMEOUT` | 30 s | `backend/app/database.py` default |
 | `WEB_CONCURRENCY` (uvicorn workers) | **2** | `backend/Dockerfile` runtime stage `ENV WEB_CONCURRENCY=2` and `backend/start.sh` default |
 | `CELERY_CONCURRENCY` (Celery task slots) | 1 | `backend/start.sh` `--concurrency="${CELERY_CONCURRENCY:-1}"` |
@@ -39,22 +39,20 @@ size X reached, connection timed out`.
 > `CELERY_CONCURRENCY` to match `start.sh`.
 
 ```
-total_ceiling = 2 × (10 + 10) + 1 + 1 = 42 connections
+total_ceiling = 2 × (5 + 5) + 1 + 1 = 22 connections
 ```
 
 | Cloud SQL tier | `max_connections` | Headroom |
 |----------------|-------------------|----------|
-| `db-f1-micro`  | 25                | **–17 (OVER BUDGET)** |
-| `db-g1-small`  | 50                | 8        |
-| `db-n1-standard-1` | 100          | 58       |
+| `db-f1-micro`  | 25                | 3 (tight — not recommended) |
+| `db-g1-small`  | 50                | **28**   |
+| `db-n1-standard-1` | 100          | 78       |
 
-> **Warning:** At 2 uvicorn workers the app already exceeds `db-f1-micro`'s
-> 25-connection limit.  A `db-g1-small` or larger tier is required.  The
-> 8-connection headroom on `db-g1-small` is tight; do not raise pool numbers
-> without first verifying with `SHOW max_connections;`.
->
-> To reduce the ceiling without changing the Cloud SQL tier, set
-> `WEB_CONCURRENCY=1` in Cloud Run (halves the uvicorn contribution to 22).
+> **Note:** Pool defaults were reduced from 10+10 to 5+5 in Task #160 to fit
+> comfortably within `db-g1-small` (28-connection headroom vs 8 previously).
+> If request-handler latency increases under load, raise `DB_POOL_SIZE` and
+> `DB_MAX_OVERFLOW` via Cloud Run env vars — always verify headroom with
+> `SHOW max_connections;` first.
 
 ### Note on `cloud-run-job.yaml`
 
@@ -69,9 +67,9 @@ with the API server pool.
 The computed budget is printed at startup:
 
 ```
-INFO DB pool configured: pool_size=10 max_overflow=10 pool_timeout=30s |
-     connection budget: uvicorn_workers=2 × (pool_size+max_overflow)=20
-     + celery_concurrency=1 + beat=1 = 42 total ceiling
+INFO DB pool configured: pool_size=5 max_overflow=5 pool_timeout=30s |
+     connection budget: uvicorn_workers=2 × (pool_size+max_overflow)=10
+     + celery_concurrency=1 + beat=1 = 22 total ceiling
 ```
 
 ---

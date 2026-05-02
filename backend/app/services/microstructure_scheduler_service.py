@@ -80,10 +80,37 @@ async def _collect_symbols(db) -> List[str]:
     return [r.symbol for r in rows]
 
 
+_MICRO_KEY_SOURCE_MAP: dict = {}  # populated lazily on first use
+
+
+def _get_micro_key_source_map() -> dict:
+    """Return source/confidence map for microstructure indicator keys.
+
+    Built lazily to avoid a circular import at module load time.
+    """
+    global _MICRO_KEY_SOURCE_MAP
+    if not _MICRO_KEY_SOURCE_MAP:
+        from ..utils.indicator_merge import _ORDER_FLOW_KEYS, _ORDERBOOK_KEYS
+        _MICRO_KEY_SOURCE_MAP = {
+            **{k: ("gate_trades", 1.00) for k in _ORDER_FLOW_KEYS},
+            **{k: ("gate_orderbook", 0.90) for k in _ORDERBOOK_KEYS},
+        }
+    return _MICRO_KEY_SOURCE_MAP
+
+
 async def _persist_indicators(db, symbol: str, results: dict, when: datetime) -> None:
     if not results:
         return
-    payload = json.dumps(results, default=str)
+    from ..utils.indicator_merge import envelop_results
+    payload = json.dumps(
+        envelop_results(
+            results,
+            default_source="gate_candles",
+            default_confidence=0.85,
+            key_source_map=_get_micro_key_source_map(),
+        ),
+        default=str,
+    )
     try:
         # SAVEPOINT: isolates a constraint error so the parent transaction
         # remains healthy for _refresh_market_metadata below.

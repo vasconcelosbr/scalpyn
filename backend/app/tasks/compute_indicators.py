@@ -9,9 +9,14 @@ import pandas as pd
 from sqlalchemy import text
 
 from ..tasks.celery_app import celery_app
+from ..utils.indicator_merge import envelop_results, _ORDER_FLOW_KEYS
 
 logger = logging.getLogger(__name__)
 _STOCHASTIC_WARMUP_OVERLAP = 2
+
+# Source/confidence map for order-flow keys fetched from real trades.
+# Technical indicators from FeatureEngine use the default "candle_computed"/0.80.
+_COMPUTE_KEY_SOURCE_MAP: dict = {k: ("gate_trades", 1.00) for k in _ORDER_FLOW_KEYS}
 
 
 def _calc_stochastic_warmup(stochastic_config: dict) -> int:
@@ -189,7 +194,7 @@ async def _compute_async():
                     now = datetime.now(timezone.utc)
                     await _upsert_market_metadata_snapshot(db, symbol, results, now)
 
-                    # Store in TimescaleDB
+                    # Store in TimescaleDB (envelope format — value + source + confidence + status)
                     await db.execute(text("""
                         INSERT INTO indicators (time, symbol, timeframe, indicators_json)
                         VALUES (:time, :symbol, :timeframe, :indicators)
@@ -197,7 +202,12 @@ async def _compute_async():
                         "time": now,
                         "symbol": symbol,
                         "timeframe": "1h",
-                        "indicators": json.dumps(results),
+                        "indicators": json.dumps(envelop_results(
+                            results,
+                            default_source="candle_computed",
+                            default_confidence=0.80,
+                            key_source_map=_COMPUTE_KEY_SOURCE_MAP,
+                        )),
                     })
 
                     computed += 1
@@ -303,6 +313,7 @@ async def _compute_5m_async():
 
                     now = datetime.now(timezone.utc)
                     await _upsert_market_metadata_snapshot(db, symbol, results, now)
+                    # Store in TimescaleDB (envelope format — value + source + confidence + status)
                     await db.execute(text("""
                         INSERT INTO indicators (time, symbol, timeframe, indicators_json)
                         VALUES (:time, :symbol, :timeframe, :indicators)
@@ -310,7 +321,12 @@ async def _compute_5m_async():
                         "time":       now,
                         "symbol":     symbol,
                         "timeframe":  "5m",
-                        "indicators": json.dumps(results),
+                        "indicators": json.dumps(envelop_results(
+                            results,
+                            default_source="candle_computed",
+                            default_confidence=0.80,
+                            key_source_map=_COMPUTE_KEY_SOURCE_MAP,
+                        )),
                     })
 
                     computed += 1

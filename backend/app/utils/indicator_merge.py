@@ -56,20 +56,92 @@ def _ensure_utc(ts: Optional[datetime]) -> Optional[datetime]:
     return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
 
 
+# ── Source/confidence tags for known indicator families ───────────────────────
+# Used by write paths (schedulers, Celery tasks) to stamp provenance and by
+# callers that want to build a key_source_map for `envelop_results()`.
+_ORDER_FLOW_KEYS: frozenset = frozenset({
+    "taker_ratio", "buy_pressure", "volume_delta",
+    "taker_buy_volume", "taker_sell_volume",
+})
+_ORDERBOOK_KEYS: frozenset = frozenset({
+    "spread_pct", "orderbook_depth_usdt",
+    "market_data_source", "market_data_confidence",
+})
+
+
+def _make_meta(
+    grp: str,
+    age: float,
+    ts: Optional[datetime],
+    source: Optional[str] = None,
+    confidence: Optional[float] = None,
+    status: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build a per-key meta dict, optionally enriched with envelope fields."""
+    m: Dict[str, Any] = {"group": grp, "age_seconds": age, "timestamp": ts}
+    if source is not None:
+        m["source"] = source
+    if confidence is not None:
+        m["confidence"] = confidence
+    if status is not None:
+        m["indicator_status"] = status
+    return m
+
+
+def envelop_results(
+    results: Dict[str, Any],
+    default_source: str = "candle_computed",
+    default_confidence: float = 0.80,
+    key_source_map: Optional[Dict[str, tuple]] = None,
+) -> Dict[str, Any]:
+    """Wrap a flat indicator dict into the IndicatorEnvelope dict format.
+
+    Each value becomes::
+
+        {"value": v, "source": "gate_trades", "confidence": 0.9, "status": "VALID"}
+
+    This format matches :meth:`IndicatorEnvelope.to_dict` so that audit queries
+    such as ``indicators_json->'taker_ratio'->>'source'`` return real values.
+
+    Args:
+        results:            Flat {key: scalar} indicator dict.
+        default_source:     Source tag used for keys not in ``key_source_map``.
+        default_confidence: Confidence used for keys not in ``key_source_map``.
+        key_source_map:     Optional {key: (source, confidence)} overrides.
+
+    Already-enveloped values (dicts with a ``"value"`` key) are passed through
+    unchanged, so calling this function twice is safe (idempotent).
+    """
+    ksm = key_source_map or {}
+    out: Dict[str, Any] = {}
+    for k, v in results.items():
+        if isinstance(v, dict) and "value" in v:
+            out[k] = v  # already enveloped — pass through unchanged
+            continue
+        src, conf = ksm.get(k, (default_source, default_confidence))
+        if v is None:
+            out[k] = {"value": None, "source": "unknown", "confidence": 0.0, "status": "NO_DATA"}
+        else:
+            out[k] = {"value": v, "source": src, "confidence": conf, "status": "VALID"}
+    return out
+
+
 class MergedIndicators:
     """Container for a symbol's merged indicator data with per-key metadata.
 
     attributes:
         values   — {key: scalar} usable for scoring (non-stale values only).
-        meta     — {key: {group, age_seconds, timestamp, stale}} per key.
+        meta     — {key: {group, age_seconds, timestamp, stale, source?,
+                   confidence?, indicator_status?}} per key.
                    Includes keys from stale groups (stale=True) so the API
                    can show staleness signals without using stale values for
-                   scoring.
+                   scoring.  Envelope fields (source, confidence,
+                   indicator_status) are present only when the row was written
+                   in envelope format (Task #160+).
     """
 
     def __init__(self) -> None:
         self.values: Dict[str, Any] = {}
-        # {key: {group, age_seconds, timestamp, stale}}
         self.meta: Dict[str, Dict[str, Any]] = {}
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -83,17 +155,24 @@ class MergedIndicators:
         return dict(self.values)
 
     def as_enriched_dict(self) -> Dict[str, Dict[str, Any]]:
-        """Enriched {key: {value, source_group, timestamp, stale}} for API responses.
+        """Enriched {key: {value, source_group, source, confidence, …}} for API responses.
 
         Includes stale keys with value=None and stale=True so that the UI can
         show debugging metadata while the score engine uses as_flat_dict() for
         actual filter evaluation.
+
+        When rows were written in envelope format (Task #160+), ``source``,
+        ``confidence``, and ``indicator_status`` are populated.  Older flat
+        rows leave those fields as None.
         """
         enriched: Dict[str, Dict[str, Any]] = {}
         for k, m in self.meta.items():
             enriched[k] = {
                 "value": self.values.get(k),  # None for stale keys
                 "source_group": m.get("group"),
+                "source": m.get("source"),
+                "confidence": m.get("confidence"),
+                "indicator_status": m.get("indicator_status"),
                 "timestamp": m.get("timestamp").isoformat()
                 if m.get("timestamp") is not None else None,
                 "stale": m.get("stale", False),
@@ -188,19 +267,29 @@ def merge_indicator_rows(
     result = MergedIndicators()
 
     for grp, ts_utc, ind_json, age in live:
-        for k, v in ind_json.items():
-            if not isinstance(v, (int, float, bool, str)):
-                continue
+        for k, raw in ind_json.items():
+            # Support both envelope dicts {"value": ..., "source": ..., ...}
+            # and bare scalars (legacy rows written before Task #160).
+            if isinstance(raw, dict) and "value" in raw:
+                v = raw["value"]
+                env_source = raw.get("source")
+                env_confidence = raw.get("confidence")
+                env_status = raw.get("status")
+                if v is None:
+                    continue  # NO_DATA entries do not participate in scoring
+            elif isinstance(raw, (int, float, bool, str)):
+                v = raw
+                env_source = None
+                env_confidence = None
+                env_status = None
+            else:
+                continue  # skip unrecognised types
 
             existing_meta = result.meta.get(k)
             if existing_meta is None:
                 # First entry for this key
                 result.values[k] = v
-                result.meta[k] = {
-                    "group": grp,
-                    "age_seconds": age,
-                    "timestamp": ts_utc,
-                }
+                result.meta[k] = _make_meta(grp, age, ts_utc, env_source, env_confidence, env_status)
                 continue
 
             existing_ts: Optional[datetime] = existing_meta.get("timestamp")
@@ -226,11 +315,7 @@ def merge_indicator_rows(
 
             if should_overwrite:
                 result.values[k] = v
-                result.meta[k] = {
-                    "group": grp,
-                    "age_seconds": age,
-                    "timestamp": ts_utc,
-                }
+                result.meta[k] = _make_meta(grp, age, ts_utc, env_source, env_confidence, env_status)
 
     # ── Step 4: Post-merge hybrid indicators ──────────────────────────────────
     # ema9_gt_ema50: EMA9 (microstructure) vs EMA50 (structural)
@@ -268,17 +353,22 @@ def merge_indicator_rows(
     # filter/scoring logic.  Non-stale keys that already exist in meta are not
     # overwritten (a fresh value always wins the metadata slot).
     for grp, ts_utc, ind_json, age in stale_rows:
-        for k, v in ind_json.items():
-            if not isinstance(v, (int, float, bool, str)):
+        for k, raw in ind_json.items():
+            if isinstance(raw, dict) and "value" in raw:
+                env_source = raw.get("source")
+                env_confidence = raw.get("confidence")
+                env_status = raw.get("status")
+            elif isinstance(raw, (int, float, bool, str)):
+                env_source = None
+                env_confidence = None
+                env_status = None
+            else:
                 continue
             if k not in result.meta:
                 # Key has no live entry — record as stale (value omitted)
-                result.meta[k] = {
-                    "group": grp,
-                    "age_seconds": age,
-                    "timestamp": ts_utc,
-                    "stale": True,
-                }
+                m = _make_meta(grp, age, ts_utc, env_source, env_confidence, env_status)
+                m["stale"] = True
+                result.meta[k] = m
             # If a live entry exists for this key, don't overwrite with stale meta.
 
     # Ensure stale=False on all live meta entries (default for non-stale keys)
