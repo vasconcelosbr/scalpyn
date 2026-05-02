@@ -25,5 +25,5 @@ xgboost>=2.0.0
 scikit-learn>=1.5.0
 joblib>=1.4.0
 prometheus-client>=0.20.0
-fakeredis>=2.20.0
-lupa>=2.0
+# Test-only dependencies (fakeredis, lupa) live in requirements-dev.txt
+# so the production Cloud Run image doesn't ship them.

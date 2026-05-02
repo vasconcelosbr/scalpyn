@@ -105,22 +105,43 @@ class GateWSClient:
     # ── Public API ────────────────────────────────────────────────────────────
 
     async def start(self) -> None:
-        """Start both futures and spot WS connections as concurrent tasks."""
+        """Start the WS connections needed for the configured channels.
+
+        Each market task is only spawned when there is something to
+        subscribe to — passing ``contracts=[]`` skips the futures
+        connection entirely and ``spot_pairs=[]`` skips the spot one.
+        This matters for the Task #171 rollout, which is spot-only:
+        without this guard we would still open an idle futures socket
+        per replica that authenticates, sends pings forever, and adds
+        no value.
+        """
         if self._running:
             logger.warning("GateWSClient.start() called but client is already running")
             return
 
-        self._running = True
-        logger.info("GateWSClient starting futures and spot connections")
+        if not self._contracts and not self._spot_pairs:
+            logger.warning(
+                "GateWSClient.start() called with no contracts and no spot_pairs — nothing to subscribe to"
+            )
+            return
 
-        self._futures_task = asyncio.create_task(
-            self._run_with_backoff("futures", self._run_futures_ws),
-            name="gate_ws_futures",
-        )
-        self._spot_task = asyncio.create_task(
-            self._run_with_backoff("spot", self._run_spot_ws),
-            name="gate_ws_spot",
-        )
+        self._running = True
+
+        markets: list[str] = []
+        if self._contracts:
+            self._futures_task = asyncio.create_task(
+                self._run_with_backoff("futures", self._run_futures_ws),
+                name="gate_ws_futures",
+            )
+            markets.append(f"futures({len(self._contracts)})")
+        if self._spot_pairs:
+            self._spot_task = asyncio.create_task(
+                self._run_with_backoff("spot", self._run_spot_ws),
+                name="gate_ws_spot",
+            )
+            markets.append(f"spot({len(self._spot_pairs)})")
+
+        logger.info("GateWSClient starting markets: %s", ", ".join(markets))
 
     async def stop(self) -> None:
         """Gracefully stop all WS connections."""

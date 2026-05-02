@@ -434,40 +434,116 @@ class _GateWSSupervisor:
             await _release_leader(self._redis, self._instance_id)
 
 
+REDIS_BOOTSTRAP_RETRY_SECONDS = 30
+"""How long to wait between retries when Redis is unavailable at startup.
+
+Picked to align with ``redis_client.INIT_RETRY_COOLDOWN_SECONDS`` so we
+don't hammer the singleton's own cooldown.
+"""
+
+
 async def start_gate_ws_with_leader_election() -> Optional[Callable[[], Awaitable[None]]]:
     """Start the supervisor and return a shutdown coroutine.
 
-    Returns ``None`` when:
-      * the feature flag ``ENABLE_GATE_WS`` is not ``"1"``, or
-      * Redis is unavailable.
+    Returns ``None`` only when the feature flag ``ENABLE_GATE_WS`` is
+    not ``"1"`` — this is the explicit rollback switch and we honor it
+    immediately.
 
-    When enabled, the returned shutdown coroutine MUST be awaited from
-    the FastAPI lifespan ``finally``.  The supervisor keeps trying to
-    acquire leadership for the lifetime of the process; this replica may
-    start out as a reader and become the leader later — when the current
-    leader dies, its 30 s lock expires and the next ``_try_acquire_leader``
-    call wins within ~``CANDIDATE_POLL_INTERVAL_SECONDS``.
+    When the flag is on but Redis is unavailable at startup we do *not*
+    give up for the lifetime of the process: a background bootstrap
+    task retries ``get_async_redis()`` every
+    ``REDIS_BOOTSTRAP_RETRY_SECONDS`` until either it succeeds (then it
+    spawns the supervisor) or the returned shutdown coroutine cancels
+    it.  This avoids the previous failure mode where a Cloud Run replica
+    that booted seconds before Redis became reachable would stay idle
+    forever.
+
+    The returned shutdown coroutine MUST be awaited from the FastAPI
+    lifespan ``finally``.  Once the supervisor is up, leadership
+    behavior is unchanged: this replica may start out as a reader and
+    become the leader later — when the current leader dies, its 30 s
+    lock expires and the next ``_try_acquire_leader`` call wins within
+    ~``CANDIDATE_POLL_INTERVAL_SECONDS``.
     """
     if os.environ.get("ENABLE_GATE_WS") != "1":
         logger.info("[gate-ws-leader] ENABLE_GATE_WS != 1 — Gate WS disabled (REST polling only)")
         return None
 
-    redis = await get_async_redis()
-    if redis is None:
-        logger.warning("[gate-ws-leader] Redis unavailable — cannot run leader election; WS disabled")
-        return None
-
     instance_id = _resolve_instance_id()
-    supervisor = _GateWSSupervisor(redis, instance_id)
-    supervisor.start()
-    logger.info(
-        "[gate-ws-leader] supervisor started (instance=%s, candidate_poll=%ds, leader_ttl=%ds)",
-        instance_id, CANDIDATE_POLL_INTERVAL_SECONDS, LEADER_TTL_SECONDS,
+
+    # Try Redis once synchronously — the happy path keeps the same
+    # log shape as before.  If it fails we hand off to the bootstrap
+    # task so the lifespan can finish initializing.
+    redis = await get_async_redis()
+    if redis is not None:
+        supervisor = _GateWSSupervisor(redis, instance_id)
+        supervisor.start()
+        logger.info(
+            "[gate-ws-leader] supervisor started (instance=%s, candidate_poll=%ds, leader_ttl=%ds)",
+            instance_id, CANDIDATE_POLL_INTERVAL_SECONDS, LEADER_TTL_SECONDS,
+        )
+
+        async def _shutdown() -> None:
+            logger.info("[gate-ws-leader] lifespan shutdown — stopping supervisor")
+            await supervisor.stop()
+
+        return _shutdown
+
+    # Redis unavailable at boot → background retry loop.
+    logger.warning(
+        "[gate-ws-leader] Redis unavailable at startup — retrying every %ds in the background",
+        REDIS_BOOTSTRAP_RETRY_SECONDS,
     )
+    state: dict = {"supervisor": None, "stopping": asyncio.Event()}
+
+    async def _bootstrap_loop() -> None:
+        while not state["stopping"].is_set():
+            try:
+                await asyncio.wait_for(
+                    state["stopping"].wait(),
+                    timeout=REDIS_BOOTSTRAP_RETRY_SECONDS,
+                )
+                return  # shutdown was requested before Redis came back
+            except asyncio.TimeoutError:
+                pass
+
+            try:
+                r = await get_async_redis()
+            except Exception as exc:
+                logger.warning("[gate-ws-leader] bootstrap: get_async_redis() raised: %s", exc)
+                continue
+            if r is None:
+                continue
+
+            sup = _GateWSSupervisor(r, instance_id)
+            sup.start()
+            state["supervisor"] = sup
+            logger.info(
+                "[gate-ws-leader] Redis recovered — supervisor started "
+                "(instance=%s, candidate_poll=%ds, leader_ttl=%ds)",
+                instance_id, CANDIDATE_POLL_INTERVAL_SECONDS, LEADER_TTL_SECONDS,
+            )
+            return
+
+    bootstrap_task = asyncio.create_task(_bootstrap_loop(), name="gate_ws_redis_bootstrap")
 
     async def _shutdown() -> None:
-        logger.info("[gate-ws-leader] lifespan shutdown — stopping supervisor")
-        await supervisor.stop()
+        logger.info("[gate-ws-leader] lifespan shutdown — stopping bootstrap + supervisor")
+        state["stopping"].set()
+        # Stop the bootstrap loop first so it can exit cleanly.
+        try:
+            await asyncio.wait_for(bootstrap_task, timeout=5)
+        except asyncio.TimeoutError:
+            bootstrap_task.cancel()
+            try:
+                await bootstrap_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        except (asyncio.CancelledError, Exception):
+            pass
+        sup = state["supervisor"]
+        if sup is not None:
+            await sup.stop()
 
     return _shutdown
 
@@ -477,6 +553,7 @@ __all__ = [
     "LEADER_TTL_SECONDS",
     "LEADER_RENEW_INTERVAL_SECONDS",
     "CANDIDATE_POLL_INTERVAL_SECONDS",
+    "REDIS_BOOTSTRAP_RETRY_SECONDS",
     "start_gate_ws_with_leader_election",
     # Exported for tests:
     "_GateWSSupervisor",
