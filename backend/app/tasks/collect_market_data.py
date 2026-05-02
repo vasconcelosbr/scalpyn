@@ -8,6 +8,8 @@ from ..tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
+_REQUIRED_OHLCV_COLUMNS = ["time", "open", "high", "low", "close", "volume"]
+
 
 def _run_async(coro):
     """Run async code in sync Celery task."""
@@ -45,11 +47,28 @@ async def _collect_all_async():
 
         for symbol in symbols:  # process all pool symbols — pool size is the cap
             try:
+                logger.info(f"[PIPELINE] START symbol={symbol}")
                 df = await market_data_service.fetch_ohlcv(symbol, "1h", limit=100)
-                if df is None or df.empty:
+                logger.info(f"[PIPELINE] DF_TYPE symbol={symbol} type={type(df)}")
+
+                if df is None:
+                    logger.error(f"[PIPELINE] DF_NONE symbol={symbol}")
+                    continue
+
+                if df.empty:
+                    logger.error(f"[PIPELINE] DF_EMPTY symbol={symbol}")
+                    continue
+
+                logger.info(f"[PIPELINE] DF_ROWS symbol={symbol} rows={len(df)}")
+                logger.debug(f"[PIPELINE] DF_HEAD symbol={symbol} data={df.head(2).to_dict()}")
+
+                missing = [c for c in _REQUIRED_OHLCV_COLUMNS if c not in df.columns]
+                if missing:
+                    logger.error(f"[PIPELINE] INVALID_COLUMNS symbol={symbol} missing={missing} columns={list(df.columns)}")
                     continue
 
                 ohlcv_exchange = df.attrs.get("exchange", "gate.io")
+                logger.info(f"[PIPELINE] INSERT_START symbol={symbol} rows={len(df)}")
                 # Each symbol's writes are isolated in a SAVEPOINT so that a
                 # single failure never aborts the whole collection transaction.
                 async with db.begin_nested():
@@ -86,9 +105,10 @@ async def _collect_all_async():
                         "updated": datetime.now(timezone.utc),
                     })
 
+                logger.info(f"[PIPELINE] INSERT_OK symbol={symbol}")
                 collected += 1
             except Exception as e:
-                logger.error(f"[collect_all] FAILED symbol={symbol} error={e}", exc_info=True)
+                logger.error(f"[PIPELINE] INSERT_FAIL symbol={symbol} error={e}", exc_info=True)
                 failures += 1
                 await db.rollback()
                 continue
@@ -211,11 +231,27 @@ async def _collect_5m_async():
         for symbol in symbols:  # no cap — process all pool symbols
             sym_market_type = symbol_market_type.get(symbol, "spot")
             try:
+                logger.info(f"[PIPELINE] START symbol={symbol} timeframe=5m")
                 df = await market_data_service.fetch_ohlcv(symbol, "5m", limit=288)
-                if df is None or df.empty:
+                logger.info(f"[PIPELINE] DF_TYPE symbol={symbol} type={type(df)}")
+
+                if df is None:
+                    logger.error(f"[PIPELINE] DF_NONE symbol={symbol} timeframe=5m")
+                    continue
+
+                if df.empty:
+                    logger.error(f"[PIPELINE] DF_EMPTY symbol={symbol} timeframe=5m")
+                    continue
+
+                logger.info(f"[PIPELINE] DF_ROWS symbol={symbol} rows={len(df)}")
+
+                missing = [c for c in _REQUIRED_OHLCV_COLUMNS if c not in df.columns]
+                if missing:
+                    logger.error(f"[PIPELINE] INVALID_COLUMNS symbol={symbol} missing={missing} columns={list(df.columns)}")
                     continue
 
                 ohlcv_exchange = df.attrs.get("exchange", "gate.io")
+                logger.info(f"[PIPELINE] INSERT_START symbol={symbol} rows={len(df)} timeframe=5m")
 
                 # SAVEPOINT 1: OHLCV candles + price seed.
                 # Isolated so a single symbol failure never aborts the whole
@@ -293,8 +329,9 @@ async def _collect_5m_async():
                     )
 
                 collected += 1
+                logger.info(f"[PIPELINE] INSERT_OK symbol={symbol} timeframe=5m")
             except Exception as e:
-                logger.error(f"[collect_5m] FAILED symbol={symbol} error={e}", exc_info=True)
+                logger.error(f"[PIPELINE] INSERT_FAIL symbol={symbol} error={e}", exc_info=True)
                 failures += 1
                 await db.rollback()
                 continue

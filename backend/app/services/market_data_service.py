@@ -382,6 +382,7 @@ class MarketDataService:
         tf_map = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d"}
         gate_tf = tf_map.get(timeframe, "1h")
         pair = self.to_gate_symbol(symbol)
+        logger.info(f"[FETCH] REQUEST symbol={symbol} timeframe={timeframe} limit={limit} gate_pair={pair}")
 
         gate_df: Optional[pd.DataFrame] = None
         binance_df: Optional[pd.DataFrame] = None
@@ -397,9 +398,12 @@ class MarketDataService:
                 resp.raise_for_status()
                 data = resp.json()
 
+            logger.info(f"[FETCH] RAW_LEN symbol={symbol} source=gate size={len(data) if data else 0}")
+
             if data:
                 rows = [parse_gate_spot_candle(candle) for candle in data]
                 gate_df = pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
+                logger.info(f"[FETCH] PARSED_ROWS symbol={symbol} source=gate rows={len(gate_df)}")
 
                 # Gate covered the request fully — no need to call Binance.
                 if len(gate_df) >= self.MIN_OHLCV_CANDLES:
@@ -425,11 +429,14 @@ class MarketDataService:
         # ── Fallback / Merge source: Binance ──────────────────────────────────
         try:
             binance_sym = self.to_binance_symbol(symbol)
+            logger.info(f"[FETCH] REQUEST symbol={symbol} source=binance binance_sym={binance_sym}")
             rows = await self._binance.get_klines(
                 binance_sym, interval=timeframe, limit=limit, market="spot"
             )
+            logger.info(f"[FETCH] RAW_LEN symbol={symbol} source=binance size={len(rows) if rows else 0}")
             if rows:
                 binance_df = pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
+                logger.info(f"[FETCH] PARSED_ROWS symbol={symbol} source=binance rows={len(binance_df)}")
         except Exception as exc:
             logger.warning(
                 "[OHLCV] Binance fallback failed for %s/%s: %s",
@@ -473,6 +480,7 @@ class MarketDataService:
             )
             return gate_df
 
+        logger.error(f"[FETCH] RETURN_NONE symbol={symbol} timeframe={timeframe} gate=None binance=None")
         return None
 
     async def fetch_all_tickers(self) -> List[Dict[str, Any]]:
