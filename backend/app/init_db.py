@@ -234,6 +234,7 @@ async def init_db():
               time TIMESTAMPTZ NOT NULL,
               symbol VARCHAR(20) NOT NULL,
               timeframe VARCHAR(10) NOT NULL,
+              market_type VARCHAR(10) NOT NULL DEFAULT 'spot',
               indicators_json JSONB NOT NULL
             );
         """))
@@ -337,6 +338,24 @@ async def init_db():
             logger.warning(
                 "Could not add scheduler_group to indicators (non-fatal, "
                 "dual-scheduler will fall back gracefully): %s", e
+            )
+        # BEST-EFFORT: add market_type to indicators table for spot/futures
+        # pool segregation.  Non-fatal — existing rows default to 'spot'.
+        try:
+            await conn.execute(text("""
+                ALTER TABLE indicators
+                    ADD COLUMN IF NOT EXISTS market_type VARCHAR(10) NOT NULL DEFAULT 'spot';
+            """))
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS ix_indicators_futures_time
+                ON indicators (time DESC)
+                WHERE market_type = 'futures';
+            """))
+            logger.info("Ensured indicators.market_type column and index exist")
+        except Exception as e:
+            logger.warning(
+                "Could not add market_type to indicators (non-fatal — "
+                "all rows will default to 'spot'): %s", e
             )
         # BEST-EFFORT: add a unique constraint on (time, symbol, timeframe) so that
         # ON CONFLICT DO UPDATE in _persist_indicators has a valid conflict target and

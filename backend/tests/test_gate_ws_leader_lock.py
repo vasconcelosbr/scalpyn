@@ -151,6 +151,9 @@ async def test_supervisor_takes_over_after_leader_lock_expires(monkeypatch, fake
     async def fake_resolve_spot_pairs():
         return ["BTC_USDT"]
 
+    async def fake_resolve_futures_pairs():
+        return []
+
     async def fake_load_credentials():
         return ("", "")
 
@@ -160,7 +163,8 @@ async def test_supervisor_takes_over_after_leader_lock_expires(monkeypatch, fake
     monkeypatch.setattr(ws_mod, "start_gate_ws", fake_start_gate_ws, raising=False)
     monkeypatch.setattr(ws_mod, "stop_gate_ws",  fake_stop_gate_ws,  raising=False)
     monkeypatch.setattr(eh_mod, "register_all_handlers", fake_register_all_handlers, raising=False)
-    monkeypatch.setattr(leader_mod, "_resolve_spot_pairs",   fake_resolve_spot_pairs)
+    monkeypatch.setattr(leader_mod, "_resolve_spot_symbols",    fake_resolve_spot_pairs)
+    monkeypatch.setattr(leader_mod, "_resolve_futures_symbols", fake_resolve_futures_pairs)
     monkeypatch.setattr(leader_mod, "_load_gate_credentials", fake_load_credentials)
 
     # Pre-populate the lock as if instance-A is the current leader.

@@ -123,14 +123,15 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
         async with db.begin_nested():
             await db.execute(text("""
                 INSERT INTO indicators
-                    (time, symbol, timeframe, indicators_json, scheduler_group)
+                    (time, symbol, timeframe, market_type, indicators_json, scheduler_group)
                 VALUES
-                    (:time, :symbol, :timeframe, :payload, :grp)
+                    (:time, :symbol, :timeframe, :market_type, :payload, :grp)
                 ON CONFLICT DO NOTHING
             """), {
                 "time": when,
                 "symbol": symbol,
                 "timeframe": TIMEFRAME,
+                "market_type": "spot",
                 "payload": payload,
                 "grp": SCHEDULER_GROUP,
             })

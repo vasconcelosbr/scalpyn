@@ -70,6 +70,7 @@ interface Pool {
 
 const LEVEL_COLORS: Record<string, string> = {
   POOL: 'bg-[#3A3117] text-[#FBBF24] border border-[#D97706]/35',
+  'POOL FUTURO': 'bg-[#2D1A3A] text-[#E879F9] border border-[#A855F7]/35',
   L1: 'bg-[#1A2744] text-[#60A5FA] border border-[#2563EB]/40',
   L2: 'bg-[#1A3A2A] text-[#34D399] border border-[#059669]/40',
   L3: 'bg-[#3A1A2A] text-[#F472B6] border border-[#DB2777]/40',
@@ -85,11 +86,17 @@ const WATCHLIST_LEVEL_OPTIONS = [
 ] as const;
 
 function resolveWatchlistLevel(
-  wl: Partial<Pick<PipelineWatchlist, 'level' | 'source_pool_id' | 'profile_id'>> | undefined,
+  wl: Partial<Pick<PipelineWatchlist, 'level' | 'source_pool_id' | 'profile_id' | 'market_mode'>> | undefined,
   profiles: Profile[],
 ) {
   const normalized = (wl?.level || '').toUpperCase();
-  if (['POOL', 'L1', 'L2', 'L3'].includes(normalized)) return normalized;
+  if (['POOL', 'L1', 'L2', 'L3'].includes(normalized)) {
+    // POOL-level futures watchlists use a distinct label so operators can
+    // immediately distinguish the spot universe (POOL) from the futures
+    // universe (POOL FUTURO) without relying on the secondary FUTURES badge.
+    if (normalized === 'POOL' && wl?.market_mode === 'futures') return 'POOL FUTURO';
+    return normalized;
+  }
   const profile = profiles.find((item) => item.id === wl?.profile_id);
   const filterConditions = profile?.config?.filters?.conditions ?? [];
   return wl?.source_pool_id && filterConditions.length > 0 ? 'POOL' : 'custom';

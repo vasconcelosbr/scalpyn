@@ -3,9 +3,9 @@
 Covers:
   * ``handle_spot_trades`` writes ZADD + ZREMRANGEBYSCORE +
     ZREMRANGEBYRANK + EXPIRE into the right Redis key, including the
-    non-normalised-symbol case (``BTCUSDT`` → ``trades_buffer:BTC_USDT``).
+    non-normalised-symbol case (``BTCUSDT`` → ``trades_buffer:spot:BTC_USDT``).
   * ``order_flow_service.get_order_flow_data`` reads from the buffer
-    first and returns ``taker_source = "gate_trades_ws"`` when ≥1 trade
+    first and returns ``taker_source = "gate_trades_ws_spot"`` when ≥1 trade
     exists in the window.
   * The same call falls back to the REST stub (``taker_source =
     "gate_io_trades"``) when the buffer is empty.
@@ -78,7 +78,7 @@ async def test_handle_spot_trades_writes_zadd_with_normalized_symbol(fake_redis)
     ])
 
     expected_key = _trades_buffer_key("BTCUSDT")
-    assert expected_key == "trades_buffer:BTC_USDT"
+    assert expected_key == "trades_buffer:spot:BTC_USDT"
 
     # Both trades land in the *same* sorted set under the normalised key.
     n = await fake_redis.zcard(expected_key)
@@ -164,7 +164,7 @@ async def test_handle_spot_trades_skips_malformed_entries(fake_redis):
 
 @pytest.mark.anyio
 async def test_get_order_flow_data_reads_from_buffer_when_present(fake_redis):
-    """When ≥1 buffered trade is in window → source = "gate_trades_ws"."""
+    """When ≥1 buffered trade is in window → source = "gate_trades_ws_spot"."""
     now_ms = time.time() * 1000.0
     await handle_spot_trades([
         _trade(currency_pair="BTC_USDT", side="buy",  amount="3.0", ts_ms=now_ms - 1_000, trade_id=1),
@@ -173,7 +173,7 @@ async def test_get_order_flow_data_reads_from_buffer_when_present(fake_redis):
 
     payload = await get_order_flow_data("BTC_USDT", window_seconds=60)
 
-    assert payload["taker_source"] == "gate_trades_ws"
+    assert payload["taker_source"] == "gate_trades_ws_spot"
     assert payload["taker_buy_volume"]  == pytest.approx(3.0)
     assert payload["taker_sell_volume"] == pytest.approx(1.0)
     assert payload["taker_ratio"]       == pytest.approx(3.0 / 4.0)
@@ -191,7 +191,7 @@ async def test_get_order_flow_data_uses_normalized_key_for_lookup(fake_redis):
     ])
     # Reader receives the normalised form — must still hit the same key.
     payload = await get_order_flow_data("BTC_USDT", window_seconds=60)
-    assert payload["taker_source"] == "gate_trades_ws"
+    assert payload["taker_source"] == "gate_trades_ws_spot"
     assert payload["taker_buy_volume"] == pytest.approx(2.0)
 
 
@@ -241,4 +241,4 @@ async def test_get_order_flow_data_buffer_window_excludes_stale_trades(fake_redi
     payload = await get_order_flow_data("BTC_USDT", window_seconds=60)
     # Only the fresh trade is included.
     assert payload["taker_buy_volume"] == pytest.approx(1.0)
-    assert payload["taker_source"] == "gate_trades_ws"
+    assert payload["taker_source"] == "gate_trades_ws_spot"

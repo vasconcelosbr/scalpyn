@@ -35,10 +35,16 @@ PING_INTERVAL_SECONDS = 20
 
 # ── Futures channels and their initial payload builders ───────────────────────
 def _futures_channel_payloads(contracts: list[str]) -> list[tuple[str, list]]:
-    """Return (channel, payload) pairs for all futures subscriptions."""
+    """Return (channel, payload) pairs for all futures subscriptions.
+
+    ``futures.trades`` feeds the Redis trade buffer (key prefix
+    ``trades_buffer:futures:``) that backs real-time order-flow ingestion
+    for futures contracts, mirroring the ``spot.trades`` path.
+    """
     return [
         ("futures.tickers", contracts),
         ("futures.candlesticks", [f"1m,{c}" for c in contracts]),
+        ("futures.trades", contracts),
         ("futures.positions", contracts),
         ("futures.orders", ["-1"]),           # -1 = all contracts
         ("futures.autoorders", ["-1"]),

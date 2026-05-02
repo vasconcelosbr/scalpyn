@@ -167,8 +167,9 @@ def _aggregate_buy_sell(
 async def _read_buffer(
     symbol: str,
     window_seconds: int,
+    market_type: str = "spot",
 ) -> Optional[Dict[str, Optional[Any]]]:
-    """Aggregate taker flow from the Redis ``trades_buffer:*`` sorted set.
+    """Aggregate taker flow from the Redis ``trades_buffer:{market_type}:*`` sorted set.
 
     Returns the same dict shape as :func:`get_order_flow_data` when the
     buffer has at least one trade in ``[now - window_seconds, +inf]``.
@@ -192,7 +193,7 @@ async def _read_buffer(
         return None
 
     pair = GateAdapter._normalize_symbol(symbol)
-    key = f"trades_buffer:{pair}"
+    key = f"trades_buffer:{market_type}:{pair}"
     cutoff_ms = (time.time() - window_seconds) * 1_000.0
 
     try:
@@ -243,25 +244,33 @@ async def _read_buffer(
     if included == 0:
         return None
 
+    ws_source = f"gate_trades_ws_{market_type}"
     return _aggregate_buy_sell(
         symbol=symbol,
         window_seconds=window_seconds,
         buy_vol=buy_vol,
         sell_vol=sell_vol,
-        source="gate_trades_ws",
+        source=ws_source,
     )
 
 
 async def get_order_flow_data(
     symbol: str,
     window_seconds: int = WINDOW_SECONDS,
+    market_type: str = "spot",
 ) -> Dict[str, Optional[Any]]:
-    """Fetch recent spot trades and aggregate taker flow metrics.
+    """Fetch recent trades and aggregate taker flow metrics.
 
-    Reads first from the WS-fed Redis buffer (Task #171); falls back to
-    the REST ``GET /spot/trades`` path when the buffer is empty/unavailable.
+    Reads first from the WS-fed Redis buffer (key prefix
+    ``trades_buffer:{market_type}:``); falls back to the REST
+    ``GET /spot/trades`` path when the buffer is empty/unavailable.
 
     Args:
+        symbol:         Pair in Gate.io format, e.g. "BTC_USDT".
+        window_seconds: Look-back window in seconds (default 60).
+        market_type:    Market namespace — ``"spot"`` (default) or
+                        ``"futures"``.  Controls which Redis buffer is
+                        read and which REST endpoint is hit on fallback.
         symbol:         Pair in Gate.io format, e.g. "BTC_USDT".
         window_seconds: Look-back window in seconds (default 60).
 
@@ -272,12 +281,12 @@ async def get_order_flow_data(
             "taker_ratio":       float | None,   # buy / (buy + sell)  (0 → 1)
             "buy_pressure":      float | None,   # buy / (buy + sell)  (0 → 1)
             "volume_delta":      float | None,   # buy_vol - sell_vol  (base asset)
-            "taker_source":      str,            # "gate_trades_ws" | "gate_io_trades"
+            "taker_source":      str,            # e.g. "gate_trades_ws_spot" | "gate_io_trades"
             "taker_window":      str,
         }
     """
     # ── Buffer-first read ────────────────────────────────────────────────
-    buffered = await _read_buffer(symbol, window_seconds)
+    buffered = await _read_buffer(symbol, window_seconds, market_type=market_type)
     if buffered is not None:
         return buffered
 
@@ -286,8 +295,8 @@ async def get_order_flow_data(
     # rise in this line in production typically means the WS leader is
     # down or the trades buffer TTL has expired.
     logger.info(
-        "[OrderFlow] buffer empty for %s (window=%ds) — using REST fallback",
-        symbol, window_seconds,
+        "[OrderFlow] buffer empty for %s market=%s (window=%ds) — using REST fallback",
+        symbol, market_type, window_seconds,
     )
 
     empty = {
