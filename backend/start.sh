@@ -214,6 +214,25 @@ MAIN_PID=$$
 # triggering an immediate container shutdown.
 WATCHDOG_GRACE=${WATCHDOG_GRACE:-120}
 
+# is_process_alive PID
+# Returns true (0) only when the process EXISTS and is NOT a zombie.
+#
+# Why not just `kill -0 $PID`?
+# When a background process exits while its parent (uvicorn, after `exec`) is
+# alive but never calls waitpid(), the child becomes a zombie — it retains its
+# PID entry in the process table but performs no work.  `kill -0` returns 0
+# (success) for zombie processes because the PID entry still exists, so the
+# watchdog would incorrectly conclude that Celery is healthy.  Checking the
+# `stat` column from `ps` and rejecting entries that start with Z (zombie)
+# prevents this false-positive.
+is_process_alive() {
+    local pid=$1
+    local stat
+    stat=$(ps -o stat= -p "$pid" 2>/dev/null)
+    # Non-empty AND does NOT start with Z (zombie)
+    [ -n "$stat" ] && case "$stat" in Z*) return 1 ;; esac
+}
+
 # Watchdog: wait for grace period, then monitor Celery health.
 # Only kill uvicorn if Celery is STILL dead after retries.
 (
@@ -225,15 +244,15 @@ WATCHDOG_GRACE=${WATCHDOG_GRACE:-120}
         WORKER_OK=true
         BEAT_OK=true
 
-        if ! kill -0 "$CELERY_WORKER_PID" 2>/dev/null; then
+        if ! is_process_alive "$CELERY_WORKER_PID"; then
             WORKER_OK=false
         fi
-        if ! kill -0 "$CELERY_BEAT_PID" 2>/dev/null; then
+        if ! is_process_alive "$CELERY_BEAT_PID"; then
             BEAT_OK=false
         fi
 
         if [ "$WORKER_OK" = false ] || [ "$BEAT_OK" = false ]; then
-            echo "WARNING: Celery process down (worker=$WORKER_OK beat=$BEAT_OK) -- shutting down container"
+            echo "WARNING: Celery process down or zombie (worker=$WORKER_OK beat=$BEAT_OK) -- shutting down container"
             kill -TERM "$MAIN_PID" 2>/dev/null
             break
         fi
