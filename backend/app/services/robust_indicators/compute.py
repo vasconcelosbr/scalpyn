@@ -95,6 +95,12 @@ def _coerce_source_string(raw: Optional[str]) -> DataSource:
         "gate": DataSource.GATE_TRADES,
         "gate_io": DataSource.GATE_TRADES,
         "gate_io_trades": DataSource.GATE_TRADES,
+        # Tokens emitted by the WS-buffer order-flow path (Task #171).
+        # Without these, the buffer-first reader's ``taker_source`` would
+        # be coerced to ``DataSource.UNKNOWN`` and downstream confidence
+        # weighting would silently drop to the unknown-source baseline.
+        "gate_trades": DataSource.GATE_TRADES,
+        "gate_trades_ws": DataSource.GATE_TRADES,
         "binance": DataSource.BINANCE_TRADES,
         "binance_trades": DataSource.BINANCE_TRADES,
         "mixed": DataSource.MERGED,

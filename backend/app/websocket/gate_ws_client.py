@@ -191,7 +191,7 @@ class GateWSClient:
 
     async def _run_futures_ws(self) -> None:
         """Connect, authenticate, subscribe futures channels, and dispatch messages."""
-        from ..services.robust_indicators.metrics import set_ws_connected
+        from ..services.robust_indicators.metrics import set_ws_connected, set_ws_auth_ok
 
         logger.info("Connecting to Gate.io Futures WS: %s", FUTURES_WS_URL)
 
@@ -204,20 +204,16 @@ class GateWSClient:
             logger.info("Futures WS connected")
 
             auth_ok = await self._send_auth(ws, "futures")
-            # Mark the connection live ONLY on confirmed auth success
-            # (Task #171). For unauthenticated streams (no API key) we
-            # still set the gauge — the public spot.trades channel works
-            # without auth, and the WS itself has been accepted.
-            # The gauge is reset to 0 in ``finally`` so a forced
-            # disconnect surfaces immediately in Prometheus, even before
-            # the backoff loop reconnects.
-            if auth_ok:
-                set_ws_connected("futures", True, instance=self._instance_id)
-            else:
-                logger.warning(
-                    "[futures] auth failed/timed out — gate_ws_connected stays at 0; "
-                    "public channels may still receive frames"
-                )
+            # Two distinct gauges (Task #171):
+            #   • gate_ws_connected = transport health (handshake done +
+            #     subscriptions about to be sent) — public channels keep
+            #     streaming even when auth fails, so this MUST be set
+            #     to 1 regardless of auth_ok.
+            #   • gate_ws_auth_ok = auth-specific health.
+            # The transport gauge is reset to 0 in ``finally`` so a
+            # forced disconnect surfaces immediately in Prometheus.
+            set_ws_connected("futures", True, instance=self._instance_id)
+            set_ws_auth_ok("futures", auth_ok, instance=self._instance_id)
 
             for channel, payload in _futures_channel_payloads(self._contracts):
                 await self._subscribe(ws, channel, payload)
@@ -230,12 +226,13 @@ class GateWSClient:
                 await self._receive_loop(ws)
             finally:
                 set_ws_connected("futures", False, instance=self._instance_id)
+                set_ws_auth_ok("futures", False, instance=self._instance_id)
                 ping_task.cancel()
                 await asyncio.gather(ping_task, return_exceptions=True)
 
     async def _run_spot_ws(self) -> None:
         """Connect, authenticate, subscribe spot channels, and dispatch messages."""
-        from ..services.robust_indicators.metrics import set_ws_connected
+        from ..services.robust_indicators.metrics import set_ws_connected, set_ws_auth_ok
 
         logger.info("Connecting to Gate.io Spot WS: %s", SPOT_WS_URL)
 
@@ -248,13 +245,9 @@ class GateWSClient:
             logger.info("Spot WS connected")
 
             auth_ok = await self._send_auth(ws, "spot")
-            if auth_ok:
-                set_ws_connected("spot", True, instance=self._instance_id)
-            else:
-                logger.warning(
-                    "[spot] auth failed/timed out — gate_ws_connected stays at 0; "
-                    "public channels (e.g. spot.trades) may still receive frames"
-                )
+            # See _run_futures_ws — same two-gauge contract.
+            set_ws_connected("spot", True, instance=self._instance_id)
+            set_ws_auth_ok("spot", auth_ok, instance=self._instance_id)
 
             for channel, payload in _spot_channel_payloads(self._spot_pairs):
                 await self._subscribe(ws, channel, payload)
@@ -267,6 +260,7 @@ class GateWSClient:
                 await self._receive_loop(ws)
             finally:
                 set_ws_connected("spot", False, instance=self._instance_id)
+                set_ws_auth_ok("spot", False, instance=self._instance_id)
                 ping_task.cancel()
                 await asyncio.gather(ping_task, return_exceptions=True)
 

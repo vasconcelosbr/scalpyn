@@ -95,7 +95,18 @@ if _PROMETHEUS_AVAILABLE:
     # alert on "leader is down but no reader took over".
     GATE_WS_CONNECTED = Gauge(
         "gate_ws_connected",
-        "Gate.io WebSocket connection status (1 = authenticated and subscribed, 0 = disconnected).",
+        # NOTE: this is *transport+subscription* health, not auth health.
+        # Public channels (e.g. spot.trades) keep streaming even when
+        # auth fails, so we must not blank this gauge on a failed login
+        # — that would page on a healthy ingestion path. Use the
+        # ``gate_ws_auth_ok`` gauge below for auth-specific alerting.
+        "Gate.io WebSocket transport status (1 = WS handshake done and subscriptions sent, 0 = disconnected).",
+        labelnames=("market", "instance"),
+        registry=REGISTRY,
+    )
+    GATE_WS_AUTH_OK = Gauge(
+        "gate_ws_auth_ok",
+        "Gate.io WebSocket authentication status (1 = login succeeded or no creds configured, 0 = login failed).",
         labelnames=("market", "instance"),
         registry=REGISTRY,
     )
@@ -120,6 +131,7 @@ else:  # pragma: no cover — exercised when extra is missing
     EXCHANGE_REQUEST_LATENCY = None
     EXCHANGE_REQUEST_ERRORS = None
     GATE_WS_CONNECTED = None
+    GATE_WS_AUTH_OK = None
     GATE_TRADES_RECEIVED_TOTAL = None
     GATE_LAST_TRADE_TIMESTAMP_SECONDS = None
 
@@ -190,12 +202,13 @@ def increment_exchange_error(exchange: str, kind: str) -> None:
 
 
 def set_ws_connected(market: str, connected: bool, instance: str = "default") -> None:
-    """Record the Gate WebSocket connection state for ``market`` (spot/futures).
+    """Record the Gate WebSocket *transport* state for ``market`` (spot/futures).
 
-    Called from ``gate_ws_client`` immediately after a successful auth
-    (connected=True) and from the connection-loop ``finally`` block
-    (connected=False).  The ``instance`` label distinguishes the leader
-    replica from any future reader replicas in multi-instance deployments.
+    Called from ``gate_ws_client`` immediately after the auth handshake
+    completes (connected=True) — regardless of whether auth succeeded,
+    because public channels like ``spot.trades`` still stream — and from
+    the connection-loop ``finally`` block (connected=False). For
+    auth-specific health use :func:`set_ws_auth_ok`.
     """
     if GATE_WS_CONNECTED is None:
         return
@@ -203,6 +216,22 @@ def set_ws_connected(market: str, connected: bool, instance: str = "default") ->
         GATE_WS_CONNECTED.labels(market=market, instance=instance).set(1.0 if connected else 0.0)
     except Exception as exc:  # pragma: no cover — defensive
         logger.debug("metrics: set_ws_connected failed: %s", exc)
+
+
+def set_ws_auth_ok(market: str, auth_ok: bool, instance: str = "default") -> None:
+    """Record the Gate WebSocket *auth* state for ``market`` (spot/futures).
+
+    Set to 1 when Gate replies ``status=success`` to the login frame
+    *or* when no credentials are configured (the unauthenticated mode
+    used by the order-flow ingestion path, which only needs public
+    channels). Set to 0 when login times out or returns an error.
+    """
+    if GATE_WS_AUTH_OK is None:
+        return
+    try:
+        GATE_WS_AUTH_OK.labels(market=market, instance=instance).set(1.0 if auth_ok else 0.0)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.debug("metrics: set_ws_auth_ok failed: %s", exc)
 
 
 def incr_trades_received(symbol: str, n: int = 1) -> None:
@@ -247,5 +276,6 @@ __all__ = [
     "set_indicator_confidence",
     "set_indicator_staleness",
     "set_last_trade_timestamp",
+    "set_ws_auth_ok",
     "set_ws_connected",
 ]
