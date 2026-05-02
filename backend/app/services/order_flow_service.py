@@ -271,8 +271,6 @@ async def get_order_flow_data(
         market_type:    Market namespace — ``"spot"`` (default) or
                         ``"futures"``.  Controls which Redis buffer is
                         read and which REST endpoint is hit on fallback.
-        symbol:         Pair in Gate.io format, e.g. "BTC_USDT".
-        window_seconds: Look-back window in seconds (default 60).
 
     Returns:
         {
