@@ -81,7 +81,7 @@ validate_critical_schema() {
     echo "==> [schema] Validating critical schema..."
     if ! python3 -m scripts.check_critical_schema; then
         echo "==> Aborting startup: critical schema drift detected." >&2
-        echo "==> See docs/runbooks/scheduler-group-drift.md to apply missing DDL manually." >&2
+        echo "==> See docs/runbooks/critical-schema-drift.md to apply missing DDL manually." >&2
         exit 1
     fi
     echo "==> [schema] Critical schema OK."

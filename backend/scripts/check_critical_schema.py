@@ -90,7 +90,7 @@ async def _check() -> int:
             print(f"  - {table}.{column}", file=sys.stderr)
         print(
             "Container will not start. Apply the missing DDL manually "
-            "(see docs/runbooks/scheduler-group-drift.md) or fix the "
+            "(see docs/runbooks/critical-schema-drift.md) or fix the "
             "alembic upgrade lock contention so the migrations can run.",
             file=sys.stderr,
         )

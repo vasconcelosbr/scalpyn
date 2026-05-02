@@ -63,6 +63,7 @@ Every `down_revision` value (or each element of a tuple) must appear as a `revis
 - [ ] If I introduced a parallel branch, the merge migration's `down_revision` is a tuple containing both branch heads.
 - [ ] If this PR adds a new entry to `backend/app/_critical_schema.py::CRITICAL_COLUMNS`, **the migration that creates that column was already merged AND deployed AND verified live** in Cloud SQL — see invariant #7 (rollout order). If not, split into two PRs.
 - [ ] If this migration touches a **hot hypertable** (`ohlcv`, `indicators`, `decisions_log`, `trades`, `pipeline_watchlist_assets`), I applied the idempotent DDL manually in prod Cloud SQL **before** pushing — see invariant #8. Without this, Cloud Run cold start contests locks with the previous revision's Celery / collector and the deploy times out.
+- [ ] I ran the pre-push auditor (`cd backend && DATABASE_URL='<prod>' python3 -m scripts.audit_prod_schema`) and it reported `OK — no drift detected.` See invariant #9. This is the only check that catches the silent-stamp-head drift mode that sank migrations 032/033/034.
 
 ## Known failure modes (from past production incidents)
 
@@ -112,6 +113,34 @@ Every `down_revision` value (or each element of a tuple) must appear as a `revis
    3. Alembic still records the revision in `alembic_version` because the migration ran successfully (every statement was a no-op, but `op.execute(...)` returned 0 rows with no error).
 
    **Cold tables** (`pools`, `pipeline_watchlists`, `watchlist_profiles`, `users`, config / lookup tables) are safe to migrate via the normal Cloud Run path — there is no concurrent writer to contest the lock.
+
+## Ninth invariant (pre-push schema audit)
+
+9. **Run `scripts/audit_prod_schema` against prod before pushing any commit that touches `backend/alembic/versions/` or `backend/app/_critical_schema.py`.** This is the only check that catches the silent-stamp-head drift mode that sank migrations 032/033/034 in May 2026. The failure pattern: a previous deploy contested locks on a hot table → `alembic upgrade head` failed 3× → `start.sh` fell through to `alembic stamp head` → `alembic_version.version_num` advanced to the new id while no DDL ran → the next deploy that *adds* an entry to `CRITICAL_COLUMNS` for that revision (or simply triggers a cold start that runs `validate_critical_schema`) exit-1s with the generic Cloud Run port-bind error. Migration 032 sat in this drifted state for days before invariant #7's post-stamp probe (added in PR #99) made it visible — by then `alembic_version` was already at `034` while `indicators.scheduler_group` had never been created. The boot-time `check_critical_schema` is the FAILSAFE; this auditor is the PREVENTION.
+
+   Usage:
+
+   ```bash
+   cd backend
+   DATABASE_URL='postgresql://prod-user:...@/scalpyn?host=/cloudsql/...' \
+       python3 -m scripts.audit_prod_schema
+   ```
+
+   The auditor is read-only (only `SELECT`s from `alembic_version` and
+   `information_schema.columns`) and runs in <5 s against Cloud SQL. It
+   prints the alembic head, the count of present/missing critical columns,
+   and for every missing column the migration file that originally
+   introduced it (best-effort grep of `versions/*.py`). Exit 0 = safe to
+   push; exit 1 = drift, follow `backend/docs/runbooks/critical-schema-drift.md`
+   to apply the idempotent DDL manually before pushing.
+
+   When to run:
+
+   - Always before merging a PR that touches `backend/alembic/versions/`.
+   - Always before merging a PR that adds an entry to `CRITICAL_COLUMNS`.
+   - As a sanity check after any Cloud Build retry or rollback (drift may
+     have been introduced by an earlier failed deploy that you forgot
+     about).
 
 ## Cold-start budget on Cloud Run
 
