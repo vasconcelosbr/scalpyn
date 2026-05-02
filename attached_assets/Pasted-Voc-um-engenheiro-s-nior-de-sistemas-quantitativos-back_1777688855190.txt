@@ -1,0 +1,254 @@
+Você é um engenheiro sênior de sistemas quantitativos + backend responsável por corrigir um trading engine em produção.
+
+O sistema já possui arquitetura robusta (IndicatorEnvelope, validation, confidence, etc.), porém apresenta falhas críticas na implementação.
+
+---
+
+## 🚨 PROBLEMAS IDENTIFICADOS
+
+### 1. Persistência incorreta dos indicadores
+
+* Os indicadores estão sendo salvos como valores simples:
+  "taker_ratio": 0.61
+
+* O correto seria:
+  "taker_ratio": {
+  "value": 0.61,
+  "source": "binance",
+  "confidence": 0.9,
+  "status": "PASS"
+  }
+
+---
+
+### 2. Banco está usando formato antigo
+
+* Tabela `indicators` contém JSON flat
+* Estrutura nova (IndicatorEnvelope) não está sendo persistida
+* Auditoria falha por falta de metadata
+
+---
+
+### 3. Query de auditoria inválida
+
+* Queries assumem estrutura com `source`
+* Dados atuais não possuem esse campo
+
+---
+
+### 4. Possível falha no pipeline
+
+* robust_indicators roda
+* mas dados não estão sendo salvos corretamente
+
+---
+
+### 5. Gargalo de conexões no PostgreSQL
+
+* 300+ conexões ativas
+* muitas idle e idle in transaction
+* ausência de controle de pool
+
+---
+
+## 🎯 OBJETIVO
+
+Corrigir completamente o sistema para que:
+
+1. Todos os indicadores sejam persistidos no formato IndicatorEnvelope
+2. O banco reflita a nova arquitetura
+3. Queries de auditoria funcionem corretamente
+4. Não haja vazamento de conexões
+5. O sistema seja consistente e auditável
+
+---
+
+## 🔧 TAREFAS
+
+### 1. CORRIGIR PERSISTÊNCIA
+
+Localizar onde os indicadores são salvos (ex: snapshot, pipeline, service)
+
+Substituir:
+
+```python
+indicators_json["taker_ratio"] = value
+```
+
+Por:
+
+```python
+indicators_json["taker_ratio"] = envelope.to_dict()
+```
+
+Garantir que TODOS os indicadores usam:
+
+* value
+* source
+* confidence
+* status
+* timestamp (se aplicável)
+
+---
+
+### 2. INTEGRAR IndicatorEnvelope
+
+Garantir que:
+
+* todos os indicadores passam por envelope
+* validation engine é aplicado antes de salvar
+* confidence está sendo calculado corretamente
+
+---
+
+### 3. AJUSTAR SNAPSHOT / STORAGE
+
+* Verificar tabela `indicator_snapshots`
+* Garantir que ela armazena JSON completo
+* Confirmar que pipeline escreve nessa tabela (não apenas em `indicators`)
+
+Se necessário:
+
+* migrar leitura para `indicator_snapshots`
+* ou atualizar tabela existente
+
+---
+
+### 4. MIGRAÇÃO DE DADOS (se necessário)
+
+Criar script que:
+
+* converte formato antigo → novo
+* adiciona campos:
+
+  * source = "unknown" (fallback)
+  * confidence = 0.5
+  * status = "UNKNOWN"
+
+---
+
+### 5. CORRIGIR QUERIES
+
+Atualizar queries para:
+
+```sql
+indicators_json->'taker_ratio'->>'source'
+```
+
+Somente após garantir que estrutura está correta
+
+---
+
+### 6. CORRIGIR CONEXÕES (CRÍTICO)
+
+Implementar:
+
+#### SQLAlchemy:
+
+```python
+create_engine(
+    DB_URL,
+    pool_size=3,
+    max_overflow=2,
+    pool_pre_ping=True,
+    pool_recycle=1800,
+)
+```
+
+#### Sessões:
+
+* usar context manager:
+
+```python
+with Session() as session:
+```
+
+* garantir:
+  session.close()
+
+---
+
+### 7. CONTROLAR CONCORRÊNCIA
+
+* reduzir paralelismo:
+
+  * Celery workers
+  * Cloud Run instances
+
+---
+
+### 8. VALIDAÇÃO FINAL
+
+Após correção, validar:
+
+#### Estrutura:
+
+```sql
+SELECT indicators_json->'taker_ratio'
+FROM indicator_snapshots
+LIMIT 5;
+```
+
+Esperado:
+
+```json
+{
+  "value": ...,
+  "source": "...",
+  "confidence": ...,
+  "status": "..."
+}
+```
+
+---
+
+#### Flow source:
+
+```sql
+SELECT 
+  indicators_json->'taker_ratio'->>'source',
+  indicators_json->'volume_delta'->>'source',
+  COUNT(*)
+FROM indicator_snapshots
+GROUP BY 1,2;
+```
+
+Esperado:
+
+* binance
+* gate
+* NUNCA null
+* NUNCA candle_approx
+
+---
+
+## 📦 OUTPUT ESPERADO
+
+A IA deve entregar:
+
+1. Código corrigido completo (persistência + engine)
+2. Ajustes no banco / models
+3. Script de migração (se necessário)
+4. Configuração de conexão otimizada
+5. Queries finais de validação
+6. Checklist de deploy seguro
+
+---
+
+## 🚫 REGRAS
+
+* Não manter compatibilidade com formato antigo sem flag explícita
+* Não usar fallback candle para flow
+* Não deixar campos NULL silenciosos
+* Não retornar explicação genérica — entregar código
+
+---
+
+## 🎯 RESULTADO FINAL
+
+Sistema totalmente consistente onde:
+
+* cada indicador é auditável
+* dados são confiáveis
+* banco reflete a arquitetura real
+* auditoria funciona corretamente
