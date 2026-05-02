@@ -1,0 +1,192 @@
+Você é um engenheiro quantitativo + SRE responsável por auditar um trading engine em produção após uma grande migração de arquitetura.
+
+O sistema implementado inclui:
+
+* IndicatorEnvelope (com source, confidence, status)
+* Validation Engine
+* Score ponderado por confiança
+* Remoção de fallback impreciso (flow)
+* Feature flag + rollout gradual
+* Monitoramento com Prometheus
+
+---
+
+## OBJETIVO
+
+Validar se o sistema em produção está:
+
+1. FUNCIONANDO corretamente
+2. GERANDO DADOS CONFIÁVEIS
+3. TOMANDO DECISÕES CONSISTENTES
+4. SEM REGRESSÕES ou BUGS OCULTOS
+
+---
+
+## DADOS DE ENTRADA
+
+Analise logs, métricas e outputs reais do sistema.
+
+---
+
+## 1. SAÚDE DO SISTEMA
+
+Levantar:
+
+* tempo médio de cálculo dos indicadores
+* taxa de erro (% ERROR)
+* taxa de NO_DATA
+* taxa de STALE
+* latência por fonte (Binance, Gate)
+
+Classificar:
+
+* OK
+* WARNING
+* CRITICAL
+
+---
+
+## 2. QUALIDADE DOS DADOS
+
+Para cada ativo (BTC, XRP, altcoins):
+
+* confidence média
+* % indicadores válidos
+* distribuição de source (binance/gate/candle)
+* incidência de fallback (deve ser baixa)
+
+Identificar:
+
+* ativos problemáticos
+* inconsistência entre ativos
+
+---
+
+## 3. VALIDAÇÃO DE INTEGRIDADE
+
+Verificar se regras estão sendo respeitadas:
+
+* volume_delta → apenas 1 bucket ativo
+* indicadores críticos nunca NO_DATA (ou corretamente bloqueados)
+* derived indicators com dependências válidas
+* candles suficientes para EMA/ADX
+
+Listar violações.
+
+---
+
+## 4. SCORE ENGINE
+
+Analisar:
+
+* distribuição de score (histograma)
+* score médio
+* taxa de aprovação vs rejeição
+* motivos de rejeição
+
+Validar:
+
+* score faz sentido com os dados?
+* confidence impactando corretamente?
+* existe score alto com baixa confiança? (ERRO)
+
+---
+
+## 5. FLOW INDICATORS (CRÍTICO)
+
+Verificar:
+
+* taker_ratio e volume_delta estão vindo de:
+
+  * trades reais? (esperado)
+  * candle fallback? (não deveria)
+
+Se fallback estiver ativo:
+→ classificar como ERRO
+
+---
+
+## 6. COMPARAÇÃO (SE SHADOW MODE ATIVO)
+
+Comparar:
+
+* score antigo vs novo
+* divergência média
+* casos com diferença > 20%
+
+Identificar:
+
+* falsos positivos antigos eliminados?
+* regressões?
+
+---
+
+## 7. MONITORAMENTO (PROMETHEUS)
+
+Validar métricas:
+
+* indicator_confidence
+* indicator_staleness
+* score_rejection_total
+* computation_duration
+
+Verificar:
+
+* alertas disparando corretamente?
+* thresholds coerentes?
+
+---
+
+## 8. ANOMALIAS
+
+Detectar automaticamente:
+
+* mesmo valor repetido em múltiplos indicadores
+* valores zerados suspeitos
+* ausência de dados em ativos líquidos
+* spikes de NO_DATA
+
+---
+
+## 9. RESULTADO FINAL
+
+Responder objetivamente:
+
+### STATUS GERAL:
+
+* OK / WARNING / CRITICAL
+
+### PROBLEMAS ENCONTRADOS:
+
+(lista clara)
+
+### RISCOS:
+
+* falso positivo?
+* perda de oportunidades?
+* inconsistência?
+
+### CONFIABILIDADE DO SISTEMA:
+
+0.0 – 1.0
+
+### RECOMENDAÇÕES:
+
+* correções imediatas
+* ajustes de threshold
+* melhorias de dados
+
+---
+
+## REGRA
+
+* NÃO assumir dados
+* NÃO usar respostas genéricas
+* SE não houver evidência → marcar como INCONCLUSIVO
+* PRIORIDADE: detectar falhas reais
+
+---
+
+## OBJETIVO FINAL
+
+Garantir que o sistema só opere com dados válidos, consistentes e auditáveis.
