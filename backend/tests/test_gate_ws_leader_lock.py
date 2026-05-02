@@ -130,15 +130,23 @@ async def test_supervisor_takes_over_after_leader_lock_expires(monkeypatch, fake
     started_with_instance: list[str] = []
     stop_calls: list[None] = []
 
-    async def fake_start_gate_ws(*, api_key, api_secret, contracts, spot_pairs, instance_id):
+    async def fake_start_gate_ws(*, api_key, api_secret, contracts, spot_pairs,
+                                  instance_id, register_handlers=None):
         started_with_instance.append(instance_id)
-        return _FakeGateWSClient()
+        client = _FakeGateWSClient()
+        # The supervisor passes ``register_all_handlers`` here — invoke
+        # it so we mirror the real call site.
+        if register_handlers is not None:
+            register_handlers(client)
+        return client
 
     async def fake_stop_gate_ws():
         stop_calls.append(None)
 
-    def fake_register_all_handlers(_client):  # noqa: ANN001
-        return None
+    register_calls: list[object] = []
+
+    def fake_register_all_handlers(client):  # noqa: ANN001
+        register_calls.append(client)
 
     async def fake_resolve_spot_pairs():
         return ["BTC_USDT"]
@@ -199,3 +207,7 @@ async def test_supervisor_takes_over_after_leader_lock_expires(monkeypatch, fake
     # Phase 3 — clean shutdown stops the WS and releases the lock.
     assert stop_calls, "stop_gate_ws should have been called on shutdown"
     assert await fake_redis.get(LEADER_KEY) is None
+    # Handlers were registered exactly once, before the receive tasks
+    # would have started — closing the startup-race the second code
+    # review flagged.
+    assert len(register_calls) == 1

@@ -203,12 +203,21 @@ class GateWSClient:
         ) as ws:
             logger.info("Futures WS connected")
 
-            await self._send_auth(ws, "futures")
-            # Auth completed → mark the connection live (Task #171).
+            auth_ok = await self._send_auth(ws, "futures")
+            # Mark the connection live ONLY on confirmed auth success
+            # (Task #171). For unauthenticated streams (no API key) we
+            # still set the gauge — the public spot.trades channel works
+            # without auth, and the WS itself has been accepted.
             # The gauge is reset to 0 in ``finally`` so a forced
             # disconnect surfaces immediately in Prometheus, even before
             # the backoff loop reconnects.
-            set_ws_connected("futures", True, instance=self._instance_id)
+            if auth_ok:
+                set_ws_connected("futures", True, instance=self._instance_id)
+            else:
+                logger.warning(
+                    "[futures] auth failed/timed out — gate_ws_connected stays at 0; "
+                    "public channels may still receive frames"
+                )
 
             for channel, payload in _futures_channel_payloads(self._contracts):
                 await self._subscribe(ws, channel, payload)
@@ -238,8 +247,14 @@ class GateWSClient:
         ) as ws:
             logger.info("Spot WS connected")
 
-            await self._send_auth(ws, "spot")
-            set_ws_connected("spot", True, instance=self._instance_id)
+            auth_ok = await self._send_auth(ws, "spot")
+            if auth_ok:
+                set_ws_connected("spot", True, instance=self._instance_id)
+            else:
+                logger.warning(
+                    "[spot] auth failed/timed out — gate_ws_connected stays at 0; "
+                    "public channels (e.g. spot.trades) may still receive frames"
+                )
 
             for channel, payload in _spot_channel_payloads(self._spot_pairs):
                 await self._subscribe(ws, channel, payload)
@@ -292,8 +307,26 @@ class GateWSClient:
 
     # ── Internal: auth & subscribe ────────────────────────────────────────────
 
-    async def _send_auth(self, ws, market: str) -> None:
-        """Send Gate.io WS authentication message."""
+    async def _send_auth(self, ws, market: str) -> bool:
+        """Send Gate.io WS authentication message.
+
+        Returns ``True`` when:
+          * Gate replied with ``result.status == "success"``, **or**
+          * the client has no API credentials (``api_key`` empty) — this
+            is the unauthenticated mode used by the order-flow ingestion
+            path which only needs the public ``spot.trades`` channel.
+
+        Returns ``False`` when the auth handshake actually failed
+        (timeout, error response, exception).  The caller is responsible
+        for not setting the ``gate_ws_connected`` gauge in that case.
+        """
+        # Skip the handshake entirely when running unauthenticated; Gate
+        # does not require login for public channels and a bogus signature
+        # would just earn an error frame.
+        if not self._api_key or not self._api_secret:
+            logger.info("[%s] no API credentials configured — skipping WS auth (public channels only)", market)
+            return True
+
         ts = int(time.time())
         channel = f"{market}.login"
         event = "api"
@@ -326,12 +359,15 @@ class GateWSClient:
             result = resp.get("result", {})
             if isinstance(result, dict) and result.get("status") == "success":
                 logger.info("[%s] WS authentication successful", market)
-            else:
-                logger.warning("[%s] WS authentication response: %s", market, resp)
+                return True
+            logger.warning("[%s] WS authentication response: %s", market, resp)
+            return False
         except asyncio.TimeoutError:
-            logger.warning("[%s] No auth response within 10s — continuing anyway", market)
+            logger.warning("[%s] No auth response within 10s — treating as failure", market)
+            return False
         except Exception as exc:
             logger.warning("[%s] Error reading auth response: %s", market, exc)
+            return False
 
     async def _subscribe(self, ws, channel: str, payload: list) -> None:
         """Send a subscribe message for the given channel and payload."""
@@ -414,6 +450,7 @@ async def start_gate_ws(
     contracts: list[str],
     spot_pairs: list[str],
     instance_id: str = "default",
+    register_handlers: Optional[Callable[["GateWSClient"], None]] = None,
 ) -> GateWSClient:
     """Create and start the global GateWSClient singleton.
 
@@ -422,6 +459,12 @@ async def start_gate_ws(
     ``instance_id`` is forwarded to the Prometheus
     ``gate_ws_connected{instance=…}`` gauge so multi-instance deployments
     can distinguish the leader from any reader replicas.
+
+    ``register_handlers`` is called synchronously **before** the receive
+    tasks are spawned so the very first frame off the wire is dispatched
+    to a registered handler — closing the startup race where the WS task
+    could begin reading messages before the caller had a chance to wire
+    its handlers.
     """
     global _global_client
 
@@ -436,6 +479,12 @@ async def start_gate_ws(
         spot_pairs=spot_pairs,
         instance_id=instance_id,
     )
+    if register_handlers is not None:
+        try:
+            register_handlers(client)
+        except Exception as exc:
+            logger.error("[gate-ws] register_handlers callback failed: %s", exc, exc_info=True)
+            raise
     await client.start()
     _global_client = client
     logger.info("Global GateWSClient started (instance=%s)", instance_id)

@@ -135,14 +135,25 @@ async def _release_leader(redis, instance_id: str) -> None:
 
 
 async def _load_gate_credentials() -> tuple[str, str]:
-    """Best-effort load of the first active Gate API credentials.
+    """Best-effort load of Gate API credentials.
 
-    Mirrors the pattern used by ``tasks/macro_regime_update.py``.  When
-    no active connection exists (or decryption fails) we return empty
-    strings: the WS auth handshake will be rejected by Gate, but the
-    *public* ``spot.trades`` channel still streams normally — which is
-    all this task needs.
+    The task spec (line 47) calls for env-based credentials
+    (``GATE_API_KEY`` / ``GATE_API_SECRET``).  We honor that first and
+    fall back to the first active ``ExchangeConnection`` row only when
+    the env vars are unset — useful in dev where credentials are
+    typically configured via the UI.
+
+    When neither source yields credentials we return empty strings: the
+    WS auth handshake is then *skipped* by ``GateWSClient._send_auth``
+    (see that method's docstring) and the public ``spot.trades`` channel
+    streams normally — which is all this task needs.
     """
+    env_key = (os.environ.get("GATE_API_KEY") or "").strip()
+    env_secret = (os.environ.get("GATE_API_SECRET") or "").strip()
+    if env_key and env_secret:
+        logger.info("[gate-ws-leader] using Gate credentials from env (GATE_API_KEY)")
+        return env_key, env_secret
+
     try:
         from ..utils.encryption import decrypt
     except Exception as exc:  # pragma: no cover — defensive
@@ -159,10 +170,14 @@ async def _load_gate_credentials() -> tuple[str, str]:
             )
             conn = res.scalars().first()
         if conn is None:
-            logger.info("[gate-ws-leader] no active ExchangeConnection — using empty creds (public channels only)")
+            logger.info(
+                "[gate-ws-leader] no GATE_API_KEY env var and no active ExchangeConnection — "
+                "using empty creds (public channels only)"
+            )
             return "", ""
         api_key = decrypt(conn.api_key_encrypted).strip()
         api_secret = decrypt(conn.api_secret_encrypted).strip()
+        logger.info("[gate-ws-leader] using Gate credentials from ExchangeConnection (env vars unset)")
         return api_key, api_secret
     except Exception as exc:
         logger.warning("[gate-ws-leader] failed to load credentials: %s — using empty creds", exc)
@@ -349,6 +364,7 @@ class _GateWSSupervisor:
         """Start the WS, drive renewal, and tear down on loss/stop."""
         # Lazy imports — keep this module decoupled from the WS client at import time.
         from ..websocket import gate_ws_client as _ws_client_mod
+        from ..websocket.event_handlers import register_all_handlers
 
         spot_pairs = await _resolve_spot_pairs()
         if not spot_pairs:
@@ -361,15 +377,18 @@ class _GateWSSupervisor:
         api_key, api_secret = await _load_gate_credentials()
 
         try:
-            client = await _ws_client_mod.start_gate_ws(
+            # Pass ``register_handlers`` so the callback runs *before*
+            # the receive tasks are spawned — otherwise the first few
+            # frames off the wire could be dispatched against an empty
+            # handler map and silently dropped.
+            await _ws_client_mod.start_gate_ws(
                 api_key=api_key,
                 api_secret=api_secret,
                 contracts=[],   # futures.trades is out of scope for #171
                 spot_pairs=spot_pairs,
                 instance_id=self._instance_id,
+                register_handlers=register_all_handlers,
             )
-            from ..websocket.event_handlers import register_all_handlers
-            register_all_handlers(client)
             logger.info(
                 "[gate-ws-leader] Gate WS started (instance=%s, spot_pairs=%d)",
                 self._instance_id, len(spot_pairs),
