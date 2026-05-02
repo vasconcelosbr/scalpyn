@@ -1,0 +1,224 @@
+Você é um engenheiro sênior responsável por corrigir um bug crítico em produção no sistema de ingestão de order flow.
+
+---
+
+# 🚨 CONTEXTO
+
+Diagnóstico confirmado:
+
+* O WebSocket (GateWSClient) para de reconectar após 20 falhas consecutivas (`RECONNECT_MAX_RETRIES = 20`)
+* Quando isso ocorre:
+
+  * o processo WS morre silenciosamente
+  * o Redis buffer para de ser alimentado
+  * após TTL expirar → sistema entra em NO_DATA
+  * só volta com restart/deploy
+
+Além disso:
+
+* `robust_indicators/compute.py` usa `window_seconds=60` (default)
+* `compute_indicators.py` usa `window_seconds=300`
+* isso gera inconsistência VALID vs NO_DATA
+
+---
+
+# 🎯 OBJETIVO
+
+1. Tornar o WebSocket **auto-recuperável (never die)**
+2. Garantir que ele **nunca pare de reconectar**
+3. Padronizar `window_seconds = 300` em todo o sistema
+4. Melhorar observabilidade do estado do WS
+
+---
+
+# 🚫 REGRAS
+
+* NÃO alterar contratos de API
+* NÃO remover fallback REST
+* NÃO alterar arquitetura (WS + Redis permanece)
+* NÃO usar pseudocódigo
+* código deve ser executável
+
+---
+
+# 🔧 TAREFA 1 — CORRIGIR RECONEXÃO (CRÍTICO)
+
+Arquivo: `gate_ws_client.py`
+
+Local: função `_run_with_backoff`
+
+## ❌ comportamento atual (ERRADO)
+
+```python id="bad1"
+if attempt >= RECONNECT_MAX_RETRIES:
+    logger.critical(...)
+    return
+```
+
+## ✔ NOVO COMPORTAMENTO
+
+* NUNCA parar
+* continuar tentando indefinidamente
+* log CRITICAL a cada múltiplo de 20 tentativas
+
+## Implementar:
+
+```python id="fix1"
+async def _run_with_backoff(self, market: str, coro_factory: Callable) -> None:
+    attempt = 0
+    delay = RECONNECT_BASE_DELAY
+
+    while self._running:
+        try:
+            await coro_factory()
+
+            if not self._running:
+                break
+
+            logger.warning(
+                "[%s] WS exited cleanly but still running — reconnecting",
+                market,
+            )
+            attempt = 0
+            delay = RECONNECT_BASE_DELAY
+
+        except asyncio.CancelledError:
+            return
+
+        except Exception as exc:
+            attempt += 1
+
+            if attempt % RECONNECT_MAX_RETRIES == 0:
+                logger.critical(
+                    "[%s] WS failed %d times — STILL RETRYING. Last error: %s",
+                    market, attempt, exc,
+                )
+            else:
+                logger.warning(
+                    "[%s] WS lost (attempt %d): %s — retry in %.1fs",
+                    market, attempt, exc, delay,
+                )
+
+        if not self._running:
+            break
+
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, RECONNECT_MAX_DELAY)
+```
+
+---
+
+# 🔧 TAREFA 2 — GARANTIR QUE TASK NÃO MORRE
+
+Verificar:
+
+* `_run_with_backoff` é chamado dentro de `asyncio.create_task`
+* supervisor (`_GateWSSupervisor`) NÃO assume que WS ainda está vivo
+
+Se necessário:
+
+* adicionar watchdog simples (opcional)
+
+---
+
+# 🔧 TAREFA 3 — PADRONIZAR WINDOW (CRÍTICO)
+
+Arquivo: `robust_indicators/compute.py`
+
+## ❌ atual
+
+```python id="bad2"
+get_order_flow_data(symbol)
+```
+
+## ✔ corrigir
+
+```python id="fix2"
+get_order_flow_data(symbol, window_seconds=300)
+```
+
+---
+
+# 🔧 TAREFA 4 — (OPCIONAL MAS RECOMENDADO) MÉTRICA DE LEADER
+
+Arquivo: `metrics.py`
+
+Adicionar:
+
+```python id="fix3"
+gate_ws_is_leader (Gauge)
+```
+
+Integrar com `_GateWSSupervisor`
+
+---
+
+# 🔧 TAREFA 5 — LOG DE BUFFER VAZIO
+
+Arquivo: `order_flow_service.py`
+
+Quando buffer vazio:
+
+```python id="fix4"
+logger.info(
+    "[OrderFlow] buffer empty for %s (window=%ds) — using REST fallback",
+    symbol, window_seconds,
+)
+```
+
+---
+
+# 🔍 VALIDAÇÃO OBRIGATÓRIA
+
+## 1. Simular queda de WS
+
+* derrubar conexão manualmente
+* verificar reconexão contínua
+
+---
+
+## 2. Verificar banco
+
+```sql id="val1"
+SELECT indicators_json->'taker_ratio'
+FROM indicators
+ORDER BY time DESC
+LIMIT 20;
+```
+
+Esperado:
+
+* parar de alternar VALID / NO_DATA
+* predominância de VALID
+
+---
+
+## 3. Prometheus
+
+Validar:
+
+```text id="val2"
+gate_ws_connected == 1 (eventualmente volta após falha)
+rate(gate_trades_received_total[1m]) > 0
+```
+
+---
+
+# 📦 OUTPUT
+
+1. Código completo modificado
+2. Diff das alterações
+3. Como testar queda de WS
+4. Evidência de reconexão contínua
+5. Query de validação no banco
+
+---
+
+# 🎯 RESULTADO FINAL
+
+Sistema com:
+
+* WebSocket resiliente (nunca morre)
+* buffer sempre alimentado
+* sem NO_DATA estrutural
+* consistência entre pipelines
