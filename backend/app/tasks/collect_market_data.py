@@ -41,6 +41,7 @@ async def _collect_all_async():
 
     async def _inner(db) -> int:
         collected = 0
+        failures = 0
 
         for symbol in symbols:  # process all pool symbols — pool size is the cap
             try:
@@ -87,7 +88,8 @@ async def _collect_all_async():
 
                 collected += 1
             except Exception as e:
-                logger.warning(f"Failed to collect {symbol}: {e}")
+                logger.error(f"[collect_all] FAILED symbol={symbol} error={e}", exc_info=True)
+                failures += 1
                 continue
 
         # Also fetch tickers for metadata (price, volume, change + spread_pct from bid/ask)
@@ -153,7 +155,11 @@ async def _collect_all_async():
             logger.error("Failed to fetch/update metadata from tickers: %s", e)
         # run_db_task auto-commits all successful writes on exit
 
-        logger.info(f"Market data collection complete: {collected} symbols")
+        logger.info(f"Market data collection complete: collected={collected} failed={failures} total={len(symbols)}")
+        if collected == 0 and len(symbols) > 0:
+            raise RuntimeError(
+                f"[collect_all] All {len(symbols)} symbol collections failed — check errors above"
+            )
         return collected
 
     return await run_db_task(_inner, celery=True)
@@ -199,6 +205,7 @@ async def _collect_5m_async():
     async def _inner(db) -> int:
         from ..services.market_data_service import market_data_service
         collected = 0
+        failures = 0
 
         for symbol in symbols:  # no cap — process all pool symbols
             sym_market_type = symbol_market_type.get(symbol, "spot")
@@ -286,7 +293,8 @@ async def _collect_5m_async():
 
                 collected += 1
             except Exception as e:
-                logger.warning(f"Failed to collect 5m data for {symbol}: {e}")
+                logger.error(f"[collect_5m] FAILED symbol={symbol} error={e}", exc_info=True)
+                failures += 1
                 continue
 
         # ── Backup metadata pathway: fetch tickers for volume_24h + spread ───
@@ -392,7 +400,11 @@ async def _collect_5m_async():
             logger.debug("5m: per-symbol stale-check skipped (non-blocking): %s", e)
         # run_db_task auto-commits all successful writes on exit
 
-        logger.info(f"5m collection complete: {collected} symbols")
+        logger.info(f"5m collection complete: collected={collected} failed={failures} total={len(symbols)}")
+        if collected == 0 and len(symbols) > 0:
+            raise RuntimeError(
+                f"[collect_5m] All {len(symbols)} symbol collections failed — check errors above"
+            )
         return collected
 
     return await run_db_task(_inner, celery=True)
