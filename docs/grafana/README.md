@@ -141,11 +141,21 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM grafana_ro;
    default time range `now-1h → now`, refresh `30s`.
 5. Optional: pin it to your Trading folder and star it.
 
-The dashboard ships **all four alert rules embedded** inside the JSON as
-`panel.alert` blocks (A1 on `Confidence Média`, A2 on `% NO_DATA`,
-A3 on `Rejection Rate (1h)`, A4 on the `Exchanges` table). On first save
-Grafana 10 migrates them into the unified-alerting model under the
-`Scalpyn` alert group automatically.
+The dashboard ships **all four alert rules embedded** inside the JSON
+using the **Grafana 10 unified-alerting schema** (each `alert` block
+carries a `data` array of query + `__expr__` reduce + threshold nodes
+and a `condition` field — identical structure to the YAML provisioning
+file in section 5):
+
+| # | Title                                 | Attached panel                         |
+|---|---------------------------------------|----------------------------------------|
+| A1 | `[Scalpyn] Confidence baixo (<0.6)`  | 3 — Confidence Média                   |
+| A2 | `[Scalpyn] NO_DATA alto (>25%)`      | 7 — Data Quality (15m) — 4-gauge panel |
+| A3 | `[Scalpyn] Rejection rate alto (>50%)` | 5 — Rejection Rate (1h)              |
+| A4 | `[Scalpyn] Exchange error rate alto (>10%)` | 9 — Exchanges table              |
+
+Grafana 10 imports them straight into the `Scalpyn` rule group with no
+legacy-to-unified migration step.
 
 ---
 

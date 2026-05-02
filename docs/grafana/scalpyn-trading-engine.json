@@ -18,7 +18,7 @@
   "editable": true,
   "graphTooltip": 1,
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "time": { "from": "now-1h", "to": "now" },
   "timepicker": {
@@ -75,15 +75,57 @@
       "id": 1,
       "type": "stat",
       "title": "System Status",
-      "description": "Composite OK/WARN/CRIT. OK requires avg(indicator_confidence) > 0.6 AND exchange error_rate < 5%. Returns 2=OK, 1=WARN, 0=CRIT. NO_DATA dimension is monitored separately by panel 2.",
-      "datasource": { "type": "prometheus", "uid": "${prometheus}" },
+      "description": "3-input composite per spec. A = avg(indicator_confidence) (Prometheus), B = % NO_DATA (Postgres), C = exchange error rate (Prometheus). OK (2) iff A>=0.6 AND B<=25 AND C<=0.05. WARN (1) if any threshold is breached by <=25% (A in [0.45, 0.6), B in (25, 31.25], C in (0.05, 0.0625]). CRIT (0) otherwise.",
+      "datasource": { "type": "datasource", "uid": "-- Mixed --" },
       "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
       "targets": [
         {
           "refId": "A",
-          "expr": "clamp_max(((avg(indicator_confidence) > bool 0.6)) + ((sum(rate(exchange_request_errors_total[5m])) / sum(rate(exchange_request_latency_seconds_count[5m])) < bool 0.05) or on() vector(1)), 2)",
+          "datasource": { "type": "prometheus", "uid": "${prometheus}" },
+          "expr": "avg(indicator_confidence)",
           "instant": true,
-          "legendFormat": "status"
+          "legendFormat": "confidence"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "postgres", "uid": "${postgres}" },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'NO_DATA') / NULLIF(COUNT(*),0) AS pct FROM indicator_snapshots, LATERAL jsonb_each(indicators_json) WHERE timestamp > NOW() - INTERVAL '15 minutes';"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "${prometheus}" },
+          "expr": "(sum(rate(exchange_request_errors_total[5m])) / sum(rate(exchange_request_latency_seconds_count[5m]))) or on() vector(0)",
+          "instant": true,
+          "legendFormat": "err_rate"
+        },
+        {
+          "refId": "D",
+          "datasource": { "type": "__expr__", "uid": "__expr__" },
+          "type": "reduce",
+          "expression": "A",
+          "reducer": "last"
+        },
+        {
+          "refId": "E",
+          "datasource": { "type": "__expr__", "uid": "__expr__" },
+          "type": "reduce",
+          "expression": "B",
+          "reducer": "last"
+        },
+        {
+          "refId": "F",
+          "datasource": { "type": "__expr__", "uid": "__expr__" },
+          "type": "reduce",
+          "expression": "C",
+          "reducer": "last"
+        },
+        {
+          "refId": "G",
+          "datasource": { "type": "__expr__", "uid": "__expr__" },
+          "type": "math",
+          "expression": "2 - min((($D < 0.6) + ($E > 25) + ($F > 0.05)), 1) - min((($D < 0.45) + ($E > 31.25) + ($F > 0.0625)), 1)"
         }
       ],
       "options": {
@@ -91,7 +133,7 @@
         "graphMode": "none",
         "justifyMode": "center",
         "textMode": "value_and_name",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^G$/", "values": false }
       },
       "fieldConfig": {
         "defaults": {
@@ -109,7 +151,7 @@
       "id": 2,
       "type": "stat",
       "title": "Score Médio (1h)",
-      "description": "Average of indicator_snapshots.score over the last hour. Requires score IS NOT NULL.",
+      "description": "AVG(indicator_snapshots.score) over the last hour. Excludes rows where score IS NULL.",
       "datasource": { "type": "postgres", "uid": "${postgres}" },
       "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
       "targets": [
@@ -146,7 +188,7 @@
       "id": 3,
       "type": "stat",
       "title": "Confidence Média",
-      "description": "avg(indicator_confidence) across all symbols and uvicorn workers. Threshold 0.6.",
+      "description": "avg(indicator_confidence) across all symbols and uvicorn workers. Embedded alert A1 (unified-alerting) fires when this falls below 0.6 for 5m.",
       "datasource": { "type": "prometheus", "uid": "${prometheus}" },
       "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
       "targets": [
@@ -181,24 +223,57 @@
         }
       },
       "alert": {
-        "name": "[Scalpyn] Confidence baixo (<0.6)",
-        "message": "Average indicator_confidence has been below 0.6 for 5 minutes. Investigate the robust-indicator pipeline (compute.py, scheduler), Gate.io connectivity, and recent indicator NO_DATA / STALE rates.",
+        "uid": "scalpyn-confidence-low",
+        "title": "[Scalpyn] Confidence baixo (<0.6)",
         "for": "5m",
-        "frequency": "1m",
-        "handler": 1,
-        "noDataState": "no_data",
-        "executionErrorState": "alerting",
-        "alertRuleTags": { "severity": "critical", "service": "trading-engine" },
-        "conditions": [
+        "condition": "C",
+        "noDataState": "NoData",
+        "execErrState": "Alerting",
+        "data": [
           {
-            "type": "query",
-            "evaluator": { "type": "lt", "params": [0.6] },
-            "operator": { "type": "and" },
-            "query": { "params": ["A", "5m", "now"] },
-            "reducer": { "type": "avg", "params": [] }
+            "refId": "A",
+            "queryType": "",
+            "relativeTimeRange": { "from": 300, "to": 0 },
+            "datasourceUid": "${prometheus}",
+            "model": {
+              "refId": "A",
+              "expr": "avg(indicator_confidence)",
+              "instant": true
+            }
+          },
+          {
+            "refId": "B",
+            "queryType": "",
+            "relativeTimeRange": { "from": 0, "to": 0 },
+            "datasourceUid": "__expr__",
+            "model": {
+              "refId": "B",
+              "type": "reduce",
+              "expression": "A",
+              "reducer": "last"
+            }
+          },
+          {
+            "refId": "C",
+            "queryType": "",
+            "relativeTimeRange": { "from": 0, "to": 0 },
+            "datasourceUid": "__expr__",
+            "model": {
+              "refId": "C",
+              "type": "threshold",
+              "expression": "B",
+              "conditions": [
+                { "evaluator": { "type": "lt", "params": [0.6] } }
+              ]
+            }
           }
         ],
-        "notifications": []
+        "labels": { "severity": "critical", "service": "trading-engine" },
+        "annotations": {
+          "summary": "Confidence média < 0.6 por 5m",
+          "description": "Average indicator_confidence has been below 0.6 for 5 minutes. Investigate the robust-indicator pipeline (compute.py, scheduler), Gate.io connectivity, and recent indicator NO_DATA / STALE rates.",
+          "runbook_url": "https://github.com/<org>/scalpyn/runbooks/grafana#confidence-baixo"
+        }
       }
     },
     {
@@ -245,7 +320,7 @@
       "id": 5,
       "type": "stat",
       "title": "Rejection Rate (1h)",
-      "description": "Percentage of decisions_log.decision = 'REJECT' over the last hour.",
+      "description": "Percentage of decisions_log.decision = 'REJECT' over the last hour. Embedded alert A3 (unified-alerting) fires when > 50 for 5m.",
       "datasource": { "type": "postgres", "uid": "${postgres}" },
       "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
       "targets": [
@@ -281,31 +356,65 @@
         }
       },
       "alert": {
-        "name": "[Scalpyn] Rejection rate alto (>50%)",
-        "message": "More than 50% of decisions in decisions_log were REJECT over the last hour. Inspect the rejection-reason donut (panel 7) and recent changes to backend/app/tasks/pipeline_scan.py.",
+        "uid": "scalpyn-rejection-rate-high",
+        "title": "[Scalpyn] Rejection rate alto (>50%)",
         "for": "5m",
-        "frequency": "1m",
-        "handler": 1,
-        "noDataState": "no_data",
-        "executionErrorState": "alerting",
-        "alertRuleTags": { "severity": "warning", "service": "trading-engine", "runbook_url": "https://github.com/<org>/scalpyn/runbooks/grafana#rejection-rate-alto" },
-        "conditions": [
+        "condition": "C",
+        "noDataState": "NoData",
+        "execErrState": "Alerting",
+        "data": [
           {
-            "type": "query",
-            "evaluator": { "type": "gt", "params": [50] },
-            "operator": { "type": "and" },
-            "query": { "params": ["A", "5m", "now"] },
-            "reducer": { "type": "last", "params": [] }
+            "refId": "A",
+            "queryType": "",
+            "relativeTimeRange": { "from": 3600, "to": 0 },
+            "datasourceUid": "${postgres}",
+            "model": {
+              "refId": "A",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT 100.0 * COUNT(*) FILTER (WHERE decision = 'REJECT') / NULLIF(COUNT(*),0) AS pct FROM decisions_log WHERE created_at > NOW() - INTERVAL '1 hour';"
+            }
+          },
+          {
+            "refId": "B",
+            "queryType": "",
+            "relativeTimeRange": { "from": 0, "to": 0 },
+            "datasourceUid": "__expr__",
+            "model": {
+              "refId": "B",
+              "type": "reduce",
+              "expression": "A",
+              "reducer": "last"
+            }
+          },
+          {
+            "refId": "C",
+            "queryType": "",
+            "relativeTimeRange": { "from": 0, "to": 0 },
+            "datasourceUid": "__expr__",
+            "model": {
+              "refId": "C",
+              "type": "threshold",
+              "expression": "B",
+              "conditions": [
+                { "evaluator": { "type": "gt", "params": [50] } }
+              ]
+            }
           }
         ],
-        "notifications": []
+        "labels": { "severity": "warning", "service": "trading-engine" },
+        "annotations": {
+          "summary": "Mais de 50% das decisões viraram REJECT na última hora",
+          "description": "decisions_log shows >50% REJECT over the last hour. Inspect the score-engine rejection donut and recent changes to backend/app/tasks/pipeline_scan.py.",
+          "runbook_url": "https://github.com/<org>/scalpyn/runbooks/grafana#rejection-rate-alto"
+        }
       }
     },
     {
       "id": 6,
       "type": "bargauge",
       "title": "Trades 1h (approved vs rejected)",
-      "description": "Decisions_log breakdown by decision over the last hour.",
+      "description": "decisions_log row count grouped by decision over the last hour.",
       "datasource": { "type": "postgres", "uid": "${postgres}" },
       "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
       "targets": [
@@ -327,9 +436,7 @@
           "color": { "mode": "thresholds" },
           "thresholds": {
             "mode": "absolute",
-            "steps": [
-              { "color": "blue", "value": null }
-            ]
+            "steps": [{ "color": "blue", "value": null }]
           }
         }
       }
@@ -344,20 +451,22 @@
     {
       "id": 7,
       "type": "gauge",
-      "title": "% VALID",
+      "title": "Data Quality (15m) — VALID · NO_DATA · STALE · ERROR",
+      "description": "Single SQL query returning four percentage columns; Grafana renders one gauge per numeric field. Embedded alert A2 (unified-alerting, see attached `alert` block) fires when % NO_DATA exceeds 25 for 5m.",
       "datasource": { "type": "postgres", "uid": "${postgres}" },
-      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 6 },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 6 },
       "targets": [
         {
           "refId": "A",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'VALID') / NULLIF(COUNT(*),0) AS pct FROM indicator_snapshots, LATERAL jsonb_each(indicators_json) WHERE timestamp > NOW() - INTERVAL '15 minutes';"
+          "rawSql": "SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'VALID')   / NULLIF(COUNT(*),0) AS pct_valid, 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'NO_DATA') / NULLIF(COUNT(*),0) AS pct_no_data, 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'STALE')   / NULLIF(COUNT(*),0) AS pct_stale, 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'ERROR')   / NULLIF(COUNT(*),0) AS pct_error FROM indicator_snapshots, LATERAL jsonb_each(indicators_json) WHERE timestamp > NOW() - INTERVAL '15 minutes';"
         }
       ],
       "options": {
         "showThresholdLabels": false,
         "showThresholdMarkers": true,
+        "orientation": "auto",
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
       },
       "fieldConfig": {
@@ -365,140 +474,131 @@
           "unit": "percent",
           "min": 0,
           "max": 100,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "red", "value": null },
-              { "color": "orange", "value": 70 },
-              { "color": "green", "value": 90 }
+          "color": { "mode": "thresholds" }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "pct_valid" },
+            "properties": [
+              { "id": "displayName", "value": "% VALID" },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "red", "value": null },
+                    { "color": "orange", "value": 70 },
+                    { "color": "green", "value": 90 }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "pct_no_data" },
+            "properties": [
+              { "id": "displayName", "value": "% NO_DATA" },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "orange", "value": 10 },
+                    { "color": "red", "value": 25 }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "pct_stale" },
+            "properties": [
+              { "id": "displayName", "value": "% STALE" },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "orange", "value": 10 },
+                    { "color": "red", "value": 25 }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "pct_error" },
+            "properties": [
+              { "id": "displayName", "value": "% ERROR" },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "orange", "value": 2 },
+                    { "color": "red", "value": 10 }
+                  ]
+                }
+              }
             ]
           }
-        }
-      }
-    },
-    {
-      "id": 8,
-      "type": "gauge",
-      "title": "% NO_DATA",
-      "description": "Percentage of indicator entries reporting status=NO_DATA in the last 15 minutes. Embedded alert A2 fires when this exceeds 25 for 5m.",
-      "datasource": { "type": "postgres", "uid": "${postgres}" },
-      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 6 },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'NO_DATA') / NULLIF(COUNT(*),0) AS pct FROM indicator_snapshots, LATERAL jsonb_each(indicators_json) WHERE timestamp > NOW() - INTERVAL '15 minutes';"
-        }
-      ],
-      "options": {
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true,
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "min": 0,
-          "max": 100,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 10 },
-              { "color": "red", "value": 25 }
-            ]
-          }
-        }
+        ]
       },
       "alert": {
-        "name": "[Scalpyn] NO_DATA alto (>25%)",
-        "message": "Indicator pipeline reports >25% NO_DATA over the last 15 minutes. Check Gate.io connectivity, the structural scheduler logs, and recent failures in backend/app/services/scheduler_service.py.",
+        "uid": "scalpyn-no-data-high",
+        "title": "[Scalpyn] NO_DATA alto (>25%)",
         "for": "5m",
-        "frequency": "1m",
-        "handler": 1,
-        "noDataState": "no_data",
-        "executionErrorState": "alerting",
-        "alertRuleTags": { "severity": "critical", "service": "trading-engine", "runbook_url": "https://github.com/<org>/scalpyn/runbooks/grafana#no-data-alto" },
-        "conditions": [
+        "condition": "C",
+        "noDataState": "NoData",
+        "execErrState": "Alerting",
+        "data": [
           {
-            "type": "query",
-            "evaluator": { "type": "gt", "params": [25] },
-            "operator": { "type": "and" },
-            "query": { "params": ["A", "15m", "now"] },
-            "reducer": { "type": "last", "params": [] }
+            "refId": "A",
+            "queryType": "",
+            "relativeTimeRange": { "from": 900, "to": 0 },
+            "datasourceUid": "${postgres}",
+            "model": {
+              "refId": "A",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'NO_DATA') / NULLIF(COUNT(*),0) AS pct FROM indicator_snapshots, LATERAL jsonb_each(indicators_json) WHERE timestamp > NOW() - INTERVAL '15 minutes';"
+            }
+          },
+          {
+            "refId": "B",
+            "queryType": "",
+            "relativeTimeRange": { "from": 0, "to": 0 },
+            "datasourceUid": "__expr__",
+            "model": {
+              "refId": "B",
+              "type": "reduce",
+              "expression": "A",
+              "reducer": "last"
+            }
+          },
+          {
+            "refId": "C",
+            "queryType": "",
+            "relativeTimeRange": { "from": 0, "to": 0 },
+            "datasourceUid": "__expr__",
+            "model": {
+              "refId": "C",
+              "type": "threshold",
+              "expression": "B",
+              "conditions": [
+                { "evaluator": { "type": "gt", "params": [25] } }
+              ]
+            }
           }
         ],
-        "notifications": []
-      }
-    },
-    {
-      "id": 9,
-      "type": "gauge",
-      "title": "% STALE",
-      "datasource": { "type": "postgres", "uid": "${postgres}" },
-      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 6 },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'STALE') / NULLIF(COUNT(*),0) AS pct FROM indicator_snapshots, LATERAL jsonb_each(indicators_json) WHERE timestamp > NOW() - INTERVAL '15 minutes';"
-        }
-      ],
-      "options": {
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true,
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "min": 0,
-          "max": 100,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 10 },
-              { "color": "red", "value": 25 }
-            ]
-          }
-        }
-      }
-    },
-    {
-      "id": 10,
-      "type": "gauge",
-      "title": "% ERROR",
-      "datasource": { "type": "postgres", "uid": "${postgres}" },
-      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 6 },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "table",
-          "rawQuery": true,
-          "rawSql": "SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'ERROR') / NULLIF(COUNT(*),0) AS pct FROM indicator_snapshots, LATERAL jsonb_each(indicators_json) WHERE timestamp > NOW() - INTERVAL '15 minutes';"
-        }
-      ],
-      "options": {
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true,
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "min": 0,
-          "max": 100,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 2 },
-              { "color": "red", "value": 10 }
-            ]
-          }
+        "labels": { "severity": "critical", "service": "trading-engine" },
+        "annotations": {
+          "summary": "Mais de 25% dos indicadores em NO_DATA",
+          "description": "Indicator pipeline reports >25% NO_DATA over the last 15 minutes. Check Gate.io connectivity, the structural scheduler logs, and recent failures in backend/app/services/scheduler_service.py.",
+          "runbook_url": "https://github.com/<org>/scalpyn/runbooks/grafana#no-data-alto"
         }
       }
     },
@@ -510,10 +610,10 @@
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 12 }
     },
     {
-      "id": 11,
+      "id": 8,
       "type": "timeseries",
       "title": "indicator_confidence por símbolo (avg 5m)",
-      "description": "Per-symbol moving average of robust indicator confidence. Horizontal reference line at 0.60.",
+      "description": "Per-symbol moving average of robust indicator confidence. Horizontal reference at 0.60.",
       "datasource": { "type": "prometheus", "uid": "${prometheus}" },
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 13 },
       "targets": [
@@ -558,10 +658,10 @@
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 }
     },
     {
-      "id": 12,
+      "id": 9,
       "type": "table",
       "title": "Exchanges — p95 latency · error rate · last update · status",
-      "description": "One row per exchange (label join). Columns match the spec exactly: p95 latency (s), error rate (ratio), last-update timestamp, and a status pill driven by staleness.",
+      "description": "One row per exchange (joined on the 'exchange' label). Spec-mandated columns: p95 latency (s), error rate (ratio 0-1), last-update timestamp (dateTimeAsLocal), status pill (range-mapped from staleness). Embedded alert A4 (unified-alerting) fires when the error rate exceeds 10% for 5m.",
       "datasource": { "type": "prometheus", "uid": "${prometheus}" },
       "gridPos": { "h": 7, "w": 24, "x": 0, "y": 22 },
       "targets": [
@@ -667,9 +767,9 @@
               {
                 "id": "mappings",
                 "value": [
-                  { "type": "range", "options": { "from": -1e9, "to": 60, "result": { "text": "OK", "color": "green", "index": 0 } } },
+                  { "type": "range", "options": { "from": -1000000000, "to": 60, "result": { "text": "OK", "color": "green", "index": 0 } } },
                   { "type": "range", "options": { "from": 60.000001, "to": 300, "result": { "text": "DEGRADED", "color": "orange", "index": 1 } } },
-                  { "type": "range", "options": { "from": 300.000001, "to": 1e12, "result": { "text": "DOWN", "color": "red", "index": 2 } } }
+                  { "type": "range", "options": { "from": 300.000001, "to": 1000000000000, "result": { "text": "DOWN", "color": "red", "index": 2 } } }
                 ]
               },
               { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "basic" } },
@@ -679,24 +779,57 @@
         ]
       },
       "alert": {
-        "name": "[Scalpyn] Exchange error rate alto (>10%)",
-        "message": "Exchange REST error rate has exceeded 10% for 5 minutes. Check Gate.io / Binance status pages, the gate_adapter._request log, and Cloud Run egress.",
+        "uid": "scalpyn-exchange-error-rate-high",
+        "title": "[Scalpyn] Exchange error rate alto (>10%)",
         "for": "5m",
-        "frequency": "1m",
-        "handler": 1,
-        "noDataState": "no_data",
-        "executionErrorState": "alerting",
-        "alertRuleTags": { "severity": "critical", "service": "trading-engine" },
-        "conditions": [
+        "condition": "C",
+        "noDataState": "NoData",
+        "execErrState": "Alerting",
+        "data": [
           {
-            "type": "query",
-            "evaluator": { "type": "gt", "params": [0.1] },
-            "operator": { "type": "and" },
-            "query": { "params": ["B", "5m", "now"] },
-            "reducer": { "type": "max", "params": [] }
+            "refId": "A",
+            "queryType": "",
+            "relativeTimeRange": { "from": 300, "to": 0 },
+            "datasourceUid": "${prometheus}",
+            "model": {
+              "refId": "A",
+              "expr": "100 * sum(rate(exchange_request_errors_total[5m])) / sum(rate(exchange_request_latency_seconds_count[5m]))",
+              "instant": true
+            }
+          },
+          {
+            "refId": "B",
+            "queryType": "",
+            "relativeTimeRange": { "from": 0, "to": 0 },
+            "datasourceUid": "__expr__",
+            "model": {
+              "refId": "B",
+              "type": "reduce",
+              "expression": "A",
+              "reducer": "last"
+            }
+          },
+          {
+            "refId": "C",
+            "queryType": "",
+            "relativeTimeRange": { "from": 0, "to": 0 },
+            "datasourceUid": "__expr__",
+            "model": {
+              "refId": "C",
+              "type": "threshold",
+              "expression": "B",
+              "conditions": [
+                { "evaluator": { "type": "gt", "params": [10] } }
+              ]
+            }
           }
         ],
-        "notifications": []
+        "labels": { "severity": "critical", "service": "trading-engine" },
+        "annotations": {
+          "summary": "Erro de exchange (Gate / Binance) > 10% por 5m",
+          "description": "More than 10% of REST requests to Gate.io / Binance failed over the last 5 minutes. Check the public status pages, gate_adapter._request transport errors in Cloud Logging, and Cloud Run egress.",
+          "runbook_url": "https://github.com/<org>/scalpyn/runbooks/grafana#exchange-error-rate"
+        }
       }
     },
     {
@@ -707,7 +840,7 @@
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 }
     },
     {
-      "id": 13,
+      "id": 10,
       "type": "timeseries",
       "title": "indicator_snapshots.score por símbolo",
       "description": "One series per symbol. Skips snapshots where score IS NULL.",
@@ -746,7 +879,7 @@
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 38 }
     },
     {
-      "id": 14,
+      "id": 11,
       "type": "table",
       "title": "Indicadores em estado crítico",
       "description": "Per-indicator drill-down filtered to NO_DATA, STALE, ERROR within the last 5 minutes. Hard limit 200 rows.",
@@ -765,9 +898,7 @@
         "footer": { "show": true, "reducer": ["count"], "fields": "" }
       },
       "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" }
-        },
+        "defaults": { "color": { "mode": "thresholds" } },
         "overrides": [
           {
             "matcher": { "id": "byName", "options": "status" },
@@ -813,7 +944,7 @@
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 }
     },
     {
-      "id": 15,
+      "id": 12,
       "type": "piechart",
       "title": "score_rejection_total por motivo (5m)",
       "description": "Reason label is whatever pipeline_scan.py passes to increment_rejection(reason_key) — currently the colon-prefix of result.rejection_reason. No enum is hard-coded.",
@@ -842,7 +973,7 @@
       }
     },
     {
-      "id": 16,
+      "id": 13,
       "type": "stat",
       "title": "Total rejeições (5m)",
       "datasource": { "type": "prometheus", "uid": "${prometheus}" },
@@ -879,7 +1010,7 @@
       }
     },
     {
-      "id": 17,
+      "id": 14,
       "type": "stat",
       "title": "Top motivo (5m)",
       "datasource": { "type": "prometheus", "uid": "${prometheus}" },
@@ -902,50 +1033,6 @@
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "fixed", "fixedColor": "orange" }
-        }
-      }
-    },
-    {
-      "id": 107,
-      "type": "row",
-      "title": "8. Pipeline Performance (computation latency)",
-      "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 58 }
-    },
-    {
-      "id": 18,
-      "type": "timeseries",
-      "title": "indicator_computation_duration_seconds — p50 / p95 por indicador",
-      "description": "Histogram quantiles of the robust-indicator computation latency, aggregated across uvicorn workers.",
-      "datasource": { "type": "prometheus", "uid": "${prometheus}" },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 59 },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "histogram_quantile(0.50, sum by (le, indicator) (rate(indicator_computation_duration_seconds_bucket[5m])))",
-          "legendFormat": "p50 · {{indicator}}"
-        },
-        {
-          "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le, indicator) (rate(indicator_computation_duration_seconds_bucket[5m])))",
-          "legendFormat": "p95 · {{indicator}}"
-        }
-      ],
-      "options": {
-        "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "max"], "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "decimals": 3,
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "fillOpacity": 5,
-            "showPoints": "never"
-          },
-          "color": { "mode": "palette-classic" }
         }
       }
     }

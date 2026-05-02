@@ -18,30 +18,53 @@ Prometheus metric or PostgreSQL column — there are no fictitious series.
 
 ## Section 1 — Top stats (refresh: 30 s)
 
-### 1.1 System Status (composite OK / WARN / CRIT)
+### 1.1 System Status (3-input composite OK / WARN / CRIT)
 
-* **Datasource:** `${prometheus}`
+* **Datasource:** `-- Mixed --` (Prometheus + Postgres)
 * **Panel type:** Stat with value mappings (0 → CRIT, 1 → WARN, 2 → OK)
-* **Query:**
+* **Inputs (three real signals, no proxies):**
 
   ```promql
-  clamp_max(
-    ((avg(indicator_confidence) > bool 0.6))
-    + ((sum(rate(exchange_request_errors_total[5m]))
-        / sum(rate(exchange_request_latency_seconds_count[5m])) < bool 0.05)
-       or on() vector(1)),
-    2)
+  # A — average robust-indicator confidence (Prometheus)
+  avg(indicator_confidence)
   ```
 
-  * Each `> bool` / `< bool` comparison returns 0 or 1.
-  * `or on() vector(1)` ensures the error-rate term collapses to "OK" when no
-    exchange traffic has occurred yet (prevents false CRITs at cold start).
-  * Result range: 0 (both bad) · 1 (one bad) · 2 (both healthy).
-* **Thresholds:** absolute, mapped — `red` (default), no further steps; the
-  three colours come from value mappings.
-* **NO_DATA dimension:** monitored separately by panel 2 — keeping it out of
-  the composite avoids a 3-input Prom expression that would require an
-  expressions-engine math node to mix with the SQL gauge.
+  ```sql
+  -- B — % NO_DATA across all indicator entries in the last 15 minutes
+  SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'NO_DATA')
+       / NULLIF(COUNT(*),0) AS pct
+  FROM indicator_snapshots, LATERAL jsonb_each(indicators_json)
+  WHERE timestamp > NOW() - INTERVAL '15 minutes';
+  ```
+
+  ```promql
+  # C — exchange request error rate over the last 5 minutes
+  (sum(rate(exchange_request_errors_total[5m]))
+    / sum(rate(exchange_request_latency_seconds_count[5m]))) or on() vector(0)
+  ```
+
+* **Combined via Grafana expressions** (`__expr__` reduce + math nodes):
+
+  ```text
+  D = reduce(A, last)
+  E = reduce(B, last)
+  F = reduce(C, last)
+  G = 2 - min(($D < 0.6) + ($E > 25) + ($F > 0.05), 1)
+        - min(($D < 0.45) + ($E > 31.25) + ($F > 0.0625), 1)
+  ```
+
+  G is the displayed field (the panel's `reduceOptions.fields = "/^G$/"`
+  hides A–F).
+* **OK / WARN / CRIT semantics — exactly per the task spec:**
+  * **OK (G = 2):**  A ≥ 0.6  AND  B ≤ 25  AND  C ≤ 0.05.
+  * **WARN (G = 1):** at least one threshold is breached but **by ≤ 25 %** —
+    A ∈ [0.45, 0.6) **or** B ∈ (25, 31.25] **or** C ∈ (0.05, 0.0625].
+  * **CRIT (G = 0):** at least one threshold is breached by **> 25 %** —
+    A < 0.45  **or**  B > 31.25  **or**  C > 0.0625.
+* **`or on() vector(0)` on C** keeps the cold-start case sensible: when no
+  exchange traffic has been recorded yet, the error-rate input collapses to
+  zero rather than `NaN`, so the panel reports OK on confidence + NO_DATA
+  alone instead of going CRIT for missing data.
 
 ### 1.2 Score médio (1h)
 
@@ -110,47 +133,35 @@ Prometheus metric or PostgreSQL column — there are no fictitious series.
 
 ## Section 2 — Data-Quality Gauges (15 m, refresh: 30 s)
 
-Four independent Postgres gauges, one query per panel (Grafana renders them
-faster as separate single-cell queries than as a 4-column transform).
+**Single Postgres query, four numeric columns rendered as four gauges in
+one panel** — exactly per the task spec. The Grafana `gauge` panel emits
+one gauge per numeric field; per-column thresholds and display names are
+attached via field-config overrides matched by column name.
 
 ```sql
--- % VALID
-SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'VALID')
-     / NULLIF(COUNT(*),0) AS pct
-FROM indicator_snapshots, LATERAL jsonb_each(indicators_json)
-WHERE timestamp > NOW() - INTERVAL '15 minutes';
-
--- % NO_DATA
-SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'NO_DATA')
-     / NULLIF(COUNT(*),0) AS pct
-FROM indicator_snapshots, LATERAL jsonb_each(indicators_json)
-WHERE timestamp > NOW() - INTERVAL '15 minutes';
-
--- % STALE
-SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'STALE')
-     / NULLIF(COUNT(*),0) AS pct
-FROM indicator_snapshots, LATERAL jsonb_each(indicators_json)
-WHERE timestamp > NOW() - INTERVAL '15 minutes';
-
--- % ERROR
-SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'ERROR')
-     / NULLIF(COUNT(*),0) AS pct
+SELECT
+  100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'VALID')   / NULLIF(COUNT(*),0) AS pct_valid,
+  100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'NO_DATA') / NULLIF(COUNT(*),0) AS pct_no_data,
+  100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'STALE')   / NULLIF(COUNT(*),0) AS pct_stale,
+  100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'ERROR')   / NULLIF(COUNT(*),0) AS pct_error
 FROM indicator_snapshots, LATERAL jsonb_each(indicators_json)
 WHERE timestamp > NOW() - INTERVAL '15 minutes';
 ```
 
-| Gauge      | Green       | Yellow      | Red       |
-|------------|-------------|-------------|-----------|
-| `% VALID`  | ≥ 90        | 70–90       | < 70      |
-| `% NO_DATA`| < 10        | 10–25       | ≥ 25      |
-| `% STALE`  | < 10        | 10–25       | ≥ 25      |
-| `% ERROR`  | < 2         | 2–10        | ≥ 10      |
+Per-column thresholds (applied via `fieldConfig.overrides` matched
+`byName`):
 
-> The single-query, Grafana-transform variant from the original spec is also
-> valid and returns identical numbers. The exploded form here trades a tiny
-> amount of duplicated SQL for one less DB round-trip per panel render and
-> avoids the `Reduce → Organize` pipeline entirely, which is the most common
-> place where Postgres-via-Grafana panels silently break on schema upgrades.
+| Column        | Display name | Green       | Yellow      | Red       |
+|---------------|--------------|-------------|-------------|-----------|
+| `pct_valid`   | `% VALID`    | ≥ 90        | 70–90       | < 70      |
+| `pct_no_data` | `% NO_DATA`  | < 10        | 10–25       | ≥ 25      |
+| `pct_stale`   | `% STALE`    | < 10        | 10–25       | ≥ 25      |
+| `pct_error`   | `% ERROR`    | < 2         | 2–10        | ≥ 10      |
+
+Embedded alert **A2** (`[Scalpyn] NO_DATA alto`) lives on this same
+panel; its `data` block runs an independent SQL targeting only the
+`pct_no_data` column so the threshold can be applied without depending
+on the panel's display query layout.
 
 ---
 
@@ -268,40 +279,33 @@ topk(1, sum by (reason) (rate(score_rejection_total[5m])))
 
 ---
 
-## Section 8 — Pipeline performance (refresh: 30 s)
+## Section 8 — Embedded alerts (Grafana 10 unified alerting)
 
-```promql
-# p50 per indicator
-histogram_quantile(0.50,
-  sum by (le, indicator) (rate(indicator_computation_duration_seconds_bucket[5m])))
-
-# p95 per indicator
-histogram_quantile(0.95,
-  sum by (le, indicator) (rate(indicator_computation_duration_seconds_bucket[5m])))
-```
-
-* **Unit:** `s` (seconds) · **Legend:** `p50 · {{indicator}}`, `p95 · {{indicator}}`
-
----
-
-## Embedded alerts (Grafana 10 unified alerting)
+All four alerts are embedded **inside the dashboard JSON** using the
+**Grafana 10 unified-alerting schema** (`alert.data` array of query +
+expression nodes, `alert.condition` referencing the threshold node, plus
+`labels`, `annotations`, and `noDataState` / `execErrState`). No legacy
+`panel.alert.conditions` shape is used.
 
 | # | Name                                  | Attached panel                       | Datasource | Condition                                                                                                            | For |
 |---|---------------------------------------|--------------------------------------|------------|----------------------------------------------------------------------------------------------------------------------|-----|
-| A1 | `[Scalpyn] Confidence baixo`         | 3 — `Confidence Média`               | Prometheus | `avg(indicator_confidence) < 0.6`                                                                                    | 5m  |
-| A2 | `[Scalpyn] NO_DATA alto`             | 8 — `% NO_DATA` gauge                | Postgres   | `last(A) > 25` where A = section-2 NO_DATA SQL                                                                       | 5m  |
-| A3 | `[Scalpyn] Rejection rate alto`      | 5 — `Rejection Rate (1h)`            | Postgres   | `last(A) > 50` where A = section-1.5 SQL                                                                             | 5m  |
-| A4 | `[Scalpyn] Exchange error rate alto` | 12 — `Exchanges` table               | Prometheus | `max(B) > 0.1` where B = `sum(rate(exchange_request_errors_total[5m])) / sum(rate(exchange_request_latency_seconds_count[5m]))` | 5m  |
+| A1 | `[Scalpyn] Confidence baixo`         | 3 — `Confidence Média`               | Prometheus | `reduce(A, last) < 0.6`, where `A = avg(indicator_confidence)`                                                       | 5m  |
+| A2 | `[Scalpyn] NO_DATA alto`             | 7 — `Data Quality (15m)` panel       | Postgres   | `reduce(A, last) > 25`, where A = NO_DATA SQL (15-minute window)                                                     | 5m  |
+| A3 | `[Scalpyn] Rejection rate alto`      | 5 — `Rejection Rate (1h)`            | Postgres   | `reduce(A, last) > 50`, where A = section-1.5 SQL (1-hour window)                                                    | 5m  |
+| A4 | `[Scalpyn] Exchange error rate alto` | 9 — `Exchanges` table                | Prometheus | `reduce(A, last) > 10`, where A = `100 * sum(rate(exchange_request_errors_total[5m])) / sum(rate(exchange_request_latency_seconds_count[5m]))` | 5m  |
 
-* **All four rules are embedded inside the dashboard JSON** as
-  `panel.alert` blocks. Grafana 10 imports them and migrates them to the
-  unified-alerting model under the `Scalpyn` rule group on first save.
-* `docs/grafana/alert-rules.yaml` ships the same four rules in
-  Grafana's native provisioning format. Use it for repeatable deploys
-  (recommended in production); the embedded blocks above are convenient
-  for one-off imports and for keeping the dashboard self-contained.
+Each `alert.data` array follows the same three-node pattern:
 
-Each rule carries `severity` (`critical` for A1/A2/A4, `warning` for A3)
-and `service: trading-engine` labels, a summary annotation pointing
-operators to the relevant adapter or pipeline file, and a `runbook_url`
-placeholder.
+```text
+[ A: query (Prom or SQL),  B: __expr__ reduce (last),  C: __expr__ threshold ]
+```
+
+with `condition: "C"`. Identical structure to `docs/grafana/alert-rules.yaml`.
+
+* The companion provisioning file `docs/grafana/alert-rules.yaml` ships
+  the same four rules with **matching UIDs** so the embedded blocks and
+  the YAML stay in sync (importing both is idempotent — the YAML wins
+  on conflict, which is the intended deploy path).
+* Each rule carries `severity` (`critical` for A1/A2/A4, `warning`
+  for A3) and `service: trading-engine` labels, plus a summary
+  description and a `runbook_url` placeholder.
