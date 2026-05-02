@@ -1,0 +1,229 @@
+Você é um engenheiro sênior de backend/infra responsável por corrigir a ingestão de order flow (taker_ratio/volume_delta) de um trading engine em produção.
+
+O diagnóstico já foi feito. O sistema hoje:
+
+* NÃO coleta `spot.trades` via WebSocket
+* Usa REST polling sequencial com janela de 60s (inviável para 100+ símbolos)
+* Não possui buffer L2 (Redis/memória)
+* Sobrescreve valores válidos com `None`
+* Não possui métricas de saúde de ingestão
+
+---
+
+# 🎯 OBJETIVO
+
+Implementar uma solução **completa e funcional** para ingestão de trades:
+
+1. WebSocket com `spot.trades` (fonte primária)
+2. Buffer L2 (Redis) para acumular trades
+3. `get_order_flow_data()` lendo primeiro do buffer (fallback REST)
+4. Corrigir merge (não sobrescrever com `None`)
+5. Adicionar métricas Prometheus de ingestão
+6. Ajustar janela para ciclos de 5m
+7. Entregar código pronto + instruções de deploy
+
+---
+
+# 🚫 REGRAS
+
+* NÃO usar pseudocódigo — entregar código executável
+* NÃO remover funcionalidades existentes
+* NÃO quebrar APIs atuais
+* Usar async/await corretamente
+* Tratar reconexão de WebSocket
+* Logar erros sem travar o sistema
+
+---
+
+# 🔧 TAREFA 1 — WEBSOCKET (CRÍTICO)
+
+Arquivo: `gate_ws_client.py`
+
+Adicionar subscrição:
+
+```python
+def _spot_channel_payloads(spot_pairs: list[str]) -> list[tuple[str, list]]:
+    return [
+        ("spot.tickers", spot_pairs),
+        ("spot.orders", spot_pairs),
+        ("spot.trades", spot_pairs),  # ADICIONAR
+    ]
+```
+
+Implementar handler:
+
+Arquivo: `event_handlers.py`
+
+```python
+import json
+import time
+import redis.asyncio as aioredis
+
+TRADE_BUFFER_TTL = 90
+
+async def handle_spot_trades(result: list[dict]) -> None:
+    r = aioredis.from_url(REDIS_URL)
+    now_ms = int(time.time() * 1000)
+
+    for trade in result:
+        symbol = trade.get("currency_pair")
+        if not symbol:
+            continue
+
+        key = f"trades_buffer:{symbol}"
+
+        await r.zadd(key, {json.dumps(trade): trade.get("create_time_ms", now_ms)})
+        await r.zremrangebyscore(key, 0, now_ms - TRADE_BUFFER_TTL * 1000)
+        await r.expire(key, TRADE_BUFFER_TTL * 2)
+```
+
+Registrar handler:
+
+```python
+client.register_handler("spot.trades", handle_spot_trades)
+```
+
+---
+
+# 🔧 TAREFA 2 — BUFFER (L2)
+
+Garantir Redis configurado:
+
+* TTL: 60–120s
+* Estrutura: sorted set por símbolo
+
+---
+
+# 🔧 TAREFA 3 — ORDER FLOW SERVICE
+
+Arquivo: `order_flow_service.py`
+
+Modificar:
+
+```python
+async def get_order_flow_data(symbol: str, window_seconds: int = 60):
+```
+
+Fluxo:
+
+1. Tentar Redis buffer
+2. Se vazio → fallback REST
+3. Agregar trades
+
+Implementar leitura:
+
+```python
+cutoff = (time.time() - window_seconds) * 1000
+key = f"trades_buffer:{symbol}"
+
+trades = await r.zrangebyscore(key, cutoff, "+inf")
+
+if trades:
+    parsed = [json.loads(t) for t in trades]
+    return aggregate_trades(parsed)
+```
+
+---
+
+# 🔧 TAREFA 4 — CORRIGIR MERGE (CRÍTICO)
+
+Arquivo: `compute_indicators.py`
+
+Substituir:
+
+```python
+results.update(...)
+```
+
+Por:
+
+```python
+for k, v in of_data.items():
+    if k in {"taker_source", "taker_window"}:
+        results[k] = v
+    elif v is not None:
+        results[k] = v
+    elif k not in results or results[k] is None:
+        results[k] = v
+```
+
+---
+
+# 🔧 TAREFA 5 — MÉTRICAS PROMETHEUS
+
+Arquivo: `metrics.py`
+
+Adicionar:
+
+```python
+TRADES_RECEIVED_TOTAL
+LAST_TRADE_TIMESTAMP
+WS_CONNECTED
+```
+
+Instrumentar:
+
+* no handler WS
+* na conexão/desconexão
+
+---
+
+# 🔧 TAREFA 6 — AJUSTE DE JANELA
+
+Para ciclos 5m:
+
+```python
+window_seconds = 300
+```
+
+---
+
+# 🔍 TAREFA 7 — VALIDAÇÃO
+
+Executar:
+
+```sql
+SELECT indicators_json->'taker_ratio'
+FROM indicator_snapshots
+LIMIT 10;
+```
+
+Esperado:
+
+* value != null
+* source = "gate_trades"
+* status = "VALID"
+
+---
+
+# 📊 TAREFA 8 — DASHBOARD SUPPORT
+
+Garantir métricas disponíveis:
+
+* ws_connected
+* trades_received_total
+* last_trade_timestamp
+
+---
+
+# 📦 OUTPUT
+
+Entregar:
+
+1. Código completo (todos os arquivos modificados)
+2. Lista de alterações
+3. Como configurar Redis
+4. Como testar WebSocket
+5. Como validar no banco
+6. Queries Prometheus
+
+---
+
+# 🎯 RESULTADO FINAL
+
+Sistema com:
+
+* ingestão real-time
+* buffer resiliente
+* sem NO_DATA falso
+* dashboard observável
