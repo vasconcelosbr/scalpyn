@@ -90,6 +90,7 @@ async def _collect_all_async():
             except Exception as e:
                 logger.error(f"[collect_all] FAILED symbol={symbol} error={e}", exc_info=True)
                 failures += 1
+                await db.rollback()
                 continue
 
         # Also fetch tickers for metadata (price, volume, change + spread_pct from bid/ask)
@@ -295,6 +296,7 @@ async def _collect_5m_async():
             except Exception as e:
                 logger.error(f"[collect_5m] FAILED symbol={symbol} error={e}", exc_info=True)
                 failures += 1
+                await db.rollback()
                 continue
 
         # ── Backup metadata pathway: fetch tickers for volume_24h + spread ───
