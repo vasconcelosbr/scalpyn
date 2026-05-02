@@ -21,7 +21,6 @@ from typing import List, Optional
 import pandas as pd
 from asyncpg.exceptions import UndefinedColumnError as _AsyncpgUndefinedColumn
 from sqlalchemy import text
-from sqlalchemy.exc import ProgrammingError as _SAProgrammingError
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +30,20 @@ def _is_scheduler_group_drift(exc: BaseException) -> bool:
     error, robust to whether asyncpg raised it directly or SQLAlchemy wrapped
     it in ProgrammingError.
 
-    Both checks are guarded by the column name so an unrelated UndefinedColumn
-    against another table cannot false-match into the silent-skip path.
+    The column-name guard is checked against the asyncpg exception's OWN
+    message (the Postgres "column X of relation Y does not exist" text), NOT
+    against str() of the SQLAlchemy wrapper.  str(SQLAlchemy.ProgrammingError)
+    includes the offending SQL statement — and our INSERT statement always
+    contains "scheduler_group" by definition — so substring-matching the
+    wrapper would silently swallow any asyncpg error on that INSERT (unique
+    violation, FK violation, lock timeout, deadlock, …).  We therefore
+    require the column name to appear in the asyncpg exception's message,
+    which is only true for UndefinedColumnError("…scheduler_group…").
     """
     orig = getattr(exc, "orig", None)
     if isinstance(orig, _AsyncpgUndefinedColumn) and "scheduler_group" in str(orig):
         return True
     if isinstance(exc, _AsyncpgUndefinedColumn) and "scheduler_group" in str(exc):
-        return True
-    if isinstance(exc, _SAProgrammingError) and "scheduler_group" in str(exc):
         return True
     return False
 
