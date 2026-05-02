@@ -300,39 +300,7 @@ async def health_check_schema():
     from fastapi import Response
     from sqlalchemy import text
     from .database import AsyncSessionLocal
-
-    # Critical (table, column) pairs — every column declared by an ORM model
-    # whose absence would 500 a user-facing endpoint.  Keep in sync with
-    # backend/alembic/versions/021_init_db_parity_catchall.py.
-    critical_columns = [
-        ("pools", "overrides"),
-        ("pools", "autopilot_enabled"),
-        ("pipeline_watchlists", "market_mode"),
-        ("pipeline_watchlists", "last_scanned_at"),
-        ("pipeline_watchlist_assets", "execution_id"),
-        ("pipeline_watchlist_assets", "score_long"),
-        ("pipeline_watchlist_assets", "score_short"),
-        ("pipeline_watchlist_assets", "confidence_score"),
-        ("pipeline_watchlist_assets", "futures_direction"),
-        ("pipeline_watchlist_assets", "entry_long_blocked"),
-        ("pipeline_watchlist_assets", "entry_short_blocked"),
-        ("pipeline_watchlist_assets", "refreshed_at"),
-        ("pipeline_watchlist_assets", "analysis_snapshot"),
-        ("pipeline_watchlist_rejections", "execution_id"),
-        ("pipeline_watchlist_rejections", "analysis_snapshot"),
-        ("watchlist_profiles", "profile_type"),
-        ("trades", "exchange_order_id"),
-        ("trades", "source"),
-        # Added by migration 026; without these, _persist_decision_logs raises
-        # UndefinedColumnError and poisons the session for the whole scan loop.
-        ("decisions_log", "direction"),
-        ("decisions_log", "event_type"),
-        # Added by migration 032; without it, both structural and microstructure
-        # schedulers fail every cycle (~30k UndefinedColumnError / day) and
-        # cascade into InFailedSQLTransactionError + QueuePool exhaustion.
-        # Detection here is what start.sh's post-stamp probe relies on as well.
-        ("indicators", "scheduler_group"),
-    ]
+    from ._critical_schema import CRITICAL_COLUMNS as critical_columns
 
     try:
         async with AsyncSessionLocal() as sess:

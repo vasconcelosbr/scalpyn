@@ -16,8 +16,11 @@ Usage from start.sh::
 
     python3 -m scripts.check_critical_schema || exit 1
 
-Keep ``CRITICAL_COLUMNS`` in sync with the same list in
-``backend/app/main.py::health_check_schema``.
+The list itself lives in ``app/_critical_schema.py`` — single source of
+truth, imported by both this script and ``app.main.health_check_schema``.
+That module is intentionally a zero-dependency leaf (no SQLAlchemy, no
+FastAPI, no app config), so importing it from a stripped-down boot context
+is safe and fast.
 """
 
 from __future__ import annotations
@@ -25,34 +28,8 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-from typing import List, Tuple
 
-# Mirror of app/main.py::health_check_schema critical_columns.  Duplicated
-# intentionally so this script has zero dependency on the FastAPI app
-# (faster import, no side effects from the app module graph during boot).
-CRITICAL_COLUMNS: List[Tuple[str, str]] = [
-    ("pools", "overrides"),
-    ("pools", "autopilot_enabled"),
-    ("pipeline_watchlists", "market_mode"),
-    ("pipeline_watchlists", "last_scanned_at"),
-    ("pipeline_watchlist_assets", "execution_id"),
-    ("pipeline_watchlist_assets", "score_long"),
-    ("pipeline_watchlist_assets", "score_short"),
-    ("pipeline_watchlist_assets", "confidence_score"),
-    ("pipeline_watchlist_assets", "futures_direction"),
-    ("pipeline_watchlist_assets", "entry_long_blocked"),
-    ("pipeline_watchlist_assets", "entry_short_blocked"),
-    ("pipeline_watchlist_assets", "refreshed_at"),
-    ("pipeline_watchlist_assets", "analysis_snapshot"),
-    ("pipeline_watchlist_rejections", "execution_id"),
-    ("pipeline_watchlist_rejections", "analysis_snapshot"),
-    ("watchlist_profiles", "profile_type"),
-    ("trades", "exchange_order_id"),
-    ("trades", "source"),
-    ("decisions_log", "direction"),
-    ("decisions_log", "event_type"),
-    ("indicators", "scheduler_group"),
-]
+from app._critical_schema import CRITICAL_COLUMNS
 
 
 def _to_asyncpg_url(url: str) -> str:
