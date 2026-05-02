@@ -44,7 +44,9 @@ import {
   Calendar,
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
+import MonitoringTab from "./MonitoringTab";
 
+type DashboardTab = "overview" | "monitoring";
 type Period = "1d" | "7d" | "30d" | "90d" | "custom";
 const PERIOD_LABELS: Record<Period, string> = { "1d": "Hoje", "7d": "7D", "30d": "30D", "90d": "90D", "custom": "Custom" };
 
@@ -750,6 +752,8 @@ export default function DashboardPage() {
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
 
+  const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
+
   const periodRef = useRef<Period>("30d");
   const customStartRef = useRef("");
   const customEndRef = useRef("");
@@ -825,33 +829,72 @@ export default function DashboardPage() {
             Portfolio analytics · Gate.io backed
           </p>
         </div>
-        <div className="flex items-center gap-3 flex-shrink-0">
-          {lastFetched && (
-            <span className="text-[11px]" style={{ color: C.textTertiary }}>
-              {lastFetched.toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" })}
-            </span>
-          )}
-          <button
-            onClick={syncTrades}
-            disabled={syncing || refreshing}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium transition-opacity hover:opacity-80 disabled:opacity-40"
-            style={{ background: "rgba(52,211,153,0.10)", color: C.profit, border: "1px solid rgba(52,211,153,0.20)" }}
-          >
-            <Download size={13} className={syncing ? "animate-bounce" : ""} />
-            {syncing ? "Importing…" : "Import from Gate"}
-          </button>
-          <button
-            onClick={() => fetchAll(true)}
-            disabled={refreshing}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium transition-opacity hover:opacity-80 disabled:opacity-40"
-            style={{ background: "rgba(79,123,247,0.12)", color: C.blue, border: "1px solid rgba(79,123,247,0.20)" }}
-          >
-            <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
-            Refresh
-          </button>
-        </div>
+        {activeTab === "overview" && (
+          <div className="flex items-center gap-3 flex-shrink-0">
+            {lastFetched && (
+              <span className="text-[11px]" style={{ color: C.textTertiary }}>
+                {lastFetched.toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+            <button
+              onClick={syncTrades}
+              disabled={syncing || refreshing}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium transition-opacity hover:opacity-80 disabled:opacity-40"
+              style={{ background: "rgba(52,211,153,0.10)", color: C.profit, border: "1px solid rgba(52,211,153,0.20)" }}
+            >
+              <Download size={13} className={syncing ? "animate-bounce" : ""} />
+              {syncing ? "Importing…" : "Import from Gate"}
+            </button>
+            <button
+              onClick={() => fetchAll(true)}
+              disabled={refreshing}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium transition-opacity hover:opacity-80 disabled:opacity-40"
+              style={{ background: "rgba(79,123,247,0.12)", color: C.blue, border: "1px solid rgba(79,123,247,0.20)" }}
+            >
+              <RefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
+              Refresh
+            </button>
+          </div>
+        )}
       </div>
 
+      {/* Tab strip */}
+      <div
+        className="flex gap-1 p-0.5 rounded-xl w-fit"
+        role="tablist"
+        aria-label="Dashboard sections"
+        style={{ background: C.elevated, border: `1px solid ${C.border}` }}
+      >
+        {(
+          [
+            { id: "overview", label: "Overview" },
+            { id: "monitoring", label: "Monitoring" },
+          ] as { id: DashboardTab; label: string }[]
+        ).map(({ id, label }) => {
+          const active = activeTab === id;
+          return (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={active}
+              onClick={() => setActiveTab(id)}
+              className="px-4 py-1.5 text-[12px] font-medium rounded-[10px] transition-all"
+              style={
+                active
+                  ? { background: C.blue, color: "#fff" }
+                  : { color: C.textSecondary }
+              }
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {activeTab === "monitoring" && <MonitoringTab />}
+
+      {activeTab === "overview" && (
+      <>
       {/* Period filter row */}
       <div className="flex flex-wrap items-center gap-2">
         <div
@@ -1107,6 +1150,8 @@ export default function DashboardPage() {
             Retry
           </button>
         </div>
+      )}
+      </>
       )}
     </div>
   );

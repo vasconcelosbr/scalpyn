@@ -354,3 +354,192 @@ If a panel shows `No data`:
   on purpose so they always reflect the same operator-meaningful window.
 * **No frontend / mobile telemetry, log aggregation, or backfilled
   history** — those are explicitly out of scope (see `task-166.md`).
+
+---
+
+## 8. Embedding the dashboard inside the Scalpyn frontend
+
+The `/dashboard` page exposes a **Monitoring** tab that embeds this
+Grafana dashboard inside an iframe so operators can see the metrics
+without leaving the app. This section covers the one-time provisioning
+needed to make that tab functional end-to-end.
+
+### 8.1 Trust model — read this first
+
+The Monitoring tab is wired to **anonymous viewer** access on Grafana.
+Anyone who can reach the `NEXT_PUBLIC_GRAFANA_URL` host in their browser
+can see the panels — same trust boundary as the rest of the trading UI
+behind your Vercel auth. There is **no per-user SSO** on the iframe by
+design: SSO would break the embed and was explicitly ruled out for this
+task. Keep the Grafana hostname off public link aggregators if that is
+not the trust posture you want.
+
+### 8.2 Cloud SQL prep (one-time, run as superuser)
+
+Grafana stores users, datasources, dashboards and alert state in its own
+internal Postgres database. Without persistence it would be wiped on
+every Cloud Run cold start.
+
+```sql
+CREATE DATABASE grafana_internal;
+CREATE ROLE grafana_app LOGIN PASSWORD '<rotate-this-secret>';
+GRANT ALL PRIVILEGES ON DATABASE grafana_internal TO grafana_app;
+ALTER DATABASE grafana_internal OWNER TO grafana_app;
+```
+
+Connection budget impact: Grafana adds at most **4** Postgres datasource
+connections (read-only `grafana_ro` to `scalpyn`) plus **~2** internal
+DB connections (`grafana_app` to `grafana_internal`). The 22-connection
+ceiling documented in `docs/db-pool-budget.md` therefore rises to ~28 —
+stay on `db-g1-small` (50 max) or larger.
+
+### 8.3 Secret Manager (one-time)
+
+```bash
+PROJECT=clickrate-477217
+
+# Grafana admin login (used to manage users / datasources via UI).
+openssl rand -hex 24 | tr -d '\n' | \
+  gcloud secrets create grafana-admin-password --data-file=- --project $PROJECT
+
+# Grafana internal DB password (matches the grafana_app role above).
+echo -n "<password-from-CREATE-ROLE>" | \
+  gcloud secrets create grafana-db-password --data-file=- --project $PROJECT
+
+# Read-only datasource password (matches the grafana_ro role from §2).
+echo -n "<grafana_ro-password>" | \
+  gcloud secrets create grafana-postgres-ro-password --data-file=- --project $PROJECT
+
+# Grant the deploy service account read access to all three.
+for s in grafana-admin-password grafana-db-password grafana-postgres-ro-password; do
+  gcloud secrets add-iam-policy-binding $s \
+    --member=serviceAccount:scalpyn-service-account@$PROJECT.iam.gserviceaccount.com \
+    --role=roles/secretmanager.secretAccessor --project $PROJECT
+done
+```
+
+The Grafana service also reuses the existing `prometheus-bearer-token`
+secret to scrape `/metrics` (see §1).
+
+### 8.4 Cloud Run deploy
+
+The image and deploy steps are codified in `grafana/cloudbuild-grafana.yaml`
+(separate from the backend `cloudbuild.yaml` so a dashboard JSON change
+does not trigger a backend redeploy and vice-versa). Wire a Cloud Build
+trigger filtered to `grafana/**` and `docs/grafana/**`.
+
+What that pipeline does:
+
+1. Builds `grafana/Dockerfile` (a thin wrapper on `grafana/grafana-oss:11`)
+   which COPYs in the dashboard JSON and the two provisioning files
+   (`grafana/provisioning/datasources/datasources.yaml` and
+   `grafana/provisioning/dashboards/dashboards.yaml`) so the dashboard
+   appears on first cold start with no manual import.
+2. Pushes the image to Artifact Registry under the same `scalpyn` repo.
+3. Deploys it as Cloud Run service `scalpyn-grafana` with:
+   - `--ingress all` (the iframe is loaded from the user's browser, so
+     Grafana itself must be public; only the datasources stay private).
+   - `--add-cloudsql-instances clickrate-477217:us-central1:scalpyn` so
+     Grafana can reach the Cloud SQL instance over the unix socket.
+   - `--vpc-connector` + `--vpc-egress=private-ranges-only` so it can
+     hit Prometheus on a private IP without exposing it publicly.
+   - The full set of `GF_*` env vars that bake in iframe-embedding
+     requirements (anonymous viewer, `GF_SECURITY_ALLOW_EMBEDDING=true`,
+     `cookie_samesite=none`, `cookie_secure=true`, dark theme, etc.).
+   - The four secret-backed env vars (admin password, internal DB
+     password, datasource password, Prometheus bearer token).
+
+Substitution variables you'll want to set on the trigger:
+
+| Substitution            | Default                                 | Purpose                                            |
+|-------------------------|-----------------------------------------|----------------------------------------------------|
+| `_VPC_CONNECTOR`        | `scalpyn-connector`                     | VPC connector name (must match the backend's)      |
+| `_PROMETHEUS_URL`       | `http://10.0.0.10:9090`                 | Private IP of the Prometheus scrape target         |
+| `_CLOUD_SQL_PRIVATE_IP` | `10.0.0.20`                             | Cloud SQL **private** IP for the read-only Postgres datasource (find via `gcloud sql instances describe scalpyn`) |
+| `_RUNTIME_SA`           | `scalpyn-service-account@clickrate-477217.iam.gserviceaccount.com` | Runtime service account passed via `--service-account`; must hold `secretmanager.secretAccessor` on the four secrets in §8.3 |
+| `_GRAFANA_PUBLIC_URL`   | `https://grafana.scalpyn.app`           | The hostname users will hit; sets `GF_SERVER_ROOT_URL` |
+
+**Datasource transport, why two paths:** Grafana's *internal* DB
+(`grafana_internal`) reaches Cloud SQL via the Unix socket
+(`/cloudsql/...`) — Grafana's backend speaks Postgres natively over the
+socket and SSL is meaningless on a local socket, so
+`GF_DATABASE_SSL_MODE=disable` is correct. The *user-facing* Postgres
+**datasource**, however, cannot use a socket path with
+`sslmode=require` — Grafana's datasource layer errors out on save. We
+therefore route the datasource over the Cloud SQL **private IP** (TCP,
+port 5432, `sslmode=require`), which the VPC connector grants Grafana
+access to without going over the public internet. After the first
+deploy, run **Connections → Data sources → PostgreSQL → Save & test**
+in the Grafana UI to confirm the datasource returns "Database
+Connection OK"; if it errors, double-check `_CLOUD_SQL_PRIVATE_IP` is
+correct and that the VPC connector can reach it (most common cause:
+`--vpc-egress=all-traffic` is needed instead of `private-ranges-only`
+when the IP falls outside RFC 1918 ranges, but Cloud SQL private IPs
+are always RFC 1918, so the default works).
+
+### 8.5 Anonymous-viewer permission on the dashboard
+
+Pick **one** of the two options the spec calls out:
+
+* **Option A — recommended.** Grant `Viewer` on the dashboard to the
+  `Anonymous` org. After the first deploy, log in to Grafana as `admin`
+  (using `grafana-admin-password`) and on the **Scalpyn Trading Engine**
+  dashboard go to **Dashboard settings → Permissions → Add a permission
+  → Role: Viewer → Permission: View → Apply**. This keeps the dashboard
+  inside the regular org and is revocable per-dashboard.
+* **Option B.** Use Grafana's built-in **Public dashboards** feature
+  (Dashboard settings → Public dashboard → Enable). Grafana mints a
+  share token; use the `…/public-dashboards/<token>` URL as the iframe
+  source instead of the `/d/scalpyn-trading-engine` path. The trade-off
+  is that the share token is not revocable per-user — the entire URL
+  must be rotated to revoke access.
+
+### 8.6 Custom domain (optional but recommended)
+
+Map `grafana.scalpyn.app` (or whichever apex you use) to the
+`scalpyn-grafana` Cloud Run service via:
+
+```bash
+gcloud beta run domain-mappings create \
+  --service scalpyn-grafana \
+  --domain grafana.scalpyn.app \
+  --region us-central1 --project clickrate-477217
+```
+
+…or place it behind the existing Cloud Load Balancer with a serverless
+NEG. If you skip this step, the iframe will fall back to the raw
+`https://scalpyn-grafana-<hash>-uc.a.run.app` URL — works, but uglier
+and less stable across redeploys.
+
+### 8.7 Frontend env var
+
+The Monitoring tab reads `NEXT_PUBLIC_GRAFANA_URL` at build time. Set it
+in your hosting provider's project settings:
+
+```
+NEXT_PUBLIC_GRAFANA_URL=https://grafana.scalpyn.app
+```
+
+(or the raw `*.run.app` URL if you skipped §8.6). Must NOT include a
+trailing slash or path — the frontend appends
+`/d/scalpyn-trading-engine?...` itself. When the variable is missing the
+tab renders a clean empty state pointing back at this README, so the
+rest of `/dashboard` keeps working.
+
+After updating the variable, **trigger a frontend redeploy** —
+`NEXT_PUBLIC_*` is inlined at build time, so a fresh build is required
+for the iframe to pick up the new value.
+
+### 8.8 Smoke test
+
+1. Open `<frontend>/dashboard` and confirm two tabs are visible.
+2. Click **Monitoring**. Within 5 s the Grafana dashboard should render
+   inside the iframe with no Grafana login prompt and no
+   `X-Frame-Options` errors in the browser console.
+3. Click into any panel — Grafana's panel-detail view should still load
+   inside the same iframe (kiosk mode preserves drilldown).
+4. Switch back to **Overview** — the existing dashboard renders
+   identically to before the embed change.
+5. Test the empty state: temporarily unset `NEXT_PUBLIC_GRAFANA_URL` and
+   redeploy — the Monitoring tab should show "Monitoring is not
+   configured yet" without crashing the page.

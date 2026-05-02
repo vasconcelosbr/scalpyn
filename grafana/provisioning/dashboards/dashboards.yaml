@@ -1,0 +1,19 @@
+# Grafana dashboard provider — auto-loads every dashboard JSON in
+# /etc/grafana/provisioning/dashboards/ on startup. The Dockerfile in
+# ../../Dockerfile bakes scalpyn-trading-engine.json into that directory
+# so the dashboard appears on first cold start with no manual import.
+
+apiVersion: 1
+
+providers:
+  - name: "scalpyn"
+    orgId: 1
+    folder: "Scalpyn"
+    folderUid: "scalpyn"
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

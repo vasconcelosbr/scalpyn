@@ -1,0 +1,154 @@
+# Cloud Build pipeline for the scalpyn-grafana Cloud Run service.
+#
+# Kept separate from the root cloudbuild.yaml (which deploys the backend
+# API) so a dashboard JSON change does not trigger a backend redeploy and
+# vice-versa. Wire this file to a Cloud Build trigger filtered to
+# `grafana/**` and `docs/grafana/**` paths.
+#
+# One-time prerequisites (see docs/grafana/README.md §8):
+#   1. Create database `grafana_internal` and role `grafana_app` (OWNER)
+#      on the existing Cloud SQL instance.
+#   2. Create Secret Manager secrets:
+#        grafana-admin-password         (random, 32+ bytes)
+#        grafana-db-password            (password for grafana_app)
+#        grafana-postgres-ro-password   (password for grafana_ro)
+#   3. Grant the build / run service account roles/secretmanager.secretAccessor
+#      on each secret.
+
+steps:
+  # Build the custom Grafana image (Dockerfile bakes in dashboard JSON +
+  # provisioning configs). Build context is the repo root so we can COPY
+  # both ./grafana and ./docs/grafana.
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest'
+      - '-f'
+      - 'grafana/Dockerfile'
+      - '.'
+
+  # Push to Artifact Registry.
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '--all-tags'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}'
+
+  # Deploy / update the Cloud Run service.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE}'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      # Public ingress: the user's browser must reach Grafana directly so
+      # the iframe in /dashboard's Monitoring tab can load it. Datasources
+      # remain inside the VPC.
+      - '--ingress'
+      - 'all'
+      - '--port'
+      - '3000'
+      - '--timeout'
+      - '300'
+      - '--timeout-startup'
+      - '240'
+      - '--min-instances'
+      - '1'
+      - '--cpu-boost'
+      - '--memory'
+      - '512Mi'
+      # Pin the runtime identity so Grafana boots with secretAccessor on
+      # the four secrets below (admin password, internal DB password,
+      # datasource password, Prometheus bearer token). README §8.3
+      # grants secretmanager.secretAccessor on those secrets to this
+      # exact service account — without --service-account here the
+      # deploy falls back to the default compute SA, which lacks the
+      # role and produces "Permission denied on secret" at first boot.
+      - '--service-account'
+      - '${_RUNTIME_SA}'
+      # Cloud SQL access for both the Postgres datasource and Grafana's
+      # own internal DB (grafana_internal). Same instance as the backend.
+      - '--add-cloudsql-instances'
+      - 'clickrate-477217:us-central1:scalpyn'
+      # VPC connector lets Grafana reach Prometheus on a private IP
+      # without exposing it publicly.
+      - '--vpc-connector'
+      - '${_VPC_CONNECTOR}'
+      - '--vpc-egress'
+      - 'private-ranges-only'
+      # Iframe-embedding requirements baked in as env vars so they
+      # survive cold starts. See docs/grafana/README.md §8 for rationale.
+      #
+      # Datasource transport split:
+      #  • Grafana's internal DB (grafana_internal) uses the Cloud SQL
+      #    Unix socket — Grafana's backend speaks Postgres natively over
+      #    /cloudsql/... and SSL is meaningless on a local socket, so
+      #    GF_DATABASE_SSL_MODE=disable is correct.
+      #  • The user-facing Postgres DATASOURCE goes over the Cloud SQL
+      #    PRIVATE IP (TCP) on port 5432, with sslmode=require. Grafana's
+      #    Postgres datasource cannot use a Unix socket path with
+      #    sslmode=require (it errors out on save), so a TCP target is
+      #    required for the datasource specifically. The VPC connector
+      #    above gives Grafana network access to the private IP without
+      #    going over the public internet.
+      - '--set-env-vars'
+      - >-
+        GF_AUTH_ANONYMOUS_ENABLED=true,
+        GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer,
+        GF_AUTH_ANONYMOUS_ORG_NAME=Scalpyn,
+        GF_AUTH_DISABLE_LOGIN_FORM=false,
+        GF_SECURITY_ALLOW_EMBEDDING=true,
+        GF_SECURITY_COOKIE_SAMESITE=none,
+        GF_SECURITY_COOKIE_SECURE=true,
+        GF_SERVER_ROOT_URL=${_GRAFANA_PUBLIC_URL},
+        GF_USERS_DEFAULT_THEME=dark,
+        GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/provisioning/dashboards/scalpyn-trading-engine.json,
+        GF_DATABASE_TYPE=postgres,
+        GF_DATABASE_HOST=/cloudsql/clickrate-477217:us-central1:scalpyn,
+        GF_DATABASE_NAME=grafana_internal,
+        GF_DATABASE_USER=grafana_app,
+        GF_DATABASE_SSL_MODE=disable,
+        GF_DATASOURCE_PROMETHEUS_URL=${_PROMETHEUS_URL},
+        GF_DATASOURCE_POSTGRES_URL=${_CLOUD_SQL_PRIVATE_IP}:5432,
+        GF_DATASOURCE_POSTGRES_SSLMODE=require
+      # Secret-backed env vars: admin password, Grafana's own DB password,
+      # the Postgres read-only datasource password, and the Prometheus
+      # bearer token (same secret used by the backend scrape gate).
+      - '--update-secrets'
+      - >-
+        GF_SECURITY_ADMIN_PASSWORD=grafana-admin-password:latest,
+        GF_DATABASE_PASSWORD=grafana-db-password:latest,
+        GF_DATASOURCE_POSTGRES_PASSWORD=grafana-postgres-ro-password:latest,
+        GF_PROMETHEUS_BEARER_TOKEN=prometheus-bearer-token:latest
+
+substitutions:
+  _REGION: us-central1
+  _REPO: scalpyn
+  _SERVICE: scalpyn-grafana
+  _VPC_CONNECTOR: scalpyn-connector
+  _PROMETHEUS_URL: http://10.0.0.10:9090
+  # Cloud SQL private IP — set via the trigger so the same image works
+  # in staging / production. Find via: `gcloud sql instances describe
+  # scalpyn --format='value(ipAddresses[?type=PRIVATE].ipAddress)'`.
+  _CLOUD_SQL_PRIVATE_IP: 10.0.0.20
+  # Runtime service account — must match the principal granted
+  # secretmanager.secretAccessor in README §8.3.
+  _RUNTIME_SA: scalpyn-service-account@clickrate-477217.iam.gserviceaccount.com
+  _GRAFANA_PUBLIC_URL: https://grafana.scalpyn.app
+
+images:
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
