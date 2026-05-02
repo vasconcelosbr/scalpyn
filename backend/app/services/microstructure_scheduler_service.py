@@ -19,9 +19,29 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 import pandas as pd
+from asyncpg.exceptions import UndefinedColumnError as _AsyncpgUndefinedColumn
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError as _SAProgrammingError
 
 logger = logging.getLogger(__name__)
+
+
+def _is_scheduler_group_drift(exc: BaseException) -> bool:
+    """Return True iff *exc* is the indicators.scheduler_group missing-column
+    error, robust to whether asyncpg raised it directly or SQLAlchemy wrapped
+    it in ProgrammingError.
+
+    Both checks are guarded by the column name so an unrelated UndefinedColumn
+    against another table cannot false-match into the silent-skip path.
+    """
+    orig = getattr(exc, "orig", None)
+    if isinstance(orig, _AsyncpgUndefinedColumn) and "scheduler_group" in str(orig):
+        return True
+    if isinstance(exc, _AsyncpgUndefinedColumn) and "scheduler_group" in str(exc):
+        return True
+    if isinstance(exc, _SAProgrammingError) and "scheduler_group" in str(exc):
+        return True
+    return False
 
 DEFAULT_INTERVAL_SECONDS = 300        # 5 min
 DEFAULT_CONCURRENCY = 8
@@ -142,7 +162,7 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
         # InFailedSQLTransactionError, then return cleanly.  Without this,
         # ~30k errors/day flooded Sentry and the failed transaction state
         # blocked connections from being recycled to the pool.
-        if "scheduler_group" in str(exc):
+        if _is_scheduler_group_drift(exc):
             global _scheduler_group_drift_logged
             if not _scheduler_group_drift_logged:
                 logger.error(
@@ -153,8 +173,17 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
                     "docs/runbooks/scheduler-group-drift.md."
                 )
                 _scheduler_group_drift_logged = True
+            # Guard the rollback on the actual session state. After the
+            # savepoint context manager exits with an exception, SQLAlchemy
+            # may have already rolled the outer transaction back (depends on
+            # whether asyncpg poisoned the parent before the savepoint
+            # release).  Calling rollback() on a session that is no longer in
+            # a transaction raises InvalidRequestError; gating on
+            # in_transaction() avoids that and still drains the failed state
+            # in the case where the outer transaction is still alive.
             try:
-                await db.rollback()
+                if db.in_transaction():
+                    await db.rollback()
             except Exception as rb_exc:
                 logger.warning(
                     "[MICRO-SCHED] rollback after schema drift failed: %s", rb_exc
