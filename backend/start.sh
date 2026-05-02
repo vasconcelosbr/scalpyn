@@ -117,6 +117,42 @@ fi
 # we probe information_schema here as well.
 validate_critical_schema
 
+# ── Pre-flight: Redis connectivity (Tarefas 3+7) ─────────────────────────────
+# Hard fail-safe: if the broker is unreachable, abort startup with exit 1
+# instead of letting Celery silently retry-and-give-up
+# (broker_connection_max_retries=10 in celery_app.py). Cloud Run will then
+# roll back to the previous revision automatically. This catches misconfigured
+# REDIS_URL (e.g. missing /0 db suffix) before the pipeline silently stalls.
+echo "==> [redis] Verifying Redis connectivity..."
+if ! python3 - <<'PY'
+import os, sys
+try:
+    import redis
+except ImportError as e:
+    print(f"ERROR: redis package not installed: {e}", file=sys.stderr)
+    sys.exit(1)
+
+url = os.environ.get("REDIS_URL", "")
+if not url:
+    print("ERROR: REDIS_URL is empty -- cannot connect to broker", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    r = redis.from_url(url, socket_connect_timeout=5, socket_timeout=5)
+    if r.ping() is not True:
+        print("ERROR: Redis ping returned False", file=sys.stderr)
+        sys.exit(1)
+    print("[redis] connected OK")
+except Exception as e:
+    # Never log the URL itself -- it carries the broker password.
+    print(f"ERROR: Redis connection failed: {type(e).__name__}: {e}", file=sys.stderr)
+    sys.exit(1)
+PY
+then
+    echo "==> Aborting startup: Redis connection failed" >&2
+    exit 1
+fi
+
 # ── Start Celery worker ──────────────────────────────────────────────────────
 echo "==> Starting Celery worker..."
 celery -A app.tasks.celery_app worker \

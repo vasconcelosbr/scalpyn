@@ -78,6 +78,23 @@ steps:
       #     --role=roles/secretmanager.secretAccessor --project clickrate-477217
       - '--update-secrets'
       - 'PROMETHEUS_BEARER_TOKEN=prometheus-bearer-token:latest'
+      # Redis broker URL (Redis Labs external).
+      # IMPORTANT: this URL carries the broker password inline. The credential
+      # was supplied by the user on 2026-05-02 to recover the collector stall;
+      # rotate it after pipeline is healthy and migrate to Secret Manager:
+      #   echo -n "<new-url>" | gcloud secrets create redis-url \
+      #     --data-file=- --project clickrate-477217
+      #   gcloud secrets add-iam-policy-binding redis-url \
+      #     --member=serviceAccount:scalpyn-service-account@clickrate-477217.iam.gserviceaccount.com \
+      #     --role=roles/secretmanager.secretAccessor --project clickrate-477217
+      # then replace the line below with:
+      #   - '--update-secrets'
+      #   - 'REDIS_URL=redis-url:latest'
+      # The `/0` db suffix is REQUIRED -- without it Celery cannot select a
+      # logical Redis database and the broker connection silently fails after
+      # broker_connection_max_retries (10) attempts.
+      - '--update-env-vars'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0'
       # Force-restart marker. Bumping this string on every recovery deploy
       # guarantees Cloud Run rolls out a fresh revision even when the image
       # SHA is unchanged, which kills any poisoned Celery worker and recycles
@@ -86,7 +103,7 @@ steps:
       # `.local/tasks/diagnose-collector-stalled-prod.md` (decisions paused
       # 2026-04-29T13:48:16Z, lag 4754 min, schema confirmed OK in prod).
       - '--update-env-vars'
-      - 'FORCE_RESTART=2026-05-02T21:15:00Z'
+      - 'FORCE_RESTART=2026-05-02T21:40:00Z'
 
 substitutions:
   _REGION: us-central1

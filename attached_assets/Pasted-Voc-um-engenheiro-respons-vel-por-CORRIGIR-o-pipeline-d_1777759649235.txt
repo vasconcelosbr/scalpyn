@@ -1,0 +1,116 @@
+Você é um engenheiro responsável por CORRIGIR o pipeline de produção que está parado.
+
+Contexto já comprovado:
+
+* Pipeline sem dados (ohlcv e decisions = 0)
+* API e DB funcionando
+* Redis externo válido (Redis Labs)
+* URL atual do Redis está incorreta (faltando /0)
+
+Objetivo:
+
+> Corrigir definitivamente a conexão com Redis e restaurar o pipeline
+
+---
+
+# 🎯 TAREFA 1 — CORRIGIR REDIS_URL
+
+Atualizar a variável de ambiente REDIS_URL para:
+
+redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0
+
+Requisitos obrigatórios:
+
+* incluir `/0` no final
+* manter `default:` como username
+* não alterar host ou porta
+
+---
+
+# 🎯 TAREFA 2 — GARANTIR QUE CELERY USA A URL
+
+Validar no código:
+
+* broker_url = settings.REDIS_URL
+* result_backend = settings.REDIS_URL
+
+Se não estiver, corrigir.
+
+---
+
+# 🎯 TAREFA 3 — TESTE DE CONEXÃO (OBRIGATÓRIO)
+
+Adicionar verificação no startup (antes de iniciar Celery):
+
+```python
+import redis
+
+r = redis.from_url(REDIS_URL)
+assert r.ping() is True
+print("Redis conectado com sucesso")
+```
+
+Se falhar:
+
+* abortar startup com erro explícito
+
+---
+
+# 🎯 TAREFA 4 — DEPLOY
+
+Forçar novo deploy (usar FORCE_RESTART ou commit)
+
+---
+
+# 🎯 TAREFA 5 — VALIDAÇÃO AUTOMÁTICA
+
+Após deploy, executar:
+
+1. Endpoint:
+   curl /api/system/pipeline-status
+
+2. Esperado:
+
+* pipeline_operational = true
+* decisions_last_hour > 0
+* lag_minutes < 5
+
+---
+
+# 🎯 TAREFA 6 — VALIDAÇÃO DE EXECUÇÃO
+
+Confirmar via logs:
+
+* "Starting market data collection"
+* "Collecting spot data"
+* ausência de erros Redis
+
+---
+
+# 🎯 TAREFA 7 — FAIL-SAFE (OBRIGATÓRIO)
+
+Se Redis não conectar:
+
+* logar erro claro: "Redis connection failed"
+* encerrar container (exit 1)
+
+---
+
+# 🎯 RESULTADO FINAL ESPERADO
+
+* Celery worker ativo
+* Celery beat agendando
+* Tasks executando
+* Dados sendo inseridos novamente
+
+---
+
+# 🚨 PROIBIDO
+
+* manter URL sem /0
+* ignorar falha de conexão Redis
+* assumir que conexão está ok sem teste
+
+---
+
+Seu objetivo é restaurar o pipeline com evidência real de execução.
