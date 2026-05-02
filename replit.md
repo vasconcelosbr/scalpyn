@@ -36,6 +36,7 @@ Required secrets (set in Replit Secrets):
 - `ENCRYPTION_KEY` — AES key for encrypting API credentials (generate: openssl rand -hex 16)
 - `REDIS_URL` — Redis connection (optional, defaults to redis://localhost:6379/0)
 - `BACKEND_URL` — Backend URL for frontend proxy (defaults to http://localhost:8000)
+- `PROMETHEUS_BEARER_TOKEN` — bearer token required to scrape `GET /metrics`. When unset the endpoint returns 404 (hidden); when set the request must carry `Authorization: Bearer <token>` or it returns 401. See `docs/grafana/README.md` and `backend/app/api/metrics.py`.
 
 ## API Proxy
 The frontend proxies all `/api/*` requests to the FastAPI backend via `frontend/app/api/[...path]/route.ts`. This keeps the backend URL server-side only.

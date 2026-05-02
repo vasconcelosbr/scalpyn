@@ -35,24 +35,102 @@ scrape_configs:
     scheme: https
     scrape_interval: 30s
     scrape_timeout: 10s
+    # Required: /metrics is gated by a shared bearer token (see below).
+    bearer_token_file: /etc/prometheus/scalpyn-metrics-token
     static_configs:
       - targets: ['scalpyn-backend-<hash>-uc.a.run.app']
 ```
 
-> ### ⚠ `/metrics` is currently unauthenticated
+> ### `/metrics` access control (Task #167)
 >
-> `backend/app/api/metrics.py` exposes the endpoint without auth so a stock
-> Prometheus scrape works. **Do not rely on application-level auth** —
-> instead restrict access at the network layer:
+> Two layers, both required:
 >
-> 1. Set Cloud Run **ingress** to "Internal and Cloud Load Balancing" or
->    "Internal only", and put Prometheus inside the same VPC connector.
-> 2. Or terminate scraping behind a Cloud Armor / IAP policy that allows
->    only the Prometheus egress IPs.
+> **1. Network perimeter (primary).** The Cloud Run service is deployed
+> with `--ingress=internal-and-cloud-load-balancing` (see
+> `cloudbuild.yaml`). The raw `*.run.app` hostname is unreachable from
+> the public internet — `curl` against it returns `403 Forbidden` from
+> Google's front end *before* a request ever hits the application.
+> Frontend traffic continues to flow through the Vercel proxy
+> (`frontend/app/api/[...path]/route.ts`) by pointing `BACKEND_URL` at
+> the Cloud Load Balancer hostname (or a custom domain mapped to the
+> LB), and Prometheus scrapes from inside the same VPC connector or
+> through an LB allow-list — see the operator setup below.
 >
-> Adding auth in code would either break the unauthenticated Prometheus
-> client or require a sidecar — a network-level allow-list is simpler and
-> fully recoverable.
+> **2. Application-level bearer token (defense in depth).** Even if the
+> ingress perimeter is ever loosened, `backend/app/api/metrics.py`
+> requires an `Authorization: Bearer <token>` header that matches the
+> `PROMETHEUS_BEARER_TOKEN` env var (mounted from the
+> `prometheus-bearer-token` Secret Manager secret). When the env var is
+> unset the endpoint returns `404 Not Found`; when set, requests without
+> the matching token get `401 Unauthorized`. Prometheus supports this
+> natively via `bearer_token_file` (already wired in the scrape config
+> above), so no sidecar is needed.
+>
+> | Reachability                                                  | Result |
+> |---------------------------------------------------------------|--------|
+> | Public internet → `https://scalpyn-backend-…run.app/metrics`  | `403` (Cloud Run ingress blocks) |
+> | Internal/LB caller, no `Authorization` header                 | `401` + `WWW-Authenticate: Bearer` |
+> | Internal/LB caller with correct `Bearer` token                | `200` + Prometheus exposition body |
+>
+> #### One-time operator setup
+>
+> ```bash
+> # ── A. Provision the Cloud Load Balancer in front of Cloud Run ─────────────
+> # Skipped here for brevity — follow the standard "Serverless NEG → backend
+> # service → URL map → HTTPS proxy → forwarding rule" recipe. The result is
+> # a stable LB IP/hostname (e.g. `api.scalpyn.app`) that fronts the Cloud
+> # Run service. After this, point Vercel's BACKEND_URL env var at the LB
+> # hostname so the frontend keeps reaching the backend.
+>
+> # ── B. Lock the bearer-token secret ───────────────────────────────────────
+> openssl rand -hex 32 | tr -d '\n' | \
+>   gcloud secrets create prometheus-bearer-token \
+>     --data-file=- --project clickrate-477217
+>
+> gcloud secrets add-iam-policy-binding prometheus-bearer-token \
+>   --member=serviceAccount:scalpyn-service-account@clickrate-477217.iam.gserviceaccount.com \
+>   --role=roles/secretmanager.secretAccessor \
+>   --project clickrate-477217
+>
+> # ── C. Re-deploy via Cloud Build ──────────────────────────────────────────
+> # cloudbuild.yaml already passes both `--ingress=internal-and-cloud-load-
+> # balancing` and `--update-secrets PROMETHEUS_BEARER_TOKEN=
+> # prometheus-bearer-token:latest`, so a fresh build applies both at once.
+>
+> # ── D. Drop the same token on the Prometheus host ─────────────────────────
+> gcloud secrets versions access latest --secret=prometheus-bearer-token \
+>   --project clickrate-477217 \
+>   | sudo tee /etc/prometheus/scalpyn-metrics-token > /dev/null
+> sudo chmod 600 /etc/prometheus/scalpyn-metrics-token
+> sudo chown prometheus:prometheus /etc/prometheus/scalpyn-metrics-token
+> sudo systemctl reload prometheus
+> ```
+>
+> #### Smoke test (post-deploy)
+>
+> ```bash
+> # 1. Public Cloud Run URL → must be 403 (ingress blocks before the app)
+> curl -s -o /dev/null -w "%{http_code}\n" \
+>   https://scalpyn-backend-<hash>-uc.a.run.app/metrics
+> # → 403
+>
+> # 2. LB hostname without the token → must be 401 (bearer gate)
+> curl -s -o /dev/null -w "%{http_code}\n" \
+>   https://api.scalpyn.app/metrics
+> # → 401
+>
+> # 3. LB hostname with the token → must be 200 + text/plain Prometheus body
+> curl -s -o /dev/null -w "%{http_code}\n" \
+>   -H "Authorization: Bearer $(cat /etc/prometheus/scalpyn-metrics-token)" \
+>   https://api.scalpyn.app/metrics
+> # → 200
+> ```
+>
+> **Rotation:** add a new secret version
+> (`gcloud secrets versions add prometheus-bearer-token --data-file=…`),
+> redeploy Cloud Run so the new value is picked up, then update
+> `/etc/prometheus/scalpyn-metrics-token` and reload Prometheus. The
+> ingress restriction stays in force throughout the rotation.
 
 ### Cloud Run multi-worker note
 

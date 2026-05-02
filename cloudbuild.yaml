@@ -30,6 +30,18 @@ steps:
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
+      # Network-level perimeter (Task #167). Only requests entering through
+      # an HTTPS Cloud Load Balancer or originating inside the VPC reach the
+      # service; the raw *.run.app URL returns 403 from the public internet,
+      # so /metrics (and every other route) is no longer leak-scrapable.
+      # Frontend traffic continues to flow because the Vercel proxy
+      # (frontend/app/api/[...path]/route.ts) targets BACKEND_URL — point it
+      # at the Cloud LB hostname (or a custom domain mapped to the LB) once
+      # the LB is provisioned. Prometheus is scraped from inside the same
+      # VPC connector / via the LB allow-list documented in
+      # docs/grafana/README.md.
+      - '--ingress'
+      - 'internal-and-cloud-load-balancing'
       - '--port'
       - '8080'
       - '--timeout'
@@ -47,6 +59,18 @@ steps:
       - '2Gi'
       - '--add-cloudsql-instances'
       - 'clickrate-477217:us-central1:scalpyn'
+      # Bearer-token gate for /metrics (Task #167). The endpoint returns 404
+      # until this env var is present, and 401 unless the request carries the
+      # matching `Authorization: Bearer …` header. Prometheus scrapes with
+      # `bearer_token_file` (see docs/grafana/README.md). The Secret Manager
+      # secret must exist before this deploy step; one-time setup:
+      #   echo -n "<random-32-byte-hex>" | gcloud secrets create \
+      #     prometheus-bearer-token --data-file=- --project clickrate-477217
+      #   gcloud secrets add-iam-policy-binding prometheus-bearer-token \
+      #     --member=serviceAccount:scalpyn-service-account@clickrate-477217.iam.gserviceaccount.com \
+      #     --role=roles/secretmanager.secretAccessor --project clickrate-477217
+      - '--update-secrets'
+      - 'PROMETHEUS_BEARER_TOKEN=prometheus-bearer-token:latest'
 
 substitutions:
   _REGION: us-central1
