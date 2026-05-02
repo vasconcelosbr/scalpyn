@@ -55,4 +55,8 @@ CRITICAL_COLUMNS: List[Tuple[str, str]] = [
     # cascade into InFailedSQLTransactionError + QueuePool exhaustion.
     # Detection here is what start.sh's post-stamp probe relies on as well.
     ("indicators", "scheduler_group"),
+    # Added by migration 033; indicator writers now insert this unconditionally
+    # and futures queries filter on it, so missing it would break writes and
+    # silently collapse spot/futures isolation.
+    ("indicators", "market_type"),
 ]

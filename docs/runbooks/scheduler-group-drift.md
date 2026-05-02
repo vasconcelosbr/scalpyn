@@ -17,7 +17,7 @@ Migration `032_add_indicators_scheduler_group.py` adds the column to `indicators
 
 When `alembic upgrade head` fails three times in a row (typically lock contention from the previous revision's Celery beat during a rolling Cloud Run deploy), `start.sh` falls back to `alembic stamp head`. **That writes `032` to `alembic_version` but never executes the `ALTER TABLE`**, so the column stays missing and every scheduler cycle fails for every symbol.
 
-Since 2026-05-02 the start script invokes `python3 -m scripts.check_critical_schema` after the stamp fallback and aborts the boot when this drift is detected — Cloud Run rolls back to the previous revision instead of running silently broken. If you are reading this runbook, you are most likely in production where the gate has not been deployed yet, or the gate already fired and you need to fix the database before the next deploy.
+Since 2026-05-02 the start script invokes `python3 -m scripts.check_critical_schema` after the stamp fallback and aborts the boot when this drift is detected — Cloud Run rolls back to the previous revision instead of running silently broken. Since 2026-05-02T14:42Z it also runs the same probe after a successful `alembic upgrade head`, which catches databases that were already drifted by an older `stamp head` incident before a later migration succeeds. If you are reading this runbook, you are most likely in production where the gate has not been deployed yet, or the gate already fired and you need to fix the database before the next deploy.
 
 ## Verification
 
