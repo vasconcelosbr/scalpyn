@@ -1,22 +1,4 @@
 {
-  "__inputs": [
-    {
-      "name": "DS_PROMETHEUS",
-      "label": "Prometheus",
-      "description": "Prometheus datasource scraping the Scalpyn /metrics endpoint.",
-      "type": "datasource",
-      "pluginId": "prometheus",
-      "pluginName": "Prometheus"
-    },
-    {
-      "name": "DS_POSTGRES",
-      "label": "PostgreSQL (read-only)",
-      "description": "PostgreSQL datasource using the grafana_ro role.",
-      "type": "datasource",
-      "pluginId": "postgres",
-      "pluginName": "PostgreSQL"
-    }
-  ],
   "__requires": [
     { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0" },
     { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" },
@@ -297,6 +279,26 @@
             ]
           }
         }
+      },
+      "alert": {
+        "name": "[Scalpyn] Rejection rate alto (>50%)",
+        "message": "More than 50% of decisions in decisions_log were REJECT over the last hour. Inspect the rejection-reason donut (panel 7) and recent changes to backend/app/tasks/pipeline_scan.py.",
+        "for": "5m",
+        "frequency": "1m",
+        "handler": 1,
+        "noDataState": "no_data",
+        "executionErrorState": "alerting",
+        "alertRuleTags": { "severity": "warning", "service": "trading-engine", "runbook_url": "https://github.com/<org>/scalpyn/runbooks/grafana#rejection-rate-alto" },
+        "conditions": [
+          {
+            "type": "query",
+            "evaluator": { "type": "gt", "params": [50] },
+            "operator": { "type": "and" },
+            "query": { "params": ["A", "5m", "now"] },
+            "reducer": { "type": "last", "params": [] }
+          }
+        ],
+        "notifications": []
       }
     },
     {
@@ -378,7 +380,7 @@
       "id": 8,
       "type": "gauge",
       "title": "% NO_DATA",
-      "description": "Embedded alert A2 (provisioning recommended): trigger when > 25 for 5m.",
+      "description": "Percentage of indicator entries reporting status=NO_DATA in the last 15 minutes. Embedded alert A2 fires when this exceeds 25 for 5m.",
       "datasource": { "type": "postgres", "uid": "${postgres}" },
       "gridPos": { "h": 6, "w": 6, "x": 6, "y": 6 },
       "targets": [
@@ -408,6 +410,26 @@
             ]
           }
         }
+      },
+      "alert": {
+        "name": "[Scalpyn] NO_DATA alto (>25%)",
+        "message": "Indicator pipeline reports >25% NO_DATA over the last 15 minutes. Check Gate.io connectivity, the structural scheduler logs, and recent failures in backend/app/services/scheduler_service.py.",
+        "for": "5m",
+        "frequency": "1m",
+        "handler": 1,
+        "noDataState": "no_data",
+        "executionErrorState": "alerting",
+        "alertRuleTags": { "severity": "critical", "service": "trading-engine", "runbook_url": "https://github.com/<org>/scalpyn/runbooks/grafana#no-data-alto" },
+        "conditions": [
+          {
+            "type": "query",
+            "evaluator": { "type": "gt", "params": [25] },
+            "operator": { "type": "and" },
+            "query": { "params": ["A", "15m", "now"] },
+            "reducer": { "type": "last", "params": [] }
+          }
+        ],
+        "notifications": []
       }
     },
     {
@@ -538,8 +560,8 @@
     {
       "id": 12,
       "type": "table",
-      "title": "Exchanges — p95 latency · error rate · staleness",
-      "description": "Joined on the 'exchange' label. Latency unit: seconds. Error rate unit: ratio (0–1). Staleness: seconds since last sample.",
+      "title": "Exchanges — p95 latency · error rate · last update · status",
+      "description": "One row per exchange (label join). Columns match the spec exactly: p95 latency (s), error rate (ratio), last-update timestamp, and a status pill driven by staleness.",
       "datasource": { "type": "prometheus", "uid": "${prometheus}" },
       "gridPos": { "h": 7, "w": 24, "x": 0, "y": 22 },
       "targets": [
@@ -559,6 +581,13 @@
         },
         {
           "refId": "C",
+          "expr": "max by (exchange) (timestamp(exchange_request_latency_seconds_count))",
+          "instant": true,
+          "format": "table",
+          "legendFormat": "last_update_ts"
+        },
+        {
+          "refId": "D",
           "expr": "time() - max by (exchange) (timestamp(exchange_request_latency_seconds_count))",
           "instant": true,
           "format": "table",
@@ -571,12 +600,13 @@
           "id": "organize",
           "options": {
             "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true },
-            "indexByName": { "exchange": 0, "Value #A": 1, "Value #B": 2, "Value #C": 3 },
+            "indexByName": { "exchange": 0, "Value #A": 1, "Value #B": 2, "Value #C": 3, "Value #D": 4 },
             "renameByName": {
               "exchange": "Exchange",
               "Value #A": "p95 latency",
               "Value #B": "Error rate",
-              "Value #C": "Staleness"
+              "Value #C": "Last update",
+              "Value #D": "Status"
             }
           }
         }
@@ -623,22 +653,27 @@
             ]
           },
           {
-            "matcher": { "id": "byName", "options": "Staleness" },
+            "matcher": { "id": "byName", "options": "Last update" },
             "properties": [
-              { "id": "unit", "value": "s" },
+              { "id": "unit", "value": "dateTimeAsLocal" },
+              { "id": "custom.cellOptions", "value": { "type": "auto" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Status" },
+            "properties": [
+              { "id": "unit", "value": "none" },
               { "id": "decimals", "value": 0 },
               {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    { "color": "green", "value": null },
-                    { "color": "orange", "value": 60 },
-                    { "color": "red", "value": 300 }
-                  ]
-                }
+                "id": "mappings",
+                "value": [
+                  { "type": "range", "options": { "from": -1e9, "to": 60, "result": { "text": "OK", "color": "green", "index": 0 } } },
+                  { "type": "range", "options": { "from": 60.000001, "to": 300, "result": { "text": "DEGRADED", "color": "orange", "index": 1 } } },
+                  { "type": "range", "options": { "from": 300.000001, "to": 1e12, "result": { "text": "DOWN", "color": "red", "index": 2 } } }
+                ]
               },
-              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "gradient" } }
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "basic" } },
+              { "id": "custom.align", "value": "center" }
             ]
           }
         ]

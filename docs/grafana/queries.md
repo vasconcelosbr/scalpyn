@@ -170,8 +170,9 @@ WHERE timestamp > NOW() - INTERVAL '15 minutes';
 
 ## Section 4 — Exchange Status table (refresh: 30 s)
 
-Three Prometheus instant queries joined on the `exchange` label via
-`merge` + `organize` transforms.
+Four Prometheus instant queries joined on the `exchange` label via
+`merge` + `organize` transforms. Final columns match the task spec
+verbatim: **p95 latency · error rate · last-update timestamp · status pill**.
 
 ```promql
 # A — p95 latency by exchange (seconds)
@@ -182,15 +183,22 @@ histogram_quantile(0.95,
 sum by (exchange) (rate(exchange_request_errors_total[5m]))
   / sum by (exchange) (rate(exchange_request_latency_seconds_count[5m]))
 
-# C — staleness: seconds since last sample
+# C — last-update timestamp (unix seconds; rendered as dateTimeAsLocal)
+max by (exchange) (timestamp(exchange_request_latency_seconds_count))
+
+# D — staleness in seconds, fed straight to the Status pill via range mappings
 time() - max by (exchange) (timestamp(exchange_request_latency_seconds_count))
 ```
 
-| Column        | Unit          | Green     | Yellow      | Red       |
-|---------------|---------------|-----------|-------------|-----------|
-| `p95 latency` | `s` (seconds) | < 0.5     | 0.5–1.5     | ≥ 1.5     |
-| `Error rate`  | `percentunit` | < 5 %     | 5 %–10 %    | ≥ 10 %    |
-| `Staleness`   | `s` (seconds) | < 60      | 60–300      | ≥ 300     |
+| Column         | Unit               | Green / OK    | Yellow / DEGRADED  | Red / DOWN     |
+|----------------|--------------------|---------------|--------------------|----------------|
+| `p95 latency`  | `s` (seconds)      | < 0.5         | 0.5–1.5            | ≥ 1.5          |
+| `Error rate`   | `percentunit`      | < 5 %         | 5 %–10 %           | ≥ 10 %         |
+| `Last update`  | `dateTimeAsLocal`  | n/a           | n/a                | n/a            |
+| `Status` pill  | range-mapped (`D`) | `OK` (< 60 s) | `DEGRADED` (60–300 s) | `DOWN` (≥ 300 s) |
+
+The Status column is rendered as a coloured background pill via Grafana's
+`range` value mappings on column D — no extra Prometheus query is required.
 
 ---
 
@@ -278,21 +286,22 @@ histogram_quantile(0.95,
 
 ## Embedded alerts (Grafana 10 unified alerting)
 
-| # | Name                              | Datasource | Condition                                                                                               | For |
-|---|-----------------------------------|------------|---------------------------------------------------------------------------------------------------------|-----|
-| A1 | `[Scalpyn] Confidence baixo`     | Prometheus | `avg(indicator_confidence) < 0.6`                                                                       | 5m  |
-| A2 | `[Scalpyn] NO_DATA alto`         | Postgres   | result of the `% NO_DATA` query in section 2 > 25                                                       | 5m  |
-| A3 | `[Scalpyn] Rejection rate alto`  | Postgres   | result of section 1.5 > 50                                                                              | 5m  |
-| A4 | `[Scalpyn] Exchange error rate alto` | Prometheus | `100 * sum(rate(exchange_request_errors_total[5m])) / sum(rate(exchange_request_latency_seconds_count[5m])) > 10` | 5m  |
+| # | Name                                  | Attached panel                       | Datasource | Condition                                                                                                            | For |
+|---|---------------------------------------|--------------------------------------|------------|----------------------------------------------------------------------------------------------------------------------|-----|
+| A1 | `[Scalpyn] Confidence baixo`         | 3 — `Confidence Média`               | Prometheus | `avg(indicator_confidence) < 0.6`                                                                                    | 5m  |
+| A2 | `[Scalpyn] NO_DATA alto`             | 8 — `% NO_DATA` gauge                | Postgres   | `last(A) > 25` where A = section-2 NO_DATA SQL                                                                       | 5m  |
+| A3 | `[Scalpyn] Rejection rate alto`      | 5 — `Rejection Rate (1h)`            | Postgres   | `last(A) > 50` where A = section-1.5 SQL                                                                             | 5m  |
+| A4 | `[Scalpyn] Exchange error rate alto` | 12 — `Exchanges` table               | Prometheus | `max(B) > 0.1` where B = `sum(rate(exchange_request_errors_total[5m])) / sum(rate(exchange_request_latency_seconds_count[5m]))` | 5m  |
 
-* **Embedded in the dashboard JSON:** A1 is attached to panel 3
-  (`Confidence Média`); A4 is attached to panel 12 (`Exchanges` table).
-  Grafana 10 imports legacy `panel.alert` blocks and converts them to the
-  unified-alerting model on first save.
-* **Provisioned separately:** A2 and A3 are SQL-based and ship in
-  `alert-rules.yaml` because Grafana's panel-attached legacy alerts cannot
-  reduce a SQL `table` result without a math expression node.
+* **All four rules are embedded inside the dashboard JSON** as
+  `panel.alert` blocks. Grafana 10 imports them and migrates them to the
+  unified-alerting model under the `Scalpyn` rule group on first save.
+* `docs/grafana/alert-rules.yaml` ships the same four rules in
+  Grafana's native provisioning format. Use it for repeatable deploys
+  (recommended in production); the embedded blocks above are convenient
+  for one-off imports and for keeping the dashboard self-contained.
 
-Each rule carries `severity` (`critical`) and `service: trading-engine`
-labels plus a summary annotation pointing operators to the relevant adapter
-or pipeline file.
+Each rule carries `severity` (`critical` for A1/A2/A4, `warning` for A3)
+and `service: trading-engine` labels, a summary annotation pointing
+operators to the relevant adapter or pipeline file, and a `runbook_url`
+placeholder.

@@ -129,26 +129,33 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM grafana_ro;
 
 1. **Dashboards → Import**.
 2. Click **Upload JSON file** and choose `scalpyn-trading-engine.json`.
-3. Grafana prompts for the two datasources declared in `__inputs`:
-   * `DS_PROMETHEUS` → pick the Prometheus datasource from step 3.
-   * `DS_POSTGRES`   → pick the PostgreSQL datasource from step 3.
+3. The dashboard exposes two **datasource template variables** —
+   `${prometheus}` and `${postgres}` — that are bound on import:
+   * `prometheus` → pick the Prometheus datasource from step 3.
+   * `postgres`   → pick the PostgreSQL datasource from step 3.
+
+   Both variables also stay editable from the dashboard's variable
+   selector, so the same JSON can be re-pointed at a staging Prometheus
+   or read-replica Postgres without re-importing.
 4. **Import**. The dashboard opens at UID `scalpyn-trading-engine`,
    default time range `now-1h → now`, refresh `30s`.
 5. Optional: pin it to your Trading folder and star it.
 
-The dashboard ships two embedded panel-level alerts (A1 on `Confidence
-Média`, A4 on the `Exchanges` table). On first save Grafana 10 migrates
-both legacy `panel.alert` blocks into the unified-alerting model under the
+The dashboard ships **all four alert rules embedded** inside the JSON as
+`panel.alert` blocks (A1 on `Confidence Média`, A2 on `% NO_DATA`,
+A3 on `Rejection Rate (1h)`, A4 on the `Exchanges` table). On first save
+Grafana 10 migrates them into the unified-alerting model under the
 `Scalpyn` alert group automatically.
 
 ---
 
 ## 5. Provisioning the four alerts repeatably
 
-Panel-level alerts are convenient for two single-query Prometheus panels
-(A1, A4) but cannot reduce a SQL `table` result without a math expression.
-Both SQL alerts (A2 NO_DATA · A3 Rejection rate) therefore live in
-`alert-rules.yaml`, which Grafana picks up via its provisioning system:
+The dashboard JSON already embeds all four alerts (see step 4 above) and
+Grafana 10 migrates them on import. For repeatable production deploys
+where the dashboard might be re-imported by automation, also drop the
+companion provisioning file in place — the rule UIDs match, so the
+embedded blocks and the YAML stay in sync without duplication:
 
 ```bash
 # /etc/grafana/provisioning/alerting/scalpyn.yaml
