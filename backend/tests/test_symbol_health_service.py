@@ -747,3 +747,45 @@ def test_remediator_only_recomputes_for_post_refresh_confirmed(monkeypatch):
     assert by_sym["ETH_USDT"].executed is False
     assert by_sym["ETH_USDT"].error == "ingestion_not_confirmed"
     assert sent_tasks == ["app.tasks.compute_indicators.compute_5m"]
+
+
+def test_etapa8_symbol_with_deferred_recompute_stays_pendente():
+    """Multi-action symbol regression: APPROVE executed=True + RECOMPUTE
+    deferred (ingestion_not_confirmed) MUST be reported as pendente,
+    not corrigido. system_healthy must remain False."""
+    from app.services.symbol_health_service import build_etapa8_envelope
+    from app.services import symbol_remediator as rem_mod
+
+    report = _build_report(
+        ("BTC_USDT", STATUS_OK),
+        ("ETH_USDT", STATUS_NOT_APPROVED),
+    )
+    rem = rem_mod.RemediationReport(
+        dry_run=False,
+        total_actions=2,
+        counts_by_action={
+            rem_mod.ACTION_APPROVE: 1,
+            rem_mod.ACTION_RECOMPUTE_INDICATORS: 1,
+        },
+        actions=[
+            rem_mod.RemediationAction(
+                symbol="ETH_USDT",
+                action=rem_mod.ACTION_APPROVE,
+                reason="approved", executed=True,
+            ),
+            rem_mod.RemediationAction(
+                symbol="ETH_USDT",
+                action=rem_mod.ACTION_RECOMPUTE_INDICATORS,
+                reason="deferred", executed=False,
+                error="ingestion_not_confirmed",
+            ),
+        ],
+        refresh_subscriptions_requested=True,
+        recompute_enqueued=True,
+    )
+    env = build_etapa8_envelope(report, rem)
+
+    eth = next(item for item in env["lista"] if item["symbol"] == "ETH_USDT")
+    assert eth["status_final"] == "pendente"
+    assert env["resumo"] == {"total": 2, "corrigidos": 0, "pendentes": 1}
+    assert env["system_healthy"] is False

@@ -635,21 +635,35 @@ def build_etapa8_envelope(
     ``corrigidos`` stays 0 — the report then represents "what is broken
     right now" rather than "what got fixed".
     """
-    by_symbol: Dict[str, "Tuple[str, bool]"] = {}  # noqa: F821
+    # Per-symbol aggregation: a symbol is only "corrigido" when EVERY
+    # action for it executed AND none has a terminal-pending marker
+    # (e.g. ``ingestion_not_confirmed`` from the post-refresh ZCARD
+    # gate). This prevents a partial fix — e.g. APPROVE executed but
+    # post-refresh RECOMPUTE deferred — from masquerading as healthy.
+    actions_by_symbol: Dict[str, List[Any]] = {}
     if remediation is not None:
         for a in getattr(remediation, "actions", []) or []:
-            prev = by_symbol.get(a.symbol)
-            # Last executed action wins; otherwise first proposed.
-            if prev is None or (a.executed and not prev[1]):
-                by_symbol[a.symbol] = (a.action, bool(a.executed))
+            actions_by_symbol.setdefault(a.symbol, []).append(a)
 
     lista: List[Dict[str, Any]] = []
     corrigidos = 0
     pendentes = 0
     for rec in report.symbols:
-        action_pair = by_symbol.get(rec.symbol)
-        if action_pair is not None:
-            action_str, executed = action_pair
+        sym_actions = actions_by_symbol.get(rec.symbol) or []
+        if sym_actions:
+            unresolved = [a for a in sym_actions if not bool(a.executed)]
+            executed_actions = [a for a in sym_actions if bool(a.executed)]
+            if unresolved:
+                # Worst-outcome wins. Surface the unresolved label so
+                # the operator can see *what* is still pending.
+                action_str = unresolved[0].action
+                executed = False
+            elif executed_actions:
+                action_str = executed_actions[-1].action
+                executed = True
+            else:
+                action_str = "pendente"
+                executed = False
         else:
             action_str = "nenhuma" if rec.status == STATUS_OK else "pendente"
             executed = False
