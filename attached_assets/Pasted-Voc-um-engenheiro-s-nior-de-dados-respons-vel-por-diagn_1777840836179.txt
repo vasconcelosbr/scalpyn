@@ -1,0 +1,221 @@
+Você é um engenheiro sênior de dados responsável por diagnosticar falhas em pipeline de market data e indicadores.
+
+## OBJETIVO
+
+Levantar evidências completas (logs + queries + testes externos) para confirmar se o sistema NÃO está ingerindo trades de mercado (exchange) e está usando apenas trades internos do app.
+
+---
+
+## CONTEXTO
+
+* Indicadores afetados: taker_ratio, volume_delta
+* Status atual: "SEM DADOS"
+* Tabela atual: public.trades (suspeita de conter apenas trades do app)
+* Símbolo foco: HYPE_USDT
+
+---
+
+## ETAPA 1 — CLASSIFICAÇÃO DA TABELA trades
+
+Rodar:
+
+```sql
+SELECT *
+FROM public.trades
+LIMIT 5;
+```
+
+Verificar e responder:
+
+* Existem campos como profit_loss, entry_price, tp/sl, user_id?
+* Existe campo de agressor (isBuyerMaker / taker)?
+* Existe granularidade de ticks (múltiplos trades por segundo)?
+
+Classificar:
+
+* [ ] USER_TRADES
+* [ ] MARKET_TRADES
+* [ ] MIXED
+
+---
+
+## ETAPA 2 — VOLUME REAL DE DADOS
+
+```sql
+SELECT symbol, COUNT(*) 
+FROM public.trades
+WHERE entry_at > NOW() - INTERVAL '5 minutes'
+GROUP BY symbol;
+```
+
+Responder:
+
+* Existe fluxo contínuo?
+* Ou apenas eventos esporádicos?
+
+---
+
+## ETAPA 3 — HISTÓRICO DO ATIVO
+
+```sql
+SELECT COUNT(*)
+FROM public.trades
+WHERE symbol = 'HYPE_USDT';
+```
+
+Responder:
+
+* Nunca coletou?
+* Coletou e parou?
+* Frequência histórica?
+
+---
+
+## ETAPA 4 — VALIDAÇÃO EXTERNA (EXCHANGE)
+
+Executar chamada:
+
+GET https://api.binance.com/api/v3/trades?symbol=HYPEUSDT
+
+Responder:
+
+* API retorna trades?
+* Volume consistente?
+* Timestamp atual?
+
+Classificar:
+
+* [ ] Sem liquidez
+* [ ] Com liquidez
+
+---
+
+## ETAPA 5 — VERIFICAÇÃO DO COLLECTOR
+
+Inspecionar código/logs:
+
+1. Existe módulo de coleta de market trades?
+2. Existe subscribe para:
+   hypeusdt@trade
+3. Logs mostram:
+
+   * conexão aberta?
+   * mensagens recebidas?
+   * reconexão?
+
+Buscar logs contendo:
+
+* "subscribe"
+* "trade"
+* "HYPE"
+
+---
+
+## ETAPA 6 — PIPELINE DE DADOS
+
+Mapear fluxo real:
+
+* Fonte de dados dos indicadores:
+
+  * [ ] public.trades
+  * [ ] outra tabela
+  * [ ] API direta
+
+* Existe tabela:
+
+  * market_trades?
+  * orderbook?
+  * agg_trades?
+
+---
+
+## ETAPA 7 — VALIDAÇÃO DE CÁLCULO
+
+Identificar query ou função de:
+
+* taker_ratio
+* volume_delta
+
+Responder:
+
+* Fonte usada
+* Dependências (campos)
+* Condição de fallback ("SEM DADOS")
+
+---
+
+## ETAPA 8 — TESTE CONTROLADO
+
+Executar teste manual:
+
+1. Puxar 50 trades da API
+2. Calcular localmente:
+
+* buy_volume
+* sell_volume
+* taker_ratio
+* volume_delta
+
+Confirmar:
+
+* cálculo funciona sem banco?
+
+---
+
+## ETAPA 9 — DIAGNÓSTICO FINAL
+
+Responder com:
+
+### CAUSA RAIZ
+
+(explicar com base em evidências)
+
+### PROVAS
+
+* queries executadas
+* logs encontrados
+* resposta da API
+
+### CLASSIFICAÇÃO
+
+* [ ] Falta de market data
+* [ ] Collector inativo
+* [ ] Erro de mapping de símbolo
+* [ ] Uso incorreto de tabela
+* [ ] Outro (especificar)
+
+---
+
+## ETAPA 10 — PLANO DE CORREÇÃO
+
+Fornecer:
+
+1. Correção mínima (rápida)
+2. Correção ideal (arquitetural)
+3. Impacto no sistema
+4. Riscos
+
+---
+
+## REGRAS
+
+* NÃO assumir nada sem evidência
+* SEM opiniões
+* SOMENTE dados verificáveis
+* TODAS as conclusões devem ter prova
+
+---
+
+## FORMATO FINAL
+
+Responder em estrutura:
+
+* Diagnóstico
+* Evidências
+* Causa raiz
+* Correção recomendada
+* Prioridade (alta/média/baixa)
+
+---
+
+FIM DO PROMPT

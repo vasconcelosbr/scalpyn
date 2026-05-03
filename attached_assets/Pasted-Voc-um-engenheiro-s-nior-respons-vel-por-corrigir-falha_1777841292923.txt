@@ -1,0 +1,223 @@
+Você é um engenheiro sênior responsável por corrigir falhas sistêmicas de ingestão de market data em um sistema de trading.
+
+## OBJETIVO
+
+Identificar e corrigir TODOS os símbolos com problema de “SEM DADOS”, garantindo:
+
+1. consistência entre pool e collector
+2. subscrição ativa no WebSocket
+3. ingestão no Redis
+4. funcionamento dos indicadores
+5. prevenção de regressões
+
+---
+
+## CONTEXTO
+
+* Indicadores afetados: taker_ratio, volume_delta
+* Fonte correta: WebSocket + Redis (não usar public.trades)
+* Problema recorrente: símbolos ativos não aprovados ou não subscritos
+
+---
+
+# ETAPA 1 — DETECTAR TODOS OS ATIVOS QUEBRADOS
+
+### 1.1 Ativos ativos mas NÃO aprovados
+
+```sql
+SELECT pc.symbol, pc.is_active, pc.is_approved, p.market_type
+FROM pool_coins pc
+JOIN pools p ON p.id = pc.pool_id
+WHERE pc.is_active = TRUE
+AND pc.is_approved = FALSE;
+```
+
+---
+
+### 1.2 Ativos aprovados mas SEM ingestão (CRÍTICO)
+
+Para cada símbolo aprovado:
+
+```pseudo
+ZCARD trades_buffer:spot:{symbol}
+```
+
+Classificar:
+
+* ZCARD = 0 → QUEBRADO
+* ZCARD > 0 → OK
+
+---
+
+### 1.3 Ativos aprovados mas SEM indicadores
+
+Verificar:
+
+* taker_ratio IS NULL
+* volume_delta IS NULL
+
+---
+
+# ETAPA 2 — CLASSIFICAÇÃO DOS PROBLEMAS
+
+Para cada símbolo, classificar:
+
+* NOT_APPROVED
+* NOT_SUBSCRIBED
+* NO_REDIS_DATA
+* NO_INDICATOR_DATA
+* OK
+
+---
+
+# ETAPA 3 — CORREÇÃO AUTOMÁTICA EM LOTE
+
+## 3.1 Aprovar automaticamente (com critério)
+
+Apenas se:
+
+* is_active = TRUE
+* market_type = 'spot'
+* símbolo existe na exchange (validar via API)
+
+```sql
+UPDATE pool_coins
+SET is_approved = TRUE
+WHERE is_active = TRUE
+AND is_approved = FALSE
+AND pool_id IN (
+  SELECT id FROM pools WHERE market_type = 'spot'
+);
+```
+
+---
+
+## 3.2 Re-subscrever TODOS os símbolos
+
+Executar:
+
+```python
+symbols = resolve_spot_symbols()
+restart_websocket()
+subscribe_all(symbols)
+```
+
+---
+
+## 3.3 Validar Redis em lote
+
+Para cada símbolo:
+
+```pseudo
+if ZCARD == 0:
+    marcar como FALHA_CRÍTICA
+```
+
+---
+
+# ETAPA 4 — VALIDAÇÃO EXTERNA
+
+Para símbolos quebrados:
+
+```bash
+GET /spot/trades?currency_pair={symbol}
+```
+
+Se API retorna dados:
+→ problema interno
+
+Se não retorna:
+→ remover do pool
+
+---
+
+# ETAPA 5 — RECÁLCULO FORÇADO
+
+Executar:
+
+```python
+recompute_indicators(symbol)
+```
+
+Para todos os símbolos corrigidos
+
+---
+
+# ETAPA 6 — PROTEÇÕES (OBRIGATÓRIO)
+
+## Regra 1 — inconsistência de pool
+
+Se:
+
+* is_active = TRUE
+* is_approved = FALSE
+
+→ ALERTA: "SYMBOL ACTIVE BUT NOT APPROVED"
+
+---
+
+## Regra 2 — falha de ingestão
+
+Se:
+
+* is_approved = TRUE
+* AND ZCARD = 0 por > 120s
+
+→ ALERTA: "SYMBOL NOT STREAMING"
+
+---
+
+## Regra 3 — fallback REST
+
+Se Redis vazio:
+→ tentar REST automaticamente
+→ logar fallback
+
+---
+
+# ETAPA 7 — LOGS OBRIGATÓRIOS
+
+```text
+[POOL] approved symbols: N
+[WS] subscribed symbols: N
+[WS] missing symbols: X
+[REDIS] empty buffers: Y
+[INDICATORS] no data: Z
+```
+
+---
+
+# ETAPA 8 — RELATÓRIO FINAL
+
+Gerar:
+
+### RESUMO
+
+* total de símbolos
+* quantos corrigidos
+* quantos ainda com erro
+
+### LISTA DETALHADA
+
+* símbolo
+* problema
+* ação aplicada
+* status final
+
+### STATUS FINAL
+
+* sistema saudável? (sim/não)
+
+---
+
+# REGRAS
+
+* NÃO corrigir apenas um símbolo
+* SEM hardcode
+* TUDO dinâmico
+* VALIDAR antes e depois
+* NÃO assumir — provar com dados
+
+---
+
+FIM DO PROMPT
