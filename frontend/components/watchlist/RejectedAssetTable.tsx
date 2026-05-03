@@ -382,6 +382,14 @@ function fmtRuleValue(value: ScoreRule["actual_value"]): string {
   return String(value);
 }
 
+function scoreBandLabel(score: number | null): string {
+  if (score == null) return "—";
+  if (score >= 80) return "STRONG";
+  if (score >= 65) return "GOOD";
+  if (score >= 40) return "MIXED";
+  return "WEAK";
+}
+
 function ScoreBreakdownSection({
   rules,
   alphaScore,
@@ -389,11 +397,20 @@ function ScoreBreakdownSection({
   rules: ScoreRule[];
   alphaScore: number | null;
 }) {
-  // Separate positive rules from penalty rules for correct header totals.
-  const totalPossible  = rules.filter(r => (r.type ?? 'positive') !== 'penalty').reduce((s, r) => s + r.points_possible, 0);
-  const earnedPositive = rules.filter(r => (r.type ?? 'positive') !== 'penalty').reduce((s, r) => s + r.points_awarded, 0);
+  // Separate positive rules from penalty rules for correct rule-counter totals.
+  const positiveRules  = rules.filter(r => (r.type ?? 'positive') !== 'penalty');
+  const totalPossible  = positiveRules.reduce((s, r) => s + r.points_possible, 0);
+  const earnedPositive = positiveRules.reduce((s, r) => s + r.points_awarded, 0);
+  const matchedCount   = positiveRules.filter(r => r.passed).length;
+  const positiveCount  = positiveRules.length;
   const totalPenalties = rules.filter(r => r.type === 'penalty').reduce((s, r) => s + r.points_awarded, 0);
   const color = scoreColor(alphaScore);
+  const bandLabel = scoreBandLabel(alphaScore);
+  const scorePct = alphaScore == null ? 0 : Math.max(0, Math.min(100, alphaScore));
+  const scoreTooltip =
+    'Confidence-weighted score (0–100). Cada regra matched contribui ' +
+    '(pontos × confidence do indicador) ÷ pontos totais possíveis × 100. ' +
+    'Faixas: avoid <40 · neutral 40–64 · buy 65–79 · strong_buy ≥80.';
 
   const byCategory = SCORE_CATEGORY_ORDER.reduce<Record<string, ScoreRule[]>>((acc, cat) => {
     const catRules = sortScoreRules(rules.filter((r) => r.category === cat));
@@ -406,40 +423,59 @@ function ScoreBreakdownSection({
 
   return (
     <div className="rounded-xl border border-[#1E2433] bg-[#0A0B10] p-4">
-      <div className="mb-1 flex items-center gap-3">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-[#4B5563]">
-          Score Breakdown
-        </span>
-        {rules.length > 0 && (
-          <>
-            <span className="text-xs text-[#334155]">
-              Score: {fmtPts(earnedPositive)}/{totalPossible.toFixed(0)} pts
-            </span>
-            <div className="flex-1 h-1 bg-[#1A2035] rounded-full overflow-hidden">
-              <div
-                className="h-full rounded-full transition-all duration-700"
-                style={{
-                  width: `${totalPossible > 0 ? Math.max(0, Math.min(100, (earnedPositive / totalPossible) * 100)) : 0}%`,
-                  backgroundColor: color,
-                }}
-              />
-            </div>
-            {alphaScore != null && (
-              <span className="text-xs font-semibold tabular-nums" style={{ color }}>
-                {alphaScore.toFixed(1)}
-              </span>
-            )}
-          </>
-        )}
+      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[#4B5563]">
+        Score Breakdown
       </div>
-      {totalPenalties !== 0 && (
-        <div className="mb-3">
-          <span className="text-[10px] text-[#F87171]">
+
+      {/* Score row — robust 0–100 metric */}
+      <div className="flex items-center gap-3">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-[#4B5563] w-[90px] shrink-0">
+          Score
+        </span>
+        <div
+          className="flex-1 h-1.5 bg-[#1A2035] rounded-full overflow-hidden"
+          title={scoreTooltip}
+        >
+          <div
+            className="h-full rounded-full transition-all duration-700"
+            style={{ width: `${scorePct}%`, backgroundColor: color }}
+          />
+        </div>
+        <span
+          className="text-sm font-bold tabular-nums w-16 text-right"
+          style={{ color }}
+          title={scoreTooltip}
+        >
+          {alphaScore == null ? '—' : `${alphaScore.toFixed(1)}/100`}
+        </span>
+        <span
+          className="text-[10px] font-semibold uppercase tracking-wider w-14 text-right"
+          style={{ color }}
+          title={scoreTooltip}
+        >
+          {bandLabel}
+        </span>
+      </div>
+
+      {/* Rules row — secondary counter, distinct visual (no bar) */}
+      <div className="flex items-center gap-3 mt-1.5 mb-3">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-[#4B5563] w-[90px] shrink-0">
+          Regras
+        </span>
+        <span
+          className="text-[11px] text-[#64748B] flex-1"
+          title="Contagem nominal de regras positivas que casaram. Não é o score — o score é confidence-weighted, então regras matched podem contribuir menos do que seu valor nominal."
+        >
+          {rules.length === 0
+            ? 'Sem regras configuradas'
+            : `${matchedCount}/${positiveCount} matched · ${fmtPts(earnedPositive)}/${totalPossible.toFixed(0)} pts`}
+        </span>
+        {totalPenalties !== 0 && (
+          <span className="text-[10px] text-[#F87171] shrink-0">
             Penalty: {fmtPts(totalPenalties)}
           </span>
-        </div>
-      )}
-      {totalPenalties === 0 && <div className="mb-3" />}
+        )}
+      </div>
 
       {rules.length === 0 ? (
         <p className="text-xs text-[#334155] text-center py-2">

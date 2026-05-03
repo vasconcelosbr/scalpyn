@@ -379,9 +379,12 @@ function DrilldownPanel({
   blocked?: boolean;
   evaluationTrace?: EvaluationTraceItem[];
 }) {
-  // Separate positive rules from penalty rules for correct header totals.
-  const totalPossible   = rules.filter(r => (r.type ?? 'positive') !== 'penalty').reduce((s, r) => s + r.points_possible, 0);
-  const earnedPositive  = rules.filter(r => (r.type ?? 'positive') !== 'penalty').reduce((s, r) => s + r.points_awarded, 0);
+  // Separate positive rules from penalty rules for correct rule-counter totals.
+  const positiveRules   = rules.filter(r => (r.type ?? 'positive') !== 'penalty');
+  const totalPossible   = positiveRules.reduce((s, r) => s + r.points_possible, 0);
+  const earnedPositive  = positiveRules.reduce((s, r) => s + r.points_awarded, 0);
+  const matchedCount    = positiveRules.filter(r => r.passed).length;
+  const positiveCount   = positiveRules.length;
   const totalPenalties  = rules.filter(r => r.type === 'penalty').reduce((s, r) => s + r.points_awarded, 0);
 
   // Group by category; within each category sort positive-first then penalties.
@@ -391,37 +394,62 @@ function DrilldownPanel({
     return acc;
   }, {});
 
+  const barColor = scoreBarColor(score, classification, blocked);
+  const status   = getStatus(score, classification, blocked);
+  const scorePct = Math.max(0, Math.min(100, score));
+  const scoreTooltip =
+    'Confidence-weighted score (0–100). Cada regra matched contribui ' +
+    '(pontos × confidence do indicador) ÷ pontos totais possíveis × 100. ' +
+    'Faixas: avoid <40 · neutral 40–64 · buy 65–79 · strong_buy ≥80.';
+
   return (
     <div className="px-4 pt-3 pb-4 bg-[#06080E] border-t border-[#1A2035]">
-      {/* Summary bar */}
-      <div className="flex items-center gap-3 mb-1">
-        <span className="text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider">
-          Score Breakdown
+      {/* Score row — robust 0–100 metric (drives entries) */}
+      <div className="flex items-center gap-3">
+        <span className="text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider w-[110px] shrink-0">
+          Score
         </span>
-        <span className="text-xs text-[#334155]">
-          Score: {fmtPts(earnedPositive)}/{totalPossible.toFixed(0)} pts
-        </span>
-        <div className="flex-1 h-1 bg-[#1A2035] rounded-full overflow-hidden">
+        <div
+          className="flex-1 h-1.5 bg-[#1A2035] rounded-full overflow-hidden"
+          title={scoreTooltip}
+        >
           <div
             className="h-full rounded-full transition-all duration-700"
-            style={{
-              width: `${totalPossible > 0 ? Math.max(0, Math.min(100, (earnedPositive / totalPossible) * 100)) : 0}%`,
-              backgroundColor: scoreBarColor(score, classification, blocked),
-            }}
+            style={{ width: `${scorePct}%`, backgroundColor: barColor }}
           />
         </div>
-        <span className="text-xs font-semibold" style={{ color: scoreBarColor(score, classification, blocked) }}>
-          {score.toFixed(1)}
+        <span
+          className="text-sm font-bold tabular-nums w-16 text-right"
+          style={{ color: barColor }}
+          title={scoreTooltip}
+        >
+          {score.toFixed(1)}/100
+        </span>
+        <span
+          className={`text-[10px] font-semibold uppercase tracking-wider w-14 text-right ${status.cls}`}
+          title={scoreTooltip}
+        >
+          {status.label}
         </span>
       </div>
-      {totalPenalties !== 0 && (
-        <div className="mb-3">
-          <span className="text-[10px] text-[#F87171]">
+
+      {/* Rules row — secondary counter, distinct visual (no bar) */}
+      <div className="flex items-center gap-3 mt-1.5 mb-3">
+        <span className="text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider w-[110px] shrink-0">
+          Regras
+        </span>
+        <span
+          className="text-[11px] text-[#64748B] flex-1"
+          title="Contagem nominal de regras positivas que casaram. Não é o score — o score é confidence-weighted, então regras matched podem contribuir menos do que seu valor nominal."
+        >
+          {matchedCount}/{positiveCount} matched · {fmtPts(earnedPositive)}/{totalPossible.toFixed(0)} pts
+        </span>
+        {totalPenalties !== 0 && (
+          <span className="text-[10px] text-[#F87171] shrink-0">
             Penalty: {fmtPts(totalPenalties)}
           </span>
-        </div>
-      )}
-      {totalPenalties === 0 && <div className="mb-3" />}
+        )}
+      </div>
 
       {/* Rules by category */}
       <div className="space-y-3">
