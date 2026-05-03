@@ -346,15 +346,23 @@ class SymbolRemediator:
                 ))
                 continue
             if not self._approve_unknown:
-                # ``--no-approve`` (CLI) / ``no_approve=true`` (HTTP) MUST
-                # disable every is_approved mutation, including for rows
-                # that already exist in pool_coins. Record the intent so
-                # the operator sees what would have happened, but skip
-                # both the bulk UPDATE and adding to ``approve_targets``.
                 actions.append(RemediationAction(
                     symbol=rec.symbol,
                     action=ACTION_APPROVE,
                     reason="NOT_APPROVED — skipped (approve_unknown=False)",
+                ))
+                continue
+            if self._validator.last_load_failed:
+                # Fail-closed: never auto-approve while we cannot
+                # confirm exchange existence. The validator returned
+                # tradable=True only because its cache was empty after
+                # a failed refresh; promoting the symbol now would
+                # bypass the required external-existence check.
+                actions.append(RemediationAction(
+                    symbol=rec.symbol,
+                    action=ACTION_APPROVE,
+                    reason="NOT_APPROVED — skipped (validator_unavailable, fail-closed)",
+                    error="validator_unavailable",
                 ))
                 continue
             approve_targets.append(rec.symbol)

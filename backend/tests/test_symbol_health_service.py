@@ -628,3 +628,42 @@ def test_no_redis_data_retry_does_not_mark_executed_when_zcard_stays_zero(monkey
     assert len(retry_actions) == 1
     assert retry_actions[0].executed is False
     assert "ZCARD still 0" in (retry_actions[0].error or "")
+
+
+def test_remediator_fails_closed_on_validator_outage(monkeypatch):
+    """When ``validator.last_load_failed`` is True, the remediator must
+    NOT auto-approve any NOT_APPROVED symbol — fail-closed."""
+    from app.services import symbol_remediator as rem_mod
+
+    class _OutageValidator:
+        last_load_failed = True
+        async def is_tradable(self, symbol):
+            return True   # fail-open helper return — must be ignored by remediator
+
+    async def boom(*a, **kw):
+        raise AssertionError("_bulk_approve must NOT run when validator is unavailable")
+
+    monkeypatch.setattr(rem_mod, "_bulk_approve", boom)
+
+    rec = SymbolHealth(
+        symbol="NEW_USDT",
+        status=STATUS_NOT_APPROVED,
+        is_approved=False,
+        pool_row_exists=True,
+    )
+    counts = {s: 0 for s in STATUS_PRIORITY}
+    counts[STATUS_NOT_APPROVED] = 1
+    report = SymbolHealthReport(
+        checked_at="2026-05-03T00:00:00+00:00",
+        total=1, counts=counts, symbols=[rec],
+    )
+    remediator = rem_mod.SymbolRemediator(
+        validator=_OutageValidator(),
+        recompute_indicators=False,
+    )
+    out = asyncio.run(remediator.remediate(report, dry_run=False))
+
+    approve_actions = [a for a in out.actions if a.action == rem_mod.ACTION_APPROVE]
+    assert len(approve_actions) == 1
+    assert approve_actions[0].executed is False
+    assert approve_actions[0].error == "validator_unavailable"

@@ -76,3 +76,39 @@ def test_apply_subscription_diff_raises_when_socket_missing():
                 spot_pairs=["BTC_USDT"], futures_contracts=[]
             )
         )
+
+
+def test_apply_subscription_diff_uses_per_channel_payload_form():
+    """Round-4 fix: futures.candlesticks expects ``["1m,<contract>"]``,
+    NOT raw symbols. ``-1`` universe channels must be skipped entirely."""
+    client = GateWSClient(
+        api_key="", api_secret="",
+        contracts=["BTC_USDT"],
+        spot_pairs=["BTC_USDT"],
+    )
+    spot_ws = _FakeWS()
+    futures_ws = _FakeWS()
+    client._spot_ws = spot_ws
+    client._futures_ws = futures_ws
+
+    asyncio.run(
+        client.apply_subscription_diff(
+            spot_pairs=["BTC_USDT", "DOGE_USDT"],            # add DOGE
+            futures_contracts=["BTC_USDT", "ETH_USDT"],      # add ETH
+        )
+    )
+
+    # By channel, what payload was sent for the add?
+    fut_by_channel = {m["channel"]: m["payload"] for m in futures_ws.sent if m["event"] == "subscribe"}
+
+    assert fut_by_channel.get("futures.candlesticks") == ["1m,ETH_USDT"]
+    assert fut_by_channel.get("futures.tickers") == ["ETH_USDT"]
+    assert fut_by_channel.get("futures.trades") == ["ETH_USDT"]
+    # Universe-wide channels (orders/autoorders) must NOT appear in diff.
+    assert "futures.orders" not in fut_by_channel
+    assert "futures.autoorders" not in fut_by_channel
+
+    spot_by_channel = {m["channel"]: m["payload"] for m in spot_ws.sent if m["event"] == "subscribe"}
+    assert spot_by_channel.get("spot.tickers") == ["DOGE_USDT"]
+    assert spot_by_channel.get("spot.trades") == ["DOGE_USDT"]
+    assert spot_by_channel.get("spot.orders") == ["DOGE_USDT"]

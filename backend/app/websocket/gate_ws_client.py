@@ -497,18 +497,35 @@ class GateWSClient:
             if fut_changes and self._futures_ws is None:
                 raise RuntimeError("futures WS not connected — cannot apply in-place diff")
 
+            # Use the helpers to derive the channel-specific payload
+            # form for the added / removed subset (e.g. futures.candlesticks
+            # expects ``["1m,<contract>", ...]``, not raw symbols). Skip
+            # universe-wide channels whose payload sentinel is ``["-1"]``
+            # — those subscriptions cover all contracts already and must
+            # not be re-sent on diff.
+            def _is_universe_channel(payload: list) -> bool:
+                return payload == ["-1"]
+
             if spot_added:
-                for channel, _ in _spot_channel_payloads(spot_added):
-                    await self._subscribe(self._spot_ws, channel, spot_added)
+                for channel, payload in _spot_channel_payloads(spot_added):
+                    if _is_universe_channel(payload):
+                        continue
+                    await self._subscribe(self._spot_ws, channel, payload)
             if spot_removed:
-                for channel, _ in _spot_channel_payloads(spot_removed):
-                    await self._unsubscribe(self._spot_ws, channel, spot_removed)
+                for channel, payload in _spot_channel_payloads(spot_removed):
+                    if _is_universe_channel(payload):
+                        continue
+                    await self._unsubscribe(self._spot_ws, channel, payload)
             if fut_added:
-                for channel, _ in _futures_channel_payloads(fut_added):
-                    await self._subscribe(self._futures_ws, channel, fut_added)
+                for channel, payload in _futures_channel_payloads(fut_added):
+                    if _is_universe_channel(payload):
+                        continue
+                    await self._subscribe(self._futures_ws, channel, payload)
             if fut_removed:
-                for channel, _ in _futures_channel_payloads(fut_removed):
-                    await self._unsubscribe(self._futures_ws, channel, fut_removed)
+                for channel, payload in _futures_channel_payloads(fut_removed):
+                    if _is_universe_channel(payload):
+                        continue
+                    await self._unsubscribe(self._futures_ws, channel, payload)
 
             # Update the desired-state lists ONLY after the WS frames
             # are flushed so a mid-flight error leaves the in-memory
