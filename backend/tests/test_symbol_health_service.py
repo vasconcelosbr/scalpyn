@@ -789,3 +789,25 @@ def test_etapa8_symbol_with_deferred_recompute_stays_pendente():
     assert eth["status_final"] == "pendente"
     assert env["resumo"] == {"total": 2, "corrigidos": 0, "pendentes": 1}
     assert env["system_healthy"] is False
+
+
+def test_gate_symbol_validator_constructs_without_monkeypatch(monkeypatch):
+    """Round-8 regression: GateSymbolValidator._refresh_if_stale() must
+    instantiate the public GateAdapter without raising TypeError. We
+    stub only the network call (list_spot_pairs) — the constructor
+    must succeed end-to-end."""
+    from app.services import symbol_remediator as rem_mod
+    from app.exchange_adapters import gate_adapter as ga_mod
+
+    async def fake_list_spot_pairs(self):
+        return [
+            {"id": "BTC_USDT", "trade_status": "tradable"},
+            {"id": "DELISTED_USDT", "trade_status": "untradable"},
+        ]
+
+    monkeypatch.setattr(ga_mod.GateAdapter, "list_spot_pairs", fake_list_spot_pairs)
+
+    v = rem_mod.GateSymbolValidator()
+    assert asyncio.run(v.is_tradable("BTC_USDT")) is True
+    assert asyncio.run(v.is_tradable("DELISTED_USDT")) is False
+    assert v.last_load_failed is False

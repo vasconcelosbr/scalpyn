@@ -128,7 +128,12 @@ class GateSymbolValidator:
                 return
             from ..exchange_adapters.gate_adapter import GateAdapter
             try:
-                adapter = GateAdapter()
+                # ``list_spot_pairs`` hits the PUBLIC GET
+                # /spot/currency_pairs endpoint — no auth required.
+                # We still construct the adapter with empty credentials
+                # so its base-class ctor (which mandates api_key /
+                # api_secret) is satisfied.
+                adapter = GateAdapter(api_key="", api_secret="")
                 pairs = await adapter.list_spot_pairs()
             except Exception as exc:
                 logger.warning(
