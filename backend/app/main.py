@@ -259,6 +259,10 @@ app.include_router(simulations.router)
 # System health
 app.include_router(system.router)
 
+# Admin diagnostics (bearer-token gated, hidden if env var unset)
+from .api import admin_diagnostics  # noqa: E402
+app.include_router(admin_diagnostics.router)
+
 # Machine Learning
 app.include_router(ml.router)
 
