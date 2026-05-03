@@ -23,7 +23,7 @@ def _run_async(coro):
 async def _collect_all_async():
     from ..services.market_data_service import market_data_service
     from ..services.pool_service import get_pool_symbols
-    from ..database import run_db_task
+    from ..database import run_db_task, CeleryAsyncSessionLocal
     from sqlalchemy import text
 
     logger.info("Starting market data collection (spot pool)...")
@@ -41,10 +41,10 @@ async def _collect_all_async():
 
     logger.info(f"Collecting spot data for {len(symbols)} pool symbols")
 
-    async def _inner(db) -> int:
-        collected = 0
-        failures = 0
+    collected = 0
+    failures = 0
 
+    async with CeleryAsyncSessionLocal() as db:
         for symbol in symbols:  # process all pool symbols — pool size is the cap
             try:
                 logger.info(f"[PIPELINE] START symbol={symbol}")
@@ -69,9 +69,7 @@ async def _collect_all_async():
 
                 ohlcv_exchange = df.attrs.get("exchange", "gate.io")
                 logger.info(f"[PIPELINE] INSERT_START symbol={symbol} rows={len(df)}")
-                # Each symbol's writes are isolated in a SAVEPOINT so that a
-                # single failure never aborts the whole collection transaction.
-                async with db.begin_nested():
+                async with db.begin():
                     for _, row in df.iterrows():
                         await db.execute(text("""
                             INSERT INTO ohlcv (time, symbol, exchange, timeframe, market_type, open, high, low, close, volume, quote_volume)
@@ -108,9 +106,11 @@ async def _collect_all_async():
                 logger.info(f"[PIPELINE] INSERT_OK symbol={symbol}")
                 collected += 1
             except Exception as e:
-                logger.error(f"[PIPELINE] INSERT_FAIL symbol={symbol} error={e}", exc_info=True)
+                logger.error(
+                    f"[collect_all] FAILED symbol={symbol} error={e}",
+                    exc_info=True,
+                )
                 failures += 1
-                await db.rollback()
                 continue
 
         # Also fetch tickers for metadata (price, volume, change + spread_pct from bid/ask)
@@ -125,20 +125,20 @@ async def _collect_all_async():
 
             now_ts = datetime.now(timezone.utc)
             ticker_ok = 0
-            for ticker in tickers:
-                try:
-                    pair = ticker.get("currency_pair", "")
-                    if not pair.endswith("_USDT"):
-                        continue
-                    sym = pair  # keep BTC_USDT format (with underscore)
-                    price = float(ticker.get("last", 0) or 0)
-                    change = float(ticker.get("change_percentage", 0) or 0)
-                    volume = float(ticker.get("quote_volume", 0) or 0)
-                    # Compute spread from tickers bid/ask (no extra API call needed)
-                    spread = market_data_service.compute_spread_from_ticker(ticker)
+            if tickers:
+                async with db.begin():
+                    for ticker in tickers:
+                        pair = ticker.get("currency_pair", "")
+                        if not pair.endswith("_USDT"):
+                            continue
+                        sym = pair  # keep BTC_USDT format (with underscore)
+                        price = float(ticker.get("last", 0) or 0)
+                        change = float(ticker.get("change_percentage", 0) or 0)
+                        volume = float(ticker.get("quote_volume", 0) or 0)
+                        # Compute spread from tickers bid/ask (no extra API call needed)
+                        spread = market_data_service.compute_spread_from_ticker(ticker)
 
-                    if price > 0:
-                        async with db.begin_nested():
+                        if price > 0:
                             await db.execute(text("""
                                 INSERT INTO market_metadata
                                     (symbol, price, price_change_24h, volume_24h,
@@ -158,11 +158,7 @@ async def _collect_all_async():
                                 "spread": spread,
                                 "updated": now_ts,
                             })
-                        ticker_ok += 1
-                except Exception as te:
-                    logger.debug("Ticker metadata upsert failed for %s: %s",
-                                 ticker.get("currency_pair", "?"), te)
-                    continue
+                            ticker_ok += 1
 
             if ticker_ok:
                 logger.info("market_metadata: upserted %d/%d tickers", ticker_ok, len(tickers))
@@ -170,20 +166,19 @@ async def _collect_all_async():
                 logger.error(
                     "market_metadata: 0 tickers upserted (fetched %d) — "
                     "collect_5m backup pathway will provide fallback metadata.",
-                    len(tickers),
+                    len(tickers) if tickers else 0,
                 )
         except Exception as e:
             logger.error("Failed to fetch/update metadata from tickers: %s", e)
-        # run_db_task auto-commits all successful writes on exit
 
-        logger.info(f"Market data collection complete: collected={collected} failed={failures} total={len(symbols)}")
-        if collected == 0 and len(symbols) > 0:
-            raise RuntimeError(
-                f"[collect_all] All {len(symbols)} symbol collections failed — check errors above"
-            )
-        return collected
-
-    return await run_db_task(_inner, celery=True)
+    logger.info(
+        f"collection complete: collected={collected} failed={failures} total={len(symbols)}"
+    )
+    if collected == 0 and len(symbols) > 0:
+        raise RuntimeError(
+            f"[collect_all] All {len(symbols)} symbol collections failed — check errors above"
+        )
+    return collected
 
 
 @celery_app.task(name="app.tasks.collect_market_data.collect_all")
@@ -203,7 +198,7 @@ async def _collect_5m_async():
     """
     from ..services.pool_service import get_pool_symbols_with_market_type
     from ..utils.symbol_filters import filter_real_assets
-    from ..database import run_db_task
+    from ..database import run_db_task, CeleryAsyncSessionLocal
     from sqlalchemy import text
 
     logger.info("Starting 5m market data collection (pool-gated)...")
@@ -223,11 +218,11 @@ async def _collect_5m_async():
 
     logger.info("5m collection universe: %d pool symbols", len(symbols))
 
-    async def _inner(db) -> int:
-        from ..services.market_data_service import market_data_service
-        collected = 0
-        failures = 0
+    from ..services.market_data_service import market_data_service
+    collected = 0
+    failures = 0
 
+    async with CeleryAsyncSessionLocal() as db:
         for symbol in symbols:  # no cap — process all pool symbols
             sym_market_type = symbol_market_type.get(symbol, "spot")
             try:
@@ -253,10 +248,10 @@ async def _collect_5m_async():
                 ohlcv_exchange = df.attrs.get("exchange", "gate.io")
                 logger.info(f"[PIPELINE] INSERT_START symbol={symbol} rows={len(df)} timeframe=5m")
 
-                # SAVEPOINT 1: OHLCV candles + price seed.
+                # Transaction 1: OHLCV candles + price seed.
                 # Isolated so a single symbol failure never aborts the whole
-                # collection transaction.
-                async with db.begin_nested():
+                # collection loop.
+                async with db.begin():
                     # Bulk-insert all returned candles (ON CONFLICT DO NOTHING is idempotent)
                     for _, row in df.iterrows():
                         await db.execute(text("""
@@ -293,7 +288,7 @@ async def _collect_5m_async():
                         "ts":    datetime.now(timezone.utc),
                     })
 
-                # SAVEPOINT 2: orderbook metrics (separate SAVEPOINT so that a
+                # Transaction 2: orderbook metrics (separate transaction so that a
                 # DB failure here never rolls back the OHLCV + price writes above).
                 # fetch_orderbook_metrics internally retries (Gate → Binance fallback)
                 # via resilient_data_service; missing depth lands as NULL in DB, which
@@ -302,7 +297,7 @@ async def _collect_5m_async():
                 try:
                     ob = await market_data_service.fetch_orderbook_metrics(symbol, depth=10)
                     if ob:
-                        async with db.begin_nested():
+                        async with db.begin():
                             await db.execute(text("""
                                 INSERT INTO market_metadata (symbol, spread_pct, orderbook_depth_usdt, last_updated)
                                 VALUES (:sym, :spread, :depth, :ts)
@@ -331,9 +326,11 @@ async def _collect_5m_async():
                 collected += 1
                 logger.info(f"[PIPELINE] INSERT_OK symbol={symbol} timeframe=5m")
             except Exception as e:
-                logger.error(f"[PIPELINE] INSERT_FAIL symbol={symbol} error={e}", exc_info=True)
+                logger.error(
+                    f"[collect_5m] FAILED symbol={symbol} error={e}",
+                    exc_info=True,
+                )
                 failures += 1
-                await db.rollback()
                 continue
 
         # ── Backup metadata pathway: fetch tickers for volume_24h + spread ───
@@ -345,8 +342,8 @@ async def _collect_5m_async():
             if tickers:
                 now_ts = datetime.now(timezone.utc)
                 ticker_ok = 0
-                for ticker in tickers:
-                    try:
+                async with db.begin():
+                    for ticker in tickers:
                         pair = ticker.get("currency_pair", "")
                         if not pair.endswith("_USDT"):
                             continue
@@ -356,33 +353,28 @@ async def _collect_5m_async():
                         volume = float(ticker.get("quote_volume", 0) or 0)
                         change = float(ticker.get("change_percentage", 0) or 0)
                         spread = market_data_service.compute_spread_from_ticker(ticker)
-                        async with db.begin_nested():
-                            await db.execute(text("""
-                                INSERT INTO market_metadata
-                                    (symbol, price, price_change_24h, volume_24h,
-                                     spread_pct, last_updated, volume_24h_updated_at)
-                                VALUES (:symbol, :price, :change, :volume, :spread,
-                                        :updated, :updated)
-                                ON CONFLICT (symbol) DO UPDATE SET
-                                    price = :price,
-                                    price_change_24h = :change,
-                                    volume_24h = :volume,
-                                    spread_pct = :spread,
-                                    last_updated = :updated,
-                                    volume_24h_updated_at = :updated
-                            """), {
-                                "symbol": pair,
-                                "price":  price,
-                                "change": change,
-                                "volume": volume,
-                                "spread": spread,
-                                "updated": now_ts,
-                            })
+                        await db.execute(text("""
+                            INSERT INTO market_metadata
+                                (symbol, price, price_change_24h, volume_24h,
+                                 spread_pct, last_updated, volume_24h_updated_at)
+                            VALUES (:symbol, :price, :change, :volume, :spread,
+                                    :updated, :updated)
+                            ON CONFLICT (symbol) DO UPDATE SET
+                                price = :price,
+                                price_change_24h = :change,
+                                volume_24h = :volume,
+                                spread_pct = :spread,
+                                last_updated = :updated,
+                                volume_24h_updated_at = :updated
+                        """), {
+                            "symbol": pair,
+                            "price":  price,
+                            "change": change,
+                            "volume": volume,
+                            "spread": spread,
+                            "updated": now_ts,
+                        })
                         ticker_ok += 1
-                    except Exception as te:
-                        logger.debug("5m: backup ticker upsert failed for %s: %s",
-                                     ticker.get("currency_pair", "?"), te)
-                        continue
                 logger.info("5m: backup ticker metadata upserted for %d symbols", ticker_ok)
         except Exception as e:
             logger.debug("5m: backup ticker fetch failed (non-blocking): %s", e)
@@ -393,16 +385,17 @@ async def _collect_5m_async():
         # touched by price/orderbook seeds in this same task and would
         # otherwise mask stale volume figures.
         try:
-            stale_rows = (await db.execute(text("""
-                SELECT symbol
-                FROM market_metadata
-                WHERE symbol = ANY(:syms)
-                  AND (
-                        volume_24h IS NULL
-                     OR volume_24h_updated_at IS NULL
-                     OR volume_24h_updated_at < now() - interval '10 minutes'
-                  )
-            """), {"syms": symbols})).fetchall()
+            async with db.begin():
+                stale_rows = (await db.execute(text("""
+                    SELECT symbol
+                    FROM market_metadata
+                    WHERE symbol = ANY(:syms)
+                      AND (
+                            volume_24h IS NULL
+                         OR volume_24h_updated_at IS NULL
+                         OR volume_24h_updated_at < now() - interval '10 minutes'
+                      )
+                """), {"syms": symbols})).fetchall()
             stale_syms = [r.symbol for r in stale_rows]
             if stale_syms:
                 logger.info("5m: per-symbol Gate ticker fallback for %d stale symbols", len(stale_syms))
@@ -416,7 +409,7 @@ async def _collect_5m_async():
                         volume = float(ticker.get("quote_volume", 0) or 0)
                         if price <= 0 or volume <= 0:
                             continue
-                        async with db.begin_nested():
+                        async with db.begin():
                             await db.execute(text("""
                                 UPDATE market_metadata
                                 SET price = :price,
@@ -437,16 +430,13 @@ async def _collect_5m_async():
                 logger.info("5m: per-symbol Gate ticker fallback refreshed %d symbols", refreshed)
         except Exception as e:
             logger.debug("5m: per-symbol stale-check skipped (non-blocking): %s", e)
-        # run_db_task auto-commits all successful writes on exit
 
-        logger.info(f"5m collection complete: collected={collected} failed={failures} total={len(symbols)}")
-        if collected == 0 and len(symbols) > 0:
-            raise RuntimeError(
-                f"[collect_5m] All {len(symbols)} symbol collections failed — check errors above"
-            )
-        return collected
-
-    return await run_db_task(_inner, celery=True)
+    logger.info(f"5m collection complete: collected={collected} failed={failures} total={len(symbols)}")
+    if collected == 0 and len(symbols) > 0:
+        raise RuntimeError(
+            f"[collect_5m] All {len(symbols)} symbol collections failed — check errors above"
+        )
+    return collected
 
 
 @celery_app.task(name="app.tasks.collect_market_data.collect_5m")
