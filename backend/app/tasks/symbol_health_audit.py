@@ -1,20 +1,17 @@
 """Celery task: periodic symbol-ingestion audit (Task #194 — etapa 6).
 
-Runs the same classifier the admin endpoint and CLI use, but in
-``monitor_only=True`` mode by default so it never mutates state.  Three
-alert classes are emitted, with deduplication keys held in Redis to
-avoid alert storms:
+Runs the same classifier the admin endpoint and CLI use, in
+``monitor_only=True`` mode — the beat-scheduled task NEVER mutates
+state. Active repair is exposed via the separate ``run_repair`` task,
+the admin endpoint, or the CLI. Three alert classes are emitted, with
+deduplication keys held in Redis to avoid alert storms:
 
-* ``[POOL-AUDIT WARN]``       — ≥ 1 symbol classified NOT_APPROVED.
+* ``WARNING [POOL-AUDIT]``    — ≥ 1 symbol classified NOT_APPROVED.
                                  Dedup key: 10 min.
 * ``[WS-AUDIT CRITICAL]``     — ≥ 1 symbol classified NOT_SUBSCRIBED
                                  (resolver drift). Dedup key: 10 min.
 * ``[REDIS-FALLBACK INFO]``   — aggregated count of NO_REDIS_DATA over
                                  the cycle. Dedup window: 5 min.
-
-Operators flip the audit to active-repair mode by setting the env var
-``SYMBOL_AUDIT_REPAIR=1`` — the task then calls
-:class:`SymbolRemediator` with ``dry_run=False``.
 """
 
 from __future__ import annotations
@@ -141,7 +138,7 @@ async def _audit_async(monitor_only: bool) -> dict:
 
     redis = await get_async_redis()
 
-    # ── POOL-AUDIT WARN (rule 1) ─────────────────────────────────────
+    # ── WARNING [POOL-AUDIT] (rule 1) ─────────────────────────────────
     # ``logger.warning`` is the route Sentry's logging integration uses
     # in this codebase (see gate_ws_client.py comments for the same
     # pattern). We pass ``extra={...}`` so structured fields land on the
@@ -153,11 +150,11 @@ async def _audit_async(monitor_only: bool) -> dict:
                 if r.status == STATUS_NOT_APPROVED
             ][:20]
             logger.warning(
-                "[POOL-AUDIT WARN] %d symbols active but not approved in pool_coins; "
+                "WARNING [POOL-AUDIT] %d symbols active but not approved in pool_coins; "
                 "first 20: %s",
                 counts[STATUS_NOT_APPROVED], sample,
                 extra={
-                    "audit_status": "POOL-AUDIT WARN",
+                    "audit_status": "WARNING [POOL-AUDIT]",
                     "not_approved_count": counts[STATUS_NOT_APPROVED],
                     "sample_symbols": sample,
                 },
@@ -232,15 +229,22 @@ async def _audit_async(monitor_only: bool) -> dict:
 
 
 @celery_app.task(name="app.tasks.symbol_health_audit.monitor_only")
-def monitor_only() -> dict:
-    """Beat-driven monitor-only audit (no DB/Redis writes)."""
-    repair = os.environ.get("SYMBOL_AUDIT_REPAIR", "").strip() == "1"
-    return asyncio.run(_audit_async(monitor_only=not repair))
+def monitor_only() -> dict:  # noqa: D401
+    """Beat-scheduled monitor task. NEVER remediates by design — for
+    active repair, use the ``run_repair`` task or the admin endpoint.
+    Recompute trigger: the remediator's per-symbol intent is fulfilled
+    via a single ``compute_indicators.compute_5m`` dispatch (which
+    iterates the universe), preserving per-symbol report semantics
+    while keeping the Celery surface area small.
+    """
+    return asyncio.run(_audit_async(monitor_only=True))
+
+
 
 
 @celery_app.task(name="app.tasks.symbol_health_audit.run_repair")
 def run_repair() -> dict:
-    """Full audit + repair, regardless of ``SYMBOL_AUDIT_REPAIR``."""
+    """Full audit + repair (admin/CLI on-demand only — never beat-scheduled)."""
     return asyncio.run(_audit_async(monitor_only=False))
 
 

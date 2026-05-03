@@ -122,8 +122,9 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.robust_alerts.evaluate",
         "schedule": 90.0,
     },
-    # Symbol ingestion audit (Task #194) every 5 minutes — monitor-only
-    # by default; set SYMBOL_AUDIT_REPAIR=1 to enable active remediation.
+    # Symbol ingestion audit (Task #194) every 5 minutes — strictly
+    # monitor-only. Active remediation is exposed only via the admin
+    # endpoint, the CLI, or the on-demand ``run_repair`` task.
     "symbol_health_audit_monitor_only": {
         "task": "app.tasks.symbol_health_audit.monitor_only",
         "schedule": 300.0,
