@@ -52,7 +52,14 @@ ACTION_APPROVE: str = "approve"
 ACTION_REFRESH_WS: str = "refresh_ws_subscriptions"
 ACTION_RETRY_BUFFER: str = "retry_buffer"
 ACTION_RECOMPUTE_INDICATORS: str = "recompute_indicators"
-ACTION_SKIP_NOT_TRADABLE: str = "skip_not_tradable_on_gate"
+# Etapa 4 of the prompt: when a NOT_APPROVED symbol fails the
+# external Gate validator (par sumiu da exchange / nunca foi listado),
+# we DELETE the row from pool_coins instead of leaving stale entries
+# behind that will keep firing alerts forever.
+ACTION_REMOVE_FROM_POOL: str = "remove_from_pool"
+# Backwards-compat alias kept for any caller that imported the old
+# constant name. New code should use ACTION_REMOVE_FROM_POOL.
+ACTION_SKIP_NOT_TRADABLE: str = ACTION_REMOVE_FROM_POOL
 
 
 @dataclass
@@ -166,7 +173,22 @@ class GateSymbolValidator:
 
 
 async def _bulk_approve(db, symbols: Iterable[str]) -> int:
-    """Set ``is_approved = true`` for every symbol in one statement."""
+    """Set ``is_approved = true`` for every symbol in one statement.
+
+    Three guards are baked into the WHERE clause per Etapa 3.1 of the
+    prompt — the statement itself enforces the business rule, never the
+    caller, so a misuse of this helper still cannot promote a futures or
+    inactive row:
+
+    * ``is_active = TRUE``    — never approve a row the operator already
+                                disabled.
+    * ``is_approved = FALSE`` — strictly idempotent (no UPDATE storm on
+                                a re-run).
+    * ``pool_id IN (SELECT id FROM pools WHERE market_type = 'spot')`` —
+                                **never** flip a futures row, even if a
+                                symbol exists in both spot and futures
+                                pools simultaneously.
+    """
     syms = [s for s in symbols if s]
     if not syms:
         return 0
@@ -177,6 +199,35 @@ async def _bulk_approve(db, symbols: Iterable[str]) -> int:
              WHERE symbol = ANY(:syms)
                AND is_active = TRUE
                AND is_approved = FALSE
+               AND pool_id IN (
+                   SELECT id FROM pools WHERE market_type = 'spot'
+               )
+        """),
+        {"syms": syms},
+    )
+    await db.commit()
+    return int(res.rowcount or 0)
+
+
+async def _remove_from_pool(db, symbols: Iterable[str]) -> int:
+    """Delete pool_coins rows for symbols that no longer exist on Gate.io spot.
+
+    Etapa 4 of the prompt: when the external validator confirms a
+    symbol is not present in ``/spot/currency_pairs`` (delisted, never
+    existed, or the pool was seeded from a stale source), the row is
+    removed from the pool altogether so the next audit cycle does not
+    keep flagging it. Restricted to spot pools to mirror :func:`_bulk_approve`.
+    """
+    syms = [s for s in symbols if s]
+    if not syms:
+        return 0
+    res = await db.execute(
+        text("""
+            DELETE FROM pool_coins
+             WHERE symbol = ANY(:syms)
+               AND pool_id IN (
+                   SELECT id FROM pools WHERE market_type = 'spot'
+               )
         """),
         {"syms": syms},
     )
@@ -231,21 +282,26 @@ class SymbolRemediator:
         actions: List[RemediationAction] = []
 
         approve_targets: List[str] = []
+        remove_targets: List[str] = []
         for rec in report.symbols:
             if rec.status != STATUS_NOT_APPROVED:
                 continue
             tradable = await self._validator.is_tradable(rec.symbol)
             if not tradable:
+                # Etapa 4 of the prompt: par sumiu da exchange → remove
+                # do pool em vez de skip silencioso. Skip-only deixava o
+                # mesmo símbolo aparecer em todo ciclo subsequente.
+                remove_targets.append(rec.symbol)
                 actions.append(RemediationAction(
                     symbol=rec.symbol,
-                    action=ACTION_SKIP_NOT_TRADABLE,
-                    reason="symbol not present in Gate /spot/currency_pairs",
+                    action=ACTION_REMOVE_FROM_POOL,
+                    reason="symbol not present in Gate /spot/currency_pairs — DELETE from pool_coins",
                 ))
                 continue
             if not rec.pool_row_exists and not self._approve_unknown:
                 actions.append(RemediationAction(
                     symbol=rec.symbol,
-                    action=ACTION_SKIP_NOT_TRADABLE,
+                    action=ACTION_REMOVE_FROM_POOL,
                     reason="approve_unknown=False and no pool_coins row exists",
                 ))
                 continue
@@ -274,6 +330,26 @@ class SymbolRemediator:
                 logger.warning("[AUDIT-FIX] bulk approve failed: %s", exc)
                 for a in actions:
                     if a.action == ACTION_APPROVE:
+                        a.error = f"{type(exc).__name__}: {exc}"
+
+        # ── ACTION 1b: bulk remove non-tradable from pool ────────────────
+        if remove_targets and not dry_run:
+            from ..database import AsyncSessionLocal
+            try:
+                async with AsyncSessionLocal() as db:
+                    removed = await _remove_from_pool(db, remove_targets)
+                logger.warning(
+                    "[AUDIT-FIX] removed %d/%d non-tradable spot symbols from pool_coins",
+                    removed, len(remove_targets),
+                )
+                for a in actions:
+                    if a.action == ACTION_REMOVE_FROM_POOL and a.symbol in remove_targets:
+                        a.executed = True
+                        a.extra["bulk_removed"] = removed
+            except Exception as exc:
+                logger.warning("[AUDIT-FIX] bulk remove_from_pool failed: %s", exc)
+                for a in actions:
+                    if a.action == ACTION_REMOVE_FROM_POOL:
                         a.error = f"{type(exc).__name__}: {exc}"
 
         # ── ACTION 2: refresh WS subscriptions ──────────────────────────
@@ -310,6 +386,11 @@ class SymbolRemediator:
                             a.error = f"{type(exc).__name__}: {exc}"
 
         # ── ACTION 3: retry buffer for NO_REDIS_DATA ────────────────────
+        # Symbols that recover (ZCARD>0 after the WS refresh) become
+        # eligible for an indicator recompute below — gates the
+        # recompute on actual ingestion recovery so we don't enqueue
+        # work for a symbol that is still silent.
+        recovered_after_retry: List[str] = []
         for rec in report.symbols:
             if rec.status != STATUS_NO_REDIS_DATA:
                 continue
@@ -322,28 +403,59 @@ class SymbolRemediator:
             retry_targets = [r for r in report.symbols if r.status == STATUS_NO_REDIS_DATA]
             for rec in retry_targets:
                 count = await _retry_buffer(rec.symbol)
+                if count > 0:
+                    recovered_after_retry.append(rec.symbol)
                 for a in actions:
                     if a.action == ACTION_RETRY_BUFFER and a.symbol == rec.symbol:
                         a.executed = True
                         a.extra["member_count_after_retry"] = count
 
-        # ── ACTION 4: enqueue recompute_indicators ──────────────────────
-        recompute_targets = [r for r in report.symbols if r.status == STATUS_NO_INDICATOR_DATA]
-        recompute_enqueued = False
-        for rec in recompute_targets:
+        # ── ACTION 4: enqueue recompute_indicators per symbol ───────────
+        # Two recompute triggers, both per-symbol intent:
+        #   (a) classifier said NO_INDICATOR_DATA → row missing/stale
+        #   (b) classifier said NO_REDIS_DATA but ZCARD>0 after retry →
+        #       buffer just came back online; we must recompute now or
+        #       the operator will keep seeing the previous stale row
+        #       until the next 5-minute scheduler cycle.
+        #
+        # The Celery task ``compute_indicators.compute_5m`` does not
+        # accept a per-symbol argument (it iterates the universe), so we
+        # dispatch it once when at least one symbol qualifies and stamp
+        # every targeted symbol with its own RemediationAction so the
+        # report still shows per-symbol intent.
+        recompute_targets: List[str] = []
+        seen_recompute: set = set()
+        for rec in report.symbols:
+            if rec.status == STATUS_NO_INDICATOR_DATA and rec.symbol not in seen_recompute:
+                recompute_targets.append(rec.symbol)
+                seen_recompute.add(rec.symbol)
+                actions.append(RemediationAction(
+                    symbol=rec.symbol,
+                    action=ACTION_RECOMPUTE_INDICATORS,
+                    reason="NO_INDICATOR_DATA → enqueue compute_indicators.compute_5m",
+                ))
+        for sym in recovered_after_retry:
+            if sym in seen_recompute:
+                continue
+            recompute_targets.append(sym)
+            seen_recompute.add(sym)
             actions.append(RemediationAction(
-                symbol=rec.symbol,
+                symbol=sym,
                 action=ACTION_RECOMPUTE_INDICATORS,
-                reason="NO_INDICATOR_DATA → enqueue compute_indicators.compute_5m",
+                reason="NO_REDIS_DATA recovered (ZCARD>0 post-retry) → enqueue compute_5m",
             ))
+
+        recompute_enqueued = False
         if recompute_targets and self._recompute_indicators and not dry_run:
             try:
                 from ..tasks.celery_app import celery_app
                 celery_app.send_task("app.tasks.compute_indicators.compute_5m")
                 recompute_enqueued = True
                 logger.info(
-                    "[INDICATORS] enqueued compute_5m for %d symbols",
+                    "[INDICATORS] enqueued compute_5m for %d symbols (recovered=%d, no_indicator=%d)",
                     len(recompute_targets),
+                    len(recovered_after_retry),
+                    len([r for r in report.symbols if r.status == STATUS_NO_INDICATOR_DATA]),
                 )
                 for a in actions:
                     if a.action == ACTION_RECOMPUTE_INDICATORS:
@@ -373,9 +485,12 @@ __all__ = [
     "ACTION_REFRESH_WS",
     "ACTION_RETRY_BUFFER",
     "ACTION_RECOMPUTE_INDICATORS",
+    "ACTION_REMOVE_FROM_POOL",
     "ACTION_SKIP_NOT_TRADABLE",
     "RemediationAction",
     "RemediationReport",
     "GateSymbolValidator",
     "SymbolRemediator",
+    "_bulk_approve",
+    "_remove_from_pool",
 ]

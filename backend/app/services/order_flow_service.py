@@ -43,12 +43,58 @@ If no trades are available in either source → all fields are None (no fallback
 
 import json
 import logging
+import threading
 import time
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Set
 
 logger = logging.getLogger(__name__)
 
 WINDOW_SECONDS: int = 60
+
+
+# ── Task #194 / Etapa 6 protection 3 — REDIS-FALLBACK aggregator ───────────
+# Track which symbols hit the REST fallback inside each rolling window so
+# the operator sees the dependency creep in production *before* it
+# becomes an incident, instead of grepping the per-call INFO line and
+# trying to count it themselves. We bucket by 5-minute window and emit
+# one canonical log per window flip:
+#
+#   INFO [REDIS-FALLBACK] window=5m count=N symbols=[...]
+#
+# A simple ``threading.Lock`` is enough because ``get_order_flow_data``
+# runs from both Celery workers (sync threads) and FastAPI request
+# handlers (asyncio default executor); contention is low since the
+# critical section just touches a dict.
+_REDIS_FALLBACK_WINDOW_SECONDS: int = 300
+_REDIS_FALLBACK_LOG_SAMPLE_LIMIT: int = 50
+_redis_fallback_lock = threading.Lock()
+_redis_fallback_buckets: Dict[float, Set[str]] = {}
+
+
+def _record_redis_fallback(symbol: str) -> None:
+    """Record a REST-fallback event and emit the windowed canonical log.
+
+    The aggregation is intentionally per-process (no Redis round-trip):
+    every Cloud Run instance emits its own line, and the operator reads
+    them additively in the central log sink. That keeps the helper
+    safe to call from any context (Celery, FastAPI, scripts) without
+    introducing a cross-instance dependency.
+    """
+    now = time.time()
+    bucket = (int(now) // _REDIS_FALLBACK_WINDOW_SECONDS) * _REDIS_FALLBACK_WINDOW_SECONDS
+    flushed: Dict[float, Set[str]] = {}
+    with _redis_fallback_lock:
+        _redis_fallback_buckets.setdefault(bucket, set()).add(symbol)
+        for ts in [b for b in _redis_fallback_buckets if b < bucket]:
+            flushed[ts] = _redis_fallback_buckets.pop(ts)
+    for ts, syms in flushed.items():
+        if not syms:
+            continue
+        sample = sorted(syms)[:_REDIS_FALLBACK_LOG_SAMPLE_LIMIT]
+        logger.info(
+            "[REDIS-FALLBACK] window=5m count=%d symbols=%s",
+            len(syms), sample,
+        )
 
 # Plausibility bounds for the persisted taker_ratio (= buy_vol / (buy_vol + sell_vol)).
 # Mirrors the predicate in `app.services.indicator_validity` (0 <= v <= 1).
@@ -296,6 +342,10 @@ async def get_order_flow_data(
         "[OrderFlow] buffer empty for %s market=%s (window=%ds) — using REST fallback",
         symbol, market_type, window_seconds,
     )
+    # Task #194 / Etapa 6 — record this fallback in the windowed
+    # aggregator so the operator sees the rolling 5m count, not just
+    # one INFO per call.
+    _record_redis_fallback(symbol)
 
     empty = {
         "taker_buy_volume":  None,

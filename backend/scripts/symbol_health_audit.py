@@ -80,7 +80,10 @@ def _format_human(report_dict: dict, remediation_dict: dict) -> str:
 
 async def _run_async(args) -> int:
     # Imported lazily so ``--help`` does not require the FastAPI app graph.
-    from app.services.symbol_health_service import SymbolHealthService
+    from app.services.symbol_health_service import (
+        SymbolHealthService,
+        build_etapa8_envelope,
+    )
     from app.services.symbol_remediator import (
         GateSymbolValidator,
         SymbolRemediator,
@@ -96,14 +99,22 @@ async def _run_async(args) -> int:
     )
     rem = await remediator.remediate(report, dry_run=args.dry_run)
 
-    payload = {
-        "report": report.to_dict(),
-        "remediation": rem.to_dict(),
-    }
+    # Etapa 8 envelope is the operator contract — same shape as the
+    # admin endpoint so the CLI and HTTP responses are interchangeable.
+    envelope = build_etapa8_envelope(report, rem)
+    envelope["report"] = report.to_dict()
+    envelope["remediation"] = rem.to_dict()
     if args.json:
-        print(json.dumps(payload, default=str, indent=2))
+        print(json.dumps(envelope, default=str, indent=2))
     else:
-        print(_format_human(payload["report"], payload["remediation"]))
+        print(_format_human(envelope["report"], envelope["remediation"]))
+        print()
+        print(
+            f"Resumo: total={envelope['resumo']['total']} "
+            f"corrigidos={envelope['resumo']['corrigidos']} "
+            f"pendentes={envelope['resumo']['pendentes']} "
+            f"system_healthy={envelope['system_healthy']}"
+        )
     return 0
 
 

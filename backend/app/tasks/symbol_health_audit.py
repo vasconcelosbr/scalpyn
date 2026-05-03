@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from typing import Optional
 
 from .celery_app import celery_app
@@ -30,8 +31,19 @@ logger = logging.getLogger(__name__)
 
 
 _DEDUP_TTL_POOL_AUDIT_SECONDS = 600
-_DEDUP_TTL_WS_AUDIT_SECONDS = 600
+# Per-symbol "not streaming" alert: flag when ZCARD has been zero for at
+# least this many seconds, then suppress repeated alerts for this many
+# seconds (the prompt's "≥ 120 s detection, ≤ 1 alert / 10 min / symbol").
+_WS_NOT_STREAMING_GRACE_SECONDS = 120
+_WS_NOT_STREAMING_DEDUP_SECONDS = 600
 _DEDUP_TTL_REDIS_FALLBACK_SECONDS = 300
+
+# Redis key prefixes for the per-symbol streaming-health tracker. The
+# "first_seen_empty" key holds the unix-ms timestamp the symbol was
+# first observed with ZCARD=0; we delete it the moment ZCARD>0 returns
+# so a flapping symbol does not accumulate false alerts.
+_KEY_FIRST_SEEN_EMPTY = b"audit:ws:first_empty:"
+_KEY_NOT_STREAMING_DEDUP = b"audit:ws:alerted:"
 
 
 async def _alert_dedup(redis, key: bytes, ttl: int) -> bool:
@@ -46,6 +58,64 @@ async def _alert_dedup(redis, key: bytes, ttl: int) -> bool:
         return True
 
 
+async def _evaluate_streaming_health(redis, report) -> int:
+    """Emit one CRITICAL alert per symbol whose buffer has been empty > 120 s.
+
+    Implements protection rule 2 of Etapa 6 of the prompt with the
+    exact wording the operator runbook expects::
+
+        CRITICAL [WS-AUDIT] symbol not streaming: {symbol}
+
+    The "first empty observation" is stamped per-symbol in Redis so a
+    transient gap (one missed audit cycle) does NOT immediately fire.
+    The dedup key is also per-symbol with a 10-minute TTL so a symbol
+    that stays empty for an hour fires at most 6 alerts, never one per
+    audit cycle.
+
+    Returns the number of alerts emitted in this cycle.
+    """
+    from ..services.symbol_health_service import (
+        STATUS_NO_REDIS_DATA,
+    )
+    if redis is None:
+        return 0
+    now_ms = int(time.time() * 1000)
+    fired = 0
+    for rec in report.symbols:
+        sym_bytes = rec.symbol.encode()
+        # Symbol is currently streaming → reset the first-empty marker.
+        if rec.status != STATUS_NO_REDIS_DATA:
+            try:
+                await redis.delete(_KEY_FIRST_SEEN_EMPTY + sym_bytes)
+            except Exception:
+                pass
+            continue
+        # Symbol is empty in this cycle. Stamp first-seen if absent.
+        first_key = _KEY_FIRST_SEEN_EMPTY + sym_bytes
+        try:
+            existing = await redis.get(first_key)
+            if existing is None:
+                # 24h TTL is more than enough — if the symbol stays empty
+                # for a full day the operator will have intervened.
+                await redis.set(first_key, str(now_ms).encode(), ex=86400)
+                continue
+            first_ms = int(existing)
+        except Exception as exc:
+            logger.debug("[symbol-audit] first_empty read failed for %s: %s", rec.symbol, exc)
+            continue
+        if (now_ms - first_ms) < _WS_NOT_STREAMING_GRACE_SECONDS * 1000:
+            continue
+        # Past the 120-s grace; alert with per-symbol dedup.
+        dedup_key = _KEY_NOT_STREAMING_DEDUP + sym_bytes
+        if await _alert_dedup(redis, dedup_key, _WS_NOT_STREAMING_DEDUP_SECONDS):
+            logger.critical(
+                "[WS-AUDIT] symbol not streaming: %s (ZCARD=0 for %ds)",
+                rec.symbol, (now_ms - first_ms) // 1000,
+            )
+            fired += 1
+    return fired
+
+
 async def _audit_async(monitor_only: bool) -> dict:
     from ..services.redis_client import get_async_redis
     from ..services.symbol_health_service import (
@@ -55,6 +125,7 @@ async def _audit_async(monitor_only: bool) -> dict:
         STATUS_NO_INDICATOR_DATA,
         STATUS_OK,
         SymbolHealthService,
+        build_etapa8_envelope,
     )
     from ..services.symbol_remediator import (
         GateSymbolValidator,
@@ -67,22 +138,49 @@ async def _audit_async(monitor_only: bool) -> dict:
 
     redis = await get_async_redis()
 
-    # ── POOL-AUDIT WARN ──────────────────────────────────────────────
+    # ── POOL-AUDIT WARN (rule 1) ─────────────────────────────────────
+    # ``logger.warning`` is the route Sentry's logging integration uses
+    # in this codebase (see gate_ws_client.py comments for the same
+    # pattern). We pass ``extra={...}`` so structured fields land on the
+    # event in addition to the formatted message.
     if counts.get(STATUS_NOT_APPROVED, 0) > 0:
         if await _alert_dedup(redis, b"alert:symbol_audit:pool", _DEDUP_TTL_POOL_AUDIT_SECONDS):
+            sample = [
+                r.symbol for r in report.symbols
+                if r.status == STATUS_NOT_APPROVED
+            ][:20]
             logger.warning(
-                "[POOL-AUDIT WARN] %d symbols are NOT_APPROVED in pool_coins (run "
-                "`python -m scripts.symbol_health_audit --no-approve --dry-run` for the list)",
-                counts[STATUS_NOT_APPROVED],
+                "[POOL-AUDIT WARN] %d symbols active but not approved in pool_coins; "
+                "first 20: %s",
+                counts[STATUS_NOT_APPROVED], sample,
+                extra={
+                    "audit_status": "POOL-AUDIT WARN",
+                    "not_approved_count": counts[STATUS_NOT_APPROVED],
+                    "sample_symbols": sample,
+                },
             )
 
-    # ── WS-AUDIT CRITICAL (resolver drift) ───────────────────────────
+    # ── WS-AUDIT CRITICAL (rule 2 — per-symbol > 120s + 10-min dedup) ─
+    fired = await _evaluate_streaming_health(redis, report)
+    if fired:
+        logger.info(
+            "[POOL] symbol-audit emitted %d [WS-AUDIT] symbol-not-streaming alerts",
+            fired,
+        )
+
+    # Aggregate WS resolver-drift signal (NOT_SUBSCRIBED) is reported
+    # alongside but uses the original cycle-level dedup so it does not
+    # spam when a redeploy briefly desyncs the resolver and the WS leader.
     if counts.get(STATUS_NOT_SUBSCRIBED, 0) > 0:
-        if await _alert_dedup(redis, b"alert:symbol_audit:ws", _DEDUP_TTL_WS_AUDIT_SECONDS):
+        if await _alert_dedup(redis, b"alert:symbol_audit:ws", _DEDUP_TTL_POOL_AUDIT_SECONDS):
+            drift_sample = [
+                r.symbol for r in report.symbols
+                if r.status == STATUS_NOT_SUBSCRIBED
+            ][:20]
             logger.critical(
                 "[WS-AUDIT CRITICAL] %d approved symbols are NOT_SUBSCRIBED — "
-                "WS leader resolver drift; trades_buffer will stay empty for them",
-                counts[STATUS_NOT_SUBSCRIBED],
+                "WS leader resolver drift; trades_buffer will stay empty. First 20: %s",
+                counts[STATUS_NOT_SUBSCRIBED], drift_sample,
             )
 
     # ── REDIS-FALLBACK INFO (aggregated) ─────────────────────────────
@@ -119,11 +217,15 @@ async def _audit_async(monitor_only: bool) -> dict:
             rem.recompute_enqueued,
         )
 
-    return {
-        "monitor_only": monitor_only,
-        "report": report.to_dict(),
-        "remediation": remediation,
-    }
+    # Etapa 8 envelope — same operator-facing contract as the admin
+    # endpoint and the CLI, so beat-driven runs and on-demand runs
+    # produce structurally identical reports.
+    rem_obj = rem if not monitor_only else None  # type: ignore[name-defined]
+    envelope = build_etapa8_envelope(report, rem_obj)
+    envelope["monitor_only"] = monitor_only
+    envelope["report"] = report.to_dict()
+    envelope["remediation"] = remediation
+    return envelope
 
 
 @celery_app.task(name="app.tasks.symbol_health_audit.monitor_only")

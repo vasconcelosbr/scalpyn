@@ -571,7 +571,10 @@ async def symbol_audit(
     # Lazy imports keep the admin module import-light when the audit is
     # never invoked — the symbol-health probes pull in the WS leader and
     # exchange adapters which we don't want to load on every request.
-    from ..services.symbol_health_service import SymbolHealthService
+    from ..services.symbol_health_service import (
+        SymbolHealthService,
+        build_etapa8_envelope,
+    )
     from ..services.symbol_remediator import GateSymbolValidator, SymbolRemediator
 
     health = SymbolHealthService(concurrency=payload.concurrency)
@@ -584,7 +587,12 @@ async def symbol_audit(
     )
     rem = await remediator.remediate(report, dry_run=payload.dry_run)
 
-    return {
-        "report": report.to_dict(),
-        "remediation": rem.to_dict(),
-    }
+    # Etapa 8 of the prompt — the operator-facing envelope is the
+    # contract; ``report`` and ``remediation`` are kept as nested debug
+    # detail (back-compat with anything already integrating against the
+    # old shape) but ``resumo``, ``lista`` and ``system_healthy`` are
+    # what panels and the runbook key off of.
+    envelope = build_etapa8_envelope(report, rem)
+    envelope["report"] = report.to_dict()
+    envelope["remediation"] = rem.to_dict()
+    return envelope

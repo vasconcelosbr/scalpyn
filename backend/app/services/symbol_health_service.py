@@ -217,7 +217,7 @@ async def _probe_buffer(redis, symbol: str) -> Dict[str, Any]:
 
 
 async def _probe_latest_indicator(db, symbol: str) -> Dict[str, Any]:
-    """Return latest microstructure indicators row keys + age."""
+    """Return latest microstructure indicators row keys + age (single-symbol)."""
     out: Dict[str, Any] = {
         "age_seconds": None,
         "has_taker_ratio": False,
@@ -251,6 +251,64 @@ async def _probe_latest_indicator(db, symbol: str) -> Dict[str, Any]:
     if row.time is not None:
         ts = row.time if row.time.tzinfo else row.time.replace(tzinfo=timezone.utc)
         out["age_seconds"] = round((datetime.now(timezone.utc) - ts).total_seconds(), 1)
+    return out
+
+
+async def _load_latest_indicators(db, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Bulk-load latest microstructure indicator row per symbol in one query.
+
+    Replaces per-symbol :func:`_probe_latest_indicator` calls in the audit
+    hot path so the shared :class:`AsyncSession` is never used by more
+    than one coroutine at a time (SQLAlchemy ``AsyncSession`` is **not**
+    safe for concurrent statement execution — running N gathered probes
+    against one session corrupts the connection state).
+
+    Returns ``{symbol: {age_seconds, has_taker_ratio, has_volume_delta,
+    error}}`` for every requested symbol; missing rows degrade to the
+    empty-record default so the classifier always has the keys it needs.
+    """
+    default = lambda err=None: {  # noqa: E731
+        "age_seconds": None,
+        "has_taker_ratio": False,
+        "has_volume_delta": False,
+        "error": err,
+    }
+    if not symbols:
+        return {}
+    try:
+        rows = (await db.execute(text("""
+            SELECT DISTINCT ON (symbol)
+                   symbol, time,
+                   (SELECT array_agg(k) FROM jsonb_object_keys(indicators_json) k) AS keys
+            FROM indicators
+            WHERE symbol = ANY(:syms)
+              AND scheduler_group = 'microstructure'
+            ORDER BY symbol, time DESC
+        """), {"syms": list(symbols)})).fetchall()
+    except Exception as exc:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        err = f"{type(exc).__name__}: {exc}"
+        return {s: default(err) for s in symbols}
+
+    now = datetime.now(timezone.utc)
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        keys = list(r.keys or [])
+        age: Optional[float] = None
+        if r.time is not None:
+            ts = r.time if r.time.tzinfo else r.time.replace(tzinfo=timezone.utc)
+            age = round((now - ts).total_seconds(), 1)
+        out[r.symbol] = {
+            "age_seconds": age,
+            "has_taker_ratio": "taker_ratio" in keys,
+            "has_volume_delta": "volume_delta" in keys,
+            "error": None,
+        }
+    for s in symbols:
+        out.setdefault(s, default())
     return out
 
 
@@ -353,6 +411,14 @@ class SymbolHealthService:
         union of the requested symbols plus the pool universe — a
         symbol explicitly requested is reported even if it has never
         existed in the pool table.
+
+        Emits the five canonical Etapa 5 logs at the end of every run:
+
+            [POOL] approved symbols: N
+            [WS]   subscribed symbols: N
+            [WS]   missing symbols: X
+            [REDIS] empty buffers: Y
+            [INDICATORS] no data: Z
         """
         from ..database import AsyncSessionLocal
         from ..exchange_adapters.gate_adapter import GateAdapter
@@ -371,28 +437,57 @@ class SymbolHealthService:
                 explicit = {GateAdapter._normalize_symbol(s) for s in symbols if s}
                 target = sorted(explicit | set(pool_state.keys()))
 
-            sem = asyncio.Semaphore(self._concurrency)
+            # Bulk-load latest indicator row for every symbol *before* fanning
+            # out the per-symbol probes — keeps the shared AsyncSession used
+            # by exactly one coroutine at a time (SQLAlchemy AsyncSession is
+            # not safe for concurrent statement execution).
+            indicator_state = await _load_latest_indicators(db, target)
 
-            async def _one(sym: str) -> SymbolHealth:
-                async with sem:
-                    pool = pool_state.get(sym, {"is_approved": False, "is_active": False, "exists": False})
-                    in_ws = sym in ws_universe
-                    # Probe buffer + indicators concurrently per symbol.
-                    buf, ind = await asyncio.gather(
-                        _probe_buffer(redis, sym),
-                        _probe_latest_indicator(db, sym),
-                    )
-                    return _classify(
-                        sym, pool, in_ws, buf, ind,
-                        self._indicator_max_age,
-                        self._buffer_newest_max_age,
-                    )
+        # Buffer probes hit Redis only — safe to run concurrently. We
+        # bound the parallelism so a 10⁴-symbol pool does not melt Redis.
+        sem = asyncio.Semaphore(self._concurrency)
 
-            records = await asyncio.gather(*(_one(s) for s in target))
+        async def _one(sym: str) -> SymbolHealth:
+            async with sem:
+                pool = pool_state.get(
+                    sym,
+                    {"is_approved": False, "is_active": False, "exists": False},
+                )
+                in_ws = sym in ws_universe
+                buf = await _probe_buffer(redis, sym)
+                ind = indicator_state.get(sym, {
+                    "age_seconds": None,
+                    "has_taker_ratio": False,
+                    "has_volume_delta": False,
+                    "error": None,
+                })
+                return _classify(
+                    sym, pool, in_ws, buf, ind,
+                    self._indicator_max_age,
+                    self._buffer_newest_max_age,
+                )
+
+        records = await asyncio.gather(*(_one(s) for s in target))
 
         counts: Dict[str, int] = {s: 0 for s in STATUS_PRIORITY}
         for r in records:
             counts[r.status] = counts.get(r.status, 0) + 1
+
+        # ── Five canonical Etapa 5 logs ────────────────────────────────
+        approved_n = sum(
+            1 for r in records if r.is_approved
+        )
+        subscribed_n = sum(
+            1 for r in records if r.is_approved and r.in_ws_subscription
+        )
+        missing_n = sum(
+            1 for r in records if r.is_approved and not r.in_ws_subscription
+        )
+        logger.info("[POOL] approved symbols: %d", approved_n)
+        logger.info("[WS] subscribed symbols: %d", subscribed_n)
+        logger.info("[WS] missing symbols: %d", missing_n)
+        logger.info("[REDIS] empty buffers: %d", counts.get(STATUS_NO_REDIS_DATA, 0))
+        logger.info("[INDICATORS] no data: %d", counts.get(STATUS_NO_INDICATOR_DATA, 0))
 
         return SymbolHealthReport(
             checked_at=datetime.now(timezone.utc).isoformat(),
@@ -400,6 +495,86 @@ class SymbolHealthService:
             counts=counts,
             symbols=records,
         )
+
+
+# ── Etapa 8 envelope ────────────────────────────────────────────────────
+# Portuguese problem labels for the operator-facing report. Matches the
+# vocabulary used in the runbook so support staff can copy-paste between
+# the JSON output and the runbook checklist.
+PROBLEMA_PT: Dict[str, str] = {
+    STATUS_NOT_APPROVED: "não aprovado em pool_coins",
+    STATUS_NOT_SUBSCRIBED: "aprovado mas WS não subscreveu",
+    STATUS_NO_REDIS_DATA: "subscrito mas trades_buffer vazio (ZCARD=0)",
+    STATUS_NO_INDICATOR_DATA: "buffer presente mas indicador microstructure ausente/stale",
+    STATUS_OK: "—",
+}
+
+
+def build_etapa8_envelope(
+    report: SymbolHealthReport,
+    remediation: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """Build the canonical operator-facing report (Etapa 8 of the prompt).
+
+    Output shape — frozen contract, locked in by snapshot test::
+
+        {
+          "resumo": {"total": int, "corrigidos": int, "pendentes": int},
+          "lista":  [{"symbol", "problema", "ação_aplicada", "status_final"}],
+          "system_healthy": bool
+        }
+
+    ``ação_aplicada`` and ``status_final`` are derived from the
+    :class:`RemediationReport` when one is provided; when ``remediation``
+    is ``None`` (audit-only mode) the action defaults to ``"nenhuma"``
+    for OK rows and ``"pendente"`` for everything else, and
+    ``corrigidos`` stays 0 — the report then represents "what is broken
+    right now" rather than "what got fixed".
+    """
+    by_symbol: Dict[str, "Tuple[str, bool]"] = {}  # noqa: F821
+    if remediation is not None:
+        for a in getattr(remediation, "actions", []) or []:
+            prev = by_symbol.get(a.symbol)
+            # Last executed action wins; otherwise first proposed.
+            if prev is None or (a.executed and not prev[1]):
+                by_symbol[a.symbol] = (a.action, bool(a.executed))
+
+    lista: List[Dict[str, Any]] = []
+    corrigidos = 0
+    pendentes = 0
+    for rec in report.symbols:
+        action_pair = by_symbol.get(rec.symbol)
+        if action_pair is not None:
+            action_str, executed = action_pair
+        else:
+            action_str = "nenhuma" if rec.status == STATUS_OK else "pendente"
+            executed = False
+
+        if rec.status == STATUS_OK:
+            status_final = "ok"
+        elif executed:
+            status_final = "corrigido"
+            corrigidos += 1
+        else:
+            status_final = "pendente"
+            pendentes += 1
+
+        lista.append({
+            "symbol": rec.symbol,
+            "problema": PROBLEMA_PT.get(rec.status, rec.status),
+            "ação_aplicada": action_str,
+            "status_final": status_final,
+        })
+
+    return {
+        "resumo": {
+            "total": report.total,
+            "corrigidos": corrigidos,
+            "pendentes": pendentes,
+        },
+        "lista": lista,
+        "system_healthy": pendentes == 0,
+    }
 
 
 __all__ = [
@@ -414,9 +589,12 @@ __all__ = [
     "SymbolHealth",
     "SymbolHealthReport",
     "SymbolHealthService",
+    "PROBLEMA_PT",
+    "build_etapa8_envelope",
     "_classify",
     "_load_pool_state",
     "_load_ws_universe",
+    "_load_latest_indicators",
     "_probe_buffer",
     "_probe_latest_indicator",
 ]

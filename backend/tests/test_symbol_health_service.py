@@ -219,15 +219,22 @@ def test_remediator_dry_run_never_executes_any_action(monkeypatch):
         assert action.executed is False
 
 
-def test_remediator_skips_symbols_not_tradable_on_gate(monkeypatch):
+def test_remediator_removes_symbols_not_tradable_on_gate(monkeypatch):
+    """Etapa 4: par sumiu da exchange → DELETE de pool_coins, não skip silencioso."""
     from app.services import symbol_remediator as rem_mod
 
     report = _build_report(("DELISTED_USDT", STATUS_NOT_APPROVED))
     remediator = rem_mod.SymbolRemediator(validator=_FakeValidator(tradable=False))
     out = asyncio.run(remediator.remediate(report, dry_run=True))
 
-    assert out.counts_by_action.get(rem_mod.ACTION_SKIP_NOT_TRADABLE) == 1
+    # Use the new canonical name; the old alias still works for callers
+    # that haven't migrated, but new tests track the new constant.
+    assert out.counts_by_action.get(rem_mod.ACTION_REMOVE_FROM_POOL) == 1
     assert out.counts_by_action.get(rem_mod.ACTION_APPROVE) is None
+    # Backwards-compat alias must still resolve to the same action so
+    # any external scripts importing the old name don't silently miss
+    # remove events in their dashboards.
+    assert rem_mod.ACTION_SKIP_NOT_TRADABLE == rem_mod.ACTION_REMOVE_FROM_POOL
 
 
 def test_remediator_executes_bulk_approve_then_requests_refresh(monkeypatch):
@@ -283,3 +290,62 @@ def test_remediator_executes_bulk_approve_then_requests_refresh(monkeypatch):
     assert out.refresh_subscriptions_requested is True
     approve_actions = [a for a in out.actions if a.action == rem_mod.ACTION_APPROVE]
     assert all(a.executed for a in approve_actions)
+
+
+# ── Etapa 8 envelope snapshot (Task #194) ───────────────────────────────
+
+
+def test_build_etapa8_envelope_snapshot_audit_only():
+    """Envelope must keep its shape — operator panels parse this contract."""
+    from app.services.symbol_health_service import build_etapa8_envelope
+
+    report = _build_report(
+        ("BTC_USDT", STATUS_OK),
+        ("ETH_USDT", STATUS_NOT_APPROVED),
+        ("XRP_USDT", STATUS_NO_REDIS_DATA),
+    )
+    env = build_etapa8_envelope(report, remediation=None)
+
+    assert set(env.keys()) == {"resumo", "lista", "system_healthy"}
+    assert env["resumo"] == {"total": 3, "corrigidos": 0, "pendentes": 2}
+    assert env["system_healthy"] is False
+    assert [item["symbol"] for item in env["lista"]] == ["BTC_USDT", "ETH_USDT", "XRP_USDT"]
+    for item in env["lista"]:
+        assert set(item.keys()) == {"symbol", "problema", "ação_aplicada", "status_final"}
+    assert env["lista"][0]["status_final"] == "ok"
+    assert env["lista"][0]["ação_aplicada"] == "nenhuma"
+    assert env["lista"][1]["status_final"] == "pendente"
+    assert env["lista"][1]["problema"] == "não aprovado em pool_coins"
+    assert env["lista"][1]["ação_aplicada"] == "pendente"
+
+
+def test_build_etapa8_envelope_marks_corrigidos_when_remediation_executed():
+    from app.services.symbol_health_service import build_etapa8_envelope
+    from app.services import symbol_remediator as rem_mod
+
+    report = _build_report(
+        ("BTC_USDT", STATUS_OK),
+        ("ETH_USDT", STATUS_NOT_APPROVED),
+    )
+    rem = rem_mod.RemediationReport(
+        dry_run=False,
+        total_actions=1,
+        counts_by_action={rem_mod.ACTION_APPROVE: 1},
+        actions=[
+            rem_mod.RemediationAction(
+                symbol="ETH_USDT",
+                action=rem_mod.ACTION_APPROVE,
+                reason="executed",
+                executed=True,
+            ),
+        ],
+        refresh_subscriptions_requested=False,
+        recompute_enqueued=False,
+    )
+    env = build_etapa8_envelope(report, rem)
+
+    assert env["resumo"] == {"total": 2, "corrigidos": 1, "pendentes": 0}
+    assert env["system_healthy"] is True
+    eth = next(i for i in env["lista"] if i["symbol"] == "ETH_USDT")
+    assert eth["ação_aplicada"] == rem_mod.ACTION_APPROVE
+    assert eth["status_final"] == "corrigido"
