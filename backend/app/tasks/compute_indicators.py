@@ -157,14 +157,15 @@ async def _compute_async():
 
     async with AsyncSessionLocal() as db:
         try:
-            # Get all symbols present in both ohlcv AND pool_coins (spot).
-            # pool_coins is the exclusive source of truth — symbols outside
-            # the pool are never computed even if they have ohlcv rows.
+            # Get all symbols present in both ohlcv AND pool_coins (spot, approved).
+            # pool_coins.is_approved is the exclusive source of truth — symbols
+            # not approved are never computed even if they have ohlcv rows.
             symbols_result = await db.execute(text("""
                 SELECT DISTINCT o.symbol
                 FROM ohlcv o
                 JOIN pool_coins p ON o.symbol = p.symbol
                 WHERE p.is_active = true
+                  AND p.is_approved = true
                   AND p.market_type = 'spot'
                   AND o.time > now() - interval '7 days'
             """))
@@ -289,14 +290,15 @@ async def _compute_5m_async():
 
     async with AsyncSessionLocal() as db:
         try:
-            # Only symbols that have recent 5m candles AND are active in pool_coins.
-            # pool_coins is the exclusive source of truth — symbols outside the
-            # pool are never computed even if they have ohlcv rows.
+            # Only symbols that have recent 5m candles AND are active+approved in pool_coins.
+            # pool_coins.is_approved is the exclusive source of truth — symbols
+            # not approved are never computed even if they have ohlcv rows.
             symbols_result = await db.execute(text("""
                 SELECT DISTINCT o.symbol, p.market_type
                 FROM ohlcv o
                 JOIN pool_coins p ON o.symbol = p.symbol
                 WHERE p.is_active = true
+                  AND p.is_approved = true
                   AND o.timeframe = '5m'
                   AND o.time > now() - interval '2 hours'
             """))

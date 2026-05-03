@@ -32,14 +32,34 @@ async def _collect_all_async():
         return await get_approved_pool_symbols(db, "spot")
 
     raw_symbols = await run_db_task(_load_spot_syms, celery=True)
-    symbols = list(dict.fromkeys(raw_symbols))  # deduplicate, preserve order
 
-    logger.info(f"[COLLECT] Approved symbols loaded: {len(symbols)}")
-    logger.info(f"[COLLECT] Sample symbols: {symbols[:5]}")
+    logger.info(f"[COLLECT] approved_symbols_count={len(raw_symbols)}")
+    logger.info(f"[COLLECT] symbols={raw_symbols}")
 
-    if not symbols:
-        logger.warning("[COLLECT] No approved symbols — skipping cycle")
-        return 0
+    if not raw_symbols:
+        raise RuntimeError("[FATAL] No approved symbols")
+
+    # Validate and deduplicate
+    valid_symbols = []
+    for sym in dict.fromkeys(raw_symbols):  # deduplicate while iterating
+        s = sym.strip().upper() if sym else ""
+        if not s:
+            logger.warning(f"[SKIP INVALID SYMBOL] raw={sym!r} reason=empty")
+            continue
+        if "USDT" not in s:
+            logger.warning(f"[SKIP INVALID SYMBOL] raw={sym!r} reason=no_usdt")
+            continue
+        if len(s) < 5 or len(s) > 20:
+            logger.warning(f"[SKIP INVALID SYMBOL] raw={sym!r} reason=inconsistent_size len={len(s)}")
+            continue
+        valid_symbols.append(sym)
+
+    logger.info(f"[COLLECT] valid_symbols={len(valid_symbols)}")
+
+    if not valid_symbols:
+        raise RuntimeError("[FATAL] No approved symbols after validation")
+
+    symbols = valid_symbols
 
     async def _inner(db) -> int:
         collected = 0
@@ -111,7 +131,7 @@ async def _collect_all_async():
                 collected += 1
             except Exception as e:
                 logger.error(
-                    f"[COLLECT][FAIL] symbol={symbol} error={str(e)}",
+                    f"[FAILED symbol={symbol}] error={str(e)}",
                     exc_info=True,
                 )
                 failures += 1
@@ -182,10 +202,8 @@ async def _collect_all_async():
         # run_db_task auto-commits all successful writes on exit
 
         logger.info(f"[COLLECT] success={collected} fail={failures} total={len(symbols)}")
-        if collected == 0 and len(symbols) > 0:
-            raise RuntimeError(
-                f"[collect_all] All {len(symbols)} symbol collections failed — check errors above"
-            )
+        if collected == 0:
+            raise RuntimeError("zero success — all symbols failed")
         return collected
 
     return await run_db_task(_inner, celery=True)
@@ -216,15 +234,35 @@ async def _collect_5m_async():
 
     symbol_market_type: dict[str, str] = await run_db_task(_load_approved, celery=True)
 
-    approved_syms = filter_real_assets(list(symbol_market_type.keys()))
-    symbols = list(dict.fromkeys(approved_syms))  # deduplicate, preserve order
+    raw_syms = filter_real_assets(list(symbol_market_type.keys()))
 
-    logger.info(f"[COLLECT] Approved symbols loaded: {len(symbols)}")
-    logger.info(f"[COLLECT] Sample symbols: {symbols[:5]}")
+    logger.info(f"[COLLECT] approved_symbols_count={len(raw_syms)}")
+    logger.info(f"[COLLECT] symbols={raw_syms}")
 
-    if not symbols:
-        logger.warning("[COLLECT] No approved symbols — skipping cycle")
-        return 0
+    if not raw_syms:
+        raise RuntimeError("[FATAL] No approved symbols")
+
+    # Validate and deduplicate
+    valid_symbols = []
+    for sym in dict.fromkeys(raw_syms):
+        s = sym.strip().upper() if sym else ""
+        if not s:
+            logger.warning(f"[SKIP INVALID SYMBOL] raw={sym!r} reason=empty")
+            continue
+        if "USDT" not in s:
+            logger.warning(f"[SKIP INVALID SYMBOL] raw={sym!r} reason=no_usdt")
+            continue
+        if len(s) < 5 or len(s) > 20:
+            logger.warning(f"[SKIP INVALID SYMBOL] raw={sym!r} reason=inconsistent_size len={len(s)}")
+            continue
+        valid_symbols.append(sym)
+
+    logger.info(f"[COLLECT] valid_symbols={len(valid_symbols)}")
+
+    if not valid_symbols:
+        raise RuntimeError("[FATAL] No approved symbols after validation")
+
+    symbols = valid_symbols
 
     async def _inner(db) -> int:
         from ..services.market_data_service import market_data_service
@@ -337,7 +375,7 @@ async def _collect_5m_async():
                 logger.info(f"[COLLECT][OK] symbol={symbol} timeframe=5m")
             except Exception as e:
                 logger.error(
-                    f"[COLLECT][FAIL] symbol={symbol} timeframe=5m error={str(e)}",
+                    f"[FAILED symbol={symbol}] timeframe=5m error={str(e)}",
                     exc_info=True,
                 )
                 failures += 1
@@ -448,10 +486,8 @@ async def _collect_5m_async():
         # run_db_task auto-commits all successful writes on exit
 
         logger.info(f"[COLLECT] success={collected} fail={failures} total={len(symbols)}")
-        if collected == 0 and len(symbols) > 0:
-            raise RuntimeError(
-                f"[collect_5m] All {len(symbols)} symbol collections failed — check errors above"
-            )
+        if collected == 0:
+            raise RuntimeError("zero success — all symbols failed")
         return collected
 
     return await run_db_task(_inner, celery=True)
