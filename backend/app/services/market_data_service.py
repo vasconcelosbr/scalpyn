@@ -96,6 +96,19 @@ class MarketDataService:
         return raw
 
     @classmethod
+    def normalize_symbol_for_exchange(cls, symbol: str, exchange: str) -> str:
+        """Return symbol in the format expected by the given exchange.
+
+        gate  → BTC_USDT  (underscore-separated)
+        binance → BTCUSDT  (no separator)
+        """
+        if exchange == "gate":
+            return cls.to_gate_symbol(symbol)
+        if exchange == "binance":
+            return cls.to_binance_symbol(symbol)
+        return cls.normalize_symbol(symbol)
+
+    @classmethod
     def to_gate_symbol(cls, symbol: str) -> str:
         return cls.normalize_symbol(symbol).replace("/", "_")
 
@@ -382,7 +395,10 @@ class MarketDataService:
         tf_map = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d"}
         gate_tf = tf_map.get(timeframe, "1h")
         pair = self.to_gate_symbol(symbol)
-        logger.info(f"[FETCH] REQUEST symbol={symbol} timeframe={timeframe} limit={limit} gate_pair={pair}")
+        binance_sym = self.to_binance_symbol(symbol)
+        logger.info(
+            f"[SYMBOL MAP] input={symbol} gate={pair} binance={binance_sym} timeframe={timeframe} limit={limit}"
+        )
 
         gate_df: Optional[pd.DataFrame] = None
         binance_df: Optional[pd.DataFrame] = None
@@ -398,6 +414,10 @@ class MarketDataService:
                 resp.raise_for_status()
                 data = resp.json()
 
+            logger.info(
+                f"[API RAW] symbol={symbol} source=gate status={resp.status_code} "
+                f"response={str(data)[:300]}"
+            )
             logger.info(f"[FETCH] RAW_LEN symbol={symbol} source=gate size={len(data) if data else 0}")
 
             if data:
@@ -416,19 +436,25 @@ class MarketDataService:
                     len(gate_df), symbol, timeframe, self.MIN_OHLCV_CANDLES,
                 )
             else:
-                logger.info(
-                    "[OHLCV] Gate.io returned empty for %s/%s — trying Binance fallback",
-                    symbol, timeframe,
+                logger.error(
+                    f"[DATA EMPTY] symbol={symbol} source=gate pair={pair} "
+                    f"response={str(data)[:300]}"
                 )
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                "[OHLCV] Gate.io HTTP error for %s/%s — status=%d body=%s — trying Binance fallback",
+                symbol, timeframe, e.response.status_code, e.response.text[:300],
+                exc_info=True,
+            )
         except Exception as e:
-            logger.warning(
+            logger.error(
                 "[OHLCV] Gate.io failed for %s/%s (%s) — trying Binance fallback",
                 symbol, timeframe, e,
+                exc_info=True,
             )
 
         # ── Fallback / Merge source: Binance ──────────────────────────────────
         try:
-            binance_sym = self.to_binance_symbol(symbol)
             logger.info(f"[FETCH] REQUEST symbol={symbol} source=binance binance_sym={binance_sym}")
             rows = await self._binance.get_klines(
                 binance_sym, interval=timeframe, limit=limit, market="spot"
@@ -437,10 +463,15 @@ class MarketDataService:
             if rows:
                 binance_df = pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
                 logger.info(f"[FETCH] PARSED_ROWS symbol={symbol} source=binance rows={len(binance_df)}")
+            else:
+                logger.error(
+                    f"[DATA EMPTY] symbol={symbol} source=binance binance_sym={binance_sym} rows=0"
+                )
         except Exception as exc:
-            logger.warning(
+            logger.error(
                 "[OHLCV] Binance fallback failed for %s/%s: %s",
                 symbol, timeframe, exc,
+                exc_info=True,
             )
 
         # ── Decide what to return ─────────────────────────────────────────────

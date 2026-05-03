@@ -47,16 +47,18 @@ async def _collect_all_async():
 
         for symbol in symbols:  # process only approved symbols
             try:
-                logger.info(f"[PIPELINE] START symbol={symbol}")
+                logger.info(f"[COLLECT][START] symbol={symbol}")
                 df = await market_data_service.fetch_ohlcv(symbol, "1h", limit=100)
-                logger.info(f"[PIPELINE] DF_TYPE symbol={symbol} type={type(df)}")
+                logger.info(f"[COLLECT][RESULT] symbol={symbol} result={type(df).__name__} rows={len(df) if df is not None else 'None'}")
 
                 if df is None:
-                    logger.error(f"[PIPELINE] DF_NONE symbol={symbol}")
+                    logger.error(f"[COLLECT][EMPTY] symbol={symbol} reason=fetch_returned_none")
+                    failures += 1
                     continue
 
                 if df.empty:
-                    logger.error(f"[PIPELINE] DF_EMPTY symbol={symbol}")
+                    logger.error(f"[COLLECT][EMPTY] symbol={symbol} reason=df_empty")
+                    failures += 1
                     continue
 
                 logger.info(f"[PIPELINE] DF_ROWS symbol={symbol} rows={len(df)}")
@@ -105,10 +107,13 @@ async def _collect_all_async():
                         "updated": datetime.now(timezone.utc),
                     })
 
-                logger.info(f"[PIPELINE] INSERT_OK symbol={symbol}")
+                logger.info(f"[COLLECT][OK] symbol={symbol}")
                 collected += 1
             except Exception as e:
-                logger.error(f"[PIPELINE] INSERT_FAIL symbol={symbol} error={e}", exc_info=True)
+                logger.error(
+                    f"[COLLECT][FAIL] symbol={symbol} error={str(e)}",
+                    exc_info=True,
+                )
                 failures += 1
                 await db.rollback()
                 continue
@@ -176,7 +181,7 @@ async def _collect_all_async():
             logger.error("Failed to fetch/update metadata from tickers: %s", e)
         # run_db_task auto-commits all successful writes on exit
 
-        logger.info(f"[COLLECT] completed: collected={collected} failed={failures} total={len(symbols)}")
+        logger.info(f"[COLLECT] success={collected} fail={failures} total={len(symbols)}")
         if collected == 0 and len(symbols) > 0:
             raise RuntimeError(
                 f"[collect_all] All {len(symbols)} symbol collections failed — check errors above"
@@ -229,16 +234,18 @@ async def _collect_5m_async():
         for symbol in symbols:  # no cap — approved symbols only
             sym_market_type = symbol_market_type.get(symbol, "spot")
             try:
-                logger.info(f"[PIPELINE] START symbol={symbol} timeframe=5m")
+                logger.info(f"[COLLECT][START] symbol={symbol} timeframe=5m")
                 df = await market_data_service.fetch_ohlcv(symbol, "5m", limit=288)
-                logger.info(f"[PIPELINE] DF_TYPE symbol={symbol} type={type(df)}")
+                logger.info(f"[COLLECT][RESULT] symbol={symbol} result={type(df).__name__} rows={len(df) if df is not None else 'None'}")
 
                 if df is None:
-                    logger.error(f"[PIPELINE] DF_NONE symbol={symbol} timeframe=5m")
+                    logger.error(f"[COLLECT][EMPTY] symbol={symbol} timeframe=5m reason=fetch_returned_none")
+                    failures += 1
                     continue
 
                 if df.empty:
-                    logger.error(f"[PIPELINE] DF_EMPTY symbol={symbol} timeframe=5m")
+                    logger.error(f"[COLLECT][EMPTY] symbol={symbol} timeframe=5m reason=df_empty")
+                    failures += 1
                     continue
 
                 logger.info(f"[PIPELINE] DF_ROWS symbol={symbol} rows={len(df)}")
@@ -327,9 +334,12 @@ async def _collect_5m_async():
                     )
 
                 collected += 1
-                logger.info(f"[PIPELINE] INSERT_OK symbol={symbol} timeframe=5m")
+                logger.info(f"[COLLECT][OK] symbol={symbol} timeframe=5m")
             except Exception as e:
-                logger.error(f"[PIPELINE] INSERT_FAIL symbol={symbol} error={e}", exc_info=True)
+                logger.error(
+                    f"[COLLECT][FAIL] symbol={symbol} timeframe=5m error={str(e)}",
+                    exc_info=True,
+                )
                 failures += 1
                 await db.rollback()
                 continue
@@ -437,7 +447,7 @@ async def _collect_5m_async():
             logger.debug("5m: per-symbol stale-check skipped (non-blocking): %s", e)
         # run_db_task auto-commits all successful writes on exit
 
-        logger.info(f"[COLLECT] completed: collected={collected} failed={failures} total={len(symbols)}")
+        logger.info(f"[COLLECT] success={collected} fail={failures} total={len(symbols)}")
         if collected == 0 and len(symbols) > 0:
             raise RuntimeError(
                 f"[collect_5m] All {len(symbols)} symbol collections failed — check errors above"
