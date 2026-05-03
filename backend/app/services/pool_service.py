@@ -55,6 +55,59 @@ async def get_pool_symbols(db, market_type: str) -> list[str]:
     return filter_real_assets([normalize_pool_symbol(r.symbol) for r in rows])
 
 
+async def get_approved_symbols(db, market_type: str) -> list[str]:
+    """Return symbols currently approved (L3-level, direction up or NULL) for *market_type*.
+
+    "Approved" means the symbol has passed all pipeline filter levels and is
+    currently sitting in an L3 watchlist with an active (up) direction.  This
+    is the **decision-driven** universe — a strict subset of pool_coins.
+
+    Args:
+        db: SQLAlchemy async session.
+        market_type: ``'spot'`` or ``'futures'``.
+
+    Returns:
+        Deduplicated, normalized list of approved symbols in ``BTC_USDT`` format.
+    """
+    rows = (await db.execute(
+        text("""
+            SELECT DISTINCT pwa.symbol
+            FROM pipeline_watchlist_assets pwa
+            JOIN pipeline_watchlists pw ON pw.id = pwa.watchlist_id
+            WHERE UPPER(pw.level) = 'L3'
+              AND pw.market_mode = :market_type
+              AND (pwa.level_direction IS NULL OR pwa.level_direction = 'up')
+        """),
+        {"market_type": market_type},
+    )).fetchall()
+
+    return filter_real_assets([normalize_pool_symbol(r.symbol) for r in rows])
+
+
+async def get_approved_symbols_with_market_type(db) -> dict[str, str]:
+    """Return a mapping of normalized symbol → market_type for all approved symbols.
+
+    Same semantics as :func:`get_approved_symbols` but covers all market types in
+    a single round-trip.  Used by the 5m collector which processes spot + futures
+    in one pass.
+
+    Returns:
+        Dict of ``{ "BTC_USDT": "spot", "ETH_USDT": "futures", ... }`` for every
+        symbol currently approved in any L3 pipeline watchlist.
+    """
+    rows = (await db.execute(
+        text("""
+            SELECT DISTINCT pwa.symbol, pw.market_mode
+            FROM pipeline_watchlist_assets pwa
+            JOIN pipeline_watchlists pw ON pw.id = pwa.watchlist_id
+            WHERE UPPER(pw.level) = 'L3'
+              AND (pwa.level_direction IS NULL OR pwa.level_direction = 'up')
+        """),
+    )).fetchall()
+
+    return {normalize_pool_symbol(r.symbol): r.market_mode for r in rows}
+
+
 async def get_pool_symbols_with_market_type(db) -> dict[str, str]:
     """Return a mapping of normalized symbol → market_type for all active pool coins.
 
