@@ -51,6 +51,11 @@ DEFAULT_INTERVAL_SECONDS = 300        # 5 min
 DEFAULT_CONCURRENCY = 8
 DEFAULT_FIRST_RUN_DELAY_SECONDS = 15  # fire quickly after structural
 DEFAULT_OHLCV_LIMIT = 100             # 100 × 5m ≈ 8 h of data
+# Order-flow look-back window fed to get_order_flow_data().  Must be ≤
+# TRADE_BUFFER_TTL_SECONDS (360 s) in event_handlers so the Redis buffer
+# is guaranteed to cover the full window.  Tune via env var when the
+# buffer TTL or cycle cadence changes.
+DEFAULT_ORDER_FLOW_WINDOW_SECONDS = 300
 TIMEFRAME = "5m"
 SCHEDULER_GROUP = "microstructure"
 
@@ -222,7 +227,8 @@ async def _refresh_market_metadata(db, symbol: str,
         logger.error("[MICRO-SCHED] market_metadata upsert failed for %s: %s", symbol, exc, exc_info=True)
 
 
-async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
+async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore,
+                               of_window: int) -> str:
     from ..database import run_db_task
     from ..services.feature_engine import FeatureEngine
     from ..services.market_data_service import market_data_service
@@ -274,7 +280,7 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
             from ..services.order_flow_service import get_order_flow_data
             from ..utils.indicator_merge import _ORDER_FLOW_KEYS
             of_data = await get_order_flow_data(
-                symbol, window_seconds=300, market_type="spot"
+                symbol, window_seconds=of_window, market_type="spot"
             )
             for key, value in of_data.items():
                 if key in _ORDER_FLOW_KEYS:
@@ -306,7 +312,7 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
         return f"{symbol}: ok indicators={len(results)}"
 
 
-async def _run_one_cycle(concurrency: int) -> None:
+async def _run_one_cycle(concurrency: int, of_window: int) -> None:
     from ..database import run_db_task
 
     cycle_start = datetime.now(timezone.utc)
@@ -322,7 +328,7 @@ async def _run_one_cycle(concurrency: int) -> None:
 
         semaphore = asyncio.Semaphore(concurrency)
         results = await asyncio.gather(
-            *[_refresh_one_symbol(s, semaphore) for s in symbols],
+            *[_refresh_one_symbol(s, semaphore, of_window) for s in symbols],
             return_exceptions=True,
         )
 
@@ -348,9 +354,11 @@ async def _scheduler_loop() -> None:
     concurrency = _env_int("BACKGROUND_SCHEDULER_CONCURRENCY", DEFAULT_CONCURRENCY)
     first_run_delay = _env_int("MICROSTRUCTURE_SCHEDULER_FIRST_RUN_DELAY_SECONDS",
                                DEFAULT_FIRST_RUN_DELAY_SECONDS)
+    of_window = _env_int("MICROSTRUCTURE_ORDER_FLOW_WINDOW_SECONDS",
+                         DEFAULT_ORDER_FLOW_WINDOW_SECONDS)
 
-    logger.info("[MICRO-SCHED] scheduler starting (interval=%ds, concurrency=%d)",
-                interval, concurrency)
+    logger.info("[MICRO-SCHED] scheduler starting (interval=%ds, concurrency=%d, of_window=%ds)",
+                interval, concurrency, of_window)
 
     try:
         await asyncio.sleep(first_run_delay)
@@ -359,7 +367,7 @@ async def _scheduler_loop() -> None:
 
     while True:
         try:
-            await _run_one_cycle(concurrency)
+            await _run_one_cycle(concurrency, of_window)
         except asyncio.CancelledError:
             logger.info("[MICRO-SCHED] scheduler cancelled — exiting loop")
             raise
