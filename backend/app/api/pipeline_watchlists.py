@@ -440,7 +440,11 @@ async def get_pipeline_assets(
             **ind_data,
         }
 
-        score_result = se.compute_score(eval_dict) if se else None
+        # Task #193: compute score + breakdown together so the robust
+        # engine runs exactly once per asset instead of twice.
+        score_result, _pipeline_breakdown = (
+            se.compute_score_with_breakdown(eval_dict) if se else (None, [])
+        )
         fresh_score = (
             float(score_result.get("total_score"))
             if score_result and score_result.get("total_score") is not None
@@ -497,8 +501,11 @@ async def get_pipeline_assets(
         }
         indicators.update(ind_data)
 
-        # Compute per-rule scoring breakdown for drilldown / transparency
-        score_rules = se.get_full_breakdown(eval_dict) if se else []
+        # Per-rule scoring breakdown for drilldown / transparency.
+        # Reuses the breakdown produced by `compute_score_with_breakdown`
+        # above — no second robust call. Falls back to an empty list if
+        # the engine is unavailable.
+        score_rules = _pipeline_breakdown if se else []
 
         # Enrich each rule with scheduler_group + indicator_age_seconds metadata
         # so the UI can show e.g. "RSI 62.1 · structural · 12m"

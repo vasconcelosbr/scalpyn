@@ -1489,9 +1489,11 @@ async def _resolve_and_persist(
                 "market_cap": meta.get("market_cap", 0),
                 "change_24h": meta.get("price_change_24h", 0),
             }
-            r = _score_engine.compute_score(eval_data)
+            # Task #193: single robust call for both score + per-rule
+            # breakdown — avoids the duplicate compute the prior pair of
+            # calls incurred for every asset in the watchlist loop.
+            r, score_rules_map[sym] = _score_engine.compute_score_with_breakdown(eval_data)
             live_score_map[sym] = round(r.get("total_score", 0), 1)
-            score_rules_map[sym] = _score_engine.get_full_breakdown(eval_data)
         else:
             live_score_map[sym] = precomp_score_map.get(sym, 0.0)
 

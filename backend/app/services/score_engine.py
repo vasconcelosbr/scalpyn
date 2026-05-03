@@ -28,7 +28,7 @@ from copy import deepcopy
 import logging
 import math
 import operator as op
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, List, Optional, Set, Tuple
 
 # ── Display labels per indicator name ─────────────────────────────────────────
 _IND_LABELS: Dict[str, str] = {
@@ -273,6 +273,39 @@ class ScoreEngine:
             "strong_buy": 80, "buy": 65, "neutral": 40
         })
 
+    def _robust_payload(
+        self, indicators: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Single point that calls the robust scoring engine.
+
+        Both ``compute_score`` and ``get_full_breakdown`` route through
+        here so a hot caller can run the robust math exactly once per
+        asset and still get a fully-shaped response from each method
+        (via ``compute_score_with_breakdown``). Returns ``None`` when
+        the engine rejects (critical/confidence gate, sparse fixtures)
+        or raises — caller decides whether to render legacy fallback.
+        """
+        if not indicators:
+            return None
+        from .robust_indicators import compute_asset_score
+
+        symbol = str(indicators.get("symbol") or "ADAPTER")
+        flow_hint = (
+            indicators.get("taker_source")
+            if isinstance(indicators, dict) else None
+        )
+        try:
+            return compute_asset_score(
+                symbol,
+                indicators,
+                self.rules,
+                is_futures=False,
+                flow_source_hint=flow_hint,
+            )
+        except Exception as exc:
+            logger.debug("ScoreEngine._robust_payload: failed: %s", exc)
+            return None
+
     def compute_score(self, indicators: Dict[str, Any]) -> Dict[str, Any]:
         """Compute the Alpha Score via the robust engine, shaped like the
         legacy response so callers (API, profile_engine, spot_scanner)
@@ -285,26 +318,7 @@ class ScoreEngine:
         if not indicators:
             return self._empty_response("no_data")
 
-        # Local import keeps the module bootable even if the robust package
-        # is being patched in tests.
-        from .robust_indicators import compute_asset_score
-
-        symbol = str(indicators.get("symbol") or "ADAPTER")
-        flow_hint = (
-            indicators.get("taker_source")
-            if isinstance(indicators, dict) else None
-        )
-        try:
-            payload = compute_asset_score(
-                symbol,
-                indicators,
-                self.rules,
-                is_futures=False,
-                flow_source_hint=flow_hint,
-            )
-        except Exception as exc:
-            logger.debug("ScoreEngine.compute_score: robust path failed: %s", exc)
-            payload = None
+        payload = self._robust_payload(indicators)
 
         # Robust matched rules carry IDs (and confidence weighting). The
         # legacy ``_get_matched_rules`` is still useful as a fallback for
@@ -501,27 +515,12 @@ class ScoreEngine:
         # below. Any failure leaves `weighted_lookup` empty → rules
         # render with nominal points only (legacy fallback).
         weighted_lookup: Dict[str, Dict[str, float]] = {}
-        payload: Optional[Dict[str, Any]] = score_payload
+        payload: Optional[Dict[str, Any]] = (
+            score_payload
+            if score_payload is not None
+            else self._robust_payload(indicators)
+        )
         try:
-            if payload is None:
-                from .robust_indicators import compute_asset_score
-
-                symbol = (
-                    str(indicators.get("symbol"))
-                    if isinstance(indicators, dict) and indicators.get("symbol")
-                    else "BREAKDOWN"
-                )
-                flow_hint = (
-                    indicators.get("taker_source")
-                    if isinstance(indicators, dict) else None
-                )
-                payload = compute_asset_score(
-                    symbol,
-                    indicators,
-                    self.rules,
-                    is_futures=False,
-                    flow_source_hint=flow_hint,
-                )
             if payload:
                 for matched in (payload.get("matched_rules") or []):
                     if not isinstance(matched, dict):
@@ -607,6 +606,46 @@ class ScoreEngine:
         positive_rules.sort(key=lambda r: -(r["points_possible"] or 0))
         penalty_rules.sort(key=lambda r:  (r["points_possible"] or 0))
         return positive_rules + penalty_rules
+
+    def compute_score_with_breakdown(
+        self, indicators: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """Convenience for hot paths (pipeline_watchlists, watchlists) that
+        need both ``compute_score`` *and* ``get_full_breakdown`` for the
+        same asset. Runs the robust engine exactly once and threads the
+        payload into both consumers — eliminates the duplicate scoring
+        call that the per-method API would incur.
+        """
+        payload = self._robust_payload(indicators) if indicators else None
+        if not indicators:
+            score = self._empty_response("no_data")
+        elif payload is None:
+            score = self._empty_response(
+                "no_data",
+                matched_rules=self._get_matched_rules(indicators),
+            )
+        else:
+            total_score = float(payload.get("score", 0.0))
+            score = {
+                "total_score": round(total_score, 2),
+                "classification": self._classify(total_score),
+                "components": {
+                    "liquidity_score": 0.0,
+                    "market_structure_score": 0.0,
+                    "momentum_score": 0.0,
+                    "signal_score": 0.0,
+                    "engine": "robust",
+                    "score_confidence": float(payload.get("score_confidence", 0.0)),
+                    "global_confidence": float(payload.get("global_confidence", 0.0)),
+                },
+                "category_summaries": {},
+                "matched_rules": [
+                    m.get("rule_id") if isinstance(m, dict) else m
+                    for m in (payload.get("matched_rules") or [])
+                ],
+            }
+        breakdown = self.get_full_breakdown(indicators, score_payload=payload)
+        return score, breakdown
 
     def _classify(self, score: float) -> str:
         if score >= self.thresholds.get("strong_buy", 80):
