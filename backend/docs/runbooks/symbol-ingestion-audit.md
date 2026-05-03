@@ -51,8 +51,11 @@ python -m scripts.symbol_health_audit --no-approve
 ```
 
 O CLI valida cada `NOT_APPROVED` contra `GET /spot/currency_pairs` da
-Gate.io antes de aprovar — se o símbolo não estiver tradable lá, ele é
-ignorado (`skip_not_tradable_on_gate`).
+Gate.io antes de aprovar. Se o símbolo não estiver tradable lá, a linha
+correspondente é **removida** de `pool_coins` (ação
+`remove_from_pool`) — a coluna não fica órfã esperando ingestão que
+nunca virá. Símbolos `NO_REDIS_DATA` que também desaparecem do
+exchange são removidos pelo mesmo caminho.
 
 ## Etapa 3 — Endpoint admin (alternativa fora do shell)
 
