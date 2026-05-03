@@ -28,6 +28,7 @@ class PoolCoin(Base):
     symbol = Column(String(20), nullable=False)
     market_type = Column(String(10), default='spot')
     is_active = Column(Boolean, default=True)
+    is_approved = Column(Boolean, default=False)
     added_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     origin = Column(String(20), default='manual')          # "manual" or "discovered"
     discovered_at = Column(DateTime(timezone=True), nullable=True)

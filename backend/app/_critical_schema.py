@@ -59,4 +59,7 @@ CRITICAL_COLUMNS: List[Tuple[str, str]] = [
     # and futures queries filter on it, so missing it would break writes and
     # silently collapse spot/futures isolation.
     ("indicators", "market_type"),
+    # Added by migration 035; without this, get_approved_pool_symbols raises
+    # ProgrammingError and all symbol collections fail with zero ohlcv inserts.
+    ("pool_coins", "is_approved"),
 ]
