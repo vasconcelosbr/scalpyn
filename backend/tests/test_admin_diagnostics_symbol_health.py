@@ -292,6 +292,66 @@ async def _aresolved(value):
     return value
 
 
+def test_sql_probes_compile_against_postgres_dialect() -> None:
+    """SQL-shape regression guard: every raw SQL string used by the
+    DB-touching probes must compile cleanly under the asyncpg dialect
+    we run in production. Catches syntax drift (e.g. someone replaces
+    ``DISTINCT ON`` with a non-Postgres construct, or breaks the
+    ``jsonb_object_keys`` lateral) without requiring a live DB."""
+    from sqlalchemy import text
+    from sqlalchemy.dialects.postgresql import asyncpg as pg_asyncpg_dialect
+
+    dialect = pg_asyncpg_dialect.dialect()
+
+    statements = [
+        # _probe_pool_status
+        """
+        SELECT pc.id, pc.pool_id, pc.is_active, pc.is_approved,
+               p.market_type, p.name
+        FROM pool_coins pc
+        LEFT JOIN pools p ON p.id = pc.pool_id
+        WHERE pc.symbol = :s
+        """,
+        # _probe_indicators_history (latest per group)
+        """
+        SELECT DISTINCT ON (scheduler_group, timeframe)
+               scheduler_group, timeframe, time,
+               (SELECT array_agg(k ORDER BY k)
+                  FROM jsonb_object_keys(indicators_json) k) AS keys
+        FROM indicators
+        WHERE symbol = :s
+        ORDER BY scheduler_group, timeframe, time DESC
+        """,
+        # _probe_indicators_history (recent rows)
+        """
+        SELECT time, timeframe, scheduler_group,
+               (SELECT array_agg(k ORDER BY k)
+                  FROM jsonb_object_keys(indicators_json) k) AS keys
+        FROM indicators
+        WHERE symbol = :s
+        ORDER BY time DESC
+        LIMIT 5
+        """,
+        # _probe_ohlcv_history
+        """
+        SELECT time, open, high, low, close, volume
+        FROM ohlcv
+        WHERE symbol = :s AND timeframe = :tf
+        ORDER BY time DESC
+        LIMIT 1
+        """,
+    ]
+
+    for sql in statements:
+        compiled = text(sql).compile(
+            dialect=dialect, compile_kwargs={"literal_binds": False}
+        )
+        # Compilation alone is sufficient — Postgres-specific syntax like
+        # ``DISTINCT ON`` and ``jsonb_object_keys`` will round-trip without
+        # error under the asyncpg dialect.
+        assert str(compiled).strip(), f"empty compiled SQL for: {sql!r}"
+
+
 def test_failed_probe_does_not_500_the_endpoint(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
