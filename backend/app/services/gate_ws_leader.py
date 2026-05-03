@@ -325,11 +325,10 @@ class _LeaderRunner:
                     logger.warning("[gate-ws-leader] on_lost callback failed: %s", exc)
                 return
 
-            # Cross-instance refresh trigger (Task #194).
-            # Round-2 review (blocker 5): prefer an in-place subscription
-            # diff so existing streams are not interrupted. Only fall
-            # back to the destructive drop+reconnect if the in-place
-            # path is unavailable (no client, no live socket) or fails.
+            # Cross-instance refresh trigger. Prefer an in-place
+            # subscription diff so live streams are not interrupted;
+            # only fall back to drop+reconnect when the in-place path
+            # is unavailable (no client / no live socket) or errors.
             if await self._refresh_requested():
                 if await self._try_in_place_refresh():
                     # Bump the watermark so the SAME refresh marker

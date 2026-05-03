@@ -43,15 +43,6 @@ logger = logging.getLogger(__name__)
 
 # ── Classification statuses ──────────────────────────────────────────────────
 STATUS_NOT_APPROVED: str = "NOT_APPROVED"
-# Inactive rows (``pool_coins.is_active = false``) are NOT a pool
-# inconsistency — the operator deliberately disabled them. We track
-# them as a distinct status so:
-#   * the rule-1 monitor "[POOL-AUDIT WARN]" only flags ``is_active=TRUE
-#     AND is_approved=FALSE`` (the prompt's exact predicate).
-#   * the remediator never tries to "approve" an inactive row (which
-#     would silently no-op against the ``is_active=TRUE`` SQL guard and
-#     then mark a falsely-corrected action in Etapa 8).
-STATUS_INACTIVE: str = "INACTIVE"
 STATUS_NOT_SUBSCRIBED: str = "NOT_SUBSCRIBED"
 STATUS_NO_REDIS_DATA: str = "NO_REDIS_DATA"
 STATUS_NO_INDICATOR_DATA: str = "NO_INDICATOR_DATA"
@@ -64,7 +55,6 @@ STATUS_PRIORITY: List[str] = [
     STATUS_NOT_SUBSCRIBED,
     STATUS_NO_REDIS_DATA,
     STATUS_NO_INDICATOR_DATA,
-    STATUS_INACTIVE,
     STATUS_OK,
 ]
 
@@ -359,11 +349,12 @@ def _classify(
         probe_errors=errors,
     )
 
-    # Inactive rows: separate status — operator deliberately disabled
-    # the row, so this is NOT a pool inconsistency. Keep it visible in
-    # the report but excluded from rule-1 alerts and from remediation.
+    # Inactive rows (operator-disabled via ``pool_coins.is_active=false``)
+    # are NOT a pool inconsistency. Treat as OK to keep the public
+    # 5-status taxonomy and avoid surfacing them in rule-1 alerts or
+    # the remediator.
     if pool_exists and not raw_is_active:
-        record.status = STATUS_INACTIVE
+        record.status = STATUS_OK
         return record
 
     if not is_approved:
@@ -522,7 +513,6 @@ class SymbolHealthService:
 # the JSON output and the runbook checklist.
 PROBLEMA_PT: Dict[str, str] = {
     STATUS_NOT_APPROVED: "ativo mas não aprovado em pool_coins",
-    STATUS_INACTIVE: "desativado pelo operador (is_active=false)",
     STATUS_NOT_SUBSCRIBED: "aprovado mas WS não subscreveu",
     STATUS_NO_REDIS_DATA: "subscrito mas trades_buffer vazio/stale",
     STATUS_NO_INDICATOR_DATA: "buffer presente mas indicador microstructure ausente/stale",
@@ -567,12 +557,10 @@ def build_etapa8_envelope(
         if action_pair is not None:
             action_str, executed = action_pair
         else:
-            action_str = "nenhuma" if rec.status in (STATUS_OK, STATUS_INACTIVE) else "pendente"
+            action_str = "nenhuma" if rec.status == STATUS_OK else "pendente"
             executed = False
 
-        # INACTIVE is "ok by operator intent" — never count it as
-        # pendente or corrigido.
-        if rec.status in (STATUS_OK, STATUS_INACTIVE):
+        if rec.status == STATUS_OK:
             status_final = "ok"
         elif executed:
             status_final = "corrigido"
@@ -601,7 +589,6 @@ def build_etapa8_envelope(
 
 __all__ = [
     "STATUS_NOT_APPROVED",
-    "STATUS_INACTIVE",
     "STATUS_NOT_SUBSCRIBED",
     "STATUS_NO_REDIS_DATA",
     "STATUS_NO_INDICATOR_DATA",

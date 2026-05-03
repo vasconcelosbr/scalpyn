@@ -462,7 +462,7 @@ class GateWSClient:
             logger.error("Failed to %s channel '%s': %s", event, channel, exc)
             raise
 
-    # ── Public: in-place subscription diff (Task #194) ────────────────────────
+    # ── Public: in-place subscription diff ────────────────────────────────────
 
     async def apply_subscription_diff(
         self,
@@ -472,19 +472,16 @@ class GateWSClient:
         """Reconcile the live subscription set against ``spot_pairs`` /
         ``futures_contracts`` without dropping the WebSocket connection.
 
-        Per the Task #194 round-2 review (blocker 5), forcing a full
-        drop+reconnect for every refresh is unnecessarily disruptive:
-        clients lose the ticker/order/trades stream for ~1–3 s while the
-        socket re-handshakes, re-authenticates, and re-subscribes the
-        WHOLE universe. The right primitive is "subscribe the new ones,
-        unsubscribe the gone ones, leave the rest alone".
+        Sends ``subscribe`` for newly-added symbols and ``unsubscribe``
+        for removed ones; symbols already subscribed are untouched so
+        existing streams are not interrupted.
 
-        Returns a dict ``{"spot": {"added": N, "removed": N},
+        Returns ``{"spot": {"added": N, "removed": N},
         "futures": {"added": N, "removed": N}}``.
 
-        Raises ``RuntimeError`` when the requested market has no live
-        socket — the caller must fall back to drop+reconnect in that
-        case so the system can never silently lose its subscriptions.
+        Raises ``RuntimeError`` when the affected market has no live
+        socket — callers must fall back to drop+reconnect in that case
+        so the system never silently loses its subscriptions.
         """
         async with self._diff_lock:
             spot_added = sorted(set(spot_pairs) - set(self._spot_pairs))

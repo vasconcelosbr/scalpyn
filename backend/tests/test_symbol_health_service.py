@@ -26,6 +26,7 @@ from app.services.symbol_health_service import (  # noqa: E402
     STATUS_NOT_SUBSCRIBED,
     STATUS_OK,
     STATUS_PRIORITY,
+    SymbolHealth,
     SymbolHealthReport,
     _classify,
 )
@@ -69,17 +70,15 @@ def test_classify_not_approved_takes_priority_over_everything():
     assert rec.status == STATUS_NOT_APPROVED
 
 
-def test_classify_inactive_row_routes_to_inactive_status():
-    """Etapa 1 of round-2 review: inactive rows are operator-disabled,
-    NOT a pool inconsistency. They must route to STATUS_INACTIVE so
-    the rule-1 monitor doesn't flag them.
+def test_classify_inactive_row_routes_to_ok():
+    """Inactive rows are operator-disabled, not a pool inconsistency,
+    and must not be flagged as NOT_APPROVED. Map them to STATUS_OK to
+    keep the public 5-status taxonomy intact.
     """
-    from app.services.symbol_health_service import STATUS_INACTIVE
     rec = _classify_with_defaults(
         pool={"is_approved": True, "is_active": False, "exists": True},
     )
-    assert rec.status == STATUS_INACTIVE
-    # And approved-but-inactive must NOT count as approved.
+    assert rec.status == STATUS_OK
     assert rec.is_approved is False
 
 
@@ -221,10 +220,7 @@ def test_remediator_dry_run_never_executes_any_action(monkeypatch):
     assert out.counts_by_action.get(rem_mod.ACTION_APPROVE) == 1
     assert out.counts_by_action.get(rem_mod.ACTION_REFRESH_WS) == 1
     assert out.counts_by_action.get(rem_mod.ACTION_RETRY_BUFFER) == 1
-    # Round-2 review: recompute trigger now also covers NOT_SUBSCRIBED
-    # (after WS refresh, indicator row may be missing entirely), so the
-    # report has one recompute action for NO_INDICATOR_DATA + one for
-    # ETH_USDT (NOT_SUBSCRIBED).
+    # Recompute trigger covers NO_INDICATOR_DATA + NOT_SUBSCRIBED.
     assert out.counts_by_action.get(rem_mod.ACTION_RECOMPUTE_INDICATORS) == 2
     for action in out.actions:
         assert action.executed is False
@@ -368,25 +364,19 @@ def test_build_etapa8_envelope_marks_corrigidos_when_remediation_executed():
     assert eth["status_final"] == "corrigido"
 
 
-# ── Round-2 review fixes (Task #194) ────────────────────────────────────
-
-
 def test_envelope_inactive_rows_are_ok_not_pendente():
-    """STATUS_INACTIVE must not contribute to pendente/corrigido — operator
-    intent, not a pool inconsistency."""
-    from app.services.symbol_health_service import (
-        STATUS_INACTIVE,
-        build_etapa8_envelope,
-    )
+    """Operator-disabled rows are classified OK and must not contribute
+    to pendente/corrigido."""
+    from app.services.symbol_health_service import build_etapa8_envelope
 
     report = _build_report(
         ("BTC_USDT", STATUS_OK),
-        ("OLD_USDT", STATUS_INACTIVE),
+        ("OLD_USDT", STATUS_OK),
         ("ETH_USDT", STATUS_NOT_APPROVED),
     )
     env = build_etapa8_envelope(report, remediation=None)
 
-    assert env["resumo"]["pendentes"] == 1   # only ETH_USDT
+    assert env["resumo"]["pendentes"] == 1
     assert env["resumo"]["corrigidos"] == 0
     inactive = next(i for i in env["lista"] if i["symbol"] == "OLD_USDT")
     assert inactive["status_final"] == "ok"
@@ -500,3 +490,141 @@ def test_remediator_marks_unverified_symbols_as_pending(monkeypatch):
     assert approve_actions["GOOD_USDT"].error is None
     assert approve_actions["BAD_USDT"].executed is False
     assert "verification failed" in (approve_actions["BAD_USDT"].error or "")
+
+
+def test_no_approve_skips_bulk_update_for_existing_pool_rows(monkeypatch):
+    """``approve_unknown=False`` (CLI ``--no-approve``) must disable
+    every is_approved mutation, including for symbols whose pool_coins
+    row already exists. ``_bulk_approve`` must never be called."""
+    from app.services import symbol_remediator as rem_mod
+
+    async def boom(*a, **kw):
+        raise AssertionError("_bulk_approve must NOT be called when approve_unknown=False")
+
+    async def fake_verify(db, syms):
+        return set()
+
+    monkeypatch.setattr(rem_mod, "_bulk_approve", boom)
+    monkeypatch.setattr(rem_mod, "_verify_approved", fake_verify)
+
+    class _SessionCtx:
+        async def __aenter__(self_inner): return self_inner
+        async def __aexit__(self_inner, *a): return False
+    monkeypatch.setattr(rem_mod, "AsyncSessionLocal", lambda: _SessionCtx(), raising=False)
+    import sys as _sys
+    db_mod = _sys.modules["app.database"]
+    monkeypatch.setattr(db_mod, "AsyncSessionLocal", lambda: _SessionCtx())
+
+    # Existing pool row, NOT_APPROVED. With approve_unknown=False the
+    # remediator must record the intent but not actually approve.
+    rec = SymbolHealth(
+        symbol="ETH_USDT",
+        status=STATUS_NOT_APPROVED,
+        is_approved=False,
+        pool_row_exists=True,
+    )
+    counts = {s: 0 for s in STATUS_PRIORITY}
+    counts[STATUS_NOT_APPROVED] = 1
+    report = SymbolHealthReport(
+        checked_at="2026-05-03T00:00:00+00:00",
+        total=1, counts=counts, symbols=[rec],
+    )
+    remediator = rem_mod.SymbolRemediator(
+        validator=_FakeValidator(),       # tradable=True
+        approve_unknown=False,
+        recompute_indicators=False,
+    )
+    out = asyncio.run(remediator.remediate(report, dry_run=False))
+
+    approve_actions = [a for a in out.actions if a.action == rem_mod.ACTION_APPROVE]
+    assert len(approve_actions) == 1
+    assert approve_actions[0].executed is False
+    assert "approve_unknown=False" in approve_actions[0].reason
+
+
+def test_no_redis_data_delisted_symbol_is_removed(monkeypatch):
+    """NO_REDIS_DATA + validator says symbol is gone → DELETE from
+    pool_coins instead of polling forever."""
+    from app.services import symbol_remediator as rem_mod
+
+    captured = {}
+
+    async def fake_remove(db, symbols):
+        captured["removed"] = list(symbols)
+        return len(captured["removed"])
+
+    async def fake_verify_removed(db, symbols):
+        return set(symbols)
+
+    async def fake_retry(symbol, retries=3, delay=2.0):
+        raise AssertionError("_retry_buffer must NOT be polled for delisted symbols")
+
+    monkeypatch.setattr(rem_mod, "_remove_from_pool", fake_remove)
+    monkeypatch.setattr(rem_mod, "_verify_removed", fake_verify_removed)
+    monkeypatch.setattr(rem_mod, "_retry_buffer", fake_retry)
+
+    class _SessionCtx:
+        async def __aenter__(self_inner): return self_inner
+        async def __aexit__(self_inner, *a): return False
+    monkeypatch.setattr(rem_mod, "AsyncSessionLocal", lambda: _SessionCtx(), raising=False)
+    import sys as _sys
+    db_mod = _sys.modules["app.database"]
+    monkeypatch.setattr(db_mod, "AsyncSessionLocal", lambda: _SessionCtx())
+
+    rec = SymbolHealth(
+        symbol="DEAD_USDT",
+        status=STATUS_NO_REDIS_DATA,
+        is_approved=True,
+        pool_row_exists=True,
+        buffer_member_count=0,
+    )
+    counts = {s: 0 for s in STATUS_PRIORITY}
+    counts[STATUS_NO_REDIS_DATA] = 1
+    report = SymbolHealthReport(
+        checked_at="2026-05-03T00:00:00+00:00",
+        total=1, counts=counts, symbols=[rec],
+    )
+    remediator = rem_mod.SymbolRemediator(
+        validator=_FakeValidator(tradable=False),
+        recompute_indicators=False,
+    )
+    out = asyncio.run(remediator.remediate(report, dry_run=False))
+
+    assert captured.get("removed") == ["DEAD_USDT"]
+    remove_actions = [a for a in out.actions if a.action == rem_mod.ACTION_REMOVE_FROM_POOL]
+    assert any(a.symbol == "DEAD_USDT" and a.executed for a in remove_actions)
+
+
+def test_no_redis_data_retry_does_not_mark_executed_when_zcard_stays_zero(monkeypatch):
+    """If ZCARD remains 0 post-retry, ACTION_RETRY_BUFFER must NOT be
+    marked executed=True (Etapa-8 must not falsely report 'corrigido')."""
+    from app.services import symbol_remediator as rem_mod
+
+    async def fake_retry(symbol, retries=3, delay=2.0):
+        return 0  # never recovered
+
+    monkeypatch.setattr(rem_mod, "_retry_buffer", fake_retry)
+
+    rec = SymbolHealth(
+        symbol="QUIET_USDT",
+        status=STATUS_NO_REDIS_DATA,
+        is_approved=True,
+        pool_row_exists=True,
+        buffer_member_count=0,
+    )
+    counts = {s: 0 for s in STATUS_PRIORITY}
+    counts[STATUS_NO_REDIS_DATA] = 1
+    report = SymbolHealthReport(
+        checked_at="2026-05-03T00:00:00+00:00",
+        total=1, counts=counts, symbols=[rec],
+    )
+    remediator = rem_mod.SymbolRemediator(
+        validator=_FakeValidator(tradable=True),
+        recompute_indicators=False,
+    )
+    out = asyncio.run(remediator.remediate(report, dry_run=False))
+
+    retry_actions = [a for a in out.actions if a.action == rem_mod.ACTION_RETRY_BUFFER]
+    assert len(retry_actions) == 1
+    assert retry_actions[0].executed is False
+    assert "ZCARD still 0" in (retry_actions[0].error or "")

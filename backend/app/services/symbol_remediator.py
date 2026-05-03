@@ -345,11 +345,16 @@ class SymbolRemediator:
                     reason="symbol not present in Gate /spot/currency_pairs — DELETE from pool_coins",
                 ))
                 continue
-            if not rec.pool_row_exists and not self._approve_unknown:
+            if not self._approve_unknown:
+                # ``--no-approve`` (CLI) / ``no_approve=true`` (HTTP) MUST
+                # disable every is_approved mutation, including for rows
+                # that already exist in pool_coins. Record the intent so
+                # the operator sees what would have happened, but skip
+                # both the bulk UPDATE and adding to ``approve_targets``.
                 actions.append(RemediationAction(
                     symbol=rec.symbol,
-                    action=ACTION_REMOVE_FROM_POOL,
-                    reason="approve_unknown=False and no pool_coins row exists",
+                    action=ACTION_APPROVE,
+                    reason="NOT_APPROVED — skipped (approve_unknown=False)",
                 ))
                 continue
             approve_targets.append(rec.symbol)
@@ -360,13 +365,10 @@ class SymbolRemediator:
             ))
 
         # ── ACTION 1: bulk approve + per-symbol verification ─────────────
-        # Per the code-review (Task #194 round 2), the rowcount returned
-        # by ``_bulk_approve`` is NOT enough to mark a symbol as
-        # corrected: the symbol may have been deleted between SELECT and
-        # UPDATE, the spot/futures pool guard may have rejected it, or
-        # ``is_active`` may have flipped concurrently. We re-query the
-        # final per-row state and only mark ``executed=True`` for
-        # symbols whose row is now genuinely approved+active+spot.
+        # Rowcount alone is insufficient — a row may have been deleted
+        # between SELECT and UPDATE, rejected by the spot/futures pool
+        # guard, or flipped to is_active=false concurrently. Re-query
+        # per-row state and only mark executed=True for verified rows.
         approved_verified: Set[str] = set()
         if approve_targets and not dry_run:
             from ..database import AsyncSessionLocal
@@ -384,9 +386,6 @@ class SymbolRemediator:
                         a.extra["bulk_affected"] = affected
                         if a.symbol in approved_verified:
                             a.executed = True
-                            # Per-symbol canonical fix log (Etapa 7 of the
-                            # prompt). One line per actually-changed symbol so
-                            # the operator can audit the run grep-style.
                             logger.info(
                                 "[AUDIT-FIX] symbol=%s from=NOT_APPROVED to=APPROVED action=%s",
                                 a.symbol, ACTION_APPROVE,
@@ -462,48 +461,90 @@ class SymbolRemediator:
                             a.error = f"{type(exc).__name__}: {exc}"
 
         # ── ACTION 3: retry buffer for NO_REDIS_DATA ────────────────────
-        # Symbols that recover (ZCARD>0 after the WS refresh) become
-        # eligible for an indicator recompute below — gates the
-        # recompute on actual ingestion recovery so we don't enqueue
-        # work for a symbol that is still silent.
+        # If the symbol is silent AND the validator confirms it is gone
+        # from the exchange (delisted), the right fix is to remove it
+        # from pool_coins instead of polling forever. Otherwise poll
+        # trades_buffer; mark executed=True ONLY on real recovery
+        # (ZCARD > 0) so Etapa-8 cannot falsely report "corrigido".
         recovered_after_retry: List[str] = []
+        no_redis_delisted: List[str] = []
+        no_redis_to_retry: List[str] = []
         for rec in report.symbols:
             if rec.status != STATUS_NO_REDIS_DATA:
                 continue
+            tradable = await self._validator.is_tradable(rec.symbol)
+            if not tradable:
+                no_redis_delisted.append(rec.symbol)
+                actions.append(RemediationAction(
+                    symbol=rec.symbol,
+                    action=ACTION_REMOVE_FROM_POOL,
+                    reason="NO_REDIS_DATA + symbol absent from Gate /spot/currency_pairs — DELETE from pool_coins",
+                ))
+                continue
+            no_redis_to_retry.append(rec.symbol)
             actions.append(RemediationAction(
                 symbol=rec.symbol,
                 action=ACTION_RETRY_BUFFER,
                 reason="NO_REDIS_DATA → poll trades_buffer for 3×2s",
             ))
-        if not dry_run:
-            retry_targets = [r for r in report.symbols if r.status == STATUS_NO_REDIS_DATA]
-            for rec in retry_targets:
-                count = await _retry_buffer(rec.symbol)
-                if count > 0:
-                    recovered_after_retry.append(rec.symbol)
+
+        if no_redis_delisted and not dry_run:
+            from ..database import AsyncSessionLocal
+            try:
+                async with AsyncSessionLocal() as db:
+                    removed = await _remove_from_pool(db, no_redis_delisted)
+                    delisted_verified = await _verify_removed(db, no_redis_delisted)
+                logger.warning(
+                    "[AUDIT-FIX] removed %d/%d delisted-and-silent symbols (verified=%d)",
+                    removed, len(no_redis_delisted), len(delisted_verified),
+                )
                 for a in actions:
-                    if a.action == ACTION_RETRY_BUFFER and a.symbol == rec.symbol:
-                        a.executed = True
+                    if (
+                        a.action == ACTION_REMOVE_FROM_POOL
+                        and a.symbol in no_redis_delisted
+                    ):
+                        if a.symbol in delisted_verified:
+                            a.executed = True
+                            logger.info(
+                                "[AUDIT-FIX] symbol=%s from=NO_REDIS_DATA to=REMOVED action=%s",
+                                a.symbol, ACTION_REMOVE_FROM_POOL,
+                            )
+                        else:
+                            a.error = "post-delete verification failed (row still present)"
+            except Exception as exc:
+                logger.warning("[AUDIT-FIX] NO_REDIS_DATA delist removal failed: %s", exc)
+                for a in actions:
+                    if (
+                        a.action == ACTION_REMOVE_FROM_POOL
+                        and a.symbol in no_redis_delisted
+                    ):
+                        a.error = f"{type(exc).__name__}: {exc}"
+
+        if no_redis_to_retry and not dry_run:
+            for sym in no_redis_to_retry:
+                count = await _retry_buffer(sym)
+                recovered = count > 0
+                if recovered:
+                    recovered_after_retry.append(sym)
+                for a in actions:
+                    if a.action == ACTION_RETRY_BUFFER and a.symbol == sym:
                         a.extra["member_count_after_retry"] = count
+                        # Only count as executed when the buffer truly
+                        # came back; otherwise Etapa-8 must keep the
+                        # symbol as "pendente".
+                        if recovered:
+                            a.executed = True
+                        else:
+                            a.error = "ZCARD still 0 after retry"
 
         # ── ACTION 4: enqueue recompute_indicators per symbol ───────────
-        # Two recompute triggers, both per-symbol intent:
-        #   (a) classifier said NO_INDICATOR_DATA → row missing/stale
-        #   (b) classifier said NO_REDIS_DATA but ZCARD>0 after retry →
-        #       buffer just came back online; we must recompute now or
-        #       the operator will keep seeing the previous stale row
-        #       until the next 5-minute scheduler cycle.
-        #
-        # The Celery task ``compute_indicators.compute_5m`` does not
-        # accept a per-symbol argument (it iterates the universe), so we
-        # dispatch it once when at least one symbol qualifies and stamp
-        # every targeted symbol with its own RemediationAction so the
-        # report still shows per-symbol intent.
-        # Recompute trigger now covers FOUR per-symbol cases. Anything
-        # whose ingestion path was just unblocked may have stale or
-        # missing indicators that the next regular 5-min scheduler tick
-        # would only repair after up to 5 more minutes — too long for
-        # the operator-facing report to truthfully claim "corrigido".
+        # Triggers: NO_INDICATOR_DATA, NO_REDIS_DATA recovered (ZCARD>0
+        # after retry), freshly approved (verified), and previously
+        # NOT_SUBSCRIBED — all paths whose ingestion was just unblocked
+        # would otherwise wait up to 5 minutes for the next scheduler
+        # tick. ``compute_indicators.compute_5m`` iterates the universe
+        # so a single dispatch covers every targeted symbol; per-symbol
+        # actions are still stamped so the report keeps that intent.
         recompute_targets: List[str] = []
         seen_recompute: set = set()
 
