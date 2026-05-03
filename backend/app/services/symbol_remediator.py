@@ -630,6 +630,15 @@ class SymbolRemediator:
         recompute_enqueued = False
         if recompute_targets and self._recompute_indicators and not dry_run:
             try:
+                # Per-symbol intent is recorded in ``recompute_targets``
+                # (one ACTION_RECOMPUTE_INDICATORS row per symbol). The
+                # actual dispatch is the existing universe-wide
+                # ``compute_5m`` task — there is no per-symbol Celery
+                # entrypoint in this codebase, and ``compute_5m``
+                # iterates the approved spot universe so every targeted
+                # symbol is picked up on the next worker tick. This is
+                # the documented contract; if a per-symbol task is ever
+                # added, swap the dispatch loop here.
                 from ..tasks.celery_app import celery_app
                 celery_app.send_task("app.tasks.compute_indicators.compute_5m")
                 recompute_enqueued = True

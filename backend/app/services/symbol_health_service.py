@@ -530,8 +530,15 @@ class SymbolHealthService:
             if symbols is None:
                 target = sorted(pool_state.keys())
             else:
-                explicit = {GateAdapter._normalize_symbol(s) for s in symbols if s}
-                target = sorted(explicit | set(pool_state.keys()))
+                # Strict restriction: when the caller passes ``symbols``,
+                # the audit universe is exactly that set (normalized).
+                # Symbols absent from ``pool_coins`` still produce a row
+                # — _classify uses the default {is_approved: False,
+                # is_active: False, exists: False} so the operator can
+                # see "this symbol does not exist in the pool".
+                target = sorted(
+                    {GateAdapter._normalize_symbol(s) for s in symbols if s}
+                )
 
             # Bulk-load latest indicator row for every symbol *before* fanning
             # out the per-symbol probes — keeps the shared AsyncSession used

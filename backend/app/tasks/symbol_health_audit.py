@@ -109,7 +109,7 @@ async def _evaluate_streaming_health(redis, report) -> int:
         dedup_key = _KEY_NOT_STREAMING_DEDUP + sym_bytes
         if await _alert_dedup(redis, dedup_key, _WS_NOT_STREAMING_DEDUP_SECONDS):
             logger.critical(
-                "[WS-AUDIT] symbol not streaming: %s (ZCARD=0 for %ds)",
+                "CRITICAL [WS-AUDIT] symbol not streaming: %s (ZCARD=0 for %ds)",
                 rec.symbol, (now_ms - first_ms) // 1000,
             )
             fired += 1
