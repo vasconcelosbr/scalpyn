@@ -10,6 +10,7 @@ import {
 } from "./EvaluationTraceBreakdown";
 import type { ScoreRule } from "./PipelineAssetTable";
 import { RULE_COLORS, fmtPts, sortScoreRules } from "./PipelineAssetTable";
+import { scoreBand, scorePct, SCORE_TOOLTIP, RULES_TOOLTIP } from "@/lib/scoreBand";
 
 const DECISION_SUMMARY_INDICATOR_LIMIT = 3;
 
@@ -382,14 +383,6 @@ function fmtRuleValue(value: ScoreRule["actual_value"]): string {
   return String(value);
 }
 
-function scoreBandLabel(score: number | null): string {
-  if (score == null) return "—";
-  if (score >= 80) return "STRONG";
-  if (score >= 65) return "GOOD";
-  if (score >= 40) return "MIXED";
-  return "WEAK";
-}
-
 function ScoreBreakdownSection({
   rules,
   alphaScore,
@@ -404,13 +397,13 @@ function ScoreBreakdownSection({
   const matchedCount   = positiveRules.filter(r => r.passed).length;
   const positiveCount  = positiveRules.length;
   const totalPenalties = rules.filter(r => r.type === 'penalty').reduce((s, r) => s + r.points_awarded, 0);
-  const color = scoreColor(alphaScore);
-  const bandLabel = scoreBandLabel(alphaScore);
-  const scorePct = alphaScore == null ? 0 : Math.max(0, Math.min(100, alphaScore));
-  const scoreTooltip =
-    'Confidence-weighted score (0–100). Cada regra matched contribui ' +
-    '(pontos × confidence do indicador) ÷ pontos totais possíveis × 100. ' +
-    'Faixas: avoid <40 · neutral 40–64 · buy 65–79 · strong_buy ≥80.';
+  // Single source of truth for label + color (Task #187 review fix). The
+  // file-local `scoreColor` helper still backs the table-row ScoreBar
+  // (different visual context, kept out of scope), but the breakdown
+  // panel now derives both from the unified robust-engine thresholds so
+  // the band label and bar color can never disagree.
+  const band = scoreBand(alphaScore);
+  const pct = scorePct(alphaScore);
 
   const byCategory = SCORE_CATEGORY_ORDER.reduce<Record<string, ScoreRule[]>>((acc, cat) => {
     const catRules = sortScoreRules(rules.filter((r) => r.category === cat));
@@ -434,26 +427,27 @@ function ScoreBreakdownSection({
         </span>
         <div
           className="flex-1 h-1.5 bg-[#1A2035] rounded-full overflow-hidden"
-          title={scoreTooltip}
+          title={SCORE_TOOLTIP}
         >
           <div
             className="h-full rounded-full transition-all duration-700"
-            style={{ width: `${scorePct}%`, backgroundColor: color }}
+            style={{ width: `${pct}%`, backgroundColor: band.color }}
           />
         </div>
         <span
           className="text-sm font-bold tabular-nums w-16 text-right"
-          style={{ color }}
-          title={scoreTooltip}
+          style={{ color: band.color }}
+          title={SCORE_TOOLTIP}
         >
           {alphaScore == null ? '—' : `${alphaScore.toFixed(1)}/100`}
         </span>
         <span
           className="text-[10px] font-semibold uppercase tracking-wider w-14 text-right"
-          style={{ color }}
-          title={scoreTooltip}
+          style={{ color: band.color }}
+          title={SCORE_TOOLTIP}
+          data-testid="score-band-label"
         >
-          {bandLabel}
+          {band.label}
         </span>
       </div>
 
@@ -464,7 +458,7 @@ function ScoreBreakdownSection({
         </span>
         <span
           className="text-[11px] text-[#64748B] flex-1"
-          title="Contagem nominal de regras positivas que casaram. Não é o score — o score é confidence-weighted, então regras matched podem contribuir menos do que seu valor nominal."
+          title={RULES_TOOLTIP}
         >
           {rules.length === 0
             ? 'Sem regras configuradas'

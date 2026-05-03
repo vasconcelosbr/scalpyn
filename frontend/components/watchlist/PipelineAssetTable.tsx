@@ -3,6 +3,7 @@
 import { Fragment, useState } from 'react';
 import { ChevronDown, ChevronRight, CheckCircle2, XCircle, RefreshCw } from 'lucide-react';
 import { EvaluationTraceBreakdown, type EvaluationTraceItem } from './EvaluationTraceBreakdown';
+import { scoreBand, scorePct, SCORE_TOOLTIP, RULES_TOOLTIP } from '@/lib/scoreBand';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -394,13 +395,11 @@ function DrilldownPanel({
     return acc;
   }, {});
 
-  const barColor = scoreBarColor(score, classification, blocked);
-  const status   = getStatus(score, classification, blocked);
-  const scorePct = Math.max(0, Math.min(100, score));
-  const scoreTooltip =
-    'Confidence-weighted score (0–100). Cada regra matched contribui ' +
-    '(pontos × confidence do indicador) ÷ pontos totais possíveis × 100. ' +
-    'Faixas: avoid <40 · neutral 40–64 · buy 65–79 · strong_buy ≥80.';
+  // Single source of truth for both label and color (Task #187 review fix).
+  // Previously getStatus + scoreBarColor could disagree at the boundaries
+  // because they encoded thresholds independently.
+  const band = scoreBand(score, blocked);
+  const pct = scorePct(score);
 
   return (
     <div className="px-4 pt-3 pb-4 bg-[#06080E] border-t border-[#1A2035]">
@@ -411,25 +410,27 @@ function DrilldownPanel({
         </span>
         <div
           className="flex-1 h-1.5 bg-[#1A2035] rounded-full overflow-hidden"
-          title={scoreTooltip}
+          title={SCORE_TOOLTIP}
         >
           <div
             className="h-full rounded-full transition-all duration-700"
-            style={{ width: `${scorePct}%`, backgroundColor: barColor }}
+            style={{ width: `${pct}%`, backgroundColor: band.color }}
           />
         </div>
         <span
           className="text-sm font-bold tabular-nums w-16 text-right"
-          style={{ color: barColor }}
-          title={scoreTooltip}
+          style={{ color: band.color }}
+          title={SCORE_TOOLTIP}
         >
           {score.toFixed(1)}/100
         </span>
         <span
-          className={`text-[10px] font-semibold uppercase tracking-wider w-14 text-right ${status.cls}`}
-          title={scoreTooltip}
+          className="text-[10px] font-semibold uppercase tracking-wider w-14 text-right"
+          style={{ color: band.color }}
+          title={SCORE_TOOLTIP}
+          data-testid="score-band-label"
         >
-          {status.label}
+          {band.label}
         </span>
       </div>
 
@@ -440,7 +441,7 @@ function DrilldownPanel({
         </span>
         <span
           className="text-[11px] text-[#64748B] flex-1"
-          title="Contagem nominal de regras positivas que casaram. Não é o score — o score é confidence-weighted, então regras matched podem contribuir menos do que seu valor nominal."
+          title={RULES_TOOLTIP}
         >
           {matchedCount}/{positiveCount} matched · {fmtPts(earnedPositive)}/{totalPossible.toFixed(0)} pts
         </span>
