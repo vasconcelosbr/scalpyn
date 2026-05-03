@@ -78,16 +78,13 @@ def _env_int(name: str, default: int) -> int:
 
 
 async def _collect_watchlist_symbols(db) -> List[str]:
-    """Union of every symbol referenced by any pipeline watchlist (any layer)."""
+    """Approved pool symbols (pool_coins.is_approved = true) — the exclusive symbol universe."""
     rows = (await db.execute(text("""
         SELECT DISTINCT symbol
-        FROM pipeline_watchlist_assets
-        WHERE symbol IS NOT NULL AND symbol <> ''
-        UNION
-        SELECT DISTINCT symbol
-        FROM market_metadata
-        WHERE symbol IS NOT NULL AND symbol <> ''
-        LIMIT 500
+        FROM pool_coins
+        WHERE is_active = true
+          AND is_approved = true
+          AND symbol IS NOT NULL AND symbol <> ''
     """))).fetchall()
     return [r.symbol for r in rows]
 
