@@ -101,15 +101,75 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+# Boot-once flag for the is_approved schema-drift error so we log it a
+# single time per process rather than every cycle. Mirrors the pattern
+# used by ``_scheduler_group_drift_logged`` above.
+_is_approved_drift_logged: bool = False
+
+
+def _is_is_approved_drift(exc: BaseException) -> bool:
+    """Return True iff *exc* is the pool_coins.is_approved missing-column error.
+
+    Walks the exception chain (``__cause__`` and ``.orig`` are both used by
+    SQLAlchemy/asyncpg) so the check works whether the asyncpg native
+    ``UndefinedColumnError`` is one or two wrappers deep — Cloud Run sees
+    it wrapped twice (SQLAlchemy ProgrammingError → asyncpg adapter
+    ProgrammingError → native UndefinedColumnError).
+    """
+    seen: set = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, _AsyncpgUndefinedColumn) and "is_approved" in str(current):
+            return True
+        # Final fallback: a SQLAlchemy ProgrammingError whose message text
+        # explicitly mentions UndefinedColumnError + the column name.
+        msg = str(current)
+        if "UndefinedColumnError" in msg and "is_approved" in msg:
+            return True
+        current = getattr(current, "orig", None) or getattr(current, "__cause__", None)
+    return False
+
+
 async def _collect_symbols(db) -> List[str]:
-    rows = (await db.execute(text("""
-        SELECT DISTINCT symbol
-        FROM pool_coins
-        WHERE is_active = true
-          AND is_approved = true
-          AND symbol IS NOT NULL AND symbol <> ''
-    """))).fetchall()
-    return [r.symbol for r in rows]
+    """Return active+approved spot symbols, degrading when migration 035 missing.
+
+    The scheduler must keep running even when ``pool_coins.is_approved`` is
+    absent (migration 035 not applied) — otherwise every cycle crashes the
+    loop and the operator never sees the schema-drift alert in logs.  The
+    degraded fallback returns an empty list so no symbols are processed
+    until the migration is applied; the alert flag exposed via
+    ``[MICRO-SCHED] SCHEMA DRIFT`` makes the issue actionable.
+    """
+    global _is_approved_drift_logged
+    try:
+        rows = (await db.execute(text("""
+            SELECT DISTINCT symbol
+            FROM pool_coins
+            WHERE is_active = true
+              AND is_approved = true
+              AND symbol IS NOT NULL AND symbol <> ''
+        """))).fetchall()
+        return [r.symbol for r in rows]
+    except Exception as exc:
+        if _is_is_approved_drift(exc):
+            if not _is_approved_drift_logged:
+                logger.error(
+                    "[MICRO-SCHED] SCHEMA DRIFT: pool_coins.is_approved column "
+                    "missing — migration 035 has not been applied. The "
+                    "microstructure scheduler will skip every cycle until the "
+                    "column is added. Hit /api/health/schema for details."
+                )
+                _is_approved_drift_logged = True
+            try:
+                if db.in_transaction():
+                    await db.rollback()
+            except Exception as rb_exc:
+                logger.warning(
+                    "[MICRO-SCHED] rollback after is_approved drift failed: %s", rb_exc
+                )
+            return []
+        raise
 
 
 _MICRO_KEY_SOURCE_MAP: dict = {}  # populated lazily on first use

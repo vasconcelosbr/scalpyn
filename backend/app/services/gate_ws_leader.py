@@ -37,8 +37,9 @@ import asyncio
 import logging
 import os
 import socket
+import time
 import uuid
-from typing import Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from sqlalchemy import select, text
 
@@ -52,6 +53,13 @@ logger = logging.getLogger(__name__)
 LEADER_KEY: bytes = b"gate_ws:leader"
 LEADER_TTL_SECONDS: int = 30
 LEADER_RENEW_INTERVAL_SECONDS: int = 10
+# Cross-instance trigger published by ``refresh_subscriptions()`` and
+# polled by the leader's renew loop on every tick. The value is a
+# millisecond Unix timestamp; if it exceeds the leader's ``serve_started_ms``
+# the leader gracefully drops its WS connection and lets the supervisor
+# re-acquire + re-resolve the symbol universe (Task #194 — etapa 3).
+REFRESH_REQUEST_KEY: bytes = b"gate_ws:refresh_request"
+REFRESH_REQUEST_TTL_SECONDS: int = 300
 # A non-leader replica retries acquisition on this cadence so that when
 # the current leader dies (lock expires within ~LEADER_TTL_SECONDS) a
 # survivor takes over within roughly TTL + this interval.
@@ -269,12 +277,18 @@ class _LeaderRunner:
         redis,
         instance_id: str,
         on_leadership_lost: Callable[[], Awaitable[None]],
+        serve_started_ms: Optional[int] = None,
     ) -> None:
         self._redis = redis
         self._instance_id = instance_id
         self._on_lost = on_leadership_lost
         self._task: Optional[asyncio.Task] = None
         self._stopping = asyncio.Event()
+        # Used to debounce ``refresh_subscriptions()`` requests:
+        # only requests strictly NEWER than the time we started serving
+        # are honored. Set by ``_serve_as_leader`` right before starting
+        # the renew loop; ``None`` disables the check.
+        self._serve_started_ms = serve_started_ms
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._run(), name="gate_ws_leader_renew")
@@ -301,17 +315,44 @@ class _LeaderRunner:
                 pass
 
             still_leader = await _renew_leader(self._redis, self._instance_id)
-            if still_leader:
-                continue
+            if not still_leader:
+                logger.warning(
+                    "[gate-ws-leader] lost leadership (lock missing or owned by another instance) — stopping local WS"
+                )
+                try:
+                    await self._on_lost()
+                except Exception as exc:
+                    logger.warning("[gate-ws-leader] on_lost callback failed: %s", exc)
+                return
 
-            logger.warning(
-                "[gate-ws-leader] lost leadership (lock missing or owned by another instance) — stopping local WS"
-            )
-            try:
-                await self._on_lost()
-            except Exception as exc:
-                logger.warning("[gate-ws-leader] on_lost callback failed: %s", exc)
-            return
+            # Cross-instance refresh trigger (Task #194). If a fresher
+            # request than our serve start exists in Redis, drop the WS
+            # so the supervisor re-resolves and re-subscribes.
+            if await self._refresh_requested():
+                logger.info(
+                    "[WS] refresh_subscriptions requested — dropping WS to re-resolve symbols"
+                )
+                try:
+                    await self._on_lost()
+                except Exception as exc:
+                    logger.warning("[gate-ws-leader] refresh on_lost failed: %s", exc)
+                return
+
+    async def _refresh_requested(self) -> bool:
+        if self._serve_started_ms is None:
+            return False
+        try:
+            raw = await self._redis.get(REFRESH_REQUEST_KEY)
+        except Exception as exc:
+            logger.debug("[gate-ws-leader] refresh poll failed: %s", exc)
+            return False
+        if raw is None:
+            return False
+        try:
+            ts = int(raw)
+        except (TypeError, ValueError):
+            return False
+        return ts > self._serve_started_ms
 
 
 class _GateWSSupervisor:
@@ -471,7 +512,12 @@ class _GateWSSupervisor:
         async def _on_lost() -> None:
             leadership_lost.set()
 
-        runner = _LeaderRunner(self._redis, self._instance_id, _on_lost)
+        runner = _LeaderRunner(
+            self._redis,
+            self._instance_id,
+            _on_lost,
+            serve_started_ms=int(time.time() * 1000),
+        )
         runner.start()
 
         stop_task = asyncio.create_task(self._stopping.wait())
@@ -613,15 +659,56 @@ async def start_gate_ws_with_leader_election() -> Optional[Callable[[], Awaitabl
     return _shutdown
 
 
+async def refresh_subscriptions(redis=None) -> Dict[str, Any]:
+    """Request the active WS leader to re-resolve and re-subscribe symbols.
+
+    Writes a millisecond timestamp to ``REFRESH_REQUEST_KEY`` in Redis.
+    The active leader's ``_LeaderRunner`` polls that key on every renew
+    tick (every :data:`LEADER_RENEW_INTERVAL_SECONDS` seconds) and, if
+    the request is newer than the moment it started serving, drops the
+    current WS so the supervisor re-acquires the lock, re-resolves the
+    symbol universe from ``pool_coins`` and reconnects with the new
+    subscription list.
+
+    Cross-instance: any FastAPI replica may call this; the request is
+    honored by whichever replica currently holds the leader lock.
+
+    Returns
+    -------
+    dict
+        ``{"requested": bool, "ts_ms": int, "reason": str}``.
+        ``requested=False`` only when Redis is unavailable.
+    """
+    if redis is None:
+        redis = await get_async_redis()
+    if redis is None:
+        return {"requested": False, "ts_ms": None, "reason": "redis_unavailable"}
+    ts_ms = int(time.time() * 1000)
+    try:
+        await redis.set(
+            REFRESH_REQUEST_KEY,
+            str(ts_ms).encode("utf-8"),
+            ex=REFRESH_REQUEST_TTL_SECONDS,
+        )
+    except Exception as exc:
+        logger.warning("[WS] refresh_subscriptions write failed: %s", exc)
+        return {"requested": False, "ts_ms": ts_ms, "reason": f"{type(exc).__name__}: {exc}"}
+    return {"requested": True, "ts_ms": ts_ms, "reason": "ok"}
+
+
 __all__ = [
     "LEADER_KEY",
     "LEADER_TTL_SECONDS",
     "LEADER_RENEW_INTERVAL_SECONDS",
     "CANDIDATE_POLL_INTERVAL_SECONDS",
     "REDIS_BOOTSTRAP_RETRY_SECONDS",
+    "REFRESH_REQUEST_KEY",
+    "REFRESH_REQUEST_TTL_SECONDS",
     "start_gate_ws_with_leader_election",
+    "refresh_subscriptions",
     # Exported for tests:
     "_GateWSSupervisor",
+    "_LeaderRunner",
     "_try_acquire_leader",
     "_renew_leader",
     "_release_leader",

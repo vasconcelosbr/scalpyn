@@ -39,7 +39,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Body, Header, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
@@ -520,4 +521,70 @@ async def symbol_health(
             "order_flow_300s": live_order_flow,
         },
         "ws_leader_status": ws_leader_status,
+    }
+
+
+# ─── Symbol audit (Task #194) ───────────────────────────────────────────────
+
+
+class SymbolAuditRequest(BaseModel):
+    """Body accepted by ``POST /api/admin/diagnostics/symbol-audit``.
+
+    All fields are optional; the defaults run a full pool-universe audit
+    in *active* mode with bulk approval enabled.
+    """
+
+    dry_run: bool = Field(
+        default=False,
+        description="Classify symbols and propose actions but do not mutate any state.",
+    )
+    no_approve: bool = Field(
+        default=False,
+        description="Skip the pool_coins.is_approved bulk UPDATE (refresh + recompute still run).",
+    )
+    symbols: Optional[List[str]] = Field(
+        default=None,
+        description="Restrict the audit to these symbols. Default: full pool universe.",
+    )
+    concurrency: int = Field(
+        default=16, ge=1, le=64,
+        description="Per-symbol probe concurrency.",
+    )
+
+
+@router.post("/diagnostics/symbol-audit", include_in_schema=False)
+async def symbol_audit(
+    payload: SymbolAuditRequest = Body(default_factory=SymbolAuditRequest),
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Run the symbol-ingestion audit and (optionally) repair in batch.
+
+    Returns the same JSON document as ``python -m scripts.symbol_health_audit
+    --json`` so operators can use either tool interchangeably:
+
+    * ``report``      — :class:`SymbolHealthReport` aggregate (counts + per-symbol).
+    * ``remediation`` — :class:`RemediationReport` with the action plan
+                        (and execution result when ``dry_run=False``).
+    """
+    _enforce_auth(authorization)
+
+    # Lazy imports keep the admin module import-light when the audit is
+    # never invoked — the symbol-health probes pull in the WS leader and
+    # exchange adapters which we don't want to load on every request.
+    from ..services.symbol_health_service import SymbolHealthService
+    from ..services.symbol_remediator import GateSymbolValidator, SymbolRemediator
+
+    health = SymbolHealthService(concurrency=payload.concurrency)
+    report = await health.audit(symbols=payload.symbols)
+
+    remediator = SymbolRemediator(
+        validator=GateSymbolValidator(),
+        approve_unknown=not payload.no_approve,
+        recompute_indicators=True,
+    )
+    rem = await remediator.remediate(report, dry_run=payload.dry_run)
+
+    return {
+        "report": report.to_dict(),
+        "remediation": rem.to_dict(),
     }

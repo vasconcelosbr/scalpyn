@@ -23,6 +23,7 @@ celery_app = Celery(
         "app.tasks.ohlcv_backfill",
         "app.tasks.simulation",
         "app.tasks.robust_alerts",
+        "app.tasks.symbol_health_audit",
     ],
 )
 
@@ -120,5 +121,11 @@ celery_app.conf.beat_schedule = {
     "robust_indicator_alerts": {
         "task": "app.tasks.robust_alerts.evaluate",
         "schedule": 90.0,
+    },
+    # Symbol ingestion audit (Task #194) every 5 minutes — monitor-only
+    # by default; set SYMBOL_AUDIT_REPAIR=1 to enable active remediation.
+    "symbol_health_audit_monitor_only": {
+        "task": "app.tasks.symbol_health_audit.monitor_only",
+        "schedule": 300.0,
     },
 }
