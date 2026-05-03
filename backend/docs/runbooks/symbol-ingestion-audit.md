@@ -12,8 +12,8 @@ Use este runbook quando:
 
 - A UI mostra ≥ 5 símbolos consecutivos com `taker_ratio` ou
   `volume_delta` em "SEM DADOS" durante mais de 10 minutos.
-- O alerta `[WS-AUDIT CRITICAL]` aparece nos logs (qualquer ocorrência).
-- O alerta `[POOL-AUDIT WARN]` aparece com contagem ≥ 10.
+- O alerta `CRITICAL [WS-AUDIT]` aparece nos logs (qualquer ocorrência).
+- O alerta `WARNING [POOL-AUDIT]` aparece com contagem ≥ 10.
 - Após uma alteração na tabela `pool_coins` (aprovação manual em massa,
   importação de novo asset universe, rollback de migração).
 
@@ -84,14 +84,15 @@ devem estar todos populados em até 1 ciclo (≤ 5 min).
 A tarefa `app.tasks.symbol_health_audit.monitor_only` roda a cada 5 min
 (beat schedule) e emite os alertas:
 
-- `[POOL-AUDIT WARN]` — dedup 10 min.
-- `[WS-AUDIT CRITICAL]` — dedup 10 min.
+- `WARNING [POOL-AUDIT]` — dedup 10 min.
+- `CRITICAL [WS-AUDIT]` — dedup 10 min.
 - `[REDIS-FALLBACK INFO]` — dedup 5 min.
 
-Para promover o monitor a reparo automático em produção, defina
-`SYMBOL_AUDIT_REPAIR=1` no Cloud Run. Recomenda-se manter em
-`monitor_only` enquanto o operador valida o comportamento por algumas
-horas.
+A tarefa beat é **estritamente monitor-only** — não há flag de ambiente
+que a transforme em reparo automático. Para reparo execute, sob demanda,
+o CLI (`python -m scripts.symbol_health_audit`), o endpoint admin
+(`POST /api/admin/diagnostics/symbol-audit`), ou a tarefa Celery
+`app.tasks.symbol_health_audit.run_repair`.
 
 ## Falhas conhecidas
 
@@ -120,6 +121,8 @@ reinicia o WS. Confira o log da instância leader:
 
 ### "GateSymbolValidator refresh failed"
 
-→ A Gate.io não respondeu. O validador é fail-open (assume tradable),
-para não bloquear o reparo durante outage curto. Para auditorias de
-massa, prefira rodar o CLI quando a Gate estiver saudável.
+→ A Gate.io não respondeu. Em caso de falha, o remediator é
+**fail-closed**: nenhum símbolo `NOT_APPROVED` é promovido enquanto
+`validator.last_load_failed=True` (ações ficam com
+`error="validator_unavailable"` e `executed=False`). Aguarde a Gate
+voltar e rode o CLI/endpoint novamente.
