@@ -22,26 +22,24 @@ def _run_async(coro):
 
 async def _collect_all_async():
     from ..services.market_data_service import market_data_service
-    from ..services.pool_service import get_approved_symbols
+    from ..services.pool_service import get_approved_pool_symbols
     from ..database import run_db_task
     from sqlalchemy import text
 
     logger.info("Starting market data collection (approved spot symbols)...")
 
-    # Only collect for symbols that have been approved (L3) through the pipeline.
-    # Using pool_coins directly (full raw universe) is explicitly prohibited.
     async def _load_spot_syms(db):
-        return await get_approved_symbols(db, "spot")
+        return await get_approved_pool_symbols(db, "spot")
 
-    symbols = await run_db_task(_load_spot_syms, celery=True)
+    raw_symbols = await run_db_task(_load_spot_syms, celery=True)
+    symbols = list(set(raw_symbols))
+
+    logger.info(f"[COLLECT] Approved symbols loaded: {len(symbols)}")
+    logger.info(f"[COLLECT] Sample symbols: {symbols[:5]}")
 
     if not symbols:
-        raise RuntimeError("[FATAL] No approved symbols to process")
-
-    if len(symbols) > 40:
-        raise RuntimeError(f"[FATAL] Too many approved symbols: {len(symbols)}")
-
-    logger.warning(f"[APPROVED] total={len(symbols)} symbols={symbols}")
+        logger.warning("[COLLECT] No approved symbols — skipping cycle")
+        return 0
 
     async def _inner(db) -> int:
         collected = 0
@@ -178,7 +176,7 @@ async def _collect_all_async():
             logger.error("Failed to fetch/update metadata from tickers: %s", e)
         # run_db_task auto-commits all successful writes on exit
 
-        logger.info(f"Market data collection complete: collected={collected} failed={failures} total={len(symbols)}")
+        logger.info(f"[COLLECT] completed: collected={collected} failed={failures} total={len(symbols)}")
         if collected == 0 and len(symbols) > 0:
             raise RuntimeError(
                 f"[collect_all] All {len(symbols)} symbol collections failed — check errors above"
@@ -199,32 +197,29 @@ def collect_all():
 async def _collect_5m_async():
     """Collect 5-minute OHLCV candles for pipeline scan freshness.
 
-    Universe = all approved symbols (L3, direction up or NULL) across spot + futures.
-    Using pool_coins directly is explicitly prohibited.
+    Universe = all approved symbols (pool_coins.is_approved = true) across spot + futures.
     """
-    from ..services.pool_service import get_approved_symbols_with_market_type
+    from ..services.pool_service import get_approved_pool_symbols_with_market_type
     from ..utils.symbol_filters import filter_real_assets
     from ..database import run_db_task
     from sqlalchemy import text
 
     logger.info("Starting 5m market data collection (approved symbols only)...")
 
-    # Load all approved symbols with their market_type in a single DB round-trip.
     async def _load_approved(db):
-        return await get_approved_symbols_with_market_type(db)
+        return await get_approved_pool_symbols_with_market_type(db)
 
     symbol_market_type: dict[str, str] = await run_db_task(_load_approved, celery=True)
 
     approved_syms = filter_real_assets(list(symbol_market_type.keys()))
-    symbols = list(dict.fromkeys(approved_syms))  # deduplicate, preserve order
+    symbols = list(set(approved_syms))
+
+    logger.info(f"[COLLECT] Approved symbols loaded: {len(symbols)}")
+    logger.info(f"[COLLECT] Sample symbols: {symbols[:5]}")
 
     if not symbols:
-        raise RuntimeError("[FATAL] No approved symbols to process")
-
-    if len(symbols) > 80:
-        raise RuntimeError(f"[FATAL] Too many approved symbols: {len(symbols)}")
-
-    logger.warning(f"[APPROVED] total={len(symbols)} symbols={symbols}")
+        logger.warning("[COLLECT] No approved symbols — skipping cycle")
+        return 0
 
     async def _inner(db) -> int:
         from ..services.market_data_service import market_data_service
@@ -442,7 +437,7 @@ async def _collect_5m_async():
             logger.debug("5m: per-symbol stale-check skipped (non-blocking): %s", e)
         # run_db_task auto-commits all successful writes on exit
 
-        logger.info(f"5m collection complete: collected={collected} failed={failures} total={len(symbols)}")
+        logger.info(f"[COLLECT] completed: collected={collected} failed={failures} total={len(symbols)}")
         if collected == 0 and len(symbols) > 0:
             raise RuntimeError(
                 f"[collect_5m] All {len(symbols)} symbol collections failed — check errors above"

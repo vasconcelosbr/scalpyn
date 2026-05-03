@@ -108,6 +108,65 @@ async def get_approved_symbols_with_market_type(db) -> dict[str, str]:
     return {normalize_pool_symbol(r.symbol): r.market_mode for r in rows}
 
 
+async def get_approved_pool_symbols(db, market_type: str = None) -> list[str]:
+    """Return symbols from pool_coins where is_approved = true.
+
+    Uses ``pool_coins.is_approved`` as the single source of truth — bypasses
+    the pipeline watchlist (L3) so that symbols approved directly in the DB
+    are collected even before they reach an L3 watchlist.
+
+    Args:
+        db: SQLAlchemy async session.
+        market_type: Optional ``'spot'`` or ``'futures'`` filter.
+
+    Returns:
+        Deduplicated, normalized list of approved symbols.
+    """
+    if market_type:
+        rows = (await db.execute(
+            text("""
+                SELECT DISTINCT symbol
+                FROM pool_coins
+                WHERE is_active = true
+                  AND is_approved = true
+                  AND market_type = :market_type
+            """),
+            {"market_type": market_type},
+        )).fetchall()
+    else:
+        rows = (await db.execute(
+            text("""
+                SELECT DISTINCT symbol
+                FROM pool_coins
+                WHERE is_active = true
+                  AND is_approved = true
+            """),
+        )).fetchall()
+
+    return list(set(filter_real_assets([normalize_pool_symbol(r.symbol) for r in rows])))
+
+
+async def get_approved_pool_symbols_with_market_type(db) -> dict[str, str]:
+    """Return a mapping of normalized symbol → market_type for all approved pool coins.
+
+    Uses ``pool_coins.is_approved`` directly.  Covers all market types in a
+    single round-trip; used by the 5m collector.
+
+    Returns:
+        Dict of ``{ "BTC_USDT": "spot", "ETH_USDT": "futures", ... }``.
+    """
+    rows = (await db.execute(
+        text("""
+            SELECT DISTINCT symbol, market_type
+            FROM pool_coins
+            WHERE is_active = true
+              AND is_approved = true
+        """),
+    )).fetchall()
+
+    return {normalize_pool_symbol(r.symbol): r.market_type for r in rows}
+
+
 async def get_pool_symbols_with_market_type(db) -> dict[str, str]:
     """Return a mapping of normalized symbol → market_type for all active pool coins.
 
