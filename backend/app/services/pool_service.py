@@ -143,6 +143,7 @@ async def get_approved_pool_symbols(db, market_type: str = None) -> list[str]:
             """),
         )).fetchall()
 
+    # set() handles normalize_pool_symbol collisions (e.g. "BTCUSDT" + "BTC_USDT" → same key)
     return list(set(filter_real_assets([normalize_pool_symbol(r.symbol) for r in rows])))
 
 

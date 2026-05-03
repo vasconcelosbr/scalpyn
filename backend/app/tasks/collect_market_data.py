@@ -32,7 +32,7 @@ async def _collect_all_async():
         return await get_approved_pool_symbols(db, "spot")
 
     raw_symbols = await run_db_task(_load_spot_syms, celery=True)
-    symbols = list(set(raw_symbols))
+    symbols = list(dict.fromkeys(raw_symbols))  # deduplicate, preserve order
 
     logger.info(f"[COLLECT] Approved symbols loaded: {len(symbols)}")
     logger.info(f"[COLLECT] Sample symbols: {symbols[:5]}")
@@ -212,7 +212,7 @@ async def _collect_5m_async():
     symbol_market_type: dict[str, str] = await run_db_task(_load_approved, celery=True)
 
     approved_syms = filter_real_assets(list(symbol_market_type.keys()))
-    symbols = list(set(approved_syms))
+    symbols = list(dict.fromkeys(approved_syms))  # deduplicate, preserve order
 
     logger.info(f"[COLLECT] Approved symbols loaded: {len(symbols)}")
     logger.info(f"[COLLECT] Sample symbols: {symbols[:5]}")
