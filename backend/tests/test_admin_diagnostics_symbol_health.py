@@ -230,6 +230,68 @@ def test_symbol_is_uppercased_before_probes(
     assert response.json()["symbol"] == "DOGE_USDT"
 
 
+def test_trade_buffer_and_ws_leader_probes_against_fake_redis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Integration check: the two Redis-touching probes are exercised
+    against a real (in-memory) Redis client so that the key format and
+    Sorted-Set semantics they assume cannot silently drift."""
+    import asyncio
+    import time as _time
+
+    import fakeredis.aioredis  # type: ignore[import-untyped]
+
+    from app.exchange_adapters.gate_adapter import GateAdapter
+    from app.services import gate_ws_leader as leader_mod
+    from app.services import redis_client as rc_mod
+
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=False)
+    monkeypatch.setattr(rc_mod, "get_async_redis", lambda: _aresolved(fake))
+
+    async def _seed_and_probe() -> dict:
+        # Seed a real trade buffer key the same way event_handlers would.
+        normalized = GateAdapter._normalize_symbol("DOGE_USDT")
+        key = f"trades_buffer:spot:{normalized}".encode()
+        now_ms = _time.time() * 1000.0
+        await fake.zadd(key, {b"trade-recent": now_ms - 1_500.0})
+        await fake.zadd(key, {b"trade-old":    now_ms - 240_000.0})
+        await fake.expire(key, 300)
+        # Seed a leader lock so ws_leader_status reflects an elected leader.
+        await fake.set(leader_mod.LEADER_KEY, b"instance-X",
+                       ex=leader_mod.LEADER_TTL_SECONDS)
+        return {
+            "buffer": await admin_api._probe_trade_buffer("DOGE_USDT"),
+            "leader": await admin_api._probe_ws_leader_status(),
+        }
+
+    out = asyncio.run(_seed_and_probe())
+
+    # Trade buffer probe: real key shape, real ZCARD/TTL/ZRANGE-with-scores.
+    buf = out["buffer"]
+    assert buf["ok"] is True
+    assert buf["redis_available"] is True
+    assert buf["key"].endswith(":DOGE_USDT")
+    assert buf["exists"] is True
+    assert buf["member_count"] == 2
+    assert buf["ttl_seconds"] == 300
+    assert buf["oldest_trade_age_seconds"] >= 200
+    assert buf["newest_trade_age_seconds"] is not None
+    assert buf["newest_trade_age_seconds"] < 5
+
+    # Leader probe: heartbeat math derived from real TTL.
+    ldr = out["leader"]
+    assert ldr["ok"] is True and ldr["redis_available"] is True
+    assert ldr["elected"] is True
+    assert ldr["leader_holder"] == "instance-X"
+    assert ldr["leader_ttl_seconds"] is not None
+    assert 0 <= ldr["leader_heartbeat_age_seconds"] <= leader_mod.LEADER_TTL_SECONDS
+    assert ldr["leader_heartbeat_unhealthy"] is False
+
+
+async def _aresolved(value):
+    return value
+
+
 def test_failed_probe_does_not_500_the_endpoint(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
