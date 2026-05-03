@@ -22,30 +22,32 @@ def _run_async(coro):
 
 async def _collect_all_async():
     from ..services.market_data_service import market_data_service
-    from ..services.pool_service import get_pool_symbols
+    from ..services.pool_service import get_approved_symbols
     from ..database import run_db_task
     from sqlalchemy import text
 
-    logger.info("Starting market data collection (spot pool)...")
+    logger.info("Starting market data collection (approved spot symbols)...")
 
-    # pool_coins is the exclusive source of truth for the symbol universe.
-    # Gate.io is a data source only — it never defines which symbols to process.
+    # Only collect for symbols that have been approved (L3) through the pipeline.
+    # Using pool_coins directly (full raw universe) is explicitly prohibited.
     async def _load_spot_syms(db):
-        return await get_pool_symbols(db, "spot")
+        return await get_approved_symbols(db, "spot")
 
     symbols = await run_db_task(_load_spot_syms, celery=True)
 
     if not symbols:
-        logger.warning("No spot pool symbols to collect data for")
-        return 0
+        raise RuntimeError("[FATAL] No approved symbols to process")
 
-    logger.info(f"Collecting spot data for {len(symbols)} pool symbols")
+    if len(symbols) > 40:
+        raise RuntimeError(f"[FATAL] Too many approved symbols: {len(symbols)}")
+
+    logger.warning(f"[APPROVED] total={len(symbols)} symbols={symbols}")
 
     async def _inner(db) -> int:
         collected = 0
         failures = 0
 
-        for symbol in symbols:  # process all pool symbols — pool size is the cap
+        for symbol in symbols:  # process only approved symbols
             try:
                 logger.info(f"[PIPELINE] START symbol={symbol}")
                 df = await market_data_service.fetch_ohlcv(symbol, "1h", limit=100)
@@ -197,38 +199,39 @@ def collect_all():
 async def _collect_5m_async():
     """Collect 5-minute OHLCV candles for pipeline scan freshness.
 
-    Universe = all active pool_coin symbols (spot + futures).
-    pool_coins is the exclusive source of truth — the Gate.io top-volume
-    universe is not used here.
+    Universe = all approved symbols (L3, direction up or NULL) across spot + futures.
+    Using pool_coins directly is explicitly prohibited.
     """
-    from ..services.pool_service import get_pool_symbols_with_market_type
+    from ..services.pool_service import get_approved_symbols_with_market_type
     from ..utils.symbol_filters import filter_real_assets
     from ..database import run_db_task
     from sqlalchemy import text
 
-    logger.info("Starting 5m market data collection (pool-gated)...")
+    logger.info("Starting 5m market data collection (approved symbols only)...")
 
-    # Load all active pool symbols with their market_type in a single DB round-trip.
-    async def _load_pool(db):
-        return await get_pool_symbols_with_market_type(db)
+    # Load all approved symbols with their market_type in a single DB round-trip.
+    async def _load_approved(db):
+        return await get_approved_symbols_with_market_type(db)
 
-    symbol_market_type: dict[str, str] = await run_db_task(_load_pool, celery=True)
+    symbol_market_type: dict[str, str] = await run_db_task(_load_approved, celery=True)
 
-    pool_syms = filter_real_assets(list(symbol_market_type.keys()))
-    symbols = list(dict.fromkeys(pool_syms))  # deduplicate, preserve order
+    approved_syms = filter_real_assets(list(symbol_market_type.keys()))
+    symbols = list(dict.fromkeys(approved_syms))  # deduplicate, preserve order
 
     if not symbols:
-        logger.warning("No symbols for 5m collection")
-        return 0
+        raise RuntimeError("[FATAL] No approved symbols to process")
 
-    logger.info("5m collection universe: %d pool symbols", len(symbols))
+    if len(symbols) > 80:
+        raise RuntimeError(f"[FATAL] Too many approved symbols: {len(symbols)}")
+
+    logger.warning(f"[APPROVED] total={len(symbols)} symbols={symbols}")
 
     async def _inner(db) -> int:
         from ..services.market_data_service import market_data_service
         collected = 0
         failures = 0
 
-        for symbol in symbols:  # no cap — process all pool symbols
+        for symbol in symbols:  # no cap — approved symbols only
             sym_market_type = symbol_market_type.get(symbol, "spot")
             try:
                 logger.info(f"[PIPELINE] START symbol={symbol} timeframe=5m")
