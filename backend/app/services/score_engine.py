@@ -460,7 +460,12 @@ class ScoreEngine:
                 matched.append(rule.get("id", "unknown"))
         return matched
 
-    def get_full_breakdown(self, indicators: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def get_full_breakdown(
+        self,
+        indicators: Dict[str, Any],
+        *,
+        score_payload: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
         """Return per-rule detailed breakdown for transparency/drilldown UI.
 
         ``points_awarded`` here reflects whether the rule's *condition*
@@ -477,30 +482,46 @@ class ScoreEngine:
         enrichment is skipped and the UI falls back to the nominal
         ``points_awarded`` numbers. Best-effort: any exception in the
         robust call is swallowed so the legacy breakdown still renders.
-        """
-        # Best-effort robust enrichment. We compute it once up-front and
-        # then merge per-rule below. Any failure leaves `weighted_lookup`
-        # empty → rules render with nominal points only (legacy fallback).
-        weighted_lookup: Dict[str, Dict[str, float]] = {}
-        try:
-            from .robust_indicators import compute_asset_score
 
-            symbol = (
-                str(indicators.get("symbol"))
-                if isinstance(indicators, dict) and indicators.get("symbol")
-                else "BREAKDOWN"
-            )
-            flow_hint = (
-                indicators.get("taker_source")
-                if isinstance(indicators, dict) else None
-            )
-            payload = compute_asset_score(
-                symbol,
-                indicators,
-                self.rules,
-                is_futures=False,
-                flow_source_hint=flow_hint,
-            )
+        Args:
+            indicators:    indicator dict (same shape ``compute_score``
+                           takes).
+            score_payload: optional pre-computed result of
+                           ``compute_asset_score(...)`` for this same
+                           asset. When provided, the breakdown reuses
+                           ``payload['matched_rules']`` instead of
+                           re-running the robust engine — eliminates the
+                           duplicate scoring call hot callers (pipeline
+                           refresh, watchlist trace) would otherwise pay.
+                           Pass ``None`` to keep the legacy self-contained
+                           behaviour.
+        """
+        # Best-effort robust enrichment. We compute it once up-front (or
+        # reuse the caller-supplied payload) and then merge per-rule
+        # below. Any failure leaves `weighted_lookup` empty → rules
+        # render with nominal points only (legacy fallback).
+        weighted_lookup: Dict[str, Dict[str, float]] = {}
+        payload: Optional[Dict[str, Any]] = score_payload
+        try:
+            if payload is None:
+                from .robust_indicators import compute_asset_score
+
+                symbol = (
+                    str(indicators.get("symbol"))
+                    if isinstance(indicators, dict) and indicators.get("symbol")
+                    else "BREAKDOWN"
+                )
+                flow_hint = (
+                    indicators.get("taker_source")
+                    if isinstance(indicators, dict) else None
+                )
+                payload = compute_asset_score(
+                    symbol,
+                    indicators,
+                    self.rules,
+                    is_futures=False,
+                    flow_source_hint=flow_hint,
+                )
             if payload:
                 for matched in (payload.get("matched_rules") or []):
                     if not isinstance(matched, dict):

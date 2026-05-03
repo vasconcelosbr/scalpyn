@@ -328,6 +328,39 @@ def test_get_full_breakdown_enriches_matched_rules_with_robust_weighted_points()
     )
 
 
+def test_get_full_breakdown_reuses_caller_supplied_payload_without_recomputing():
+    """Hot callers (pipeline refresh, watchlist trace) that already
+    invoked ``compute_asset_score`` for an asset can pass the payload
+    via ``score_payload=`` to skip the redundant robust call. Verifies
+    the optimization actually short-circuits (mock asserts 0 calls)."""
+    config = {
+        "scoring_rules": [
+            {"id": "rsi_low", "indicator": "rsi", "operator": "<=", "value": 40, "points": 20, "category": "momentum"},
+        ],
+    }
+    engine = ScoreEngine(config)
+
+    pre_computed = {
+        "score": 8.4,
+        "matched_rules": [
+            {"rule_id": "rsi_low", "indicator": "rsi", "points": 20.0,
+             "weighted_points": 8.4, "confidence": 0.42},
+        ],
+    }
+    with patch(
+        "app.services.robust_indicators.compute_asset_score",
+    ) as mock_score:
+        breakdown = engine.get_full_breakdown(
+            {"rsi": 25}, score_payload=pre_computed,
+        )
+
+    # Critical: when a payload is supplied, no recomputation happens.
+    assert mock_score.call_count == 0
+    rule = breakdown[0]
+    assert rule["weighted_points"] == 8.4
+    assert rule["indicator_confidence"] == 0.42
+
+
 def test_get_full_breakdown_falls_back_to_nominal_when_robust_rejects():
     """When ``compute_asset_score`` returns ``None`` (critical-gate or
     confidence-gate rejection, e.g. sparse fixtures), every rule must
