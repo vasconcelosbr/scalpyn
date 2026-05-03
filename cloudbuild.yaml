@@ -78,6 +78,18 @@ steps:
       #     --role=roles/secretmanager.secretAccessor --project clickrate-477217
       - '--update-secrets'
       - 'PROMETHEUS_BEARER_TOKEN=prometheus-bearer-token:latest'
+      # Bearer-token gate for /api/system/celery-diagnostics (Task #186).
+      # Same access model as PROMETHEUS_BEARER_TOKEN: endpoint returns 404
+      # until the env var is set, 401 unless the request carries the
+      # matching `Authorization: Bearer …` header. One-time setup:
+      #   python -c "import secrets; print(secrets.token_hex(32))" \
+      #     | gcloud secrets create diagnostics-bearer-token \
+      #         --data-file=- --project clickrate-477217
+      #   gcloud secrets add-iam-policy-binding diagnostics-bearer-token \
+      #     --member=serviceAccount:scalpyn-service-account@clickrate-477217.iam.gserviceaccount.com \
+      #     --role=roles/secretmanager.secretAccessor --project clickrate-477217
+      - '--update-secrets'
+      - 'DIAGNOSTICS_BEARER_TOKEN=diagnostics-bearer-token:latest'
       # Redis broker URL (Redis Labs external).
       # IMPORTANT: this URL carries the broker password inline. The credential
       # was supplied by the user on 2026-05-02 to recover the collector stall;
@@ -103,7 +115,7 @@ steps:
       # `.local/tasks/diagnose-collector-stalled-prod.md` (decisions paused
       # 2026-04-29T13:48:16Z, lag 4754 min, schema confirmed OK in prod).
       - '--update-env-vars'
-      - 'FORCE_RESTART=2026-05-02T22:05:00Z'
+      - 'FORCE_RESTART=2026-05-03T00:00:00Z'
 
 substitutions:
   _REGION: us-central1

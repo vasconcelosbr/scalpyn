@@ -1,10 +1,13 @@
 """System health and monitoring API endpoints."""
 
+import hmac
 import logging
+import os
+import time as _time
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
@@ -14,6 +17,230 @@ from .config import get_current_user_id
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/system", tags=["System"])
+
+
+# ── Celery diagnostics endpoint (Task #186) ──────────────────────────────────
+# Bearer-token-gated SRE channel that exposes in-process Celery + Redis
+# health: process inventory via psutil, ``inspect.active/registered/stats``,
+# Redis ``ping``/``dbsize``, and the ``scalpyn:last_collect_all_*`` markers
+# written by the instrumented ``collect_all`` task. With ``?dispatch=collect_all``
+# the endpoint enqueues an on-demand run and reports its state 3 s later, so
+# operators without ``gcloud`` access can still answer the 5 SRE questions
+# (Redis? Worker? Beat? Task fires? Exact error?). Same access model as
+# ``/metrics``: 404 when ``DIAGNOSTICS_BEARER_TOKEN`` is unset, 401 on a bad
+# header. The token never appears in any response body or log line.
+
+_BEARER_PREFIX = "Bearer "
+LAST_COLLECT_ALL_START_KEY = "scalpyn:last_collect_all_start"
+LAST_COLLECT_ALL_END_KEY = "scalpyn:last_collect_all_end"
+COLLECT_ALL_RUNS_KEY = "scalpyn:collect_all_runs"
+COLLECT_ALL_ERRORS_KEY = "scalpyn:collect_all_errors"
+LAST_COLLECT_ALL_ERROR_KEY = "scalpyn:last_collect_all_error"
+
+
+def _expected_diagnostics_token() -> Optional[str]:
+    token = os.environ.get("DIAGNOSTICS_BEARER_TOKEN", "").strip()
+    return token or None
+
+
+def _extract_bearer(authorization: Optional[str]) -> Optional[str]:
+    if not authorization or not authorization.startswith(_BEARER_PREFIX):
+        return None
+    return authorization[len(_BEARER_PREFIX):].strip() or None
+
+
+def _require_diagnostics_bearer(authorization: Optional[str]) -> None:
+    expected = _expected_diagnostics_token()
+    if expected is None:
+        # Endpoint hidden when the gate is not configured.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    presented = _extract_bearer(authorization)
+    if presented is None or not hmac.compare_digest(presented, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+def _scan_celery_processes() -> Dict[str, Any]:
+    """Inventory live Celery worker/beat processes via psutil.
+
+    Returns lists of PIDs (no full cmdlines, no env vars — both could leak
+    the broker password embedded in ``REDIS_URL``).
+    """
+    workers: list[int] = []
+    beats: list[int] = []
+    error: Optional[str] = None
+    try:
+        import psutil  # type: ignore
+    except Exception as exc:
+        return {
+            "worker_processes": [],
+            "beat_processes": [],
+            "error": f"psutil_unavailable: {type(exc).__name__}: {exc}",
+        }
+    try:
+        for proc in psutil.process_iter(["pid", "cmdline"]):
+            try:
+                cmdline = proc.info.get("cmdline") or []
+            except Exception:
+                continue
+            joined = " ".join(cmdline)
+            if "celery" not in joined:
+                continue
+            if " beat" in joined or joined.endswith(" beat") or "celery beat" in joined:
+                beats.append(int(proc.info["pid"]))
+            elif " worker" in joined or "celery worker" in joined:
+                workers.append(int(proc.info["pid"]))
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+    return {
+        "worker_processes": sorted(workers),
+        "beat_processes": sorted(beats),
+        "error": error,
+    }
+
+
+def _redis_probe() -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "redis_ping": False,
+        "redis_dbsize": None,
+        "last_collect_all_start": None,
+        "last_collect_all_end": None,
+        "collect_all_runs": None,
+        "collect_all_errors": None,
+        "last_collect_all_error": None,
+        "error": None,
+    }
+    try:
+        import redis as _redis
+        from ..config import settings
+        r = _redis.from_url(
+            settings.REDIS_URL,
+            socket_connect_timeout=3,
+            socket_timeout=3,
+        )
+        out["redis_ping"] = bool(r.ping())
+        out["redis_dbsize"] = int(r.dbsize())
+        for key, dest in (
+            (LAST_COLLECT_ALL_START_KEY, "last_collect_all_start"),
+            (LAST_COLLECT_ALL_END_KEY, "last_collect_all_end"),
+            (COLLECT_ALL_RUNS_KEY, "collect_all_runs"),
+            (COLLECT_ALL_ERRORS_KEY, "collect_all_errors"),
+            (LAST_COLLECT_ALL_ERROR_KEY, "last_collect_all_error"),
+        ):
+            try:
+                val = r.get(key)
+                if val is None:
+                    continue
+                if isinstance(val, (bytes, bytearray)):
+                    val = val.decode("utf-8", errors="replace")
+                out[dest] = val
+            except Exception:
+                continue
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"
+    return out
+
+
+def _inspect_celery() -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "inspect_active": None,
+        "inspect_registered": None,
+        "inspect_stats": None,
+        "error": None,
+    }
+    try:
+        from ..tasks.celery_app import celery_app
+        insp = celery_app.control.inspect(timeout=2.0)
+        out["inspect_active"] = insp.active() or {}
+        registered = insp.registered() or {}
+        # Deduplicate task names across workers for a flat list.
+        flat: set[str] = set()
+        for names in registered.values():
+            for n in names or []:
+                flat.add(n)
+        out["inspect_registered"] = sorted(flat)
+        stats = insp.stats() or {}
+        # Drop ``broker.url`` style fields that may carry credentials.
+        scrubbed: Dict[str, Any] = {}
+        for node, payload in stats.items():
+            if isinstance(payload, dict):
+                payload = {
+                    k: v for k, v in payload.items()
+                    if "url" not in k.lower() and "password" not in k.lower()
+                }
+            scrubbed[node] = payload
+        out["inspect_stats"] = scrubbed
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"
+    return out
+
+
+@router.get("/celery-diagnostics", include_in_schema=False)
+async def celery_diagnostics(
+    authorization: Optional[str] = Header(default=None),
+    dispatch: Optional[str] = Query(default=None),
+) -> Dict[str, Any]:
+    """Bearer-gated Celery + Redis runtime probe (Task #186).
+
+    Returns a flat JSON snapshot answering the five SRE questions
+    (Redis? Worker? Beat? Task dispatch? Exact error?). With
+    ``?dispatch=collect_all`` it enqueues an on-demand ``collect_all``
+    run and waits 3 s for a state transition. Never echoes ``REDIS_URL``
+    or any secret value.
+    """
+    _require_diagnostics_bearer(authorization)
+
+    payload: Dict[str, Any] = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    payload.update(_redis_probe())
+    payload.update(_scan_celery_processes())
+    payload.update(_inspect_celery())
+
+    if dispatch:
+        if dispatch != "collect_all":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only ?dispatch=collect_all is supported.",
+            )
+        dispatch_result: Dict[str, Any] = {
+            "task": "app.tasks.collect_market_data.collect_all",
+            "dispatched_task_id": None,
+            "state_after_3s": None,
+            "traceback": None,
+            "error": None,
+        }
+        try:
+            from ..tasks.celery_app import celery_app
+            async_result = celery_app.send_task(
+                "app.tasks.collect_market_data.collect_all",
+            )
+            dispatch_result["dispatched_task_id"] = async_result.id
+            # Block 3 s in a thread so the event loop is not pinned.
+            import asyncio as _asyncio
+
+            def _poll() -> tuple[str, Optional[str]]:
+                _time.sleep(3)
+                state = async_result.state
+                tb = None
+                try:
+                    if state in ("FAILURE",):
+                        tb = str(async_result.traceback)
+                except Exception:
+                    tb = None
+                return state, tb
+
+            state, tb = await _asyncio.to_thread(_poll)
+            dispatch_result["state_after_3s"] = state
+            dispatch_result["traceback"] = tb
+        except Exception as exc:
+            dispatch_result["error"] = f"{type(exc).__name__}: {exc}"
+        payload["dispatch"] = dispatch_result
+
+    return payload
 
 
 @router.get("/celery-status")

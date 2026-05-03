@@ -176,6 +176,63 @@ gcloud run services describe scalpyn --region us-central1 \
 
 ---
 
+## Diagnóstico Celery em prod sem `gcloud` (Task #186)
+
+A rota `GET /api/system/celery-diagnostics` é o canal SRE oficial para
+responder às 5 perguntas do briefing sem precisar de `gcloud logging
+read` nem `gcloud run services proxy`. Auth = bearer estático
+(`DIAGNOSTICS_BEARER_TOKEN`, montado de Secret Manager —
+`diagnostics-bearer-token:latest`). Sem o env var, a rota responde 404;
+com header errado, 401; nunca devolve `REDIS_URL` nem credenciais.
+
+```bash
+TOKEN=$(gcloud secrets versions access latest \
+  --secret diagnostics-bearer-token --project clickrate-477217)
+
+# 1) Snapshot baseline (sem disparar nada)
+curl -s -H "Authorization: Bearer $TOKEN" \
+  https://scalpyn-330575088921.us-central1.run.app/api/system/celery-diagnostics \
+  | python3 -m json.tool
+
+# 2) Forçar uma execução de collect_all (espera 3 s pelo state)
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "https://scalpyn-330575088921.us-central1.run.app/api/system/celery-diagnostics?dispatch=collect_all" \
+  | python3 -m json.tool
+
+# 3) 60 s depois, conferir se o pipeline destravou
+sleep 60
+curl -s https://scalpyn-330575088921.us-central1.run.app/api/system/pipeline-status \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); p=d['pipeline']['decisions']; print('last_hour:', p['last_hour'], '| lag_min:', p['lag_minutes'])"
+```
+
+### Mapeamento campo → pergunta do briefing
+
+| Campo do JSON                    | Pergunta respondida                                  |
+|----------------------------------|------------------------------------------------------|
+| `redis_ping`, `redis_dbsize`     | Redis conecta? (item 6)                              |
+| `worker_processes`               | Worker vivo? (item 4) — PIDs do celery worker        |
+| `beat_processes`                 | Beat vivo? (item 5) — PIDs do celery beat            |
+| `inspect_active`                 | Worker está consumindo tasks? (item 4)               |
+| `inspect_registered`             | Tasks foram importadas no worker? (item 4)           |
+| `last_collect_all_start/end`     | Beat enfileirou + worker rodou recentemente? (3 + 4) |
+| `collect_all_runs/errors`        | Quantas execuções e quantas falharam (item 3)        |
+| `last_collect_all_error`         | Erro exato da última falha (item 3)                  |
+| `dispatch.state_after_3s`        | Task dispara sob demanda? (item 7)                   |
+| `dispatch.traceback`             | Erro exato quando a task falha (item 3)              |
+
+### Árvore de decisão de causa-raiz
+
+| Sintoma observado no JSON                                                | Causa raiz provável                          | Ação                                                         |
+|--------------------------------------------------------------------------|----------------------------------------------|--------------------------------------------------------------|
+| `redis_ping=false`                                                       | Broker Redis inacessível                     | Verificar `REDIS_URL` / firewall / status do Redis Labs       |
+| `redis_ping=true`, `worker_processes=[]`                                 | Worker não subiu (preflight `start.sh` morreu)| Cloud Run logs do container; redeploy com `CELERY_LOGLEVEL=debug` |
+| `redis_ping=true`, `beat_processes=[]`                                   | Beat morreu — `collect_all` nunca enfileira  | Idem: redeploy + checar traceback                             |
+| Worker e beat presentes, `last_collect_all_start` antigo (> 5 min)       | Beat schedule não está disparando            | Verificar `celery_app.conf.beat_schedule` da revisão ativa    |
+| `last_collect_all_start` recente, `last_collect_all_end` ausente/antigo  | Worker travado/lento processando o batch     | Inspecionar `inspect_active`; `dispatch=collect_all` p/ traceback |
+| `dispatch.state_after_3s=PENDING` por > 30 s                             | Worker offline ou broker rejeitando          | Conferir `inspect_active`; reiniciar revisão                  |
+| `dispatch.state_after_3s=FAILURE`                                        | Erro de runtime na task                      | Ler `dispatch.traceback` literalmente                         |
+| Tudo verde mas `pipeline-status.last_hour=0`                             | Coleta OK mas downstream parou               | Investigar `compute_indicators` / `evaluate_signals` separados |
+
 ## Validação pós-fix
 
 ```bash

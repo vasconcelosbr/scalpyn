@@ -209,9 +209,57 @@ async def _collect_all_async():
     return await run_db_task(_inner, celery=True)
 
 
+def _record_collect_all_marker(key: str, value: str) -> None:
+    """Write a tiny diagnostics marker to Redis. Never raise."""
+    try:
+        import redis as _redis
+        from ..config import settings
+        r = _redis.from_url(
+            settings.REDIS_URL,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+        r.set(key, value)
+    except Exception as exc:
+        logger.debug("[collect_all] failed to write marker %s: %s", key, exc)
+
+
+def _incr_collect_all_counter(key: str) -> None:
+    try:
+        import redis as _redis
+        from ..config import settings
+        r = _redis.from_url(
+            settings.REDIS_URL,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+        r.incr(key)
+    except Exception as exc:
+        logger.debug("[collect_all] failed to incr counter %s: %s", key, exc)
+
+
 @celery_app.task(name="app.tasks.collect_market_data.collect_all")
 def collect_all():
-    count = _run_async(_collect_all_async())
+    # Diagnostics markers (Task #186) — read by /api/system/celery-diagnostics
+    # to prove that beat is enqueueing AND worker is consuming. Never block
+    # the task on Redis marker write failures.
+    started = datetime.now(timezone.utc).isoformat()
+    _record_collect_all_marker("scalpyn:last_collect_all_start", started)
+    _incr_collect_all_counter("scalpyn:collect_all_runs")
+    try:
+        count = _run_async(_collect_all_async())
+    except Exception as exc:
+        _incr_collect_all_counter("scalpyn:collect_all_errors")
+        _record_collect_all_marker(
+            "scalpyn:last_collect_all_error",
+            f"{datetime.now(timezone.utc).isoformat()} {type(exc).__name__}: {exc}",
+        )
+        raise
+    finally:
+        _record_collect_all_marker(
+            "scalpyn:last_collect_all_end",
+            datetime.now(timezone.utc).isoformat(),
+        )
     # Chain to compute indicators
     celery_app.send_task("app.tasks.compute_indicators.compute")
     return f"Collected {count} symbols"
