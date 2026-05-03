@@ -14,6 +14,88 @@ from ..utils.indicator_merge import envelop_results, _ORDER_FLOW_KEYS
 logger = logging.getLogger(__name__)
 _STOCHASTIC_WARMUP_OVERLAP = 2
 
+
+def _compute_score_fields(results: dict) -> dict:
+    """Compute a deterministic basic score from flat indicator values.
+
+    Returns four fields that are injected into ``indicators_json`` so that
+    every indicators row has a self-contained score — independent of the
+    user-configured robust engine in ``compute_scores``.
+
+    Scoring criteria (each criterion contributes up to 20 points):
+      * RSI in [40, 70]                    — momentum zone
+      * EMA9 > EMA21                       — short-term trend up
+      * volume_spike > 1.5                 — volume expansion
+      * ATR% > 0.5                         — sufficient volatility
+      * macd_signal == "positive"          — MACD bullish cross
+      * price > vwap                       — price above VWAP
+
+    score_normalized (0–100) = score_raw / score_max * 100
+    score mirrors score_normalized for direct use in ranking/display.
+    """
+    score = 0
+    max_score = 0
+
+    rsi = results.get("rsi")
+    if rsi is not None:
+        max_score += 20
+        try:
+            if 40 <= float(rsi) <= 70:
+                score += 20
+        except (TypeError, ValueError):
+            pass
+
+    ema9 = results.get("ema9")
+    ema21 = results.get("ema21")
+    if ema9 is not None and ema21 is not None:
+        max_score += 20
+        try:
+            if float(ema9) > float(ema21):
+                score += 20
+        except (TypeError, ValueError):
+            pass
+
+    volume_spike = results.get("volume_spike")
+    if volume_spike is not None:
+        max_score += 20
+        try:
+            if float(volume_spike) > 1.5:
+                score += 20
+        except (TypeError, ValueError):
+            pass
+
+    atr_pct = results.get("atr_pct")
+    if atr_pct is not None:
+        max_score += 20
+        try:
+            if float(atr_pct) > 0.5:
+                score += 20
+        except (TypeError, ValueError):
+            pass
+
+    if results.get("macd_signal") == "positive":
+        max_score += 20
+        score += 20
+
+    price = results.get("price")
+    vwap = results.get("vwap")
+    if price is not None and vwap is not None:
+        max_score += 20
+        try:
+            if float(price) > float(vwap):
+                score += 20
+        except (TypeError, ValueError):
+            pass
+
+    score_normalized = round((score / max_score) * 100, 2) if max_score > 0 else 0.0
+
+    return {
+        "score_raw": score,
+        "score_max": max_score,
+        "score_normalized": score_normalized,
+        "score": score_normalized,
+    }
+
 # Source/confidence map for order-flow keys fetched from real trades.
 # Technical indicators from FeatureEngine use the default "candle_computed"/0.80.
 _COMPUTE_KEY_SOURCE_MAP: dict = {k: ("gate_trades", 1.00) for k in _ORDER_FLOW_KEYS}
@@ -225,6 +307,9 @@ async def _compute_async():
                     )
                     _merge_order_flow_into_results(results, of_data)
 
+                    # Compute and persist score fields inside indicators_json so
+                    # every row is self-contained.  Must happen BEFORE envelop_results.
+                    results.update(_compute_score_fields(results))
 
                     now = datetime.now(timezone.utc)
                     await _upsert_market_metadata_snapshot(db, symbol, results, now)
@@ -356,6 +441,10 @@ async def _compute_5m_async():
                         symbol, window_seconds=300, market_type="spot"
                     )
                     _merge_order_flow_into_results(results, of_data)
+
+                    # Compute and persist score fields inside indicators_json so
+                    # every row is self-contained.  Must happen BEFORE envelop_results.
+                    results.update(_compute_score_fields(results))
 
                     now = datetime.now(timezone.utc)
                     await _upsert_market_metadata_snapshot(db, symbol, results, now)
