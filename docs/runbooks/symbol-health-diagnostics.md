@@ -92,8 +92,15 @@ operator always sees the full picture.
 
 ### `indicators_history`
 
-The most recent 5 rows in the `indicators` table for this symbol, with
-the list of keys present in `indicators_json`.
+Two lists:
+
+- `latest_per_scheduler_group` — the most recent row for each
+  `(scheduler_group, timeframe)` pair, so a stale or crashed
+  scheduler is **not** masked by a healthy one that wrote more
+  recently.
+- `rows` — the most recent 5 rows overall (at-a-glance recency).
+
+Each row carries the list of keys present in `indicators_json`.
 
 | Symptom | Root cause | Fix |
 |---|---|---|
@@ -130,24 +137,31 @@ Calls `market_data_service.fetch_ohlcv(symbol, "5m", 100)` live.
 
 Calls `get_order_flow_data(symbol, 300)` live. This is the **definitive
 test** of whether `taker_ratio`/`volume_delta` can be produced for this
-symbol right now.
+symbol right now. The `buffer_trades_in_window`, `fallback_used`, and
+`fallback_returned_zero_trades` fields cross-reference the source so
+you can tell apart "buffer healthy" from "fallback saved us" from
+"both empty".
 
 | Symptom | Root cause |
 |---|---|
-| `source: "gate_trades_ws_spot"` and values present | Buffer healthy — if the indicator is still missing in the watchlist, the bug is downstream (compute_indicators / scheduler not running for this symbol). |
-| `source: "gate_io_trades"` and values present | WS buffer was empty, REST fallback succeeded — fine for high-volume symbols, fragile for low-volume. |
-| `source: "gate_io_trades"`, all values `None` | Buffer empty AND REST returned no trades in the 300s window — symbol genuinely has no trades, or symbol mapping is wrong. |
+| `source: "gate_trades_ws_spot"`, values present, `buffer_trades_in_window > 0` | Buffer healthy — if the indicator is still missing in the watchlist, the bug is downstream (compute_indicators / scheduler not running for this symbol). |
+| `fallback_used: true`, values present, `buffer_trades_in_window: 0` | WS buffer was empty, REST fallback succeeded — fine for high-volume symbols, fragile for low-volume. Cross-check `resolver_diff` to see whether WS *should* have subscribed. |
+| `fallback_returned_zero_trades: true` | Buffer empty AND REST returned no trades in the 300s window — symbol genuinely has no trades, or symbol mapping is wrong. |
+| `buffer_trades_in_window > 0` but `source: "gate_io_trades"` | Buffer-read code path failed despite trades being present — file a bug against `order_flow_service._read_buffer`. |
 
 ### `ws_leader_status`
 
 ```json
 {"ok": true, "leader_holder": "container-abc-1234", "elected": true,
- "leader_ttl_seconds": 25}
+ "leader_ttl_seconds": 25, "leader_heartbeat_age_seconds": 5,
+ "leader_heartbeat_unhealthy": false,
+ "renew_interval_seconds": 10, "lock_ttl_seconds": 30}
 ```
 
 | Symptom | Root cause | Fix |
 |---|---|---|
 | `elected: false` | No leader has been elected → trade buffer is empty for **every** symbol | Check Cloud Run logs for `[gate-ws-leader]` errors, force a restart of the service. |
+| `leader_heartbeat_unhealthy: true` (heartbeat age > 2× renew interval) | Leader replica is alive in Redis but failing to renew on schedule — likely stuck in a sync call or starved of CPU | Restart the service to force re-election. |
 | `leader_ttl_seconds < 5` | Leader on the verge of expiring without renew → leader replica is stuck | Restart the service to force re-election. |
 
 ## Diagnostic workflow

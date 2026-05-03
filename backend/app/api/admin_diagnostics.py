@@ -231,8 +231,24 @@ async def _probe_trade_buffer(symbol: str) -> Dict[str, Any]:
 async def _probe_indicators_history(symbol: str) -> Dict[str, Any]:
     try:
         from ..database import AsyncSessionLocal
+        # Latest row per (scheduler_group, timeframe) so a stale or
+        # crashed scheduler is not masked by a healthy one that wrote
+        # more recently. Falls back to a global LIMIT 5 view as well
+        # for at-a-glance recency.
         async with AsyncSessionLocal() as db:
-            rows = (await db.execute(text("""
+            latest_per_group = (await db.execute(text("""
+                SELECT DISTINCT ON (scheduler_group, timeframe)
+                       scheduler_group,
+                       timeframe,
+                       time,
+                       (SELECT array_agg(k ORDER BY k)
+                          FROM jsonb_object_keys(indicators_json) k) AS keys
+                FROM indicators
+                WHERE symbol = :s
+                ORDER BY scheduler_group, timeframe, time DESC
+            """), {"s": symbol})).fetchall()
+
+            recent_rows = (await db.execute(text("""
                 SELECT time,
                        timeframe,
                        scheduler_group,
@@ -243,21 +259,26 @@ async def _probe_indicators_history(symbol: str) -> Dict[str, Any]:
                 ORDER BY time DESC
                 LIMIT 5
             """), {"s": symbol})).fetchall()
-        history = [
-            {
+
+        def _row(r) -> Dict[str, Any]:
+            keys = list(r.keys or [])
+            return {
                 "time": r.time.isoformat() if r.time else None,
                 "age_seconds": _age_seconds(r.time),
                 "timeframe": r.timeframe,
                 "scheduler_group": r.scheduler_group,
-                "indicator_keys": list(r.keys or []),
-                "has_taker_ratio": "taker_ratio" in (r.keys or []),
-                "has_volume_spike": "volume_spike" in (r.keys or []),
-                "has_volume_delta": "volume_delta" in (r.keys or []),
-                "has_spread_pct": "spread_pct" in (r.keys or []),
+                "indicator_keys": keys,
+                "has_taker_ratio": "taker_ratio" in keys,
+                "has_volume_spike": "volume_spike" in keys,
+                "has_volume_delta": "volume_delta" in keys,
+                "has_spread_pct": "spread_pct" in keys,
             }
-            for r in rows
-        ]
-        return {"ok": True, "rows": history}
+
+        return {
+            "ok": True,
+            "latest_per_scheduler_group": [_row(r) for r in latest_per_group],
+            "rows": [_row(r) for r in recent_rows],
+        }
     except Exception as exc:
         logger.warning("[admin-diag] indicators_history failed for %s: %s", symbol, exc)
         return _err(exc)
@@ -339,8 +360,35 @@ async def _probe_live_ohlcv(symbol: str) -> Dict[str, Any]:
 
 async def _probe_live_order_flow(symbol: str) -> Dict[str, Any]:
     try:
+        from ..exchange_adapters.gate_adapter import GateAdapter
         from ..services.order_flow_service import get_order_flow_data
-        of = await get_order_flow_data(symbol, window_seconds=300)
+        from ..services.redis_client import get_async_redis
+
+        window_seconds = 300
+        of = await get_order_flow_data(symbol, window_seconds=window_seconds)
+
+        # Cross-reference: how many trades did the buffer hold inside
+        # the same look-back window, vs. what the public dict reports
+        # as its source. Pinpoints "fallback REST returned zero trades"
+        # vs. "buffer empty so REST took over and succeeded" without
+        # needing log access.
+        buffer_trades_in_window: Optional[int] = None
+        try:
+            redis = await get_async_redis()
+            if redis is not None:
+                normalized = GateAdapter._normalize_symbol(symbol)
+                key = f"trades_buffer:spot:{normalized}"
+                cutoff_ms = (time.time() - window_seconds) * 1000.0
+                buffer_trades_in_window = int(
+                    await redis.zcount(key, cutoff_ms, "+inf")
+                )
+        except Exception as exc:
+            logger.debug(
+                "[admin-diag] live_order_flow buffer-count failed for %s: %s",
+                symbol, exc,
+            )
+
+        source = of.get("taker_source") if of else None
         return {
             "ok": True,
             "taker_ratio": of.get("taker_ratio") if of else None,
@@ -348,8 +396,14 @@ async def _probe_live_order_flow(symbol: str) -> Dict[str, Any]:
             "volume_delta": of.get("volume_delta") if of else None,
             "taker_buy_volume": of.get("taker_buy_volume") if of else None,
             "taker_sell_volume": of.get("taker_sell_volume") if of else None,
-            "source": of.get("taker_source") if of else None,
+            "source": source,
             "window": of.get("taker_window") if of else None,
+            "buffer_trades_in_window": buffer_trades_in_window,
+            "fallback_used": source == "gate_io_trades",
+            "fallback_returned_zero_trades": (
+                source == "gate_io_trades"
+                and (of is None or of.get("taker_buy_volume") is None)
+            ),
         }
     except Exception as exc:
         logger.warning("[admin-diag] live_order_flow failed for %s: %s", symbol, exc)
@@ -358,7 +412,11 @@ async def _probe_live_order_flow(symbol: str) -> Dict[str, Any]:
 
 async def _probe_ws_leader_status() -> Dict[str, Any]:
     try:
-        from ..services.gate_ws_leader import LEADER_KEY
+        from ..services.gate_ws_leader import (
+            LEADER_KEY,
+            LEADER_RENEW_INTERVAL_SECONDS,
+            LEADER_TTL_SECONDS,
+        )
         from ..services.redis_client import get_async_redis
 
         redis = await get_async_redis()
@@ -369,6 +427,21 @@ async def _probe_ws_leader_status() -> Dict[str, Any]:
             }
         holder = await redis.get(LEADER_KEY)
         ttl = await redis.ttl(LEADER_KEY)
+        ttl_int = int(ttl) if ttl is not None and ttl >= 0 else None
+
+        # Each successful renew resets the TTL back to LEADER_TTL_SECONDS,
+        # so (LEADER_TTL_SECONDS - current_ttl) is the seconds-since-last-
+        # renew — i.e. the leader heartbeat age.
+        heartbeat_age: Optional[int] = (
+            max(LEADER_TTL_SECONDS - ttl_int, 0) if ttl_int is not None else None
+        )
+        # Renew runs every LEADER_RENEW_INTERVAL_SECONDS; we tolerate one
+        # missed renew before flagging the leader as unhealthy.
+        unhealthy = (
+            heartbeat_age is not None
+            and heartbeat_age > 2 * LEADER_RENEW_INTERVAL_SECONDS
+        )
+
         return {
             "ok": True,
             "redis_available": True,
@@ -377,7 +450,11 @@ async def _probe_ws_leader_status() -> Dict[str, Any]:
                 if isinstance(holder, (bytes, bytearray))
                 else holder
             ),
-            "leader_ttl_seconds": int(ttl) if ttl is not None and ttl >= 0 else None,
+            "leader_ttl_seconds": ttl_int,
+            "leader_heartbeat_age_seconds": heartbeat_age,
+            "leader_heartbeat_unhealthy": unhealthy,
+            "renew_interval_seconds": LEADER_RENEW_INTERVAL_SECONDS,
+            "lock_ttl_seconds": LEADER_TTL_SECONDS,
             "elected": holder is not None,
         }
     except Exception as exc:
