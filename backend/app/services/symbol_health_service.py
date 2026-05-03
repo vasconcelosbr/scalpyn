@@ -77,9 +77,12 @@ class SymbolHealth:
 
     symbol: str
     status: str
+    market_type: str = "spot"
     is_approved: bool = False
+    is_active: bool = False
     pool_row_exists: bool = False
     in_ws_subscription: bool = False
+    ws_subscribed: bool = False
     buffer_member_count: int = 0
     buffer_newest_age_seconds: Optional[float] = None
     indicator_age_seconds: Optional[float] = None
@@ -175,9 +178,22 @@ async def _load_pool_state(db) -> Dict[str, Dict[str, bool]]:
 
 
 async def _load_ws_universe() -> set:
-    """Snapshot of the WS leader's spot subscription universe."""
+    """Snapshot of the WS leader's actual spot subscription set.
+
+    Prefers the *live* subscription state held by the in-process
+    ``GateWSClient`` singleton (the leader's truth) so NOT_SUBSCRIBED
+    detection reflects what the socket actually subscribed to — not
+    just what the resolver *would* have asked for. Falls back to the
+    DB-resolved universe only when no GateWSClient is running in this
+    replica (reader replica, audit run before WS bootstrap, etc.).
+    """
     from ..exchange_adapters.gate_adapter import GateAdapter
+    from ..websocket.gate_ws_client import live_subscribed_spot_symbols
     from .gate_ws_leader import _resolve_spot_symbols
+
+    live = live_subscribed_spot_symbols()
+    if live is not None:
+        return {GateAdapter._normalize_symbol(s) for s in live if s}
 
     try:
         syms = await _resolve_spot_symbols()
@@ -185,6 +201,73 @@ async def _load_ws_universe() -> set:
         logger.warning("[SYMBOL-HEALTH] _resolve_spot_symbols failed: %s", exc)
         return set()
     return {GateAdapter._normalize_symbol(s) for s in syms if s}
+
+
+async def _probe_buffers_pipelined(
+    redis,
+    symbols: List[str],
+    chunk_size: int = 500,
+) -> Dict[str, Dict[str, Any]]:
+    """Pipelined ZCARD + (conditional) ZRANGE for many trade buffers.
+
+    Round-trip count is O(N / chunk_size), not O(N). For empty/erroring
+    buffers we skip the per-symbol ZRANGE entirely so the second pass
+    only runs for symbols that actually have data.
+    """
+    from ..exchange_adapters.gate_adapter import GateAdapter
+
+    out: Dict[str, Dict[str, Any]] = {}
+    if not symbols:
+        return out
+
+    if redis is None:
+        for s in symbols:
+            out[s] = {"member_count": 0, "newest_age_seconds": None, "error": "redis_unavailable"}
+        return out
+
+    norm = [GateAdapter._normalize_symbol(s) for s in symbols]
+    keys = [f"trades_buffer:spot:{s}".encode() for s in norm]
+
+    for i in range(0, len(symbols), chunk_size):
+        sub_syms = symbols[i:i + chunk_size]
+        sub_keys = keys[i:i + chunk_size]
+        # ZCARD pass
+        try:
+            pipe = redis.pipeline(transaction=False)
+            for k in sub_keys:
+                pipe.zcard(k)
+            counts = await pipe.execute()
+        except Exception as exc:
+            for s in sub_syms:
+                out[s] = {"member_count": 0, "newest_age_seconds": None, "error": f"{type(exc).__name__}: {exc}"}
+            continue
+        # Newest-age pass (only for buffers with members)
+        nonempty: List[int] = []
+        for j, c in enumerate(counts):
+            cnt = int(c or 0)
+            if cnt > 0:
+                nonempty.append(j)
+            out[sub_syms[j]] = {
+                "member_count": cnt,
+                "newest_age_seconds": None,
+                "error": None,
+            }
+        if nonempty:
+            try:
+                pipe2 = redis.pipeline(transaction=False)
+                for j in nonempty:
+                    pipe2.zrange(sub_keys[j], -1, -1, withscores=True)
+                newest = await pipe2.execute()
+                now_ms = time.time() * 1000.0
+                for j, res in zip(nonempty, newest):
+                    if res:
+                        out[sub_syms[j]]["newest_age_seconds"] = round(
+                            (now_ms - float(res[0][1])) / 1000.0, 1
+                        )
+            except Exception as exc:
+                for j in nonempty:
+                    out[sub_syms[j]]["error"] = f"{type(exc).__name__}: {exc}"
+    return out
 
 
 async def _probe_buffer(redis, symbol: str) -> Dict[str, Any]:
@@ -338,9 +421,12 @@ def _classify(
     record = SymbolHealth(
         symbol=symbol,
         status=STATUS_OK,
+        market_type="spot",
         is_approved=is_approved,
+        is_active=raw_is_active,
         pool_row_exists=pool_exists,
         in_ws_subscription=in_ws,
+        ws_subscribed=in_ws,
         buffer_member_count=int(buf.get("member_count") or 0),
         buffer_newest_age_seconds=buf.get("newest_age_seconds"),
         indicator_age_seconds=ind.get("age_seconds"),
@@ -453,8 +539,12 @@ class SymbolHealthService:
             # not safe for concurrent statement execution).
             indicator_state = await _load_latest_indicators(db, target)
 
-        # Buffer probes hit Redis only — safe to run concurrently. We
-        # bound the parallelism so a 10⁴-symbol pool does not melt Redis.
+        # Buffer probes hit Redis only. We pipeline every ZCARD into a
+        # single round-trip per chunk so auditing the full ~10⁴-symbol
+        # universe stays scalable. The follow-up ZRANGE for "newest age"
+        # only fires for buffers that returned ZCARD>0, also pipelined.
+        buf_map = await _probe_buffers_pipelined(redis, target, chunk_size=500)
+
         sem = asyncio.Semaphore(self._concurrency)
 
         async def _one(sym: str) -> SymbolHealth:
@@ -464,7 +554,11 @@ class SymbolHealthService:
                     {"is_approved": False, "is_active": False, "exists": False},
                 )
                 in_ws = sym in ws_universe
-                buf = await _probe_buffer(redis, sym)
+                buf = buf_map.get(sym, {
+                    "member_count": 0,
+                    "newest_age_seconds": None,
+                    "error": None,
+                })
                 ind = indicator_state.get(sym, {
                     "age_seconds": None,
                     "has_taker_ratio": False,

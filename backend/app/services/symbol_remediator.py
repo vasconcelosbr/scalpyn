@@ -545,13 +545,38 @@ class SymbolRemediator:
                         else:
                             a.error = "ZCARD still 0 after retry"
 
+        # ── POST-REFRESH ZCARD CONFIRMATION ─────────────────────────────
+        # For every symbol whose status depended on a subscription/approval
+        # change we just attempted (freshly approved or previously
+        # NOT_SUBSCRIBED), we MUST confirm ingestion actually resumed
+        # before claiming the fix worked. We poll the trade buffer up to
+        # 3×2s (same cadence as ACTION_RETRY_BUFFER). Recompute is then
+        # only enqueued for the confirmed set — stale/unconfirmed paths
+        # remain "pendente" in Etapa 8.
+        confirmed_post_refresh: set = set()
+        post_refresh_targets = sorted(
+            set(approved_verified)
+            | {r.symbol for r in report.symbols if r.status == STATUS_NOT_SUBSCRIBED}
+        )
+        if post_refresh_targets and not dry_run and refresh_requested:
+            for sym in post_refresh_targets:
+                count = await _retry_buffer(sym)
+                if count > 0:
+                    confirmed_post_refresh.add(sym)
+            logger.info(
+                "[REDIS] post-refresh ZCARD confirmation: %d/%d symbols streaming",
+                len(confirmed_post_refresh), len(post_refresh_targets),
+            )
+
         # ── ACTION 4: enqueue recompute_indicators per symbol ───────────
-        # Triggers: NO_INDICATOR_DATA, NO_REDIS_DATA recovered (ZCARD>0
-        # after retry), freshly approved (verified), and previously
-        # NOT_SUBSCRIBED — all paths whose ingestion was just unblocked
-        # would otherwise wait up to 5 minutes for the next scheduler
-        # tick. ``compute_indicators.compute_5m`` iterates the universe
-        # so a single dispatch covers every targeted symbol; per-symbol
+        # Recompute targets are strictly the set with verified ingestion:
+        #   * NO_INDICATOR_DATA (already approved+subscribed+streaming —
+        #     only indicators are missing).
+        #   * NO_REDIS_DATA recovered after the 3×2s retry above.
+        #   * Freshly approved + ZCARD>0 confirmed post-refresh.
+        #   * Previously NOT_SUBSCRIBED + ZCARD>0 confirmed post-refresh.
+        # ``compute_indicators.compute_5m`` iterates the universe so a
+        # single dispatch covers every targeted symbol; per-symbol
         # actions are still stamped so the report keeps that intent.
         recompute_targets: List[str] = []
         seen_recompute: set = set()
@@ -567,6 +592,10 @@ class SymbolRemediator:
                 reason=reason,
             ))
 
+        # Stamp deferred (pendente) actions for symbols that did NOT
+        # confirm post-refresh — keeps Etapa-8 honest.
+        deferred_post_refresh = set(post_refresh_targets) - confirmed_post_refresh
+
         for rec in report.symbols:
             if rec.status == STATUS_NO_INDICATOR_DATA:
                 _add_recompute(
@@ -578,23 +607,25 @@ class SymbolRemediator:
                 sym,
                 "NO_REDIS_DATA recovered (ZCARD>0 post-retry) → enqueue compute_5m",
             )
-        # Newly approved spot rows: WS will pick them up on the refresh,
-        # buffer fills shortly after, but indicators won't appear until
-        # the next 5-min cycle without an explicit kick.
-        for sym in approved_verified:
-            _add_recompute(
-                sym,
-                "freshly approved → indicators will be stale until next compute_5m kick",
-            )
-        # Symbols that were stuck in NOT_SUBSCRIBED also benefit: the
-        # WS refresh will resolve them, but their indicator row may be
-        # missing entirely.
-        for rec in report.symbols:
-            if rec.status == STATUS_NOT_SUBSCRIBED:
+        for sym in sorted(confirmed_post_refresh):
+            if sym in approved_verified:
                 _add_recompute(
-                    rec.symbol,
-                    "NOT_SUBSCRIBED → after WS refresh, recompute indicators",
+                    sym,
+                    "freshly approved + ZCARD>0 post-refresh → enqueue compute_5m",
                 )
+            else:
+                _add_recompute(
+                    sym,
+                    "NOT_SUBSCRIBED + ZCARD>0 post-refresh → enqueue compute_5m",
+                )
+        for sym in sorted(deferred_post_refresh):
+            actions.append(RemediationAction(
+                symbol=sym,
+                action=ACTION_RECOMPUTE_INDICATORS,
+                reason="ingestion not confirmed (ZCARD=0 after refresh) — deferred",
+                executed=False,
+                error="ingestion_not_confirmed",
+            ))
 
         recompute_enqueued = False
         if recompute_targets and self._recompute_indicators and not dry_run:
@@ -609,12 +640,19 @@ class SymbolRemediator:
                     len([r for r in report.symbols if r.status == STATUS_NO_INDICATOR_DATA]),
                 )
                 for a in actions:
-                    if a.action == ACTION_RECOMPUTE_INDICATORS:
+                    if (
+                        a.action == ACTION_RECOMPUTE_INDICATORS
+                        and a.symbol in seen_recompute
+                        and a.error != "ingestion_not_confirmed"
+                    ):
                         a.executed = True
             except Exception as exc:
                 logger.warning("[INDICATORS] failed to enqueue compute_5m: %s", exc)
                 for a in actions:
-                    if a.action == ACTION_RECOMPUTE_INDICATORS:
+                    if (
+                        a.action == ACTION_RECOMPUTE_INDICATORS
+                        and a.symbol in seen_recompute
+                    ):
                         a.error = f"{type(exc).__name__}: {exc}"
 
         counts: Dict[str, int] = {}

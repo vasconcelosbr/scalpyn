@@ -667,3 +667,83 @@ def test_remediator_fails_closed_on_validator_outage(monkeypatch):
     assert len(approve_actions) == 1
     assert approve_actions[0].executed is False
     assert approve_actions[0].error == "validator_unavailable"
+
+
+def test_load_ws_universe_uses_live_subscribed_state(monkeypatch):
+    """NOT_SUBSCRIBED detection must read the LIVE WS client's spot
+    set, not the resolver output. When a GateWSClient is running, only
+    symbols actually subscribed on the socket count as in_ws."""
+    from app.services import symbol_health_service as svc
+    from app.websocket import gate_ws_client as wsmod
+
+    monkeypatch.setattr(wsmod, "live_subscribed_spot_symbols", lambda: {"BTC_USDT"})
+
+    async def boom():
+        raise AssertionError("must NOT fall back to resolver when live state is available")
+
+    from app.services import gate_ws_leader as leader_mod
+    monkeypatch.setattr(leader_mod, "_resolve_spot_symbols", boom)
+
+    universe = asyncio.run(svc._load_ws_universe())
+    assert universe == {"BTC_USDT"}
+
+
+def test_remediator_only_recomputes_for_post_refresh_confirmed(monkeypatch):
+    """Recompute MUST only fire for symbols whose ZCARD>0 was confirmed
+    after the WS refresh; unconfirmed symbols are stamped as deferred
+    (executed=False, error=ingestion_not_confirmed)."""
+    from app.services import symbol_remediator as rem_mod
+
+    async def fake_bulk(db, syms):
+        return len(syms)
+    async def fake_verify(db, syms):
+        return set(syms)
+    async def fake_refresh():
+        return {"requested": True, "ts_ms": 1}
+
+    # Simulate post-refresh ingestion: BTC streams (count=10),
+    # ETH still silent (count=0), DOGE (NOT_SUBSCRIBED) streams.
+    counts_by_sym = {"BTC_USDT": 10, "ETH_USDT": 0, "DOGE_USDT": 5}
+    async def fake_retry(symbol, retries=3, delay=2.0):
+        return counts_by_sym.get(symbol, 0)
+
+    sent_tasks = []
+    class _FakeCelery:
+        def send_task(self, name, *a, **kw):
+            sent_tasks.append(name)
+
+    monkeypatch.setattr(rem_mod, "_bulk_approve", fake_bulk)
+    monkeypatch.setattr(rem_mod, "_verify_approved", fake_verify)
+    monkeypatch.setattr(rem_mod, "_retry_buffer", fake_retry)
+
+    from app.services import gate_ws_leader as leader_mod
+    monkeypatch.setattr(leader_mod, "refresh_subscriptions", fake_refresh)
+
+    class _SessionCtx:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+    import app.database as db_mod
+    monkeypatch.setattr(db_mod, "AsyncSessionLocal", lambda: _SessionCtx())
+
+    import app.tasks.celery_app as celery_mod
+    monkeypatch.setattr(celery_mod, "celery_app", _FakeCelery())
+
+    report = _build_report(
+        ("BTC_USDT", STATUS_NOT_APPROVED),
+        ("ETH_USDT", STATUS_NOT_APPROVED),
+        ("DOGE_USDT", STATUS_NOT_SUBSCRIBED),
+    )
+    remediator = rem_mod.SymbolRemediator(
+        validator=_FakeValidator(),
+        recompute_indicators=True,
+    )
+    out = asyncio.run(remediator.remediate(report, dry_run=False))
+
+    recompute = [a for a in out.actions if a.action == rem_mod.ACTION_RECOMPUTE_INDICATORS]
+    by_sym = {a.symbol: a for a in recompute}
+
+    assert by_sym["BTC_USDT"].executed is True
+    assert by_sym["DOGE_USDT"].executed is True
+    assert by_sym["ETH_USDT"].executed is False
+    assert by_sym["ETH_USDT"].error == "ingestion_not_confirmed"
+    assert sent_tasks == ["app.tasks.compute_indicators.compute_5m"]

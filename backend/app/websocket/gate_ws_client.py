@@ -666,3 +666,17 @@ async def stop_gate_ws() -> None:
 def get_gate_ws() -> Optional[GateWSClient]:
     """Return the running global GateWSClient, or None if not started."""
     return _global_client
+
+
+def live_subscribed_spot_symbols() -> Optional[set]:
+    """Snapshot of the live spot subscription set on the running leader.
+
+    Returns ``None`` when no GateWSClient is active in this process —
+    callers (e.g. ``SymbolHealthService``) must then fall back to the
+    DB-resolved universe. Returning a fresh ``set`` keeps the caller
+    decoupled from the client's internal mutable list.
+    """
+    client = _global_client
+    if client is None:
+        return None
+    return set(client._spot_pairs)
