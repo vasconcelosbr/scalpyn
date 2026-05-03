@@ -143,13 +143,11 @@ def test_celery_diagnostics_dispatch_collect_all(
 
     fake_async = SimpleNamespace(id="task-uuid-123", state="STARTED", traceback=None)
 
-    class _FakeCeleryApp:
-        def send_task(self, name, *a, **kw):
-            assert name == "app.tasks.collect_market_data.collect_all"
-            return fake_async
-
-    fake_celery_module = SimpleNamespace(celery_app=_FakeCeleryApp())
-    monkeypatch.setitem(sys.modules, "app.tasks.celery_app", fake_celery_module)
+    from app.tasks import collect_market_data as collect_mod
+    monkeypatch.setattr(
+        collect_mod.collect_all, "apply_async",
+        lambda *a, **kw: fake_async, raising=False,
+    )
 
     # Skip the real 3 s sleep — patch time.sleep used inside the endpoint.
     monkeypatch.setattr(system_api._time, "sleep", lambda _s: None)

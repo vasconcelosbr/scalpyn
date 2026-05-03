@@ -78,7 +78,7 @@ def _scan_celery_processes() -> Dict[str, Any]:
         return {
             "worker_processes": [],
             "beat_processes": [],
-            "error": f"psutil_unavailable: {type(exc).__name__}: {exc}",
+            "process_scan_error": f"psutil_unavailable: {type(exc).__name__}: {exc}",
         }
     try:
         for proc in psutil.process_iter(["pid", "cmdline"]):
@@ -98,7 +98,7 @@ def _scan_celery_processes() -> Dict[str, Any]:
     return {
         "worker_processes": sorted(workers),
         "beat_processes": sorted(beats),
-        "error": error,
+        "process_scan_error": error,
     }
 
 
@@ -111,8 +111,11 @@ def _redis_probe() -> Dict[str, Any]:
         "collect_all_runs": None,
         "collect_all_errors": None,
         "last_collect_all_error": None,
-        "error": None,
+        "redis_error": None,
     }
+    # Numeric counters get explicit int casting so the runbook can treat
+    # them as metrics; timestamp/error markers stay as strings.
+    int_keys = {COLLECT_ALL_RUNS_KEY, COLLECT_ALL_ERRORS_KEY}
     try:
         import redis as _redis
         from ..config import settings
@@ -136,11 +139,16 @@ def _redis_probe() -> Dict[str, Any]:
                     continue
                 if isinstance(val, (bytes, bytearray)):
                     val = val.decode("utf-8", errors="replace")
+                if key in int_keys:
+                    try:
+                        val = int(val)
+                    except (TypeError, ValueError):
+                        pass
                 out[dest] = val
             except Exception:
                 continue
     except Exception as exc:
-        out["error"] = f"{type(exc).__name__}: {exc}"
+        out["redis_error"] = f"{type(exc).__name__}: {exc}"
     return out
 
 
@@ -149,7 +157,7 @@ def _inspect_celery() -> Dict[str, Any]:
         "inspect_active": None,
         "inspect_registered": None,
         "inspect_stats": None,
-        "error": None,
+        "inspect_error": None,
     }
     try:
         from ..tasks.celery_app import celery_app
@@ -174,7 +182,7 @@ def _inspect_celery() -> Dict[str, Any]:
             scrubbed[node] = payload
         out["inspect_stats"] = scrubbed
     except Exception as exc:
-        out["error"] = f"{type(exc).__name__}: {exc}"
+        out["inspect_error"] = f"{type(exc).__name__}: {exc}"
     return out
 
 
@@ -214,10 +222,11 @@ async def celery_diagnostics(
             "error": None,
         }
         try:
-            from ..tasks.celery_app import celery_app
-            async_result = celery_app.send_task(
-                "app.tasks.collect_market_data.collect_all",
-            )
+            # Use the task's own ``apply_async()`` for spec fidelity (the
+            # task spec calls out ``collect_all.apply_async()`` explicitly)
+            # and for clearer traceability in Flower / inspect output.
+            from ..tasks.collect_market_data import collect_all as _collect_all_task
+            async_result = _collect_all_task.apply_async()
             dispatch_result["dispatched_task_id"] = async_result.id
             # Block 3 s in a thread so the event loop is not pinned.
             import asyncio as _asyncio
