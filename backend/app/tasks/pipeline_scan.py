@@ -1933,6 +1933,7 @@ async def _run_pipeline_scan():
                             select(PoolCoin).where(
                                 PoolCoin.pool_id == source_pool_id,
                                 PoolCoin.is_active == True,
+                                PoolCoin.is_approved == True,
                                 PoolCoin.market_type == wl_market_mode,
                             )
                         )).scalars().all()

@@ -82,6 +82,7 @@ async def _score_async():
             FROM indicators i
             JOIN pool_coins p ON i.symbol = p.symbol
             WHERE p.is_active = true
+              AND p.is_approved = true
               AND i.time > now() - interval '2 hours'
             ORDER BY i.symbol, i.time DESC
         """))
