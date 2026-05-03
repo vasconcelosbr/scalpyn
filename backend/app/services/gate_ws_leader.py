@@ -325,18 +325,53 @@ class _LeaderRunner:
                     logger.warning("[gate-ws-leader] on_lost callback failed: %s", exc)
                 return
 
-            # Cross-instance refresh trigger (Task #194). If a fresher
-            # request than our serve start exists in Redis, drop the WS
-            # so the supervisor re-resolves and re-subscribes.
+            # Cross-instance refresh trigger (Task #194).
+            # Round-2 review (blocker 5): prefer an in-place subscription
+            # diff so existing streams are not interrupted. Only fall
+            # back to the destructive drop+reconnect if the in-place
+            # path is unavailable (no client, no live socket) or fails.
             if await self._refresh_requested():
+                if await self._try_in_place_refresh():
+                    # Bump the watermark so the SAME refresh marker
+                    # doesn't keep firing on every renewal tick.
+                    import time as _time
+                    self._serve_started_ms = int(_time.time() * 1000)
+                    continue
                 logger.info(
-                    "[WS] refresh_subscriptions requested — dropping WS to re-resolve symbols"
+                    "[WS] refresh_subscriptions requested — in-place diff unavailable, "
+                    "dropping WS to re-resolve symbols"
                 )
                 try:
                     await self._on_lost()
                 except Exception as exc:
                     logger.warning("[gate-ws-leader] refresh on_lost failed: %s", exc)
                 return
+
+    async def _try_in_place_refresh(self) -> bool:
+        """Attempt an in-place subscription diff against the live WS.
+
+        Returns ``True`` on success, ``False`` to signal the caller to
+        fall back to drop+reconnect. Never raises — any exception is
+        downgraded to a warning + ``False``.
+        """
+        try:
+            from ..websocket.gate_ws_client import get_gate_ws
+            client = get_gate_ws()
+            if client is None:
+                return False
+            spot_pairs, futures_contracts = await asyncio.gather(
+                _resolve_spot_symbols(),
+                _resolve_futures_symbols(),
+            )
+            await client.apply_subscription_diff(spot_pairs, futures_contracts)
+            logger.info(
+                "[WS] in-place subscription diff applied (spot=%d, futures=%d)",
+                len(spot_pairs), len(futures_contracts),
+            )
+            return True
+        except Exception as exc:
+            logger.warning("[WS] in-place diff failed, will fall back: %s", exc)
+            return False
 
     async def _refresh_requested(self) -> bool:
         if self._serve_started_ms is None:

@@ -74,17 +74,20 @@ async def _evaluate_streaming_health(redis, report) -> int:
 
     Returns the number of alerts emitted in this cycle.
     """
-    from ..services.symbol_health_service import (
-        STATUS_NO_REDIS_DATA,
-    )
     if redis is None:
         return 0
     now_ms = int(time.time() * 1000)
     fired = 0
     for rec in report.symbols:
         sym_bytes = rec.symbol.encode()
-        # Symbol is currently streaming → reset the first-empty marker.
-        if rec.status != STATUS_NO_REDIS_DATA:
+        # The prompt's rule-2 predicate is strict: ``ZCARD == 0`` for
+        # >120 s on an APPROVED symbol. ``STATUS_NO_REDIS_DATA`` is a
+        # superset that also fires on stale ``newest_age`` and on probe
+        # errors — both of those are real degradations but they are NOT
+        # "symbol not streaming" and would falsely page on-call. Filter
+        # to ``buffer_member_count == 0`` and ``is_approved`` here so
+        # the alert text remains honest.
+        if rec.buffer_member_count != 0 or not rec.is_approved:
             try:
                 await redis.delete(_KEY_FIRST_SEEN_EMPTY + sym_bytes)
             except Exception:

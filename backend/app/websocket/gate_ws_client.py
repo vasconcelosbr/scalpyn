@@ -117,6 +117,17 @@ class GateWSClient:
         self._futures_task: Optional[asyncio.Task] = None
         self._spot_task: Optional[asyncio.Task] = None
 
+        # Live WS handles, populated while connected. Used by
+        # ``apply_subscription_diff`` to send subscribe/unsubscribe
+        # frames in-place without dropping the connection. ``None``
+        # means "no live socket right now" (between reconnects), in
+        # which case the caller should fall back to drop+reconnect.
+        self._spot_ws = None
+        self._futures_ws = None
+        # Single mutex serialises in-place diffs so two near-simultaneous
+        # refresh ticks cannot interleave subscribe/unsubscribe frames.
+        self._diff_lock = asyncio.Lock()
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -263,6 +274,8 @@ class GateWSClient:
             close_timeout=10,
         ) as ws:
             logger.info("Futures WS connected")
+            # Expose for in-place subscription diff. Cleared in finally.
+            self._futures_ws = ws
 
             auth_ok = await self._send_auth(ws, "futures")
             # Two distinct gauges (Task #171):
@@ -286,6 +299,7 @@ class GateWSClient:
             try:
                 await self._receive_loop(ws)
             finally:
+                self._futures_ws = None
                 set_ws_connected("futures", False, instance=self._instance_id)
                 set_ws_auth_ok("futures", False, instance=self._instance_id)
                 ping_task.cancel()
@@ -304,6 +318,7 @@ class GateWSClient:
             close_timeout=10,
         ) as ws:
             logger.info("Spot WS connected")
+            self._spot_ws = ws
 
             auth_ok = await self._send_auth(ws, "spot")
             # See _run_futures_ws — same two-gauge contract.
@@ -320,6 +335,7 @@ class GateWSClient:
             try:
                 await self._receive_loop(ws)
             finally:
+                self._spot_ws = None
                 set_ws_connected("spot", False, instance=self._instance_id)
                 set_ws_auth_ok("spot", False, instance=self._instance_id)
                 ping_task.cancel()
@@ -426,18 +442,92 @@ class GateWSClient:
 
     async def _subscribe(self, ws, channel: str, payload: list) -> None:
         """Send a subscribe message for the given channel and payload."""
-        sub_msg = {
+        await self._send_sub_event(ws, channel, payload, event="subscribe")
+
+    async def _unsubscribe(self, ws, channel: str, payload: list) -> None:
+        """Send an unsubscribe message for the given channel and payload."""
+        await self._send_sub_event(ws, channel, payload, event="unsubscribe")
+
+    async def _send_sub_event(self, ws, channel: str, payload: list, *, event: str) -> None:
+        msg = {
             "time": int(time.time()),
             "channel": channel,
-            "event": "subscribe",
+            "event": event,
             "payload": payload,
         }
         try:
-            await ws.send(json.dumps(sub_msg))
-            logger.debug("Subscribed to channel '%s' with payload %s", channel, payload)
+            await ws.send(json.dumps(msg))
+            logger.debug("[%s] channel='%s' payload=%s", event, channel, payload)
         except Exception as exc:
-            logger.error("Failed to subscribe to channel '%s': %s", channel, exc)
+            logger.error("Failed to %s channel '%s': %s", event, channel, exc)
             raise
+
+    # ── Public: in-place subscription diff (Task #194) ────────────────────────
+
+    async def apply_subscription_diff(
+        self,
+        spot_pairs: list[str],
+        futures_contracts: list[str],
+    ) -> dict:
+        """Reconcile the live subscription set against ``spot_pairs`` /
+        ``futures_contracts`` without dropping the WebSocket connection.
+
+        Per the Task #194 round-2 review (blocker 5), forcing a full
+        drop+reconnect for every refresh is unnecessarily disruptive:
+        clients lose the ticker/order/trades stream for ~1–3 s while the
+        socket re-handshakes, re-authenticates, and re-subscribes the
+        WHOLE universe. The right primitive is "subscribe the new ones,
+        unsubscribe the gone ones, leave the rest alone".
+
+        Returns a dict ``{"spot": {"added": N, "removed": N},
+        "futures": {"added": N, "removed": N}}``.
+
+        Raises ``RuntimeError`` when the requested market has no live
+        socket — the caller must fall back to drop+reconnect in that
+        case so the system can never silently lose its subscriptions.
+        """
+        async with self._diff_lock:
+            spot_added = sorted(set(spot_pairs) - set(self._spot_pairs))
+            spot_removed = sorted(set(self._spot_pairs) - set(spot_pairs))
+            fut_added = sorted(set(futures_contracts) - set(self._contracts))
+            fut_removed = sorted(set(self._contracts) - set(futures_contracts))
+
+            spot_changes = bool(spot_added or spot_removed)
+            fut_changes = bool(fut_added or fut_removed)
+
+            if spot_changes and self._spot_ws is None:
+                raise RuntimeError("spot WS not connected — cannot apply in-place diff")
+            if fut_changes and self._futures_ws is None:
+                raise RuntimeError("futures WS not connected — cannot apply in-place diff")
+
+            if spot_added:
+                for channel, _ in _spot_channel_payloads(spot_added):
+                    await self._subscribe(self._spot_ws, channel, spot_added)
+            if spot_removed:
+                for channel, _ in _spot_channel_payloads(spot_removed):
+                    await self._unsubscribe(self._spot_ws, channel, spot_removed)
+            if fut_added:
+                for channel, _ in _futures_channel_payloads(fut_added):
+                    await self._subscribe(self._futures_ws, channel, fut_added)
+            if fut_removed:
+                for channel, _ in _futures_channel_payloads(fut_removed):
+                    await self._unsubscribe(self._futures_ws, channel, fut_removed)
+
+            # Update the desired-state lists ONLY after the WS frames
+            # are flushed so a mid-flight error leaves the in-memory
+            # state matching what the broker actually received.
+            self._spot_pairs = list(spot_pairs)
+            self._contracts = list(futures_contracts)
+
+            logger.info(
+                "[WS] apply_subscription_diff spot(+%d/-%d) futures(+%d/-%d)",
+                len(spot_added), len(spot_removed),
+                len(fut_added), len(fut_removed),
+            )
+            return {
+                "spot": {"added": len(spot_added), "removed": len(spot_removed)},
+                "futures": {"added": len(fut_added), "removed": len(fut_removed)},
+            }
 
     # ── Internal: dispatch ────────────────────────────────────────────────────
 

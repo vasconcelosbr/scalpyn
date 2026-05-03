@@ -209,6 +209,53 @@ async def _bulk_approve(db, symbols: Iterable[str]) -> int:
     return int(res.rowcount or 0)
 
 
+async def _verify_approved(db, symbols: Iterable[str]) -> Set[str]:
+    """Return the subset of ``symbols`` whose pool_coins row is now approved + active.
+
+    Per-symbol verification gate (Etapa 8 of the prompt). Only symbols
+    confirmed as ``is_active=TRUE AND is_approved=TRUE`` post-update may
+    be marked ``executed=True`` so the operator-facing ``corrigidos``
+    counter is truthful — bulk rowcount alone hides per-row failures
+    such as the row being deleted between SELECT and UPDATE, or the
+    spot/futures pool guard rejecting the row silently.
+    """
+    syms = [s for s in symbols if s]
+    if not syms:
+        return set()
+    res = await db.execute(
+        text("""
+            SELECT symbol FROM pool_coins
+             WHERE symbol = ANY(:syms)
+               AND is_active = TRUE
+               AND is_approved = TRUE
+               AND pool_id IN (SELECT id FROM pools WHERE market_type = 'spot')
+        """),
+        {"syms": syms},
+    )
+    return {row[0] for row in res.fetchall()}
+
+
+async def _verify_removed(db, symbols: Iterable[str]) -> Set[str]:
+    """Return the subset of ``symbols`` no longer present in any spot pool row.
+
+    Mirror of :func:`_verify_approved` for the DELETE path: a symbol is
+    considered remediated only when no spot pool row remains.
+    """
+    syms = [s for s in symbols if s]
+    if not syms:
+        return set()
+    res = await db.execute(
+        text("""
+            SELECT symbol FROM pool_coins
+             WHERE symbol = ANY(:syms)
+               AND pool_id IN (SELECT id FROM pools WHERE market_type = 'spot')
+        """),
+        {"syms": syms},
+    )
+    still_present = {row[0] for row in res.fetchall()}
+    return {s for s in syms if s not in still_present}
+
+
 async def _remove_from_pool(db, symbols: Iterable[str]) -> int:
     """Delete pool_coins rows for symbols that no longer exist on Gate.io spot.
 
@@ -312,40 +359,69 @@ class SymbolRemediator:
                 reason="NOT_APPROVED → set pool_coins.is_approved = true",
             ))
 
-        # ── ACTION 1: bulk approve ───────────────────────────────────────
+        # ── ACTION 1: bulk approve + per-symbol verification ─────────────
+        # Per the code-review (Task #194 round 2), the rowcount returned
+        # by ``_bulk_approve`` is NOT enough to mark a symbol as
+        # corrected: the symbol may have been deleted between SELECT and
+        # UPDATE, the spot/futures pool guard may have rejected it, or
+        # ``is_active`` may have flipped concurrently. We re-query the
+        # final per-row state and only mark ``executed=True`` for
+        # symbols whose row is now genuinely approved+active+spot.
+        approved_verified: Set[str] = set()
         if approve_targets and not dry_run:
             from ..database import AsyncSessionLocal
             try:
                 async with AsyncSessionLocal() as db:
                     affected = await _bulk_approve(db, approve_targets)
+                    approved_verified = await _verify_approved(db, approve_targets)
                 logger.info(
-                    "[AUDIT-FIX] approved %d/%d symbols (validator_failed=%s)",
-                    affected, len(approve_targets), self._validator.last_load_failed,
+                    "[AUDIT-FIX] approved %d/%d symbols (verified=%d, validator_failed=%s)",
+                    affected, len(approve_targets), len(approved_verified),
+                    self._validator.last_load_failed,
                 )
                 for a in actions:
                     if a.action == ACTION_APPROVE and a.symbol in approve_targets:
-                        a.executed = True
                         a.extra["bulk_affected"] = affected
+                        if a.symbol in approved_verified:
+                            a.executed = True
+                            # Per-symbol canonical fix log (Etapa 7 of the
+                            # prompt). One line per actually-changed symbol so
+                            # the operator can audit the run grep-style.
+                            logger.info(
+                                "[AUDIT-FIX] symbol=%s from=NOT_APPROVED to=APPROVED action=%s",
+                                a.symbol, ACTION_APPROVE,
+                            )
+                        else:
+                            a.error = "post-approval verification failed (row missing, futures, or inactive)"
             except Exception as exc:
                 logger.warning("[AUDIT-FIX] bulk approve failed: %s", exc)
                 for a in actions:
                     if a.action == ACTION_APPROVE:
                         a.error = f"{type(exc).__name__}: {exc}"
 
-        # ── ACTION 1b: bulk remove non-tradable from pool ────────────────
+        # ── ACTION 1b: bulk remove + per-symbol verification ─────────────
+        removed_verified: Set[str] = set()
         if remove_targets and not dry_run:
             from ..database import AsyncSessionLocal
             try:
                 async with AsyncSessionLocal() as db:
                     removed = await _remove_from_pool(db, remove_targets)
+                    removed_verified = await _verify_removed(db, remove_targets)
                 logger.warning(
-                    "[AUDIT-FIX] removed %d/%d non-tradable spot symbols from pool_coins",
-                    removed, len(remove_targets),
+                    "[AUDIT-FIX] removed %d/%d non-tradable spot symbols (verified=%d)",
+                    removed, len(remove_targets), len(removed_verified),
                 )
                 for a in actions:
                     if a.action == ACTION_REMOVE_FROM_POOL and a.symbol in remove_targets:
-                        a.executed = True
                         a.extra["bulk_removed"] = removed
+                        if a.symbol in removed_verified:
+                            a.executed = True
+                            logger.info(
+                                "[AUDIT-FIX] symbol=%s from=NOT_APPROVED to=REMOVED action=%s",
+                                a.symbol, ACTION_REMOVE_FROM_POOL,
+                            )
+                        else:
+                            a.error = "post-delete verification failed (row still present)"
             except Exception as exc:
                 logger.warning("[AUDIT-FIX] bulk remove_from_pool failed: %s", exc)
                 for a in actions:
@@ -423,27 +499,53 @@ class SymbolRemediator:
         # dispatch it once when at least one symbol qualifies and stamp
         # every targeted symbol with its own RemediationAction so the
         # report still shows per-symbol intent.
+        # Recompute trigger now covers FOUR per-symbol cases. Anything
+        # whose ingestion path was just unblocked may have stale or
+        # missing indicators that the next regular 5-min scheduler tick
+        # would only repair after up to 5 more minutes — too long for
+        # the operator-facing report to truthfully claim "corrigido".
         recompute_targets: List[str] = []
         seen_recompute: set = set()
-        for rec in report.symbols:
-            if rec.status == STATUS_NO_INDICATOR_DATA and rec.symbol not in seen_recompute:
-                recompute_targets.append(rec.symbol)
-                seen_recompute.add(rec.symbol)
-                actions.append(RemediationAction(
-                    symbol=rec.symbol,
-                    action=ACTION_RECOMPUTE_INDICATORS,
-                    reason="NO_INDICATOR_DATA → enqueue compute_indicators.compute_5m",
-                ))
-        for sym in recovered_after_retry:
+
+        def _add_recompute(sym: str, reason: str) -> None:
             if sym in seen_recompute:
-                continue
+                return
             recompute_targets.append(sym)
             seen_recompute.add(sym)
             actions.append(RemediationAction(
                 symbol=sym,
                 action=ACTION_RECOMPUTE_INDICATORS,
-                reason="NO_REDIS_DATA recovered (ZCARD>0 post-retry) → enqueue compute_5m",
+                reason=reason,
             ))
+
+        for rec in report.symbols:
+            if rec.status == STATUS_NO_INDICATOR_DATA:
+                _add_recompute(
+                    rec.symbol,
+                    "NO_INDICATOR_DATA → enqueue compute_indicators.compute_5m",
+                )
+        for sym in recovered_after_retry:
+            _add_recompute(
+                sym,
+                "NO_REDIS_DATA recovered (ZCARD>0 post-retry) → enqueue compute_5m",
+            )
+        # Newly approved spot rows: WS will pick them up on the refresh,
+        # buffer fills shortly after, but indicators won't appear until
+        # the next 5-min cycle without an explicit kick.
+        for sym in approved_verified:
+            _add_recompute(
+                sym,
+                "freshly approved → indicators will be stale until next compute_5m kick",
+            )
+        # Symbols that were stuck in NOT_SUBSCRIBED also benefit: the
+        # WS refresh will resolve them, but their indicator row may be
+        # missing entirely.
+        for rec in report.symbols:
+            if rec.status == STATUS_NOT_SUBSCRIBED:
+                _add_recompute(
+                    rec.symbol,
+                    "NOT_SUBSCRIBED → after WS refresh, recompute indicators",
+                )
 
         recompute_enqueued = False
         if recompute_targets and self._recompute_indicators and not dry_run:
