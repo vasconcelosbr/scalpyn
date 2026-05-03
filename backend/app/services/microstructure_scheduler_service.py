@@ -264,6 +264,34 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
                 if spread_payload.get(key) is not None and key not in results:
                     results[key] = spread_payload[key]
 
+        # ── Order flow: taker_ratio / volume_delta / buy_pressure ────────────
+        # fetch_orderbook_metrics uses include_taker=False (orderbook only), so
+        # real taker data never arrives via spread_payload.  Call the order-flow
+        # service directly here so 5m indicators have the same real trade signal
+        # as the 1h Celery path.  Window aligned to TRADE_BUFFER_TTL_SECONDS
+        # (360 s) so the Redis buffer is guaranteed to cover the full lookback.
+        try:
+            from ..services.order_flow_service import get_order_flow_data
+            from ..utils.indicator_merge import _ORDER_FLOW_KEYS
+            of_data = await get_order_flow_data(
+                symbol, window_seconds=300, market_type="spot"
+            )
+            for key, value in of_data.items():
+                if key in _ORDER_FLOW_KEYS:
+                    if value is not None or results.get(key) is None:
+                        results[key] = value
+                else:
+                    results[key] = value
+            logger.debug(
+                "[MICRO-SCHED] [OF] %s taker_ratio=%s volume_delta=%s source=%s",
+                symbol,
+                of_data.get("taker_ratio"),
+                of_data.get("volume_delta"),
+                of_data.get("taker_source"),
+            )
+        except Exception as exc:
+            logger.warning("[MICRO-SCHED] order_flow failed for %s: %s", symbol, exc)
+
         if not results:
             return f"{symbol}: no_data"
 

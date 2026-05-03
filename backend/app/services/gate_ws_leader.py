@@ -200,6 +200,7 @@ async def _resolve_spot_symbols() -> list[str]:
                 FROM pool_coins pc
                 JOIN pools p ON p.id = pc.pool_id
                 WHERE pc.is_active = TRUE
+                  AND pc.is_approved = TRUE
                   AND p.market_type = 'spot'
                   AND pc.symbol IS NOT NULL
                   AND pc.symbol <> ''
