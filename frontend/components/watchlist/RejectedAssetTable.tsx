@@ -476,7 +476,9 @@ function ScoreBreakdownSection({
                 ? `+${earnedDisplay.toFixed(1)}`
                 : fmtPts(earnedDisplay)}
               /{totalPossible.toFixed(0)} pts{hasRobust ? ' ponderados' : ''}
-              {!hasRobust && positiveCount > 0 && (
+              {/* Review fix: only flag (legacy) when matched > 0 — zero
+                  matches give no signal that enrichment was expected. */}
+              {!hasRobust && matchedCount > 0 && (
                 <span className="ml-1.5 text-[9px] text-[#475569] uppercase tracking-wider">
                   (legacy)
                 </span>

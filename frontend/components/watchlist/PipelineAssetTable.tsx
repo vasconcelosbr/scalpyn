@@ -468,7 +468,12 @@ function DrilldownPanel({
             ? `+${earnedDisplay.toFixed(1)}`
             : fmtPts(earnedDisplay)}
           /{totalPossible.toFixed(0)} pts{hasRobust ? ' ponderados' : ''}
-          {!hasRobust && positiveCount > 0 && (
+          {/* Review fix: only flag (legacy) when we *expected* robust info
+              but didn't get it — i.e. there were matches whose weighted
+              contribution should have been attached. Zero matches gives us
+              no signal to infer enrichment was missing, so suppressing the
+              marker avoids false-positives on score=0 rows. */}
+          {!hasRobust && matchedCount > 0 && (
             <span className="ml-1.5 text-[9px] text-[#475569] uppercase tracking-wider">
               (legacy)
             </span>

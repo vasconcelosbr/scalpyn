@@ -276,9 +276,14 @@ def test_get_full_breakdown_enriches_matched_rules_with_robust_weighted_points()
     }
     engine = ScoreEngine(config)
 
+    # Fixture is internally consistent: score is derived from the matched
+    # rules so the reconciliation invariant below is a real coupling check
+    # (review feedback). Denominator covers all *positive* rules including
+    # rsi_high (15 pts), giving 45 total. Σ weighted = 8.4 + 3.0 = 11.4 →
+    # 11.4 / 45 × 100 = 25.33.
     fake_payload = {
-        "score": 17.7,
-        "score_confidence": 0.42,
+        "score": 25.33,
+        "score_confidence": 0.36,
         "global_confidence": 0.7,
         "matched_rules": [
             # rsi_low matched with confidence 0.42 → weighted = 20 × 0.42 = 8.4
@@ -309,20 +314,18 @@ def test_get_full_breakdown_enriches_matched_rules_with_robust_weighted_points()
     assert "weighted_points" not in by_id["rsi_high"]
     assert "indicator_confidence" not in by_id["rsi_high"]
 
-    # Reconciliation invariant: Σ weighted_points / Σ points_possible × 100
-    # must approximate the score the robust engine reported.
+    # Strict reconciliation invariant — this is the core property the UI
+    # depends on: Σ weighted_points / Σ points_possible × 100 ≈ score.
+    # If this assertion ever fails, the panel will go back to showing
+    # contradictory numbers (Score and Regras drifting apart).
     matched = [r for r in breakdown if "weighted_points" in r]
     weighted_total = sum(r["weighted_points"] for r in matched)
     denom = sum(r["points_possible"] for r in breakdown if (r.get("type") or "positive") != "penalty")
     reconstructed_score = (weighted_total / denom) * 100
-    # 11.4 / 45 * 100 = 25.33 — the test fixture's payload score is 17.7
-    # so we don't assert exact equality (the payload is computed over the
-    # full real-engine path, not a re-derivation from matched_rules
-    # alone), but we do assert the reconstruction stays in the bounded
-    # 0–100 range and is consistent with what the per-rule breakdown
-    # totals would imply.
-    assert 0.0 <= reconstructed_score <= 100.0
-    assert weighted_total < denom  # bounded — every weighted contribution is ≤ its nominal
+    assert abs(reconstructed_score - fake_payload["score"]) < 0.05, (
+        f"reconciliation drift: reconstructed={reconstructed_score:.4f} "
+        f"vs payload.score={fake_payload['score']}"
+    )
 
 
 def test_get_full_breakdown_falls_back_to_nominal_when_robust_rejects():
