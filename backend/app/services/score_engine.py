@@ -467,7 +467,58 @@ class ScoreEngine:
         matched the indicator value — it's NOT a score contribution under
         the robust engine (which weights matched points by indicator
         confidence). UI uses this for the rule-level pass/fail panel.
+
+        Task #193: each rule entry is now enriched with ``weighted_points``
+        and ``indicator_confidence`` when the robust engine produces a
+        score. The UI uses these to render the "Regras" line as a
+        confidence-weighted sum that reconciles with the displayed Score
+        (the alpha_score on the 0–100 scale). When the robust engine is
+        rejected (critical-gate / confidence-gate / sparse fixtures), the
+        enrichment is skipped and the UI falls back to the nominal
+        ``points_awarded`` numbers. Best-effort: any exception in the
+        robust call is swallowed so the legacy breakdown still renders.
         """
+        # Best-effort robust enrichment. We compute it once up-front and
+        # then merge per-rule below. Any failure leaves `weighted_lookup`
+        # empty → rules render with nominal points only (legacy fallback).
+        weighted_lookup: Dict[str, Dict[str, float]] = {}
+        try:
+            from .robust_indicators import compute_asset_score
+
+            symbol = (
+                str(indicators.get("symbol"))
+                if isinstance(indicators, dict) and indicators.get("symbol")
+                else "BREAKDOWN"
+            )
+            flow_hint = (
+                indicators.get("taker_source")
+                if isinstance(indicators, dict) else None
+            )
+            payload = compute_asset_score(
+                symbol,
+                indicators,
+                self.rules,
+                is_futures=False,
+                flow_source_hint=flow_hint,
+            )
+            if payload:
+                for matched in (payload.get("matched_rules") or []):
+                    if not isinstance(matched, dict):
+                        continue
+                    rid = matched.get("rule_id")
+                    if rid is None:
+                        continue
+                    weighted_lookup[str(rid)] = {
+                        "weighted_points": float(matched.get("weighted_points", 0.0)),
+                        "indicator_confidence": float(matched.get("confidence", 0.0)),
+                    }
+        except Exception as exc:  # pragma: no cover — defensive only
+            logger.debug(
+                "get_full_breakdown: robust enrichment failed (%s); "
+                "rendering nominal-only breakdown",
+                exc,
+            )
+
         result = []
         for rule in self.rules:
             indicator = rule.get("indicator", "")
@@ -504,8 +555,9 @@ class ScoreEngine:
                 cond = f"{lbl} {operator_str} {target}" if target is not None else f"{lbl} {operator_str}"
 
             passed = self._evaluate_rule(rule, indicators)
-            result.append({
-                "id": rule.get("id", f"{indicator}_{operator_str}"),
+            rule_id = rule.get("id", f"{indicator}_{operator_str}")
+            entry: Dict[str, Any] = {
+                "id": rule_id,
                 "indicator": indicator,
                 "label": lbl,
                 "operator": operator_str,
@@ -519,7 +571,15 @@ class ScoreEngine:
                 "type": "positive" if pts > 0 else ("penalty" if pts < 0 else "neutral"),
                 "condition_text": cond,
                 "category": resolve_rule_category(rule),
-            })
+            }
+            # Task #193: merge robust per-rule contribution when available.
+            # Only matched rules appear in `weighted_lookup`; non-matched stay
+            # without these fields (UI keeps showing 0 contribution).
+            robust_info = weighted_lookup.get(str(rule_id))
+            if robust_info is not None:
+                entry["weighted_points"] = robust_info["weighted_points"]
+                entry["indicator_confidence"] = robust_info["indicator_confidence"]
+            result.append(entry)
 
         positive_rules = [r for r in result if r["type"] == "positive"]
         penalty_rules  = [r for r in result if r["type"] == "penalty"]

@@ -4,6 +4,7 @@ import { Fragment, useState } from 'react';
 import { ChevronDown, ChevronRight, CheckCircle2, XCircle, RefreshCw } from 'lucide-react';
 import { EvaluationTraceBreakdown, type EvaluationTraceItem } from './EvaluationTraceBreakdown';
 import { scoreBand, scorePct, SCORE_TOOLTIP, RULES_TOOLTIP } from '@/lib/scoreBand';
+import { summarizeScoreRules, fmtConfidence } from '@/lib/scoreRulesSummary';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -24,6 +25,16 @@ export interface ScoreRule {
   category: string;
   scheduler_group?: string | null;
   indicator_age_seconds?: number | null;
+  /**
+   * Task #193 — robust-engine confidence-weighted contribution of this
+   * matched rule (`points_possible × indicator_confidence`). Present
+   * only on matched rules and only when the robust engine produced a
+   * score. Absent ⇒ render falls back to `points_awarded` and the
+   * panel shows a "(legacy)" marker on the Regras line.
+   */
+  weighted_points?: number;
+  /** Robust-engine confidence for this rule's indicator (0–1). */
+  indicator_confidence?: number;
 }
 
 // ── Shared score-rule colour tokens ──────────────────────────────────────────
@@ -380,13 +391,22 @@ function DrilldownPanel({
   blocked?: boolean;
   evaluationTrace?: EvaluationTraceItem[];
 }) {
-  // Separate positive rules from penalty rules for correct rule-counter totals.
-  const positiveRules   = rules.filter(r => (r.type ?? 'positive') !== 'penalty');
-  const totalPossible   = positiveRules.reduce((s, r) => s + r.points_possible, 0);
-  const earnedPositive  = positiveRules.reduce((s, r) => s + r.points_awarded, 0);
-  const matchedCount    = positiveRules.filter(r => r.passed).length;
-  const positiveCount   = positiveRules.length;
-  const totalPenalties  = rules.filter(r => r.type === 'penalty').reduce((s, r) => s + r.points_awarded, 0);
+  // Task #193 — render confidence-weighted earned points so Score and
+  // Regras reconcile mathematically (Score ≈ weightedEarned/totalPossible
+  // × 100). When the backend cannot ship per-rule weighted_points (legacy
+  // snapshots), `hasRobust` is false and we display the nominal sum + a
+  // "(legacy)" marker so the mismatch with the score is not surprising.
+  const summary = summarizeScoreRules(rules);
+  const {
+    matchedCount,
+    positiveCount,
+    totalPossible,
+    nominalEarned,
+    weightedEarned,
+    hasRobust,
+    totalPenalties,
+  } = summary;
+  const earnedDisplay = hasRobust ? weightedEarned : nominalEarned;
 
   // Group by category; within each category sort positive-first then penalties.
   const byCategory = CATEGORY_ORDER.reduce<Record<string, ScoreRule[]>>((acc, cat) => {
@@ -443,7 +463,16 @@ function DrilldownPanel({
           className="text-[11px] text-[#64748B] flex-1"
           title={RULES_TOOLTIP}
         >
-          {matchedCount}/{positiveCount} matched · {fmtPts(earnedPositive)}/{totalPossible.toFixed(0)} pts
+          {matchedCount}/{positiveCount} matched ·{' '}
+          {hasRobust
+            ? `+${earnedDisplay.toFixed(1)}`
+            : fmtPts(earnedDisplay)}
+          /{totalPossible.toFixed(0)} pts{hasRobust ? ' ponderados' : ''}
+          {!hasRobust && positiveCount > 0 && (
+            <span className="ml-1.5 text-[9px] text-[#475569] uppercase tracking-wider">
+              (legacy)
+            </span>
+          )}
         </span>
         {totalPenalties !== 0 && (
           <span className="text-[10px] text-[#F87171] shrink-0">
@@ -476,8 +505,27 @@ function DrilldownPanel({
                 const grpColor = GROUP_COLOR[grpKey] ?? 'text-[#4B5563]';
                 const ageStr = fmtAge(rule.indicator_age_seconds);
 
-                const awardedDisplay = rule.passed ? fmtPts(rule.points_awarded) : '0';
+                // Task #193 — when robust engine enriched this rule, show
+                // the confidence-weighted contribution (e.g. "+8.4") instead
+                // of the nominal "+20", so the per-rule numbers add up to
+                // the Regras total. Tooltip keeps both for transparency.
+                const hasWeighted =
+                  rule.passed &&
+                  typeof rule.weighted_points === 'number' &&
+                  Number.isFinite(rule.weighted_points);
+                const awardedDisplay = rule.passed
+                  ? hasWeighted
+                    ? `+${(rule.weighted_points as number).toFixed(1)}`
+                    : fmtPts(rule.points_awarded)
+                  : '0';
                 const possibleDisplay = fmtPts(rule.points_possible);
+                const ptsTooltip = hasWeighted
+                  ? `${(rule.weighted_points as number).toFixed(2)} ponderado` +
+                    ` (nominal ${rule.points_awarded.toFixed(2)} ×` +
+                    ` conf ${fmtConfidence(rule.indicator_confidence)}) /` +
+                    ` ${rule.points_possible.toFixed(2)} pts possíveis`
+                  : `${rule.passed ? rule.points_awarded.toFixed(2) : '0'} /` +
+                    ` ${rule.points_possible.toFixed(2)} pts`;
 
                 return (
                   <div
@@ -506,8 +554,8 @@ function DrilldownPanel({
                       </span>
                     )}
                     <span
-                      className={`font-mono text-[10px] shrink-0 w-16 text-right ${colors.text}`}
-                      title={`${rule.passed ? rule.points_awarded.toFixed(2) : '0'} / ${rule.points_possible.toFixed(2)} pts`}
+                      className={`font-mono text-[10px] shrink-0 w-20 text-right ${colors.text}`}
+                      title={ptsTooltip}
                     >
                       {awardedDisplay}/{possibleDisplay}
                     </span>

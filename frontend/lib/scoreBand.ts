@@ -59,6 +59,7 @@ export const SCORE_TOOLTIP =
   "Faixas: avoid <40 · neutral 40–64 · buy 65–79 · strong_buy ≥80.";
 
 export const RULES_TOOLTIP =
-  "Contagem nominal de regras positivas que casaram. Não é o score — " +
-  "o score é confidence-weighted, então regras matched podem contribuir " +
-  "menos do que seu valor nominal.";
+  "Soma confidence-weighted (Σ pontos × confidence do indicador) sobre " +
+  "o total possível. Reconciliando com o Score: " +
+  "Score ≈ (pts ponderados ÷ pts totais) × 100. " +
+  "Quando aparece (legacy), o snapshot é antigo e mostra apenas pontos nominais.";

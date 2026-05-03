@@ -11,6 +11,7 @@ import {
 import type { ScoreRule } from "./PipelineAssetTable";
 import { RULE_COLORS, fmtPts, sortScoreRules } from "./PipelineAssetTable";
 import { scoreBand, scorePct, SCORE_TOOLTIP, RULES_TOOLTIP } from "@/lib/scoreBand";
+import { summarizeScoreRules, fmtConfidence } from "@/lib/scoreRulesSummary";
 
 const DECISION_SUMMARY_INDICATOR_LIMIT = 3;
 
@@ -390,13 +391,19 @@ function ScoreBreakdownSection({
   rules: ScoreRule[];
   alphaScore: number | null;
 }) {
-  // Separate positive rules from penalty rules for correct rule-counter totals.
-  const positiveRules  = rules.filter(r => (r.type ?? 'positive') !== 'penalty');
-  const totalPossible  = positiveRules.reduce((s, r) => s + r.points_possible, 0);
-  const earnedPositive = positiveRules.reduce((s, r) => s + r.points_awarded, 0);
-  const matchedCount   = positiveRules.filter(r => r.passed).length;
-  const positiveCount  = positiveRules.length;
-  const totalPenalties = rules.filter(r => r.type === 'penalty').reduce((s, r) => s + r.points_awarded, 0);
+  // Task #193 — confidence-weighted earned so Score and Regras reconcile.
+  // See `lib/scoreRulesSummary.ts` for the legacy fallback semantics.
+  const summary = summarizeScoreRules(rules);
+  const {
+    matchedCount,
+    positiveCount,
+    totalPossible,
+    nominalEarned,
+    weightedEarned,
+    hasRobust,
+    totalPenalties,
+  } = summary;
+  const earnedDisplay = hasRobust ? weightedEarned : nominalEarned;
   // Single source of truth for label + color (Task #187 review fix). The
   // file-local `scoreColor` helper still backs the table-row ScoreBar
   // (different visual context, kept out of scope), but the breakdown
@@ -460,9 +467,22 @@ function ScoreBreakdownSection({
           className="text-[11px] text-[#64748B] flex-1"
           title={RULES_TOOLTIP}
         >
-          {rules.length === 0
-            ? 'Sem regras configuradas'
-            : `${matchedCount}/${positiveCount} matched · ${fmtPts(earnedPositive)}/${totalPossible.toFixed(0)} pts`}
+          {rules.length === 0 ? (
+            'Sem regras configuradas'
+          ) : (
+            <>
+              {matchedCount}/{positiveCount} matched ·{' '}
+              {hasRobust
+                ? `+${earnedDisplay.toFixed(1)}`
+                : fmtPts(earnedDisplay)}
+              /{totalPossible.toFixed(0)} pts{hasRobust ? ' ponderados' : ''}
+              {!hasRobust && positiveCount > 0 && (
+                <span className="ml-1.5 text-[9px] text-[#475569] uppercase tracking-wider">
+                  (legacy)
+                </span>
+              )}
+            </>
+          )}
         </span>
         {totalPenalties !== 0 && (
           <span className="text-[10px] text-[#F87171] shrink-0">
@@ -494,6 +514,24 @@ function ScoreBreakdownSection({
                       ? (isFired ? RULE_COLORS.penaltyFired : RULE_COLORS.penaltyIdle)
                       : (isFired ? RULE_COLORS.positiveMatched : RULE_COLORS.positiveUnmatched);
 
+                  // Task #193 — robust-weighted display for matched rules.
+                  const hasWeighted =
+                    rule.passed &&
+                    typeof rule.weighted_points === 'number' &&
+                    Number.isFinite(rule.weighted_points);
+                  const awardedDisplay = rule.passed
+                    ? hasWeighted
+                      ? `+${(rule.weighted_points as number).toFixed(1)}`
+                      : fmtPts(rule.points_awarded)
+                    : '0';
+                  const ptsTooltip = hasWeighted
+                    ? `${(rule.weighted_points as number).toFixed(2)} ponderado` +
+                      ` (nominal ${rule.points_awarded.toFixed(2)} ×` +
+                      ` conf ${fmtConfidence(rule.indicator_confidence)}) /` +
+                      ` ${rule.points_possible.toFixed(2)} pts possíveis`
+                    : `${rule.passed ? rule.points_awarded.toFixed(2) : '0'} /` +
+                      ` ${rule.points_possible.toFixed(2)} pts`;
+
                   return (
                     <div
                       key={rule.id}
@@ -522,10 +560,10 @@ function ScoreBreakdownSection({
                         {fmtRuleValue(rule.actual_value)}
                       </span>
                       <span
-                        className={`font-mono text-[10px] shrink-0 w-16 text-right ${colors.text}`}
-                        title={`${rule.passed ? rule.points_awarded.toFixed(2) : '0'} / ${rule.points_possible.toFixed(2)} pts`}
+                        className={`font-mono text-[10px] shrink-0 w-20 text-right ${colors.text}`}
+                        title={ptsTooltip}
                       >
-                        {rule.passed ? fmtPts(rule.points_awarded) : '0'}/{fmtPts(rule.points_possible)}
+                        {awardedDisplay}/{fmtPts(rule.points_possible)}
                       </span>
                     </div>
                   );
