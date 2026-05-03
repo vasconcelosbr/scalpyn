@@ -161,3 +161,25 @@ def test_symbol_audit_accepts_explicit_symbol_filter(client, monkeypatch):
     )
     assert response.status_code == 200
     assert captured["symbols"] == ["btc_usdt", "ETH_USDT"]
+
+
+def test_symbol_audit_response_top_level_contract_is_locked(client, monkeypatch):
+    """Lock the endpoint shape: top-level keys must always be exactly
+    {report, remediation, etapa8} so downstream consumers can rely on
+    the contract without optional fields drifting in/out."""
+    monkeypatch.setenv("ADMIN_DIAGNOSTICS_TOKEN", "s3cret")
+    _stub_pipeline(monkeypatch)
+
+    response = client.post(
+        "/api/admin/diagnostics/symbol-audit",
+        json={"dry_run": True},
+        headers={"Authorization": "Bearer s3cret"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    # Top-level shape = Etapa-8 envelope flattened + report/remediation
+    # debug nesting. Locked here so future changes are deliberate.
+    assert set(body.keys()) == {
+        "resumo", "lista", "system_healthy", "report", "remediation",
+    }
+    assert set(body["resumo"].keys()) == {"total", "corrigidos", "pendentes"}
