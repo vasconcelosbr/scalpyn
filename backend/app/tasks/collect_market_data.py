@@ -52,7 +52,7 @@ async def _collect_all_async():
         if len(s) < 5 or len(s) > 20:
             logger.warning(f"[SKIP INVALID SYMBOL] raw={sym!r} reason=inconsistent_size len={len(s)}")
             continue
-        valid_symbols.append(sym)
+        valid_symbols.append(s)
 
     logger.info(f"[COLLECT] valid_symbols={len(valid_symbols)}")
 
@@ -255,7 +255,7 @@ async def _collect_5m_async():
         if len(s) < 5 or len(s) > 20:
             logger.warning(f"[SKIP INVALID SYMBOL] raw={sym!r} reason=inconsistent_size len={len(s)}")
             continue
-        valid_symbols.append(sym)
+        valid_symbols.append(s)
 
     logger.info(f"[COLLECT] valid_symbols={len(valid_symbols)}")
 
