@@ -378,13 +378,19 @@ def _extract_profile_indicator_fields(profile_config: Optional[Dict[str, Any]]) 
     return result
 
 
-async def _fetch_indicators_map(db: AsyncSession, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+async def _fetch_indicators_map(
+    db: AsyncSession,
+    symbols: List[str],
+    *,
+    include_stale: bool = False,
+) -> Dict[str, Dict[str, Any]]:
     """Fetch merged indicator values per symbol, returning flat scalar dicts.
 
     Uses ``fetch_merged_indicators`` which correctly:
       1. Merges across scheduler groups (structural + microstructure).
       2. Unwraps envelope format (``{"value": v, "source": …}`` → ``v``).
-      3. Filters stale rows per group staleness limits.
+      3. Filters stale rows per group staleness limits (unless
+         ``include_stale`` is True).
       4. Falls back to legacy rows when the scheduler_group column is absent.
 
     Returns ``{symbol: {key: scalar, …}}`` — the same contract as the
@@ -396,7 +402,7 @@ async def _fetch_indicators_map(db: AsyncSession, symbols: List[str]) -> Dict[st
         return {}
     try:
         from ..utils.indicator_merge import fetch_merged_indicators
-        merged = await fetch_merged_indicators(db, list(symbols))
+        merged = await fetch_merged_indicators(db, list(symbols), include_stale=include_stale)
         return {sym: mi.as_flat_dict() for sym, mi in merged.items()}
     except Exception as exc:
         logger.warning("[Pipeline] indicators fetch failed: %s", exc)
@@ -1426,15 +1432,9 @@ async def _resolve_and_persist(
     # Load indicators for scoring + signal evaluation
     ind_map: Dict[str, Dict] = {}
     try:
-        ind_rows = (await db.execute(
-            text("""
-                SELECT DISTINCT ON (symbol) symbol, indicators_json
-                FROM indicators WHERE symbol = ANY(:symbols)
-                ORDER BY symbol, time DESC
-            """),
-            {"symbols": list(base_symbols)},
-        )).fetchall()
-        ind_map = {r.symbol: (r.indicators_json or {}) for r in ind_rows}
+        from ..utils.indicator_merge import fetch_merged_indicators as _fmi
+        _merged_by_sym = await _fmi(db, list(base_symbols), include_stale=True)
+        ind_map = {sym: mi.as_flat_dict() for sym, mi in _merged_by_sym.items()}
     except Exception:
         pass
 
@@ -1882,7 +1882,7 @@ async def get_watchlist_assets(
 
     # ── Fetch live indicator values for all asset symbols ─────────────────────
     symbols = [a.symbol for a in assets]
-    ind_map = await _fetch_indicators_map(db, symbols) if symbols else {}
+    ind_map = await _fetch_indicators_map(db, symbols, include_stale=True) if symbols else {}
 
     # On-demand computation: if some symbols have no indicators in DB OR are
     # missing key indicator fields (stale/partial cache), fetch OHLCV and recompute.
@@ -2317,7 +2317,7 @@ async def _get_watchlist_rejections_payload(
     # left untouched (out of scope) and is used as a defensive fallback when
     # the indicators table has no entry for a symbol.
     rejection_symbols = sorted({row.symbol for row in rows})
-    ind_map = await _fetch_indicators_map(db, rejection_symbols) if rejection_symbols else {}
+    ind_map = await _fetch_indicators_map(db, rejection_symbols, include_stale=True) if rejection_symbols else {}
     meta_map: Dict[str, Dict[str, Any]] = {}
     if rejection_symbols:
         try:

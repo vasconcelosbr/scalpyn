@@ -189,12 +189,19 @@ class MergedIndicators:
 def merge_indicator_rows(
     rows: List[Tuple[str, Optional[datetime], Dict[str, Any]]],
     now: Optional[datetime] = None,
+    *,
+    include_stale: bool = False,
 ) -> MergedIndicators:
     """Merge a list of (group, timestamp, indicators_dict) tuples for ONE symbol.
 
     Args:
-        rows: Each entry is (scheduler_group, row_timestamp, indicators_dict).
-        now:  Current UTC time used to compute ages.  Defaults to utcnow().
+        rows:          Each entry is (scheduler_group, row_timestamp, indicators_dict).
+        now:           Current UTC time used to compute ages.  Defaults to utcnow().
+        include_stale: When True, stale rows are still included in ``values``
+                       (merged normally) so callers like the drilldown endpoint
+                       can score against outdated-but-still-useful data.
+                       Per-key metadata still carries ``stale=True`` so
+                       consumers can render staleness warnings.
 
     Returns:
         MergedIndicators with merged values + per-key metadata.
@@ -208,6 +215,9 @@ def merge_indicator_rows(
     # ── Step 1: Absolute staleness filter ────────────────────────────────────
     # Stale rows are excluded from scoring values but tracked in `stale_rows`
     # so their metadata can be added to result.meta with stale=True.
+    # When ``include_stale`` is True, stale rows are kept in ``live`` (so
+    # their values participate in the merge) AND recorded in ``stale_rows``
+    # (so per-key metadata still carries ``stale=True``).
     live: List[Tuple[str, Optional[datetime], Dict[str, Any], float]] = []
     stale_rows: List[Tuple[str, Optional[datetime], Dict[str, Any], float]] = []
     for grp, ts, ind_json in rows:
@@ -217,10 +227,13 @@ def merge_indicator_rows(
             age = (now - ts_utc).total_seconds()
             if age > stale_limit:
                 logger.debug(
-                    "[merge] group=%s ts=%s age=%.0fs > stale_limit=%.0fs — stale",
+                    "[merge] group=%s ts=%s age=%.0fs > stale_limit=%.0fs — stale%s",
                     grp, ts_utc.isoformat(), age, stale_limit,
+                    " (included)" if include_stale else "",
                 )
                 stale_rows.append((grp, ts_utc, ind_json or {}, age))
+                if include_stale:
+                    live.append((grp, ts_utc, ind_json or {}, age))
                 continue
             live.append((grp, ts_utc, ind_json or {}, age))
         else:
@@ -398,8 +411,17 @@ async def fetch_merged_indicators(
     db,
     symbols: List[str],
     now: Optional[datetime] = None,
+    *,
+    include_stale: bool = False,
 ) -> Dict[str, MergedIndicators]:
     """Fetch and merge indicator rows for all given symbols from the DB.
+
+    Args:
+        include_stale: When True, stale indicator values are included in
+                       ``MergedIndicators.values`` (not filtered out) so
+                       callers like the drilldown endpoint can score against
+                       outdated data.  Per-key metadata still carries
+                       ``stale=True``.
 
     Returns:
         Dict mapping symbol → MergedIndicators.
@@ -444,12 +466,12 @@ async def fetch_merged_indicators(
             )
             if has_separated:
                 row_list = [(g, t, d) for g, t, d in row_list if g != "combined"]
-            merged[sym] = merge_indicator_rows(row_list, now=now)
+            merged[sym] = merge_indicator_rows(row_list, now=now, include_stale=include_stale)
 
         # Legacy fallback for symbols still missing
         missing = [s for s in symbols if s not in merged]
         if missing:
-            _add_legacy_rows(merged, await _fetch_legacy(db, missing), now)
+            _add_legacy_rows(merged, await _fetch_legacy(db, missing), now, include_stale=include_stale)
 
         return merged
 
@@ -458,7 +480,7 @@ async def fetch_merged_indicators(
         pass
 
     legacy = await _fetch_legacy(db, symbols)
-    _add_legacy_rows(merged, legacy, now)
+    _add_legacy_rows(merged, legacy, now, include_stale=include_stale)
     return merged
 
 
@@ -492,6 +514,8 @@ def _add_legacy_rows(
     merged: Dict[str, MergedIndicators],
     legacy_rows: List,
     now: datetime,
+    *,
+    include_stale: bool = False,
 ) -> None:
     """Merge multiple legacy rows per symbol into MergedIndicators.
 
@@ -507,4 +531,4 @@ def _add_legacy_rows(
 
     for sym, row_list in by_sym.items():
         if sym not in merged:
-            merged[sym] = merge_indicator_rows(row_list, now=now)
+            merged[sym] = merge_indicator_rows(row_list, now=now, include_stale=include_stale)

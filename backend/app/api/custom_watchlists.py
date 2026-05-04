@@ -830,7 +830,7 @@ async def _get_assets_with_indicators(db: AsyncSession, symbols: List[str]) -> L
         # Get latest indicators via dual-scheduler merge
         try:
             from ..utils.indicator_merge import fetch_merged_indicators
-            _merged = await fetch_merged_indicators(db, list(symbols))
+            _merged = await fetch_merged_indicators(db, list(symbols), include_stale=True)
             indicators_map = {sym: mi.as_flat_dict() for sym, mi in _merged.items()}
             enriched_map = {sym: mi.as_enriched_dict() for sym, mi in _merged.items()}
         except Exception:

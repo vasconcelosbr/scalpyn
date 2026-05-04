@@ -360,7 +360,7 @@ async def get_pipeline_assets(
     if symbols:
         try:
             from ..utils.indicator_merge import fetch_merged_indicators
-            merged_by_sym = await fetch_merged_indicators(db, symbols)
+            merged_by_sym = await fetch_merged_indicators(db, symbols, include_stale=True)
             for sym, mi in merged_by_sym.items():
                 flat = mi.as_flat_dict()
                 if flat:
@@ -442,14 +442,16 @@ async def get_pipeline_assets(
 
         # Task #193: compute score + breakdown together so the robust
         # engine runs exactly once per asset instead of twice.
+        has_live_indicators = bool(ind_data)
         score_result, _pipeline_breakdown = (
             se.compute_score_with_breakdown(eval_dict) if se else (None, [])
         )
-        fresh_score = (
-            float(score_result.get("total_score"))
-            if score_result and score_result.get("total_score") is not None
-            else stored_score if stored_score is not None else 0.0
-        )
+        if has_live_indicators and score_result and score_result.get("total_score") is not None:
+            fresh_score = float(score_result.get("total_score"))
+        elif stored_score is not None:
+            fresh_score = stored_score
+        else:
+            fresh_score = 0.0
         eval_dict["score"] = fresh_score
 
         if (

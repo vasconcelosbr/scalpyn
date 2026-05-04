@@ -69,6 +69,14 @@ The frontend proxies all `/api/*` requests to the FastAPI backend via `frontend/
 - Celery beat `app.tasks.robust_alerts.evaluate` (every 90 s) inspects recent snapshots and fires Slack alerts to the single ops webhook for stale data, low confidence, or high rejection rate (rate-limited to 1 alert per condition per 15 min via Redis with in-process fallback). Divergence + standby beats are gone.
 - Tests in `backend/tests/test_robust_indicators.py` cover envelope wrapping, all validation rules, and the Phase 4 removed-symbol contract. Full design notes: `backend/docs/robust_indicators.md`.
 
+## Stale Indicator Override Fix (Task #207)
+- **Root cause**: `fetch_merged_indicators` filtered out ALL indicator rows older than staleness thresholds (600s micro, 1800s structural). When schedulers haven't run recently (e.g. 34h gap), `ind_data={}` and on-demand scoring computes 0/3 rules matched → score 0.0, overriding the stored `alpha_score` (e.g. 60.2 for ZEC_USDT).
+- **Fix — `include_stale` parameter**: Added `include_stale: bool = False` to `merge_indicator_rows` and `fetch_merged_indicators` in `utils/indicator_merge.py`. When `True`, stale rows remain in the `live` list AND are tagged with `stale: True` in metadata so downstream consumers can display staleness warnings without losing the data entirely.
+- **All read-path callers updated**: `pipeline_watchlists.py` drilldown, `watchlists.py` `_fetch_indicators_map` (L3/rejection views), `watchlists.py` `_resolve_and_persist` scoring loop (replaced raw SQL with `fetch_merged_indicators(include_stale=True)`), and `custom_watchlists.py` drilldown — all pass `include_stale=True`.
+- **Fallback guard**: `pipeline_watchlists.py` drilldown scoring loop checks `has_live_indicators = bool(ind_data)` before on-demand scoring. When `ind_data` is empty, `fresh_score` falls back to `stored_score` instead of computing 0.0.
+- **Write-path unchanged**: `pipeline_scan.py` (the scheduler that stores scores) still uses `include_stale=False` (default) so stored scores are only computed from fresh data.
+- **Result**: ZEC_USDT goes from 0 indicators → 50 indicators, score from 0.0 → 24.0 (1/3 rules matched: ema_trend_1), `weighted_points` present so no "(LEGACY)" tag.
+
 ## Score Engine — Gate Removal & Operator Fix (Task #203)
 - **Critical gate removed**: `calculate_score_with_confidence` no longer rejects the score when critical indicators (`rsi`, `adx`, `macd`, `ema50`) are missing. Missing indicators contribute 0 to the numerator while their rules' points stay in the denominator, producing a partial score proportional to the rules that could be evaluated (e.g. 1 rule matched for 10 pts out of 120 possible → ~8.3/100).
 - **Confidence gate softened**: Low global confidence no longer rejects the score to 0.0. The score is computed normally; `can_trade` stays `False` when `score_confidence < min_global_confidence`.
