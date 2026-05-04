@@ -127,10 +127,16 @@ def build_trace_asset(
     asset["market_cap"] = meta.get("market_cap")
 
     # 2. Indicator payload — wins for any field where the value is usable.
+    #    Envelope dicts ({"value": v, "source": …}) are unwrapped as a safety
+    #    net so that callers passing raw indicators_json still get scalars.
     #    Non-scalar entries are dropped to keep the dict JSON-safe.
     for key, value in indicators.items():
         if value is None:
             continue
+        if isinstance(value, dict):
+            value = value.get("value")
+            if value is None:
+                continue
         if isinstance(value, (int, float, bool)) or (
             isinstance(value, str) and key in _PROFILE_STRING_INDICATORS
         ):

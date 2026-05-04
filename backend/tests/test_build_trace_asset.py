@@ -229,3 +229,86 @@ def test_trace_no_longer_reports_sem_dados_for_sui_block_rule():
         assert item.get("reason") != "indicator_not_available", (
             f"{label} was wrongly reported as missing data: {item}"
         )
+
+
+# ── Envelope unwrap safety-net tests (Task #200) ─────────────────────────────
+
+def test_envelope_indicators_are_unwrapped_to_scalars():
+    """build_trace_asset must unwrap envelope dicts produced by
+    envelop_results (e.g. {"value": 66.5, "source": "candle_computed"})
+    into bare scalars so the rule engine can evaluate them.
+    """
+    envelope_indicators = {
+        "rsi": {"value": 48.5, "source": "candle_computed", "confidence": 0.8, "status": "VALID"},
+        "adx": {"value": 22.4, "source": "candle_computed", "confidence": 0.8, "status": "VALID"},
+        "taker_ratio": {"value": 0.51, "source": "gate_trades", "confidence": 0.9, "status": "VALID"},
+        "volume_spike": {"value": 1.42, "source": "candle_computed", "confidence": 0.8, "status": "VALID"},
+        "bb_width": {"value": 0.054, "source": "candle_computed", "confidence": 0.8, "status": "VALID"},
+        "macd_signal": {"value": "bullish", "source": "candle_computed", "confidence": 0.8, "status": "VALID"},
+    }
+    asset = build_trace_asset("HYPE_USDT", indicators=envelope_indicators)
+
+    assert asset["rsi"] == 48.5
+    assert asset["adx"] == 22.4
+    assert asset["taker_ratio"] == 0.51
+    assert asset["volume_spike"] == 1.42
+    assert asset["bb_width"] == 0.054
+    assert asset["macd_signal"] == "bullish"
+
+
+def test_envelope_value_none_treated_as_absent():
+    """{"value": None} must be treated as missing — the indicator should
+    NOT appear in the asset dict.
+    """
+    indicators = {
+        "rsi": {"value": None, "source": "unknown", "confidence": 0.0, "status": "NO_DATA"},
+        "adx": {"value": 22.0, "source": "candle_computed", "confidence": 0.8, "status": "VALID"},
+    }
+    asset = build_trace_asset("HYPE_USDT", indicators=indicators)
+
+    assert "rsi" not in asset
+    assert asset["adx"] == 22.0
+
+
+def test_envelope_value_zero_is_valid():
+    """{"value": 0} is a real measurement — must NOT be treated as missing."""
+    indicators = {
+        "volume_delta": {"value": 0, "source": "gate_trades", "confidence": 0.9, "status": "VALID"},
+        "rsi": {"value": 0.0, "source": "candle_computed", "confidence": 0.8, "status": "VALID"},
+    }
+    asset = build_trace_asset("HYPE_USDT", indicators=indicators)
+
+    assert asset["volume_delta"] == 0
+    assert asset["rsi"] == 0.0
+
+
+def test_empty_envelope_dict_treated_as_absent():
+    """An empty dict {} (partial envelope) must be treated as missing."""
+    indicators = {
+        "rsi": {},
+        "adx": {"value": 30.0, "source": "candle_computed", "confidence": 0.8, "status": "VALID"},
+    }
+    asset = build_trace_asset("HYPE_USDT", indicators=indicators)
+
+    assert "rsi" not in asset
+    assert asset["adx"] == 30.0
+
+
+def test_mixed_flat_and_envelope_indicators():
+    """build_trace_asset must handle a mix of flat scalars and envelope
+    dicts in the same indicators payload (legacy + new format coexisting).
+    """
+    indicators = {
+        "rsi": 48.5,
+        "adx": {"value": 22.4, "source": "candle_computed", "confidence": 0.8, "status": "VALID"},
+        "taker_ratio": {"value": 0.51, "source": "gate_trades", "confidence": 0.9, "status": "VALID"},
+        "bb_width": 0.054,
+        "volume_spike": {"value": None, "source": "unknown", "confidence": 0.0, "status": "NO_DATA"},
+    }
+    asset = build_trace_asset("HYPE_USDT", indicators=indicators)
+
+    assert asset["rsi"] == 48.5
+    assert asset["adx"] == 22.4
+    assert asset["taker_ratio"] == 0.51
+    assert asset["bb_width"] == 0.054
+    assert "volume_spike" not in asset

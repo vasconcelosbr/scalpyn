@@ -379,20 +379,25 @@ def _extract_profile_indicator_fields(profile_config: Optional[Dict[str, Any]]) 
 
 
 async def _fetch_indicators_map(db: AsyncSession, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
-    """Fetch latest indicators_json per symbol from the indicators table."""
+    """Fetch merged indicator values per symbol, returning flat scalar dicts.
+
+    Uses ``fetch_merged_indicators`` which correctly:
+      1. Merges across scheduler groups (structural + microstructure).
+      2. Unwraps envelope format (``{"value": v, "source": …}`` → ``v``).
+      3. Filters stale rows per group staleness limits.
+      4. Falls back to legacy rows when the scheduler_group column is absent.
+
+    Returns ``{symbol: {key: scalar, …}}`` — the same contract as the
+    previous simple-query implementation so all downstream consumers
+    (``build_trace_asset``, on-demand fallback check, score engine) keep
+    working without changes.
+    """
     if not symbols:
         return {}
     try:
-        rows = (await db.execute(
-            text("""
-                SELECT DISTINCT ON (symbol) symbol, indicators_json
-                FROM indicators
-                WHERE symbol = ANY(:symbols)
-                ORDER BY symbol, time DESC
-            """),
-            {"symbols": list(symbols)},
-        )).fetchall()
-        return {r.symbol: (r.indicators_json or {}) for r in rows}
+        from ..utils.indicator_merge import fetch_merged_indicators
+        merged = await fetch_merged_indicators(db, list(symbols))
+        return {sym: mi.as_flat_dict() for sym, mi in merged.items()}
     except Exception as exc:
         logger.warning("[Pipeline] indicators fetch failed: %s", exc)
         return {}
@@ -1883,12 +1888,23 @@ async def get_watchlist_assets(
     # missing key indicator fields (stale/partial cache), fetch OHLCV and recompute.
     # We check both *presence* and *non-None value* so that a row with e.g.
     # rsi=66 but adx=None still triggers a full re-compute.
+    # Values may still arrive as envelope dicts if the merge path failed to
+    # unwrap — treat those as missing too ({"value": None} → missing,
+    # {"value": 0} would already have been unwrapped to 0 by the merge).
     _KEY_INDICATOR_FIELDS = {"taker_ratio", "ema9_distance_pct", "rsi", "adx", "bb_width", "volume_spike"}
+
+    def _is_indicator_missing(v: Any) -> bool:
+        if v is None:
+            return True
+        if isinstance(v, dict):
+            return v.get("value") is None
+        return False
+
     if symbols:
         missing = [
             s for s in symbols
             if not ind_map.get(s) or any(
-                ind_map[s].get(f) is None for f in _KEY_INDICATOR_FIELDS
+                _is_indicator_missing(ind_map[s].get(f)) for f in _KEY_INDICATOR_FIELDS
             )
         ]
         if missing:

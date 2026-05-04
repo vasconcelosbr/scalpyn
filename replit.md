@@ -69,14 +69,20 @@ The frontend proxies all `/api/*` requests to the FastAPI backend via `frontend/
 - Celery beat `app.tasks.robust_alerts.evaluate` (every 90 s) inspects recent snapshots and fires Slack alerts to the single ops webhook for stale data, low confidence, or high rejection rate (rate-limited to 1 alert per condition per 15 min via Redis with in-process fallback). Divergence + standby beats are gone.
 - Tests in `backend/tests/test_robust_indicators.py` cover envelope wrapping, all validation rules, both score-engine gates, and the Phase 4 removed-symbol contract. Full design notes: `backend/docs/robust_indicators.md`.
 
-## Watchlist Trace Asset (task #69)
+## Watchlist Trace Asset (task #69, #200)
 - `pipeline_rejections.build_trace_asset(symbol, indicators, meta, alpha_score)` is the SINGLE source for building the asset dict consumed by `build_asset_evaluation_trace` and `_passes_profile_filters`.
 - Merge contract:
   - `indicators_json` is the **sole source of truth** for indicator values; a non-None indicator value is NEVER shadowed by a None coming from `market_metadata`.
   - `market_metadata` complements only `current_price`, `price_change_24h`, `volume_24h`, `market_cap` (always present in the dict, possibly None — DB-write paths depend on these keys existing).
   - `spread_pct` and `orderbook_depth_usdt` are hybrid: indicators win when present, meta is the fallback.
   - Variant aliases (`bollinger_width` ↔ `bb_width`, `volume_24h_usdt` ↔ `volume_24h`, `price_change_24h_pct` ↔ `price_change_24h`, `spread_percent` ↔ `spread_pct`, `atr_percent` ↔ `atr_pct`, `orderbook_depth` ↔ `orderbook_depth_usdt`, `price` ↔ `current_price`) are auto-populated in both directions so legacy field naming never produces a false "SEM DADOS / aguardando coleta".
+  - **Envelope safety net (Task #200):** `build_trace_asset` now unwraps envelope dicts (`{"value": v, "source": …}` → `v`) as a defensive layer. `{"value": None}` and `{}` are treated as absent; `{"value": 0}` is valid.
 - Both call-sites in `backend/app/api/watchlists.py` (`_resolve_watchlist_pipeline` ~line 1490 and `get_watchlist_assets` ~line 1957) MUST go through this helper. Regression locked in by `backend/tests/test_build_trace_asset.py`.
+
+## Indicator Fetch — Dual-Scheduler Merge (Task #200)
+- `_fetch_indicators_map` in `watchlists.py` now delegates to `fetch_merged_indicators` (from `utils/indicator_merge.py`) instead of using a simple `DISTINCT ON (symbol) ORDER BY time DESC` query. This correctly merges across structural (15-min) and microstructure (5-min) scheduler groups, unwraps envelope format, and filters stale rows. Returns `{symbol: flat_dict}` via `MergedIndicators.as_flat_dict()`.
+- The on-demand fallback check uses `_is_indicator_missing()` which handles `None`, envelope dicts with `value=None`, and empty envelope dicts — preventing false positives where the system thought it had data but `build_trace_asset` couldn't extract it.
+- Regression tests: `test_build_trace_asset.py` (envelope unwrap scenarios) + `test_indicator_merge_regression.py` (structural-only, micro-only, both-groups, staleness).
 
 ## Trace SKIPPED Reasons (task #71)
 The evaluation trace distinguishes three causes of `status="SKIPPED"` via the `reason` field — the frontend (`EvaluationTraceBreakdown.classifySkip` in `frontend/components/watchlist/EvaluationTraceBreakdown.tsx`) renders each one differently so traders can tell them apart at a glance:
