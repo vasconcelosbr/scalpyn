@@ -69,6 +69,14 @@ The frontend proxies all `/api/*` requests to the FastAPI backend via `frontend/
 - Celery beat `app.tasks.robust_alerts.evaluate` (every 90 s) inspects recent snapshots and fires Slack alerts to the single ops webhook for stale data, low confidence, or high rejection rate (rate-limited to 1 alert per condition per 15 min via Redis with in-process fallback). Divergence + standby beats are gone.
 - Tests in `backend/tests/test_robust_indicators.py` cover envelope wrapping, all validation rules, and the Phase 4 removed-symbol contract. Full design notes: `backend/docs/robust_indicators.md`.
 
+## Deterministic Scoring — Score Decoupled from Confidence (Task #211)
+- **Core change**: `calculate_score_with_confidence` in `score.py` no longer multiplies matched-rule points by `env.confidence`. Matched rules now award their full configured points: `awarded_points = points`. Score formula is purely deterministic: `score = (sum_matched_points / total_possible_points) × 100`.
+- **Field rename**: `weighted_points` → `awarded_points` throughout backend and frontend. The old field implied confidence weighting; the new name reflects the deterministic semantics.
+- **New `data_available` flag**: Each matched rule carries `data_available: bool` (true when the indicator's envelope was usable). Rules where `env is None or not env.is_usable` are NOT_MATCHED with their points still counted in the denominator.
+- **Confidence preserved as metadata**: `indicator_confidence` is still present per rule for tooltips and observability. `can_trade` gating still checks `score_confidence >= min_global_confidence`. Confidence just doesn't multiply into the score anymore.
+- **Frontend updated**: `ScoreRule.weighted_points` → `ScoreRule.awarded_points`, `ScoreRulesSummary.weightedEarned` → `awardedEarned`, `hasRobust` → `hasEnriched`. Drilldown panel shows full integer points (e.g. `+10/10` instead of `+8.5/10`). Both `PipelineAssetTable.tsx` and `RejectedAssetTable.tsx` updated.
+- **Invariant**: Confidence MUST NOT influence numerator or denominator in any scoring path.
+
 ## Stale Indicator Override Fix (Task #207)
 - **Root cause**: `fetch_merged_indicators` filtered out ALL indicator rows older than staleness thresholds (600s micro, 1800s structural). When schedulers haven't run recently (e.g. 34h gap), `ind_data={}` and on-demand scoring computes 0/3 rules matched → score 0.0, overriding the stored `alpha_score` (e.g. 60.2 for ZEC_USDT).
 - **Fix — `include_stale` parameter**: Added `include_stale: bool = False` to `merge_indicator_rows` and `fetch_merged_indicators` in `utils/indicator_merge.py`. When `True`, stale rows remain in the `live` list AND are tagged with `stale: True` in metadata so downstream consumers can display staleness warnings without losing the data entirely.

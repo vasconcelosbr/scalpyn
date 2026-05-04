@@ -1,20 +1,15 @@
 /**
- * Score-rule aggregation helper (Task #193).
+ * Score-rule aggregation helper (Task #211).
  *
- * The Score Breakdown panel renders two values that historically did not
- * reconcile: the alpha_score (0–100, confidence-weighted) and a "Regras"
- * counter showing nominal points (rule.points × passed). Under the robust
- * engine the actual contribution of each matched rule is
- * `points × indicator_confidence`, so 5 matched rules worth 60 nominal
- * points might only contribute ~21 weighted points → score ≈ 21/120·100.
+ * Scoring is now deterministic: matched rules award their full configured
+ * points (no confidence weighting). `awarded_points` equals `points_possible`
+ * for every matched rule. Confidence is preserved as metadata for tooltips
+ * and `can_trade` gating but does NOT influence the score.
  *
- * This helper centralises the aggregation so both PipelineAssetTable and
- * RejectedAssetTable show numbers that mathematically reconcile with the
- * displayed score. When the backend ships `weighted_points` per matched
- * rule (robust path), `weightedEarned` is the confidence-weighted sum and
- * `hasRobust` is true. When the backend cannot produce a robust score
- * (legacy snapshots, critical-gate / confidence-gate rejections), the
- * helper falls back to nominal points and `hasRobust` is false.
+ * When the backend ships `awarded_points` per matched rule (enriched path),
+ * `awardedEarned` is the sum and `hasEnriched` is true. When the backend
+ * cannot produce enrichment (legacy snapshots), the helper falls back to
+ * nominal `points_awarded` and `hasEnriched` is false.
  */
 
 import type { ScoreRule } from '@/components/watchlist/PipelineAssetTable';
@@ -29,17 +24,16 @@ export interface ScoreRulesSummary {
   /** Σ points_awarded for matched positive rules (legacy / nominal). */
   nominalEarned: number;
   /**
-   * Σ weighted_points for matched positive rules. Falls back to
-   * `nominalEarned` when the robust engine did not enrich any rule.
+   * Σ awarded_points for matched positive rules. Falls back to
+   * `nominalEarned` when the engine did not enrich any rule.
    */
-  weightedEarned: number;
+  awardedEarned: number;
   /**
    * True when at least one matched positive rule carries a backend-provided
-   * `weighted_points` field. False means the backend could not produce a
-   * robust contribution → UI should render nominal numbers + a "(legacy)"
-   * marker so the mismatch with the score does not look like a bug.
+   * `awarded_points` field. False means the backend could not produce
+   * enrichment → UI should render nominal numbers + a "(legacy)" marker.
    */
-  hasRobust: boolean;
+  hasEnriched: boolean;
   /** Σ points_awarded for fired penalty rules (negative number). */
   totalPenalties: number;
 }
@@ -57,19 +51,12 @@ export function summarizeScoreRules(rules: ScoreRule[]): ScoreRulesSummary {
     (s, r) => s + (r.points_awarded || 0),
     0,
   );
-  // A rule is "robust-enriched" when the backend attached a numeric
-  // weighted_points. We treat the breakdown as robust as soon as any
-  // matched rule carries that field — partial enrichment shouldn't
-  // happen in practice (the backend either runs the robust engine for
-  // the whole asset or skips it), but if it does, summing the
-  // weighted_points we have is still strictly closer to the truth than
-  // the nominal sum.
   const enriched = matched.filter(
-    (r) => typeof r.weighted_points === 'number' && Number.isFinite(r.weighted_points),
+    (r) => typeof r.awarded_points === 'number' && Number.isFinite(r.awarded_points),
   );
-  const hasRobust = enriched.length > 0;
-  const weightedEarned = hasRobust
-    ? enriched.reduce((s, r) => s + (r.weighted_points as number), 0)
+  const hasEnriched = enriched.length > 0;
+  const awardedEarned = hasEnriched
+    ? enriched.reduce((s, r) => s + (r.awarded_points as number), 0)
     : nominalEarned;
   const totalPenalties = rules
     .filter((r) => r.type === 'penalty')
@@ -80,8 +67,8 @@ export function summarizeScoreRules(rules: ScoreRule[]): ScoreRulesSummary {
     positiveCount: positiveRules.length,
     totalPossible,
     nominalEarned,
-    weightedEarned,
-    hasRobust,
+    awardedEarned,
+    hasEnriched,
     totalPenalties,
   };
 }

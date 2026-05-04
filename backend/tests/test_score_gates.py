@@ -83,7 +83,7 @@ class TestCriticalGateRemoved:
 
         assert not result.rejected
         assert result.score > 0.0, f"Expected non-zero score, got {result.score}"
-        expected = (10 * 0.80) / TOTAL_POSITIVE_POINTS * 100
+        expected = (10 / TOTAL_POSITIVE_POINTS) * 100
         assert abs(result.score - round(expected, 2)) < 0.1
         assert len(result.matched_rules) == 1
         assert result.matched_rules[0]["rule_id"] == "r_ema"
@@ -96,7 +96,7 @@ class TestCriticalGateRemoved:
 
         assert not result.rejected
         assert result.score > 0.0
-        expected = (15 * 0.85) / TOTAL_POSITIVE_POINTS * 100
+        expected = (15 / TOTAL_POSITIVE_POINTS) * 100
         assert abs(result.score - round(expected, 2)) < 0.1
 
     def test_missing_all_critical_still_scores(self):
@@ -190,7 +190,7 @@ class TestBetweenOperator:
         rules = [{"id": "r1", "indicator": "rsi", "operator": "between",
                   "min": 48, "max": 62, "points": 10, "category": "momentum"}]
         result = calculate_score_with_confidence(envelopes, rules)
-        assert result.score == round((10 * 0.85 / 10) * 100, 2)
+        assert result.score == round((10 / 10) * 100, 2)
         assert len(result.matched_rules) == 1
 
     def test_between_no_match_below(self):
@@ -337,7 +337,7 @@ class TestComputeAssetScorePartialData:
 
 
 class TestBreakdownConsistency:
-    def test_matched_rules_have_weighted_points(self):
+    def test_matched_rules_have_awarded_points(self):
         envelopes = {
             "rsi": _env("rsi", 55.0, confidence=0.85),
             "ema50_gt_ema200": _env("ema50_gt_ema200", True,
@@ -347,11 +347,13 @@ class TestBreakdownConsistency:
 
         assert len(result.matched_rules) == 2
         for mr in result.matched_rules:
-            assert "weighted_points" in mr
+            assert "awarded_points" in mr
             assert "confidence" in mr
-            assert mr["weighted_points"] > 0.0
+            assert "data_available" in mr
+            assert mr["awarded_points"] == mr["points"]
+            assert mr["data_available"] is True
 
-    def test_score_matches_weighted_sum(self):
+    def test_score_matches_deterministic_sum(self):
         envelopes = {
             "rsi": _env("rsi", 55.0, confidence=0.90),
             "adx": _env("adx", 25.0, confidence=0.90),
@@ -364,9 +366,9 @@ class TestBreakdownConsistency:
         ]
         result = calculate_score_with_confidence(envelopes, rules)
 
-        weighted_sum = sum(mr["weighted_points"] for mr in result.matched_rules)
+        awarded_sum = sum(mr["awarded_points"] for mr in result.matched_rules)
         denom = sum(r["points"] for r in rules)
-        expected_score = round((weighted_sum / denom) * 100.0, 2)
+        expected_score = round((awarded_sum / denom) * 100.0, 2)
         assert result.score == expected_score
 
 

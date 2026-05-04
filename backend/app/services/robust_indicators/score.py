@@ -233,12 +233,15 @@ def calculate_score_with_confidence(
             global_conf, min_global_confidence,
         )
 
-    # ── 3. Direct confidence-weighted scoring ───────────────────────────
+    # ── 3. Deterministic scoring (Task #211) ─────────────────────────────
+    # Score is fully deterministic: matched rules award their full configured
+    # points.  Confidence is tracked per rule for observability and can_trade
+    # gating but does NOT multiply into the numerator or denominator.
     matched: List[Dict[str, Any]] = []
     confidences_used: List[float] = []
     components: Dict[str, float] = {c: 0.0 for c in _VALID_CATEGORIES}
 
-    weighted_numerator = 0.0
+    raw_numerator = 0.0
     points_denominator = 0.0
 
     for rule in rules:
@@ -261,9 +264,8 @@ def calculate_score_with_confidence(
             continue
 
         if _evaluate_rule(rule, env, envelopes):
-            weighted = points * env.confidence
-            weighted_numerator += weighted
-            components[category] += weighted
+            raw_numerator += points
+            components[category] += points
             confidences_used.append(env.confidence)
             matched.append({
                 "rule_id": rule.get("id"),
@@ -271,13 +273,14 @@ def calculate_score_with_confidence(
                 "operator": rule.get("operator"),
                 "value": rule.get("value"),
                 "points": points,
-                "weighted_points": round(weighted, 4),
+                "awarded_points": points,
                 "confidence": env.confidence,
+                "data_available": True,
                 "category": category,
             })
 
     if points_denominator > 0:
-        score = (weighted_numerator / points_denominator) * 100.0
+        score = (raw_numerator / points_denominator) * 100.0
     else:
         score = 0.0
     score = max(0.0, min(100.0, score))

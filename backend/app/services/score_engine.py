@@ -482,20 +482,10 @@ class ScoreEngine:
     ) -> List[Dict[str, Any]]:
         """Return per-rule detailed breakdown for transparency/drilldown UI.
 
-        ``points_awarded`` here reflects whether the rule's *condition*
-        matched the indicator value — it's NOT a score contribution under
-        the robust engine (which weights matched points by indicator
-        confidence). UI uses this for the rule-level pass/fail panel.
-
-        Task #193: each rule entry is now enriched with ``weighted_points``
-        and ``indicator_confidence`` when the robust engine produces a
-        score. The UI uses these to render the "Regras" line as a
-        confidence-weighted sum that reconciles with the displayed Score
-        (the alpha_score on the 0–100 scale). When the robust engine is
-        rejected (critical-gate / confidence-gate / sparse fixtures), the
-        enrichment is skipped and the UI falls back to the nominal
-        ``points_awarded`` numbers. Best-effort: any exception in the
-        robust call is swallowed so the legacy breakdown still renders.
+        Task #211: scoring is now deterministic — ``awarded_points`` equals
+        the configured ``points`` for every matched rule (no confidence
+        weighting). ``indicator_confidence`` is preserved per rule for
+        observability / tooltips but does NOT reduce the awarded points.
 
         Args:
             indicators:    indicator dict (same shape ``compute_score``
@@ -510,11 +500,7 @@ class ScoreEngine:
                            Pass ``None`` to keep the legacy self-contained
                            behaviour.
         """
-        # Best-effort robust enrichment. We compute it once up-front (or
-        # reuse the caller-supplied payload) and then merge per-rule
-        # below. Any failure leaves `weighted_lookup` empty → rules
-        # render with nominal points only (legacy fallback).
-        weighted_lookup: Dict[str, Dict[str, float]] = {}
+        robust_lookup: Dict[str, Dict[str, float]] = {}
         payload: Optional[Dict[str, Any]] = (
             score_payload
             if score_payload is not None
@@ -528,11 +514,12 @@ class ScoreEngine:
                     rid = matched.get("rule_id")
                     if rid is None:
                         continue
-                    weighted_lookup[str(rid)] = {
-                        "weighted_points": float(matched.get("weighted_points", 0.0)),
+                    robust_lookup[str(rid)] = {
+                        "awarded_points": float(matched.get("awarded_points", matched.get("points", 0.0))),
                         "indicator_confidence": float(matched.get("confidence", 0.0)),
+                        "data_available": bool(matched.get("data_available", True)),
                     }
-        except Exception as exc:  # pragma: no cover — defensive only
+        except Exception as exc:
             logger.debug(
                 "get_full_breakdown: robust enrichment failed (%s); "
                 "rendering nominal-only breakdown",
@@ -592,13 +579,11 @@ class ScoreEngine:
                 "condition_text": cond,
                 "category": resolve_rule_category(rule),
             }
-            # Task #193: merge robust per-rule contribution when available.
-            # Only matched rules appear in `weighted_lookup`; non-matched stay
-            # without these fields (UI keeps showing 0 contribution).
-            robust_info = weighted_lookup.get(str(rule_id))
+            robust_info = robust_lookup.get(str(rule_id))
             if robust_info is not None:
-                entry["weighted_points"] = robust_info["weighted_points"]
+                entry["awarded_points"] = robust_info["awarded_points"]
                 entry["indicator_confidence"] = robust_info["indicator_confidence"]
+                entry["data_available"] = robust_info["data_available"]
             result.append(entry)
 
         positive_rules = [r for r in result if r["type"] == "positive"]

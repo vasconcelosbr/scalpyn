@@ -255,18 +255,16 @@ def test_resolve_rule_category_taker_ratio_defaults_to_liquidity():
     assert resolve_rule_category({"indicator": "buy_pressure"}) == "liquidity"
 
 
-# ── Task #193: get_full_breakdown enriches matched rules with weighted_points ─
+# ── Task #211: get_full_breakdown enriches matched rules with awarded_points ──
 
 
-def test_get_full_breakdown_enriches_matched_rules_with_robust_weighted_points():
-    """The drilldown panel renders ``weighted_points`` (confidence × pts)
-    so the per-rule chips and the "Regras" total reconcile with the
-    displayed Score. ``get_full_breakdown`` must mesh the robust engine's
-    matched_rules onto the legacy per-rule list, attaching
-    ``weighted_points`` and ``indicator_confidence`` only to matched
-    entries. Non-matched rules and rules absent from the robust payload
-    keep the legacy nominal-only shape so the UI fallback path keeps
-    working."""
+def test_get_full_breakdown_enriches_matched_rules_with_awarded_points():
+    """Task #211 — scoring is deterministic: ``awarded_points`` equals the
+    full configured ``points`` for matched rules (no confidence weighting).
+    ``get_full_breakdown`` must mesh the engine's matched_rules onto the
+    per-rule list, attaching ``awarded_points``, ``indicator_confidence``,
+    and ``data_available`` only to matched entries. Non-matched rules keep
+    the nominal-only shape so the UI fallback path keeps working."""
     config = {
         "scoring_rules": [
             {"id": "rsi_low",  "indicator": "rsi", "operator": "<=", "value": 40, "points": 20, "category": "momentum"},
@@ -276,22 +274,15 @@ def test_get_full_breakdown_enriches_matched_rules_with_robust_weighted_points()
     }
     engine = ScoreEngine(config)
 
-    # Fixture is internally consistent: score is derived from the matched
-    # rules so the reconciliation invariant below is a real coupling check
-    # (review feedback). Denominator covers all *positive* rules including
-    # rsi_high (15 pts), giving 45 total. Σ weighted = 8.4 + 3.0 = 11.4 →
-    # 11.4 / 45 × 100 = 25.33.
     fake_payload = {
-        "score": 25.33,
+        "score": 66.67,
         "score_confidence": 0.36,
         "global_confidence": 0.7,
         "matched_rules": [
-            # rsi_low matched with confidence 0.42 → weighted = 20 × 0.42 = 8.4
             {"rule_id": "rsi_low",  "indicator": "rsi", "operator": "<=", "value": 40,
-             "points": 20.0, "weighted_points": 8.4, "confidence": 0.42, "category": "momentum"},
-            # vol matched with confidence 0.30 → weighted = 10 × 0.30 = 3.0
+             "points": 20.0, "awarded_points": 20.0, "confidence": 0.42, "data_available": True, "category": "momentum"},
             {"rule_id": "vol", "indicator": "volume_spike", "operator": ">=", "value": 2,
-             "points": 10.0, "weighted_points": 3.0, "confidence": 0.30, "category": "liquidity"},
+             "points": 10.0, "awarded_points": 10.0, "confidence": 0.30, "data_available": True, "category": "liquidity"},
         ],
     }
     with patch(
@@ -304,24 +295,19 @@ def test_get_full_breakdown_enriches_matched_rules_with_robust_weighted_points()
 
     by_id = {r["id"]: r for r in breakdown}
 
-    # Matched rules must carry the robust per-rule contribution.
-    assert by_id["rsi_low"]["weighted_points"] == 8.4
+    assert by_id["rsi_low"]["awarded_points"] == 20.0
     assert by_id["rsi_low"]["indicator_confidence"] == 0.42
-    assert by_id["vol"]["weighted_points"] == 3.0
+    assert by_id["rsi_low"]["data_available"] is True
+    assert by_id["vol"]["awarded_points"] == 10.0
     assert by_id["vol"]["indicator_confidence"] == 0.30
 
-    # Non-matched rule must NOT carry weighted_points (UI keeps "0").
-    assert "weighted_points" not in by_id["rsi_high"]
+    assert "awarded_points" not in by_id["rsi_high"]
     assert "indicator_confidence" not in by_id["rsi_high"]
 
-    # Strict reconciliation invariant — this is the core property the UI
-    # depends on: Σ weighted_points / Σ points_possible × 100 ≈ score.
-    # If this assertion ever fails, the panel will go back to showing
-    # contradictory numbers (Score and Regras drifting apart).
-    matched = [r for r in breakdown if "weighted_points" in r]
-    weighted_total = sum(r["weighted_points"] for r in matched)
+    matched = [r for r in breakdown if "awarded_points" in r]
+    awarded_total = sum(r["awarded_points"] for r in matched)
     denom = sum(r["points_possible"] for r in breakdown if (r.get("type") or "positive") != "penalty")
-    reconstructed_score = (weighted_total / denom) * 100
+    reconstructed_score = (awarded_total / denom) * 100
     assert abs(reconstructed_score - fake_payload["score"]) < 0.05, (
         f"reconciliation drift: reconstructed={reconstructed_score:.4f} "
         f"vs payload.score={fake_payload['score']}"
@@ -341,10 +327,10 @@ def test_get_full_breakdown_reuses_caller_supplied_payload_without_recomputing()
     engine = ScoreEngine(config)
 
     pre_computed = {
-        "score": 8.4,
+        "score": 100.0,
         "matched_rules": [
             {"rule_id": "rsi_low", "indicator": "rsi", "points": 20.0,
-             "weighted_points": 8.4, "confidence": 0.42},
+             "awarded_points": 20.0, "confidence": 0.42, "data_available": True},
         ],
     }
     with patch(
@@ -354,17 +340,17 @@ def test_get_full_breakdown_reuses_caller_supplied_payload_without_recomputing()
             {"rsi": 25}, score_payload=pre_computed,
         )
 
-    # Critical: when a payload is supplied, no recomputation happens.
     assert mock_score.call_count == 0
     rule = breakdown[0]
-    assert rule["weighted_points"] == 8.4
+    assert rule["awarded_points"] == 20.0
     assert rule["indicator_confidence"] == 0.42
+    assert rule["data_available"] is True
 
 
 def test_get_full_breakdown_falls_back_to_nominal_when_robust_rejects():
     """When ``compute_asset_score`` returns ``None`` (critical-gate or
     confidence-gate rejection, e.g. sparse fixtures), every rule must
-    render in legacy mode — no ``weighted_points`` keys — so the UI
+    render in legacy mode — no ``awarded_points`` keys — so the UI
     falls back to nominal points and shows the "(legacy)" marker."""
     config = {
         "scoring_rules": [
@@ -382,7 +368,7 @@ def test_get_full_breakdown_falls_back_to_nominal_when_robust_rejects():
     rule = breakdown[0]
     assert rule["passed"] is True
     assert rule["points_awarded"] == 20.0
-    assert "weighted_points" not in rule
+    assert "awarded_points" not in rule
     assert "indicator_confidence" not in rule
 
 

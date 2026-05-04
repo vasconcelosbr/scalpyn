@@ -391,19 +391,17 @@ function ScoreBreakdownSection({
   rules: ScoreRule[];
   alphaScore: number | null;
 }) {
-  // Task #193 — confidence-weighted earned so Score and Regras reconcile.
-  // See `lib/scoreRulesSummary.ts` for the legacy fallback semantics.
   const summary = summarizeScoreRules(rules);
   const {
     matchedCount,
     positiveCount,
     totalPossible,
     nominalEarned,
-    weightedEarned,
-    hasRobust,
+    awardedEarned,
+    hasEnriched,
     totalPenalties,
   } = summary;
-  const earnedDisplay = hasRobust ? weightedEarned : nominalEarned;
+  const earnedDisplay = hasEnriched ? awardedEarned : nominalEarned;
   // Single source of truth for label + color (Task #187 review fix). The
   // file-local `scoreColor` helper still backs the table-row ScoreBar
   // (different visual context, kept out of scope), but the breakdown
@@ -472,13 +470,9 @@ function ScoreBreakdownSection({
           ) : (
             <>
               {matchedCount}/{positiveCount} matched ·{' '}
-              {hasRobust
-                ? `+${earnedDisplay.toFixed(1)}`
-                : fmtPts(earnedDisplay)}
-              /{totalPossible.toFixed(0)} pts{hasRobust ? ' ponderados' : ''}
-              {/* Review fix: only flag (legacy) when matched > 0 — zero
-                  matches give no signal that enrichment was expected. */}
-              {!hasRobust && matchedCount > 0 && (
+              {`+${earnedDisplay.toFixed(0)}`}
+              /{totalPossible.toFixed(0)} pts
+              {!hasEnriched && matchedCount > 0 && (
                 <span className="ml-1.5 text-[9px] text-[#475569] uppercase tracking-wider">
                   (legacy)
                 </span>
@@ -516,21 +510,19 @@ function ScoreBreakdownSection({
                       ? (isFired ? RULE_COLORS.penaltyFired : RULE_COLORS.penaltyIdle)
                       : (isFired ? RULE_COLORS.positiveMatched : RULE_COLORS.positiveUnmatched);
 
-                  // Task #193 — robust-weighted display for matched rules.
-                  const hasWeighted =
+                  const hasAwarded =
                     rule.passed &&
-                    typeof rule.weighted_points === 'number' &&
-                    Number.isFinite(rule.weighted_points);
+                    typeof rule.awarded_points === 'number' &&
+                    Number.isFinite(rule.awarded_points);
                   const awardedDisplay = rule.passed
-                    ? hasWeighted
-                      ? `+${(rule.weighted_points as number).toFixed(1)}`
+                    ? hasAwarded
+                      ? `+${(rule.awarded_points as number).toFixed(0)}`
                       : fmtPts(rule.points_awarded)
                     : '0';
-                  const ptsTooltip = hasWeighted
-                    ? `${(rule.weighted_points as number).toFixed(2)} ponderado` +
-                      ` (nominal ${rule.points_awarded.toFixed(2)} ×` +
-                      ` conf ${fmtConfidence(rule.indicator_confidence)}) /` +
-                      ` ${rule.points_possible.toFixed(2)} pts possíveis`
+                  const ptsTooltip = hasAwarded
+                    ? `${(rule.awarded_points as number).toFixed(0)}` +
+                      ` / ${rule.points_possible.toFixed(0)} pts` +
+                      ` (conf ${fmtConfidence(rule.indicator_confidence)})`
                     : `${rule.passed ? rule.points_awarded.toFixed(2) : '0'} /` +
                       ` ${rule.points_possible.toFixed(2)} pts`;
 
