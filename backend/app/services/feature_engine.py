@@ -55,52 +55,99 @@ class FeatureEngine:
 
         results: Dict[str, Any] = {}
 
-        try:
-            if _want("rsi") and self.config.get("rsi", {}).get("enabled"):
+        # ── Per-indicator isolation: each calc runs in its own try/except so
+        # that a failure in one indicator does not abort the remaining ones.
+        if _want("rsi") and self.config.get("rsi", {}).get("enabled"):
+            try:
                 results.update(self._calc_rsi(df))
+            except Exception as e:
+                logger.exception("rsi calculation failed: %s", e)
 
-            if _want("adx") and self.config.get("adx", {}).get("enabled"):
+        if _want("adx") and self.config.get("adx", {}).get("enabled"):
+            try:
                 results.update(self._calc_adx(df))
+            except Exception as e:
+                logger.exception("adx calculation failed: %s", e)
 
-            if _want("ema") and self.config.get("ema", {}).get("enabled"):
+        if _want("ema") and self.config.get("ema", {}).get("enabled"):
+            try:
                 results.update(self._calc_ema(df))
+            except Exception as e:
+                logger.exception("ema calculation failed: %s", e)
 
-            if _want("atr") and self.config.get("atr", {}).get("enabled"):
+        if _want("atr") and self.config.get("atr", {}).get("enabled"):
+            try:
                 results.update(self._calc_atr(df))
+            except Exception as e:
+                logger.exception("atr calculation failed: %s", e)
 
-            if _want("macd") and self.config.get("macd", {}).get("enabled"):
+        if _want("macd") and self.config.get("macd", {}).get("enabled"):
+            try:
                 results.update(self._calc_macd(df))
+            except Exception as e:
+                logger.exception("macd calculation failed: %s", e)
 
-            if _want("vwap") and self.config.get("vwap", {}).get("enabled"):
+        if _want("vwap") and self.config.get("vwap", {}).get("enabled"):
+            try:
                 results.update(self._calc_vwap(df))
+            except Exception as e:
+                logger.exception("vwap calculation failed: %s", e)
 
-            if _want("stochastic") and self.config.get("stochastic", {}).get("enabled"):
+        if _want("stochastic") and self.config.get("stochastic", {}).get("enabled"):
+            try:
                 results.update(self._calc_stochastic(df))
+            except Exception as e:
+                logger.exception("stochastic calculation failed: %s", e)
 
-            if _want("obv") and self.config.get("obv", {}).get("enabled"):
+        if _want("obv") and self.config.get("obv", {}).get("enabled"):
+            try:
                 results.update(self._calc_obv(df))
+            except Exception as e:
+                logger.exception("obv calculation failed: %s", e)
 
-            if _want("bollinger") and self.config.get("bollinger", {}).get("enabled"):
+        if _want("bollinger") and self.config.get("bollinger", {}).get("enabled"):
+            try:
                 results.update(self._calc_bollinger(df))
+            except Exception as e:
+                logger.exception("bollinger calculation failed: %s", e)
 
-            if _want("parabolic_sar") and self.config.get("parabolic_sar", {}).get("enabled"):
+        if _want("parabolic_sar") and self.config.get("parabolic_sar", {}).get("enabled"):
+            try:
                 results.update(self._calc_parabolic_sar(df))
+            except Exception as e:
+                logger.exception("parabolic_sar calculation failed: %s", e)
 
-            if _want("zscore") and self.config.get("zscore", {}).get("enabled"):
+        if _want("zscore") and self.config.get("zscore", {}).get("enabled"):
+            try:
                 results.update(self._calc_zscore(df))
+            except Exception as e:
+                logger.exception("zscore calculation failed: %s", e)
 
-            if _want("volume_delta") and self.config.get("volume_delta", {}).get("enabled"):
+        if _want("volume_delta") and self.config.get("volume_delta", {}).get("enabled"):
+            try:
                 results.update(self._calc_volume_delta(df))
+            except Exception as e:
+                logger.exception("volume_delta calculation failed: %s", e)
 
-            if _want("volume_metrics") and self.config.get("volume_metrics", {}).get("enabled", True):
+        if _want("volume_metrics") and self.config.get("volume_metrics", {}).get("enabled", True):
+            try:
                 results.update(self._calc_volume_metrics(df))
+            except Exception as e:
+                logger.exception("volume_metrics calculation failed: %s", e)
 
-            if _want("volume_spike") and self.config.get("volume_spike", {}).get("enabled", True):
+        if _want("volume_spike") and self.config.get("volume_spike", {}).get("enabled", True):
+            try:
                 results.update(self._calc_volume_spike(df))
+            except Exception as e:
+                logger.exception("volume_spike calculation failed: %s", e)
 
-            if _want("taker_ratio") and self.config.get("taker_ratio", {}).get("enabled", True):
+        if _want("taker_ratio") and self.config.get("taker_ratio", {}).get("enabled", True):
+            try:
                 results.update(self._calc_taker_ratio(df))
+            except Exception as e:
+                logger.exception("taker_ratio calculation failed: %s", e)
 
+        try:
             # ── Post-compute: EMA period filtering by group ────────────────────
             # "ema" calc key runs in both groups but each stores only its subset:
             #   structural   → EMA50, EMA200 (slow, anchor for trend structure)

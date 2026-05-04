@@ -312,32 +312,37 @@ async def _compute_async():
                     results.update(_compute_score_fields(results))
 
                     now = datetime.now(timezone.utc)
-                    await _upsert_market_metadata_snapshot(db, symbol, results, now)
 
-                    # Store in TimescaleDB (envelope format — value + source + confidence + status)
-                    await db.execute(text("""
-                        INSERT INTO indicators
-                            (time, symbol, timeframe, market_type, indicators_json)
-                        VALUES
-                            (:time, :symbol, :timeframe, :market_type, :indicators)
-                    """), {
-                        "time": now,
-                        "symbol": symbol,
-                        "timeframe": "1h",
-                        "market_type": "spot",  # 1h collector is spot-only (pool query above filters p.market_type='spot')
-                        "indicators": json.dumps(envelop_results(
-                            results,
-                            default_source="candle_computed",
-                            default_confidence=0.80,
-                            key_source_map=_COMPUTE_KEY_SOURCE_MAP,
-                        )),
-                    })
+                    # SAVEPOINT: isolates this symbol's writes so that a
+                    # failure here does not roll back other symbols' data.
+                    async with db.begin_nested():
+                        await _upsert_market_metadata_snapshot(db, symbol, results, now)
+
+                        # Store in TimescaleDB (envelope format — value + source + confidence + status)
+                        await db.execute(text("""
+                            INSERT INTO indicators
+                                (time, symbol, timeframe, market_type, indicators_json)
+                            VALUES
+                                (:time, :symbol, :timeframe, :market_type, :indicators)
+                        """), {
+                            "time": now,
+                            "symbol": symbol,
+                            "timeframe": "1h",
+                            "market_type": "spot",  # 1h collector is spot-only (pool query above filters p.market_type='spot')
+                            "indicators": json.dumps(envelop_results(
+                                results,
+                                default_source="candle_computed",
+                                default_confidence=0.80,
+                                key_source_map=_COMPUTE_KEY_SOURCE_MAP,
+                            )),
+                        })
 
                     computed += 1
 
                 except Exception as e:
                     logger.warning(f"Failed to compute indicators for {symbol}: {e}")
-                    await db.rollback()
+                    # begin_nested() savepoint auto-rolled back on exception;
+                    # outer transaction remains healthy — no db.rollback() needed.
                     continue
 
             await db.commit()
@@ -447,31 +452,36 @@ async def _compute_5m_async():
                     results.update(_compute_score_fields(results))
 
                     now = datetime.now(timezone.utc)
-                    await _upsert_market_metadata_snapshot(db, symbol, results, now)
-                    # Store in TimescaleDB (envelope format — value + source + confidence + status)
-                    await db.execute(text("""
-                        INSERT INTO indicators
-                            (time, symbol, timeframe, market_type, indicators_json)
-                        VALUES
-                            (:time, :symbol, :timeframe, :market_type, :indicators)
-                    """), {
-                        "time":        now,
-                        "symbol":      symbol,
-                        "timeframe":   "5m",
-                        "market_type": symbol_market_type.get(symbol, "spot"),
-                        "indicators":  json.dumps(envelop_results(
-                            results,
-                            default_source="candle_computed",
-                            default_confidence=0.80,
-                            key_source_map=_COMPUTE_KEY_SOURCE_MAP,
-                        )),
-                    })
+
+                    # SAVEPOINT: isolates this symbol's writes so that a
+                    # failure here does not roll back other symbols' data.
+                    async with db.begin_nested():
+                        await _upsert_market_metadata_snapshot(db, symbol, results, now)
+                        # Store in TimescaleDB (envelope format — value + source + confidence + status)
+                        await db.execute(text("""
+                            INSERT INTO indicators
+                                (time, symbol, timeframe, market_type, indicators_json)
+                            VALUES
+                                (:time, :symbol, :timeframe, :market_type, :indicators)
+                        """), {
+                            "time":        now,
+                            "symbol":      symbol,
+                            "timeframe":   "5m",
+                            "market_type": symbol_market_type.get(symbol, "spot"),
+                            "indicators":  json.dumps(envelop_results(
+                                results,
+                                default_source="candle_computed",
+                                default_confidence=0.80,
+                                key_source_map=_COMPUTE_KEY_SOURCE_MAP,
+                            )),
+                        })
 
                     computed += 1
 
                 except Exception as e:
                     logger.warning(f"Failed to compute 5m indicators for {symbol}: {e}")
-                    await db.rollback()
+                    # begin_nested() savepoint auto-rolled back on exception;
+                    # outer transaction remains healthy — no db.rollback() needed.
                     continue
 
             await db.commit()
