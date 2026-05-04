@@ -133,6 +133,32 @@ class TestConfidenceGateSoftened:
         assert result.score > 0.0
         assert not result.can_trade
 
+    def test_high_score_confidence_but_low_global_confidence_blocks_trade(self):
+        envelopes = {
+            "rsi": _env("rsi", 55.0, confidence=0.95),
+            "adx": _env("adx", 25.0, confidence=0.95),
+            "macd_histogram": _env("macd_histogram", 0.5, confidence=0.95),
+            "ema50": _env("ema50", 100.0, confidence=0.05),
+            "ema50_gt_ema200": _env("ema50_gt_ema200", True,
+                                    source=DataSource.DERIVED, confidence=0.95),
+            "bb_width": _env("bb_width", 0.03, confidence=0.95),
+            "volume_24h": _env("volume_24h", 50000.0,
+                               source=DataSource.GATE_TICKER, confidence=0.05),
+            "di_plus": _env("di_plus", 40.0, confidence=0.95),
+            "orderbook_depth_usdt": _env("orderbook_depth_usdt", 10000.0,
+                                         source=DataSource.GATE_ORDERBOOK, confidence=0.05),
+            "volume_delta": _env("volume_delta", 100.0,
+                                 source=DataSource.GATE_TRADES, confidence=0.05),
+        }
+        result = calculate_score_with_confidence(
+            envelopes, RULES_LIKE_USER, can_trade_threshold=30.0,
+            min_global_confidence=0.60,
+        )
+        assert not result.rejected
+        assert result.score > 30.0
+        assert result.global_confidence < 0.60
+        assert not result.can_trade
+
     def test_high_confidence_can_trade(self):
         envelopes = {
             "rsi": _env("rsi", 55.0, confidence=0.95),

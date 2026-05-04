@@ -23,7 +23,8 @@ Pipeline:
        that matched (used as a quality signal alongside the score).
     5. ``can_trade`` flag: True only when
        ``score >= can_trade_threshold`` (default 65) AND
-       ``score_confidence >= min_global_confidence``.
+       ``score_confidence >= min_global_confidence`` AND
+       ``global_confidence >= min_global_confidence``.
 
 The engine reads scoring rules in the same shape used by the legacy
 ``ScoreEngine`` (``scoring_rules`` / ``rules`` lists with
@@ -289,6 +290,7 @@ def calculate_score_with_confidence(
     can_trade = (
         score >= can_trade_threshold
         and score_conf >= min_global_confidence
+        and global_conf >= min_global_confidence
     )
 
     return ScoreResult(
