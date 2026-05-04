@@ -218,7 +218,7 @@ def merge_indicator_rows(
     # When ``include_stale`` is True, stale rows are kept in ``live`` (so
     # their values participate in the merge) AND recorded in ``stale_rows``
     # (so per-key metadata still carries ``stale=True``).
-    live: List[Tuple[str, Optional[datetime], Dict[str, Any], float]] = []
+    live: List[Tuple[str, Optional[datetime], Dict[str, Any], float, bool]] = []
     stale_rows: List[Tuple[str, Optional[datetime], Dict[str, Any], float]] = []
     for grp, ts, ind_json in rows:
         ts_utc = _ensure_utc(ts)
@@ -233,16 +233,16 @@ def merge_indicator_rows(
                 )
                 stale_rows.append((grp, ts_utc, ind_json or {}, age))
                 if include_stale:
-                    live.append((grp, ts_utc, ind_json or {}, age))
+                    live.append((grp, ts_utc, ind_json or {}, age, True))
                 continue
-            live.append((grp, ts_utc, ind_json or {}, age))
+            live.append((grp, ts_utc, ind_json or {}, age, False))
         else:
-            live.append((grp, None, ind_json or {}, float("inf")))
+            live.append((grp, None, ind_json or {}, float("inf"), False))
 
     # ── Step 2: Inter-group drift cap ─────────────────────────────────────────
     # Pick latest timestamp per group from live rows.
     ts_by_group: Dict[str, Optional[datetime]] = {}
-    for grp, ts_utc, _, _age in live:
+    for grp, ts_utc, _, _age, _stale in live:
         existing = ts_by_group.get(grp)
         if existing is None or (ts_utc is not None and ts_utc > existing):
             ts_by_group[grp] = ts_utc
@@ -270,11 +270,10 @@ def merge_indicator_rows(
                     "[merge] drift=%.0fs > %.0fs — microstructure group absent",
                     drift, max_drift,
                 )
-            # Track drift-dropped rows as stale (same as absolute staleness)
             for entry in live:
                 if entry[0] in stale_groups:
-                    stale_rows.append(entry)
-            live = [(g, t, d, a) for g, t, d, a in live if g not in stale_groups]
+                    stale_rows.append((entry[0], entry[1], entry[2], entry[3]))
+            live = [(g, t, d, a, s) for g, t, d, a, s in live if g not in stale_groups]
 
     # ── Step 3: Per-key latest-timestamp-wins merge ───────────────────────────
     # For each indicator key:
@@ -284,30 +283,29 @@ def merge_indicator_rows(
     #     equal (its faster cadence means it is at least as fresh as structural).
     result = MergedIndicators()
 
-    for grp, ts_utc, ind_json, age in live:
+    for grp, ts_utc, ind_json, age, is_stale in live:
         for k, raw in ind_json.items():
-            # Support both envelope dicts {"value": ..., "source": ..., ...}
-            # and bare scalars (legacy rows written before Task #160).
             if isinstance(raw, dict) and "value" in raw:
                 v = raw["value"]
                 env_source = raw.get("source")
                 env_confidence = raw.get("confidence")
                 env_status = raw.get("status")
                 if v is None:
-                    continue  # NO_DATA entries do not participate in scoring
+                    continue
             elif isinstance(raw, (int, float, bool, str)):
                 v = raw
                 env_source = None
                 env_confidence = None
                 env_status = None
             else:
-                continue  # skip unrecognised types
+                continue
 
             existing_meta = result.meta.get(k)
             if existing_meta is None:
-                # First entry for this key
                 result.values[k] = v
-                result.meta[k] = _make_meta(grp, age, ts_utc, env_source, env_confidence, env_status)
+                m = _make_meta(grp, age, ts_utc, env_source, env_confidence, env_status)
+                m["stale"] = is_stale
+                result.meta[k] = m
                 continue
 
             existing_ts: Optional[datetime] = existing_meta.get("timestamp")
@@ -343,19 +341,25 @@ def merge_indicator_rows(
 
             if should_overwrite:
                 result.values[k] = v
-                result.meta[k] = _make_meta(grp, age, ts_utc, env_source, env_confidence, env_status)
+                m = _make_meta(grp, age, ts_utc, env_source, env_confidence, env_status)
+                m["stale"] = is_stale
+                result.meta[k] = m
 
     # ── Step 4: Post-merge hybrid indicators ──────────────────────────────────
     # ema9_gt_ema50: EMA9 (microstructure) vs EMA50 (structural)
     if "ema9" in result.values and "ema50" in result.values:
         result.values["ema9_gt_ema50"] = result.values["ema9"] > result.values["ema50"]
-        ema9_age = (result.meta.get("ema9") or {}).get("age_seconds")
-        ema50_age = (result.meta.get("ema50") or {}).get("age_seconds")
+        ema9_meta = result.meta.get("ema9") or {}
+        ema50_meta = result.meta.get("ema50") or {}
+        ema9_age = ema9_meta.get("age_seconds")
+        ema50_age = ema50_meta.get("age_seconds")
         ages = [a for a in (ema9_age, ema50_age) if a is not None]
+        any_stale = ema9_meta.get("stale", False) or ema50_meta.get("stale", False)
         result.meta["ema9_gt_ema50"] = {
-            "group": "structural",  # hybrid classified as structural
+            "group": "structural",
             "age_seconds": max(ages) if ages else None,
             "timestamp": None,
+            "stale": any_stale,
         }
 
     # ema_full_alignment: EMA9 > EMA50 > EMA200
@@ -363,15 +367,23 @@ def merge_indicator_rows(
         result.values["ema_full_alignment"] = (
             result.values["ema9"] > result.values["ema50"] > result.values["ema200"]
         )
-        ema9_age = (result.meta.get("ema9") or {}).get("age_seconds")
-        ema50_age = (result.meta.get("ema50") or {}).get("age_seconds")
-        ema200_age = (result.meta.get("ema200") or {}).get("age_seconds")
+        ema9_meta = result.meta.get("ema9") or {}
+        ema50_meta = result.meta.get("ema50") or {}
+        ema200_meta = result.meta.get("ema200") or {}
+        ema9_age = ema9_meta.get("age_seconds")
+        ema50_age = ema50_meta.get("age_seconds")
+        ema200_age = ema200_meta.get("age_seconds")
         ages = [a for a in (ema9_age, ema50_age, ema200_age) if a is not None]
+        any_stale = (
+            ema9_meta.get("stale", False)
+            or ema50_meta.get("stale", False)
+            or ema200_meta.get("stale", False)
+        )
         result.meta["ema_full_alignment"] = {
             "group": "structural",
             "age_seconds": max(ages) if ages else None,
             "timestamp": None,
-            "stale": False,
+            "stale": any_stale,
         }
 
     # ── Step 5: Add stale metadata (debugging/observability) ─────────────────
