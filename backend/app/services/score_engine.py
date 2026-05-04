@@ -28,6 +28,8 @@ from copy import deepcopy
 import logging
 import math
 import operator as op
+
+from .indicator_validity import unwrap_envelope_value
 from typing import Dict, Any, List, Optional, Set, Tuple
 
 # ── Display labels per indicator name ─────────────────────────────────────────
@@ -390,7 +392,10 @@ class ScoreEngine:
         target_value = rule.get("value")
 
         def get_indicator_value(name: str) -> Any:
-            return indicators.get(name)
+            # Indicator payloads use the envelope shape
+            # ``{"value": v, "status": ...}``. Unwrap so every operator
+            # below compares against the scalar instead of the dict.
+            return unwrap_envelope_value(indicators.get(name))
 
         # Special EMA trend operators
         if operator_str == "ema9>ema50>ema200":
@@ -538,30 +543,37 @@ class ScoreEngine:
 
             lbl = _IND_LABELS.get(indicator, indicator.upper())
 
+            # All reads below go through the unwrap helper so envelope
+            # payloads ({"value": v, "status": "VALID"}) are interpreted
+            # by their scalar payload rather than by dict truthiness.
+            def _ind(key: str) -> Any:
+                return unwrap_envelope_value(indicators.get(key))
+
             if operator_str == "ema9>ema50>ema200":
-                actual: Any = bool(indicators.get("ema_full_alignment", False))
+                actual: Any = bool(_ind("ema_full_alignment") or False)
                 cond = "EMA 9>50>200"
             elif operator_str == "ema9>ema50":
-                actual = bool(indicators.get("ema9_gt_ema50", False))
+                actual = bool(_ind("ema9_gt_ema50") or False)
                 cond = "EMA 9>50"
             elif operator_str == "ema9<ema50":
-                actual = not bool(indicators.get("ema9_gt_ema50", True))
+                _flag = _ind("ema9_gt_ema50")
+                actual = not bool(_flag if _flag is not None else True)
                 cond = "EMA 9<50"
             elif operator_str == "ema50>ema200":
-                actual = bool(indicators.get("ema50_gt_ema200", False))
+                actual = bool(_ind("ema50_gt_ema200") or False)
                 cond = "EMA 50>200"
             elif operator_str == "di+>di-":
-                actual = indicators.get("di_plus")
+                actual = _ind("di_plus")
                 cond = "DI+ > DI-"
             elif operator_str == "di->di+":
-                actual = indicators.get("di_minus")
+                actual = _ind("di_minus")
                 cond = "DI- > DI+"
             elif operator_str == "between":
-                actual = indicators.get(indicator)
+                actual = _ind(indicator)
                 mn, mx = rule.get("min", 0), rule.get("max", 100)
                 cond = f"{lbl} {mn}–{mx}"
             else:
-                actual = indicators.get(indicator)
+                actual = _ind(indicator)
                 cond = f"{lbl} {operator_str} {target}" if target is not None else f"{lbl} {operator_str}"
 
             passed = self._evaluate_rule(rule, indicators)

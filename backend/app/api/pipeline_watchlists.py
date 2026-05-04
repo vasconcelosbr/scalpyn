@@ -533,11 +533,18 @@ async def get_pipeline_assets(
         # Build per-key inline metadata: {key: {value, source_group, age_seconds, stale}}
         # This satisfies the inline metadata contract without changing the flat
         # `indicators` format that the scoring engine and frontend depend on.
+        # Indicator payloads in `indicators` may already be unwrapped to
+        # scalars by upstream callers, but when they aren't (e.g. raw
+        # `indicators_json` from the DB), the envelope dict
+        # `{"value": v, "status": "VALID"}` would leak through here as
+        # the "value" — the frontend then renders an object instead of
+        # a number. Unwrap defensively to keep the metadata contract.
+        from ..services.indicator_validity import unwrap_envelope_value
         indicators_meta: Dict[str, Dict[str, Any]] = {}
         sym_meta_all = ind_meta_map.get(sym, {})
         for ikey, imeta in sym_meta_all.items():
             indicators_meta[ikey] = {
-                "value": indicators.get(ikey),  # None for stale-only keys
+                "value": unwrap_envelope_value(indicators.get(ikey)),  # None for stale-only keys
                 "source_group": imeta.get("group"),
                 "timestamp": imeta.get("timestamp"),
                 "age_seconds": imeta.get("age_seconds"),

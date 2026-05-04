@@ -14,7 +14,7 @@ import logging
 import operator as _op
 from typing import Dict, Any, List, Optional
 
-from .indicator_validity import RuleStatus, SkipReason, is_valid, log_skipped
+from .indicator_validity import RuleStatus, SkipReason, is_valid, log_skipped, unwrap_envelope_value
 from .rule_engine import RuleEngine
 
 logger = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ class BlockEngine:
                     details[block_id] = f"Condition '{block.get('condition')}' matched"
                 continue
 
-            actual = indicators.get(indicator)
+            actual = unwrap_envelope_value(indicators.get(indicator))
 
             valid, skip_reason = is_valid(actual, indicator)
             if not valid:
@@ -235,10 +235,14 @@ class BlockEngine:
 
     def _evaluate_string_condition(self, block: Dict, indicators: Dict) -> bool:
         condition = block.get("condition", "")
+        # Unwrap envelope so a payload like ``{"value": True, "status": "VALID"}``
+        # is interpreted by its boolean value, not as the truthiness of a dict
+        # (which would always be True and silently break the EMA-cross logic).
+        ema_flag = unwrap_envelope_value(indicators.get("ema9_gt_ema50"))
         if condition == "ema9<ema50":
-            return not bool(indicators.get("ema9_gt_ema50", True))
+            return not bool(ema_flag if ema_flag is not None else True)
         elif condition == "ema9>ema50":
-            return bool(indicators.get("ema9_gt_ema50", False))
+            return bool(ema_flag if ema_flag is not None else False)
         return False
 
     # ── Entry Triggers (absorbed from Signal Rules) ───────────────────────────

@@ -103,7 +103,8 @@ async def _execute_buy_cycle_async() -> dict:
             if field == "market_cap":
                 actual = market_cap
             else:
-                raw = indicators.get(field)
+                from ..services.indicator_validity import unwrap_envelope_value
+                raw = unwrap_envelope_value(indicators.get(field))
                 actual = float(raw) if raw is not None else None
 
             if actual is None:
@@ -346,10 +347,14 @@ async def _execute_buy_cycle_async() -> dict:
                     if buys_this_cycle >= max_opps:
                         break
 
+                    from ..services.indicator_validity import unwrap_envelope_value
                     symbol         = row.symbol
                     indicators     = row.indicators_json or {}
                     candidate_market_cap = float(row.market_cap) if row.market_cap else None
-                    current_price  = float(indicators.get("close", 0))
+                    # ``close`` is stored as an envelope (``{"value": v, ...}``);
+                    # unwrap before float() so we don't crash on dict.
+                    _close_raw     = unwrap_envelope_value(indicators.get("close"))
+                    current_price  = float(_close_raw) if _close_raw is not None else 0.0
 
                     if current_price <= 0:
                         logger.debug("Skipping %s — missing close price", symbol)

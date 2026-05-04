@@ -606,11 +606,19 @@ def _filter_incomplete_indicators(assets: list) -> tuple[list, list]:
     complete: list = []
     incomplete: list = []
 
+    from ..services.indicator_validity import unwrap_envelope_value
+
     for asset in assets:
         indicators = asset.get("indicators", {})
+        # Indicator payloads use the envelope shape
+        # ``{"value": v, "status": "VALID"}``. The raw dict is never
+        # ``None`` even when the value is missing, so the quarantine
+        # check has to compare the unwrapped scalar — otherwise an
+        # asset whose RSI envelope holds ``"value": None`` is treated
+        # as "fully populated" and advances with broken indicators.
         missing = [
             ind for ind in _REQUIRED_CORE_INDICATORS
-            if indicators.get(ind) is None
+            if unwrap_envelope_value(indicators.get(ind)) is None
         ]
         if missing:
             incomplete.append(asset)

@@ -5,7 +5,7 @@ import operator as op
 from typing import Dict, Any, List, Optional, Union
 from enum import Enum
 
-from .indicator_validity import RuleStatus, SkipReason, is_valid, log_skipped
+from .indicator_validity import RuleStatus, SkipReason, is_valid, log_skipped, unwrap_envelope_value
 
 logger = logging.getLogger(__name__)
 
@@ -252,10 +252,17 @@ class RuleEngine:
             return False, detail
     
     def _get_nested_value(self, data: Dict[str, Any], field: str) -> Any:
-        """Get value from nested dict using dot notation (e.g., 'indicators.rsi')."""
+        """Get value from nested dict using dot notation (e.g., 'indicators.rsi').
+
+        Indicator payloads stored in ``indicators_json`` use the envelope
+        shape ``{"value": v, "status": "VALID", ...}``. The leaf value is
+        unwrapped here so every operator downstream sees the scalar — the
+        envelope dict is *never* a meaningful comparison operand and used
+        to silently surface as "SEM DADOS" in the trace UI.
+        """
         if "." not in field:
-            return data.get(field)
-        
+            return unwrap_envelope_value(data.get(field))
+
         parts = field.split(".")
         value = data
         for part in parts:
@@ -263,7 +270,7 @@ class RuleEngine:
                 value = value.get(part)
             else:
                 return None
-        return value
+        return unwrap_envelope_value(value)
     
     def _apply_operator(
         self,

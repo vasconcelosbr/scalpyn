@@ -78,11 +78,36 @@ def _is_nan(value: Any) -> bool:
     return isinstance(value, float) and math.isnan(value)
 
 
+def unwrap_envelope_value(value: Any) -> Any:
+    """Return the scalar payload of an indicator envelope.
+
+    Indicators are stored in ``indicators_json`` using the envelope shape
+    ``{"value": v, "source": ..., "confidence": ..., "status": "VALID"}``
+    (Task #160+). Most call sites operate on flat scalars, so any
+    consumer that reads the raw envelope dict ends up treating a
+    perfectly valid 51.61 as an unevaluable object — surfacing as
+    "SEM DADOS / aguardando coleta" in the trace UI.
+
+    This helper is the canonical unwrap. It is intentionally tolerant:
+      * Plain scalars (int/float/bool/str/None) pass through unchanged.
+      * Dicts with a ``"value"`` key are unwrapped to that value.
+      * Other dicts are returned as-is so downstream validity checks
+        can reject them as non-numeric (preserves prior behaviour for
+        unexpected shapes).
+    """
+    if isinstance(value, dict) and "value" in value:
+        return value["value"]
+    return value
+
+
 def is_valid(value: Any, indicator_name: Optional[str] = None) -> Tuple[bool, Optional[SkipReason]]:
     """Return (valid, skip_reason) for an indicator value.
 
     Args:
-        value: Raw value from the indicator payload.
+        value: Raw value from the indicator payload. Envelope dicts
+               (``{"value": v, "status": ...}``) are unwrapped first so
+               every evaluator gets the same answer regardless of whether
+               the caller already flattened the payload.
         indicator_name: Indicator name used to look up plausibility rules.
 
     Returns:
@@ -90,6 +115,8 @@ def is_valid(value: Any, indicator_name: Optional[str] = None) -> Tuple[bool, Op
         (False, SkipReason.X)   if the value should cause the rule to be
                                 marked SKIPPED with the given reason.
     """
+    value = unwrap_envelope_value(value)
+
     if value is None:
         return False, SkipReason.INDICATOR_NOT_AVAILABLE
 

@@ -74,10 +74,15 @@ async def _evaluate_async():
                 """))
                 candidates = ranked.fetchall()
 
+                from ..services.indicator_validity import unwrap_envelope_value
+
                 for candidate in candidates:
                     symbol = candidate.symbol
                     indicators = candidate.indicators_json or {}
-                    current_price = indicators.get("close", 0)
+                    # ``close`` may be stored as the envelope
+                    # ``{"value": 1234.5, "status": "VALID"}``. Unwrap
+                    # so the price guard below compares a scalar.
+                    current_price = unwrap_envelope_value(indicators.get("close")) or 0
 
                     if current_price <= 0:
                         continue
