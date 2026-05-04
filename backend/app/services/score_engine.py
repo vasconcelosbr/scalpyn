@@ -501,6 +501,7 @@ class ScoreEngine:
                            behaviour.
         """
         robust_lookup: Dict[str, Dict[str, float]] = {}
+        evaluated_ids: set = set()
         payload: Optional[Dict[str, Any]] = (
             score_payload
             if score_payload is not None
@@ -519,6 +520,8 @@ class ScoreEngine:
                         "indicator_confidence": float(matched.get("confidence", 0.0)),
                         "data_available": bool(matched.get("data_available", True)),
                     }
+                for eid in (payload.get("evaluated_rule_ids") or []):
+                    evaluated_ids.add(str(eid))
         except Exception as exc:
             logger.debug(
                 "get_full_breakdown: robust enrichment failed (%s); "
@@ -584,6 +587,11 @@ class ScoreEngine:
                 entry["awarded_points"] = robust_info["awarded_points"]
                 entry["indicator_confidence"] = robust_info["indicator_confidence"]
                 entry["data_available"] = robust_info["data_available"]
+            elif payload is not None and pts > 0:
+                data_avail = str(rule_id) in evaluated_ids
+                entry["awarded_points"] = float(pts) if passed else 0.0
+                entry["indicator_confidence"] = 0.0
+                entry["data_available"] = data_avail
             result.append(entry)
 
         positive_rules = [r for r in result if r["type"] == "positive"]

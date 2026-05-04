@@ -1,4 +1,4 @@
-"""Confidence-weighted score engine.
+"""Deterministic score engine (Task #211).
 
 Pipeline:
 
@@ -9,22 +9,30 @@ Pipeline:
     2. Global-confidence advisory: when the average envelope confidence
        is below ``min_global_confidence`` the score is still computed
        but ``can_trade`` stays False.
-    3. Confidence-weighted score (direct formulation):
+    3. Deterministic scoring (no confidence weighting):
 
-           score = sum(rule.points * env.confidence  for matched rules)
-                 / sum(rule.points                  for all considered rules)
+           score = sum(rule.points  for matched rules)
+                 / sum(rule.points  for all enabled positive rules)
                  * 100
 
-       Every matched rule contributes its full point value scaled by
-       the freshness/quality of its underlying envelope, and the
-       denominator is the sum of all considered rule points so the
-       result stays bounded to ``[0, 100]``.
+       Every matched rule contributes its full configured point value.
+       Confidence is tracked per rule for observability but does NOT
+       multiply into the numerator or denominator. The denominator
+       includes every enabled positive rule regardless of match,
+       confidence, or data availability, keeping the score bounded
+       to ``[0, 100]`` and comparable across assets.
     4. ``score_confidence``: average envelope confidence across rules
        that matched (used as a quality signal alongside the score).
     5. ``can_trade`` flag: True only when
        ``score >= can_trade_threshold`` (default 65) AND
        ``score_confidence >= min_global_confidence`` AND
        ``global_confidence >= min_global_confidence``.
+
+    Per-rule breakdown contract (``matched_rules`` entries):
+       - ``awarded_points``: full configured points (= ``points``)
+       - ``confidence``: envelope confidence (metadata only)
+       - ``data_available``: True (always True for matched rules;
+         unmatched rules are not in ``matched_rules``)
 
 The engine reads scoring rules in the same shape used by the legacy
 ``ScoreEngine`` (``scoring_rules`` / ``rules`` lists with
@@ -75,7 +83,7 @@ _OPERATOR_ENVELOPE_REMAP: Dict[str, str] = {
 
 @dataclass
 class ScoreResult:
-    """Confidence-weighted score outcome."""
+    """Deterministic score outcome (Task #211)."""
 
     score: float
     score_confidence: float
@@ -84,6 +92,7 @@ class ScoreResult:
     rejection_reason: Optional[str]
     components: Dict[str, float] = field(default_factory=dict)
     matched_rules: List[Dict[str, Any]] = field(default_factory=list)
+    evaluated_rule_ids: List[str] = field(default_factory=list)
     global_confidence: float = 0.0
     valid_indicators: int = 0
     total_indicators: int = 0
@@ -97,6 +106,7 @@ class ScoreResult:
             "rejection_reason": self.rejection_reason,
             "components": {k: round(v, 4) for k, v in self.components.items()},
             "matched_rules": list(self.matched_rules),
+            "evaluated_rule_ids": list(self.evaluated_rule_ids),
             "global_confidence": round(self.global_confidence, 4),
             "valid_indicators": self.valid_indicators,
             "total_indicators": self.total_indicators,
@@ -238,6 +248,7 @@ def calculate_score_with_confidence(
     # points.  Confidence is tracked per rule for observability and can_trade
     # gating but does NOT multiply into the numerator or denominator.
     matched: List[Dict[str, Any]] = []
+    evaluated_rule_ids: List[str] = []
     confidences_used: List[float] = []
     components: Dict[str, float] = {c: 0.0 for c in _VALID_CATEGORIES}
 
@@ -263,12 +274,15 @@ def calculate_score_with_confidence(
         if env is None or not env.is_usable:
             continue
 
+        rule_id = rule.get("id") or f"{name}_{rule_operator}"
+        evaluated_rule_ids.append(str(rule_id))
+
         if _evaluate_rule(rule, env, envelopes):
             raw_numerator += points
             components[category] += points
             confidences_used.append(env.confidence)
             matched.append({
-                "rule_id": rule.get("id"),
+                "rule_id": rule_id,
                 "indicator": name,
                 "operator": rule.get("operator"),
                 "value": rule.get("value"),
@@ -304,6 +318,7 @@ def calculate_score_with_confidence(
         rejection_reason=None,
         components={k: round(v, 4) for k, v in components.items()},
         matched_rules=matched,
+        evaluated_rule_ids=evaluated_rule_ids,
         global_confidence=global_conf,
         valid_indicators=valid_n,
         total_indicators=total_n,

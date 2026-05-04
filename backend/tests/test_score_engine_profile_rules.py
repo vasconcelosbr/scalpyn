@@ -263,8 +263,10 @@ def test_get_full_breakdown_enriches_matched_rules_with_awarded_points():
     full configured ``points`` for matched rules (no confidence weighting).
     ``get_full_breakdown`` must mesh the engine's matched_rules onto the
     per-rule list, attaching ``awarded_points``, ``indicator_confidence``,
-    and ``data_available`` only to matched entries. Non-matched rules keep
-    the nominal-only shape so the UI fallback path keeps working."""
+    and ``data_available`` to ALL positive rules. Matched rules get
+    ``data_available=True``; unmatched rules with data get
+    ``data_available=True``; rules with missing data get
+    ``data_available=False``."""
     config = {
         "scoring_rules": [
             {"id": "rsi_low",  "indicator": "rsi", "operator": "<=", "value": 40, "points": 20, "category": "momentum"},
@@ -284,6 +286,7 @@ def test_get_full_breakdown_enriches_matched_rules_with_awarded_points():
             {"rule_id": "vol", "indicator": "volume_spike", "operator": ">=", "value": 2,
              "points": 10.0, "awarded_points": 10.0, "confidence": 0.30, "data_available": True, "category": "liquidity"},
         ],
+        "evaluated_rule_ids": ["rsi_low", "rsi_high", "vol"],
     }
     with patch(
         "app.services.robust_indicators.compute_asset_score",
@@ -301,10 +304,11 @@ def test_get_full_breakdown_enriches_matched_rules_with_awarded_points():
     assert by_id["vol"]["awarded_points"] == 10.0
     assert by_id["vol"]["indicator_confidence"] == 0.30
 
-    assert "awarded_points" not in by_id["rsi_high"]
-    assert "indicator_confidence" not in by_id["rsi_high"]
+    assert by_id["rsi_high"]["awarded_points"] == 0.0
+    assert by_id["rsi_high"]["indicator_confidence"] == 0.0
+    assert by_id["rsi_high"]["data_available"] is True
 
-    matched = [r for r in breakdown if "awarded_points" in r]
+    matched = [r for r in breakdown if r.get("awarded_points", 0) > 0]
     awarded_total = sum(r["awarded_points"] for r in matched)
     denom = sum(r["points_possible"] for r in breakdown if (r.get("type") or "positive") != "penalty")
     reconstructed_score = (awarded_total / denom) * 100
@@ -312,6 +316,41 @@ def test_get_full_breakdown_enriches_matched_rules_with_awarded_points():
         f"reconciliation drift: reconstructed={reconstructed_score:.4f} "
         f"vs payload.score={fake_payload['score']}"
     )
+
+
+def test_get_full_breakdown_marks_missing_data_rules():
+    """Rules whose indicator data was not available (envelope missing/unusable)
+    should have ``data_available=False`` and ``indicator_confidence=0.0``."""
+    config = {
+        "scoring_rules": [
+            {"id": "rsi_low",  "indicator": "rsi", "operator": "<=", "value": 40, "points": 20, "category": "momentum"},
+            {"id": "vol",      "indicator": "volume_spike", "operator": ">=", "value": 2, "points": 10, "category": "liquidity"},
+        ],
+    }
+    engine = ScoreEngine(config)
+
+    fake_payload = {
+        "score": 66.67,
+        "matched_rules": [
+            {"rule_id": "rsi_low", "indicator": "rsi", "points": 20.0,
+             "awarded_points": 20.0, "confidence": 0.42, "data_available": True},
+        ],
+        "evaluated_rule_ids": ["rsi_low"],
+    }
+    with patch(
+        "app.services.robust_indicators.compute_asset_score",
+        return_value=fake_payload,
+    ):
+        breakdown = engine.get_full_breakdown({"rsi": 25, "symbol": "X_USDT"})
+
+    by_id = {r["id"]: r for r in breakdown}
+
+    assert by_id["rsi_low"]["data_available"] is True
+    assert by_id["rsi_low"]["awarded_points"] == 20.0
+
+    assert by_id["vol"]["data_available"] is False
+    assert by_id["vol"]["awarded_points"] == 0.0
+    assert by_id["vol"]["indicator_confidence"] == 0.0
 
 
 def test_get_full_breakdown_reuses_caller_supplied_payload_without_recomputing():
@@ -332,6 +371,7 @@ def test_get_full_breakdown_reuses_caller_supplied_payload_without_recomputing()
             {"rule_id": "rsi_low", "indicator": "rsi", "points": 20.0,
              "awarded_points": 20.0, "confidence": 0.42, "data_available": True},
         ],
+        "evaluated_rule_ids": ["rsi_low"],
     }
     with patch(
         "app.services.robust_indicators.compute_asset_score",

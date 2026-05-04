@@ -353,6 +353,28 @@ class TestBreakdownConsistency:
             assert mr["awarded_points"] == mr["points"]
             assert mr["data_available"] is True
 
+    def test_evaluated_rule_ids_tracks_rules_with_usable_data(self):
+        envelopes = {
+            "rsi": _env("rsi", 55.0, confidence=0.85),
+            "adx": _env("adx", 5.0, confidence=0.80),
+        }
+        rules = [
+            {"id": "r1", "indicator": "rsi", "operator": "between",
+             "min": 48, "max": 62, "points": 15, "category": "momentum"},
+            {"id": "r2", "indicator": "adx", "operator": ">",
+             "value": 20, "points": 10, "category": "market_structure"},
+            {"id": "r3", "indicator": "macd", "operator": ">",
+             "value": 0, "points": 10, "category": "momentum"},
+        ]
+        result = calculate_score_with_confidence(envelopes, rules)
+
+        assert len(result.matched_rules) == 1
+        assert result.matched_rules[0]["rule_id"] == "r1"
+
+        assert "r1" in result.evaluated_rule_ids
+        assert "r2" in result.evaluated_rule_ids
+        assert "r3" not in result.evaluated_rule_ids
+
     def test_score_matches_deterministic_sum(self):
         envelopes = {
             "rsi": _env("rsi", 55.0, confidence=0.90),
