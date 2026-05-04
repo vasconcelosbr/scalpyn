@@ -248,7 +248,7 @@ _LEGACY_BUCKETS = ("liquidity", "market_structure", "momentum", "signal")
 
 class ScoreEngine:
     """Thin adapter — every ``compute_score`` call routes through the robust
-    confidence-weighted engine. The legacy 4-bucket math was removed in
+    deterministic engine (Task #211). The legacy 4-bucket math was removed in
     Phase 4.
 
     The instance still accepts the legacy config shape (``weights`` /

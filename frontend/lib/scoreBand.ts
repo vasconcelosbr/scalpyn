@@ -54,12 +54,12 @@ export function scorePct(score: number | null | undefined): number {
 
 /** Tooltip text used wherever the robust score is displayed. */
 export const SCORE_TOOLTIP =
-  "Confidence-weighted score (0–100). Cada regra matched contribui " +
-  "(pontos × confidence do indicador) ÷ pontos totais possíveis × 100. " +
+  "Score determinístico (0–100). Cada regra matched recebe seus pontos " +
+  "configurados integralmente. Score = (pontos conquistados ÷ pontos " +
+  "totais possíveis) × 100. " +
   "Faixas: avoid <40 · neutral 40–64 · buy 65–79 · strong_buy ≥80.";
 
 export const RULES_TOOLTIP =
-  "Soma confidence-weighted (Σ pontos × confidence do indicador) sobre " +
-  "o total possível. Reconciliando com o Score: " +
-  "Score ≈ (pts ponderados ÷ pts totais) × 100. " +
-  "Quando aparece (legacy), o snapshot é antigo e mostra apenas pontos nominais.";
+  "Soma dos pontos conquistados (Σ pontos das regras matched) sobre " +
+  "o total possível. Score = (pts conquistados ÷ pts totais) × 100. " +
+  "Confidence é usado apenas para gating (can_trade) e metadados.";

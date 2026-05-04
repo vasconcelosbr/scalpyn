@@ -206,14 +206,14 @@ def calculate_score_with_confidence(
     min_global_confidence: float = 0.60,
     can_trade_threshold: float = 65.0,
 ) -> ScoreResult:
-    """Run the confidence-weighted score pipeline (direct formulation).
+    """Run the deterministic score pipeline (Task #211).
 
     Args:
         envelopes:               Mapping of indicator name -> envelope.
         scoring_rules:           Iterable of legacy-shape rules.
         weights:                 Accepted for API compatibility with the
-                                 legacy engine; ignored by the direct
-                                 confidence-weighted formulation.
+                                 legacy engine; ignored by the deterministic
+                                 formulation.
         min_global_confidence:   Confidence threshold enforced on
                                  ``score_confidence`` for ``can_trade``.
         can_trade_threshold:     Score threshold below which ``can_trade``
