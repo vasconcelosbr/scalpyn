@@ -197,3 +197,61 @@ def test_as_flat_dict_returns_plain_dict():
     flat = result.as_flat_dict()
     assert type(flat) is dict
     assert flat == {"rsi": 50.0, "adx": 20.0}
+
+
+def test_fetch_indicators_map_adapter_contract():
+    """The adapter pattern used by _fetch_indicators_map must produce
+    {symbol: flat_dict} where every value in the flat_dict is a scalar
+    (not a dict/envelope). This tests the contract at the MergedIndicators
+    boundary without needing a DB session.
+    """
+    rows_by_symbol = {
+        "HYPE_USDT": [
+            (
+                "structural",
+                NOW - timedelta(minutes=5),
+                {
+                    "rsi": {"value": 48.5, "source": "candle_computed", "confidence": 0.8, "status": "VALID"},
+                    "adx": {"value": 22.4, "source": "candle_computed", "confidence": 0.8, "status": "VALID"},
+                },
+            ),
+            (
+                "microstructure",
+                NOW - timedelta(minutes=2),
+                {
+                    "taker_ratio": {"value": 0.51, "source": "gate_trades", "confidence": 0.9, "status": "VALID"},
+                    "volume_spike": {"value": 1.42, "source": "candle_computed", "confidence": 0.8, "status": "VALID"},
+                },
+            ),
+        ],
+        "BTC_USDT": [
+            (
+                "combined",
+                NOW - timedelta(minutes=3),
+                {"rsi": 55.0, "bb_width": 0.04},
+            ),
+        ],
+    }
+
+    adapter_result = {}
+    for sym, rows in rows_by_symbol.items():
+        mi = merge_indicator_rows(rows, now=NOW)
+        adapter_result[sym] = mi.as_flat_dict()
+
+    assert isinstance(adapter_result, dict)
+    assert set(adapter_result.keys()) == {"HYPE_USDT", "BTC_USDT"}
+
+    hype = adapter_result["HYPE_USDT"]
+    assert isinstance(hype, dict)
+    assert hype["rsi"] == 48.5
+    assert hype["adx"] == 22.4
+    assert hype["taker_ratio"] == 0.51
+    assert hype["volume_spike"] == 1.42
+    for v in hype.values():
+        assert not isinstance(v, dict), f"Adapter must return scalars, got dict: {v}"
+
+    btc = adapter_result["BTC_USDT"]
+    assert btc["rsi"] == 55.0
+    assert btc["bb_width"] == 0.04
+    for v in btc.values():
+        assert not isinstance(v, dict), f"Adapter must return scalars, got dict: {v}"

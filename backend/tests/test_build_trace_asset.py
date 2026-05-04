@@ -312,3 +312,89 @@ def test_mixed_flat_and_envelope_indicators():
     assert asset["taker_ratio"] == 0.51
     assert asset["bb_width"] == 0.054
     assert "volume_spike" not in asset
+
+
+# ── On-demand fallback _is_indicator_missing tests (Task #200) ────────────────
+
+def test_on_demand_fallback_triggers_for_envelope_value_none():
+    """Simulate the on-demand fallback check: when key indicator fields
+    contain envelope dicts with value=None, the symbol must be classified
+    as missing so _compute_indicators_on_demand fires.
+    """
+    def _is_indicator_missing(v):
+        if v is None:
+            return True
+        if isinstance(v, dict):
+            return v.get("value") is None
+        return False
+
+    _KEY_FIELDS = {"taker_ratio", "ema9_distance_pct", "rsi", "adx", "bb_width", "volume_spike"}
+
+    ind_map = {
+        "HYPE_USDT": {
+            "rsi": {"value": None, "source": "unknown", "confidence": 0.0, "status": "NO_DATA"},
+            "adx": {"value": 22.4, "source": "candle_computed", "confidence": 0.8, "status": "VALID"},
+            "taker_ratio": {"value": 0.51, "source": "gate_trades", "confidence": 0.9, "status": "VALID"},
+            "bb_width": {"value": 0.054, "source": "candle_computed", "confidence": 0.8, "status": "VALID"},
+            "volume_spike": {"value": None, "source": "unknown", "confidence": 0.0, "status": "NO_DATA"},
+        },
+    }
+
+    missing = [
+        s for s in ["HYPE_USDT"]
+        if not ind_map.get(s) or any(
+            _is_indicator_missing(ind_map[s].get(f)) for f in _KEY_FIELDS
+        )
+    ]
+    assert "HYPE_USDT" in missing, "Symbol with envelope value=None must trigger fallback"
+
+
+def test_on_demand_fallback_skips_valid_scalars():
+    """When all key fields are present as flat scalars (post-merge), the
+    fallback must NOT trigger.
+    """
+    def _is_indicator_missing(v):
+        if v is None:
+            return True
+        if isinstance(v, dict):
+            return v.get("value") is None
+        return False
+
+    _KEY_FIELDS = {"taker_ratio", "ema9_distance_pct", "rsi", "adx", "bb_width", "volume_spike"}
+
+    ind_map = {
+        "BTC_USDT": {
+            "rsi": 55.0,
+            "adx": 30.0,
+            "taker_ratio": 0.6,
+            "ema9_distance_pct": 0.02,
+            "bb_width": 0.04,
+            "volume_spike": 1.1,
+        },
+    }
+
+    missing = [
+        s for s in ["BTC_USDT"]
+        if not ind_map.get(s) or any(
+            _is_indicator_missing(ind_map[s].get(f)) for f in _KEY_FIELDS
+        )
+    ]
+    assert "BTC_USDT" not in missing, "Symbol with all valid scalars must NOT trigger fallback"
+
+
+def test_on_demand_fallback_treats_zero_as_valid():
+    """{"value": 0} is a real measurement — must NOT trigger fallback."""
+    def _is_indicator_missing(v):
+        if v is None:
+            return True
+        if isinstance(v, dict):
+            return v.get("value") is None
+        return False
+
+    assert _is_indicator_missing(None) is True
+    assert _is_indicator_missing({"value": None}) is True
+    assert _is_indicator_missing({}) is True
+    assert _is_indicator_missing({"value": 0}) is False
+    assert _is_indicator_missing({"value": 0.0}) is False
+    assert _is_indicator_missing(0) is False
+    assert _is_indicator_missing(66.5) is False
