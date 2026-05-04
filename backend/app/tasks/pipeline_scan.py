@@ -2022,7 +2022,7 @@ async def _run_pipeline_scan():
                     is_futures = getattr(wl, "market_mode", "spot") == "futures"
 
                     # ── Robust authoritative scoring ─────────────────────
-                    # The robust confidence-weighted score becomes the
+                    # The robust deterministic score becomes the
                     # authoritative value on the asset dict; downstream
                     # rejection / upsert / UI all read from the mutated
                     # dict. For futures the LONG / SHORT split + direction

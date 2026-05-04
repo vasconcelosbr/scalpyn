@@ -2,7 +2,7 @@
 
 Phase 4 cleanup: this task no longer runs the legacy ``ScoreEngine`` math.
 For every fresh row in ``indicators`` it asks the robust engine to wrap the
-indicator dict, validate, and emit a confidence-weighted score, and then
+indicator dict, validate, and emit a deterministic score, and then
 persists the result in ``alpha_scores`` (always ``scoring_version='v1'`` —
 the legacy dual-write columns are written as ``NULL``). The same robust
 score is reused by the level-transition detector so a single computation
