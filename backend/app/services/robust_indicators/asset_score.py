@@ -103,8 +103,10 @@ def compute_asset_score(
 ) -> Optional[dict]:
     """Score a single asset through the robust engine.
 
-    Returns a dict with the canonical asset score fields, or ``None`` when
-    the engine rejects the indicators or cannot produce a numeric score::
+    Returns a dict with the canonical asset score fields, or ``None`` only
+    when the indicator dict is empty or the engine raises.  Partial data
+    (e.g. only EMA available, RSI/ADX/MACD missing) produces a partial
+    score proportional to the rules that could be evaluated::
 
         {
             "score":              float,
@@ -134,7 +136,7 @@ def compute_asset_score(
         logger.debug("compute_asset_score: robust score failed for %s: %s", symbol, exc)
         return None
 
-    if result.rejected or result.score is None:
+    if result.score is None:
         return None
 
     score = float(result.score)

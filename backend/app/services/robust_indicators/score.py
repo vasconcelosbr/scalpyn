@@ -1,27 +1,27 @@
 """Confidence-weighted score engine.
 
-Pipeline (per Phase 1 spec):
+Pipeline:
 
-    1. Critical-indicator gate: every member of ``CRITICAL_INDICATORS``
-       (``rsi``, ``adx``, ``macd``, ``ema50``) must be ``VALID`` or
-       ``DEGRADED``. Otherwise → ``REJECTED`` with reason ``critical_gate``.
-    2. Global-confidence gate: average envelope confidence across all
-       usable indicators must be ≥ 0.6. Otherwise → ``REJECTED`` with
-       reason ``confidence_gate``.
+    1. Critical-indicator advisory: missing members of
+       ``CRITICAL_INDICATORS`` are logged but do NOT reject the score.
+       Assets with partial data receive a partial score proportional
+       to the rules that could be evaluated.
+    2. Global-confidence advisory: when the average envelope confidence
+       is below ``min_global_confidence`` the score is still computed
+       but ``can_trade`` stays False.
     3. Confidence-weighted score (direct formulation):
 
            score = sum(rule.points * env.confidence  for matched rules)
                  / sum(rule.points                  for all considered rules)
                  * 100
 
-       This is the formulation called out in the spec — every matched
-       rule contributes its full point value scaled by the freshness/
-       quality of its underlying envelope, and the denominator is the
-       sum of all considered rule points so the result stays bounded to
-       ``[0, 100]`` regardless of which rules matched.
+       Every matched rule contributes its full point value scaled by
+       the freshness/quality of its underlying envelope, and the
+       denominator is the sum of all considered rule points so the
+       result stays bounded to ``[0, 100]``.
     4. ``score_confidence``: average envelope confidence across rules
        that matched (used as a quality signal alongside the score).
-    5. ``can_trade`` flag: True only when neither gate rejected AND
+    5. ``can_trade`` flag: True only when
        ``score >= can_trade_threshold`` (default 65) AND
        ``score_confidence >= min_global_confidence``.
 
@@ -59,6 +59,17 @@ _OPERATORS = {
 }
 
 _VALID_CATEGORIES = ("liquidity", "market_structure", "momentum", "signal")
+
+_BOOL_TREND_OPS = frozenset({"ema50>ema200", "ema9>ema50", "ema9>ema50>ema200"})
+
+_OPERATOR_ENVELOPE_REMAP: Dict[str, str] = {
+    "ema50>ema200": "ema50_gt_ema200",
+    "ema9>ema50": "ema9_gt_ema50",
+    "ema9<ema50": "ema9_gt_ema50",
+    "ema9>ema50>ema200": "ema_full_alignment",
+    "di+>di-": "di_plus",
+    "di->di+": "di_plus",
+}
 
 
 @dataclass
@@ -100,15 +111,55 @@ def _resolve_category(rule: Mapping[str, Any]) -> str:
     return "signal"
 
 
-def _evaluate_rule(rule: Mapping[str, Any], env: IndicatorEnvelope) -> bool:
-    operator = (rule.get("operator") or "").strip()
+def _evaluate_rule(
+    rule: Mapping[str, Any],
+    env: IndicatorEnvelope,
+    envelopes: Optional[Mapping[str, IndicatorEnvelope]] = None,
+) -> bool:
+    operator_str = (rule.get("operator") or "").strip()
     target = rule.get("value")
     actual = env.value
 
-    if operator == "ema9>ema50>ema200":
+    if operator_str in _BOOL_TREND_OPS:
         return bool(actual)
 
-    fn = _OPERATORS.get(operator)
+    if operator_str == "ema9<ema50":
+        return not bool(actual)
+
+    if operator_str in ("di+>di-", "di->di+") and envelopes:
+        di_plus_env = envelopes.get("di_plus")
+        di_minus_env = envelopes.get("di_minus")
+        if not (di_plus_env and di_plus_env.is_usable
+                and di_minus_env and di_minus_env.is_usable):
+            return False
+        try:
+            if operator_str == "di+>di-":
+                return float(di_plus_env.value) > float(di_minus_env.value)
+            return float(di_minus_env.value) > float(di_plus_env.value)
+        except (TypeError, ValueError):
+            return False
+
+    if operator_str == "between":
+        min_val = rule.get("min", 0)
+        max_val = rule.get("max", 100)
+        try:
+            return float(min_val) <= float(actual) <= float(max_val)
+        except (TypeError, ValueError):
+            return False
+
+    ind_name = (rule.get("indicator") or "").strip().lower()
+    if operator_str == ">prev+" and ind_name == "adx_acceleration":
+        try:
+            return float(actual) > float(target or 0)
+        except (TypeError, ValueError):
+            return False
+    if operator_str == ">prev" and ind_name == "adx_acceleration":
+        try:
+            return float(actual) > 0
+        except (TypeError, ValueError):
+            return False
+
+    fn = _OPERATORS.get(operator_str)
     if fn is None:
         return False
 
@@ -140,7 +191,7 @@ def calculate_score_with_confidence(
     envelopes: Mapping[str, IndicatorEnvelope],
     scoring_rules: Optional[Iterable[Mapping[str, Any]]] = None,
     *,
-    weights: Optional[Mapping[str, float]] = None,  # accepted for compat; unused in direct mode
+    weights: Optional[Mapping[str, float]] = None,
     min_global_confidence: float = 0.60,
     can_trade_threshold: float = 65.0,
 ) -> ScoreResult:
@@ -152,61 +203,46 @@ def calculate_score_with_confidence(
         weights:                 Accepted for API compatibility with the
                                  legacy engine; ignored by the direct
                                  confidence-weighted formulation.
-        min_global_confidence:   Confidence gate threshold (also enforces
-                                 ``score_confidence >= threshold`` for
-                                 ``can_trade``).
+        min_global_confidence:   Confidence threshold enforced on
+                                 ``score_confidence`` for ``can_trade``.
         can_trade_threshold:     Score threshold below which ``can_trade``
-                                 stays False even when neither gate
-                                 rejected.
+                                 stays False.
     """
     rules = list(scoring_rules or [])
-    del weights  # explicitly unused — direct formulation has no per-cat weights
+    del weights
 
     global_conf, valid_n, total_n = _global_confidence(envelopes)
 
-    base = ScoreResult(
-        score=0.0,
-        score_confidence=0.0,
-        can_trade=False,
-        rejected=False,
-        rejection_reason=None,
-        components={c: 0.0 for c in _VALID_CATEGORIES},
-        matched_rules=[],
-        global_confidence=global_conf,
-        valid_indicators=valid_n,
-        total_indicators=total_n,
-    )
-
-    # ── 1. Critical-indicator gate ──────────────────────────────────────────
+    # ── 1. Critical-indicator advisory (no longer rejects) ────────────────
     missing_critical = [
         name for name in CRITICAL_INDICATORS
         if not (envelopes.get(name) and envelopes[name].is_usable)
     ]
     if missing_critical:
-        base.rejected = True
-        base.rejection_reason = (
-            f"critical_gate:missing={sorted(missing_critical)}"
+        logger.info(
+            "critical indicators missing: %s — computing partial score",
+            sorted(missing_critical),
         )
-        return base
 
-    # ── 2. Global-confidence gate ───────────────────────────────────────────
+    # ── 2. Global-confidence advisory (no longer rejects) ─────────────────
     if global_conf < min_global_confidence:
-        base.rejected = True
-        base.rejection_reason = (
-            f"confidence_gate:{global_conf:.3f}<{min_global_confidence:.3f}"
+        logger.info(
+            "global confidence %.3f below threshold %.3f — "
+            "computing score with can_trade=False",
+            global_conf, min_global_confidence,
         )
-        return base
 
-    # ── 3. Direct confidence-weighted scoring ───────────────────────────────
+    # ── 3. Direct confidence-weighted scoring ───────────────────────────
     matched: List[Dict[str, Any]] = []
     confidences_used: List[float] = []
     components: Dict[str, float] = {c: 0.0 for c in _VALID_CATEGORIES}
 
-    weighted_numerator = 0.0      # Σ points * confidence (matched rules)
-    points_denominator = 0.0      # Σ points (all considered rules)
+    weighted_numerator = 0.0
+    points_denominator = 0.0
 
     for rule in rules:
         name = (rule.get("indicator") or "").strip().lower()
+        rule_operator = (rule.get("operator") or "").strip()
         if not name:
             continue
         try:
@@ -215,17 +251,15 @@ def calculate_score_with_confidence(
             points = 0.0
         if points <= 0:
             continue
-        # Every considered rule contributes to the denominator so the
-        # bounded score reflects total achievable points, not just the
-        # matched subset.
         points_denominator += points
 
         category = _resolve_category(rule)
-        env = envelopes.get(name)
+        resolved_name = _OPERATOR_ENVELOPE_REMAP.get(rule_operator, name)
+        env = envelopes.get(resolved_name)
         if env is None or not env.is_usable:
             continue
 
-        if _evaluate_rule(rule, env):
+        if _evaluate_rule(rule, env, envelopes):
             weighted = points * env.confidence
             weighted_numerator += weighted
             components[category] += weighted

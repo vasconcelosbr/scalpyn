@@ -209,25 +209,25 @@ _SAMPLE_RULES = [
 ]
 
 
-def test_score_rejects_when_critical_missing():
+def test_score_computes_partial_when_critical_missing():
     envs = _full_envelope_set()
     envs["adx"] = _env("adx", None)  # critical NO_DATA
     out = calculate_score_with_confidence(envs, _SAMPLE_RULES)
-    assert out.rejected is True
-    assert out.rejection_reason and out.rejection_reason.startswith("critical_gate")
+    assert out.rejected is False
+    assert out.score >= 0.0
     assert out.can_trade is False
 
 
-def test_score_rejects_when_global_confidence_too_low():
+def test_score_computes_with_low_global_confidence():
     envs = _full_envelope_set()
-    # Force every envelope to a deeply stale (>300s) state — confidence 0.10×base
     envs = {
         name: _env(env.name, env.value, source=env.source, age_seconds=400)
         for name, env in envs.items()
     }
     out = calculate_score_with_confidence(envs, _SAMPLE_RULES)
-    assert out.rejected is True
-    assert out.rejection_reason and out.rejection_reason.startswith("confidence_gate")
+    assert out.rejected is False
+    assert out.score >= 0.0
+    assert out.can_trade is False
 
 
 def test_score_uses_confidence_weighting():
@@ -242,8 +242,7 @@ def test_score_uses_confidence_weighting():
         for name, env in envs.items()
     }
     out_stale = calculate_score_with_confidence(envs_stale, _SAMPLE_RULES)
-    if not out_stale.rejected:
-        assert out_stale.score <= out_fresh.score
+    assert out_stale.score <= out_fresh.score
 
 
 def test_score_uses_direct_confidence_weighted_formula():
