@@ -105,17 +105,23 @@ steps:
       # The `/0` db suffix is REQUIRED -- without it Celery cannot select a
       # logical Redis database and the broker connection silently fails after
       # broker_connection_max_retries (10) attempts.
+      # All plain env-vars are merged in a single --update-env-vars block to
+      # prevent Cloud Run from performing a partial substitution (each separate
+      # --update-env-vars call replaces the *entire* set of plain env-vars in
+      # some gcloud SDK versions, which can silently drop variables set in a
+      # previous call within the same deploy step).
+      #
+      # REDIS_URL: Redis Labs external broker (password inline — rotate after
+      #   pipeline is healthy and migrate to Secret Manager; see comment above).
+      # FORCE_RESTART: bumped on every recovery deploy to force a new revision
+      #   even when the image SHA is unchanged (kills poisoned Celery workers).
+      #   Bumped 2026-05-02 to recover from the collector stall documented in
+      #   `.local/tasks/diagnose-collector-stalled-prod.md`.
+      # ENABLE_GATE_WS: gates the Gate.io WebSocket leader (Task #171).  Must
+      #   be exactly "1" — any other value disables WS ingestion and the system
+      #   falls back to REST polling for order flow (taker_ratio = null).
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0'
-      # Force-restart marker. Bumping this string on every recovery deploy
-      # guarantees Cloud Run rolls out a fresh revision even when the image
-      # SHA is unchanged, which kills any poisoned Celery worker and recycles
-      # the asyncpg connection pool from the previous container. Bumped on
-      # 2026-05-02 to recover from the collector stall documented in
-      # `.local/tasks/diagnose-collector-stalled-prod.md` (decisions paused
-      # 2026-04-29T13:48:16Z, lag 4754 min, schema confirmed OK in prod).
-      - '--update-env-vars'
-      - 'FORCE_RESTART=2026-05-03T00:00:00Z'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1'
 
 substitutions:
   _REGION: us-central1

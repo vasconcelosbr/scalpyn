@@ -338,8 +338,9 @@ async def get_order_flow_data(
     # diagnostic shows up in default log dashboards (Task #180); a sharp
     # rise in this line in production typically means the WS leader is
     # down or the trades buffer TTL has expired.
-    logger.info(
-        "[OrderFlow] buffer empty for %s market=%s (window=%ds) — using REST fallback",
+    logger.warning(
+        "[OrderFlow] EMPTY BUFFER: %s market=%s (window=%ds) — WS ingestion not working, "
+        "using REST fallback",
         symbol, market_type, window_seconds,
     )
     # Task #194 / Etapa 6 — record this fallback in the windowed

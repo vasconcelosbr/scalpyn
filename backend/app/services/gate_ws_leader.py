@@ -506,13 +506,20 @@ class _GateWSSupervisor:
         logger.info("[POOL] SPOT symbols: %d", len(spot_pairs))
         logger.info("[POOL] FUTURES symbols: %d", len(futures_contracts))
 
-        if not spot_pairs and not futures_contracts:
-            logger.warning(
-                "[gate-ws-leader] no symbols resolved for either market — "
-                "releasing lock and going back to candidate mode"
+        if not spot_pairs:
+            logger.error(
+                "[gate-ws-leader] CRITICAL: no SPOT symbols resolved "
+                "(pool_coins is_active=true AND is_approved=true AND market_type='spot' returned 0 rows) "
+                "— releasing lock and going back to candidate mode"
             )
             await _release_leader(self._redis, self._instance_id)
             return
+
+        if not futures_contracts:
+            logger.warning(
+                "[gate-ws-leader] no FUTURES symbols resolved — "
+                "proceeding with SPOT-only subscription"
+            )
 
         api_key, api_secret = await _load_gate_credentials()
 
@@ -611,8 +618,11 @@ async def start_gate_ws_with_leader_election() -> Optional[Callable[[], Awaitabl
     ~``CANDIDATE_POLL_INTERVAL_SECONDS``.
     """
     if os.environ.get("ENABLE_GATE_WS") != "1":
-        logger.info("[gate-ws-leader] ENABLE_GATE_WS != 1 — Gate WS disabled (REST polling only)")
-        return None
+        logger.error(
+            "[gate-ws-leader] CRITICAL: ENABLE_GATE_WS is not set to '1' — "
+            "WS ingestion is DISABLED; taker_ratio will be null until the flag is enabled"
+        )
+        raise RuntimeError("Gate WS disabled — ENABLE_GATE_WS != '1'")
 
     instance_id = _resolve_instance_id()
 

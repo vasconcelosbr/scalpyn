@@ -355,6 +355,12 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore,
                 of_data.get("volume_delta"),
                 of_data.get("taker_source"),
             )
+            if of_data.get("taker_ratio") is None:
+                logger.error(
+                    "[MICRO-SCHED] CRITICAL: taker_ratio=None for %s (source=%s) — "
+                    "upstream WS ingestion or Redis buffer broken",
+                    symbol, of_data.get("taker_source"),
+                )
         except Exception as exc:
             logger.warning("[MICRO-SCHED] order_flow failed for %s: %s", symbol, exc)
 

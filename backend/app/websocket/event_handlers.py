@@ -678,7 +678,10 @@ async def handle_spot_trades(result: list[dict]) -> None:
 
     redis = await get_async_redis()
     if redis is None:
-        logger.debug("spot.trades: Redis unavailable — buffer write skipped")
+        logger.error(
+            "CRITICAL: Redis unavailable — dropping spot.trades event (data loss); "
+            "taker_ratio will be null until Redis is reachable"
+        )
         return
 
     cap = _trades_buffer_max_per_symbol()
