@@ -1,4 +1,8 @@
-"""Robust Indicators package — authoritative confidence-weighted scoring path.
+"""Robust Indicators package — deterministic scoring path (Task #211).
+
+Scoring is deterministic: matched rules award their full configured points
+(no confidence weighting). Confidence is tracked per rule for observability
+and ``can_trade`` gating but does NOT multiply into the score.
 
 Public surface (re-exported here for convenience):
     * IndicatorEnvelope, ValidationRule, ValidationResult, ScoreResult

@@ -101,7 +101,7 @@ def compute_asset_score(
     is_futures: bool = False,
     flow_source_hint: Optional[str] = None,
 ) -> Optional[dict]:
-    """Score a single asset through the robust engine.
+    """Score a single asset through the robust engine (deterministic, Task #211).
 
     Returns a dict with the canonical asset score fields, or ``None`` only
     when the indicator dict is empty or the engine raises.  Partial data
@@ -113,6 +113,7 @@ def compute_asset_score(
             "score_confidence":   float,
             "global_confidence":  float,
             "matched_rules":      list,
+            "evaluated_rule_ids": list[str],
             # futures-only:
             "score_long":         float,
             "score_short":        float,
@@ -145,6 +146,7 @@ def compute_asset_score(
         "score_confidence": float(result.score_confidence),
         "global_confidence": float(result.global_confidence),
         "matched_rules": list(getattr(result, "matched_rules", []) or []),
+        "evaluated_rule_ids": list(getattr(result, "evaluated_rule_ids", []) or []),
     }
 
     if is_futures:

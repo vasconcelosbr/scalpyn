@@ -412,6 +412,37 @@ def test_get_full_breakdown_falls_back_to_nominal_when_robust_rejects():
     assert "indicator_confidence" not in rule
 
 
+def test_integration_compute_asset_score_populates_evaluated_rule_ids():
+    """Integration test (no mocking): ``compute_asset_score`` must include
+    ``evaluated_rule_ids`` so ``get_full_breakdown`` can distinguish
+    unmatched-with-data (``data_available=True``) from missing-data
+    (``data_available=False``) rules."""
+    rules = [
+        {"id": "rsi_low", "indicator": "rsi", "operator": "<=", "value": 40,
+         "points": 20, "category": "momentum"},
+        {"id": "adx_strong", "indicator": "adx", "operator": ">=", "value": 25,
+         "points": 15, "category": "market_structure"},
+        {"id": "macd_pos", "indicator": "macd_histogram", "operator": ">",
+         "value": 0, "points": 10, "category": "momentum"},
+    ]
+    config = {"scoring_rules": rules}
+    engine = ScoreEngine(config)
+
+    indicators = {"rsi": 25.0, "adx": 10.0}
+
+    breakdown = engine.get_full_breakdown(indicators)
+    by_id = {r["id"]: r for r in breakdown}
+
+    assert by_id["rsi_low"]["data_available"] is True
+    assert by_id["rsi_low"]["awarded_points"] == 20.0
+
+    assert by_id["adx_strong"]["data_available"] is True
+    assert by_id["adx_strong"]["awarded_points"] == 0.0
+
+    assert by_id["macd_pos"]["data_available"] is False
+    assert by_id["macd_pos"]["awarded_points"] == 0.0
+
+
 def test_taker_ratio_rule_drilldown_reports_liquidity_category():
     """End-to-end drilldown check: a default-category taker_ratio rule
     reports ``category="liquidity"`` (not ``signal``) in
