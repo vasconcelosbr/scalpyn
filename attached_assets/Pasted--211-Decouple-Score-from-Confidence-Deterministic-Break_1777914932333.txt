@@ -1,0 +1,145 @@
+#211 — Decouple Score from Confidence (Deterministic Breakdown + Independent Risk Layer)
+What & Why
+
+O sistema atual mistura dois conceitos distintos:
+
+Score (regras) → avaliação lógica do setup
+Confidence (dados) → qualidade/confiabilidade dos dados
+
+Hoje:
+
+score = points × confidence
+
+Isso causa:
+
+perda de previsibilidade no Score Breakdown
+quebra da expectativa do usuário (configuração ≠ resultado exibido)
+dificuldade de auditoria/debug
+
+Objetivo: tornar o score determinístico e mover confidence para uma camada independente de risco.
+
+Target Architecture
+1. Raw Score (determinístico)
+raw_score = sum(matched_rule_points)
+NÃO usa confidence
+Reflete exatamente a configuração
+Base do Score Breakdown
+2. Confidence (separado)
+confidence = aggregated data quality metric (0–1)
+NÃO altera pontos
+Usado para decisão de trade
+Exposto em metadata
+3. Final Decision
+can_trade = (raw_score >= threshold) AND (confidence >= min_confidence)
+4. (Opcional, interno)
+risk_adjusted_score = raw_score × confidence
+NÃO usado no breakdown
+NÃO exibido como score principal
+Apenas para ranking avançado/log interno
+Done Looks Like
+Score Breakdown mostra pontos completos configurados (ex: +10/10)
+weighted_points == points para toda regra válida
+Score total:
+(raw_score / total_possible_points) × 100
+confidence permanece disponível em:
+metadata do indicador
+tooltips (UI)
+gating (can_trade)
+Nenhuma multiplicação de confidence no cálculo do score
+Implementation Steps
+1. Remove confidence from scoring formula
+
+Arquivo:
+
+backend/app/services/robust_indicators/score.py
+
+Alterar:
+
+# BEFORE
+weighted_points = rule.points * envelope.confidence
+
+# AFTER
+weighted_points = rule.points
+
+Manter:
+
+indicator_confidence = envelope.confidence
+2. Preserve confidence in metadata
+
+Garantir que cada regra retornada contenha:
+
+{
+  "points": rule.points,
+  "weighted_points": rule.points,
+  "confidence": envelope.confidence,
+  "matched": True/False
+}
+3. Update ScoreEngine adapter
+
+Arquivo:
+
+backend/app/services/score_engine.py
+
+Verificar:
+
+compute_score_with_breakdown
+não aplicar nenhum weighting adicional
+garantir uso de raw_score
+4. Update normalization
+
+Garantir:
+
+score = (raw_score / total_points) * 100
+
+Sem qualquer uso de confidence.
+
+5. Validate all scoring paths
+
+Verificar compatibilidade em:
+
+compute_asset_score
+pipeline_scan
+watchlists.py
+
+Checklist:
+
+nenhum uso residual de confidence no cálculo do score
+apenas no gating
+6. UI validation
+
+Arquivo:
+
+frontend/components/watchlist/PipelineAssetTable.tsx
+frontend/lib/scoreRulesSummary.ts
+
+Confirmar:
+
+Breakdown exibe valores inteiros (ex: +10)
+Tooltip pode exibir:
+confidence
+source (ex: UNKNOWN)
+staleness
+Non-Goals
+Alterar lógica de can_trade
+Remover confidence do modelo
+Refatorar layout do frontend
+Risks & Mitigation
+
+Risco: Score inflado com dados ruins
+✔ Mitigação:
+
+manter confidence gating obrigatório
+opcional: bloquear regra se confidence < min_rule_confidence
+Optional Enhancements (não obrigatório nesta task)
+Adicionar flag:
+low_confidence_flag = confidence < threshold
+UI badge:
+“Low Data Quality”
+Rule-level gating:
+if envelope.confidence < min_conf:
+    skip rule (no points awarded)
+Resultado Esperado
+Score previsível e auditável
+Configuração respeitada 100%
+Separação clara entre lógica e risco
+Base sólida para evolução futura (ranking, ML, etc.)

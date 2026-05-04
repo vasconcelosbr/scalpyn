@@ -1,0 +1,127 @@
+Está bem estruturado e, do ponto de vista de arquitetura, agora está correto.
+Você eliminou o problema de previsibilidade sem perder o controle de risco.
+
+Vou apenas ajustar pontos críticos de robustez que faltam para evitar bugs sutis em produção.
+
+✔ Validação geral
+
+Sua definição resolve:
+
+inconsistência no breakdown ✔
+perda de autoridade da configuração ✔
+acoplamento indevido entre score e qualidade de dados ✔
+
+A separação ficou clara:
+
+Score = lógica
+Confidence = risco
+⚠️ Ajustes necessários (importantes)
+1. Definir explicitamente o que entra no denominador
+
+Hoje você diz:
+
+(sum_matched_points / total_possible_points) × 100
+
+Mas precisa fixar:
+
+👉 total_possible_points inclui TODAS as regras ativas, independentemente de:
+
+match
+confiança
+disponibilidade de dados
+
+Caso contrário, você cria distorção entre ativos.
+
+Definição correta:
+
+total_possible_points = sum(points for all enabled rules)
+2. Tratar ausência de dados (edge case crítico)
+
+Hoje sua task não define isso.
+
+Problema:
+
+indicador não veio / veio null / source UNKNOWN
+regra pode cair como False → penalizando injustamente
+
+👉 Isso quebra o ranking.
+
+Solução mínima (sem mudar escopo):
+
+Adicionar no contrato:
+
+Se dado estiver ausente → regra = NOT_MATCHED, mas com flag:
+{
+  "status": "NOT_MATCHED",
+  "confidence": 0.0,
+  "data_available": false
+}
+
+✔ não muda lógica
+✔ mantém consistência
+✔ permite evolução futura
+
+3. Garantir que não existe weighting oculto
+
+Você já mencionou, mas precisa deixar explícito:
+
+👉 Proibido qualquer uso indireto de confidence no score
+
+Inclui:
+
+normalização ponderada
+filtros antes do score
+“pre-adjustments”
+
+Sugestão de regra:
+
+“Confidence MUST NOT influence numerator or denominator in any scoring path.”
+
+4. Contrato do breakdown (padronização)
+
+Hoje você usa weighted_points, mas agora ele perdeu sentido semântico.
+
+Sugestão (mais claro e futuro-proof):
+
+{
+  "points": 10,
+  "awarded_points": 10,
+  "confidence": 0.82,
+  "matched": true
+}
+
+👉 evita confusão futura com “weighting”
+
+5. Ordem correta de execução
+
+Isso evita bugs silenciosos:
+
+Avalia regras
+Calcula raw_score
+Calcula score_pct
+Calcula confidence
+Aplica can_trade
+
+👉 nunca o contrário
+
+✔ Versão final (ajustada)
+
+Sua task está correta com esses refinamentos:
+
+Score 100% determinístico
+Confidence isolado
+Breakdown confiável
+Gating preservado
+Veredito final
+
+👉 Pode implementar assim.
+👉 Estrutura está sólida e escalável.
+👉 Não há mais risco de inconsistência no Score Breakdown.
+
+Se quiser o próximo passo ideal, posso te entregar:
+
+diff exato por arquivo
+testes unitários obrigatórios
+checklist de validação pós-deploy
+
+Isso reduz bastante risco na execução.
