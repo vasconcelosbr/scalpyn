@@ -589,7 +589,7 @@ class ScoreEngine:
                 entry["data_available"] = robust_info["data_available"]
             elif payload is not None and pts > 0:
                 data_avail = str(rule_id) in evaluated_ids
-                entry["awarded_points"] = float(pts) if passed else 0.0
+                entry["awarded_points"] = float(pts) if (passed and data_avail) else 0.0
                 entry["indicator_confidence"] = 0.0
                 entry["data_available"] = data_avail
             result.append(entry)

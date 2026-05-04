@@ -443,6 +443,43 @@ def test_integration_compute_asset_score_populates_evaluated_rule_ids():
     assert by_id["macd_pos"]["awarded_points"] == 0.0
 
 
+def test_get_full_breakdown_no_awarded_points_when_data_unavailable():
+    """Even if the legacy raw-indicator evaluation would pass the condition,
+    ``awarded_points`` must be 0 when ``data_available=False`` (envelope
+    was missing or unusable). This prevents the drilldown from showing
+    points for rules whose data we couldn't trust."""
+    config = {
+        "scoring_rules": [
+            {"id": "rsi_low", "indicator": "rsi", "operator": "<=", "value": 40,
+             "points": 20, "category": "momentum"},
+            {"id": "vol", "indicator": "volume_spike", "operator": ">=", "value": 2,
+             "points": 10, "category": "liquidity"},
+        ],
+    }
+    engine = ScoreEngine(config)
+
+    fake_payload = {
+        "score": 0.0,
+        "matched_rules": [],
+        "evaluated_rule_ids": [],
+    }
+    with patch(
+        "app.services.robust_indicators.compute_asset_score",
+        return_value=fake_payload,
+    ):
+        breakdown = engine.get_full_breakdown(
+            {"rsi": 25, "volume_spike": 3.5}
+        )
+
+    by_id = {r["id"]: r for r in breakdown}
+
+    assert by_id["rsi_low"]["data_available"] is False
+    assert by_id["rsi_low"]["awarded_points"] == 0.0
+
+    assert by_id["vol"]["data_available"] is False
+    assert by_id["vol"]["awarded_points"] == 0.0
+
+
 def test_taker_ratio_rule_drilldown_reports_liquidity_category():
     """End-to-end drilldown check: a default-category taker_ratio rule
     reports ``category="liquidity"`` (not ``signal``) in
