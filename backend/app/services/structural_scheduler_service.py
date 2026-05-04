@@ -53,6 +53,41 @@ DEFAULT_OHLCV_LIMIT = 200
 TIMEFRAME = "1h"
 SCHEDULER_GROUP = "structural"
 
+_STOCHASTIC_WARMUP_OVERLAP = 2
+
+
+def _derive_min_candles(indicators_config: dict) -> int:
+    """Return the minimum number of 1h candles required to produce valid
+    RSI, ADX, and MACD values from *indicators_config*.
+
+    Mirrors the same function in ``tasks/compute_indicators`` so the
+    structural scheduler enforces the same data-quality gate.
+    """
+    stochastic = indicators_config.get("stochastic", {})
+    stoch_warmup = max(
+        stochastic.get("k", 0)
+        + stochastic.get("smooth", 0)
+        + stochastic.get("d", 0)
+        - _STOCHASTIC_WARMUP_OVERLAP,
+        0,
+    )
+    volume_lookback = max(
+        int(indicators_config.get("volume_spike", {}).get("lookback", 20)),
+        int(indicators_config.get("taker_ratio", {}).get("lookback", 20)),
+    )
+    return max(
+        2,
+        indicators_config.get("adx", {}).get("period", 0) * 2,
+        indicators_config.get("rsi", {}).get("period", 0) + 1,
+        indicators_config.get("macd", {}).get("slow", 0),
+        indicators_config.get("atr", {}).get("period", 0),
+        indicators_config.get("bollinger", {}).get("period", 0),
+        indicators_config.get("zscore", {}).get("lookback", 0),
+        stoch_warmup,
+        volume_lookback,
+        24,  # 1h timeframe — at least 24 candles for coverage
+    )
+
 _scheduler_task: Optional[asyncio.Task] = None
 
 _first_cycle_done_event: Optional[asyncio.Event] = None
@@ -123,7 +158,9 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
                     (time, symbol, timeframe, market_type, indicators_json, scheduler_group)
                 VALUES
                     (:time, :symbol, :timeframe, :market_type, :payload, :grp)
-                ON CONFLICT DO NOTHING
+                ON CONFLICT (time, symbol, timeframe)
+                    DO UPDATE SET indicators_json = EXCLUDED.indicators_json,
+                                  scheduler_group = EXCLUDED.scheduler_group
             """), {
                 "time": when,
                 "symbol": symbol,
@@ -204,6 +241,14 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
 
         if df is None or df.empty:
             return f"{symbol}: no_data"
+
+        min_candles = _derive_min_candles(DEFAULT_INDICATORS)
+        if len(df) < min_candles:
+            logger.debug(
+                "[STRUCT-SCHED] %s: insufficient candles (%d < %d) — skipping",
+                symbol, len(df), min_candles,
+            )
+            return f"{symbol}: insufficient_candles"
 
         engine = FeatureEngine(DEFAULT_INDICATORS)
         try:
