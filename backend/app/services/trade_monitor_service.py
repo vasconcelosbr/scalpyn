@@ -146,23 +146,28 @@ async def _fetch_price_maps(
     Returns ``(spot_price_map, futures_price_map)``; each map is an empty
     dict if the endpoint is skipped or fails, allowing graceful degradation.
     """
-    coros = []
-    fetch_spot = bool(spot_symbols)
-    fetch_futures = bool(futures_symbols)
+    if not spot_symbols and not futures_symbols:
+        return {}, {}
 
-    if fetch_spot:
-        coros.append(_fetch_tickers(_GATE_SPOT_TICKERS_URL, "currency_pair"))
-    if fetch_futures:
-        coros.append(_fetch_tickers(_GATE_FUTURES_TICKERS_URL, "contract"))
+    if spot_symbols and futures_symbols:
+        spot_map, futures_map = await asyncio.gather(
+            _fetch_tickers(_GATE_SPOT_TICKERS_URL, "currency_pair"),
+            _fetch_tickers(_GATE_FUTURES_TICKERS_URL, "contract"),
+        )
+        return spot_map, futures_map
 
-    results = await asyncio.gather(*coros)
+    if spot_symbols:
+        return await _fetch_tickers(_GATE_SPOT_TICKERS_URL, "currency_pair"), {}
 
-    idx = 0
-    spot_map: dict[str, float] = results[idx] if fetch_spot else {}
-    if fetch_spot:
-        idx += 1
-    futures_map: dict[str, float] = results[idx] if fetch_futures else {}
-    return spot_map, futures_map
+    return {}, await _fetch_tickers(_GATE_FUTURES_TICKERS_URL, "contract")
+
+
+# ── Trade helpers ─────────────────────────────────────────────────────────────
+
+
+def _is_futures(trade: TradeTracking) -> bool:
+    """Return True when *trade* belongs to the futures market."""
+    return (trade.market_type or "spot") == "futures"
 
 
 # ── Exit condition logic ──────────────────────────────────────────────────────
@@ -276,7 +281,7 @@ class TradeMonitorService:
         spot_symbols: set[str] = set()
         futures_symbols: set[str] = set()
         for t in trades:
-            if (t.market_type or "spot") == "futures":
+            if _is_futures(t):
                 futures_symbols.add(t.symbol)
             else:
                 spot_symbols.add(t.symbol)
@@ -287,7 +292,7 @@ class TradeMonitorService:
         # ── 3. Evaluate and close ─────────────────────────────────────────────
         for trade in trades:
             try:
-                is_futures = (trade.market_type or "spot") == "futures"
+                is_futures = _is_futures(trade)
                 # Select the correct price map based on the trade's market type.
                 price: float | None = futures_price_map.get(trade.symbol) if is_futures else spot_price_map.get(trade.symbol)
 
