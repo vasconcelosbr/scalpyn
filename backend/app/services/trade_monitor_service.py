@@ -142,8 +142,20 @@ def _check_exit_conditions(
         if elapsed > timeout_seconds:
             return "timeout"
 
-    target: float | None = float(trade.target_price) if trade.target_price is not None else None
-    stop: float | None = float(trade.stop_price) if trade.stop_price is not None else None
+    target: float | None = None
+    try:
+        if trade.target_price is not None:
+            target = float(trade.target_price)
+    except (TypeError, ValueError):
+        pass
+
+    stop: float | None = None
+    try:
+        if trade.stop_price is not None:
+            stop = float(trade.stop_price)
+    except (TypeError, ValueError):
+        pass
+
     side: str = (trade.position_side or "long").lower()
 
     if side == "long":
@@ -260,7 +272,7 @@ class TradeMonitorService:
 
         logger.info(
             "[TradeMonitor] cycle complete — %s",
-            {k: v for k, v in summary.items() if v},
+            summary,
         )
         return summary
 
