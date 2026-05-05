@@ -179,7 +179,15 @@ class TradeReconciliationService:
 
     @staticmethod
     def _normalize_spot(raw: dict) -> dict[str, Any] | None:
-        """Normalize a /spot/my_trades entry into the internal trade dict."""
+        """Normalize a /spot/my_trades entry into the internal trade dict.
+
+        Only BUY fills are processed.  In the Scalpyn spot engine, sells are
+        used to *close* existing long positions — they are not modelled as
+        opening short positions.  Returning None for sell fills prevents the
+        reconciler from creating spurious short trade_tracking rows that would
+        never match an open trade and would be created as external trades with
+        wrong position_side.
+        """
         try:
             ts_raw = raw.get("create_time") or raw.get("create_time_ms")
             ts = _parse_timestamp(ts_raw)
@@ -190,8 +198,9 @@ class TradeReconciliationService:
             if price <= 0 or size <= 0:
                 return None
             side = str(raw.get("side", "buy")).lower()
-            # For spot: buy = long, sell = short
-            position_side = "long" if side == "buy" else "short"
+            # Skip sell fills: spot sells close long positions, they are not shorts.
+            if side == "sell":
+                return None
             return {
                 "external_id": str(raw["id"]),
                 "symbol": str(raw["currency_pair"]),
@@ -199,7 +208,7 @@ class TradeReconciliationService:
                 "size": size,
                 "timestamp": ts,
                 "side": side,
-                "position_side": position_side,
+                "position_side": "long",
                 "market_type": "spot",
             }
         except (KeyError, TypeError, ValueError) as exc:
