@@ -278,6 +278,11 @@ app.include_router(ai_skills.router)
 # Debug / Diagnostic endpoints
 app.include_router(debug_indicators.router)
 
+# Debug — manual OHLCV collector trigger (Task #221).
+# Hidden by default in Cloud Run when DEBUG_COLLECT_TOKEN is unset.
+from .api import debug_collect  # noqa: E402
+app.include_router(debug_collect.router)
+
 # Prometheus /metrics (robust-indicators Phase 1)
 app.include_router(metrics_api.router)
 
