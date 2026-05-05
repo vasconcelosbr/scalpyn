@@ -317,7 +317,7 @@ class TradeReconciliationService:
                 / TradeTracking.entry_price
                 < _PRICE_TOLERANCE,
                 or_(
-                    DecisionLog.user_id == str(user_id) if user_id else True,
+                    DecisionLog.user_id == str(user_id) if user_id is not None else DecisionLog.user_id.is_(None),
                     TradeTracking.decision_id.is_(None),
                 ),
             )
