@@ -127,6 +127,7 @@ async def _collect_all_async():
                         "updated": datetime.now(timezone.utc),
                     })
 
+                logger.info(f"[PERSIST] success symbol={symbol}")
                 logger.info(f"[COLLECT][OK] symbol={symbol}")
                 collected += 1
             except Exception as e:
@@ -135,7 +136,13 @@ async def _collect_all_async():
                     exc_info=True,
                 )
                 failures += 1
-                await db.rollback()
+                # NOTE: do NOT call ``await db.rollback()`` here. The
+                # ``async with db.begin_nested()`` above already rolls back
+                # the SAVEPOINT on exception. Calling ``db.rollback()`` on
+                # top of that closes the OUTER transaction opened by
+                # ``run_db_task`` (``async with session.begin()``) and
+                # poisons every subsequent symbol with
+                # "Can't operate on closed transaction inside context manager".
                 continue
 
         # Also fetch tickers for metadata (price, volume, change + spread_pct from bid/ask)
@@ -426,6 +433,7 @@ async def _collect_5m_async():
                     )
 
                 collected += 1
+                logger.info(f"[PERSIST] success symbol={symbol}")
                 logger.info(f"[COLLECT][OK] symbol={symbol} timeframe=5m")
             except Exception as e:
                 logger.error(
@@ -433,7 +441,13 @@ async def _collect_5m_async():
                     exc_info=True,
                 )
                 failures += 1
-                await db.rollback()
+                # NOTE: do NOT call ``await db.rollback()`` here. The
+                # ``async with db.begin_nested()`` above already rolls back
+                # the SAVEPOINT on exception. Calling ``db.rollback()`` on
+                # top of that closes the OUTER transaction opened by
+                # ``run_db_task`` (``async with session.begin()``) and
+                # poisons every subsequent symbol with
+                # "Can't operate on closed transaction inside context manager".
                 continue
 
         # ── Backup metadata pathway: fetch tickers for volume_24h + spread ───

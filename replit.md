@@ -76,6 +76,7 @@ Scalpyn is an institutional-grade cryptocurrency trading platform that provides 
 - **Celery sentinel queue (`__no_default__`)**: Declared in `task_queues` so kombu's `_create_task_sender` can resolve `task_default_queue` (Celery ≥ 5.6 raises `KeyError` on every send_task / beat tick otherwise). No worker consumes it, so any task escaping `TASK_ROUTES` still piles up visibly there — preserving the loud-failure intent of invariant #4 from Task #216. Do **not** remove it.
 - **Dev pipeline boot (Replit)**: Celery requires three workflows — `Redis` (port 6379), `Celery Worker` (`--queues=microstructure,structural,execution`), and `Celery Beat`. After fresh DB setup, manually approve representative symbols in dev (`UPDATE pool_coins SET is_approved=true WHERE symbol IN (...)`) — `collect_market_data.collect_all` raises `[FATAL] No approved symbols` otherwise (invariant #5 from Task #216).
 - **`compute_indicators_robust` window**: The `window_seconds` for order flow data is standardized at 300s. Inconsistencies can lead to `VALID` vs `NO_DATA` flapping.
+- **Nested-savepoint rollback rule**: Never call `await db.rollback()` inside a loop that uses `async with db.begin_nested()` — the SAVEPOINT is already rolled back by the context manager on exception. The extra `db.rollback()` closes the OUTER transaction opened by `run_db_task` (`async with session.begin()`) and poisons every subsequent iteration with `Can't operate on closed transaction inside context manager` (Task #222).
 
 ## Pointers
 
