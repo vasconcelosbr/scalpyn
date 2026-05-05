@@ -18,7 +18,7 @@ Invariants
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import text, update
@@ -112,7 +112,7 @@ class DecisionLogEnricherService:
 
         # ── Fix 3: consolidated upfront validation ────────────────────────────
         symbol: str = decision.symbol or ""
-        entry_time: datetime = decision.created_at or datetime.now(timezone.utc)
+        entry_time: datetime | None = decision.created_at
 
         if not symbol:
             logger.warning(

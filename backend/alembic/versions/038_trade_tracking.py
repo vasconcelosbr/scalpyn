@@ -103,7 +103,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute(sa.text("DROP TABLE IF EXISTS trade_tracking CASCADE"))
-    op.execute(sa.text("DROP INDEX IF EXISTS ux_trade_tracking_decision"))
     op.execute(sa.text("DROP INDEX IF EXISTS idx_decisions_log_processed"))
     op.execute(sa.text("""
         ALTER TABLE decisions_log
