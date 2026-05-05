@@ -62,4 +62,9 @@ CRITICAL_COLUMNS: List[Tuple[str, str]] = [
     # Added by migration 035; without this, get_approved_pool_symbols raises
     # ProgrammingError and all symbol collections fail with zero ohlcv inserts.
     ("pool_coins", "is_approved"),
+    # Added by migration 038; without it, the Decision Log Enricher task
+    # raises UndefinedColumnError on every cycle and creates no trade_tracking
+    # rows.
+    ("decisions_log", "processed"),
+    ("trade_tracking", "status"),
 ]
