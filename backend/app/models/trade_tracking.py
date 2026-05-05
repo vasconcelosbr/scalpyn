@@ -35,4 +35,8 @@ class TradeTracking(Base):
 
     status = Column(String(20), nullable=False, default="open")
 
+    # Set by the Trade Reconciliation service (Module 2) when a real Gate trade
+    # is matched or a new external trade is ingested.
+    external_id = Column(String(100), nullable=True)
+
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))

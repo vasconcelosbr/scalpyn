@@ -76,6 +76,7 @@ celery_app = Celery(
         "app.tasks.robust_alerts",
         "app.tasks.symbol_health_audit",
         "app.tasks.decision_log_enricher",
+        "app.tasks.trade_reconciliation",
     ],
 )
 
@@ -110,6 +111,9 @@ TASK_ROUTES = {
 
     # Decision Log Enricher (Module 1)
     "app.tasks.decision_log_enricher.enrich":            {"queue": QUEUE_STRUCTURAL},
+
+    # Trade Reconciliation (Module 2)
+    "app.tasks.trade_reconciliation.reconcile":          {"queue": QUEUE_STRUCTURAL},
 
     # Execution (latency-sensitive, must run on isolated workers)
     "app.tasks.evaluate_signals.evaluate":          {"queue": QUEUE_EXECUTION},
@@ -177,6 +181,9 @@ TASK_ANNOTATIONS = {
 
     # Decision Log Enricher (Module 1)
     "app.tasks.decision_log_enricher.enrich":            {**_STRUCTURAL_GUARDS, "rate_limit": "6/m"},
+
+    # Trade Reconciliation (Module 2) — runs every 60 s, bounded under 2 min
+    "app.tasks.trade_reconciliation.reconcile":          {**_STRUCTURAL_GUARDS, "rate_limit": "6/m"},
 
     # Execution
     "app.tasks.evaluate_signals.evaluate":          {**_EXECUTION_GUARDS, "rate_limit": "2/m"},
@@ -306,6 +313,11 @@ celery_app.conf.beat_schedule = {
     "decision_log_enricher": {
         "task": "app.tasks.decision_log_enricher.enrich",
         "schedule": 300.0,
+    },
+    # Trade Reconciliation: run every 60 seconds to detect real Gate fills.
+    "trade_reconciliation": {
+        "task": "app.tasks.trade_reconciliation.reconcile",
+        "schedule": 60.0,
     },
 }
 

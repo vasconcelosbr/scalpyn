@@ -749,6 +749,34 @@ class GateAdapter(BaseExchangeAdapter):
             params={"currency_pair": pair, "limit": str(limit)},
         )
 
+    async def get_my_futures_trades(
+        self,
+        contract: Optional[str] = None,
+        days: int = 7,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        GET /futures/usdt/my_trades — authenticated personal futures fill history.
+
+        Returns list of dicts with keys:
+            id, contract, create_time, create_time_ms, order_id,
+            size (positive=long fill, negative=short fill), price,
+            role ("maker"|"taker"), fee, text.
+        """
+        from datetime import datetime, timezone, timedelta
+        start_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+        params: Dict[str, str] = {
+            "limit": str(limit),
+            "from": str(start_ts),
+        }
+        if contract:
+            params["contract"] = self._normalize_symbol(contract)
+        return await self._request(
+            "GET", f"/futures/{self.SETTLE}/my_trades",
+            params=params,
+            base_url=self._futures_url(),
+        )
+
     async def list_spot_pairs(self) -> List[Dict[str, Any]]:
         """
         GET /spot/currency_pairs (public) → all spot trading pairs.
