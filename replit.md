@@ -65,7 +65,8 @@ Scalpyn is an institutional-grade cryptocurrency trading platform that provides 
 
 ## User preferences
 
-- _Populate as you build_
+- **Sempre publicar (deploy) ao final de cada tarefa.** Após `mark_task_complete`, chamar `suggest_deploy` para que a versão em produção (ex.: `scalpyn.vercel.app` no front + backend hospedado) reflita o código mais recente. Sem isso, o usuário continua vendo 404 em rotas novas.
+- Comunicação em PT-BR.
 
 ## Gotchas
 
