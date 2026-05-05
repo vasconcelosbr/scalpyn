@@ -74,16 +74,29 @@ async def get_health(
     db: AsyncSession = Depends(get_db),
     _user_id: UUID = Depends(get_current_user_id),
 ):
+    # `last_candle` MUST come from the full timeframe scope — restricting it
+    # to the 15-min window makes a stopped pipeline silently return NULL and
+    # be classified as "unknown" instead of "critical / Parado".  The window
+    # filter is only used for the in-window row / symbol counters.
     sql = text(
         """
-        SELECT
-            COUNT(*)::int                      AS rows_window,
-            COUNT(DISTINCT symbol)::int        AS distinct_symbols,
-            MAX(time)                          AS last_candle,
-            EXTRACT(EPOCH FROM (NOW() - MAX(time)))::float AS delay_seconds
-        FROM ohlcv
-        WHERE timeframe = '5m'
-          AND time > NOW() - INTERVAL '15 minutes'
+        WITH win AS (
+            SELECT COUNT(*)::int               AS rows_window,
+                   COUNT(DISTINCT symbol)::int AS distinct_symbols
+            FROM ohlcv
+            WHERE timeframe = '5m'
+              AND time > NOW() - INTERVAL '15 minutes'
+        ),
+        last_c AS (
+            SELECT MAX(time) AS last_candle
+            FROM ohlcv
+            WHERE timeframe = '5m'
+        )
+        SELECT win.rows_window,
+               win.distinct_symbols,
+               last_c.last_candle,
+               EXTRACT(EPOCH FROM (NOW() - last_c.last_candle))::float AS delay_seconds
+        FROM win, last_c
         """
     )
     row = (await db.execute(sql)).one()
@@ -232,25 +245,23 @@ async def get_decisions(
     # Top motivos de bloqueio extraídos do JSONB `reasons`. Estrutura típica:
     # {"failed": ["reason_a", "reason_b"]} — caímos para a chave `failed`
     # quando existir, senão pegamos as próprias chaves do dict.
+    # Set-returning functions cannot live inside COALESCE/CASE in the SELECT
+    # list — must be lateral-joined.  We extract from `reasons.failed` when
+    # it's an array; otherwise the LATERAL emits zero rows for that decision
+    # and it's silently dropped, which is the desired behavior.
     reasons_sql = text(
         """
-        WITH expanded AS (
-            SELECT
-                COALESCE(
-                    jsonb_array_elements_text(
-                        CASE WHEN jsonb_typeof(reasons -> 'failed') = 'array'
-                             THEN reasons -> 'failed' ELSE '[]'::jsonb END
-                    ),
-                    NULL
-                ) AS reason
-            FROM decisions_log
-            WHERE decision = 'BLOCK'
-              AND created_at > NOW() - (:hours || ' hours')::interval
-              AND reasons IS NOT NULL
-        )
         SELECT reason, COUNT(*)::int AS count
-        FROM expanded
-        WHERE reason IS NOT NULL
+        FROM decisions_log d
+        CROSS JOIN LATERAL jsonb_array_elements_text(
+            CASE WHEN jsonb_typeof(d.reasons -> 'failed') = 'array'
+                 THEN d.reasons -> 'failed'
+                 ELSE '[]'::jsonb
+            END
+        ) AS reason
+        WHERE d.decision = 'BLOCK'
+          AND d.created_at > NOW() - (:hours || ' hours')::interval
+          AND d.reasons IS NOT NULL
         GROUP BY reason
         ORDER BY count DESC
         LIMIT 10
