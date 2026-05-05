@@ -35,7 +35,8 @@ Invariants
 * Each trade is processed in a SAVEPOINT so one failure never aborts the
   rest of the batch.
 * ``FOR UPDATE SKIP LOCKED`` on the batch SELECT prevents race conditions
-  when two monitor workers overlap.
+  when two monitor workers overlap — each worker acquires a non-overlapping
+  subset of open trades so the same row is never closed twice.
 """
 
 from __future__ import annotations
