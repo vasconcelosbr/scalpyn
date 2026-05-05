@@ -25,7 +25,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -268,40 +268,37 @@ class TradeReconciliationService:
         * same symbol
         * status = 'open'
         * is_simulated = TRUE
+        * external_id IS NULL (not yet reconciled)
         * |entry_time − trade.timestamp| ≤ _MATCH_WINDOW_S
         * user context: decision linked to the same user (or no decision)
         """
-        result = await self.session.execute(
-            text("""
-                SELECT tt.*
-                FROM trade_tracking tt
-                LEFT JOIN decisions_log dl ON tt.decision_id = dl.id
-                WHERE tt.symbol      = :symbol
-                  AND tt.market_type = :market_type
-                  AND tt.status      = 'open'
-                  AND tt.is_simulated = TRUE
-                  AND tt.external_id IS NULL
-                  AND ABS(EXTRACT(EPOCH FROM (tt.entry_time - :ts))) <= :window
-                  AND (dl.user_id = :uid OR tt.decision_id IS NULL)
-                ORDER BY tt.entry_time DESC
-                LIMIT 1
-            """),
-            {
-                "symbol": trade["symbol"],
-                "market_type": trade["market_type"],
-                "ts": trade["timestamp"],
-                "window": _MATCH_WINDOW_S,
-                "uid": str(user_id) if user_id else None,
-            },
+        ts: datetime = trade["timestamp"]
+
+        stmt = (
+            select(TradeTracking)
+            .outerjoin(DecisionLog, TradeTracking.decision_id == DecisionLog.id)
+            .where(
+                TradeTracking.symbol == trade["symbol"],
+                TradeTracking.market_type == trade["market_type"],
+                TradeTracking.status == "open",
+                TradeTracking.is_simulated == True,  # noqa: E712
+                TradeTracking.external_id.is_(None),
+                func.abs(
+                    func.extract(
+                        "epoch",
+                        TradeTracking.entry_time - ts,
+                    )
+                ) <= _MATCH_WINDOW_S,
+                or_(
+                    DecisionLog.user_id == str(user_id) if user_id else True,
+                    TradeTracking.decision_id.is_(None),
+                ),
+            )
+            .order_by(TradeTracking.entry_time.desc())
+            .limit(1)
         )
-        row = result.fetchone()
-        if row is None:
-            return None
-        # Re-fetch as ORM object so we get the mapped model.
-        result2 = await self.session.execute(
-            select(TradeTracking).where(TradeTracking.id == row[0])
-        )
-        return result2.scalars().first()
+        result = await self.session.execute(stmt)
+        return result.scalars().first()
 
     # ── conversion / creation ─────────────────────────────────────────────────
 
@@ -387,7 +384,7 @@ class TradeReconciliationService:
     async def _get_active_connections(self) -> list[ExchangeConnection]:
         result = await self.session.execute(
             select(ExchangeConnection).where(
-                ExchangeConnection.is_active == True,  # noqa: E712
+                ExchangeConnection.is_active.is_(True),
             )
         )
         return list(result.scalars().all())
