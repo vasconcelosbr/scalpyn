@@ -286,6 +286,11 @@ app.include_router(debug_collect.router)
 # Prometheus /metrics (robust-indicators Phase 1)
 app.include_router(metrics_api.router)
 
+# Operational performance dashboard (Task #224) — read-only aggregations
+# powering the /dashboard/performance Next.js page.
+from .api import dashboard as dashboard_api  # noqa: E402
+app.include_router(dashboard_api.router)
+
 # WebSocket
 app.include_router(websocket.router)
 
