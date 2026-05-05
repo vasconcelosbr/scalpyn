@@ -39,6 +39,11 @@ class DecisionLog(Base):
     execution_entry_price = Column(Float, nullable=True)
     execution_entry_time = Column(DateTime(timezone=True), nullable=True)
 
+    # Populated by Trade Monitor (Module 3) once the trade closes.
+    outcome = Column(String(20), nullable=True)        # 'tp' | 'sl' | 'timeout'
+    pnl_pct = Column(Float, nullable=True)
+    holding_seconds = Column(Integer, nullable=True)
+
 
 class AssetTrace(Base):
     __tablename__ = 'asset_traces'

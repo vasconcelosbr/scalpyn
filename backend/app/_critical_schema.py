@@ -67,4 +67,13 @@ CRITICAL_COLUMNS: List[Tuple[str, str]] = [
     # rows.
     ("decisions_log", "processed"),
     ("trade_tracking", "status"),
+    # Added by migration 041; without these the Trade Monitor task raises
+    # UndefinedColumnError and cannot close any trades (TP / SL / timeout
+    # outcomes will never be recorded and the ML dataset will be incomplete).
+    ("trade_tracking", "exit_price"),
+    ("trade_tracking", "outcome"),
+    ("decisions_log", "outcome"),
+    # Added by migration 042; without this the monitor cannot record the price
+    # authority (market vs exchange), causing UndefinedColumnError on every close.
+    ("trade_tracking", "exit_price_source"),
 ]
