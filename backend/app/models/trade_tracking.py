@@ -30,6 +30,11 @@ class TradeTracking(Base):
     entry_price = Column(Numeric(20, 8), nullable=False)
     entry_time = Column(DateTime(timezone=True), nullable=False)
 
+    # Set by the Trade Reconciliation service (Module 2) when a simulated row
+    # is confirmed as real.  Preserves the original decision entry_price for
+    # slippage analysis (real_entry_price − entry_price = slippage).
+    real_entry_price = Column(Numeric(20, 8), nullable=True)
+
     target_price = Column(Numeric(20, 8), nullable=True)
     stop_price = Column(Numeric(20, 8), nullable=True)
 

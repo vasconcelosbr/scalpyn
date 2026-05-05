@@ -9,8 +9,12 @@ Invariants
 ----------
 * Does NOT modify ``pipeline_scan``, ``score_engine``, ``block_engine``,
   ``execute_buy``, indicators, or the Celery execution flow.
-* Gate.io is treated as the source of truth — it can overwrite a simulated
-  entry_price with the real fill price.
+* Gate.io is treated as the source of truth.
+* Original ``entry_price`` (decision/signal price) is NEVER overwritten;
+  the real fill price is stored in ``real_entry_price`` for slippage analysis.
+* ``decisions_log.metrics`` JSONB is immutable — execution metadata is written
+  to dedicated columns (``trade_executed``, ``execution_type``,
+  ``execution_entry_price``, ``execution_entry_time``).
 * The ``reconciled_gate_trades`` dedup table guarantees idempotency: a Gate
   fill is processed at most once even if the task fires multiple times within
   the same window.
@@ -22,11 +26,10 @@ Invariants
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import func, or_, select, text, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..exchange_adapters.gate_adapter import GateAdapter
@@ -44,6 +47,8 @@ _FETCH_LIMIT = 100
 # Maximum seconds between a Gate fill timestamp and a trade_tracking.entry_time
 # to consider them the same trade.
 _MATCH_WINDOW_S = 60
+# Maximum relative price deviation (0.5 %) to accept a match.
+_PRICE_TOLERANCE = 0.005
 
 
 class TradeReconciliationService:
@@ -110,7 +115,7 @@ class TradeReconciliationService:
         raw_futures = await self._safe_fetch_futures(adapter)
 
         spot_normalized = [self._normalize_spot(t) for t in raw_spot]
-        futures_normalized = [self._normalize_futures(t) for t in raw_futures if t]
+        futures_normalized = [self._normalize_futures(t) for t in raw_futures]
 
         all_trades = [t for t in spot_normalized + futures_normalized if t is not None]
 
@@ -184,13 +189,17 @@ class TradeReconciliationService:
             size = float(raw["amount"])
             if price <= 0 or size <= 0:
                 return None
+            side = str(raw.get("side", "buy")).lower()
+            # For spot: buy = long, sell = short
+            position_side = "long" if side == "buy" else "short"
             return {
                 "external_id": str(raw["id"]),
                 "symbol": str(raw["currency_pair"]),
                 "price": price,
                 "size": size,
                 "timestamp": ts,
-                "side": str(raw.get("side", "buy")).lower(),
+                "side": side,
+                "position_side": position_side,
                 "market_type": "spot",
             }
         except (KeyError, TypeError, ValueError) as exc:
@@ -199,7 +208,16 @@ class TradeReconciliationService:
 
     @staticmethod
     def _normalize_futures(raw: dict) -> dict[str, Any] | None:
-        """Normalize a /futures/usdt/my_trades entry into the internal trade dict."""
+        """Normalize a /futures/usdt/my_trades entry into the internal trade dict.
+
+        For futures, position direction is determined by the sign of ``size``:
+          * size > 0 → long fill (opening/adding a long position)
+          * size < 0 → short fill (opening/adding a short position)
+
+        We do NOT use buy/sell labels here because in hedge-mode or reduce-only
+        orders, the buy/sell direction does not reliably indicate whether the
+        resulting position is long or short.
+        """
         try:
             ts_raw = raw.get("create_time") or raw.get("create_time_ms")
             ts = _parse_timestamp(ts_raw)
@@ -209,14 +227,16 @@ class TradeReconciliationService:
             size_raw = float(raw["size"])
             if price <= 0 or size_raw == 0:
                 return None
-            side = "buy" if size_raw > 0 else "sell"
+            # Derive position_side directly from the size sign (Gate.io spec).
+            position_side = "long" if size_raw > 0 else "short"
             return {
                 "external_id": str(raw["id"]),
                 "symbol": str(raw["contract"]),
                 "price": price,
                 "size": abs(size_raw),
                 "timestamp": ts,
-                "side": side,
+                "side": "buy" if size_raw > 0 else "sell",
+                "position_side": position_side,
                 "market_type": "futures",
             }
         except (KeyError, TypeError, ValueError) as exc:
@@ -264,12 +284,15 @@ class TradeReconciliationService:
     ) -> TradeTracking | None:
         """Find an open simulated trade_tracking row close in time to *trade*.
 
-        Matching criteria:
+        Matching criteria (all must be satisfied):
         * same symbol
+        * same market_type
+        * same position_side (long/short) — prevents cross-direction false matches
         * status = 'open'
         * is_simulated = TRUE
         * external_id IS NULL (not yet reconciled)
-        * |entry_time − trade.timestamp| ≤ _MATCH_WINDOW_S
+        * |entry_time − trade.timestamp| ≤ _MATCH_WINDOW_S seconds
+        * |entry_price − trade.price| / entry_price < _PRICE_TOLERANCE (0.5 %)
         * user context: decision linked to the same user (or no decision)
         """
         ts: datetime = trade["timestamp"]
@@ -280,6 +303,7 @@ class TradeReconciliationService:
             .where(
                 TradeTracking.symbol == trade["symbol"],
                 TradeTracking.market_type == trade["market_type"],
+                TradeTracking.position_side == trade["position_side"],
                 TradeTracking.status == "open",
                 TradeTracking.is_simulated == True,  # noqa: E712
                 TradeTracking.external_id.is_(None),
@@ -289,6 +313,9 @@ class TradeReconciliationService:
                         TradeTracking.entry_time - ts,
                     )
                 ) <= _MATCH_WINDOW_S,
+                func.abs(TradeTracking.entry_price - trade["price"])
+                / TradeTracking.entry_price
+                < _PRICE_TOLERANCE,
                 or_(
                     DecisionLog.user_id == str(user_id) if user_id else True,
                     TradeTracking.decision_id.is_(None),
@@ -305,64 +332,64 @@ class TradeReconciliationService:
     async def _convert_to_real(
         self, tt: TradeTracking, trade: dict[str, Any]
     ) -> None:
-        """Convert a simulated trade_tracking row to real using Gate fill data."""
+        """Convert a simulated trade_tracking row to real using Gate fill data.
+
+        The original ``entry_price`` (from the decision/signal) is preserved
+        so that slippage can be calculated as ``real_entry_price − entry_price``.
+        Only ``real_entry_price``, ``is_simulated``, and ``external_id`` are updated.
+        """
         await self.session.execute(
             update(TradeTracking)
             .where(TradeTracking.id == tt.id)
             .values(
                 is_simulated=False,
-                entry_price=trade["price"],
-                entry_time=trade["timestamp"],
+                real_entry_price=trade["price"],
                 external_id=trade["external_id"],
             )
         )
         logger.info(
-            "[Reconciler] Converted simulated → real | id=%s symbol=%s price=%.8g",
+            "[Reconciler] Converted simulated → real | id=%s symbol=%s "
+            "decision_price=%.8g real_price=%.8g slippage_pct=%.4f",
             tt.id,
             trade["symbol"],
+            float(tt.entry_price),
             trade["price"],
+            (trade["price"] - float(tt.entry_price)) / float(tt.entry_price) * 100,
         )
 
     async def _update_decision_log(
         self, tt: TradeTracking, trade: dict[str, Any]
     ) -> None:
-        """Update the linked decisions_log row to reflect the real execution."""
+        """Write execution metadata to dedicated decisions_log columns.
+
+        The ``metrics`` JSONB column is intentionally left untouched — it is
+        written once by pipeline_scan and must remain immutable for auditability.
+        """
         if tt.decision_id is None:
             return
         await self.session.execute(
-            text("""
-                UPDATE decisions_log
-                SET
-                    metrics = COALESCE(metrics, '{}'::jsonb) ||
-                              jsonb_build_object(
-                                  'trade_executed',  true,
-                                  'execution_type',  :market_type,
-                                  'entry_price',     :price,
-                                  'entry_time',      :ts,
-                                  'simulation',      false
-                              )
-                WHERE id = :decision_id
-            """),
-            {
-                "market_type": trade["market_type"],
-                "price": float(trade["price"]),
-                "ts": trade["timestamp"].isoformat(),
-                "decision_id": tt.decision_id,
-            },
+            update(DecisionLog)
+            .where(DecisionLog.id == tt.decision_id)
+            .values(
+                trade_executed=True,
+                execution_type=trade["market_type"],
+                execution_entry_price=float(trade["price"]),
+                execution_entry_time=trade["timestamp"],
+            )
         )
 
     async def _create_external_trade(
         self, trade: dict[str, Any]
     ) -> TradeTracking | None:
         """Create a new trade_tracking row for a Gate fill with no local match."""
-        position_side = _infer_side(trade["side"])
         tt = TradeTracking(
             decision_id=None,
             symbol=trade["symbol"],
             market_type=trade["market_type"],
-            position_side=position_side,
+            position_side=trade["position_side"],
             is_simulated=False,
             entry_price=trade["price"],
+            real_entry_price=trade["price"],
             entry_time=trade["timestamp"],
             external_id=trade["external_id"],
             status="open",
@@ -370,10 +397,11 @@ class TradeReconciliationService:
         self.session.add(tt)
         await self.session.flush()  # populate tt.id before returning
         logger.info(
-            "[Reconciler] Created external trade | symbol=%s market=%s side=%s price=%.8g external_id=%s",
+            "[Reconciler] Created external trade | symbol=%s market=%s side=%s "
+            "price=%.8g external_id=%s",
             trade["symbol"],
             trade["market_type"],
-            position_side,
+            trade["position_side"],
             trade["price"],
             trade["external_id"],
         )
@@ -424,7 +452,3 @@ def _parse_timestamp(value: Any) -> datetime | None:
     except (TypeError, ValueError, OSError):
         return None
 
-
-def _infer_side(side: str) -> str:
-    """Map Gate.io trade side ('buy'/'sell') to position_side ('long'/'short')."""
-    return "long" if side.lower() == "buy" else "short"

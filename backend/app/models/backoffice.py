@@ -32,6 +32,13 @@ class DecisionLog(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+    # Populated by Trade Reconciliation (Module 2) using dedicated columns
+    # rather than patching the immutable metrics JSONB.
+    trade_executed = Column(Boolean, nullable=True)
+    execution_type = Column(String(10), nullable=True)
+    execution_entry_price = Column(Float, nullable=True)
+    execution_entry_time = Column(DateTime(timezone=True), nullable=True)
+
 
 class AssetTrace(Base):
     __tablename__ = 'asset_traces'
