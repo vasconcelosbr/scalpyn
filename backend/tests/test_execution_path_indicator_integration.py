@@ -132,6 +132,24 @@ def test_pipeline_scan_delegates_quarantine_to_provider():
     assert "filter_incomplete_assets" in src or "from ..services.indicators_provider" in src
 
 
+def test_compute_scores_imports_provider_and_uses_is_complete():
+    """compute_scores writes ``alpha_scores`` consumed downstream; it must
+    also route through the unified provider so partial-row reads do not
+    pollute the score table for ~67% of cycles."""
+    import inspect
+    from app.tasks import compute_scores as cs_mod
+
+    src = inspect.getsource(cs_mod)
+    code = _strip_comments(src)
+    assert "from ..services.indicators_provider import" in src
+    assert "get_merged_indicators" in code
+    assert "is_complete" in code
+    # Anti-pattern (in actual code): raw DISTINCT ON read of `indicators`
+    assert "DISTINCT ON (i.symbol)" not in code
+    # Candidate universe from pool_coins (sanctioned source)
+    assert "FROM pool_coins" in code
+
+
 # ── B. Micro-only-latest scenario advances past quarantine ─────────────────
 
 

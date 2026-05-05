@@ -77,16 +77,47 @@ async def _score_async():
             or []
         )
 
-        result = await db.execute(text("""
-            SELECT DISTINCT ON (i.symbol) i.symbol, i.indicators_json, i.time
-            FROM indicators i
-            JOIN pool_coins p ON i.symbol = p.symbol
-            WHERE p.is_active = true
-              AND p.is_approved = true
-              AND i.time > now() - interval '2 hours'
-            ORDER BY i.symbol, i.time DESC
+        # Task #215: route through the unified provider so the partial-row
+        # ``DISTINCT ON`` anti-pattern is gone here too. compute_scores
+        # writes ``alpha_scores``, which is consumed downstream — feeding
+        # it micro-only-latest payloads would write incomplete scores
+        # for the same ~67% of cycles. Candidate symbol universe comes
+        # from active + approved pool_coins (sanctioned source); merged
+        # indicator payload + completeness guard match the other tasks.
+        from ..services.indicators_provider import (
+            get_merged_indicators,
+            is_complete,
+        )
+        from types import SimpleNamespace
+
+        pool_res = await db.execute(text("""
+            SELECT DISTINCT symbol FROM pool_coins
+            WHERE is_active = true AND is_approved = true
         """))
-        rows = result.fetchall()
+        pool_symbols = [r.symbol for r in pool_res.fetchall()]
+
+        merged_by_sym = (
+            await get_merged_indicators(db, pool_symbols)
+            if pool_symbols else {}
+        )
+
+        # Build row-shaped objects so the loop body and Phase 2 keep
+        # operating on the same shape (.symbol / .indicators_json / .time).
+        rows = []
+        for symbol, mi in merged_by_sym.items():
+            flat = mi.as_flat_dict()
+            ok, missing = is_complete(flat)
+            if not ok:
+                logger.warning(
+                    "[compute_scores] QUARANTINED %s — missing core: %s",
+                    symbol, missing,
+                )
+                continue
+            rows.append(SimpleNamespace(
+                symbol=symbol,
+                indicators_json=flat,
+                time=datetime.now(timezone.utc),
+            ))
 
         now = datetime.now(timezone.utc)
         _scored = 0
