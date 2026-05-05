@@ -91,9 +91,19 @@ def upgrade() -> None:
             ON trade_tracking (created_at DESC)
     """))
 
+    # Unique constraint so that a crash between INSERT and the processed=TRUE
+    # update cannot produce duplicate trade_tracking rows for the same decision.
+    # Partial (WHERE decision_id IS NOT NULL) to allow NULL FK safely.
+    op.execute(sa.text("""
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_trade_tracking_decision
+            ON trade_tracking (decision_id)
+            WHERE decision_id IS NOT NULL
+    """))
+
 
 def downgrade() -> None:
     op.execute(sa.text("DROP TABLE IF EXISTS trade_tracking CASCADE"))
+    op.execute(sa.text("DROP INDEX IF EXISTS ux_trade_tracking_decision"))
     op.execute(sa.text("DROP INDEX IF EXISTS idx_decisions_log_processed"))
     op.execute(sa.text("""
         ALTER TABLE decisions_log

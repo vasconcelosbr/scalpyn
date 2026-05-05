@@ -8,9 +8,11 @@ Invariants
 * Does NOT call the Gate.io API.
 * Does NOT close trades or compute final P&L.
 * Does NOT modify the original pipeline, indicators, or score engine.
-* Each processed decision is marked ``processed = TRUE`` exactly once
-  inside the same transaction as the ``trade_tracking`` insert, so the
-  operation is atomic and idempotent against crash-restart.
+* Each processed decision is marked ``processed = TRUE`` inside the same
+  transaction as the ``trade_tracking`` insert — atomic and crash-safe.
+* The ``ux_trade_tracking_decision`` unique index + ``ON CONFLICT DO NOTHING``
+  guarantee true idempotency even if a crash occurs between the INSERT and the
+  ``processed = TRUE`` update.
 """
 
 from __future__ import annotations
@@ -19,7 +21,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, text, update
+from sqlalchemy import text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.backoffice import DecisionLog
@@ -86,6 +89,7 @@ class DecisionLogEnricherService:
 
     async def _fetch_unprocessed_decisions(self) -> list[DecisionLog]:
         """Return up to _BATCH_LIMIT unprocessed ALLOW decisions, oldest first."""
+        from sqlalchemy import select
         result = await self.session.execute(
             select(DecisionLog)
             .where(DecisionLog.decision == "ALLOW", DecisionLog.processed.is_(False))
@@ -97,21 +101,41 @@ class DecisionLogEnricherService:
     async def _process_decision(self, decision: DecisionLog, config: dict[str, Any]) -> bool:
         """Create a trade_tracking row for *decision* and mark it processed.
 
-        Returns True when a row was inserted, False when skipped (e.g. no
-        price available in metrics).
+        Returns True when a row was inserted, False when skipped (invalid data).
+        Raises ValueError for missing price so the caller's error counter is
+        incremented and the decision is still marked processed.
         """
+        # ── Fix 1: robust price extraction with two-level fallback ────────────
+        # Try the top-level ``price`` attribute first (future-proof); then fall
+        # back to metrics JSONB where pipeline_scan stores it today.
         entry_price = self._extract_price(decision)
-        if entry_price is None:
+
+        # ── Fix 3: consolidated upfront validation ────────────────────────────
+        symbol: str = decision.symbol or ""
+        entry_time: datetime = decision.created_at or datetime.now(timezone.utc)
+
+        if not symbol:
             logger.warning(
-                "[Enricher] Skipping decision id=%s symbol=%s — no price in metrics",
+                "[Enricher] Skipping decision id=%s — missing symbol",
                 decision.id,
-                decision.symbol,
             )
             await self._mark_processed(decision)
             return False
 
-        entry_time: datetime = decision.created_at or datetime.now(timezone.utc)
-        symbol: str = decision.symbol
+        if entry_price is None:
+            raise ValueError(
+                f"Missing price in decision_log id={decision.id} symbol={symbol}"
+            )
+
+        if not entry_time:
+            logger.warning(
+                "[Enricher] Skipping decision id=%s symbol=%s — missing entry_time",
+                decision.id,
+                symbol,
+            )
+            await self._mark_processed(decision)
+            return False
+
         market_type: str = self._extract_market_type(decision)
         position_side: str = self._extract_position_side(decision)
 
@@ -119,19 +143,27 @@ class DecisionLogEnricherService:
         sl_pct: float = float(config.get("sl_pct", _DEFAULT_SL_PCT))
         target_price, stop_price = self._calc_target_stop(entry_price, position_side, tp_pct, sl_pct)
 
-        tracking = TradeTracking(
-            decision_id=decision.id,
-            symbol=symbol,
-            market_type=market_type,
-            position_side=position_side,
-            is_simulated=True,
-            entry_price=entry_price,
-            entry_time=entry_time,
-            target_price=target_price,
-            stop_price=stop_price,
-            status="open",
+        # ── Fix 2: idempotent INSERT via ON CONFLICT DO NOTHING ───────────────
+        # The unique index ux_trade_tracking_decision guarantees at-most-once
+        # even if a crash occurred between a previous INSERT and its
+        # processed=TRUE update.
+        stmt = (
+            pg_insert(TradeTracking)
+            .values(
+                decision_id=decision.id,
+                symbol=symbol,
+                market_type=market_type,
+                position_side=position_side,
+                is_simulated=True,
+                entry_price=entry_price,
+                entry_time=entry_time,
+                target_price=target_price,
+                stop_price=stop_price,
+                status="open",
+            )
+            .on_conflict_do_nothing(index_elements=["decision_id"])
         )
-        self.session.add(tracking)
+        await self.session.execute(stmt)
 
         await self._mark_processed(decision)
 
@@ -183,13 +215,20 @@ class DecisionLogEnricherService:
 
     @staticmethod
     def _extract_price(decision: DecisionLog) -> float | None:
-        """Read price from decisions_log.metrics JSONB."""
-        metrics: dict = decision.metrics or {}
-        price = metrics.get("price")
-        if price is None:
+        """Extract price with a two-level fallback.
+
+        1. Direct ``price`` attribute on the ORM row (future-proof — if a
+           top-level price column is ever added to decisions_log).
+        2. ``metrics->>'price'`` JSONB key where pipeline_scan stores it today.
+        """
+        raw = getattr(decision, "price", None)
+        if raw is None:
+            metrics: dict = decision.metrics or {}
+            raw = metrics.get("price")
+        if raw is None:
             return None
         try:
-            value = float(price)
+            value = float(raw)
             return value if value > 0 else None
         except (TypeError, ValueError):
             return None
