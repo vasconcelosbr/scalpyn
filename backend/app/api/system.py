@@ -252,22 +252,113 @@ async def celery_diagnostics(
     return payload
 
 
+# ── Per-queue alert thresholds (Task #216, operator spec part 5) ────────────
+# Hysteresis avoids alert flapping: we go CRITICAL when depth crosses the
+# upper bound and only re-arm (allow another CRITICAL) once depth drops
+# back below the lower bound.
+QUEUE_ALERT_HIGH = 10_000
+QUEUE_ALERT_LOW = 8_000
+QUEUE_ALERT_STATE_PREFIX = "scalpyn:celery_queue_alert_state:"
+QUEUE_OLDEST_AGE_SAMPLES = 1  # peek at queue head only — cheap
+
+
+def _peek_oldest_age_seconds(redis_client, queue_name: str) -> Optional[float]:
+    """Return the wall-clock age of the oldest message in ``queue_name``.
+
+    Celery messages are JSON envelopes whose ``properties.timestamp``
+    (or, in newer kombu versions, ``headers.timestamp``) is the enqueue
+    time. We LRANGE the head element and parse defensively — anything we
+    cannot decode returns ``None`` rather than crashing the endpoint.
+    """
+    try:
+        import json
+        raw = redis_client.lrange(queue_name, 0, 0)
+        if not raw:
+            return None
+        payload = raw[0]
+        if isinstance(payload, (bytes, bytearray)):
+            payload = payload.decode("utf-8", errors="replace")
+        msg = json.loads(payload)
+        timestamp_str: Optional[str] = None
+        for path in (("properties", "timestamp"), ("headers", "timestamp")):
+            cur: Any = msg
+            for key in path:
+                if not isinstance(cur, dict):
+                    cur = None
+                    break
+                cur = cur.get(key)
+            if cur:
+                timestamp_str = str(cur)
+                break
+        if not timestamp_str:
+            return None
+        # Celery enqueue timestamps are ISO-8601 (UTC). datetime.fromisoformat
+        # accepts both ``2026-05-04T12:34:56`` and ``...+00:00``; the
+        # trailing ``Z`` form needs a manual swap.
+        ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - ts).total_seconds())
+    except Exception:
+        return None
+
+
+def _evaluate_queue_alert(redis_client, queue_name: str, depth: int) -> str:
+    """Apply hysteresis and emit a CRITICAL log when threshold is crossed.
+
+    Returns the resulting state string (``"ok"`` or ``"alerted"``) so the
+    caller can include it in the response payload.
+    """
+    state_key = f"{QUEUE_ALERT_STATE_PREFIX}{queue_name}"
+    try:
+        prev_raw = redis_client.get(state_key)
+        prev_state = (
+            prev_raw.decode("utf-8", errors="replace")
+            if isinstance(prev_raw, (bytes, bytearray))
+            else (prev_raw or "ok")
+        )
+    except Exception:
+        prev_state = "ok"
+
+    new_state = prev_state
+    if depth >= QUEUE_ALERT_HIGH and prev_state != "alerted":
+        # Cross the upper bound: emit a single CRITICAL line per cycle and
+        # arm the latch so we do not re-alert until depth drops below LOW.
+        logger.critical(
+            "[celery-status] CRITICAL queue=%s depth=%d threshold=%d "
+            "(workers may be stalled or undersized — see runbook "
+            "docs/runbooks/celery-queue-topology.md)",
+            queue_name, depth, QUEUE_ALERT_HIGH,
+        )
+        new_state = "alerted"
+    elif depth < QUEUE_ALERT_LOW and prev_state == "alerted":
+        new_state = "ok"
+
+    if new_state != prev_state:
+        try:
+            redis_client.set(state_key, new_state, ex=24 * 3600)
+        except Exception:
+            pass
+    return new_state
+
+
 @router.get("/celery-status")
 async def get_celery_status():
-    """
-    Probe Celery worker and beat health without authentication.
+    """Per-queue Celery worker + queue health (Task #216, operator spec).
 
-    Pings all active workers via Celery inspect and reports:
-    - Whether any workers responded (worker_alive)
-    - Active task count
-    - Registered task count
-    - Queue depth in Redis (tasks waiting to be consumed)
+    Reports per queue (``microstructure``, ``structural``, ``execution``):
+        * ``depth``      — Redis LLEN
+        * ``oldest_age_s`` — wall-clock age of the message at the head
+        * ``alert_state`` — ``ok`` or ``alerted`` (hysteresis: trips at
+          ``QUEUE_ALERT_HIGH``, re-arms below ``QUEUE_ALERT_LOW``)
 
-    Returns HTTP 200 always; check ``worker_alive`` to determine health.
-    This endpoint is intentionally unauthenticated so it can be hit from
-    Cloud Run health checks, Uptime Kuma, or a plain curl without a JWT.
+    Plus aggregate worker info via Celery ``inspect``.
+
+    HTTP 200 always; the dashboard renders ``alert_state`` red when any
+    queue is ``alerted``. Intentionally unauthenticated so Cloud Run /
+    Uptime Kuma / curl can probe without a JWT.
     """
-    from ..tasks.celery_app import celery_app
+    from ..tasks.celery_app import celery_app, ALL_QUEUES
 
     result: Dict[str, Any] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -275,7 +366,9 @@ async def get_celery_status():
         "worker_count": 0,
         "active_tasks": 0,
         "registered_task_count": 0,
-        "queue_depth": None,
+        "queues": {q: {"depth": None, "oldest_age_s": None, "alert_state": "unknown"}
+                   for q in ALL_QUEUES},
+        "redis_error": None,
         "error": None,
     }
 
@@ -298,14 +391,30 @@ async def get_celery_status():
         result["error"] = str(exc)
         logger.warning("[celery-status] inspect failed: %s", exc)
 
-    # Queue depth: count messages in the default 'celery' queue via Redis
+    # Per-queue depth + age + hysteresis alert
     try:
         import redis as _redis
         from ..config import settings
         r = _redis.from_url(settings.REDIS_URL, socket_connect_timeout=3)
-        result["queue_depth"] = r.llen("celery")
+        for queue_name in ALL_QUEUES:
+            try:
+                depth = int(r.llen(queue_name))
+            except Exception as exc:
+                logger.warning(
+                    "[celery-status] LLEN failed for queue=%s: %s",
+                    queue_name, exc,
+                )
+                continue
+            oldest_age = _peek_oldest_age_seconds(r, queue_name) if depth else None
+            alert_state = _evaluate_queue_alert(r, queue_name, depth)
+            result["queues"][queue_name] = {
+                "depth": depth,
+                "oldest_age_s": oldest_age,
+                "alert_state": alert_state,
+            }
     except Exception as exc:
-        logger.warning("[celery-status] redis queue depth check failed: %s", exc)
+        result["redis_error"] = f"{type(exc).__name__}: {exc}"
+        logger.warning("[celery-status] redis queue probe failed: %s", exc)
 
     return result
 

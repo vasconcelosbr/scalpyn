@@ -708,9 +708,15 @@ def test_remediator_only_recomputes_for_post_refresh_confirmed(monkeypatch):
         return counts_by_sym.get(symbol, 0)
 
     sent_tasks = []
+    class _FakeAsyncResult:
+        # Task #216: ``task_dispatch.enqueue`` now reads ``async_result.id``
+        # off the return value of ``celery_app.send_task`` to log the dispatch
+        # — the FakeCelery has to honour that contract.
+        id = "fake-task-id"
     class _FakeCelery:
         def send_task(self, name, *a, **kw):
             sent_tasks.append(name)
+            return _FakeAsyncResult()
 
     monkeypatch.setattr(rem_mod, "_bulk_approve", fake_bulk)
     monkeypatch.setattr(rem_mod, "_verify_approved", fake_verify)

@@ -318,17 +318,21 @@ async def _compute_async():
                     async with db.begin_nested():
                         await _upsert_market_metadata_snapshot(db, symbol, results, now)
 
-                        # Store in TimescaleDB (envelope format — value + source + confidence + status)
+                        # Store in TimescaleDB (envelope format — value + source + confidence + status).
+                        # Task #216: write ``scheduler_group`` explicitly so the read
+                        # path (indicators_provider) can merge structural + microstructure
+                        # rows by group rather than guessing from legacy NULL/'combined'.
                         await db.execute(text("""
                             INSERT INTO indicators
-                                (time, symbol, timeframe, market_type, indicators_json)
+                                (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
                             VALUES
-                                (:time, :symbol, :timeframe, :market_type, :indicators)
+                                (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
                         """), {
                             "time": now,
                             "symbol": symbol,
                             "timeframe": "1h",
                             "market_type": "spot",  # 1h collector is spot-only (pool query above filters p.market_type='spot')
+                            "scheduler_group": "structural",
                             "indicators": json.dumps(envelop_results(
                                 results,
                                 default_source="candle_computed",
@@ -358,7 +362,13 @@ async def _compute_async():
 @celery_app.task(name="app.tasks.compute_indicators.compute")
 def compute():
     count = _run_async(_compute_async())
-    celery_app.send_task("app.tasks.compute_scores.score")
+    # Chain to scoring (structural queue). Dedup TTL = score time_limit + 60s.
+    from . import task_dispatch
+    task_dispatch.enqueue(
+        "app.tasks.compute_scores.score",
+        dedup_key="score",
+        ttl_seconds=660,
+    )
     return f"Computed indicators for {count} symbols"
 
 
@@ -457,18 +467,21 @@ async def _compute_5m_async():
                     # failure here does not roll back other symbols' data.
                     async with db.begin_nested():
                         await _upsert_market_metadata_snapshot(db, symbol, results, now)
-                        # Store in TimescaleDB (envelope format — value + source + confidence + status)
+                        # Store in TimescaleDB (envelope format — value + source + confidence + status).
+                        # Task #216: explicit ``scheduler_group='microstructure'`` so the
+                        # read path can identify which cadence wrote each row.
                         await db.execute(text("""
                             INSERT INTO indicators
-                                (time, symbol, timeframe, market_type, indicators_json)
+                                (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
                             VALUES
-                                (:time, :symbol, :timeframe, :market_type, :indicators)
+                                (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
                         """), {
-                            "time":        now,
-                            "symbol":      symbol,
-                            "timeframe":   "5m",
-                            "market_type": symbol_market_type.get(symbol, "spot"),
-                            "indicators":  json.dumps(envelop_results(
+                            "time":            now,
+                            "symbol":          symbol,
+                            "timeframe":       "5m",
+                            "market_type":     symbol_market_type.get(symbol, "spot"),
+                            "scheduler_group": "microstructure",
+                            "indicators":      json.dumps(envelop_results(
                                 results,
                                 default_source="candle_computed",
                                 default_confidence=0.80,
@@ -497,6 +510,12 @@ async def _compute_5m_async():
 @celery_app.task(name="app.tasks.compute_indicators.compute_5m")
 def compute_5m():
     count = _run_async(_compute_5m_async())
-    # Chain: fresh 5m indicators → pipeline scan re-evaluates all layers
-    celery_app.send_task("app.tasks.pipeline_scan.scan")
+    # Chain: fresh 5m indicators → pipeline scan (microstructure queue).
+    # TTL = pipeline_scan time_limit (180s) + 30s margin.
+    from . import task_dispatch
+    task_dispatch.enqueue(
+        "app.tasks.pipeline_scan.scan",
+        dedup_key="pipeline_scan",
+        ttl_seconds=210,
+    )
     return f"Computed 5m indicators for {count} symbols"

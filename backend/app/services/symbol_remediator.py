@@ -644,8 +644,15 @@ class SymbolRemediator:
                 # symbol is picked up on the next worker tick. This is
                 # the documented contract; if a per-symbol task is ever
                 # added, swap the dispatch loop here.
-                from ..tasks.celery_app import celery_app
-                celery_app.send_task("app.tasks.compute_indicators.compute_5m")
+                # Task #216: route through the dedup wrapper so a busy
+                # 5m cycle does not stack a second compute_5m on top of
+                # an in-flight one.
+                from ..tasks import task_dispatch
+                task_dispatch.enqueue(
+                    "app.tasks.compute_indicators.compute_5m",
+                    dedup_key="compute_5m",
+                    ttl_seconds=210,
+                )
                 recompute_enqueued = True
                 logger.info(
                     "[INDICATORS] enqueued compute_5m for %d symbols (recovered=%d, no_indicator=%d)",

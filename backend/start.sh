@@ -158,23 +158,44 @@ fi
 # import errors, beat schedule wiring) without rebuilding.
 CELERY_LOGLEVEL="${CELERY_LOGLEVEL:-info}"
 
+# ── Queue topology (Task #216, operator spec parts 4 + 7) ────────────────────
+# WORKER_QUEUES selects which Celery queues this container consumes:
+#   - "microstructure,structural,execution"  (default, single-container dev)
+#   - "microstructure"                       (Cloud Run worker-micro)
+#   - "structural"                           (Cloud Run worker-structural)
+#   - "execution"                            (Cloud Run worker-execution)
+#
+# RUN_BEAT controls whether this container runs the beat scheduler:
+#   - "1" (default in dev/single-container)  → beat is started here.
+#   - "0" (Cloud Run multi-service)          → beat lives in its own
+#                                              dedicated container so we
+#                                              never have two beats
+#                                              double-firing the schedule.
+WORKER_QUEUES="${WORKER_QUEUES:-microstructure,structural,execution}"
+RUN_BEAT="${RUN_BEAT:-1}"
+
 # ── Start Celery worker ──────────────────────────────────────────────────────
-echo "==> STARTING CELERY WORKER (loglevel=${CELERY_LOGLEVEL})..."
+echo "==> STARTING CELERY WORKER (queues=${WORKER_QUEUES} loglevel=${CELERY_LOGLEVEL})..."
 celery -A app.tasks.celery_app worker \
     --loglevel="${CELERY_LOGLEVEL}" \
     --concurrency="${CELERY_CONCURRENCY:-1}" \
-    --queues=celery \
+    --queues="${WORKER_QUEUES}" \
     &
 CELERY_WORKER_PID=$!
 echo " Celery worker PID: $CELERY_WORKER_PID"
 
-# ── Start Celery beat ────────────────────────────────────────────────────────
-echo "==> STARTING CELERY BEAT (loglevel=${CELERY_LOGLEVEL})..."
-celery -A app.tasks.celery_app beat \
-    --loglevel="${CELERY_LOGLEVEL}" \
-    &
-CELERY_BEAT_PID=$!
-echo " Celery beat PID: $CELERY_BEAT_PID"
+# ── Start Celery beat (only when RUN_BEAT=1) ─────────────────────────────────
+CELERY_BEAT_PID=""
+if [ "$RUN_BEAT" = "1" ]; then
+    echo "==> STARTING CELERY BEAT (loglevel=${CELERY_LOGLEVEL})..."
+    celery -A app.tasks.celery_app beat \
+        --loglevel="${CELERY_LOGLEVEL}" \
+        &
+    CELERY_BEAT_PID=$!
+    echo " Celery beat PID: $CELERY_BEAT_PID"
+else
+    echo "==> SKIPPING CELERY BEAT (RUN_BEAT=${RUN_BEAT}; this container only runs workers)"
+fi
 
 # ── Fail-fast: 5s post-start liveness check (Tarefas 1, 4, 5) ────────────────
 # If either Celery process dies within 5 seconds of fork, the container exits 1
@@ -194,7 +215,7 @@ if ! kill -0 "$CELERY_WORKER_PID" 2>/dev/null; then
     echo "ERROR: Celery WORKER (PID $CELERY_WORKER_PID) died within 5s of start" >&2
     CELERY_FAILED=true
 fi
-if ! kill -0 "$CELERY_BEAT_PID" 2>/dev/null; then
+if [ -n "$CELERY_BEAT_PID" ] && ! kill -0 "$CELERY_BEAT_PID" 2>/dev/null; then
     echo "ERROR: Celery BEAT (PID $CELERY_BEAT_PID) died within 5s of start" >&2
     CELERY_FAILED=true
 fi
@@ -204,7 +225,11 @@ if [ "$CELERY_FAILED" = true ]; then
     echo "==> Re-deploy with CELERY_LOGLEVEL=debug for verbose startup output." >&2
     exit 1
 fi
-echo "==> [celery-check] Worker (PID $CELERY_WORKER_PID) and Beat (PID $CELERY_BEAT_PID) both alive after 5s. ✓"
+if [ -n "$CELERY_BEAT_PID" ]; then
+    echo "==> [celery-check] Worker (PID $CELERY_WORKER_PID) and Beat (PID $CELERY_BEAT_PID) both alive after 5s. ✓"
+else
+    echo "==> [celery-check] Worker (PID $CELERY_WORKER_PID) alive after 5s. ✓ (beat skipped)"
+fi
 
 # Capture the PID that exec uvicorn will inherit (shell PID becomes uvicorn PID)
 MAIN_PID=$$
@@ -247,7 +272,9 @@ is_process_alive() {
         if ! is_process_alive "$CELERY_WORKER_PID"; then
             WORKER_OK=false
         fi
-        if ! is_process_alive "$CELERY_BEAT_PID"; then
+        # When beat runs in a sibling container (RUN_BEAT=0), CELERY_BEAT_PID
+        # is empty and the watchdog only monitors the worker.
+        if [ -n "$CELERY_BEAT_PID" ] && ! is_process_alive "$CELERY_BEAT_PID"; then
             BEAT_OK=false
         fi
 
@@ -262,8 +289,13 @@ is_process_alive() {
 # Graceful cleanup: when uvicorn/container receives SIGTERM, stop children first
 cleanup() {
     echo "==> SIGTERM received -- stopping background processes..."
-    kill -TERM "$CELERY_WORKER_PID" "$CELERY_BEAT_PID" 2>/dev/null
-    wait "$CELERY_WORKER_PID" "$CELERY_BEAT_PID" 2>/dev/null
+    if [ -n "$CELERY_BEAT_PID" ]; then
+        kill -TERM "$CELERY_WORKER_PID" "$CELERY_BEAT_PID" 2>/dev/null
+        wait "$CELERY_WORKER_PID" "$CELERY_BEAT_PID" 2>/dev/null
+    else
+        kill -TERM "$CELERY_WORKER_PID" 2>/dev/null
+        wait "$CELERY_WORKER_PID" 2>/dev/null
+    fi
 }
 trap cleanup TERM INT
 

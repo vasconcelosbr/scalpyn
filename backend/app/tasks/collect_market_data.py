@@ -260,8 +260,14 @@ def collect_all():
             "scalpyn:last_collect_all_end",
             datetime.now(timezone.utc).isoformat(),
         )
-    # Chain to compute indicators
-    celery_app.send_task("app.tasks.compute_indicators.compute")
+    # Chain to compute indicators (Task #216: dedup wrapper, structural queue).
+    # TTL = compute time_limit (600s) + 60s safety margin.
+    from . import task_dispatch
+    task_dispatch.enqueue(
+        "app.tasks.compute_indicators.compute",
+        dedup_key="compute",
+        ttl_seconds=660,
+    )
     return f"Collected {count} symbols"
 
 
@@ -544,6 +550,12 @@ async def _collect_5m_async():
 @celery_app.task(name="app.tasks.collect_market_data.collect_5m")
 def collect_5m():
     count = _run_async(_collect_5m_async())
-    # Chain: fresh 5m candles → compute 5m indicators → pipeline scan
-    celery_app.send_task("app.tasks.compute_indicators.compute_5m")
+    # Chain: fresh 5m candles → compute 5m indicators (microstructure queue).
+    # TTL = compute_5m time_limit (180s) + 30s margin.
+    from . import task_dispatch
+    task_dispatch.enqueue(
+        "app.tasks.compute_indicators.compute_5m",
+        dedup_key="compute_5m",
+        ttl_seconds=210,
+    )
     return f"Collected 5m data for {count} symbols"

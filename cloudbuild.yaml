@@ -120,8 +120,29 @@ steps:
       # ENABLE_GATE_WS: gates the Gate.io WebSocket leader (Task #171).  Must
       #   be exactly "1" — any other value disables WS ingestion and the system
       #   falls back to REST polling for order flow (taker_ratio = null).
+      # Task #216: this `scalpyn` service is the API + a single combined
+      # Celery worker (queues=microstructure,structural,execution) + beat.
+      # The operator-spec Cloud Run multi-service split is staged via
+      # `WORKER_QUEUES` and `RUN_BEAT` (read by `backend/start.sh`):
+      #
+      #   Service                    | WORKER_QUEUES                            | RUN_BEAT
+      #   ---------------------------+------------------------------------------+---------
+      #   scalpyn (this file)        | microstructure,structural,execution      | 1
+      #   scalpyn-worker-micro       | microstructure                           | 0
+      #   scalpyn-worker-structural  | structural                               | 0
+      #   scalpyn-worker-execution   | execution                                | 0
+      #   scalpyn-beat               | (none — `RUN_BEAT=1` only, no worker)    | 1
+      #
+      # To finish the split, clone this file three times (one per worker
+      # service), point each copy's _SERVICE substitution at the matching
+      # Cloud Run service name, and append the queue env vars below.
+      # Until the split is staged, leaving `WORKER_QUEUES` unset on the
+      # combined service means the in-image default
+      # ("microstructure,structural,execution") is consumed and the
+      # pipeline keeps running end-to-end on a single instance.
+      # See `docs/runbooks/celery-queue-topology.md` for the full topology.
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=microstructure,structural,execution,RUN_BEAT=1'
 
 substitutions:
   _REGION: us-central1

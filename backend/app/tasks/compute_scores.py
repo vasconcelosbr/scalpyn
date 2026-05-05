@@ -268,5 +268,12 @@ async def _detect_level_transitions(db, scored_rows, rules, cached_scores: dict)
 @celery_app.task(name="app.tasks.compute_scores.score")
 def score():
     count = _run_async(_score_async())
-    celery_app.send_task("app.tasks.evaluate_signals.evaluate")
+    # Chain: scoring → signal evaluation (execution queue, isolated workers).
+    # TTL = evaluate time_limit (120s) + 30s margin.
+    from . import task_dispatch
+    task_dispatch.enqueue(
+        "app.tasks.evaluate_signals.evaluate",
+        dedup_key="evaluate",
+        ttl_seconds=150,
+    )
     return f"Scored {count} symbols"

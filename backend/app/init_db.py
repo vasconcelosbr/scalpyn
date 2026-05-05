@@ -326,18 +326,27 @@ async def init_db():
         # architecture (Task #95).  Non-fatal because the column is not referenced
         # by any ORM model — it's read/written via raw SQL only.
         try:
+            # Task #216: drop the legacy ``DEFAULT 'combined'`` so any new
+            # writer that forgets ``scheduler_group`` lands a NULL row that
+            # is visibly different from real legacy 'combined' rows in the
+            # read path. The canonical writers (compute, compute_5m) now
+            # always pass an explicit group ('structural' / 'microstructure').
             await conn.execute(text("""
                 ALTER TABLE indicators
-                    ADD COLUMN IF NOT EXISTS scheduler_group VARCHAR(20) DEFAULT 'combined';
+                    ADD COLUMN IF NOT EXISTS scheduler_group VARCHAR(20);
+            """))
+            await conn.execute(text("""
+                ALTER TABLE indicators
+                    ALTER COLUMN scheduler_group DROP DEFAULT;
             """))
             await conn.execute(text("""
                 CREATE INDEX IF NOT EXISTS ix_indicators_symbol_group_time
                 ON indicators (symbol, scheduler_group, time DESC);
             """))
-            logger.info("Ensured indicators.scheduler_group column and index exist")
+            logger.info("Ensured indicators.scheduler_group column (no default) and index exist")
         except Exception as e:
             logger.warning(
-                "Could not add scheduler_group to indicators (non-fatal, "
+                "Could not configure scheduler_group on indicators (non-fatal, "
                 "dual-scheduler will fall back gracefully): %s", e
             )
         # BEST-EFFORT: add market_type to indicators table for spot/futures
