@@ -41,6 +41,7 @@ Invariants
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -64,8 +65,9 @@ _BATCH_SIZE: int = 200
 # TRADE_MONITOR_TIMEOUT_SECONDS environment variable.
 _DEFAULT_TIMEOUT_SECONDS: int = 86_400
 
-# Gate.io public tickers endpoint — no authentication required.
-_GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/spot/tickers"
+# Gate.io public tickers endpoints — no authentication required.
+_GATE_SPOT_TICKERS_URL = "https://api.gateio.ws/api/v4/spot/tickers"
+_GATE_FUTURES_TICKERS_URL = "https://api.gateio.ws/api/v4/futures/usdt/tickers"
 
 # HTTP timeout for the ticker batch request.
 _HTTP_TIMEOUT: float = 10.0
@@ -80,32 +82,28 @@ _PRICE_SOURCE_MARKET = "market"
 # ── Price fetching ────────────────────────────────────────────────────────────
 
 
-async def _fetch_price_map(symbols: set[str]) -> dict[str, float]:
-    """Return {symbol: last_price} for all requested symbols.
+async def _fetch_tickers(url: str, pair_key: str) -> dict[str, float]:
+    """Fetch a Gate.io tickers endpoint and return {symbol: last_price}.
 
-    Executes a **single** call to the Gate.io public tickers endpoint and
-    filters the response to the set of symbols we need.  ``symbol`` is
-    expected in ``BTC_USDT`` (underscore) format as stored in
-    ``trade_tracking.symbol``.
+    ``pair_key`` is the JSON field that contains the symbol/contract name:
+    * ``'currency_pair'`` for spot tickers
+    * ``'contract'`` for futures/usdt tickers
 
     Returns an empty dict on failure so callers can skip gracefully.
     """
-    if not symbols:
-        return {}
-
     price_map: dict[str, float] = {}
     last_exc: Exception | None = None
 
     for attempt in range(1, _PRICE_FETCH_RETRIES + 1):
         try:
             async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-                resp = await client.get(_GATE_TICKERS_URL)
+                resp = await client.get(url)
                 resp.raise_for_status()
                 tickers: list[dict[str, Any]] = resp.json()
 
             for ticker in tickers:
-                pair: str = ticker.get("currency_pair", "")
-                if pair not in symbols:
+                pair: str = ticker.get(pair_key, "")
+                if not pair:
                     continue
                 last = ticker.get("last")
                 if last is not None:
@@ -115,25 +113,61 @@ async def _fetch_price_map(symbols: set[str]) -> dict[str, float]:
                         pass
 
             logger.debug(
-                "[TradeMonitor] price fetch attempt %d/%d — %d/%d symbols resolved",
+                "[TradeMonitor] %s attempt %d/%d — %d symbols loaded",
+                url,
                 attempt,
                 _PRICE_FETCH_RETRIES,
                 len(price_map),
-                len(symbols),
             )
             return price_map
 
         except Exception as exc:
             last_exc = exc
             logger.warning(
-                "[TradeMonitor] price fetch attempt %d/%d failed: %s",
+                "[TradeMonitor] %s attempt %d/%d failed: %s",
+                url,
                 attempt,
                 _PRICE_FETCH_RETRIES,
                 exc,
             )
 
-    logger.error("[TradeMonitor] all price fetch attempts failed: %s", last_exc)
+    logger.error("[TradeMonitor] all fetch attempts for %s failed: %s", url, last_exc)
     return price_map
+
+
+async def _fetch_price_maps(
+    spot_symbols: set[str],
+    futures_symbols: set[str],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Fetch spot and futures price maps concurrently.
+
+    Only calls the respective endpoint when there are symbols of that type
+    so that an all-spot workload never hits the futures API and vice versa.
+    Returns ``(spot_price_map, futures_price_map)``; each map is an empty
+    dict if the endpoint is skipped or fails, allowing graceful degradation.
+    """
+    if not spot_symbols and not futures_symbols:
+        return {}, {}
+
+    if spot_symbols and futures_symbols:
+        spot_map, futures_map = await asyncio.gather(
+            _fetch_tickers(_GATE_SPOT_TICKERS_URL, "currency_pair"),
+            _fetch_tickers(_GATE_FUTURES_TICKERS_URL, "contract"),
+        )
+        return spot_map, futures_map
+
+    if spot_symbols:
+        return await _fetch_tickers(_GATE_SPOT_TICKERS_URL, "currency_pair"), {}
+
+    return {}, await _fetch_tickers(_GATE_FUTURES_TICKERS_URL, "contract")
+
+
+# ── Trade helpers ─────────────────────────────────────────────────────────────
+
+
+def _is_futures(trade: TradeTracking) -> bool:
+    """Return True when *trade* belongs to the futures market."""
+    return (trade.market_type or "spot") == "futures"
 
 
 # ── Exit condition logic ──────────────────────────────────────────────────────
@@ -243,16 +277,24 @@ class TradeMonitorService:
 
         logger.info("[TradeMonitor] scanning %d open trade(s)", len(trades))
 
-        # ── 2. Batch-fetch prices — single HTTP call covers all symbols ───────
-        symbols: set[str] = {t.symbol for t in trades}
-        price_map = await _fetch_price_map(symbols)
+        # ── 2. Batch-fetch prices — one HTTP call per market type ─────────────
+        spot_symbols: set[str] = set()
+        futures_symbols: set[str] = set()
+        for t in trades:
+            if _is_futures(t):
+                futures_symbols.add(t.symbol)
+            else:
+                spot_symbols.add(t.symbol)
+        spot_price_map, futures_price_map = await _fetch_price_maps(spot_symbols, futures_symbols)
 
         now = datetime.now(timezone.utc)
 
         # ── 3. Evaluate and close ─────────────────────────────────────────────
         for trade in trades:
             try:
-                price: float | None = price_map.get(trade.symbol)
+                is_futures = _is_futures(trade)
+                # Select the correct price map based on the trade's market type.
+                price: float | None = futures_price_map.get(trade.symbol) if is_futures else spot_price_map.get(trade.symbol)
 
                 # Determine outcome — timeout can trigger even without price.
                 if price is None:
