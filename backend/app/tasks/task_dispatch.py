@@ -35,12 +35,21 @@ are intentionally **not** routed through this wrapper:
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
 _DEDUP_PREFIX = "celery:dedup:"
 _DEDUP_HEADER = "x-scalpyn-dedup-key"
+# Operator-spec acceptance criterion C: ``oldest_task_age_seconds`` in
+# ``/api/system/celery-status`` MUST be non-null when the queue has
+# pending work. Celery's stock envelope is best-effort about
+# ``properties.timestamp`` (varies by serializer), so every dispatch
+# stamps a controlled ISO-8601 UTC timestamp that the status endpoint
+# falls back on. Header name is namespaced so we never collide with a
+# Celery-internal key.
+_ENQUEUED_AT_HEADER = "x-scalpyn-enqueued-at"
 
 
 def _redis_client():
@@ -109,7 +118,13 @@ def enqueue(
             )
 
     from .celery_app import celery_app
-    headers = {_DEDUP_HEADER: full_key}
+    headers = {
+        _DEDUP_HEADER: full_key,
+        # Stamped at dispatch time (UTC, ISO-8601) so the status
+        # endpoint can compute oldest_task_age_seconds even when the
+        # underlying Celery serializer omits ``properties.timestamp``.
+        _ENQUEUED_AT_HEADER: datetime.now(timezone.utc).isoformat(),
+    }
     async_result = celery_app.send_task(
         task_name,
         args=args,

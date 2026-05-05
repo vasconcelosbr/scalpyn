@@ -9,8 +9,8 @@ different queues with isolated worker pools.
 
 | Queue            | Cadence    | Workers (Cloud Run service) | Tasks                                                                                                                 |
 | ---------------- | ---------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `microstructure` | 5 minutes  | `scalpyn-worker-micro`      | `collect_5m`, `compute_5m`, `pipeline_scan.scan`                                                                      |
-| `structural`     | hourly+    | `scalpyn-worker-structural` | `collect_all`, `compute`, `score`, `discover`, `fetch_market_caps`, `macro_regime.update`, `simulation.*`, `daily_summary.send`, `robust_alerts.evaluate`, `symbol_health_audit.*`, `ohlcv_backfill.*` |
+| `microstructure` | 5 minutes  | `scalpyn-worker-micro`      | `collect_5m`, `compute_5m`                                                                                            |
+| `structural`     | hourly+    | `scalpyn-worker-structural` | `collect_all`, `compute`, `score`, `discover`, `fetch_market_caps`, `macro_regime.update`, `simulation.*`, `daily_summary.send`, `robust_alerts.evaluate`, `symbol_health_audit.*`, `ohlcv_backfill.*`, `pipeline_scan.scan` |
 | `execution`      | sub-minute | `scalpyn-worker-execution`  | `evaluate_signals.evaluate`, `execute_buy.execute_buy_cycle`, `anti_liq_monitor.monitor`                              |
 
 The single `scalpyn-beat` service runs Celery beat (the scheduler) — it
@@ -28,8 +28,12 @@ split:
    tick for the entire duration. Late buys, missed force-close
    triggers, anti_liq monitoring delayed by hundreds of seconds.
 2. A burst of `simulation.run_trade_simulation` work piled 30k items
-   into the queue. Beat's `pipeline_scan` ticks were FIFO behind the
-   sims and arrived 12 minutes late, repeatedly.
+   into the queue. Beat's `pipeline_scan.scan` ticks (the cadence-locked
+   safety-net scan over L1/L2/L3 watchlists) were FIFO behind the sims
+   and arrived 12 minutes late, repeatedly. `pipeline_scan.scan` now
+   lives on the `structural` queue alongside the other heavy work so a
+   `microstructure` burst cannot delay it and a slow scan cannot
+   starve the 5-minute chain on `microstructure`.
 
 With three queues the trading critical path runs on its own workers
 that only consume `execution`. A pile-up on `structural` cannot delay

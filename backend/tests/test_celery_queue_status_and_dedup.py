@@ -274,3 +274,78 @@ def test_hysteresis_fires_once_per_crossing(monkeypatch, caplog):
         f"Expected exactly 2 CRITICAL log lines (one per real crossing), "
         f"got {crit_count}"
     )
+
+
+# ── Group 4: oldest-age envelope parsing (acceptance criterion C) ──────────
+
+def test_oldest_age_parses_dispatch_wrapper_header():
+    """A realistic Celery Redis envelope, stamped by our
+    ``task_dispatch.enqueue()`` wrapper with
+    ``headers.x-scalpyn-enqueued-at``, must yield a non-null
+    ``oldest_age_s`` so the operator dashboard never silently shows a
+    stale ``null`` for a queue that actually has work."""
+    import json
+    from datetime import datetime, timedelta, timezone
+    from app.api import system as system_mod
+
+    fake = _MiniSyncRedis()
+    enqueued_at = datetime.now(timezone.utc) - timedelta(seconds=42)
+    envelope = {
+        "body": "<base64-task-payload>",
+        "content-encoding": "utf-8",
+        "content-type": "application/json",
+        "headers": {
+            "id": "task-uuid-1",
+            "task": "app.tasks.compute_indicators.compute_5m",
+            "x-scalpyn-dedup-key": "celery:dedup:compute_5m:BTC",
+            "x-scalpyn-enqueued-at": enqueued_at.isoformat(),
+        },
+        "properties": {
+            "delivery_tag": "tag-1",
+            "delivery_mode": 2,
+        },
+    }
+    fake.lists["microstructure"] = [json.dumps(envelope)]
+
+    age = system_mod._peek_oldest_age_seconds(fake, "microstructure")
+    assert age is not None, (
+        "oldest_age_s must be non-null when our enqueued-at header is "
+        "present in the Redis envelope head — acceptance criterion C."
+    )
+    # Should be roughly 42 seconds; allow a wide margin for jitter so
+    # this test is never flaky.
+    assert 35 <= age <= 90, f"expected ~42s, got {age:.1f}s"
+
+
+def test_oldest_age_falls_back_to_celery_properties_timestamp():
+    """When a task did not go through our wrapper (legacy or external),
+    the parser must still recover an age from Celery's stock
+    ``properties.timestamp`` so coverage degrades gracefully rather
+    than going dark."""
+    import json
+    from datetime import datetime, timedelta, timezone
+    from app.api import system as system_mod
+
+    fake = _MiniSyncRedis()
+    ts = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+    envelope = {
+        "body": "<...>",
+        "headers": {"id": "task-uuid-2", "task": "x.y.z"},
+        "properties": {"timestamp": ts, "delivery_mode": 2},
+    }
+    fake.lists["structural"] = [json.dumps(envelope)]
+
+    age = system_mod._peek_oldest_age_seconds(fake, "structural")
+    assert age is not None
+    assert 5 <= age <= 30
+
+
+def test_oldest_age_returns_none_when_envelope_lacks_timestamp():
+    """A malformed / timestampless envelope must return None rather
+    than crashing the status endpoint."""
+    import json
+    from app.api import system as system_mod
+
+    fake = _MiniSyncRedis()
+    fake.lists["execution"] = [json.dumps({"body": "x", "headers": {}, "properties": {}})]
+    assert system_mod._peek_oldest_age_seconds(fake, "execution") is None

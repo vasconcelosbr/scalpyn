@@ -279,8 +279,24 @@ def _peek_oldest_age_seconds(redis_client, queue_name: str) -> Optional[float]:
         if isinstance(payload, (bytes, bytearray)):
             payload = payload.decode("utf-8", errors="replace")
         msg = json.loads(payload)
+        # Probe multiple paths in priority order:
+        #   1. ``headers.x-scalpyn-enqueued-at`` — stamped by our
+        #      ``task_dispatch.enqueue()`` wrapper (Step 5). Always
+        #      present for tasks that go through the wrapper, which is
+        #      every periodic + chained dispatch from ``app/tasks/``.
+        #   2. ``properties.timestamp`` / ``headers.timestamp`` — Celery's
+        #      stock envelope. Best-effort: depends on the broker
+        #      serializer.
+        # Inspecting the head element only costs one LRANGE per queue
+        # per status call and lets the operator dashboard surface a
+        # real number (acceptance criterion C) without polling Celery
+        # workers for individual task metadata.
         timestamp_str: Optional[str] = None
-        for path in (("properties", "timestamp"), ("headers", "timestamp")):
+        for path in (
+            ("headers", "x-scalpyn-enqueued-at"),
+            ("properties", "timestamp"),
+            ("headers", "timestamp"),
+        ):
             cur: Any = msg
             for key in path:
                 if not isinstance(cur, dict):
