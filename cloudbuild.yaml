@@ -120,29 +120,174 @@ steps:
       # ENABLE_GATE_WS: gates the Gate.io WebSocket leader (Task #171).  Must
       #   be exactly "1" — any other value disables WS ingestion and the system
       #   falls back to REST polling for order flow (taker_ratio = null).
-      # Task #216: this `scalpyn` service is the API + a single combined
-      # Celery worker (queues=microstructure,structural,execution) + beat.
-      # The operator-spec Cloud Run multi-service split is staged via
-      # `WORKER_QUEUES` and `RUN_BEAT` (read by `backend/start.sh`):
+      # Task #216: this `scalpyn` service is API-only — the embedded
+      # Celery worker is disabled here (`WORKER_QUEUES=`, `RUN_BEAT=0`)
+      # so HTTP latency is never co-tenant with task execution. The
+      # three worker queues run as independent Cloud Run services
+      # (deploy steps below); the dedicated beat-only service owns the
+      # periodic schedule so it cannot double-fire.
       #
-      #   Service                    | WORKER_QUEUES                            | RUN_BEAT
-      #   ---------------------------+------------------------------------------+---------
-      #   scalpyn (this file)        | microstructure,structural,execution      | 1
-      #   scalpyn-worker-micro       | microstructure                           | 0
-      #   scalpyn-worker-structural  | structural                               | 0
-      #   scalpyn-worker-execution   | execution                                | 0
-      #   scalpyn-beat               | (none — `RUN_BEAT=1` only, no worker)    | 1
+      #   Service                    | WORKER_QUEUES                            | RUN_BEAT | min/max
+      #   ---------------------------+------------------------------------------+----------+--------
+      #   scalpyn (this file)        | (empty — API only)                       | 0        | 1 / 4
+      #   scalpyn-worker-micro       | microstructure                           | 0        | 1 / 5
+      #   scalpyn-worker-structural  | structural                               | 0        | 1 / 3
+      #   scalpyn-worker-execution   | execution                                | 0        | 1 / 2
+      #   scalpyn-beat               | (none — `RUN_BEAT=1` only, no worker)    | 1        | 1 / 1
       #
-      # To finish the split, clone this file three times (one per worker
-      # service), point each copy's _SERVICE substitution at the matching
-      # Cloud Run service name, and append the queue env vars below.
-      # Until the split is staged, leaving `WORKER_QUEUES` unset on the
-      # combined service means the in-image default
-      # ("microstructure,structural,execution") is consumed and the
-      # pipeline keeps running end-to-end on a single instance.
       # See `docs/runbooks/celery-queue-topology.md` for the full topology.
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=microstructure,structural,execution,RUN_BEAT=1'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=0'
+
+  # ── Task #216: Celery worker — microstructure queue ─────────────────
+  # Bursty 5-minute cadence (collect_5m → compute_5m). Sized to absorb
+  # a tick of fan-out without blocking the slower structural queue.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'scalpyn-worker-micro'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--no-allow-unauthenticated'
+      - '--ingress'
+      - 'internal'
+      - '--port'
+      - '8080'
+      - '--timeout'
+      - '300'
+      - '--timeout-startup'
+      - '540'
+      - '--min-instances'
+      - '1'
+      - '--max-instances'
+      - '5'
+      - '--no-cpu-throttling'
+      - '--cpu-boost'
+      - '--memory'
+      - '2Gi'
+      - '--add-cloudsql-instances'
+      - 'clickrate-477217:us-central1:scalpyn'
+      - '--update-env-vars'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=microstructure,RUN_BEAT=0'
+
+  # ── Task #216: Celery worker — structural queue ─────────────────────
+  # Hourly+ heavy TA (collect_all → compute → score, pipeline_scan,
+  # symbol_health, etc.). Cadence-locked; one warm instance keeps the
+  # 60s collect cycle from cold-starting on every tick.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'scalpyn-worker-structural'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--no-allow-unauthenticated'
+      - '--ingress'
+      - 'internal'
+      - '--port'
+      - '8080'
+      - '--timeout'
+      - '300'
+      - '--timeout-startup'
+      - '540'
+      - '--min-instances'
+      - '1'
+      - '--max-instances'
+      - '3'
+      - '--no-cpu-throttling'
+      - '--cpu-boost'
+      - '--memory'
+      - '2Gi'
+      - '--add-cloudsql-instances'
+      - 'clickrate-477217:us-central1:scalpyn'
+      - '--update-env-vars'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=structural,RUN_BEAT=0'
+
+  # ── Task #216: Celery worker — execution queue ──────────────────────
+  # Latency-sensitive trading critical path (evaluate, execute_buy,
+  # anti_liq). Isolated so a slow indicator compute can never starve a
+  # force-close decision. Low instance ceiling — tasks are short.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'scalpyn-worker-execution'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--no-allow-unauthenticated'
+      - '--ingress'
+      - 'internal'
+      - '--port'
+      - '8080'
+      - '--timeout'
+      - '300'
+      - '--timeout-startup'
+      - '540'
+      - '--min-instances'
+      - '1'
+      - '--max-instances'
+      - '2'
+      - '--no-cpu-throttling'
+      - '--cpu-boost'
+      - '--memory'
+      - '1Gi'
+      - '--add-cloudsql-instances'
+      - 'clickrate-477217:us-central1:scalpyn'
+      - '--update-env-vars'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=execution,RUN_BEAT=0'
+
+  # ── Task #216: Celery beat — sole owner of the periodic schedule ────
+  # MUST be a single revision (max-instances=1) so periodic schedules
+  # cannot double-fire. No worker (`WORKER_QUEUES=`) — beat only.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'scalpyn-beat'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--no-allow-unauthenticated'
+      - '--ingress'
+      - 'internal'
+      - '--port'
+      - '8080'
+      - '--timeout'
+      - '300'
+      - '--timeout-startup'
+      - '540'
+      - '--min-instances'
+      - '1'
+      - '--max-instances'
+      - '1'
+      - '--no-cpu-throttling'
+      - '--cpu-boost'
+      - '--memory'
+      - '1Gi'
+      - '--add-cloudsql-instances'
+      - 'clickrate-477217:us-central1:scalpyn'
+      - '--update-env-vars'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=1'
 
 substitutions:
   _REGION: us-central1

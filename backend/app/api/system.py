@@ -303,11 +303,47 @@ def _peek_oldest_age_seconds(redis_client, queue_name: str) -> Optional[float]:
         return None
 
 
-def _evaluate_queue_alert(redis_client, queue_name: str, depth: int) -> str:
+async def _emit_backoffice_alert(queue_name: str, depth: int) -> None:
+    """Persist a CRITICAL ``BackofficeAlert`` so the operator UI surfaces
+    the queue backlog alongside other system alerts. Best-effort: an
+    insert failure must never crash the status endpoint, so any error is
+    swallowed after a WARNING log."""
+    try:
+        from ..models.backoffice import BackofficeAlert
+        from ..database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            db.add(BackofficeAlert(
+                alert_type="critical",
+                category="celery_queue_backlog",
+                message=(
+                    f"Celery queue '{queue_name}' depth={depth} crossed "
+                    f"threshold {QUEUE_ALERT_HIGH}. Workers may be stalled "
+                    f"or undersized. Runbook: "
+                    f"docs/runbooks/celery-queue-topology.md"
+                ),
+                details_json={
+                    "queue": queue_name,
+                    "depth": depth,
+                    "threshold_high": QUEUE_ALERT_HIGH,
+                    "threshold_low": QUEUE_ALERT_LOW,
+                },
+                status="active",
+            ))
+            await db.commit()
+    except Exception as exc:
+        logger.warning(
+            "[celery-status] BackofficeAlert insert failed (queue=%s): %s",
+            queue_name, exc,
+        )
+
+
+def _evaluate_queue_alert(redis_client, queue_name: str, depth: int) -> tuple[str, bool]:
     """Apply hysteresis and emit a CRITICAL log when threshold is crossed.
 
-    Returns the resulting state string (``"ok"`` or ``"alerted"``) so the
-    caller can include it in the response payload.
+    Returns ``(state, alert_fired)`` — ``state`` is ``"ok"`` or
+    ``"alerted"``, ``alert_fired`` is True only on the rising-edge
+    crossing so the caller can persist a ``BackofficeAlert`` exactly
+    once per cycle.
     """
     state_key = f"{QUEUE_ALERT_STATE_PREFIX}{queue_name}"
     try:
@@ -321,6 +357,7 @@ def _evaluate_queue_alert(redis_client, queue_name: str, depth: int) -> str:
         prev_state = "ok"
 
     new_state = prev_state
+    alert_fired = False
     if depth >= QUEUE_ALERT_HIGH and prev_state != "alerted":
         # Cross the upper bound: emit a single CRITICAL line per cycle and
         # arm the latch so we do not re-alert until depth drops below LOW.
@@ -331,6 +368,7 @@ def _evaluate_queue_alert(redis_client, queue_name: str, depth: int) -> str:
             queue_name, depth, QUEUE_ALERT_HIGH,
         )
         new_state = "alerted"
+        alert_fired = True
     elif depth < QUEUE_ALERT_LOW and prev_state == "alerted":
         new_state = "ok"
 
@@ -339,7 +377,7 @@ def _evaluate_queue_alert(redis_client, queue_name: str, depth: int) -> str:
             redis_client.set(state_key, new_state, ex=24 * 3600)
         except Exception:
             pass
-    return new_state
+    return new_state, alert_fired
 
 
 @router.get("/celery-status")
@@ -366,8 +404,18 @@ async def get_celery_status():
         "worker_count": 0,
         "active_tasks": 0,
         "registered_task_count": 0,
+        # Spec'd per-queue payloads (operator spec part 7). The
+        # ``queues`` dict is the structured shape; the flat
+        # ``queue_depth_by_queue`` / ``oldest_task_age_seconds_by_queue``
+        # mirrors live alongside it for direct alert-rule consumption.
         "queues": {q: {"depth": None, "oldest_age_s": None, "alert_state": "unknown"}
                    for q in ALL_QUEUES},
+        "queue_depth_by_queue": {q: None for q in ALL_QUEUES},
+        "oldest_task_age_seconds_by_queue": {q: None for q in ALL_QUEUES},
+        # Legacy single-queue scalar (Task #186). Kept for backward
+        # compatibility with existing dashboards / alert rules — now
+        # represents the SUM of the three per-queue depths.
+        "queue_depth": None,
         "redis_error": None,
         "error": None,
     }
@@ -392,10 +440,13 @@ async def get_celery_status():
         logger.warning("[celery-status] inspect failed: %s", exc)
 
     # Per-queue depth + age + hysteresis alert
+    fired_alerts: list[tuple[str, int]] = []
     try:
         import redis as _redis
         from ..config import settings
         r = _redis.from_url(settings.REDIS_URL, socket_connect_timeout=3)
+        total_depth = 0
+        any_depth_seen = False
         for queue_name in ALL_QUEUES:
             try:
                 depth = int(r.llen(queue_name))
@@ -406,15 +457,30 @@ async def get_celery_status():
                 )
                 continue
             oldest_age = _peek_oldest_age_seconds(r, queue_name) if depth else None
-            alert_state = _evaluate_queue_alert(r, queue_name, depth)
+            alert_state, alert_fired = _evaluate_queue_alert(r, queue_name, depth)
             result["queues"][queue_name] = {
                 "depth": depth,
                 "oldest_age_s": oldest_age,
                 "alert_state": alert_state,
             }
+            result["queue_depth_by_queue"][queue_name] = depth
+            result["oldest_task_age_seconds_by_queue"][queue_name] = oldest_age
+            total_depth += depth
+            any_depth_seen = True
+            if alert_fired:
+                fired_alerts.append((queue_name, depth))
+        if any_depth_seen:
+            result["queue_depth"] = total_depth
     except Exception as exc:
         result["redis_error"] = f"{type(exc).__name__}: {exc}"
         logger.warning("[celery-status] redis queue probe failed: %s", exc)
+
+    # Persist BackofficeAlert rows for any rising-edge crossings — once
+    # per crossing thanks to the hysteresis latch above. Done after the
+    # Redis loop so the response payload is complete even if the alert
+    # writer hits an error.
+    for queue_name, depth in fired_alerts:
+        await _emit_backoffice_alert(queue_name, depth)
 
     return result
 

@@ -3,13 +3,18 @@
 Queue topology (Task #216, operator spec parts 4-6):
 
     microstructure  — 5-minute cadence, latency-tolerant pipeline:
-                      collect_5m → compute_5m → pipeline_scan.scan
-                      Bursty by design (one tick every 5 min).
+                      collect_5m → compute_5m. Bursty by design (one
+                      tick every 5 min).
     structural      — Hourly+ cadence, heavy TA + universe maintenance:
                       collect_all → compute → score, plus discover,
                       fetch_market_caps, macro_regime, simulation,
                       symbol_health_audit, robust_alerts, daily_summary,
-                      ohlcv_backfill.
+                      ohlcv_backfill, and pipeline_scan.scan (the
+                      cadence-locked safety-net scan that walks the L1/L2/L3
+                      watchlists; per operator spec it stays on the
+                      structural queue so a microstructure burst cannot
+                      delay the scan and a slow scan cannot starve the
+                      5m chain).
     execution       — Latency-sensitive trading critical path:
                       evaluate → execute_buy_cycle, plus anti_liq_monitor.
                       Workers for this queue MUST be deployed isolated
@@ -81,12 +86,14 @@ TASK_ROUTES = {
     # Microstructure (5-minute cadence chain)
     "app.tasks.collect_market_data.collect_5m":  {"queue": QUEUE_MICROSTRUCTURE},
     "app.tasks.compute_indicators.compute_5m":   {"queue": QUEUE_MICROSTRUCTURE},
-    "app.tasks.pipeline_scan.scan":              {"queue": QUEUE_MICROSTRUCTURE},
 
     # Structural (hourly+ cadence, heavier work)
     "app.tasks.collect_market_data.collect_all":         {"queue": QUEUE_STRUCTURAL},
     "app.tasks.compute_indicators.compute":              {"queue": QUEUE_STRUCTURAL},
     "app.tasks.compute_scores.score":                    {"queue": QUEUE_STRUCTURAL},
+    # pipeline_scan.scan: structural per operator spec (cadence-locked
+    # safety-net, must not compete with the bursty 5m chain).
+    "app.tasks.pipeline_scan.scan":                      {"queue": QUEUE_STRUCTURAL},
     "app.tasks.auto_discover_assets.discover":           {"queue": QUEUE_STRUCTURAL},
     "app.tasks.fetch_market_caps.fetch_market_caps":     {"queue": QUEUE_STRUCTURAL},
     "app.tasks.macro_regime_update.update":              {"queue": QUEUE_STRUCTURAL},
@@ -143,12 +150,14 @@ TASK_ANNOTATIONS = {
     # Microstructure
     "app.tasks.collect_market_data.collect_5m":  dict(_MICRO_GUARDS),
     "app.tasks.compute_indicators.compute_5m":   dict(_MICRO_GUARDS),
-    "app.tasks.pipeline_scan.scan":              dict(_MICRO_GUARDS),
 
     # Structural — most tasks
     "app.tasks.collect_market_data.collect_all":         dict(_STRUCTURAL_GUARDS),
     "app.tasks.compute_indicators.compute":              dict(_STRUCTURAL_GUARDS),
     "app.tasks.compute_scores.score":                    dict(_STRUCTURAL_GUARDS),
+    # pipeline_scan.scan: structural cadence (5-min safety-net scan,
+    # but heavier than the 5m TA chain — uses structural cost guards).
+    "app.tasks.pipeline_scan.scan":                      dict(_STRUCTURAL_GUARDS),
     "app.tasks.auto_discover_assets.discover":           {**_STRUCTURAL_GUARDS, "rate_limit": "2/h"},
     "app.tasks.fetch_market_caps.fetch_market_caps":     {**_STRUCTURAL_GUARDS, "rate_limit": "4/h"},
     "app.tasks.macro_regime_update.update":              {**_STRUCTURAL_GUARDS, "rate_limit": "4/h"},
