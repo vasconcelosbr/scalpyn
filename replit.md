@@ -61,7 +61,7 @@ Scalpyn is an institutional-grade cryptocurrency trading platform that provides 
 - **Real-time Data Feeds**: Integrates real-time order flow data from exchanges via WebSockets.
 - **Trade History & P&L Tracking**: Imports and analyzes closed spot orders, calculating profit and loss.
 - **Operational Monitoring**: Integrates with Grafana for real-time monitoring of system health, data quality, and alerts.
-- **Native Performance Dashboard** (`/dashboard/performance`, Task #224): seven panels (health, system status, ingest rate, decisions, trades, sim-vs-real, ML dataset) backed by `GET /api/dashboard/*` read-only aggregations. Replaces the Grafana iframe.
+- **Native Performance Dashboard** (`/dashboard/performance`, Task #224): seven panels (health, system status, ingest rate, decisions, trades, sim-vs-real, ML dataset) backed by `GET /api/dashboard/*` read-only aggregations. Native alternative to the Grafana iframe — the legacy MonitoringTab is retained for backward compatibility.
 
 ## User preferences
 

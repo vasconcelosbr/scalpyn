@@ -646,7 +646,7 @@ function MLDatasetPanel({ data }: { data: MlResp | null }) {
 // ─── Page root ─────────────────────────────────────────────────────────────
 export default function PerformanceDashboardPage() {
   const health = usePoll<HealthResp>("/dashboard/health", 10_000);
-  const sysstat = usePoll<SystemStatusResp>("/dashboard/system-status", 10_000);
+  const sysstat = usePoll<SystemStatusResp>("/dashboard/system-status", 60_000);
   const ingest = usePoll<OhlcvRateResp>("/dashboard/ohlcv-rate?minutes=60", 15_000);
   const decisions = usePoll<DecisionsResp>("/dashboard/decisions?hours=24", 60_000);
   const trades = usePoll<TradesResp>("/dashboard/trades?days=30", 60_000);
