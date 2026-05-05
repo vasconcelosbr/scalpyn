@@ -174,7 +174,7 @@ steps:
       - '--add-cloudsql-instances'
       - 'clickrate-477217:us-central1:scalpyn'
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=microstructure,RUN_BEAT=0'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=microstructure,RUN_BEAT=0,CELERY_CONCURRENCY=4'
 
   # ── Task #216: Celery worker — structural queue ─────────────────────
   # Hourly+ heavy TA (collect_all → compute → score, pipeline_scan,
@@ -212,7 +212,7 @@ steps:
       - '--add-cloudsql-instances'
       - 'clickrate-477217:us-central1:scalpyn'
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=structural,RUN_BEAT=0'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=structural,RUN_BEAT=0,CELERY_CONCURRENCY=2'
 
   # ── Task #216: Celery worker — execution queue ──────────────────────
   # Latency-sensitive trading critical path (evaluate, execute_buy,
@@ -250,7 +250,7 @@ steps:
       - '--add-cloudsql-instances'
       - 'clickrate-477217:us-central1:scalpyn'
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=execution,RUN_BEAT=0'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=execution,RUN_BEAT=0,CELERY_CONCURRENCY=2'
 
   # ── Task #216: Celery beat — sole owner of the periodic schedule ────
   # MUST be a single revision (max-instances=1) so periodic schedules

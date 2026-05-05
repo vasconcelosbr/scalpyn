@@ -212,17 +212,19 @@ celery_app.conf.update(
     result_expires=60,
 
     # ── Queue topology (no fallback queue — invariant #4) ────────────────
+    # Operator spec part 4: an unrouted task MUST fail loudly, not silently
+    # land on a default queue. Setting the defaults to a never-declared
+    # sentinel (``__no_default__``) means any task that escapes
+    # ``TASK_ROUTES`` raises ``NoRoute``/``UndeliverableTask`` at dispatch
+    # time and is loud in logs (caught by the lint test
+    # ``test_every_registered_task_is_routed`` long before runtime).
     task_queues=TASK_QUEUES,
     task_routes=TASK_ROUTES,
     task_annotations=TASK_ANNOTATIONS,
-    # Setting ``task_default_queue`` to a real, declared queue means an
-    # unrouted task would land on ``structural`` instead of a ghost
-    # ``celery`` queue. Combined with the lint test
-    # ``test_every_registered_task_is_routed`` we get both runtime
-    # safety and lint-level enforcement.
-    task_default_queue=QUEUE_STRUCTURAL,
-    task_default_exchange=QUEUE_STRUCTURAL,
-    task_default_routing_key=QUEUE_STRUCTURAL,
+    task_default_queue="__no_default__",
+    task_default_exchange="__no_default__",
+    task_default_routing_key="__no_default__",
+    task_create_missing_queues=False,
 )
 
 # Periodic task schedule

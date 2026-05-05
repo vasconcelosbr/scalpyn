@@ -158,34 +158,51 @@ fi
 # import errors, beat schedule wiring) without rebuilding.
 CELERY_LOGLEVEL="${CELERY_LOGLEVEL:-info}"
 
-# ── Queue topology (Task #216, operator spec parts 4 + 7) ────────────────────
-# WORKER_QUEUES selects which Celery queues this container consumes:
-#   - "microstructure,structural,execution"  (default, single-container dev)
-#   - "microstructure"                       (Cloud Run worker-micro)
-#   - "structural"                           (Cloud Run worker-structural)
-#   - "execution"                            (Cloud Run worker-execution)
+# ── Queue topology (Task #216, operator spec parts 4 + 7 + 9) ────────────────
+# WORKER_QUEUES selects which Celery queues this container consumes.
+#   - "microstructure,structural,execution"  (default — single-container dev)
+#   - "microstructure"                       (Cloud Run scalpyn-worker-micro)
+#   - "structural"                           (Cloud Run scalpyn-worker-structural)
+#   - "execution"                            (Cloud Run scalpyn-worker-execution)
+#   - "" (empty)                             (Cloud Run scalpyn API or scalpyn-beat
+#                                             — NO Celery worker is started here)
 #
-# RUN_BEAT controls whether this container runs the beat scheduler:
-#   - "1" (default in dev/single-container)  → beat is started here.
-#   - "0" (Cloud Run multi-service)          → beat lives in its own
-#                                              dedicated container so we
-#                                              never have two beats
-#                                              double-firing the schedule.
-WORKER_QUEUES="${WORKER_QUEUES:-microstructure,structural,execution}"
+# RUN_BEAT controls the beat scheduler:
+#   - "1" (default dev / scalpyn-beat)       → beat IS started here.
+#   - "0" (every other Cloud Run service)    → beat is OFF; the dedicated
+#                                              scalpyn-beat revision owns the
+#                                              periodic schedule so it can
+#                                              never double-fire.
+#
+# At least one of {worker, beat} must be enabled — an "all-off" container
+# would be the API-only role, which is the intended shape for the `scalpyn`
+# Cloud Run service that fronts HTTP traffic.
+WORKER_QUEUES="${WORKER_QUEUES-microstructure,structural,execution}"
 RUN_BEAT="${RUN_BEAT:-1}"
 
-# ── Start Celery worker ──────────────────────────────────────────────────────
-echo "==> STARTING CELERY WORKER (queues=${WORKER_QUEUES} loglevel=${CELERY_LOGLEVEL})..."
-celery -A app.tasks.celery_app worker \
-    --loglevel="${CELERY_LOGLEVEL}" \
-    --concurrency="${CELERY_CONCURRENCY:-1}" \
-    --queues="${WORKER_QUEUES}" \
-    &
-CELERY_WORKER_PID=$!
-echo " Celery worker PID: $CELERY_WORKER_PID"
+CELERY_WORKER_PID=""
+CELERY_BEAT_PID=""
+
+# ── Start Celery worker (only when WORKER_QUEUES is non-empty) ───────────────
+# Setting WORKER_QUEUES="" on the API service skips the worker entirely so
+# HTTP latency is never co-tenant with task execution. CELERY_CONCURRENCY
+# is sized per queue by the deploy config (4 for microstructure burst, 2
+# for structural/execution); the dev default of 2 keeps the single-container
+# Replit setup responsive without overloading the local broker.
+if [ -n "$WORKER_QUEUES" ]; then
+    echo "==> STARTING CELERY WORKER (queues=${WORKER_QUEUES} concurrency=${CELERY_CONCURRENCY:-2} loglevel=${CELERY_LOGLEVEL})..."
+    celery -A app.tasks.celery_app worker \
+        --loglevel="${CELERY_LOGLEVEL}" \
+        --concurrency="${CELERY_CONCURRENCY:-2}" \
+        --queues="${WORKER_QUEUES}" \
+        &
+    CELERY_WORKER_PID=$!
+    echo " Celery worker PID: $CELERY_WORKER_PID"
+else
+    echo "==> SKIPPING CELERY WORKER (WORKER_QUEUES is empty; this container is API-only or beat-only)"
+fi
 
 # ── Start Celery beat (only when RUN_BEAT=1) ─────────────────────────────────
-CELERY_BEAT_PID=""
 if [ "$RUN_BEAT" = "1" ]; then
     echo "==> STARTING CELERY BEAT (loglevel=${CELERY_LOGLEVEL})..."
     celery -A app.tasks.celery_app beat \
@@ -194,41 +211,49 @@ if [ "$RUN_BEAT" = "1" ]; then
     CELERY_BEAT_PID=$!
     echo " Celery beat PID: $CELERY_BEAT_PID"
 else
-    echo "==> SKIPPING CELERY BEAT (RUN_BEAT=${RUN_BEAT}; this container only runs workers)"
+    echo "==> SKIPPING CELERY BEAT (RUN_BEAT=${RUN_BEAT}; this container only runs workers or API)"
 fi
 
 # ── Fail-fast: 5s post-start liveness check (Tarefas 1, 4, 5) ────────────────
-# If either Celery process dies within 5 seconds of fork, the container exits 1
-# so Cloud Run rolls back to the previous revision. This catches:
+# If a Celery process we did start dies within 5 seconds of fork, the
+# container exits 1 so Cloud Run rolls back to the previous revision. This
+# catches:
 #   - Redis URL malformed (parse error in celery_app.py module load)
 #   - Module import errors (missing dependency, syntax error in tasks)
 #   - Beat schedule wiring errors (invalid cron, missing task ref)
 # Without this gate, the watchdog only catches deaths AFTER the 120s grace
 # period, by which time Cloud Run has already marked the revision Ready.
-echo "==> [celery-check] Waiting 5s for Celery processes to stabilize..."
-sleep 5
-echo "==> [celery-check] ps aux | grep -E 'celery|beat' (excluding grep):"
-ps aux | grep -E 'celery|beat' | grep -v grep || true
+# An API-only container has neither PID set, so this check is a no-op for it.
+if [ -n "$CELERY_WORKER_PID" ] || [ -n "$CELERY_BEAT_PID" ]; then
+    echo "==> [celery-check] Waiting 5s for Celery processes to stabilize..."
+    sleep 5
+    echo "==> [celery-check] ps aux | grep -E 'celery|beat' (excluding grep):"
+    ps aux | grep -E 'celery|beat' | grep -v grep || true
 
-CELERY_FAILED=false
-if ! kill -0 "$CELERY_WORKER_PID" 2>/dev/null; then
-    echo "ERROR: Celery WORKER (PID $CELERY_WORKER_PID) died within 5s of start" >&2
-    CELERY_FAILED=true
-fi
-if [ -n "$CELERY_BEAT_PID" ] && ! kill -0 "$CELERY_BEAT_PID" 2>/dev/null; then
-    echo "ERROR: Celery BEAT (PID $CELERY_BEAT_PID) died within 5s of start" >&2
-    CELERY_FAILED=true
-fi
-if [ "$CELERY_FAILED" = true ]; then
-    echo "==> CELERY FAILED TO START -- aborting container (Cloud Run will roll back)" >&2
-    echo "==> Check the lines above for the celery worker/beat traceback." >&2
-    echo "==> Re-deploy with CELERY_LOGLEVEL=debug for verbose startup output." >&2
-    exit 1
-fi
-if [ -n "$CELERY_BEAT_PID" ]; then
-    echo "==> [celery-check] Worker (PID $CELERY_WORKER_PID) and Beat (PID $CELERY_BEAT_PID) both alive after 5s. ✓"
+    CELERY_FAILED=false
+    if [ -n "$CELERY_WORKER_PID" ] && ! kill -0 "$CELERY_WORKER_PID" 2>/dev/null; then
+        echo "ERROR: Celery WORKER (PID $CELERY_WORKER_PID) died within 5s of start" >&2
+        CELERY_FAILED=true
+    fi
+    if [ -n "$CELERY_BEAT_PID" ] && ! kill -0 "$CELERY_BEAT_PID" 2>/dev/null; then
+        echo "ERROR: Celery BEAT (PID $CELERY_BEAT_PID) died within 5s of start" >&2
+        CELERY_FAILED=true
+    fi
+    if [ "$CELERY_FAILED" = true ]; then
+        echo "==> CELERY FAILED TO START -- aborting container (Cloud Run will roll back)" >&2
+        echo "==> Check the lines above for the celery worker/beat traceback." >&2
+        echo "==> Re-deploy with CELERY_LOGLEVEL=debug for verbose startup output." >&2
+        exit 1
+    fi
+    if [ -n "$CELERY_WORKER_PID" ] && [ -n "$CELERY_BEAT_PID" ]; then
+        echo "==> [celery-check] Worker (PID $CELERY_WORKER_PID) and Beat (PID $CELERY_BEAT_PID) both alive after 5s. ✓"
+    elif [ -n "$CELERY_WORKER_PID" ]; then
+        echo "==> [celery-check] Worker (PID $CELERY_WORKER_PID) alive after 5s. ✓ (beat skipped)"
+    else
+        echo "==> [celery-check] Beat (PID $CELERY_BEAT_PID) alive after 5s. ✓ (worker skipped)"
+    fi
 else
-    echo "==> [celery-check] Worker (PID $CELERY_WORKER_PID) alive after 5s. ✓ (beat skipped)"
+    echo "==> [celery-check] No Celery worker or beat started — API-only container."
 fi
 
 # Capture the PID that exec uvicorn will inherit (shell PID becomes uvicorn PID)
@@ -259,42 +284,45 @@ is_process_alive() {
 }
 
 # Watchdog: wait for grace period, then monitor Celery health.
-# Only kill uvicorn if Celery is STILL dead after retries.
-(
-    echo " [watchdog] Waiting ${WATCHDOG_GRACE}s grace period before monitoring Celery..."
-    sleep "$WATCHDOG_GRACE"
-    echo " [watchdog] Grace period over -- monitoring Celery processes."
+# Only kill uvicorn if a Celery process we *started* is STILL dead after retries.
+# An API-only container (no worker, no beat) skips the watchdog entirely.
+if [ -n "$CELERY_WORKER_PID" ] || [ -n "$CELERY_BEAT_PID" ]; then
+    (
+        echo " [watchdog] Waiting ${WATCHDOG_GRACE}s grace period before monitoring Celery..."
+        sleep "$WATCHDOG_GRACE"
+        echo " [watchdog] Grace period over -- monitoring Celery processes."
 
-    while sleep 30; do
-        WORKER_OK=true
-        BEAT_OK=true
+        while sleep 30; do
+            WORKER_OK=true
+            BEAT_OK=true
 
-        if ! is_process_alive "$CELERY_WORKER_PID"; then
-            WORKER_OK=false
-        fi
-        # When beat runs in a sibling container (RUN_BEAT=0), CELERY_BEAT_PID
-        # is empty and the watchdog only monitors the worker.
-        if [ -n "$CELERY_BEAT_PID" ] && ! is_process_alive "$CELERY_BEAT_PID"; then
-            BEAT_OK=false
-        fi
+            # Empty PID means the role is owned by a sibling container; do not
+            # mark it as failing on this side.
+            if [ -n "$CELERY_WORKER_PID" ] && ! is_process_alive "$CELERY_WORKER_PID"; then
+                WORKER_OK=false
+            fi
+            if [ -n "$CELERY_BEAT_PID" ] && ! is_process_alive "$CELERY_BEAT_PID"; then
+                BEAT_OK=false
+            fi
 
-        if [ "$WORKER_OK" = false ] || [ "$BEAT_OK" = false ]; then
-            echo "WARNING: Celery process down or zombie (worker=$WORKER_OK beat=$BEAT_OK) -- shutting down container"
-            kill -TERM "$MAIN_PID" 2>/dev/null
-            break
-        fi
-    done
-) &
+            if [ "$WORKER_OK" = false ] || [ "$BEAT_OK" = false ]; then
+                echo "WARNING: Celery process down or zombie (worker=$WORKER_OK beat=$BEAT_OK) -- shutting down container"
+                kill -TERM "$MAIN_PID" 2>/dev/null
+                break
+            fi
+        done
+    ) &
+fi
 
 # Graceful cleanup: when uvicorn/container receives SIGTERM, stop children first
 cleanup() {
     echo "==> SIGTERM received -- stopping background processes..."
-    if [ -n "$CELERY_BEAT_PID" ]; then
-        kill -TERM "$CELERY_WORKER_PID" "$CELERY_BEAT_PID" 2>/dev/null
-        wait "$CELERY_WORKER_PID" "$CELERY_BEAT_PID" 2>/dev/null
-    else
-        kill -TERM "$CELERY_WORKER_PID" 2>/dev/null
-        wait "$CELERY_WORKER_PID" 2>/dev/null
+    PIDS_TO_KILL=""
+    [ -n "$CELERY_WORKER_PID" ] && PIDS_TO_KILL="$PIDS_TO_KILL $CELERY_WORKER_PID"
+    [ -n "$CELERY_BEAT_PID" ]   && PIDS_TO_KILL="$PIDS_TO_KILL $CELERY_BEAT_PID"
+    if [ -n "$PIDS_TO_KILL" ]; then
+        kill -TERM $PIDS_TO_KILL 2>/dev/null
+        wait $PIDS_TO_KILL 2>/dev/null
     fi
 }
 trap cleanup TERM INT

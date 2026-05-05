@@ -200,6 +200,39 @@ def test_no_routes_for_unknown_tasks() -> None:
     )
 
 
+def test_no_silent_default_queue_fallback() -> None:
+    """Operator spec part 4: there must be NO declared default queue an
+    unrouted task can silently land on. The defaults are pinned to a
+    sentinel name that is never declared in ``task_queues``, and
+    ``task_create_missing_queues=False`` so an attempted dispatch of a
+    task missing from ``TASK_ROUTES`` raises immediately rather than
+    creating a ghost queue with no consumer."""
+    from app.tasks.celery_app import celery_app, ALL_QUEUES
+
+    conf = celery_app.conf
+    sentinel = "__no_default__"
+    assert conf.task_default_queue == sentinel, (
+        f"task_default_queue must be the sentinel {sentinel!r} (got "
+        f"{conf.task_default_queue!r}); pointing it at a real queue "
+        "lets unrouted tasks silently land there."
+    )
+    assert conf.task_default_exchange == sentinel
+    assert conf.task_default_routing_key == sentinel
+    assert conf.task_create_missing_queues is False, (
+        "task_create_missing_queues=True would let Celery auto-create "
+        "the sentinel queue at first dispatch, defeating the fail-loud "
+        "contract."
+    )
+    declared = {q.name for q in conf.task_queues}
+    assert sentinel not in declared, (
+        f"Sentinel {sentinel!r} must not be a declared queue."
+    )
+    assert declared == set(ALL_QUEUES), (
+        f"Declared queues drifted from ALL_QUEUES: {declared} != "
+        f"{set(ALL_QUEUES)}"
+    )
+
+
 # ── Invariant #5: pool universe is_approved=true ───────────────────────────
 
 @pytest.mark.parametrize("module_name", DECISION_TASK_MODULES)
