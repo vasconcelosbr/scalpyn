@@ -93,8 +93,11 @@ async def _evaluate_async():
                     for r in legacy_alpha_score_res.fetchall()
                 }
 
+                # ``legacy_alpha_score_by_sym`` is intentionally left
+                # unread inside the loop — it preserves the prior row-shape
+                # contract for any external observer that hooks into this
+                # task; selection is gated by ``_compute_robust_score``.
                 for symbol, mi in merged_by_sym.items():
-                    legacy_alpha_score = legacy_alpha_score_by_sym.get(symbol, 0.0)  # noqa: F841 — informational
                     # ``MergedIndicators.values`` already carries scalars
                     # unwrapped from per-key envelopes; downstream engines
                     # accept either flat or envelope shape (they call

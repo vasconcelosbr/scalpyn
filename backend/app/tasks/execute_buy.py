@@ -248,9 +248,17 @@ async def _execute_buy_cycle_async() -> dict:
                     is_complete,
                 )
 
+                # Per-cycle pre-cap on the candidate universe so per-symbol
+                # evaluation stays bounded even when the operator-curated
+                # pool grows large. ``max_opps * 20`` keeps a wide enough
+                # margin that quarantine + threshold filtering downstream
+                # still has plenty of candidates to choose from before the
+                # ``max_opps`` placement cap is hit.
                 pool_res = await db.execute(text("""
-                    SELECT DISTINCT symbol FROM pool_coins WHERE is_active = true
-                """))
+                    SELECT symbol FROM pool_coins
+                    WHERE  is_active = true
+                    LIMIT  :cap
+                """), {"cap": max(max_opps * 20, 50)})
                 pool_symbols = [r.symbol for r in pool_res.fetchall()]
 
                 if not pool_symbols:
