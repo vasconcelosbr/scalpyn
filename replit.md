@@ -30,9 +30,33 @@
 >
 > Decisions persist `decisions_log.metrics["indicators_snapshot"]` so any
 > future "decision vs DB" investigation can compare the exact payload that
-> was used. Sampled telemetry log `indicators_used` (env
+> was used. Default snapshot scope is required-core only (3 keys); callers
+> that consume more (e.g. `pipeline_scan` score components) pass an explicit
+> `keys=` set. Sampled telemetry log `indicators_used` (env
 > `INDICATORS_USED_LOG_SAMPLE_PCT`, default 1) surfaces collection gaps
 > without DB queries.
+>
+> **Intentional scope notes**:
+> - `indicators_used` telemetry intentionally logs the *merged* keyset per
+>   symbol (emitted from a single point in the provider), NOT the
+>   per-decision-loop consumed keyset. This trades exactness of "what the
+>   rule actually read" for a cheap, uniform collection-gap signal that
+>   covers all consumers without per-call wiring. The `indicators_snapshot`
+>   in `decisions_log` is the authoritative consumed-key record.
+> - The legacy `alpha_scores.score` LEFT JOIN was removed from
+>   `evaluate_signals`. The column was joined in the old query but never
+>   read inside the loop — `_compute_robust_score` is the authoritative
+>   selector. Removal is an intentional simplification, not a contract
+>   break.
+> - Read-only API endpoints (`watchlists`, `pipeline_watchlists`,
+>   `custom_watchlists`) are explicitly allowed to call
+>   `fetch_merged_indicators` directly: they are UI views, not decision
+>   engines. The "must go through provider" rule binds decision paths
+>   only.
+> - Post-deploy operator validations (UI×execution consistency, SEM-DADOS
+>   rate, coverage SQL, telemetry sample rate) are listed in
+>   `.local/tasks/unify-indicator-read-path.md`. They are operator-side
+>   acceptance checks, not part of the code change.
 
 ## Architecture
 - **Frontend**: Next.js 16 (App Router) + TypeScript + TailwindCSS + shadcn/ui — runs on port 5000
