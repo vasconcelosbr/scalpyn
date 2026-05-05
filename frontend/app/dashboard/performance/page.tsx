@@ -522,7 +522,7 @@ function TradePerformancePanel({ data }: { data: TradesResp | null }) {
                 contentStyle={{ background: C.elevated2, border: `1px solid ${C.borderStrong}`, borderRadius: 12 }}
                 labelStyle={{ color: C.textSecondary }}
                 itemStyle={{ color: C.textPrimary }}
-                formatter={(v: number) => fmtPctSigned(v)}
+                formatter={(v) => fmtPctSigned(typeof v === "number" ? v : Number(v))}
               />
               <Area
                 type="monotone"
