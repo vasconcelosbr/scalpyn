@@ -77,6 +77,7 @@ celery_app = Celery(
         "app.tasks.symbol_health_audit",
         "app.tasks.decision_log_enricher",
         "app.tasks.trade_reconciliation",
+        "app.tasks.trade_monitor",
     ],
 )
 
@@ -114,6 +115,9 @@ TASK_ROUTES = {
 
     # Trade Reconciliation (Module 2)
     "app.tasks.trade_reconciliation.reconcile":          {"queue": QUEUE_STRUCTURAL},
+
+    # Trade Monitor (Module 3)
+    "app.tasks.trade_monitor.monitor":                   {"queue": QUEUE_EXECUTION},
 
     # Execution (latency-sensitive, must run on isolated workers)
     "app.tasks.evaluate_signals.evaluate":          {"queue": QUEUE_EXECUTION},
@@ -184,6 +188,10 @@ TASK_ANNOTATIONS = {
 
     # Trade Reconciliation (Module 2) — runs every 60 s, bounded under 2 min
     "app.tasks.trade_reconciliation.reconcile":          {**_STRUCTURAL_GUARDS, "rate_limit": "6/m"},
+
+    # Trade Monitor (Module 3) — runs every 10 s, must be fast; never retry
+    # (duplicate close attempts would re-close already-closed trades).
+    "app.tasks.trade_monitor.monitor":                   {**_EXECUTION_GUARDS, "max_retries": 0},
 
     # Execution
     "app.tasks.evaluate_signals.evaluate":          {**_EXECUTION_GUARDS, "rate_limit": "2/m"},
@@ -318,6 +326,11 @@ celery_app.conf.beat_schedule = {
     "trade_reconciliation": {
         "task": "app.tasks.trade_reconciliation.reconcile",
         "schedule": 60.0,
+    },
+    # Trade Monitor: run every 10 seconds to close TP / SL / timeout trades.
+    "trade_monitor": {
+        "task": "app.tasks.trade_monitor.monitor",
+        "schedule": 10.0,
     },
 }
 

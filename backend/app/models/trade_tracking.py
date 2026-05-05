@@ -1,6 +1,6 @@
 """Trade tracking model — open-trade records spawned by the Decision Log Enricher."""
 
-from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Numeric, String
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from datetime import datetime, timezone
@@ -43,5 +43,13 @@ class TradeTracking(Base):
     # Set by the Trade Reconciliation service (Module 2) when a real Gate trade
     # is matched or a new external trade is ingested.
     external_id = Column(String(100), nullable=True)
+
+    # Set by the Trade Monitor (Module 3) when a TP / SL / timeout condition
+    # is triggered.  Columns remain NULL while the trade is still open.
+    exit_price = Column(Numeric(20, 8), nullable=True)
+    exit_time = Column(DateTime(timezone=True), nullable=True)
+    outcome = Column(String(20), nullable=True)       # 'tp' | 'sl' | 'timeout'
+    pnl_pct = Column(Numeric(10, 4), nullable=True)
+    holding_seconds = Column(Integer, nullable=True)
 
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
