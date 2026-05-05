@@ -73,6 +73,8 @@ Scalpyn is an institutional-grade cryptocurrency trading platform that provides 
 - **Alembic migrations**: Always write a migration for schema changes. For hot tables, pre-apply DDL manually (e.g., `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`) in Cloud SQL before deployment to avoid lock contention and startup failures.
 - **`CRITICAL_COLUMNS`**: When adding new columns, deploy the migration first (N), verify column existence, then add the column to `_critical_schema.py` in a separate deploy (N+1).
 - **WS Leader Election**: Ensure Redis is accessible for the Gate.io WebSocket leader election to function correctly. If Redis is down and `ENABLE_GATE_WS=1`, the system will retry indefinitely to connect.
+- **Celery sentinel queue (`__no_default__`)**: Declared in `task_queues` so kombu's `_create_task_sender` can resolve `task_default_queue` (Celery ≥ 5.6 raises `KeyError` on every send_task / beat tick otherwise). No worker consumes it, so any task escaping `TASK_ROUTES` still piles up visibly there — preserving the loud-failure intent of invariant #4 from Task #216. Do **not** remove it.
+- **Dev pipeline boot (Replit)**: Celery requires three workflows — `Redis` (port 6379), `Celery Worker` (`--queues=microstructure,structural,execution`), and `Celery Beat`. After fresh DB setup, manually approve representative symbols in dev (`UPDATE pool_coins SET is_approved=true WHERE symbol IN (...)`) — `collect_market_data.collect_all` raises `[FATAL] No approved symbols` otherwise (invariant #5 from Task #216).
 - **`compute_indicators_robust` window**: The `window_seconds` for order flow data is standardized at 300s. Inconsistencies can lead to `VALID` vs `NO_DATA` flapping.
 
 ## Pointers

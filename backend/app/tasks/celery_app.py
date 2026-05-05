@@ -129,8 +129,19 @@ TASK_ROUTES = {
 # default queue. There is no ``celery`` fallback queue: an unrouted task
 # raises a routing error rather than silently piling up where no worker
 # consumes it.
+#
+# Note: the ``__no_default__`` sentinel queue is declared here so kombu's
+# ``_create_task_sender`` can resolve ``task_default_queue`` at producer
+# construction time (Celery >= 5.6 raises KeyError on every send_task /
+# beat tick otherwise — see Task #220). No worker is configured to
+# consume from it (workers run with explicit ``--queues=micro,struct,exec``),
+# so any task that escapes ``TASK_ROUTES`` still piles up visibly on this
+# queue and surfaces in ``/api/system/celery-status`` alerts — preserving
+# the loud-failure intent of invariant #4.
+_NO_DEFAULT_QUEUE_NAME = "__no_default__"
 TASK_QUEUES = tuple(
-    Queue(name, Exchange(name), routing_key=name) for name in ALL_QUEUES
+    Queue(name, Exchange(name), routing_key=name)
+    for name in (*ALL_QUEUES, _NO_DEFAULT_QUEUE_NAME)
 )
 
 # ── Per-task cost guards (invariant: no unbounded work) ──────────────────────
