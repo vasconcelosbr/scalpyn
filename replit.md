@@ -66,6 +66,7 @@ Scalpyn is an institutional-grade cryptocurrency trading platform that provides 
 ## User preferences
 
 - **Sempre publicar (deploy) ao final de cada tarefa.** Após `mark_task_complete`, chamar `suggest_deploy` para que a versão em produção (ex.: `scalpyn.vercel.app` no front + backend hospedado) reflita o código mais recente. Sem isso, o usuário continua vendo 404 em rotas novas.
+- **Antes do checkpoint final, rodar `cd frontend && npx tsc --noEmit -p .`** para validar o build de produção. A Vercel falha com qualquer type error que o `next dev` não pega (ex.: `Tooltip` do recharts tipa `formatter`'s `value` como `ValueType | undefined`, não aceita anotação `(v: number) => …`). Corrigir antes do push evita ciclo de deploys vermelhos.
 - Comunicação em PT-BR.
 
 ## Gotchas
