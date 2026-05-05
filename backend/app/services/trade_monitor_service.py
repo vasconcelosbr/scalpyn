@@ -41,6 +41,7 @@ Invariants
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -140,25 +141,18 @@ async def _fetch_price_maps(
 ) -> tuple[dict[str, float], dict[str, float]]:
     """Fetch spot and futures price maps concurrently.
 
-    Returns ``(spot_price_map, futures_price_map)``.  Each map is an empty
-    dict if the corresponding endpoint fails, allowing graceful degradation.
+    Only calls the respective endpoint when there are symbols of that type
+    so that an all-spot workload never hits the futures API and vice versa.
+    Returns ``(spot_price_map, futures_price_map)``; each map is an empty
+    dict if the endpoint is skipped or fails, allowing graceful degradation.
     """
-    import asyncio as _asyncio
-
-    async def _empty() -> dict[str, float]:
-        return {}
-
-    spot_coro = (
-        _fetch_tickers(_GATE_SPOT_TICKERS_URL, "currency_pair")
-        if spot_symbols
-        else _empty()
-    )
-    futures_coro = (
-        _fetch_tickers(_GATE_FUTURES_TICKERS_URL, "contract")
-        if futures_symbols
-        else _empty()
-    )
-    spot_map, futures_map = await _asyncio.gather(spot_coro, futures_coro)
+    coros = [
+        _fetch_tickers(_GATE_SPOT_TICKERS_URL, "currency_pair") if spot_symbols else asyncio.sleep(0),
+        _fetch_tickers(_GATE_FUTURES_TICKERS_URL, "contract") if futures_symbols else asyncio.sleep(0),
+    ]
+    results = await asyncio.gather(*coros)
+    spot_map: dict[str, float] = results[0] if spot_symbols else {}
+    futures_map: dict[str, float] = results[1] if futures_symbols else {}
     return spot_map, futures_map
 
 
@@ -270,8 +264,13 @@ class TradeMonitorService:
         logger.info("[TradeMonitor] scanning %d open trade(s)", len(trades))
 
         # ── 2. Batch-fetch prices — one HTTP call per market type ─────────────
-        spot_symbols: set[str] = {t.symbol for t in trades if (t.market_type or "spot") != "futures"}
-        futures_symbols: set[str] = {t.symbol for t in trades if (t.market_type or "spot") == "futures"}
+        spot_symbols: set[str] = set()
+        futures_symbols: set[str] = set()
+        for t in trades:
+            if (t.market_type or "spot") == "futures":
+                futures_symbols.add(t.symbol)
+            else:
+                spot_symbols.add(t.symbol)
         spot_price_map, futures_price_map = await _fetch_price_maps(spot_symbols, futures_symbols)
 
         now = datetime.now(timezone.utc)
@@ -279,11 +278,9 @@ class TradeMonitorService:
         # ── 3. Evaluate and close ─────────────────────────────────────────────
         for trade in trades:
             try:
+                is_futures = (trade.market_type or "spot") == "futures"
                 # Select the correct price map based on the trade's market type.
-                if (trade.market_type or "spot") == "futures":
-                    price: float | None = futures_price_map.get(trade.symbol)
-                else:
-                    price = spot_price_map.get(trade.symbol)
+                price: float | None = futures_price_map.get(trade.symbol) if is_futures else spot_price_map.get(trade.symbol)
 
                 # Determine outcome — timeout can trigger even without price.
                 if price is None:
