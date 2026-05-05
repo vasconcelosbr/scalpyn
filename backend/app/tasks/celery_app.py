@@ -75,6 +75,7 @@ celery_app = Celery(
         "app.tasks.simulation",
         "app.tasks.robust_alerts",
         "app.tasks.symbol_health_audit",
+        "app.tasks.decision_log_enricher",
     ],
 )
 
@@ -106,6 +107,9 @@ TASK_ROUTES = {
     "app.tasks.daily_summary.send":                      {"queue": QUEUE_STRUCTURAL},
     "app.tasks.ohlcv_backfill.backfill":                 {"queue": QUEUE_STRUCTURAL},
     "app.tasks.ohlcv_backfill.get_status":               {"queue": QUEUE_STRUCTURAL},
+
+    # Decision Log Enricher (Module 1)
+    "app.tasks.decision_log_enricher.enrich":            {"queue": QUEUE_STRUCTURAL},
 
     # Execution (latency-sensitive, must run on isolated workers)
     "app.tasks.evaluate_signals.evaluate":          {"queue": QUEUE_EXECUTION},
@@ -170,6 +174,9 @@ TASK_ANNOTATIONS = {
     "app.tasks.daily_summary.send":                      {**_STRUCTURAL_GUARDS, "rate_limit": "1/h"},
     "app.tasks.ohlcv_backfill.backfill":                 {"time_limit": 1800, "soft_time_limit": 1700, "rate_limit": "2/h", "max_retries": 3},
     "app.tasks.ohlcv_backfill.get_status":               {"time_limit": 60, "soft_time_limit": 50, "rate_limit": "6/m", "max_retries": 3},
+
+    # Decision Log Enricher (Module 1)
+    "app.tasks.decision_log_enricher.enrich":            {**_STRUCTURAL_GUARDS, "rate_limit": "6/m"},
 
     # Execution
     "app.tasks.evaluate_signals.evaluate":          {**_EXECUTION_GUARDS, "rate_limit": "2/m"},
@@ -293,6 +300,11 @@ celery_app.conf.beat_schedule = {
     # endpoint, the CLI, or the on-demand ``run_repair`` task.
     "symbol_health_audit_monitor_only": {
         "task": "app.tasks.symbol_health_audit.monitor_only",
+        "schedule": 300.0,
+    },
+    # Decision Log Enricher: run every 5 minutes to pick up new ALLOW decisions.
+    "decision_log_enricher": {
+        "task": "app.tasks.decision_log_enricher.enrich",
         "schedule": 300.0,
     },
 }
