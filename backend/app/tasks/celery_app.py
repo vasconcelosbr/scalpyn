@@ -125,19 +125,19 @@ TASK_ROUTES = {
     "app.tasks.anti_liq_monitor.monitor":           {"queue": QUEUE_EXECUTION},
 }
 
-# Static queue declarations so beat / dispatch never need an "implicit"
-# default queue. There is no ``celery`` fallback queue: an unrouted task
-# raises a routing error rather than silently piling up where no worker
-# consumes it.
+# Static queue declarations so beat / dispatch never rely on an "implicit"
+# default queue. There is no ``celery`` fallback queue.
 #
-# Note: the ``__no_default__`` sentinel queue is declared here so kombu's
+# The ``__no_default__`` sentinel queue is declared here so kombu's
 # ``_create_task_sender`` can resolve ``task_default_queue`` at producer
 # construction time (Celery >= 5.6 raises KeyError on every send_task /
 # beat tick otherwise — see Task #220). No worker is configured to
-# consume from it (workers run with explicit ``--queues=micro,struct,exec``),
-# so any task that escapes ``TASK_ROUTES`` still piles up visibly on this
-# queue and surfaces in ``/api/system/celery-status`` alerts — preserving
-# the loud-failure intent of invariant #4.
+# consume from it (workers run with explicit ``--queues=micro,struct,exec``).
+# Concretely this means: an unrouted task no longer raises ``NoRoute`` at
+# dispatch — instead it accumulates on ``__no_default__`` and surfaces in
+# ``/api/system/celery-status`` (visible backlog, no consumer). This
+# preserves the loud-failure intent of invariant #4 via observability
+# rather than dispatch-time exceptions.
 _NO_DEFAULT_QUEUE_NAME = "__no_default__"
 TASK_QUEUES = tuple(
     Queue(name, Exchange(name), routing_key=name)
