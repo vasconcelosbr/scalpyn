@@ -52,17 +52,17 @@ async def _evaluate_async():
 
                 daily = await analytics_service.get_daily_summary(db, user.id)
 
-                # Robust authoritative scoring (Task #215):
-                # Candidate symbols come from active ``pool_coins`` (the
-                # exclusive source of truth). Indicator payloads are fetched
-                # via the unified provider so structural RSI/MACD/ADX are
-                # always merged with microstructure taker/spread — replacing
-                # a naive ``DISTINCT ON`` query that silently dropped
-                # structural indicators ~67% of the time. The legacy
-                # ``alpha_scores.score`` column is fetched separately and
-                # exposed informationally so the prior row contract is
-                # preserved for any downstream observer; selection is
-                # gated by ``_compute_robust_score`` below.
+                # Robust authoritative scoring (Task #215): candidate
+                # symbols come from active ``pool_coins`` (the operator-
+                # curated tradable set), and the indicator payload is
+                # resolved via the unified provider so structural
+                # RSI/MACD/ADX are always merged with microstructure
+                # taker/spread. The previous ``DISTINCT ON (i.symbol)``
+                # join silently dropped structural indicators ~67% of the
+                # time. Selection is gated by ``_compute_robust_score``
+                # below — the legacy ``alpha_scores.score`` column was
+                # joined in the old query but never read in this loop, so
+                # it is no longer fetched.
                 from ..services.indicators_provider import (
                     get_merged_indicators,
                     is_complete,
@@ -78,25 +78,6 @@ async def _evaluate_async():
 
                 merged_by_sym = await get_merged_indicators(db, pool_symbols)
 
-                # Informational legacy alpha_score (parity with the previous
-                # ``LEFT JOIN alpha_scores`` row contract). Never gates
-                # selection — the robust score below is authoritative.
-                legacy_alpha_score_res = await db.execute(text("""
-                    SELECT DISTINCT ON (symbol) symbol, score
-                    FROM   alpha_scores
-                    WHERE  symbol = ANY(:syms)
-                      AND  time > now() - interval '2 hours'
-                    ORDER  BY symbol, time DESC
-                """), {"syms": pool_symbols})
-                legacy_alpha_score_by_sym = {
-                    r.symbol: float(r.score) if r.score is not None else 0.0
-                    for r in legacy_alpha_score_res.fetchall()
-                }
-
-                # ``legacy_alpha_score_by_sym`` is intentionally left
-                # unread inside the loop — it preserves the prior row-shape
-                # contract for any external observer that hooks into this
-                # task; selection is gated by ``_compute_robust_score``.
                 for symbol, mi in merged_by_sym.items():
                     # ``MergedIndicators.values`` already carries scalars
                     # unwrapped from per-key envelopes; downstream engines
