@@ -19,7 +19,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.backoffice import DecisionLog
@@ -28,6 +28,11 @@ from ..models.trade_tracking import TradeTracking
 logger = logging.getLogger(__name__)
 
 _BATCH_LIMIT = 100
+# Fallback TP/SL percentages used when config_profiles has no enricher entry.
+# Override via config_profiles with config_type='enricher_settings':
+#   {"tp_pct": 0.01, "sl_pct": 0.01}
+_DEFAULT_TP_PCT = 0.01
+_DEFAULT_SL_PCT = 0.01
 
 
 class DecisionLogEnricherService:
@@ -43,6 +48,7 @@ class DecisionLogEnricherService:
 
         Returns a summary dict with counts for logging / task result.
         """
+        config = await self._load_config()
         decisions = await self._fetch_unprocessed_decisions()
         if not decisions:
             logger.debug("[Enricher] No unprocessed ALLOW decisions found.")
@@ -51,7 +57,7 @@ class DecisionLogEnricherService:
         processed = skipped = errors = 0
         for decision in decisions:
             try:
-                created = await self._process_decision(decision)
+                created = await self._process_decision(decision, config)
                 if created:
                     processed += 1
                 else:
@@ -65,7 +71,7 @@ class DecisionLogEnricherService:
                     exc,
                     exc_info=True,
                 )
-                # Mark as processed anyway to avoid infinite retry on bad rows.
+                # Mark as processed to avoid infinite retry on permanently bad rows.
                 await self._mark_processed(decision)
 
         logger.info(
@@ -82,13 +88,13 @@ class DecisionLogEnricherService:
         """Return up to _BATCH_LIMIT unprocessed ALLOW decisions, oldest first."""
         result = await self.session.execute(
             select(DecisionLog)
-            .where(DecisionLog.decision == "ALLOW", DecisionLog.processed == False)  # noqa: E712
+            .where(DecisionLog.decision == "ALLOW", DecisionLog.processed.is_(False))
             .order_by(DecisionLog.created_at.asc())
             .limit(_BATCH_LIMIT)
         )
         return list(result.scalars().all())
 
-    async def _process_decision(self, decision: DecisionLog) -> bool:
+    async def _process_decision(self, decision: DecisionLog, config: dict[str, Any]) -> bool:
         """Create a trade_tracking row for *decision* and mark it processed.
 
         Returns True when a row was inserted, False when skipped (e.g. no
@@ -109,7 +115,9 @@ class DecisionLogEnricherService:
         market_type: str = self._extract_market_type(decision)
         position_side: str = self._extract_position_side(decision)
 
-        target_price, stop_price = self._calc_target_stop(entry_price, position_side)
+        tp_pct: float = float(config.get("tp_pct", _DEFAULT_TP_PCT))
+        sl_pct: float = float(config.get("sl_pct", _DEFAULT_SL_PCT))
+        target_price, stop_price = self._calc_target_stop(entry_price, position_side, tp_pct, sl_pct)
 
         tracking = TradeTracking(
             decision_id=decision.id,
@@ -150,6 +158,29 @@ class DecisionLogEnricherService:
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
+    async def _load_config(self) -> dict[str, Any]:
+        """Load enricher config from config_profiles, falling back to defaults.
+
+        Operators can tune TP/SL percentages by inserting a row with
+        ``config_type = 'enricher_settings'`` in config_profiles:
+        ``{"tp_pct": 0.015, "sl_pct": 0.01}``
+        """
+        try:
+            result = await self.session.execute(
+                text("""
+                    SELECT config_json
+                    FROM config_profiles
+                    WHERE config_type = 'enricher_settings'
+                    LIMIT 1
+                """)
+            )
+            row = result.fetchone()
+            if row and row.config_json:
+                return row.config_json
+        except Exception as exc:
+            logger.warning("[Enricher] Could not load config_profiles: %s", exc)
+        return {}
+
     @staticmethod
     def _extract_price(decision: DecisionLog) -> float | None:
         """Read price from decisions_log.metrics JSONB."""
@@ -176,12 +207,17 @@ class DecisionLogEnricherService:
         return "long"
 
     @staticmethod
-    def _calc_target_stop(entry_price: float, position_side: str) -> tuple[float, float]:
-        """Return (target_price, stop_price) based on entry and side."""
+    def _calc_target_stop(
+        entry_price: float,
+        position_side: str,
+        tp_pct: float = _DEFAULT_TP_PCT,
+        sl_pct: float = _DEFAULT_SL_PCT,
+    ) -> tuple[float, float]:
+        """Return (target_price, stop_price) based on entry, side, and config pcts."""
         if position_side == "short":
-            target = entry_price * 0.99
-            stop = entry_price * 1.01
+            target = entry_price * (1 - tp_pct)
+            stop = entry_price * (1 + sl_pct)
         else:
-            target = entry_price * 1.01
-            stop = entry_price * 0.99
+            target = entry_price * (1 + tp_pct)
+            stop = entry_price * (1 - sl_pct)
         return target, stop

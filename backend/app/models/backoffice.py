@@ -28,6 +28,7 @@ class DecisionLog(Base):
     latency_ms = Column(Integer, nullable=True)
     direction = Column(String(10), nullable=True)
     event_type = Column(String(40), nullable=True)
+    processed = Column(Boolean, nullable=False, default=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
