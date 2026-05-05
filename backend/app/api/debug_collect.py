@@ -83,17 +83,24 @@ def _enforce_auth(
     authorization: Optional[str],
     x_debug_token: Optional[str],
 ) -> None:
-    """404 in prod when token unset; 401 on bad token; 200 otherwise."""
+    """Always return 404 to unauthenticated callers (hides existence of the
+    endpoint); serve normally only when a valid token is presented.
+
+    Behavior matrix:
+      * Cloud Run / prod, token unset                 → 404 (endpoint hidden)
+      * Cloud Run / prod, token set, bad/missing hdr  → 404 (looks identical
+                                                            to a non-existent
+                                                            route — no probing)
+      * Cloud Run / prod, token set, valid header     → 200
+      * Dev / Replit (no K_SERVICE), token unset      → 200 (open, with warn)
+      * Dev / Replit, token set                       → same token rules as prod
+    """
     expected = os.environ.get("DEBUG_COLLECT_TOKEN", "").strip() or None
     on_cloud_run = bool(os.environ.get("K_SERVICE"))
 
     if expected is None:
         if on_cloud_run:
-            # Hidden by default in Cloud Run prod — operators must opt in
-            # by setting DEBUG_COLLECT_TOKEN to enable the endpoint.
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-        # Dev / Replit: allow without token so the operator can curl
-        # directly, but log every hit so accidental exposure is visible.
         logger.warning(
             "[debug-collect] DEBUG_COLLECT_TOKEN unset; allowing in non-Cloud-Run env"
         )
@@ -106,11 +113,10 @@ def _enforce_auth(
         presented = x_debug_token.strip() or None
 
     if presented is None or not hmac.compare_digest(presented, expected):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing debug token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        # Intentionally 404 (not 401/403) so unauthenticated callers cannot
+        # distinguish "route exists but you lack auth" from "route does not
+        # exist". Prevents endpoint discovery via response-code probing.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
 
 # ─── In-memory log capture ──────────────────────────────────────────────────
