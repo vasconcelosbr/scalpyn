@@ -5,14 +5,24 @@ TP / SL / timeout condition is met.
 
 Responsibilities
 ----------------
-* Fetch up to 200 open trades per run.
+* Fetch up to 200 open trades per run, locking rows with
+  ``FOR UPDATE SKIP LOCKED`` to prevent double-closing when multiple
+  Celery workers run concurrently.
 * Batch-fetch current prices from the Gate.io public ticker API
-  (single HTTP request, cached per symbol for the duration of the run).
+  (single HTTP request per cycle — no per-symbol calls).
 * Apply per-trade exit logic (long / short × TP / SL / timeout).
-* Write ``exit_price``, ``exit_time``, ``outcome``, ``pnl_pct``, and
-  ``holding_seconds`` to ``trade_tracking``.
+* Write ``exit_price``, ``exit_price_source``, ``exit_time``, ``outcome``,
+  ``pnl_pct``, and ``holding_seconds`` to ``trade_tracking``.
 * Mirror ``outcome``, ``pnl_pct``, and ``holding_seconds`` to the
   matching ``decisions_log`` row (if one exists).
+
+exit_price_source values
+------------------------
+* ``'market'``   — Gate.io public ticker; estimated close price used by
+                   the monitor for simulated and real trades alike until
+                   actual fill reconciliation is implemented.
+* ``'exchange'`` — reserved for future: actual fill price confirmed via
+                   the authenticated Gate.io API.
 
 Invariants
 ----------
@@ -20,9 +30,12 @@ Invariants
 * Does NOT modify pipeline_scan, score_engine, block_engine, execute_buy,
   indicators, or the Celery execution flow.
 * Does NOT use the authenticated Gate.io API (that is reconciliation).
-* Price cache is local to each run — no cross-run stale prices.
+* Price map is built once per run from a single HTTP call — no redundant
+  per-symbol requests.
 * Each trade is processed in a SAVEPOINT so one failure never aborts the
   rest of the batch.
+* ``FOR UPDATE SKIP LOCKED`` on the batch SELECT prevents race conditions
+  when two monitor workers overlap.
 """
 
 from __future__ import annotations
@@ -45,10 +58,9 @@ logger = logging.getLogger(__name__)
 # Batch size: maximum open trades processed per run.
 _BATCH_SIZE: int = 200
 
-# Default trade timeout in seconds (24 h).  A trade that has been open
-# longer than this is closed with outcome = "timeout" regardless of price.
-# The value is intentionally conservative; shorter timeouts should be
-# encoded as stop_price levels by the decision layer.
+# Default trade timeout in seconds (24 h).  Overridden at runtime via
+# settings.TRADE_MONITOR_TIMEOUT_SECONDS which reads from the
+# TRADE_MONITOR_TIMEOUT_SECONDS environment variable.
 _DEFAULT_TIMEOUT_SECONDS: int = 86_400
 
 # Gate.io public tickers endpoint — no authentication required.
@@ -60,6 +72,9 @@ _HTTP_TIMEOUT: float = 10.0
 # Retry attempts for the price fetch.
 _PRICE_FETCH_RETRIES: int = 2
 
+# Source label written to exit_price_source for ticker-based closes.
+_PRICE_SOURCE_MARKET = "market"
+
 
 # ── Price fetching ────────────────────────────────────────────────────────────
 
@@ -67,7 +82,7 @@ _PRICE_FETCH_RETRIES: int = 2
 async def _fetch_price_map(symbols: set[str]) -> dict[str, float]:
     """Return {symbol: last_price} for all requested symbols.
 
-    Executes a single call to the Gate.io public tickers endpoint and
+    Executes a **single** call to the Gate.io public tickers endpoint and
     filters the response to the set of symbols we need.  ``symbol`` is
     expected in ``BTC_USDT`` (underscore) format as stored in
     ``trade_tracking.symbol``.
@@ -194,6 +209,11 @@ class TradeMonitorService:
     async def run(self, timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS) -> dict[str, Any]:
         """Run one monitoring cycle.
 
+        ``timeout_seconds`` — maximum holding time before a trade is closed
+        with outcome = 'timeout'.  Defaults to ``_DEFAULT_TIMEOUT_SECONDS``
+        (24 h) but should be overridden via ``settings.TRADE_MONITOR_TIMEOUT_SECONDS``
+        so operators can tune it without a code deploy.
+
         Returns a summary dict for logging.
         """
         summary: dict[str, int] = {
@@ -205,10 +225,12 @@ class TradeMonitorService:
             "errors": 0,
         }
 
-        # ── 1. Load open trades ───────────────────────────────────────────────
+        # ── 1. Load open trades — FOR UPDATE SKIP LOCKED prevents two workers
+        #       from processing the same row simultaneously.
         result = await self.session.execute(
             select(TradeTracking)
             .where(TradeTracking.status == "open")
+            .with_for_update(skip_locked=True)
             .limit(_BATCH_SIZE)
         )
         trades: list[TradeTracking] = list(result.scalars().all())
@@ -220,7 +242,7 @@ class TradeMonitorService:
 
         logger.info("[TradeMonitor] scanning %d open trade(s)", len(trades))
 
-        # ── 2. Batch-fetch prices (single HTTP call, cached per symbol) ───────
+        # ── 2. Batch-fetch prices — single HTTP call covers all symbols ───────
         symbols: set[str] = {t.symbol for t in trades}
         price_map = await _fetch_price_map(symbols)
 
@@ -233,7 +255,6 @@ class TradeMonitorService:
 
                 # Determine outcome — timeout can trigger even without price.
                 if price is None:
-                    # Check timeout-only path; can't evaluate TP/SL without price.
                     outcome = None
                     if trade.entry_time is not None:
                         entry_time = trade.entry_time
@@ -249,7 +270,8 @@ class TradeMonitorService:
                         )
                         continue
 
-                    # Timeout without price: use entry_price as exit_price proxy.
+                    # Timeout without price: use entry_price as the best available
+                    # proxy (P&L will be 0 — better than skipping the close).
                     exit_price = float(trade.entry_price)
                 else:
                     outcome = _check_exit_conditions(trade, price, now, timeout_seconds)
@@ -257,7 +279,7 @@ class TradeMonitorService:
                         continue
                     exit_price = price
 
-                await self._close_trade(trade, exit_price, outcome, now)
+                await self._close_trade(trade, exit_price, _PRICE_SOURCE_MARKET, outcome, now)
 
                 summary[f"closed_{outcome}"] += 1
 
@@ -280,10 +302,14 @@ class TradeMonitorService:
         self,
         trade: TradeTracking,
         exit_price: float,
+        exit_price_source: str,
         outcome: str,
         now: datetime,
     ) -> None:
         """Write exit data to trade_tracking and mirror to decisions_log.
+
+        ``exit_price_source`` labels the authority for the exit price:
+        ``'market'`` (ticker estimate) or ``'exchange'`` (confirmed fill).
 
         Each close is wrapped in a SAVEPOINT so a DB failure here does not
         abort the outer transaction (which is still processing other trades).
@@ -306,6 +332,7 @@ class TradeMonitorService:
                 .values(
                     status="closed",
                     exit_price=exit_price,
+                    exit_price_source=exit_price_source,
                     exit_time=now,
                     outcome=outcome,
                     pnl_pct=pnl_pct,
@@ -326,9 +353,11 @@ class TradeMonitorService:
                 )
 
         logger.info(
-            "[TradeMonitor] closed trade %s symbol=%s outcome=%s pnl_pct=%.4f",
+            "[TradeMonitor] closed trade %s symbol=%s outcome=%s pnl_pct=%.4f source=%s",
             trade.id,
             trade.symbol,
             outcome,
             pnl_pct,
+            exit_price_source,
         )
+

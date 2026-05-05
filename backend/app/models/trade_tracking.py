@@ -48,8 +48,11 @@ class TradeTracking(Base):
     # is triggered.  Columns remain NULL while the trade is still open.
     exit_price = Column(Numeric(20, 8), nullable=True)
     exit_time = Column(DateTime(timezone=True), nullable=True)
-    outcome = Column(String(20), nullable=True)       # 'tp' | 'sl' | 'timeout'
+    outcome = Column(String(20), nullable=True)           # 'tp' | 'sl' | 'timeout'
     pnl_pct = Column(Numeric(10, 4), nullable=True)
     holding_seconds = Column(Integer, nullable=True)
+    # 'market'   — ticker price used by the Trade Monitor (estimated close)
+    # 'exchange' — actual fill price confirmed by future reconciliation
+    exit_price_source = Column(String(20), nullable=True)
 
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))

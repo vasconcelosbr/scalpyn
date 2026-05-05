@@ -11,6 +11,7 @@ import asyncio
 import logging
 
 from .celery_app import celery_app
+from ..config import settings
 from ..database import run_db_task
 from ..services.trade_monitor_service import TradeMonitorService
 
@@ -26,7 +27,7 @@ def monitor(self) -> str:
     """
     async def _inner(session):
         service = TradeMonitorService(session)
-        return await service.run()
+        return await service.run(timeout_seconds=settings.TRADE_MONITOR_TIMEOUT_SECONDS)
 
     try:
         result = asyncio.run(run_db_task(_inner, celery=True))

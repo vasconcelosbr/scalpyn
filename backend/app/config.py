@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     # symbol/score data into another tenant's Slack).
     ROBUST_ALERTS_OPS_WEBHOOK_URL: str = ""
 
+    # Maximum seconds a trade may remain open before the Trade Monitor closes
+    # it with outcome = "timeout".  Override via the TRADE_MONITOR_TIMEOUT_SECONDS
+    # environment variable.  Default is 24 hours (86 400 s).
+    TRADE_MONITOR_TIMEOUT_SECONDS: int = 86_400
+
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
     def fix_db_url(cls, v: str) -> str:

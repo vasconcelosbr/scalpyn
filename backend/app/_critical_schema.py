@@ -73,4 +73,7 @@ CRITICAL_COLUMNS: List[Tuple[str, str]] = [
     ("trade_tracking", "exit_price"),
     ("trade_tracking", "outcome"),
     ("decisions_log", "outcome"),
+    # Added by migration 042; without this the monitor cannot record the price
+    # authority (market vs exchange), causing UndefinedColumnError on every close.
+    ("trade_tracking", "exit_price_source"),
 ]
