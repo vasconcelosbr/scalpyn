@@ -227,8 +227,16 @@ def _build_pipeline_asset(
     volume_24h=None,
     spread_pct=None,
     orderbook_depth_usdt=None,
+    merged_indicators=None,
 ) -> dict:
-    """Build a normalized pipeline asset dict from metadata, indicators, and scores."""
+    """Build a normalized pipeline asset dict from metadata, indicators, and scores.
+
+    ``merged_indicators`` (Task #215) is the originating
+    :class:`MergedIndicators` object and is stashed under the private
+    key ``_merged_indicators`` so :func:`_decision_metrics` can build
+    the persisted ``indicators_snapshot``. The leading underscore
+    keeps it out of any client-facing serialisation.
+    """
     asset = {
         "symbol": symbol,
         "name": name or symbol,
@@ -240,6 +248,7 @@ def _build_pipeline_asset(
         "orderbook_depth_usdt": orderbook_depth_usdt,
         "indicators": indicators,
         "_has_market_metadata": has_market_metadata,
+        "_merged_indicators": merged_indicators,
         **{k: v for k, v in indicators.items() if isinstance(v, (int, float, bool, str))},
     }
 
@@ -467,8 +476,11 @@ async def _fetch_market_data(db, symbols: list) -> list:
     # per-key latest-timestamp-wins semantics. Falls back to legacy single-row
     # query when scheduler_group column is absent.
     try:
-        from ..utils.indicator_merge import fetch_merged_indicators
-        _merged_by_sym = await fetch_merged_indicators(db, syms_list)
+        # Task #215: route through the unified provider so the same merge
+        # path + telemetry + quarantine semantics apply across pipeline_scan,
+        # evaluate_signals, and execute_buy.
+        from ..services.indicators_provider import get_merged_indicators
+        _merged_by_sym = await get_merged_indicators(db, syms_list)
 
         score_rows = (await db.execute(
             text("""
@@ -542,6 +554,7 @@ async def _fetch_market_data(db, symbols: list) -> list:
             volume_24h=float(row.volume_24h) if row.volume_24h is not None else None,
             spread_pct=float(row.spread_pct) if row.spread_pct is not None else None,
             orderbook_depth_usdt=float(row.orderbook_depth_usdt) if row.orderbook_depth_usdt is not None else None,
+            merged_indicators=_merged_by_sym.get(sym),
         ))
 
     for sym in sorted(missing_meta):
@@ -553,6 +566,7 @@ async def _fetch_market_data(db, symbols: list) -> list:
             indicators=indicators,
             score_row=score_row,
             has_market_metadata=False,
+            merged_indicators=_merged_by_sym.get(sym),
         ))
 
     return assets
@@ -560,86 +574,19 @@ async def _fetch_market_data(db, symbols: list) -> list:
 
 # ─── core indicator completeness guard ───────────────────────────────────────
 
-def _resolve_required_core_indicators() -> tuple[str, ...]:
-    """Return the set of core indicators that must be non-null for pipeline advancement.
-
-    Derived from DEFAULT_INDICATORS so the list automatically reflects the active
-    indicator config (ZERO HARDCODE: no magic strings here — the source of truth
-    is the seed config which is DB-backed via config_profiles).
-
-    Only indicators with both ``enabled=True`` *and* a numeric ``period``
-    (i.e. time-series indicators that can legitimately return null during warm-up)
-    are included in the mandatory check.
-    """
-    from ..services.seed_service import DEFAULT_INDICATORS
-
-    # Only the three fundamental indicators required by DEFAULT_SIGNAL are
-    # treated as mandatory core checks.  Additional indicators can be added to
-    # DEFAULT_INDICATORS without automatically becoming pipeline blockers.
-    _CORE_KEYS = ("adx", "rsi", "macd")
-    return tuple(
-        key for key in _CORE_KEYS
-        if DEFAULT_INDICATORS.get(key, {}).get("enabled", False)
-    )
-
-
-#: Resolved at module load time from DEFAULT_INDICATORS.  Re-computed on each
-#: import so changes to seed config are picked up without restarting workers.
-_REQUIRED_CORE_INDICATORS: tuple[str, ...] = _resolve_required_core_indicators()
-
-
 def _filter_incomplete_indicators(assets: list) -> tuple[list, list]:
-    """Separate assets into (complete, incomplete) based on core indicator presence.
+    """Backward-compatible delegate to the unified provider (Task #215).
 
-    An asset is *incomplete* if any of the required core indicators (ADX, RSI,
-    MACD) is ``None`` or absent from its indicator dict.  Incomplete assets are
-    excluded from the pipeline and logged so the issue is visible in production
-    logs without raising an exception.
-
-    Returns
-    -------
-    complete : list
-        Assets where all core indicators are non-null.
-    incomplete : list
-        Assets with at least one null core indicator (quarantined).
+    The shared completeness rule + helper now live in
+    :mod:`app.services.indicators_provider` so all three Celery tasks
+    (pipeline_scan / evaluate_signals / execute_buy) apply identical
+    quarantine semantics. The required-core key list is
+    ``("adx", "rsi", "macd_histogram")`` — see
+    ``indicators_provider.REQUIRED_CORE_INDICATORS`` for the canonical
+    rationale and rename procedure.
     """
-    complete: list = []
-    incomplete: list = []
-
-    from ..services.indicator_validity import unwrap_envelope_value
-
-    for asset in assets:
-        indicators = asset.get("indicators", {})
-        # Indicator payloads use the envelope shape
-        # ``{"value": v, "status": "VALID"}``. The raw dict is never
-        # ``None`` even when the value is missing, so the quarantine
-        # check has to compare the unwrapped scalar — otherwise an
-        # asset whose RSI envelope holds ``"value": None`` is treated
-        # as "fully populated" and advances with broken indicators.
-        missing = [
-            ind for ind in _REQUIRED_CORE_INDICATORS
-            if unwrap_envelope_value(indicators.get(ind)) is None
-        ]
-        if missing:
-            incomplete.append(asset)
-            logger.warning(
-                "[PipelineScan] QUARANTINED %s — core indicators null: %s "
-                "(asset will not advance until indicators are fully computed)",
-                asset.get("symbol", "?"),
-                missing,
-            )
-        else:
-            complete.append(asset)
-
-    if incomplete:
-        logger.info(
-            "[PipelineScan] Core indicator guard: %d/%d assets quarantined "
-            "(null ADX/RSI/MACD). Sample: %s",
-            len(incomplete), len(assets),
-            [a.get("symbol") for a in incomplete[:10]],
-        )
-
-    return complete, incomplete
+    from ..services.indicators_provider import filter_incomplete_assets
+    return filter_incomplete_assets(assets)
 
 
 # ─── level evaluators ─────────────────────────────────────────────────────────
@@ -958,6 +905,17 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
         "score_classification": score.get("classification"),
         "signal_direction": processed.get("signal", {}).get("direction"),
     }
+
+    # Task #215: persist the indicator snapshot used by THIS decision so a
+    # future "decision vs DB" investigation can compare the exact payload
+    # against table state at the same instant. Snapshot includes the
+    # required-core keys plus every key with a non-null value in the
+    # merge — small enough for JSONB, large enough to trace.
+    merged = asset.get("_merged_indicators")
+    if merged is not None:
+        from ..services.indicators_provider import build_indicators_snapshot
+        metrics["indicators_snapshot"] = build_indicators_snapshot(merged)
+
     return _jsonable(metrics)
 
 

@@ -225,30 +225,73 @@ async def _execute_buy_cycle_async() -> dict:
 
                 trade_size_usdt = capital_mgr.calc_trade_size(state)
 
-                # 5. Top-scoring candidates (last 2 min) — includes market_cap from metadata.
+                # 5. Top-scoring candidates (last 2 min) — Task #215:
                 #
-                # Robust authority: pull every recent-indicator symbol;
-                # the legacy ``alpha_scores.score`` column is LEFT JOINed
-                # and COALESCEd to 0.0 purely so the row shape stays
-                # identical for downstream code. ``alpha_score`` is
-                # recomputed below via the robust selector and the
-                # operator-configured threshold gates inclusion.
-                ranked_res = await db.execute(text("""
-                    SELECT DISTINCT ON (i.symbol)
-                        i.symbol,
-                        COALESCE(a.score, 0.0) AS score,
-                        i.indicators_json,
-                        mm.market_cap
-                    FROM indicators i
-                    LEFT JOIN alpha_scores a
-                      ON a.symbol = i.symbol
-                     AND a.time > now() - interval '2 minutes'
-                    LEFT JOIN market_metadata mm ON mm.symbol = i.symbol
-                    WHERE i.time > now() - interval '2 minutes'
-                    ORDER BY i.symbol, i.time DESC, a.time DESC
-                    LIMIT :limit
-                """), {"limit": max_opps * 5})
-                candidates = ranked_res.fetchall()
+                # We pick the candidate symbol set from any fresh row in
+                # ``indicators`` (either scheduler group), then resolve the
+                # full per-symbol payload via the unified provider. The
+                # previous ``DISTINCT ON (i.symbol) ORDER BY i.time DESC``
+                # returned a microstructure-only row in ~87% of cycles,
+                # silently erasing RSI/MACD/ADX from the buy decision.
+                # ``market_metadata.market_cap`` is now joined separately
+                # so we never depend on a single ``indicators`` row to
+                # carry the full envelope. ``alpha_score`` is recomputed
+                # below via the robust selector — the legacy column is no
+                # longer needed.
+                from ..services.indicators_provider import (
+                    get_merged_indicators,
+                    is_complete,
+                )
+
+                fresh_syms_res = await db.execute(text("""
+                    SELECT DISTINCT symbol
+                    FROM   indicators
+                    WHERE  time > now() - interval '2 minutes'
+                    LIMIT  :cap
+                """), {"cap": max_opps * 20})
+                fresh_symbols = [r.symbol for r in fresh_syms_res.fetchall()]
+
+                if not fresh_symbols:
+                    logger.debug(
+                        "No fresh indicator symbols for user %s (threshold=%.1f)",
+                        user_id, threshold,
+                    )
+                    continue
+
+                merged_by_sym = await get_merged_indicators(db, fresh_symbols)
+
+                meta_res = await db.execute(text("""
+                    SELECT symbol, market_cap
+                    FROM   market_metadata
+                    WHERE  symbol = ANY(:syms)
+                """), {"syms": fresh_symbols})
+                market_cap_by_sym = {
+                    r.symbol: float(r.market_cap) if r.market_cap is not None else None
+                    for r in meta_res.fetchall()
+                }
+
+                # Build candidate rows mirroring the previous shape so the
+                # downstream loop is mechanical (.symbol / .indicators_json
+                # / .market_cap). Apply the shared completeness guard
+                # (Task #215) at this stage so quarantined symbols never
+                # reach the per-row evaluation.
+                _Candidate = type("_Candidate", (), {})
+                candidates: list = []
+                for _sym, _mi in merged_by_sym.items():
+                    _flat = _mi.as_flat_dict()
+                    _ok, _missing = is_complete(_flat)
+                    if not _ok:
+                        logger.warning(
+                            "[execute_buy] QUARANTINED %s — missing core: %s",
+                            _sym, _missing,
+                        )
+                        stats["skipped"] += 1
+                        continue
+                    _row = _Candidate()
+                    _row.symbol = _sym
+                    _row.indicators_json = _flat
+                    _row.market_cap = market_cap_by_sym.get(_sym)
+                    candidates.append(_row)
 
                 if not candidates:
                     logger.debug(

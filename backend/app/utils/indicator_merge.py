@@ -1,5 +1,15 @@
 """Shared utility for merging dual-scheduler indicator rows.
 
+ARCHITECTURAL NOTE (Task #215):
+    This module is the low-level merge primitive. Decision engines
+    (pipeline_scan, evaluate_signals, execute_buy, and any future
+    consumer) MUST NOT call ``fetch_merged_indicators`` directly —
+    they go through :mod:`app.services.indicators_provider`, which is
+    the single sanctioned read path. Direct ``SELECT … FROM indicators``
+    queries against ``indicators_json`` are a regression that
+    reintroduces the partial-row bug (microstructure-only "latest" row
+    silently hiding RSI/MACD/ADX from execution).
+
 Implements deterministic merge from structural + microstructure indicator groups.
 
 Merge contract (applied per indicator key):
@@ -15,9 +25,14 @@ Merge contract (applied per indicator key):
      post-merge if both contributing EMA values are present.
 
 Environment overrides:
-  INDICATOR_MAX_DRIFT_SECONDS  — inter-group drift cap (default 900)
-  STRUCTURAL_STALE_SECONDS     — structural stale limit  (default 1800)
-  MICRO_STALE_SECONDS          — microstructure stale limit (default 600)
+  INDICATOR_MAX_DRIFT_SECONDS           — inter-group drift cap
+                                          (default = STRUCTURAL_INTERVAL + 300 s = 1200 s)
+  STRUCTURAL_SCHEDULER_INTERVAL_SECONDS — structural cadence (default 900 = 15 min);
+                                          drift cap MUST be ≥ this + one micro cycle
+                                          (300 s) so a small scheduler skew does not
+                                          drop the structural group wholesale
+  STRUCTURAL_STALE_SECONDS              — structural stale limit  (default 1800)
+  MICRO_STALE_SECONDS                   — microstructure stale limit (default 600)
 """
 
 from __future__ import annotations
@@ -37,8 +52,19 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-# Runtime-configurable limits
-INDICATOR_MAX_DRIFT_SECONDS: float = _env_float("INDICATOR_MAX_DRIFT_SECONDS", 900.0)
+# Runtime-configurable limits.
+#
+# ``STRUCTURAL_INTERVAL_SECONDS`` mirrors the structural scheduler cadence
+# (see ``structural_scheduler_service.DEFAULT_INTERVAL_SECONDS``) so the
+# drift cap can be derived from it. The drift cap MUST be ≥ structural
+# cadence + one microstructure cycle (300 s) — otherwise a small scheduler
+# skew (e.g. structural ran 950 s ago, micro ran 50 s ago) collides with
+# the cap and the structural group is dropped wholesale, silently
+# erasing RSI / MACD / ADX from every consumer.
+STRUCTURAL_INTERVAL_SECONDS: float = _env_float("STRUCTURAL_SCHEDULER_INTERVAL_SECONDS", 900.0)
+INDICATOR_MAX_DRIFT_SECONDS: float = _env_float(
+    "INDICATOR_MAX_DRIFT_SECONDS", STRUCTURAL_INTERVAL_SECONDS + 300.0
+)
 STRUCTURAL_STALE_SECONDS: float = _env_float("STRUCTURAL_STALE_SECONDS", 1800.0)
 MICROSTRUCTURE_STALE_SECONDS: float = _env_float("MICRO_STALE_SECONDS", 600.0)
 

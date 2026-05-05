@@ -1,5 +1,39 @@
 # Scalpyn — Institutional-Grade Crypto Trading Platform
 
+## Architecture Decision Record — Indicator read path (Task #215)
+> **Single-source-of-truth rule**: every consumer that reads
+> `indicators.indicators_json` for a decision MUST go through
+> `app/services/indicators_provider.get_merged_indicators`. This wraps
+> `app/utils/indicator_merge.fetch_merged_indicators`, which performs the
+> dual-scheduler merge (structural 15 min RSI/MACD/ADX/EMA + microstructure
+> 5 min taker_ratio/spread/VWAP/volume).
+>
+> A direct `SELECT … FROM indicators` (in particular `DISTINCT ON (symbol)
+> ORDER BY time DESC`) is a regression: each row is a *partial* envelope
+> tied to a single `scheduler_group`, so the "latest" row is
+> microstructure-only ~67–87% of the time and silently erases RSI/MACD/ADX
+> from the consumer's view even though they are present in the DB and
+> render correctly in the watchlist UI.
+>
+> Required-core completeness key list lives in
+> `indicators_provider.REQUIRED_CORE_INDICATORS = ("adx", "rsi",
+> "macd_histogram")`. The canonical MACD output key is `macd_histogram`,
+> not `macd` (the raw line value is informational only). Renaming any of
+> these requires updating `feature_engine._calc_macd`,
+> `structural_scheduler_service`, `indicator_validity._PLAUSIBILITY_RULES`,
+> and the provider in lockstep.
+>
+> Drift cap default (`INDICATOR_MAX_DRIFT_SECONDS`) is derived as
+> `STRUCTURAL_SCHEDULER_INTERVAL_SECONDS + 300` (= 1200 s). It MUST stay
+> ≥ structural cadence + one micro cycle, otherwise a small scheduler
+> skew drops the structural group wholesale.
+>
+> Decisions persist `decisions_log.metrics["indicators_snapshot"]` so any
+> future "decision vs DB" investigation can compare the exact payload that
+> was used. Sampled telemetry log `indicators_used` (env
+> `INDICATORS_USED_LOG_SAMPLE_PCT`, default 1) surfaces collection gaps
+> without DB queries.
+
 ## Architecture
 - **Frontend**: Next.js 16 (App Router) + TypeScript + TailwindCSS + shadcn/ui — runs on port 5000
 - **Backend**: FastAPI (Python 3.12) + SQLAlchemy 2.0 + Alembic — runs on port 8000

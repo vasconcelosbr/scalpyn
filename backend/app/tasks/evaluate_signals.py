@@ -52,36 +52,52 @@ async def _evaluate_async():
 
                 daily = await analytics_service.get_daily_summary(db, user.id)
 
-                # Robust authoritative scoring: candidates are pulled from the
-                # ``indicators`` table, restricted to pool_coins (pool_coins is
-                # the exclusive source of truth).  The legacy ``alpha_scores.score``
-                # column is LEFT JOINed only so the row shape stays unchanged for
-                # downstream code — it is purely informational and never gates
-                # selection.
-                ranked = await db.execute(text("""
-                    SELECT DISTINCT ON (i.symbol)
-                        i.symbol,
-                        COALESCE(a.score, 0.0) AS score,
-                        i.indicators_json
-                    FROM indicators i
-                    JOIN pool_coins p ON i.symbol = p.symbol
-                    LEFT JOIN alpha_scores a
-                      ON a.symbol = i.symbol
-                     AND a.time > now() - interval '2 hours'
-                    WHERE p.is_active = true
-                      AND i.time > now() - interval '2 hours'
-                    ORDER BY i.symbol, i.time DESC, a.time DESC
-                """))
-                candidates = ranked.fetchall()
-
+                # Robust authoritative scoring (Task #215):
+                # Candidate symbols come from active ``pool_coins`` (the
+                # exclusive source of truth). Indicator payloads are fetched
+                # via the unified provider so structural RSI/MACD/ADX are
+                # always merged with microstructure taker/spread — replacing
+                # a naive ``DISTINCT ON`` query that silently dropped
+                # structural indicators ~67% of the time. The legacy
+                # ``alpha_scores.score`` column is no longer joined here
+                # because it is informational and never gates selection
+                # (the robust score below is the authority).
+                from ..services.indicators_provider import (
+                    get_merged_indicators,
+                    is_complete,
+                )
                 from ..services.indicator_validity import unwrap_envelope_value
 
-                for candidate in candidates:
-                    symbol = candidate.symbol
-                    indicators = candidate.indicators_json or {}
+                pool_res = await db.execute(text("""
+                    SELECT DISTINCT symbol FROM pool_coins WHERE is_active = true
+                """))
+                pool_symbols = [r.symbol for r in pool_res.fetchall()]
+                if not pool_symbols:
+                    continue
+
+                merged_by_sym = await get_merged_indicators(db, pool_symbols)
+
+                for symbol, mi in merged_by_sym.items():
+                    # ``MergedIndicators.values`` already carries scalars
+                    # unwrapped from per-key envelopes; downstream engines
+                    # accept either flat or envelope shape (they call
+                    # ``unwrap_envelope_value`` internally).
+                    indicators = mi.as_flat_dict()
+
+                    # Shared completeness guard (Task #215) — same rule
+                    # used by pipeline_scan and execute_buy. Skip cleanly
+                    # when core indicators are still warming up.
+                    ok, missing = is_complete(indicators)
+                    if not ok:
+                        logger.warning(
+                            "[evaluate_signals] QUARANTINED %s — missing core: %s",
+                            symbol, missing,
+                        )
+                        continue
+
                     # ``close`` may be stored as the envelope
-                    # ``{"value": 1234.5, "status": "VALID"}``. Unwrap
-                    # so the price guard below compares a scalar.
+                    # ``{"value": 1234.5, "status": "VALID"}``. Unwrap so
+                    # the price guard below compares a scalar.
                     current_price = unwrap_envelope_value(indicators.get("close")) or 0
 
                     if current_price <= 0:
