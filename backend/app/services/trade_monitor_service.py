@@ -146,13 +146,22 @@ async def _fetch_price_maps(
     Returns ``(spot_price_map, futures_price_map)``; each map is an empty
     dict if the endpoint is skipped or fails, allowing graceful degradation.
     """
-    coros = [
-        _fetch_tickers(_GATE_SPOT_TICKERS_URL, "currency_pair") if spot_symbols else asyncio.sleep(0),
-        _fetch_tickers(_GATE_FUTURES_TICKERS_URL, "contract") if futures_symbols else asyncio.sleep(0),
-    ]
+    coros = []
+    fetch_spot = bool(spot_symbols)
+    fetch_futures = bool(futures_symbols)
+
+    if fetch_spot:
+        coros.append(_fetch_tickers(_GATE_SPOT_TICKERS_URL, "currency_pair"))
+    if fetch_futures:
+        coros.append(_fetch_tickers(_GATE_FUTURES_TICKERS_URL, "contract"))
+
     results = await asyncio.gather(*coros)
-    spot_map: dict[str, float] = results[0] if spot_symbols else {}
-    futures_map: dict[str, float] = results[1] if futures_symbols else {}
+
+    idx = 0
+    spot_map: dict[str, float] = results[idx] if fetch_spot else {}
+    if fetch_spot:
+        idx += 1
+    futures_map: dict[str, float] = results[idx] if fetch_futures else {}
     return spot_map, futures_map
 
 
