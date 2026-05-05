@@ -225,46 +225,48 @@ async def _execute_buy_cycle_async() -> dict:
 
                 trade_size_usdt = capital_mgr.calc_trade_size(state)
 
-                # 5. Top-scoring candidates (last 2 min) — Task #215:
+                # 5. Top-scoring candidates (Task #215):
                 #
-                # We pick the candidate symbol set from any fresh row in
-                # ``indicators`` (either scheduler group), then resolve the
-                # full per-symbol payload via the unified provider. The
-                # previous ``DISTINCT ON (i.symbol) ORDER BY i.time DESC``
-                # returned a microstructure-only row in ~87% of cycles,
-                # silently erasing RSI/MACD/ADX from the buy decision.
-                # ``market_metadata.market_cap`` is now joined separately
-                # so we never depend on a single ``indicators`` row to
-                # carry the full envelope. ``alpha_score`` is recomputed
-                # below via the robust selector — the legacy column is no
-                # longer needed.
+                # ARCHITECTURAL RULE: the candidate symbol universe MUST come
+                # from a sanctioned source (pool_coins — the operator-curated
+                # tradable set), never from a raw ``SELECT DISTINCT symbol
+                # FROM indicators`` (which is the same partial-row anti-pattern
+                # at the symbol-list level). The full indicator payload is
+                # then resolved via the unified provider, which merges
+                # structural RSI/MACD/ADX with microstructure taker/spread.
+                # Freshness is enforced by the merge utility's per-group
+                # stale limits (structural 1800 s, microstructure 600 s) —
+                # symbols whose data is too old simply won't carry the
+                # required-core keys and will be quarantined by ``is_complete``.
+                # ``market_metadata.market_cap`` is fetched separately so we
+                # never depend on a single ``indicators`` row to carry the
+                # full envelope. The robust selector below is the
+                # authoritative score; the legacy ``alpha_scores.score``
+                # column is no longer joined here.
                 from ..services.indicators_provider import (
                     get_merged_indicators,
                     is_complete,
                 )
 
-                fresh_syms_res = await db.execute(text("""
-                    SELECT DISTINCT symbol
-                    FROM   indicators
-                    WHERE  time > now() - interval '2 minutes'
-                    LIMIT  :cap
-                """), {"cap": max_opps * 20})
-                fresh_symbols = [r.symbol for r in fresh_syms_res.fetchall()]
+                pool_res = await db.execute(text("""
+                    SELECT DISTINCT symbol FROM pool_coins WHERE is_active = true
+                """))
+                pool_symbols = [r.symbol for r in pool_res.fetchall()]
 
-                if not fresh_symbols:
+                if not pool_symbols:
                     logger.debug(
-                        "No fresh indicator symbols for user %s (threshold=%.1f)",
+                        "No active pool_coins for user %s (threshold=%.1f)",
                         user_id, threshold,
                     )
                     continue
 
-                merged_by_sym = await get_merged_indicators(db, fresh_symbols)
+                merged_by_sym = await get_merged_indicators(db, pool_symbols)
 
                 meta_res = await db.execute(text("""
                     SELECT symbol, market_cap
                     FROM   market_metadata
                     WHERE  symbol = ANY(:syms)
-                """), {"syms": fresh_symbols})
+                """), {"syms": pool_symbols})
                 market_cap_by_sym = {
                     r.symbol: float(r.market_cap) if r.market_cap is not None else None
                     for r in meta_res.fetchall()

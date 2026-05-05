@@ -908,13 +908,29 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
 
     # Task #215: persist the indicator snapshot used by THIS decision so a
     # future "decision vs DB" investigation can compare the exact payload
-    # against table state at the same instant. Snapshot includes the
-    # required-core keys plus every key with a non-null value in the
-    # merge — small enough for JSONB, large enough to trace.
+    # against table state at the same instant. Snapshot is scoped to the
+    # keys this decision actually consumed: required-core (always) +
+    # whatever keys appear in the score-components breakdown (i.e. the
+    # indicators that contributed to the L3 score). Keeps JSONB small.
     merged = asset.get("_merged_indicators")
     if merged is not None:
         from ..services.indicators_provider import build_indicators_snapshot
-        metrics["indicators_snapshot"] = build_indicators_snapshot(merged)
+        consumed_keys: set[str] = set()
+        components = score.get("components") or {}
+        if isinstance(components, dict):
+            for comp_value in components.values():
+                if isinstance(comp_value, dict):
+                    # Component contributions can be either {"value": …,
+                    # "indicator": "rsi"} or nested {"rsi": …, "adx": …}
+                    if "indicator" in comp_value and isinstance(comp_value["indicator"], str):
+                        consumed_keys.add(comp_value["indicator"])
+                    consumed_keys.update(
+                        k for k in comp_value.keys()
+                        if isinstance(k, str) and k in (merged.values or {})
+                    )
+        metrics["indicators_snapshot"] = build_indicators_snapshot(
+            merged, keys=consumed_keys
+        )
 
     return _jsonable(metrics)
 

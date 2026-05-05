@@ -183,14 +183,20 @@ def build_indicators_snapshot(
     "decision vs DB" investigation can compare the exact payload that
     was used against the table state at decision time.
 
-    By default snapshots :data:`REQUIRED_CORE_INDICATORS` plus every key
-    with a non-null value in the merge. Pass an explicit ``keys`` iterable
-    to scope further (e.g. only the keys consumed by a specific rule set).
+    By default snapshots ONLY :data:`REQUIRED_CORE_INDICATORS` so the
+    JSONB column stays small (3 keys × ~4 fields = ~12 entries per
+    decision). Callers that consumed additional indicators (e.g. score
+    components, block-rule inputs) should pass an explicit ``keys``
+    iterable derived from what the decision actually read — that scopes
+    the snapshot to "exactly what was consumed", not "everything that
+    happened to be merged".
     """
     if keys is None:
-        keys_to_dump = set(REQUIRED_CORE_INDICATORS) | set(merged.values.keys())
+        keys_to_dump = set(REQUIRED_CORE_INDICATORS)
     else:
-        keys_to_dump = set(keys)
+        # Always include required-core keys so the snapshot is self-evident
+        # about the completeness state of the decision.
+        keys_to_dump = set(keys) | set(REQUIRED_CORE_INDICATORS)
 
     snapshot: Dict[str, Dict[str, Any]] = {}
     for key in sorted(keys_to_dump):
