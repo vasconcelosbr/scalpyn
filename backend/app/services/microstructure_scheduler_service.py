@@ -246,35 +246,6 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
             return
         logger.error("[MICRO-SCHED] indicators insert failed for %s: %s", symbol, exc, exc_info=True)
 
-
-async def _refresh_market_metadata(db, symbol: str,
-                                   spread_payload: dict, when: datetime) -> None:
-    spread_pct = spread_payload.get("spread_pct")
-    depth = spread_payload.get("orderbook_depth_usdt")
-    if spread_pct is None and depth is None:
-        return
-    try:
-        # SAVEPOINT: isolates a market_metadata failure from the rest of the session.
-        async with db.begin_nested():
-            await db.execute(text("""
-                INSERT INTO market_metadata
-                    (symbol, spread_pct, orderbook_depth_usdt, last_updated)
-                VALUES
-                    (:symbol, :spread, :depth, :updated)
-                ON CONFLICT (symbol) DO UPDATE SET
-                    spread_pct = COALESCE(:spread, market_metadata.spread_pct),
-                    orderbook_depth_usdt = COALESCE(:depth, market_metadata.orderbook_depth_usdt),
-                    last_updated = :updated
-            """), {
-                "symbol": symbol,
-                "spread": spread_pct,
-                "depth": depth,
-                "updated": when,
-            })
-    except Exception as exc:
-        logger.error("[MICRO-SCHED] market_metadata upsert failed for %s: %s", symbol, exc, exc_info=True)
-
-
 async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore,
                                of_window: int) -> str:
     from ..services.feature_engine import FeatureEngine

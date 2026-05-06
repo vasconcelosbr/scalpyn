@@ -15,7 +15,13 @@ class PersistenceRepository:
             await self._persist_market_metadata(session, job)
 
     async def _persist_candles(self, session, job: PersistenceJob) -> None:
-        timeframe = job.indicator.timeframe if job.indicator else job.timeframe
+        timeframe = (
+            job.indicator.timeframe
+            if job.indicator is not None and getattr(job.indicator, "timeframe", None)
+            else job.timeframe
+        )
+        if not timeframe:
+            raise ValueError(f"PersistenceJob missing timeframe for candle batch: {job.key}")
         for candle in job.candles:
             await session.execute(
                 text("""

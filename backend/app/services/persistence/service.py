@@ -69,7 +69,7 @@ class _PersistenceState:
         self.total_failed += 1
         state = self.domains[domain]
         state.failed += 1
-        state.last_error = f"{key}: {type(exc).__name__}: {exc}"
+        state.last_error = f"{key}: {type(exc).__name__}"
 
     def increment_rollbacks(self) -> None:
         self.rollback_count += 1

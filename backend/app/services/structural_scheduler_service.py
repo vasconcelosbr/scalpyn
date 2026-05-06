@@ -194,25 +194,6 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
             return
         logger.error("[STRUCT-SCHED] indicators insert failed for %s: %s", symbol, exc, exc_info=True)
 
-
-async def _refresh_market_metadata(db, symbol: str, df: pd.DataFrame, when: datetime) -> None:
-    if df is None or df.empty:
-        return
-    try:
-        # SAVEPOINT: isolates a market_metadata failure from the rest of the session.
-        async with db.begin_nested():
-            last_close = float(df.iloc[-1]["close"])
-            await db.execute(text("""
-                INSERT INTO market_metadata (symbol, price, last_updated)
-                VALUES (:symbol, :price, :updated)
-                ON CONFLICT (symbol) DO UPDATE SET
-                    price = COALESCE(:price, market_metadata.price),
-                    last_updated = :updated
-            """), {"symbol": symbol, "price": last_close, "updated": when})
-    except Exception as exc:
-        logger.error("[STRUCT-SCHED] market_metadata upsert failed for %s: %s", symbol, exc, exc_info=True)
-
-
 async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
     from ..services.feature_engine import FeatureEngine
     from ..services.market_data_service import market_data_service

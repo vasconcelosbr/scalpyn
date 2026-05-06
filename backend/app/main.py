@@ -414,13 +414,23 @@ async def health_check_persistence():
     from .services.persistence import get_persistence_snapshot
 
     payload = get_persistence_snapshot()
+    public_payload = {
+        **payload,
+        "domains": {
+            name: {
+                **domain,
+                "last_error": "internal_error" if domain.get("last_error") else None,
+            }
+            for name, domain in (payload.get("domains") or {}).items()
+        },
+    }
     if payload.get("status") != "ok":
         return Response(
-            content=_json.dumps(payload),
+            content=_json.dumps(public_payload),
             status_code=503,
             media_type="application/json",
         )
-    return payload
+    return public_payload
 
 
 @app.get("/api/market/scores")
