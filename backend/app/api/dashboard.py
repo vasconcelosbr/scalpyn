@@ -123,51 +123,17 @@ async def get_health(
 # ─────────────────────────────────────────────────────────────────────────────
 @router.get("/system-status", response_model=SystemStatusResponse)
 async def get_system_status(
-    db: AsyncSession = Depends(get_db),
     _user_id: UUID = Depends(get_current_user_id),
 ):
-    redis_alive = False
-    redis_error: Optional[str] = None
-    try:
-        import redis as _redis
-        from ..config import settings
+    """Backwards-compatible system status — now snapshot-backed.
 
-        r = _redis.from_url(
-            settings.REDIS_URL,
-            socket_connect_timeout=2,
-            socket_timeout=2,
-        )
-        redis_alive = bool(r.ping())
-    except Exception as exc:
-        redis_error = f"{type(exc).__name__}: {exc}"
-
-    sql = text(
-        """
-        SELECT
-            (SELECT MAX(time)       FROM ohlcv WHERE timeframe = '5m') AS last_ohlcv_ts,
-            (SELECT MAX(created_at) FROM decisions_log)                AS last_decision_ts
-        """
-    )
-    row = (await db.execute(sql)).one()
-    now = datetime.now(timezone.utc)
-
-    def _age(ts: Optional[datetime]) -> Optional[float]:
-        if ts is None:
-            return None
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        return (now - ts).total_seconds()
-
-    return SystemStatusResponse(
-        redis_alive=redis_alive,
-        redis_error=redis_error,
-        last_ohlcv_ts=row.last_ohlcv_ts,
-        last_ohlcv_age_seconds=_age(row.last_ohlcv_ts),
-        last_decision_ts=row.last_decision_ts,
-        last_decision_age_seconds=_age(row.last_decision_ts),
-        last_pipeline_scan_ts=row.last_decision_ts,  # heurística: última decisão = última varredura
-        last_pipeline_scan_age_seconds=_age(row.last_decision_ts),
-    )
+    Reads only from ``OperationalSnapshotService`` cache.  Does NOT open a
+    Redis connection or run a DB query at request time.  This was an
+    invariant introduced by Task #225 (no inline Celery/Redis probes in
+    HTTP handlers — see replit.md gotcha).  The response shape is
+    preserved for the legacy MonitoringTab clients.
+    """
+    return SystemStatusResponse(**get_ops_service().get_system_status_view())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -476,9 +442,33 @@ async def get_score_snapshot(_user_id: UUID = Depends(get_current_user_id)):
     return get_ops_service().score.to_dict()
 
 
-@router.get("/pipeline-latency", response_model=SnapshotEnvelope)
-async def get_latency_snapshot(_user_id: UUID = Depends(get_current_user_id)):
-    return get_ops_service().latency.to_dict()
+@router.get("/pipeline-latency")
+async def get_latency_snapshot(
+    family: Optional[str] = Query(
+        None,
+        description="ingestion | decision | processing.  Omit to receive all three.",
+    ),
+    _user_id: UUID = Depends(get_current_user_id),
+):
+    """Pipeline latency split into three families.
+
+    * ``ingestion``  — gap between NOW and the most recent OHLCV candle.
+    * ``decision``   — p50/p95/max of ``decisions_log.latency_ms`` (1h).
+    * ``processing`` — p50/p95 derived from the in-process Prometheus
+                       ``indicator_computation_duration_seconds`` histogram.
+    """
+    svc = get_ops_service()
+    families = {
+        "ingestion":  svc.ingestion_latency.to_dict(),
+        "decision":   svc.decision_latency.to_dict(),
+        "processing": svc.processing_latency.to_dict(),
+    }
+    if family is None:
+        return families
+    if family not in families:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"unknown latency family: {family}")
+    return families[family]
 
 
 @router.get("/ingestion", response_model=SnapshotEnvelope)
@@ -491,9 +481,22 @@ async def get_alerts(_user_id: UUID = Depends(get_current_user_id)):
     return get_ops_service().get_alerts()
 
 
-@router.get("/events", response_model=OperationalEventsResponse)
-async def get_events(_user_id: UUID = Depends(get_current_user_id)):
-    return get_ops_service().get_events()
+@router.get("/events")
+async def get_events(
+    category: Optional[str] = Query(
+        None,
+        description="alert | worker | redis | all.  Omit for all three buckets.",
+    ),
+    limit: int = Query(50, ge=1, le=100),
+    _user_id: UUID = Depends(get_current_user_id),
+):
+    """Filtered event stream.
+
+    Without ``category`` the response shape matches
+    :class:`OperationalEventsResponse` (three buckets together).  When a
+    category is supplied the response collapses to ``{events: [...]}``.
+    """
+    return get_ops_service().get_events(category=category, limit=limit)
 
 
 @router.get("/ml-dataset/export")

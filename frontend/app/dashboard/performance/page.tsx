@@ -5,11 +5,12 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Database,
   Download,
   Gauge,
   RefreshCw,
-  Server,
   ShieldAlert,
   Sigma,
   TrendingUp,
@@ -52,36 +53,11 @@ const C = {
 } as const;
 
 const STATUS_STYLES: Record<string, { bg: string; border: string; text: string; icon: React.ReactNode }> = {
-  ok: {
-    bg: "rgba(34,197,94,0.12)",
-    border: "rgba(34,197,94,0.45)",
-    text: C.ok,
-    icon: <CheckCircle2 size={20} />,
-  },
-  degraded: {
-    bg: "rgba(245,158,11,0.12)",
-    border: "rgba(245,158,11,0.45)",
-    text: C.warn,
-    icon: <AlertTriangle size={20} />,
-  },
-  warn: {
-    bg: "rgba(245,158,11,0.12)",
-    border: "rgba(245,158,11,0.45)",
-    text: C.warn,
-    icon: <AlertTriangle size={20} />,
-  },
-  critical: {
-    bg: "rgba(239,68,68,0.14)",
-    border: "rgba(239,68,68,0.55)",
-    text: C.critical,
-    icon: <ShieldAlert size={20} />,
-  },
-  unknown: {
-    bg: "rgba(139,146,165,0.10)",
-    border: "rgba(139,146,165,0.30)",
-    text: C.textSecondary,
-    icon: <Activity size={20} />,
-  },
+  ok:       { bg: "rgba(34,197,94,0.12)",  border: "rgba(34,197,94,0.45)",  text: C.ok,            icon: <CheckCircle2 size={20} /> },
+  degraded: { bg: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.45)", text: C.warn,          icon: <AlertTriangle size={20} /> },
+  warn:     { bg: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.45)", text: C.warn,          icon: <AlertTriangle size={20} /> },
+  critical: { bg: "rgba(239,68,68,0.14)",  border: "rgba(239,68,68,0.55)",  text: C.critical,      icon: <ShieldAlert size={20} /> },
+  unknown:  { bg: "rgba(139,146,165,0.10)", border: "rgba(139,146,165,0.30)", text: C.textSecondary, icon: <Activity size={20} /> },
 };
 
 const STATUS_LABEL_PT: Record<string, string> = {
@@ -98,6 +74,7 @@ interface SnapshotEnvelope<T = Record<string, unknown>> {
   status: "ok" | "degraded" | "critical" | "unknown";
   data: T;
   error: string | null;
+  failure_streak?: number;
 }
 
 interface OperationalAlert {
@@ -108,6 +85,8 @@ interface OperationalAlert {
   since: string | null;
   details: Record<string, unknown>;
 }
+
+interface QueueStats { active: number; reserved: number; scheduled: number }
 
 interface OverviewResp {
   as_of: string;
@@ -123,14 +102,22 @@ interface OverviewResp {
       workers?: string[];
       worker_count?: number;
       active_tasks?: number;
+      reserved_tasks?: number;
+      scheduled_tasks?: number;
       registered_tasks?: number;
+      per_queue?: Record<string, QueueStats>;
+      beat?: { status?: string; schedule_age_seconds?: number | null };
     }>;
     redis: SnapshotEnvelope<{
       alive?: boolean;
+      ping_ms?: number;
       connected_clients?: number;
       used_memory_human?: string;
       instantaneous_ops_per_sec?: number;
       total_commands_processed?: number;
+      queue_lengths?: Record<string, number>;
+      backlog_total?: number;
+      unrouted_backlog?: number;
     }>;
     db: SnapshotEnvelope<{
       select1_ms?: number;
@@ -151,11 +138,23 @@ interface OverviewResp {
       last_decision?: string | null;
       last_decision_age_seconds?: number | null;
     }>;
-    latency: SnapshotEnvelope<{
+    ingestion_latency: SnapshotEnvelope<{
+      delay_seconds?: number | null;
+      last_candle?: string | null;
+      rows_window?: number;
+    }>;
+    decision_latency: SnapshotEnvelope<{
       p50_ms?: number | null;
       p95_ms?: number | null;
       max_ms?: number | null;
       samples_1h?: number;
+    }>;
+    processing_latency: SnapshotEnvelope<{
+      available?: boolean;
+      samples?: number;
+      p50_ms?: number | null;
+      p95_ms?: number | null;
+      avg_ms?: number | null;
     }>;
   };
   alerts: OperationalAlert[];
@@ -167,21 +166,22 @@ interface EventItem {
   code: string;
   message: string;
   extra: Record<string, unknown>;
+  category?: string;
 }
 interface EventsResp {
   as_of: string;
-  alert_history: EventItem[];
-  worker_events: EventItem[];
-  redis_degradations: EventItem[];
+  alert_history?: EventItem[];
+  worker_events?: EventItem[];
+  redis_degradations?: EventItem[];
 }
 
+// Analytics types (lazy section)
 interface OhlcvRateResp {
   window_minutes: number;
   timeframe: string;
   total_candles: number;
   buckets: { bucket: string; candles: number }[];
 }
-
 interface DecisionsResp {
   window_hours: number;
   total: number;
@@ -192,7 +192,6 @@ interface DecisionsResp {
   score_distribution: { bucket: string; count: number }[];
   top_block_reasons: { reason: string; count: number }[];
 }
-
 interface TradesResp {
   window_days: number;
   total: number;
@@ -201,12 +200,10 @@ interface TradesResp {
   avg_holding_seconds: number | null;
   cumulative_pnl: { time: string; cumulative_pnl_pct: number }[];
 }
-
 interface CompResp {
   window_days: number;
   items: { kind: string; total: number; win_rate: number | null; avg_pnl_pct: number | null }[];
 }
-
 interface MlResp {
   total: number;
   items: {
@@ -223,15 +220,21 @@ interface MlResp {
 }
 
 // ─── Polling hook ────────────────────────────────────────────────────────────
-function usePoll<T>(endpoint: string, intervalMs: number) {
+function usePoll<T>(endpoint: string | null, intervalMs: number) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(endpoint != null);
   const [tick, setTick] = useState(0);
 
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
+    if (endpoint == null) {
+      setData(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     const run = async () => {
       try {
@@ -283,6 +286,10 @@ function fmtTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
+function fmtMs(v: number | null | undefined, digits = 0): string {
+  if (v == null || Number.isNaN(v)) return "—";
+  return `${v.toFixed(digits)} ms`;
+}
 function statusColor(s: string | undefined | null): string {
   if (s === "ok") return C.ok;
   if (s === "degraded" || s === "warn") return C.warn;
@@ -326,17 +333,9 @@ function Panel({
 function StatTile({ label, value, hint, color }: { label: string; value: string; hint?: string; color?: string }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>
-        {label}
-      </span>
-      <span className="text-[22px] font-bold tabular-nums" style={{ color: color ?? C.textPrimary }}>
-        {value}
-      </span>
-      {hint && (
-        <span className="text-[11px]" style={{ color: C.textTertiary }}>
-          {hint}
-        </span>
-      )}
+      <span className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>{label}</span>
+      <span className="text-[22px] font-bold tabular-nums" style={{ color: color ?? C.textPrimary }}>{value}</span>
+      {hint && <span className="text-[11px]" style={{ color: C.textTertiary }}>{hint}</span>}
     </div>
   );
 }
@@ -344,9 +343,7 @@ function StatTile({ label, value, hint, color }: { label: string; value: string;
 function EmptyState({ message }: { message: string }) {
   return (
     <div className="flex items-center justify-center py-10">
-      <p className="text-sm" style={{ color: C.textTertiary }}>
-        {message}
-      </p>
+      <p className="text-sm" style={{ color: C.textTertiary }}>{message}</p>
     </div>
   );
 }
@@ -359,7 +356,7 @@ function OperationalBanner({ data }: { data: OverviewResp | null }) {
   const delay = ing?.delay_seconds ?? null;
   return (
     <div
-      className="rounded-2xl p-5 flex items-center justify-between gap-4"
+      className="rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4"
       style={{ background: style.bg, border: `1px solid ${style.border}` }}
     >
       <div className="flex items-center gap-4">
@@ -369,11 +366,11 @@ function OperationalBanner({ data }: { data: OverviewResp | null }) {
             {STATUS_LABEL_PT[overall] ?? overall}
           </span>
           <span className="text-[12px]" style={{ color: C.textSecondary }}>
-            Limiares de ingestão: verde &lt; 10 min · amarelo 10–20 min · vermelho &gt; 20 min
+            Limiares de ingestão: verde &lt; 10 min · amarelo 10–20 min · vermelho &gt; 20 min · degrada após 3 falhas consecutivas
           </span>
         </div>
       </div>
-      <div className="flex items-center gap-6">
+      <div className="flex items-center gap-6 flex-wrap">
         <StatTile label="Atraso ingest" value={fmtAge(delay)} color={style.text} />
         <StatTile label="Símbolos" value={String(ing?.distinct_symbols ?? "—")} />
         <StatTile label="Candles (15m)" value={String(ing?.rows_window ?? "—")} />
@@ -418,22 +415,14 @@ function AlertsPanel({ data }: { data: OverviewResp | null }) {
                     >
                       {a.severity}
                     </span>
-                    <span className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>
-                      {a.category}
-                    </span>
-                    <span className="text-[12px] font-mono" style={{ color: C.textSecondary }}>
-                      {a.code}
-                    </span>
+                    <span className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>{a.category}</span>
+                    <span className="text-[12px] font-mono" style={{ color: C.textSecondary }}>{a.code}</span>
                   </div>
                   {a.since && (
-                    <span className="text-[11px]" style={{ color: C.textTertiary }}>
-                      desde {fmtTime(a.since)}
-                    </span>
+                    <span className="text-[11px]" style={{ color: C.textTertiary }}>desde {fmtTime(a.since)}</span>
                   )}
                 </div>
-                <p className="text-[13px]" style={{ color: C.textPrimary }}>
-                  {a.impact}
-                </p>
+                <p className="text-[13px]" style={{ color: C.textPrimary }}>{a.impact}</p>
               </li>
             );
           })}
@@ -443,20 +432,23 @@ function AlertsPanel({ data }: { data: OverviewResp | null }) {
   );
 }
 
-// ─── Snapshot card grid ─────────────────────────────────────────────────────
+// ─── Snapshot card ──────────────────────────────────────────────────────────
 function SnapshotCard({
   title,
   icon,
   envelope,
   rows,
+  footer,
 }: {
   title: string;
   icon: React.ReactNode;
   envelope: SnapshotEnvelope | undefined;
   rows: { label: string; value: string }[];
+  footer?: React.ReactNode;
 }) {
   const status = envelope?.status ?? "unknown";
   const color = statusColor(status);
+  const streak = envelope?.failure_streak ?? 0;
   return (
     <div
       className="rounded-2xl p-4 flex flex-col gap-3"
@@ -465,43 +457,82 @@ function SnapshotCard({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span style={{ color: C.textSecondary }}>{icon}</span>
-          <h4 className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: C.textSecondary }}>
-            {title}
-          </h4>
+          <h4 className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: C.textSecondary }}>{title}</h4>
         </div>
         <span
           className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
           style={{ background: `${color}22`, color, border: `1px solid ${color}55` }}
         >
-          {status}
+          {status}{streak > 0 ? ` (${streak}/3)` : ""}
         </span>
       </div>
       <div className="flex flex-col gap-1.5">
         {rows.map((r) => (
           <div key={r.label} className="flex justify-between text-[13px]">
             <span style={{ color: C.textTertiary }}>{r.label}</span>
-            <span className="tabular-nums font-medium" style={{ color: C.textPrimary }}>
-              {r.value}
-            </span>
+            <span className="tabular-nums font-medium text-right" style={{ color: C.textPrimary }}>{r.value}</span>
           </div>
         ))}
       </div>
+      {footer}
       {envelope?.error && (
-        <p className="text-[11px] mt-1 truncate" title={envelope.error} style={{ color: C.critical }}>
-          {envelope.error}
-        </p>
+        <p className="text-[11px] mt-1 truncate" title={envelope.error} style={{ color: C.critical }}>{envelope.error}</p>
       )}
       {envelope?.as_of && (
-        <p className="text-[10px]" style={{ color: C.textTertiary }}>
-          atualizado {fmtTime(envelope.as_of)}
-        </p>
+        <p className="text-[10px]" style={{ color: C.textTertiary }}>atualizado {fmtTime(envelope.as_of)}</p>
       )}
     </div>
   );
 }
 
+// ─── Per-queue mini-table (Celery + Redis backlog) ──────────────────────────
+function QueueBreakdown({
+  perQueue,
+  queueLengths,
+}: {
+  perQueue?: Record<string, QueueStats>;
+  queueLengths?: Record<string, number>;
+}) {
+  const queues = useMemo(() => {
+    const names = new Set<string>([
+      ...Object.keys(perQueue ?? {}),
+      ...Object.keys(queueLengths ?? {}),
+    ]);
+    return Array.from(names).sort();
+  }, [perQueue, queueLengths]);
+  if (queues.length === 0) return null;
+  return (
+    <div className="border-t pt-2" style={{ borderColor: C.border }}>
+      <p className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: C.textTertiary }}>
+        Por fila — backlog (LLEN) · A/R/S
+      </p>
+      <ul className="flex flex-col gap-1">
+        {queues.map((q) => {
+          const ll = queueLengths?.[q];
+          const stats = perQueue?.[q];
+          const isSentinel = q === "__no_default__";
+          const danger = isSentinel && (ll ?? 0) > 0;
+          return (
+            <li key={q} className="flex justify-between text-[12px] tabular-nums">
+              <span style={{ color: danger ? C.critical : C.textPrimary }}>
+                {q}{isSentinel ? " ⚠" : ""}
+              </span>
+              <span style={{ color: danger ? C.critical : C.textSecondary }}>
+                {ll != null && ll >= 0 ? `LLEN ${ll}` : "LLEN —"}
+                {stats ? ` · ${stats.active}/${stats.reserved}/${stats.scheduled}` : ""}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+// ─── Snapshot grid ──────────────────────────────────────────────────────────
 function OpsSnapshotsGrid({ data }: { data: OverviewResp | null }) {
   const s = data?.snapshots;
+  const beat = s?.celery.data.beat;
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
       <SnapshotCard
@@ -521,9 +552,15 @@ function OpsSnapshotsGrid({ data }: { data: OverviewResp | null }) {
         envelope={s?.celery}
         rows={[
           { label: "Workers", value: String(s?.celery.data.worker_count ?? 0) },
-          { label: "Tarefas ativas", value: String(s?.celery.data.active_tasks ?? 0) },
-          { label: "Tarefas registradas", value: String(s?.celery.data.registered_tasks ?? 0) },
+          { label: "Active", value: String(s?.celery.data.active_tasks ?? 0) },
+          { label: "Reserved", value: String(s?.celery.data.reserved_tasks ?? 0) },
+          { label: "Scheduled", value: String(s?.celery.data.scheduled_tasks ?? 0) },
+          {
+            label: "Beat",
+            value: `${beat?.status ?? "—"} (${fmtAge(beat?.schedule_age_seconds)})`,
+          },
         ]}
+        footer={<QueueBreakdown perQueue={s?.celery.data.per_queue} />}
       />
       <SnapshotCard
         title="Redis"
@@ -531,17 +568,19 @@ function OpsSnapshotsGrid({ data }: { data: OverviewResp | null }) {
         envelope={s?.redis}
         rows={[
           { label: "Status", value: s?.redis.data.alive ? "online" : "offline" },
+          { label: "Ping", value: fmtMs(s?.redis.data.ping_ms, 1) },
           { label: "Clientes", value: String(s?.redis.data.connected_clients ?? "—") },
           { label: "Memória", value: s?.redis.data.used_memory_human ?? "—" },
           { label: "Ops/s", value: String(s?.redis.data.instantaneous_ops_per_sec ?? "—") },
         ]}
+        footer={<QueueBreakdown queueLengths={s?.redis.data.queue_lengths} />}
       />
       <SnapshotCard
         title="Banco de dados"
         icon={<Database size={14} />}
         envelope={s?.db}
         rows={[
-          { label: "SELECT 1", value: s?.db.data.select1_ms != null ? `${s.db.data.select1_ms.toFixed(1)} ms` : "—" },
+          { label: "SELECT 1", value: fmtMs(s?.db.data.select1_ms, 1) },
           { label: "Pool", value: `${s?.db.data.checked_out ?? 0}/${s?.db.data.pool_size ?? 0}` },
           { label: "Overflow", value: String(s?.db.data.overflow ?? 0) },
         ]}
@@ -554,20 +593,91 @@ function OpsSnapshotsGrid({ data }: { data: OverviewResp | null }) {
           { label: "Decisões", value: String(s?.score.data.decisions_24h ?? 0) },
           { label: "Taxa ALLOW", value: fmtPct(s?.score.data.allow_rate_24h ?? null) },
           { label: "Score médio", value: s?.score.data.avg_score != null ? s.score.data.avg_score.toFixed(1) : "—" },
-          { label: "Última decisão", value: fmtAge(s?.score.data.last_decision_age_seconds) + " atrás" },
+          { label: "Última decisão", value: `${fmtAge(s?.score.data.last_decision_age_seconds)} atrás` },
         ]}
       />
-      <SnapshotCard
-        title="Latência decisão (1 h)"
-        icon={<Clock size={14} />}
-        envelope={s?.latency}
-        rows={[
-          { label: "p50", value: s?.latency.data.p50_ms != null ? `${s.latency.data.p50_ms.toFixed(0)} ms` : "—" },
-          { label: "p95", value: s?.latency.data.p95_ms != null ? `${s.latency.data.p95_ms.toFixed(0)} ms` : "—" },
-          { label: "Máx", value: s?.latency.data.max_ms != null ? `${s.latency.data.max_ms} ms` : "—" },
-          { label: "Amostras", value: String(s?.latency.data.samples_1h ?? 0) },
-        ]}
+      <LatencyCard
+        ingestion={s?.ingestion_latency}
+        decision={s?.decision_latency}
+        processing={s?.processing_latency}
       />
+    </div>
+  );
+}
+
+// ─── Latency triple-card ─────────────────────────────────────────────────────
+function LatencyCard({
+  ingestion,
+  decision,
+  processing,
+}: {
+  ingestion: SnapshotEnvelope<{ delay_seconds?: number | null }> | undefined;
+  decision: SnapshotEnvelope<{ p50_ms?: number | null; p95_ms?: number | null; samples_1h?: number }> | undefined;
+  processing: SnapshotEnvelope<{ p50_ms?: number | null; p95_ms?: number | null; samples?: number; available?: boolean }> | undefined;
+}) {
+  const ranks: Record<string, number> = { unknown: 0, ok: 1, degraded: 2, critical: 3 };
+  const worst = [ingestion?.status, decision?.status, processing?.status].reduce<string>(
+    (acc, s) => (ranks[s ?? "unknown"] > ranks[acc] ? (s ?? "unknown") : acc),
+    "unknown",
+  );
+  const color = statusColor(worst);
+  return (
+    <div
+      className="rounded-2xl p-4 flex flex-col gap-3"
+      style={{ background: C.elevated, border: `1px solid ${C.border}` }}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Clock size={14} style={{ color: C.textSecondary }} />
+          <h4 className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: C.textSecondary }}>
+            Latência (3 famílias)
+          </h4>
+        </div>
+        <span
+          className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
+          style={{ background: `${color}22`, color, border: `1px solid ${color}55` }}
+        >
+          {worst}
+        </span>
+      </div>
+      <div className="flex flex-col gap-2 text-[12px]">
+        <LatencyRow
+          label="Ingestão (gap)"
+          value={fmtAge(ingestion?.data.delay_seconds ?? null)}
+          status={ingestion?.status}
+        />
+        <LatencyRow
+          label="Decisão p50/p95"
+          value={`${fmtMs(decision?.data.p50_ms)} / ${fmtMs(decision?.data.p95_ms)}`}
+          status={decision?.status}
+          hint={`${decision?.data.samples_1h ?? 0} amostras`}
+        />
+        <LatencyRow
+          label="Compute p50/p95"
+          value={
+            processing?.data.available === false
+              ? "prom indisponível"
+              : `${fmtMs(processing?.data.p50_ms)} / ${fmtMs(processing?.data.p95_ms)}`
+          }
+          status={processing?.status}
+          hint={`${processing?.data.samples ?? 0} amostras`}
+        />
+      </div>
+    </div>
+  );
+}
+function LatencyRow({ label, value, status, hint }: { label: string; value: string; status?: string; hint?: string }) {
+  const dot = statusColor(status);
+  return (
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-2">
+        <span className="w-1.5 h-1.5 rounded-full" style={{ background: dot }} />
+        <span style={{ color: C.textTertiary }}>{label}</span>
+      </div>
+      <span className="tabular-nums" style={{ color: C.textPrimary }}>
+        {value}
+        {hint && <span className="ml-2" style={{ color: C.textTertiary }}>· {hint}</span>}
+      </span>
     </div>
   );
 }
@@ -577,13 +687,11 @@ function EventsHistoryPanel({ data }: { data: EventsResp | null }) {
   const merged = useMemo(() => {
     if (!data) return [];
     const all: (EventItem & { kind: string })[] = [
-      ...data.alert_history.map((e) => ({ ...e, kind: "alert" })),
-      ...data.worker_events.map((e) => ({ ...e, kind: "worker" })),
-      ...data.redis_degradations.map((e) => ({ ...e, kind: "redis" })),
+      ...(data.alert_history ?? []).map((e) => ({ ...e, kind: e.category ?? "alert" })),
+      ...(data.worker_events ?? []).map((e) => ({ ...e, kind: e.category ?? "worker" })),
+      ...(data.redis_degradations ?? []).map((e) => ({ ...e, kind: e.category ?? "redis" })),
     ];
-    return all
-      .sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
-      .slice(0, 20);
+    return all.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime()).slice(0, 30);
   }, [data]);
   return (
     <Panel title="Histórico de eventos" icon={<History size={16} />}>
@@ -595,10 +703,7 @@ function EventsHistoryPanel({ data }: { data: EventsResp | null }) {
             const recovered = e.code.includes("recovered") || e.code === "worker_online";
             const dotColor = recovered ? C.ok : e.kind === "redis" ? C.warn : C.critical;
             return (
-              <li
-                key={`${e.ts}-${e.code}-${i}`}
-                className="flex items-center gap-3 text-[12px] py-1"
-              >
+              <li key={`${e.ts}-${e.code}-${i}`} className="flex items-center gap-3 text-[12px] py-1">
                 <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: dotColor }} />
                 <span className="tabular-nums" style={{ color: C.textTertiary }}>{fmtTime(e.ts)}</span>
                 <span className="font-mono text-[11px] px-1.5 py-0.5 rounded" style={{ background: C.elevated2, color: C.textSecondary }}>
@@ -614,7 +719,7 @@ function EventsHistoryPanel({ data }: { data: EventsResp | null }) {
   );
 }
 
-// ─── Ingest rate chart ──────────────────────────────────────────────────────
+// ─── Analytics panels (lazy section) ────────────────────────────────────────
 function IngestRateChart({ data }: { data: OhlcvRateResp | null }) {
   const chartData = useMemo(
     () =>
@@ -648,11 +753,7 @@ function IngestRateChart({ data }: { data: OhlcvRateResp | null }) {
             <CartesianGrid strokeDasharray="3 4" stroke="rgba(255,255,255,0.04)" vertical={false} />
             <XAxis dataKey="label" tick={{ fill: C.textTertiary, fontSize: 11 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
             <YAxis tick={{ fill: C.textTertiary, fontSize: 11 }} tickLine={false} axisLine={false} width={32} allowDecimals={false} />
-            <Tooltip
-              contentStyle={{ background: C.elevated2, border: `1px solid ${C.borderStrong}`, borderRadius: 12 }}
-              labelStyle={{ color: C.textSecondary }}
-              itemStyle={{ color: C.textPrimary }}
-            />
+            <Tooltip contentStyle={{ background: C.elevated2, border: `1px solid ${C.borderStrong}`, borderRadius: 12 }} labelStyle={{ color: C.textSecondary }} itemStyle={{ color: C.textPrimary }} />
             <Area type="monotone" dataKey="candles" stroke={C.blue} strokeWidth={2} fill="url(#ingestGrad)" dot={false} />
           </AreaChart>
         </ResponsiveContainer>
@@ -661,7 +762,6 @@ function IngestRateChart({ data }: { data: OhlcvRateResp | null }) {
   );
 }
 
-// ─── Decision stats ─────────────────────────────────────────────────────────
 function DecisionStatsPanel({ data }: { data: DecisionsResp | null }) {
   const pieData = useMemo(
     () => [
@@ -673,7 +773,6 @@ function DecisionStatsPanel({ data }: { data: DecisionsResp | null }) {
   const dist = data?.score_distribution ?? [];
   const reasons = data?.top_block_reasons ?? [];
   const empty = (data?.total ?? 0) === 0;
-
   return (
     <Panel title="Decisões (24 h)" icon={<Sigma size={16} />}>
       {empty ? (
@@ -689,15 +788,9 @@ function DecisionStatsPanel({ data }: { data: DecisionsResp | null }) {
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={42} outerRadius={70} paddingAngle={2}>
-                  {pieData.map((d) => (
-                    <Cell key={d.name} fill={d.color} stroke="none" />
-                  ))}
+                  {pieData.map((d) => <Cell key={d.name} fill={d.color} stroke="none" />)}
                 </Pie>
-                <Tooltip
-                  contentStyle={{ background: C.elevated2, border: `1px solid ${C.borderStrong}`, borderRadius: 12 }}
-                  labelStyle={{ color: C.textSecondary }}
-                  itemStyle={{ color: C.textPrimary }}
-                />
+                <Tooltip contentStyle={{ background: C.elevated2, border: `1px solid ${C.borderStrong}`, borderRadius: 12 }} labelStyle={{ color: C.textSecondary }} itemStyle={{ color: C.textPrimary }} />
               </PieChart>
             </ResponsiveContainer>
           </div>
@@ -707,11 +800,7 @@ function DecisionStatsPanel({ data }: { data: DecisionsResp | null }) {
                 <CartesianGrid strokeDasharray="3 4" stroke="rgba(255,255,255,0.04)" vertical={false} />
                 <XAxis dataKey="bucket" tick={{ fill: C.textTertiary, fontSize: 11 }} tickLine={false} axisLine={false} />
                 <YAxis tick={{ fill: C.textTertiary, fontSize: 11 }} tickLine={false} axisLine={false} width={28} allowDecimals={false} />
-                <Tooltip
-                  contentStyle={{ background: C.elevated2, border: `1px solid ${C.borderStrong}`, borderRadius: 12 }}
-                  labelStyle={{ color: C.textSecondary }}
-                  itemStyle={{ color: C.textPrimary }}
-                />
+                <Tooltip contentStyle={{ background: C.elevated2, border: `1px solid ${C.borderStrong}`, borderRadius: 12 }} labelStyle={{ color: C.textSecondary }} itemStyle={{ color: C.textPrimary }} />
                 <Bar dataKey="count" fill={C.purple} radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
@@ -720,16 +809,10 @@ function DecisionStatsPanel({ data }: { data: DecisionsResp | null }) {
       )}
       {!empty && reasons.length > 0 && (
         <div className="border-t pt-3" style={{ borderColor: C.border }}>
-          <p className="text-[11px] uppercase tracking-wide mb-2" style={{ color: C.textTertiary }}>
-            Top motivos de bloqueio
-          </p>
+          <p className="text-[11px] uppercase tracking-wide mb-2" style={{ color: C.textTertiary }}>Top motivos de bloqueio</p>
           <ul className="flex flex-wrap gap-2">
             {reasons.map((r) => (
-              <li
-                key={r.reason}
-                className="text-[12px] px-2 py-1 rounded-md"
-                style={{ background: C.elevated2, border: `1px solid ${C.border}`, color: C.textPrimary }}
-              >
+              <li key={r.reason} className="text-[12px] px-2 py-1 rounded-md" style={{ background: C.elevated2, border: `1px solid ${C.border}`, color: C.textPrimary }}>
                 {r.reason} <span style={{ color: C.textTertiary }}>· {r.count}</span>
               </li>
             ))}
@@ -740,7 +823,6 @@ function DecisionStatsPanel({ data }: { data: DecisionsResp | null }) {
   );
 }
 
-// ─── Trade performance ─────────────────────────────────────────────────────
 function TradePerformancePanel({ data }: { data: TradesResp | null }) {
   const curve = useMemo(
     () =>
@@ -753,7 +835,6 @@ function TradePerformancePanel({ data }: { data: TradesResp | null }) {
   const empty = (data?.total ?? 0) === 0;
   const lastVal = curve.length ? curve[curve.length - 1].value : 0;
   const isUp = lastVal >= 0;
-
   return (
     <Panel title="Performance — trades reais (30 d)" icon={<TrendingUp size={16} />}>
       {empty ? (
@@ -769,14 +850,8 @@ function TradePerformancePanel({ data }: { data: TradesResp | null }) {
           <ResponsiveContainer width="100%" height={180}>
             <AreaChart data={curve} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
               <defs>
-                <linearGradient id="pnlUp" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={C.ok} stopOpacity={0.30} />
-                  <stop offset="95%" stopColor={C.ok} stopOpacity={0} />
-                </linearGradient>
-                <linearGradient id="pnlDown" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={C.critical} stopOpacity={0.28} />
-                  <stop offset="95%" stopColor={C.critical} stopOpacity={0} />
-                </linearGradient>
+                <linearGradient id="pnlUp" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.ok} stopOpacity={0.30} /><stop offset="95%" stopColor={C.ok} stopOpacity={0} /></linearGradient>
+                <linearGradient id="pnlDown" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.critical} stopOpacity={0.28} /><stop offset="95%" stopColor={C.critical} stopOpacity={0} /></linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 4" stroke="rgba(255,255,255,0.04)" vertical={false} />
               <XAxis dataKey="label" tick={{ fill: C.textTertiary, fontSize: 11 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
@@ -787,14 +862,7 @@ function TradePerformancePanel({ data }: { data: TradesResp | null }) {
                 itemStyle={{ color: C.textPrimary }}
                 formatter={(v) => fmtPctSigned(typeof v === "number" ? v : Number(v))}
               />
-              <Area
-                type="monotone"
-                dataKey="value"
-                stroke={isUp ? C.ok : C.critical}
-                strokeWidth={2}
-                fill={isUp ? "url(#pnlUp)" : "url(#pnlDown)"}
-                dot={false}
-              />
+              <Area type="monotone" dataKey="value" stroke={isUp ? C.ok : C.critical} strokeWidth={2} fill={isUp ? "url(#pnlUp)" : "url(#pnlDown)"} dot={false} />
             </AreaChart>
           </ResponsiveContainer>
         </>
@@ -803,15 +871,11 @@ function TradePerformancePanel({ data }: { data: TradesResp | null }) {
   );
 }
 
-// ─── Sim vs real ───────────────────────────────────────────────────────────
 function SimVsRealPanel({ data }: { data: CompResp | null }) {
   const real = data?.items.find((i) => i.kind === "real");
   const sim = data?.items.find((i) => i.kind === "simulated");
   const Card = ({ title, item, accent }: { title: string; item?: { total: number; win_rate: number | null; avg_pnl_pct: number | null }; accent: string }) => (
-    <div
-      className="rounded-xl p-4 flex flex-col gap-2"
-      style={{ background: C.elevated2, border: `1px solid ${C.border}` }}
-    >
+    <div className="rounded-xl p-4 flex flex-col gap-2" style={{ background: C.elevated2, border: `1px solid ${C.border}` }}>
       <div className="flex items-center justify-between">
         <span className="text-[12px] uppercase tracking-wide" style={{ color: C.textTertiary }}>{title}</span>
         <span className="w-2 h-2 rounded-full" style={{ background: accent }} />
@@ -833,7 +897,6 @@ function SimVsRealPanel({ data }: { data: CompResp | null }) {
   );
 }
 
-// ─── ML dataset table ──────────────────────────────────────────────────────
 function MLDatasetPanel({ data }: { data: MlResp | null }) {
   const handleExport = useCallback(async () => {
     try {
@@ -883,8 +946,7 @@ function MLDatasetPanel({ data }: { data: MlResp | null }) {
             </thead>
             <tbody>
               {items.map((r) => {
-                const resultColor =
-                  r.result === "WIN" ? C.ok : r.result === "LOSS" ? C.critical : C.warn;
+                const resultColor = r.result === "WIN" ? C.ok : r.result === "LOSS" ? C.critical : C.warn;
                 return (
                   <tr key={r.id} style={{ borderTop: `1px solid ${C.border}` }}>
                     <td className="py-2 px-2 font-medium" style={{ color: C.textPrimary }}>{r.symbol}</td>
@@ -906,34 +968,59 @@ function MLDatasetPanel({ data }: { data: MlResp | null }) {
   );
 }
 
-// ─── Page root ─────────────────────────────────────────────────────────────
-export default function PerformanceDashboardPage() {
-  const overview = usePoll<OverviewResp>("/dashboard/overview", 10_000);
-  const events   = usePoll<EventsResp>("/dashboard/events", 30_000);
-  const ingest   = usePoll<OhlcvRateResp>("/dashboard/ohlcv-rate?minutes=60", 15_000);
+// ─── Lazy analytics section ──────────────────────────────────────────────────
+function AnalyticsSection() {
+  // Polling endpoints only mount when the section is expanded — that
+  // satisfies the Task #225 invariant that observability panels must not
+  // poll legacy /api/dashboard/{decisions,trades,ml-dataset,...} endpoints.
+  // These are auxiliary KPI charts the operator can choose to load.
+  const ingest    = usePoll<OhlcvRateResp>("/dashboard/ohlcv-rate?minutes=60", 60_000);
   const decisions = usePoll<DecisionsResp>("/dashboard/decisions?hours=24", 60_000);
-  const trades   = usePoll<TradesResp>("/dashboard/trades?days=30", 60_000);
-  const comp     = usePoll<CompResp>("/dashboard/trade-comparison?days=30", 60_000);
-  const ml       = usePoll<MlResp>("/dashboard/ml-dataset?limit=100", 60_000);
+  const trades    = usePoll<TradesResp>("/dashboard/trades?days=30", 120_000);
+  const comp      = usePoll<CompResp>("/dashboard/trade-comparison?days=30", 120_000);
+  const ml        = usePoll<MlResp>("/dashboard/ml-dataset?limit=100", 120_000);
 
-  const refreshAll = () => {
-    overview.refresh(); events.refresh(); ingest.refresh();
-    decisions.refresh(); trades.refresh(); comp.refresh(); ml.refresh();
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <IngestRateChart data={ingest.data} />
+        <DecisionStatsPanel data={decisions.data} />
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div className="lg:col-span-2"><TradePerformancePanel data={trades.data} /></div>
+        <SimVsRealPanel data={comp.data} />
+      </div>
+      <MLDatasetPanel data={ml.data} />
+    </div>
+  );
+}
+
+// ─── Page root ───────────────────────────────────────────────────────────────
+export default function PerformanceDashboardPage() {
+  // Observability surface: ONLY two endpoints poll continuously, both
+  // backed by the OperationalSnapshotService cache so handlers never block
+  // on Celery inspect or Redis INFO.
+  const overview = usePoll<OverviewResp>("/dashboard/overview", 10_000);
+  const events   = usePoll<EventsResp>("/dashboard/events?limit=50", 30_000);
+
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
+
+  const refreshOps = () => {
+    overview.refresh();
+    events.refresh();
   };
 
   return (
     <div className="min-h-screen px-6 py-8 max-w-[1400px] mx-auto" style={{ background: C.surface }}>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
         <div>
-          <h1 className="text-2xl font-bold" style={{ color: C.textPrimary }}>
-            Centro Operacional
-          </h1>
+          <h1 className="text-2xl font-bold" style={{ color: C.textPrimary }}>Centro Operacional</h1>
           <p className="text-[13px] mt-1" style={{ color: C.textSecondary }}>
-            Saúde do pipeline, alertas e desempenho — atualização automática a cada 10 s.
+            Saúde do pipeline e alertas — atualização automática a cada 10 s.
           </p>
         </div>
         <button
-          onClick={refreshAll}
+          onClick={refreshOps}
           className="flex items-center gap-2 text-[13px] px-3 py-2 rounded-lg transition-colors"
           style={{ background: C.elevated, border: `1px solid ${C.border}`, color: C.textPrimary }}
         >
@@ -945,20 +1032,32 @@ export default function PerformanceDashboardPage() {
         <OperationalBanner data={overview.data} />
         <AlertsPanel data={overview.data} />
         <OpsSnapshotsGrid data={overview.data} />
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <EventsHistoryPanel data={events.data} />
-          <IngestRateChart data={ingest.data} />
-        </div>
-        <DecisionStatsPanel data={decisions.data} />
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-          <div className="lg:col-span-2"><TradePerformancePanel data={trades.data} /></div>
-          <SimVsRealPanel data={comp.data} />
-        </div>
-        <MLDatasetPanel data={ml.data} />
+        <EventsHistoryPanel data={events.data} />
 
-        {(overview.error || events.error || ingest.error || decisions.error || trades.error || comp.error || ml.error) && (
+        {/* Lazy analytics section — does not poll until the operator opens it. */}
+        <button
+          onClick={() => setAnalyticsOpen((v) => !v)}
+          className="flex items-center justify-between gap-2 rounded-2xl p-4 text-left transition-colors"
+          style={{ background: C.elevated, border: `1px solid ${C.border}`, color: C.textPrimary }}
+        >
+          <div className="flex items-center gap-2">
+            {analyticsOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            <div>
+              <p className="text-[14px] font-semibold">Histórico & performance</p>
+              <p className="text-[12px]" style={{ color: C.textSecondary }}>
+                Gráficos auxiliares (ingestão, decisões, trades, ML dataset) — carregados sob demanda.
+              </p>
+            </div>
+          </div>
+          <span className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>
+            {analyticsOpen ? "ocultar" : "expandir"}
+          </span>
+        </button>
+        {analyticsOpen && <AnalyticsSection />}
+
+        {(overview.error || events.error) && (
           <div className="text-[12px] px-3 py-2 rounded-lg" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", color: C.critical }}>
-            Falha em algum endpoint do dashboard. Veja o console para detalhes.
+            Falha ao buscar dados de observabilidade. Veja o console para detalhes.
           </div>
         )}
       </div>

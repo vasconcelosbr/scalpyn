@@ -14,30 +14,47 @@ spins.  Worse, every concurrent dashboard viewer opens its own probe.
 The fix is the standard pattern: probe out-of-band, cache the result, serve
 the cache.  This module owns:
 
-* one ``asyncio.Task`` per probe family (Celery, Redis, DB pool, latency,
-  ingestion freshness, score throughput);
+* one ``asyncio.Task`` per probe family (Celery, Redis, DB pool, score
+  throughput, ingestion freshness, plus three latency families);
 * a thread-safe-ish snapshot store (single writer per snapshot, many readers);
 * ring buffers for alert / worker / redis-degradation history;
 * an alert engine that re-derives the current alert list from the latest
   snapshot every time ``get_overview()`` is called.
 
-Contract for callers
---------------------
+Snapshot families (contract — never reorder, the frontend keys off these names)
+------------------------------------------------------------------------------
 
-* :func:`get_service` returns the process-wide singleton.
-* All getters (``get_overview``, ``get_alerts``, ``get_events``, …) are
-  *non-blocking* — they read the cached snapshots and return immediately.
-* Snapshots that haven't refreshed yet expose ``status='unknown'`` rather
-  than raising — the dashboard is the system that must show the user
-  *something* even when everything is broken.
-* Every refresher swallows its own exceptions and records them on the
-  snapshot's ``error`` field; nothing here ever propagates back into the
-  FastAPI lifespan or the request loop.
+* ``ingestion``       — OHLCV freshness (``time`` of last 5m candle) and
+                        per-window row/symbol counts.
+* ``celery``          — workers, per-queue active/reserved/scheduled
+                        breakdown, Beat heartbeat (mtime of beat schedule).
+* ``redis``           — ping liveness + ping ms, INFO stats, per-queue
+                        ``LLEN`` for ``microstructure``, ``structural``,
+                        ``execution`` and the ``__no_default__`` sentinel.
+* ``db``              — SELECT 1 timing + SQLAlchemy pool counters.
+* ``score``           — 24h decisions throughput, ALLOW/BLOCK split, score
+                        distribution stats, age of last decision.
+* ``ingestion_latency`` — single-number summary of the OHLCV gap (mirror
+                        of ingestion.delay_seconds, kept on its own snapshot
+                        so the latency family has a uniform shape).
+* ``decision_latency``  — p50/p95/max of ``decisions_log.latency_ms``
+                        in the last hour.
+* ``processing_latency`` — Prometheus
+                        ``indicator_computation_duration_seconds`` histogram
+                        — derives p50/p95 estimates from bucket cumcount.
+
+Failure-tolerance contract
+--------------------------
+
+Each refresher tracks consecutive failures.  A snapshot's status only flips
+to ``degraded`` / ``critical`` after **three** consecutive failed probes —
+this prevents a single network blip from triggering pages.  On success, the
+counter resets to zero immediately.
 
 Eventually-consistent — a snapshot is at most ``interval_seconds`` old plus
-the probe's own ``timeout``.  Tune the intervals at the bottom of the
-module before raising them; longer intervals tighten the budget on
-inspect/INFO calls in exchange for staler data.
+the probe's own ``timeout``.  Tune the intervals at the top of the module
+before raising them; longer intervals tighten the budget on inspect/INFO
+calls in exchange for staler data.
 """
 
 from __future__ import annotations
@@ -49,14 +66,12 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 
 # ─── Tunables (env-overridable) ──────────────────────────────────────────────
-# Each refresher runs every N seconds.  Keep these conservative — every tick
-# is a network round-trip to Redis / a Celery inspect / a DB query.
 INGESTION_INTERVAL_S = int(os.environ.get("OPS_SNAP_INGESTION_S", 10))
 CELERY_INTERVAL_S    = int(os.environ.get("OPS_SNAP_CELERY_S", 15))
 REDIS_INTERVAL_S     = int(os.environ.get("OPS_SNAP_REDIS_S", 15))
@@ -69,9 +84,34 @@ CELERY_TIMEOUT_S = 2.0
 REDIS_TIMEOUT_S  = 1.0
 DB_TIMEOUT_S     = 3.0
 
-# Ring-buffer caps — bounded memory.  ~100 entries is enough for the operator
-# to scroll through "what just happened" without the snapshot ballooning.
+# Number of consecutive failures before a snapshot is allowed to degrade.
+# Single transient failures (network blip, GC pause) are absorbed silently.
+FAIL_TOLERANCE = 3
+
+# Ring-buffer caps — bounded memory.
 EVENT_RING_SIZE = 100
+
+# Beat-heartbeat thresholds.  Beat ticks once a second and persists its
+# schedule; a stale schedule file means the scheduler has been blocked.
+BEAT_OK_SECONDS       = 60
+BEAT_DEGRADED_SECONDS = 180
+
+# Queue names + the sentinel — backlog probed via Redis ``LLEN``.
+_QUEUE_NAMES_DEFAULT = (
+    "microstructure",
+    "structural",
+    "execution",
+    "__no_default__",
+)
+
+
+def _queue_names() -> Tuple[str, ...]:
+    """Return the queue list, falling back to a constant if Celery imports fail."""
+    try:
+        from ..tasks.celery_app import ALL_QUEUES  # type: ignore[attr-defined]
+        return tuple(ALL_QUEUES) + ("__no_default__",)
+    except Exception:
+        return _QUEUE_NAMES_DEFAULT
 
 
 # ─── Snapshot data model ─────────────────────────────────────────────────────
@@ -87,6 +127,10 @@ class Snapshot:
     status: str = "unknown"
     data: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
+    # Consecutive failures since the last successful probe.  Exposed in the
+    # serialized form so the dashboard can show "1/3 strikes" while a probe
+    # is wobbling.
+    failure_streak: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -94,6 +138,7 @@ class Snapshot:
             "status": self.status,
             "data": self.data,
             "error": self.error,
+            "failure_streak": self.failure_streak,
         }
 
 
@@ -103,6 +148,8 @@ class _Event:
     code: str
     message: str
     extra: Dict[str, Any] = field(default_factory=dict)
+    # Category lets ``/events`` filter (alert | worker | redis).
+    category: str = "alert"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -110,6 +157,7 @@ class _Event:
             "code": self.code,
             "message": self.message,
             "extra": self.extra,
+            "category": self.category,
         }
 
 
@@ -118,12 +166,14 @@ class OperationalSnapshotService:
     """Singleton — own all background probes; expose cached snapshots."""
 
     def __init__(self) -> None:
-        self.ingestion = Snapshot()
-        self.celery    = Snapshot()
-        self.redis     = Snapshot()
-        self.db        = Snapshot()
-        self.score     = Snapshot()
-        self.latency   = Snapshot()
+        self.ingestion         = Snapshot()
+        self.celery            = Snapshot()
+        self.redis             = Snapshot()
+        self.db                = Snapshot()
+        self.score             = Snapshot()
+        self.ingestion_latency = Snapshot()
+        self.decision_latency  = Snapshot()
+        self.processing_latency = Snapshot()
 
         self._tasks: List[asyncio.Task] = []
         self._started: bool = False
@@ -133,12 +183,9 @@ class OperationalSnapshotService:
         self._worker_events:      Deque[_Event] = deque(maxlen=EVENT_RING_SIZE)
         self._redis_degradations: Deque[_Event] = deque(maxlen=EVENT_RING_SIZE)
 
-        # Track previously-seen alert codes to push new ones into history
-        # only on transition (avoid spamming the same code every tick).
+        # Track previously-seen alert codes so we only push transitions.
         self._prev_alert_codes: set[str] = set()
-        # Track previous Celery worker presence for transition events.
         self._prev_workers: set[str] = set()
-        # Track previous Redis status for degradation transition events.
         self._prev_redis_alive: Optional[bool] = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
@@ -161,9 +208,10 @@ class OperationalSnapshotService:
             ))
         logger.info(
             "[ops-snapshot] started %d refreshers (intervals: ing=%ds cel=%ds "
-            "redis=%ds db=%ds score=%ds lat=%ds)",
+            "redis=%ds db=%ds score=%ds lat=%ds, fail-tolerance=%d)",
             len(self._tasks), INGESTION_INTERVAL_S, CELERY_INTERVAL_S,
             REDIS_INTERVAL_S, DB_INTERVAL_S, SCORE_INTERVAL_S, LATENCY_INTERVAL_S,
+            FAIL_TOLERANCE,
         )
 
     async def stop(self) -> None:
@@ -186,9 +234,6 @@ class OperationalSnapshotService:
         interval_seconds: int,
         name: str,
     ) -> None:
-        # Run once immediately so the dashboard isn't blank for the first
-        # ``interval_seconds`` after boot.  Failure of a single iteration
-        # never breaks the loop — log + continue.
         while True:
             try:
                 await fn()
@@ -200,6 +245,49 @@ class OperationalSnapshotService:
                 await asyncio.sleep(interval_seconds)
             except asyncio.CancelledError:
                 raise
+
+    # ── failure-tolerance helper ──────────────────────────────────────────
+    def _apply_success(
+        self,
+        attr: str,
+        data: Dict[str, Any],
+        status: str,
+        error: Optional[str] = None,
+    ) -> None:
+        """Record a successful probe — reset the failure streak immediately."""
+        setattr(self, attr, Snapshot(
+            as_of=datetime.now(timezone.utc),
+            status=status,
+            data=data,
+            error=error,
+            failure_streak=0,
+        ))
+
+    def _apply_failure(
+        self,
+        attr: str,
+        error: str,
+        soft_status: str = "degraded",
+        hard_status: str = "critical",
+    ) -> None:
+        """Record a failed probe.  Status only changes after FAIL_TOLERANCE
+        consecutive failures.  Until then we keep the previous status to
+        absorb single transient errors (network blip, GC pause)."""
+        prev: Snapshot = getattr(self, attr)
+        streak = prev.failure_streak + 1
+        if streak < FAIL_TOLERANCE:
+            # Keep last-known status; only annotate the error so the
+            # dashboard can surface "1/3 strikes" without paging.
+            new_status = prev.status if prev.status != "unknown" else soft_status
+        else:
+            new_status = hard_status
+        setattr(self, attr, Snapshot(
+            as_of=datetime.now(timezone.utc),
+            status=new_status,
+            data=prev.data,            # keep last-known so graphs don't blank
+            error=error,
+            failure_streak=streak,
+        ))
 
     # ── refreshers ─────────────────────────────────────────────────────────
     async def _refresh_ingestion(self) -> None:
@@ -230,7 +318,6 @@ class OperationalSnapshotService:
             async with AsyncSessionLocal() as db:
                 row = (await asyncio.wait_for(db.execute(sql), timeout=DB_TIMEOUT_S)).one()
             delay = float(row.delay_seconds) if row.delay_seconds is not None else None
-            # Status thresholds aligned with /api/dashboard/health (10/20 min).
             if delay is None:
                 status = "unknown"
             elif delay < 600:
@@ -239,62 +326,74 @@ class OperationalSnapshotService:
                 status = "degraded"
             else:
                 status = "critical"
-            self.ingestion = Snapshot(
-                as_of=datetime.now(timezone.utc),
-                status=status,
-                data={
-                    "rows_window": int(row.rows_window or 0),
-                    "distinct_symbols": int(row.distinct_symbols or 0),
-                    "last_candle": row.last_candle.isoformat() if row.last_candle else None,
+            data = {
+                "rows_window": int(row.rows_window or 0),
+                "distinct_symbols": int(row.distinct_symbols or 0),
+                "last_candle": row.last_candle.isoformat() if row.last_candle else None,
+                "delay_seconds": delay,
+            }
+            self._apply_success("ingestion", data, status)
+            # Mirror onto the latency family so /pipeline-latency has a
+            # uniform shape across the three latency dimensions.
+            lat_status = status if status != "critical" else "critical"
+            self._apply_success(
+                "ingestion_latency",
+                {
                     "delay_seconds": delay,
+                    "last_candle": data["last_candle"],
+                    "rows_window": data["rows_window"],
                 },
+                lat_status,
             )
         except asyncio.TimeoutError:
-            self.ingestion = Snapshot(
-                as_of=datetime.now(timezone.utc),
-                status="degraded",
-                error=f"DB query timeout after {DB_TIMEOUT_S}s",
-                data=self.ingestion.data,  # keep last-known
-            )
+            self._apply_failure("ingestion", f"DB query timeout after {DB_TIMEOUT_S}s")
         except Exception as exc:
-            self.ingestion = Snapshot(
-                as_of=datetime.now(timezone.utc),
-                status="critical",
-                error=f"{type(exc).__name__}: {exc}",
-                data=self.ingestion.data,
+            self._apply_failure(
+                "ingestion",
+                f"{type(exc).__name__}: {exc}",
+                hard_status="critical",
             )
 
     async def _refresh_celery(self) -> None:
-        """Celery worker / beat presence via inspect (off-loop, 2 s budget)."""
+        """Celery worker / beat presence + per-queue task breakdown."""
         try:
             data = await asyncio.wait_for(
                 asyncio.to_thread(_inspect_celery_blocking),
                 timeout=CELERY_TIMEOUT_S + 1.0,
             )
         except asyncio.TimeoutError:
-            self.celery = Snapshot(
-                as_of=datetime.now(timezone.utc),
-                status="degraded",
-                error=f"Celery inspect timeout after {CELERY_TIMEOUT_S}s",
-                data=self.celery.data,
-            )
+            self._apply_failure("celery", f"Celery inspect timeout after {CELERY_TIMEOUT_S}s")
             return
         except Exception as exc:
-            self.celery = Snapshot(
-                as_of=datetime.now(timezone.utc),
-                status="critical",
-                error=f"{type(exc).__name__}: {exc}",
-                data=self.celery.data,
-            )
+            self._apply_failure("celery", f"{type(exc).__name__}: {exc}")
             return
 
         workers = sorted(data.get("workers", []))
-        active_count = sum(len(v or []) for v in (data.get("active") or {}).values())
-        # Status: critical when no worker responds; degraded when inspect
-        # returned but reports zero queues; ok otherwise.
+        per_queue = data.get("per_queue", {})
+        active_total = sum(q.get("active", 0) for q in per_queue.values())
+        reserved_total = sum(q.get("reserved", 0) for q in per_queue.values())
+        scheduled_total = sum(q.get("scheduled", 0) for q in per_queue.values())
+
+        # Beat heartbeat — celerybeat-schedule mtime.  Beat ticks every
+        # second and writes the file on each due-task pickup; if it's
+        # stale, beat is blocked / dead.
+        beat_age = _beat_schedule_age_seconds()
+        if beat_age is None:
+            beat_status = "unknown"
+        elif beat_age <= BEAT_OK_SECONDS:
+            beat_status = "ok"
+        elif beat_age <= BEAT_DEGRADED_SECONDS:
+            beat_status = "degraded"
+        else:
+            beat_status = "critical"
+
         if not workers:
             status = "critical"
         elif data.get("error"):
+            status = "degraded"
+        elif beat_status == "critical":
+            status = "critical"
+        elif beat_status == "degraded":
             status = "degraded"
         else:
             status = "ok"
@@ -303,86 +402,112 @@ class OperationalSnapshotService:
         now = datetime.now(timezone.utc)
         cur_set = set(workers)
         for w in cur_set - self._prev_workers:
-            self._worker_events.append(_Event(now, "worker_online", f"Worker online: {w}", {"worker": w}))
+            self._worker_events.append(_Event(
+                now, "worker_online", f"Worker online: {w}",
+                {"worker": w}, "worker",
+            ))
         for w in self._prev_workers - cur_set:
-            self._worker_events.append(_Event(now, "worker_offline", f"Worker offline: {w}", {"worker": w}))
+            self._worker_events.append(_Event(
+                now, "worker_offline", f"Worker offline: {w}",
+                {"worker": w}, "worker",
+            ))
         self._prev_workers = cur_set
 
-        self.celery = Snapshot(
-            as_of=now,
-            status=status,
-            data={
+        self._apply_success(
+            "celery",
+            {
                 "workers": workers,
                 "worker_count": len(workers),
-                "active_tasks": active_count,
+                "active_tasks": active_total,
+                "reserved_tasks": reserved_total,
+                "scheduled_tasks": scheduled_total,
                 "registered_tasks": data.get("registered_count", 0),
+                "per_queue": per_queue,
+                "beat": {
+                    "status": beat_status,
+                    "schedule_age_seconds": beat_age,
+                },
             },
+            status,
             error=data.get("error"),
         )
 
     async def _refresh_redis(self) -> None:
-        """Redis liveness + key INFO sections (1 s budget)."""
+        """Redis liveness + INFO + per-queue LLEN (1 s budget)."""
         try:
             from .redis_client import get_async_redis
         except Exception as exc:
-            self.redis = Snapshot(
-                as_of=datetime.now(timezone.utc),
-                status="critical",
-                error=f"redis_client import failed: {exc}",
-            )
+            self._apply_failure("redis", f"redis_client import failed: {exc}")
             return
 
         rc = await get_async_redis()
         now = datetime.now(timezone.utc)
         if rc is None:
-            alive = False
-            data = {"alive": False}
-            err = "Redis client unavailable"
-        else:
-            try:
-                async def _probe() -> Dict[str, Any]:
-                    pong = await rc.ping()
-                    info_stats   = await rc.info("stats")
-                    info_memory  = await rc.info("memory")
-                    info_clients = await rc.info("clients")
-                    return {
-                        "alive": bool(pong),
-                        "connected_clients": int(info_clients.get("connected_clients", 0)),
-                        "used_memory_human": info_memory.get("used_memory_human", "?"),
-                        "used_memory_bytes": int(info_memory.get("used_memory", 0)),
-                        "instantaneous_ops_per_sec": int(info_stats.get("instantaneous_ops_per_sec", 0)),
-                        "total_commands_processed": int(info_stats.get("total_commands_processed", 0)),
-                    }
-                data = await asyncio.wait_for(_probe(), timeout=REDIS_TIMEOUT_S)
-                alive = bool(data.get("alive"))
-                err = None
-            except asyncio.TimeoutError:
-                alive = False
-                data = {"alive": False}
-                err = f"Redis probe timeout after {REDIS_TIMEOUT_S}s"
-            except Exception as exc:
-                alive = False
-                data = {"alive": False}
-                err = f"{type(exc).__name__}: {exc}"
+            self._record_redis_transition(False, "Redis client unavailable")
+            self._apply_failure("redis", "Redis client unavailable")
+            return
 
-        # Transition event — only on flip, not on every tick.
+        async def _probe() -> Dict[str, Any]:
+            t0 = time.perf_counter()
+            pong = await rc.ping()
+            ping_ms = (time.perf_counter() - t0) * 1000.0
+            info_stats   = await rc.info("stats")
+            info_memory  = await rc.info("memory")
+            info_clients = await rc.info("clients")
+            queue_lengths: Dict[str, int] = {}
+            for q in _queue_names():
+                try:
+                    queue_lengths[q] = int(await rc.llen(q))
+                except Exception:
+                    queue_lengths[q] = -1  # signal "probe failed for this key"
+            return {
+                "alive": bool(pong),
+                "ping_ms": round(ping_ms, 2),
+                "connected_clients": int(info_clients.get("connected_clients", 0)),
+                "used_memory_human": info_memory.get("used_memory_human", "?"),
+                "used_memory_bytes": int(info_memory.get("used_memory", 0)),
+                "instantaneous_ops_per_sec": int(info_stats.get("instantaneous_ops_per_sec", 0)),
+                "total_commands_processed": int(info_stats.get("total_commands_processed", 0)),
+                "queue_lengths": queue_lengths,
+            }
+
+        try:
+            data = await asyncio.wait_for(_probe(), timeout=REDIS_TIMEOUT_S)
+            alive = bool(data.get("alive"))
+            self._record_redis_transition(alive, None)
+            # Backlog on __no_default__ is an architectural alarm (invariant
+            # #4 — task escaped TASK_ROUTES).  We expose the number so the
+            # alert engine and the dashboard can show it.
+            no_default = data["queue_lengths"].get("__no_default__", 0)
+            backlog_total = sum(
+                v for k, v in data["queue_lengths"].items()
+                if k != "__no_default__" and v >= 0
+            )
+            data["backlog_total"] = backlog_total
+            data["unrouted_backlog"] = no_default
+            status = "ok"
+            if data.get("ping_ms", 0) > 100:
+                status = "degraded"
+            self._apply_success("redis", data, status if alive else "critical")
+        except asyncio.TimeoutError:
+            self._record_redis_transition(False, f"Redis probe timeout after {REDIS_TIMEOUT_S}s")
+            self._apply_failure("redis", f"Redis probe timeout after {REDIS_TIMEOUT_S}s")
+        except Exception as exc:
+            self._record_redis_transition(False, f"{type(exc).__name__}: {exc}")
+            self._apply_failure("redis", f"{type(exc).__name__}: {exc}")
+
+    def _record_redis_transition(self, alive: bool, err: Optional[str]) -> None:
+        now = datetime.now(timezone.utc)
         if self._prev_redis_alive is True and not alive:
             self._redis_degradations.append(_Event(
                 now, "redis_down", "Redis indisponível",
-                {"error": err},
+                {"error": err}, "redis",
             ))
         elif self._prev_redis_alive is False and alive:
             self._redis_degradations.append(_Event(
-                now, "redis_recovered", "Redis recuperado", {},
+                now, "redis_recovered", "Redis recuperado", {}, "redis",
             ))
         self._prev_redis_alive = alive
-
-        self.redis = Snapshot(
-            as_of=now,
-            status="ok" if alive else "critical",
-            data=data,
-            error=err,
-        )
 
     async def _refresh_db(self) -> None:
         """DB pool stats + SELECT 1 timing."""
@@ -402,7 +527,6 @@ class OperationalSnapshotService:
                 "overflow": pool.overflow(),
                 "status": pool.status(),
             }
-            # `invalidated` exists on QueuePool; absent on NullPool.
             inv = getattr(pool, "_invalidate_time", None)
             if inv is not None:
                 data["invalidated_at"] = inv
@@ -411,21 +535,11 @@ class OperationalSnapshotService:
                 status = "degraded"
             if elapsed_ms > 2000:
                 status = "critical"
-            self.db = Snapshot(as_of=datetime.now(timezone.utc), status=status, data=data)
+            self._apply_success("db", data, status)
         except asyncio.TimeoutError:
-            self.db = Snapshot(
-                as_of=datetime.now(timezone.utc),
-                status="critical",
-                error=f"SELECT 1 timeout after {DB_TIMEOUT_S}s",
-                data=self.db.data,
-            )
+            self._apply_failure("db", f"SELECT 1 timeout after {DB_TIMEOUT_S}s")
         except Exception as exc:
-            self.db = Snapshot(
-                as_of=datetime.now(timezone.utc),
-                status="critical",
-                error=f"{type(exc).__name__}: {exc}",
-                data=self.db.data,
-            )
+            self._apply_failure("db", f"{type(exc).__name__}: {exc}")
 
     async def _refresh_score(self) -> None:
         """Throughput / quality / distribution from decisions_log (24 h)."""
@@ -456,7 +570,6 @@ class OperationalSnapshotService:
             if last is not None and last.tzinfo is None:
                 last = last.replace(tzinfo=timezone.utc)
             age_seconds = (now - last).total_seconds() if last else None
-            # Status: critical when no decision in 30 min, degraded after 10 min.
             if total == 0 or age_seconds is None:
                 status = "critical"
             elif age_seconds > 1800:
@@ -465,38 +578,33 @@ class OperationalSnapshotService:
                 status = "degraded"
             else:
                 status = "ok"
-            self.score = Snapshot(
-                as_of=now,
-                status=status,
-                data={
-                    "decisions_24h": total,
-                    "allow_24h": int(row.allow_count or 0),
-                    "block_24h": int(row.block_count or 0),
-                    "allow_rate_24h": (int(row.allow_count or 0) / total) if total else 0.0,
-                    "avg_score": float(row.avg_score) if row.avg_score is not None else None,
-                    "min_score": float(row.min_score) if row.min_score is not None else None,
-                    "max_score": float(row.max_score) if row.max_score is not None else None,
-                    "last_decision": last.isoformat() if last else None,
-                    "last_decision_age_seconds": age_seconds,
-                },
-            )
+            data = {
+                "decisions_24h": total,
+                "allow_24h": int(row.allow_count or 0),
+                "block_24h": int(row.block_count or 0),
+                "allow_rate_24h": (int(row.allow_count or 0) / total) if total else 0.0,
+                "avg_score": float(row.avg_score) if row.avg_score is not None else None,
+                "min_score": float(row.min_score) if row.min_score is not None else None,
+                "max_score": float(row.max_score) if row.max_score is not None else None,
+                "last_decision": last.isoformat() if last else None,
+                "last_decision_age_seconds": age_seconds,
+            }
+            self._apply_success("score", data, status)
         except asyncio.TimeoutError:
-            self.score = Snapshot(
-                as_of=datetime.now(timezone.utc),
-                status="degraded",
-                error=f"DB query timeout after {DB_TIMEOUT_S}s",
-                data=self.score.data,
-            )
+            self._apply_failure("score", f"DB query timeout after {DB_TIMEOUT_S}s")
         except Exception as exc:
-            self.score = Snapshot(
-                as_of=datetime.now(timezone.utc),
-                status="critical",
-                error=f"{type(exc).__name__}: {exc}",
-                data=self.score.data,
-            )
+            self._apply_failure("score", f"{type(exc).__name__}: {exc}")
 
     async def _refresh_latency(self) -> None:
-        """Decision pipeline latency (p50/p95) from decisions_log.latency_ms."""
+        """Decision (DB) + processing (Prometheus) latency families.
+
+        Ingestion latency is mirrored from ``_refresh_ingestion`` so this
+        method only owns the decision and processing dimensions.
+        """
+        await self._refresh_decision_latency()
+        self._refresh_processing_latency()
+
+    async def _refresh_decision_latency(self) -> None:
         from sqlalchemy import text
         from ..database import AsyncSessionLocal
 
@@ -526,30 +634,43 @@ class OperationalSnapshotService:
                 status = "degraded"
             else:
                 status = "ok"
-            self.latency = Snapshot(
-                as_of=datetime.now(timezone.utc),
-                status=status,
-                data={
-                    "p50_ms": float(row.p50) if row.p50 is not None else None,
-                    "p95_ms": p95,
-                    "max_ms": int(row.max_latency) if row.max_latency is not None else None,
-                    "samples_1h": samples,
-                },
-            )
+            self._apply_success("decision_latency", {
+                "p50_ms": float(row.p50) if row.p50 is not None else None,
+                "p95_ms": p95,
+                "max_ms": int(row.max_latency) if row.max_latency is not None else None,
+                "samples_1h": samples,
+            }, status)
         except asyncio.TimeoutError:
-            self.latency = Snapshot(
-                as_of=datetime.now(timezone.utc),
-                status="degraded",
-                error=f"DB query timeout after {DB_TIMEOUT_S}s",
-                data=self.latency.data,
-            )
+            self._apply_failure("decision_latency", f"DB query timeout after {DB_TIMEOUT_S}s")
         except Exception as exc:
-            self.latency = Snapshot(
-                as_of=datetime.now(timezone.utc),
-                status="critical",
-                error=f"{type(exc).__name__}: {exc}",
-                data=self.latency.data,
+            self._apply_failure("decision_latency", f"{type(exc).__name__}: {exc}")
+
+    def _refresh_processing_latency(self) -> None:
+        """Read indicator computation duration histogram (in-process Prometheus)."""
+        try:
+            stats = _read_processing_histogram()
+        except Exception as exc:
+            self._apply_failure("processing_latency", f"prometheus read failed: {exc}")
+            return
+        if stats is None:
+            self._apply_success(
+                "processing_latency",
+                {"available": False},
+                "unknown",
+                error="prometheus_client not installed",
             )
+            return
+        samples = stats["samples"]
+        p95 = stats["p95_ms"]
+        if samples == 0:
+            status = "unknown"
+        elif p95 is not None and p95 > 2000:
+            status = "critical"
+        elif p95 is not None and p95 > 500:
+            status = "degraded"
+        else:
+            status = "ok"
+        self._apply_success("processing_latency", stats, status)
 
     # ── alert engine ───────────────────────────────────────────────────────
     def _evaluate_alerts(self) -> List[Dict[str, Any]]:
@@ -558,72 +679,78 @@ class OperationalSnapshotService:
         Alert codes (stable, contract):
           * ``redis_down``           — Redis ping failed
           * ``worker_offline``       — no Celery worker responded to inspect
+          * ``beat_stalled``         — Celery Beat schedule file stale
+          * ``unrouted_backlog``     — tasks stacking on ``__no_default__``
           * ``ingestion_stale``      — OHLCV last candle older than 20 min
-          * ``no_decisions``         — no decision in last 30 min
+          * ``ingestion_lagging``    — OHLCV between 10 and 20 min old
+          * ``no_decisions``         — no decision in last 30 min OR 24 h cold
           * ``db_slow``              — SELECT 1 > 500 ms
           * ``latency_spike``        — decision p95 > 2 s in last hour
+          * ``processing_latency_spike`` — indicator compute p95 > 500 ms
         """
         alerts: List[Dict[str, Any]] = []
         now = datetime.now(timezone.utc)
 
-        # Redis
         if self.redis.status == "critical":
             alerts.append({
-                "severity": "critical",
-                "category": "infra",
-                "code": "redis_down",
+                "severity": "critical", "category": "infra", "code": "redis_down",
                 "impact": "WS leader election parado, indicators_provider sem cache, throttle desabilitado.",
                 "since": self.redis.as_of.isoformat() if self.redis.as_of else None,
                 "details": {"error": self.redis.error},
             })
 
-        # Celery worker
-        if self.celery.status == "critical":
+        if self.celery.status == "critical" and self.celery.data.get("worker_count", 0) == 0:
             alerts.append({
-                "severity": "critical",
-                "category": "celery",
-                "code": "worker_offline",
+                "severity": "critical", "category": "celery", "code": "worker_offline",
                 "impact": "Nenhum worker responde — pipeline_scan, collect_market_data e execute_buy não rodam.",
                 "since": self.celery.as_of.isoformat() if self.celery.as_of else None,
                 "details": {"error": self.celery.error},
             })
 
-        # Ingestion freshness
+        beat = self.celery.data.get("beat") or {}
+        beat_status = beat.get("status")
+        if beat_status in ("degraded", "critical"):
+            alerts.append({
+                "severity": "critical" if beat_status == "critical" else "warning",
+                "category": "celery", "code": "beat_stalled",
+                "impact": "Celery Beat travado — tarefas periódicas (collect, scan, monitor) não estão sendo despachadas.",
+                "since": self.celery.as_of.isoformat() if self.celery.as_of else None,
+                "details": {"schedule_age_seconds": beat.get("schedule_age_seconds")},
+            })
+
+        unrouted = self.redis.data.get("unrouted_backlog", 0)
+        if isinstance(unrouted, int) and unrouted > 0:
+            alerts.append({
+                "severity": "critical", "category": "celery", "code": "unrouted_backlog",
+                "impact": "Tarefas escaparam de TASK_ROUTES e estão acumulando na fila sentinela __no_default__ (invariant #4).",
+                "since": self.redis.as_of.isoformat() if self.redis.as_of else None,
+                "details": {"unrouted_backlog": unrouted},
+            })
+
         delay = self.ingestion.data.get("delay_seconds")
         if isinstance(delay, (int, float)):
             if delay > 1200:
                 alerts.append({
-                    "severity": "critical",
-                    "category": "ingest",
-                    "code": "ingestion_stale",
+                    "severity": "critical", "category": "ingest", "code": "ingestion_stale",
                     "impact": "OHLCV não atualiza há mais de 20 min — decisões usam dados velhos.",
                     "since": self.ingestion.as_of.isoformat() if self.ingestion.as_of else None,
                     "details": {"delay_seconds": delay, "last_candle": self.ingestion.data.get("last_candle")},
                 })
             elif delay > 600:
                 alerts.append({
-                    "severity": "warning",
-                    "category": "ingest",
-                    "code": "ingestion_lagging",
+                    "severity": "warning", "category": "ingest", "code": "ingestion_lagging",
                     "impact": "OHLCV atrasado entre 10 e 20 min — aceitável em catch-up multi-symbol.",
                     "since": self.ingestion.as_of.isoformat() if self.ingestion.as_of else None,
                     "details": {"delay_seconds": delay},
                 })
 
-        # Decisions throughput.  Fire on EITHER zero decisions in 24 h (cold
-        # start / scoring engine never ran) OR last decision older than 30 min
-        # (engine stalled mid-flight).  The two cases cover different failure
-        # modes — the first means no rule has ever passed; the second means
-        # rules used to pass but stopped.
         last_age = self.score.data.get("last_decision_age_seconds")
         decisions_24h = self.score.data.get("decisions_24h", 0)
         stalled = isinstance(last_age, (int, float)) and last_age > 1800
         cold = self.score.status != "unknown" and (decisions_24h or 0) == 0
         if stalled or cold:
             alerts.append({
-                "severity": "critical",
-                "category": "score",
-                "code": "no_decisions",
+                "severity": "critical", "category": "score", "code": "no_decisions",
                 "impact": (
                     "Nenhuma decisão nas últimas 24h — score engine sem dados/regra ou pipeline_scan parado."
                     if cold else
@@ -633,28 +760,34 @@ class OperationalSnapshotService:
                 "details": {"age_seconds": last_age, "decisions_24h": decisions_24h},
             })
 
-        # DB latency
         select1 = self.db.data.get("select1_ms")
         if isinstance(select1, (int, float)) and select1 > 500:
             alerts.append({
                 "severity": "critical" if select1 > 2000 else "warning",
-                "category": "db",
-                "code": "db_slow",
+                "category": "db", "code": "db_slow",
                 "impact": "Banco lento — handlers HTTP podem timar out no /api/dashboard.",
                 "since": self.db.as_of.isoformat() if self.db.as_of else None,
                 "details": {"select1_ms": select1, "pool_status": self.db.data.get("status")},
             })
 
-        # Decision-pipeline latency
-        p95 = self.latency.data.get("p95_ms")
+        p95 = self.decision_latency.data.get("p95_ms")
         if isinstance(p95, (int, float)) and p95 > 2000:
             alerts.append({
                 "severity": "critical" if p95 > 5000 else "warning",
-                "category": "latency",
-                "code": "latency_spike",
+                "category": "latency", "code": "latency_spike",
                 "impact": "Avaliação de score lenta (>2s p95) — possível gargalo em fetch_merged_indicators.",
-                "since": self.latency.as_of.isoformat() if self.latency.as_of else None,
-                "details": {"p95_ms": p95, "samples_1h": self.latency.data.get("samples_1h")},
+                "since": self.decision_latency.as_of.isoformat() if self.decision_latency.as_of else None,
+                "details": {"p95_ms": p95, "samples_1h": self.decision_latency.data.get("samples_1h")},
+            })
+
+        proc_p95 = self.processing_latency.data.get("p95_ms")
+        if isinstance(proc_p95, (int, float)) and proc_p95 > 500:
+            alerts.append({
+                "severity": "critical" if proc_p95 > 2000 else "warning",
+                "category": "latency", "code": "processing_latency_spike",
+                "impact": "Cálculo de indicadores lento (>500 ms p95) — gargalo na pipeline microstructure.",
+                "since": self.processing_latency.as_of.isoformat() if self.processing_latency.as_of else None,
+                "details": {"p95_ms": proc_p95, "samples": self.processing_latency.data.get("samples")},
             })
 
         # Push *new* alert codes into history; clear codes that healed.
@@ -666,11 +799,12 @@ class OperationalSnapshotService:
                     now, code,
                     f"[{matching['severity'].upper()}] {matching['impact']}",
                     {"category": matching["category"], "details": matching.get("details", {})},
+                    "alert",
                 ))
         for code in self._prev_alert_codes - cur_codes:
             self._alert_history.append(_Event(
                 now, f"{code}_recovered",
-                f"Alerta resolvido: {code}", {},
+                f"Alerta resolvido: {code}", {}, "alert",
             ))
         self._prev_alert_codes = cur_codes
 
@@ -679,15 +813,13 @@ class OperationalSnapshotService:
     # ── public API ─────────────────────────────────────────────────────────
     def get_overview(self) -> Dict[str, Any]:
         alerts = self._evaluate_alerts()
-        # Overall status = worst snapshot status, but "critical" alerts force
-        # critical even if all underlying snapshots happen to be ok (e.g.
-        # newly-discovered alert engine threshold breach).
         ranks = {"unknown": 0, "ok": 1, "degraded": 2, "critical": 3}
+        all_snapshots = (
+            self.ingestion, self.celery, self.redis, self.db, self.score,
+            self.ingestion_latency, self.decision_latency, self.processing_latency,
+        )
         worst = max(
-            (s.status for s in (
-                self.ingestion, self.celery, self.redis,
-                self.db, self.score, self.latency,
-            )),
+            (s.status for s in all_snapshots),
             key=lambda s: ranks.get(s, 0),
         )
         if any(a["severity"] == "critical" for a in alerts):
@@ -699,12 +831,14 @@ class OperationalSnapshotService:
             "as_of": datetime.now(timezone.utc).isoformat(),
             "overall_status": worst,
             "snapshots": {
-                "ingestion": self.ingestion.to_dict(),
-                "celery":    self.celery.to_dict(),
-                "redis":     self.redis.to_dict(),
-                "db":        self.db.to_dict(),
-                "score":     self.score.to_dict(),
-                "latency":   self.latency.to_dict(),
+                "ingestion":          self.ingestion.to_dict(),
+                "celery":             self.celery.to_dict(),
+                "redis":              self.redis.to_dict(),
+                "db":                 self.db.to_dict(),
+                "score":              self.score.to_dict(),
+                "ingestion_latency":  self.ingestion_latency.to_dict(),
+                "decision_latency":   self.decision_latency.to_dict(),
+                "processing_latency": self.processing_latency.to_dict(),
             },
             "alerts": alerts,
             "alert_count": len(alerts),
@@ -718,38 +852,209 @@ class OperationalSnapshotService:
             "history": [e.to_dict() for e in reversed(self._alert_history)],
         }
 
-    def get_events(self) -> Dict[str, Any]:
+    def get_events(
+        self,
+        category: Optional[str] = None,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """Filtered event stream.
+
+        ``category`` ∈ {alert, worker, redis, None}.  ``None`` returns all
+        three buckets (legacy contract).  ``limit`` truncates each bucket.
+        """
+        limit = max(1, min(int(limit or 50), EVENT_RING_SIZE))
+        alerts = [e.to_dict() for e in reversed(self._alert_history)][:limit]
+        workers = [e.to_dict() for e in reversed(self._worker_events)][:limit]
+        redises = [e.to_dict() for e in reversed(self._redis_degradations)][:limit]
+        if category in (None, "all", ""):
+            return {
+                "as_of": datetime.now(timezone.utc).isoformat(),
+                "alert_history":      alerts,
+                "worker_events":      workers,
+                "redis_degradations": redises,
+            }
+        bucket = {"alert": alerts, "worker": workers, "redis": redises}.get(category, [])
         return {
             "as_of": datetime.now(timezone.utc).isoformat(),
-            "alert_history":      [e.to_dict() for e in reversed(self._alert_history)],
-            "worker_events":      [e.to_dict() for e in reversed(self._worker_events)],
-            "redis_degradations": [e.to_dict() for e in reversed(self._redis_degradations)],
+            "category": category,
+            "events": bucket,
+        }
+
+    # ── snapshot-derived view for /api/dashboard/system-status ────────────
+    def get_system_status_view(self) -> Dict[str, Any]:
+        """Backwards-compatible view used by ``/api/dashboard/system-status``.
+
+        Reads only from in-memory snapshots — never opens a Redis or DB
+        connection at request time.  Returns the same field shape as the
+        legacy handler so the SystemStatusResponse Pydantic model still
+        validates without any frontend changes.
+        """
+        last_candle = self.ingestion.data.get("last_candle")
+        last_decision = self.score.data.get("last_decision")
+        return {
+            "redis_alive": bool(self.redis.data.get("alive", False)),
+            "redis_error": self.redis.error,
+            "last_ohlcv_ts": last_candle,
+            "last_ohlcv_age_seconds": self.ingestion.data.get("delay_seconds"),
+            "last_decision_ts": last_decision,
+            "last_decision_age_seconds": self.score.data.get("last_decision_age_seconds"),
+            # Heurística: última decisão ≈ última varredura do pipeline.
+            "last_pipeline_scan_ts": last_decision,
+            "last_pipeline_scan_age_seconds": self.score.data.get("last_decision_age_seconds"),
         }
 
 
 # ─── Celery inspect helper (blocking — runs in a thread) ────────────────────
 def _inspect_celery_blocking() -> Dict[str, Any]:
-    """Synchronous Celery inspect probe; runs inside ``asyncio.to_thread``.
+    """Synchronous Celery probe; runs inside ``asyncio.to_thread``.
 
-    Returning a dict instead of mutating a snapshot keeps the threading
-    surface tiny (no shared mutable state across the thread boundary).
+    Pulls active/reserved/scheduled and breaks them down per queue using the
+    routing_key from each message's ``delivery_info``.  Falls back to a
+    bucket-less view if a Celery version doesn't expose delivery_info.
     """
     try:
-        from ..tasks.celery_app import celery_app
+        from ..tasks.celery_app import celery_app, ALL_QUEUES
         insp = celery_app.control.inspect(timeout=CELERY_TIMEOUT_S)
         active = insp.active() or {}
+        reserved = insp.reserved() or {}
+        scheduled = insp.scheduled() or {}
         registered = insp.registered() or {}
+
         flat: set[str] = set()
         for names in registered.values():
             for n in names or []:
                 flat.add(n)
+
+        # Per-queue breakdown.  Each task descriptor has
+        # ``delivery_info.routing_key`` set to its queue name.
+        per_queue: Dict[str, Dict[str, int]] = {
+            q: {"active": 0, "reserved": 0, "scheduled": 0} for q in ALL_QUEUES
+        }
+        per_queue.setdefault("__no_default__", {"active": 0, "reserved": 0, "scheduled": 0})
+
+        def _bucket(items: dict, key: str) -> None:
+            for tasks in items.values():
+                for t in tasks or []:
+                    di = (t.get("delivery_info") if isinstance(t, dict) else None) or {}
+                    rk = di.get("routing_key") or di.get("exchange") or "__no_default__"
+                    if rk not in per_queue:
+                        per_queue[rk] = {"active": 0, "reserved": 0, "scheduled": 0}
+                    per_queue[rk][key] += 1
+
+        _bucket(active, "active")
+        _bucket(reserved, "reserved")
+        _bucket(scheduled, "scheduled")
+
+        workers = sorted(set(active.keys()) | set(registered.keys()))
         return {
-            "workers": list(active.keys() or registered.keys() or []),
-            "active": active,
+            "workers": workers,
+            "per_queue": per_queue,
             "registered_count": len(flat),
         }
     except Exception as exc:
-        return {"workers": [], "active": {}, "registered_count": 0, "error": f"{type(exc).__name__}: {exc}"}
+        return {
+            "workers": [],
+            "per_queue": {},
+            "registered_count": 0,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+# ─── Beat heartbeat ─────────────────────────────────────────────────────────
+def _beat_schedule_age_seconds() -> Optional[float]:
+    """Return seconds since the celerybeat-schedule file was last touched.
+
+    The file is ``backend/celerybeat-schedule`` in the dev workflow and
+    ``/var/lib/celerybeat-schedule`` in container deployments.  Beat
+    persists schedule state on each tick; a stale mtime means the
+    scheduler has been blocked.
+    """
+    candidates = (
+        "backend/celerybeat-schedule",
+        "celerybeat-schedule",
+        "/var/lib/celerybeat-schedule",
+    )
+    for p in candidates:
+        try:
+            mtime = os.path.getmtime(p)
+        except OSError:
+            continue
+        return max(0.0, time.time() - mtime)
+    return None
+
+
+# ─── Prometheus histogram reader (in-process) ────────────────────────────────
+def _read_processing_histogram() -> Optional[Dict[str, Any]]:
+    """Parse ``indicator_computation_duration_seconds`` from the in-process
+    Prometheus registry.  Returns ``None`` when prometheus_client is missing.
+
+    Bucket-based p50/p95 estimates use linear interpolation inside the
+    matched bucket, which is the standard Prometheus convention.
+    """
+    try:
+        from .robust_indicators.metrics import (  # type: ignore[attr-defined]
+            INDICATOR_COMPUTATION_DURATION,
+            _PROMETHEUS_AVAILABLE,
+        )
+    except Exception:
+        return None
+    if not _PROMETHEUS_AVAILABLE:
+        return None
+
+    bucket_totals: Dict[float, float] = {}
+    total_count = 0.0
+    total_sum = 0.0
+    try:
+        for metric in INDICATOR_COMPUTATION_DURATION.collect():
+            for sample in metric.samples:
+                name = sample.name
+                if name.endswith("_bucket"):
+                    le = sample.labels.get("le")
+                    if le is None:
+                        continue
+                    le_f = float("inf") if le == "+Inf" else float(le)
+                    bucket_totals[le_f] = bucket_totals.get(le_f, 0.0) + float(sample.value)
+                elif name.endswith("_count"):
+                    total_count += float(sample.value)
+                elif name.endswith("_sum"):
+                    total_sum += float(sample.value)
+    except Exception as exc:
+        logger.warning("[ops-snapshot] processing histogram read failed: %s", exc)
+        return {"available": True, "samples": 0, "error": str(exc),
+                "p50_ms": None, "p95_ms": None, "avg_ms": None}
+
+    samples = int(total_count)
+    if samples == 0:
+        return {"available": True, "samples": 0,
+                "p50_ms": None, "p95_ms": None, "avg_ms": None,
+                "total_seconds": total_sum}
+
+    def _quantile(q: float) -> Optional[float]:
+        if not bucket_totals:
+            return None
+        sorted_buckets = sorted(bucket_totals.items())
+        target = q * samples
+        prev_cum = 0.0
+        prev_le = 0.0
+        for le, cum in sorted_buckets:
+            if cum >= target:
+                # Linear interp inside the bucket (Prometheus style).
+                if le == float("inf") or cum == prev_cum:
+                    return le * 1000.0 if le != float("inf") else prev_le * 1000.0
+                frac = (target - prev_cum) / (cum - prev_cum)
+                return (prev_le + frac * (le - prev_le)) * 1000.0
+            prev_cum = cum
+            prev_le = le if le != float("inf") else prev_le
+        return None
+
+    return {
+        "available": True,
+        "samples": samples,
+        "p50_ms": _quantile(0.50),
+        "p95_ms": _quantile(0.95),
+        "avg_ms": (total_sum / samples) * 1000.0 if samples else None,
+        "total_seconds": total_sum,
+    }
 
 
 # ─── Singleton accessor ─────────────────────────────────────────────────────

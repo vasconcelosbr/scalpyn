@@ -106,6 +106,7 @@ class SnapshotEnvelope(BaseModel):
     status: str  # "ok" | "degraded" | "critical" | "unknown"
     data: dict
     error: Optional[str] = None
+    failure_streak: int = 0
 
 
 class OperationalAlert(BaseModel):
@@ -120,7 +121,9 @@ class OperationalAlert(BaseModel):
 class OperationalOverviewResponse(BaseModel):
     as_of: str
     overall_status: str  # "ok" | "degraded" | "critical" | "unknown"
-    snapshots: dict  # ingestion / celery / redis / db / score / latency
+    # snapshots keys: ingestion / celery / redis / db / score /
+    # ingestion_latency / decision_latency / processing_latency
+    snapshots: dict
     alerts: List[OperationalAlert]
     alert_count: int
 
@@ -130,10 +133,17 @@ class OperationalEvent(BaseModel):
     code: str
     message: str
     extra: dict
+    category: str = "alert"
 
 
 class OperationalEventsResponse(BaseModel):
+    """Legacy envelope (no filter): three buckets returned together.
+
+    When ``/events`` is called with ``?category=…`` the handler returns
+    a different shape (``events`` + ``category``) and bypasses this model
+    via ``response_model=None``.
+    """
     as_of: str
-    alert_history: List[OperationalEvent]
-    worker_events: List[OperationalEvent]
-    redis_degradations: List[OperationalEvent]
+    alert_history: List[OperationalEvent] = []
+    worker_events: List[OperationalEvent] = []
+    redis_degradations: List[OperationalEvent] = []
