@@ -1,18 +1,17 @@
 """Celery Task — evaluate signals, check blocks, apply risk, execute trades.
 
-Task #232 scope clarification (reviewer round 13):
-``evaluate_signals`` is the **legacy** signal-evaluation path retained
-for backward-compat with users that have not yet been migrated to the
-L3 pipeline. It enforces the EXECUTION gate (``is_tradable``) at the
-buy decision point (see ~line 90 onward) so a non-tradable symbol
-never produces an order, but it does NOT enforce L3 watchlist
-membership — that is a deliberate design decision so legacy users
-without an L3 profile keep working through the rolling deploy.
+Task #232 (reviewer round 16): unified execution gating. Both
+``evaluate_signals`` and ``execute_buy`` now require the same triple
+gate at the buy decision point:
 
-The canonical execution path is ``execute_buy``, which DOES join
-through ``pipeline_watchlist`` (L1) → ``pipeline_watchlist_assets``
-(L3) before placing an order. Both paths are gated by ``is_tradable``;
-only ``execute_buy`` is gated by L3 presence.
+    is_active = true  AND  is_tradable = true  AND  EXISTS L3 row
+
+When the per-user L3 chain (Pool → L1 → L2 → L3 PipelineWatchlist)
+resolves, candidates are restricted to its
+``pipeline_watchlist_assets`` set; symbols absent from L3 are skipped
+with ``reason=NOT_IN_L3``. Users without an L3 chain configured fall
+back to the active+tradable set (degraded mode) so a fresh tenant is
+not silently locked out before the operator builds a profile.
 """
 
 import asyncio
@@ -108,6 +107,50 @@ async def _evaluate_async():
                 if not pool_symbols:
                     continue
 
+                # Task #232 round 16 — resolve the per-user L3 symbol
+                # set so the execution gate matches ``execute_buy``.
+                # Best-effort: if any link in the chain is missing,
+                # ``l3_symbols`` stays None and we degrade to the
+                # active+tradable universe (fresh tenants without an
+                # L3 profile keep working through the rolling deploy).
+                from ..models.pipeline_watchlist import (
+                    PipelineWatchlist, PipelineWatchlistAsset,
+                )
+                l3_symbols: set | None = None
+                try:
+                    pool_for_l3 = (await db.execute(
+                        select(Pool).where(
+                            Pool.user_id == user.id,
+                            Pool.is_active == True,  # noqa: E712
+                        ).limit(1)
+                    )).scalars().first()
+                    if pool_for_l3 is not None:
+                        l1 = (await db.execute(select(PipelineWatchlist).where(
+                            PipelineWatchlist.source_pool_id == pool_for_l3.id,
+                            PipelineWatchlist.user_id == user.id,
+                        ).limit(1))).scalars().first()
+                        l2 = (await db.execute(select(PipelineWatchlist).where(
+                            PipelineWatchlist.source_watchlist_id == l1.id,
+                            PipelineWatchlist.user_id == user.id,
+                        ).limit(1))).scalars().first() if l1 else None
+                        l3 = (await db.execute(select(PipelineWatchlist).where(
+                            PipelineWatchlist.source_watchlist_id == l2.id,
+                            PipelineWatchlist.user_id == user.id,
+                        ).limit(1))).scalars().first() if l2 else None
+                        if l3 is not None:
+                            l3_rows = (await db.execute(
+                                select(PipelineWatchlistAsset.symbol).where(
+                                    PipelineWatchlistAsset.watchlist_id == l3.id
+                                )
+                            )).fetchall()
+                            l3_symbols = {r[0] for r in l3_rows}
+                except Exception as _l3_exc:
+                    logger.warning(
+                        "[evaluate_signals] L3 chain unresolved for user %s: %s "
+                        "— degrading to active+tradable gate only.",
+                        user.id, _l3_exc,
+                    )
+
                 merged_by_sym = await get_merged_indicators(db, pool_symbols)
 
                 for symbol, mi in merged_by_sym.items():
@@ -169,15 +212,24 @@ async def _evaluate_async():
                         logger.info(f"Trade for {symbol} rejected by risk: {risk_result.get('rejection_reason')}")
                         continue
 
-                    # Task #232 — execution gate. Symbol passed
-                    # scoring+signal+block+risk; would be bought if
-                    # tradable. Per-symbol skip log + counter.
+                    # Task #232 round 16 — unified execution gate.
+                    # Symbol passed scoring+signal+block+risk; the gate
+                    # below mirrors execute_buy: is_tradable AND (when
+                    # the chain resolved) L3 membership.
                     if not tradable_by_symbol.get(symbol, False):
                         record_not_tradable("evaluate_signals")
                         logger.info(
                             "[evaluate_signals] SKIPPED %s reason=NOT_TRADABLE "
                             "score=%.2f direction=%s — qualified buy blocked by "
                             "is_tradable=false",
+                            symbol, alpha_score, signal_result.get("direction"),
+                        )
+                        continue
+                    if l3_symbols is not None and symbol not in l3_symbols:
+                        logger.info(
+                            "[evaluate_signals] SKIPPED %s reason=NOT_IN_L3 "
+                            "score=%.2f direction=%s — qualified buy blocked "
+                            "by L3 watchlist membership.",
                             symbol, alpha_score, signal_result.get("direction"),
                         )
                         continue

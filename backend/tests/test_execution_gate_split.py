@@ -189,52 +189,43 @@ def test_active_non_tradable_symbol_is_ingested_but_never_executed() -> None:
         )
 
 
-def test_evaluate_signals_vs_execute_buy_l3_gating_contract() -> None:
-    """Lock the intentional dual-path Task #232 semantics:
+def test_unified_execution_gate_includes_l3_in_both_paths() -> None:
+    """Task #232 round 16 — both execution entrypoints
+    (``evaluate_signals`` and ``execute_buy``) must enforce the same
+    triple gate at the buy decision point: is_active, is_tradable,
+    and L3 watchlist membership.
 
-    * ``execute_buy`` (canonical) — gates on is_tradable AND joins
-      through ``pipeline_watchlist`` / ``pipeline_watchlist_assets``
-      (L1 → L3) before placing an order.
-    * ``evaluate_signals`` (legacy) — gates on is_tradable only;
-      DOES NOT enforce L3 watchlist membership. Documented as
-      back-compat for users without an L3 profile.
-
-    A future change that adds L3 to evaluate_signals OR removes L3
-    from execute_buy must update this test to keep the dual-path
-    contract intentional, not accidental.
+    Implemented as a static lint over module sources because a real
+    runtime e2e would require live Postgres + Redis + broker.
     """
     import inspect
     import re
     from app.tasks import evaluate_signals, execute_buy
 
-    def _strip_comments(src: str) -> str:
-        # Strip ``"""…"""``/``'''…'''`` docstrings and ``# …`` line
-        # comments so the assertion sees executable code only.
+    def _strip(src: str) -> str:
         src = re.sub(r'"""[\s\S]*?"""', "", src)
         src = re.sub(r"'''[\s\S]*?'''", "", src)
         src = re.sub(r"(?m)#.*$", "", src)
-        return src
+        return src.lower()
 
-    eb_code = _strip_comments(inspect.getsource(execute_buy)).lower()
-    es_code = _strip_comments(inspect.getsource(evaluate_signals)).lower()
-
-    # Both paths gate execution on is_tradable.
-    assert "record_not_tradable" in eb_code
-    assert "record_not_tradable" in es_code
-
-    # Canonical path imports / joins the L1+L3 watchlist models.
-    assert "pipelinewatchlist" in eb_code or "pipeline_watchlist" in eb_code, (
-        "execute_buy must reference pipeline_watchlist (L1/L3 join)."
-    )
-
-    # Legacy path must NOT reference the L3 watchlist tables in code.
-    # If a future change adds it, update the module docstring + this
-    # test together so the dual-path contract stays intentional.
-    assert "pipelinewatchlist" not in es_code and "pipeline_watchlist" not in es_code, (
-        "evaluate_signals now references pipeline_watchlist — if this "
-        "is intentional, update the module docstring (currently says "
-        "'does NOT enforce L3 watchlist membership') and this test."
-    )
+    for mod in (evaluate_signals, execute_buy):
+        code = _strip(inspect.getsource(mod))
+        assert "record_not_tradable" in code, (
+            f"{mod.__name__}: missing record_not_tradable() call."
+        )
+        assert "reason=not_tradable" in code, (
+            f"{mod.__name__}: missing reason=NOT_TRADABLE skip log."
+        )
+        assert (
+            "pipelinewatchlist" in code or "pipeline_watchlist" in code
+        ), (
+            f"{mod.__name__}: must reference pipeline_watchlist for "
+            "L3 membership enforcement (Task #232 round 16)."
+        )
+        assert "pipelinewatchlistasset" in code or "pipeline_watchlist_asset" in code, (
+            f"{mod.__name__}: must read pipeline_watchlist_assets to "
+            "compute the L3 symbol set."
+        )
 
 
 def test_execute_buy_orders_tradable_before_limit() -> None:
