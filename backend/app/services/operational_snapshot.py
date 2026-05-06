@@ -311,7 +311,13 @@ class OperationalSnapshotService:
             )
 
     async def _refresh_celery(self) -> None:
-        """Celery worker / beat presence + per-queue task breakdown."""
+        """Celery worker / beat presence + per-queue task breakdown.
+
+        Probe failures (inspect raises, returns ``error``, or yields no
+        workers) flow through ``_apply_failure`` so the 3-strike streak
+        gates the eventual degradation — a single network blip on the
+        broker no longer flips the snapshot to ``critical`` immediately.
+        """
         try:
             data = await asyncio.wait_for(
                 asyncio.to_thread(_inspect_celery_blocking),
@@ -324,15 +330,22 @@ class OperationalSnapshotService:
             self._apply_failure("celery", f"{type(exc).__name__}: {exc}")
             return
 
+        if data.get("error"):
+            self._apply_failure("celery", str(data["error"]))
+            return
+
         workers = sorted(data.get("workers", []))
+        if not workers:
+            # No workers reachable is itself a probe-level signal: route
+            # through the failure path so we honour the 3-strike contract.
+            self._apply_failure("celery", "No workers responded to inspect()")
+            return
+
         per_queue = data.get("per_queue", {})
         active_total = sum(q.get("active", 0) for q in per_queue.values())
         reserved_total = sum(q.get("reserved", 0) for q in per_queue.values())
         scheduled_total = sum(q.get("scheduled", 0) for q in per_queue.values())
 
-        # Beat heartbeat — celerybeat-schedule mtime.  Beat ticks every
-        # second and writes the file on each due-task pickup; if it's
-        # stale, beat is blocked / dead.
         beat_age = _beat_schedule_age_seconds()
         if beat_age is None:
             beat_status = "unknown"
@@ -343,11 +356,7 @@ class OperationalSnapshotService:
         else:
             beat_status = "critical"
 
-        if not workers:
-            status = "critical"
-        elif data.get("error"):
-            status = "degraded"
-        elif beat_status == "critical":
+        if beat_status == "critical":
             status = "critical"
         elif beat_status == "degraded":
             status = "degraded"
@@ -515,22 +524,53 @@ class OperationalSnapshotService:
         from sqlalchemy import text
         from ..database import AsyncSessionLocal
 
+        # Defensive bounded sample: cap at 100k rows so a runaway burst
+        # cannot blow up the snapshot worker's memory / DB time.
         agg_sql = text(
             """
+            WITH sample AS (
+                SELECT score, decision, l1_pass, l2_pass, l3_pass, metrics, created_at
+                FROM decisions_log
+                WHERE created_at > NOW() - INTERVAL '24 hours'
+                ORDER BY created_at DESC
+                LIMIT 100000
+            )
             SELECT
-                COUNT(*)::int                                                          AS total,
-                COALESCE(SUM(CASE WHEN decision='ALLOW' THEN 1 ELSE 0 END), 0)::int   AS allow_count,
-                COALESCE(SUM(CASE WHEN decision='BLOCK' THEN 1 ELSE 0 END), 0)::int   AS block_count,
-                AVG(score)::float                                                     AS avg_score,
-                MIN(score)::float                                                     AS min_score,
-                MAX(score)::float                                                     AS max_score,
-                STDDEV_SAMP(score)::float                                             AS stddev_score,
-                COALESCE(SUM(CASE WHEN l1_pass IS TRUE THEN 1 ELSE 0 END), 0)::int   AS l1_pass_count,
-                COALESCE(SUM(CASE WHEN l2_pass IS TRUE THEN 1 ELSE 0 END), 0)::int   AS l2_pass_count,
-                COALESCE(SUM(CASE WHEN l3_pass IS TRUE THEN 1 ELSE 0 END), 0)::int   AS l3_pass_count,
-                MAX(created_at)                                                       AS last_decision
-            FROM decisions_log
-            WHERE created_at > NOW() - INTERVAL '24 hours'
+                COUNT(*)::int                                                                   AS total,
+                COALESCE(SUM(CASE WHEN decision='ALLOW' THEN 1 ELSE 0 END), 0)::int            AS allow_count,
+                COALESCE(SUM(CASE WHEN decision='BLOCK' THEN 1 ELSE 0 END), 0)::int            AS block_count,
+                AVG(score)::float                                                              AS avg_score,
+                MIN(score)::float                                                              AS min_score,
+                MAX(score)::float                                                              AS max_score,
+                STDDEV_SAMP(score)::float                                                      AS stddev_score,
+                percentile_cont(0.50) WITHIN GROUP (ORDER BY score)::float                     AS p50_score,
+                percentile_cont(0.95) WITHIN GROUP (ORDER BY score)::float                     AS p95_score,
+                COALESCE(SUM(CASE WHEN l1_pass IS TRUE THEN 1 ELSE 0 END), 0)::int            AS l1_pass_count,
+                COALESCE(SUM(CASE WHEN l2_pass IS TRUE THEN 1 ELSE 0 END), 0)::int            AS l2_pass_count,
+                COALESCE(SUM(CASE WHEN l3_pass IS TRUE THEN 1 ELSE 0 END), 0)::int            AS l3_pass_count,
+                AVG(
+                    (CASE WHEN l1_pass IS TRUE THEN 1.0 ELSE 0.0 END
+                   + CASE WHEN l2_pass IS TRUE THEN 1.0 ELSE 0.0 END
+                   + CASE WHEN l3_pass IS TRUE THEN 1.0 ELSE 0.0 END) / 3.0
+                )::float                                                                       AS avg_confidence,
+                COALESCE(SUM(
+                    CASE WHEN metrics ? 'indicators_snapshot'
+                         AND EXISTS (
+                             SELECT 1 FROM jsonb_each(metrics->'indicators_snapshot') e
+                             WHERE (e.value->>'value') IS NULL
+                         )
+                    THEN 1 ELSE 0 END
+                ), 0)::int                                                                     AS missing_count,
+                COALESCE(SUM(
+                    CASE WHEN metrics ? 'indicators_snapshot'
+                         AND EXISTS (
+                             SELECT 1 FROM jsonb_each(metrics->'indicators_snapshot') e
+                             WHERE (e.value->>'stale')::boolean IS TRUE
+                         )
+                    THEN 1 ELSE 0 END
+                ), 0)::int                                                                     AS stale_count,
+                MAX(created_at)                                                                AS last_decision
+            FROM sample
             """
         )
         dist_sql = text(
@@ -547,14 +587,34 @@ class OperationalSnapshotService:
                 FROM decisions_log
                 WHERE created_at > NOW() - INTERVAL '24 hours'
                   AND score IS NOT NULL
+                LIMIT 100000
             ) sub
             GROUP BY bucket
+            """
+        )
+        # Time-series throughput: per-minute counts for the last 60 min so
+        # the operator can see backlog catch-ups vs steady state.
+        series_sql = text(
+            """
+            SELECT bucket_min, decisions_count, scores_count
+            FROM (
+                SELECT
+                    date_trunc('minute', created_at) AS bucket_min,
+                    COUNT(*)::int                    AS decisions_count,
+                    COUNT(score)::int                AS scores_count
+                FROM decisions_log
+                WHERE created_at > NOW() - INTERVAL '60 minutes'
+                GROUP BY 1
+            ) s
+            ORDER BY bucket_min ASC
+            LIMIT 60
             """
         )
         try:
             async with AsyncSessionLocal() as db:
                 row = (await asyncio.wait_for(db.execute(agg_sql), timeout=DB_TIMEOUT_S)).one()
                 dist_rows = (await asyncio.wait_for(db.execute(dist_sql), timeout=DB_TIMEOUT_S)).all()
+                series_rows = (await asyncio.wait_for(db.execute(series_sql), timeout=DB_TIMEOUT_S)).all()
             now = datetime.now(timezone.utc)
             total = int(row.total or 0)
             last = row.last_decision
@@ -578,6 +638,23 @@ class OperationalSnapshotService:
                 if r.bucket in dist_map:
                     dist_map[r.bucket] = int(r.count)
 
+            series = [
+                {
+                    "ts":               r.bucket_min.replace(tzinfo=timezone.utc).isoformat()
+                                        if r.bucket_min.tzinfo is None
+                                        else r.bucket_min.isoformat(),
+                    "decisions_per_min": int(r.decisions_count),
+                    "scores_per_min":    int(r.scores_count),
+                }
+                for r in series_rows
+            ]
+            decisions_per_min_now = (
+                series[-1]["decisions_per_min"] if series else 0
+            )
+            scores_per_min_now = series[-1]["scores_per_min"] if series else 0
+            missing_count = int(row.missing_count or 0)
+            stale_count   = int(row.stale_count or 0)
+
             data = {
                 # Sub-family payloads (referenced by name on the frontend).
                 "throughput": {
@@ -585,22 +662,31 @@ class OperationalSnapshotService:
                     "allow_24h":                 allow,
                     "block_24h":                 block,
                     "allow_rate_24h":            (allow / total) if total else 0.0,
-                    "decisions_per_min":         total / (24.0 * 60.0) if total else 0.0,
+                    "decisions_per_min_avg_24h": total / (24.0 * 60.0) if total else 0.0,
+                    "decisions_per_min_now":     decisions_per_min_now,
+                    "scores_per_min_now":        scores_per_min_now,
+                    "series_60m":                series,
                     "last_decision":             last.isoformat() if last else None,
                     "last_decision_age_seconds": age_seconds,
                 },
                 "quality": {
-                    "avg_score":     float(row.avg_score)    if row.avg_score    is not None else None,
-                    "min_score":     float(row.min_score)    if row.min_score    is not None else None,
-                    "max_score":     float(row.max_score)    if row.max_score    is not None else None,
-                    "stddev_score":  float(row.stddev_score) if row.stddev_score is not None else None,
-                    "l1_pass_rate":  (int(row.l1_pass_count or 0) / total) if total else 0.0,
-                    "l2_pass_rate":  (int(row.l2_pass_count or 0) / total) if total else 0.0,
-                    "l3_pass_rate":  (int(row.l3_pass_count or 0) / total) if total else 0.0,
+                    "avg_score":              float(row.avg_score)      if row.avg_score      is not None else None,
+                    "min_score":              float(row.min_score)      if row.min_score      is not None else None,
+                    "max_score":              float(row.max_score)      if row.max_score      is not None else None,
+                    "stddev_score":           float(row.stddev_score)   if row.stddev_score   is not None else None,
+                    "avg_confidence":         float(row.avg_confidence) if row.avg_confidence is not None else None,
+                    "reject_ratio":           (block / total) if total else 0.0,
+                    "missing_indicators_pct": (missing_count / total) if total else 0.0,
+                    "stale_indicators_pct":   (stale_count   / total) if total else 0.0,
+                    "l1_pass_rate":           (int(row.l1_pass_count or 0) / total) if total else 0.0,
+                    "l2_pass_rate":           (int(row.l2_pass_count or 0) / total) if total else 0.0,
+                    "l3_pass_rate":           (int(row.l3_pass_count or 0) / total) if total else 0.0,
                 },
                 "distribution": {
                     "buckets":       [{"bucket": k, "count": dist_map[k]} for k in buckets_keys],
                     "total_scored":  sum(dist_map.values()),
+                    "p50_score":     float(row.p50_score) if row.p50_score is not None else None,
+                    "p95_score":     float(row.p95_score) if row.p95_score is not None else None,
                 },
                 # Top-level mirrors kept for the legacy system-status view and
                 # the alert engine — never remove without auditing both.
@@ -647,9 +733,16 @@ class OperationalSnapshotService:
 
         sql = text(
             """
-            WITH lags AS (
+            WITH bounded_decisions AS (
+                SELECT id, symbol, created_at
+                FROM decisions_log
+                WHERE created_at > NOW() - INTERVAL '24 hours'
+                ORDER BY created_at DESC
+                LIMIT 20000
+            ),
+            lags AS (
                 SELECT EXTRACT(EPOCH FROM (d.created_at - c.time))::float AS lag_s
-                FROM decisions_log d
+                FROM bounded_decisions d
                 CROSS JOIN LATERAL (
                     SELECT o.time
                     FROM ohlcv o
@@ -659,7 +752,6 @@ class OperationalSnapshotService:
                     ORDER BY o.time DESC
                     LIMIT 1
                 ) c
-                WHERE d.created_at > NOW() - INTERVAL '24 hours'
             )
             SELECT
                 percentile_cont(0.50) WITHIN GROUP (ORDER BY lag_s)::float AS p50_s,
@@ -732,15 +824,16 @@ class OperationalSnapshotService:
         """Re-derive alert list from current snapshots.
 
         Alert codes (stable, contract):
-          * ``redis_down``           — Redis ping failed
-          * ``worker_offline``       — no Celery worker responded to inspect
-          * ``beat_stalled``         — Celery Beat schedule file stale
-          * ``unrouted_backlog``     — tasks stacking on ``__no_default__``
-          * ``ingestion_stale``      — OHLCV last candle older than 20 min
-          * ``ingestion_lagging``    — OHLCV between 10 and 20 min old
-          * ``no_decisions``         — no decision in last 30 min OR 24 h cold
-          * ``db_slow``              — SELECT 1 > 500 ms
-          * ``latency_spike``        — decision p95 > 2 s in last hour
+          * ``redis_down``               — Redis ping failed
+          * ``worker_offline_60s``       — no Celery worker responded for ≥60 s
+          * ``beat_stale_60s``           — Celery Beat schedule file >60 s stale
+          * ``queue_backlog_500``        — any non-sentinel queue with >500 pending
+          * ``unrouted_backlog``         — tasks stacking on ``__no_default__``
+          * ``ingestion_stale``          — OHLCV last candle older than 20 min
+          * ``ingestion_lagging``        — OHLCV between 10 and 20 min old
+          * ``no_decisions``             — no decision in last 30 min OR 24 h cold
+          * ``db_slow``                  — SELECT 1 > 500 ms
+          * ``latency_spike``            — candle→decision p95 > 5 min (24h)
           * ``processing_latency_spike`` — indicator compute p95 > 500 ms
         """
         alerts: List[Dict[str, Any]] = []
@@ -754,23 +847,55 @@ class OperationalSnapshotService:
                 "details": {"error": self.redis.error},
             })
 
-        if self.celery.status == "critical" and self.celery.data.get("worker_count", 0) == 0:
+        # worker_offline_60s — fires only after the celery probe has been
+        # failing long enough to cross the ~60 s threshold.  The celery
+        # refresher runs every CELERY_INTERVAL_S (15 s), and `_apply_failure`
+        # only flips status to ``degraded`` after FAIL_TOLERANCE strikes —
+        # so failure_streak >= 4 is ≈ 60 s of confirmed worker absence.
+        worker_failure_streak = self.celery.failure_streak
+        if (
+            self.celery.status in ("degraded", "critical")
+            and worker_failure_streak >= 4
+            and self.celery.data.get("worker_count", 0) == 0
+        ):
             alerts.append({
-                "severity": "critical", "category": "celery", "code": "worker_offline",
-                "impact": "Nenhum worker responde — pipeline_scan, collect_market_data e execute_buy não rodam.",
+                "severity": "critical", "category": "celery", "code": "worker_offline_60s",
+                "impact": "Nenhum worker responde há >60s — pipeline_scan, collect_market_data e execute_buy parados.",
                 "since": self.celery.as_of.isoformat() if self.celery.as_of else None,
-                "details": {"error": self.celery.error},
+                "details": {
+                    "error": self.celery.error,
+                    "failure_streak": worker_failure_streak,
+                    "approx_offline_seconds": worker_failure_streak * CELERY_INTERVAL_S,
+                },
             })
 
         beat = self.celery.data.get("beat") or {}
         beat_status = beat.get("status")
-        if beat_status in ("degraded", "critical"):
+        beat_age = beat.get("schedule_age_seconds")
+        # beat_stale_60s — beat heartbeat older than the 60 s OK window.
+        if isinstance(beat_age, (int, float)) and beat_age > BEAT_OK_SECONDS:
             alerts.append({
                 "severity": "critical" if beat_status == "critical" else "warning",
-                "category": "celery", "code": "beat_stalled",
-                "impact": "Celery Beat travado — tarefas periódicas (collect, scan, monitor) não estão sendo despachadas.",
+                "category": "celery", "code": "beat_stale_60s",
+                "impact": "Celery Beat travado há >60s — tarefas periódicas (collect, scan, monitor) não estão sendo despachadas.",
                 "since": self.celery.as_of.isoformat() if self.celery.as_of else None,
-                "details": {"schedule_age_seconds": beat.get("schedule_age_seconds")},
+                "details": {"schedule_age_seconds": beat_age},
+            })
+
+        # queue_backlog_500 — any non-sentinel queue with > 500 pending tasks.
+        queue_lengths = self.redis.data.get("queue_lengths", {}) or {}
+        backlogged = {
+            q: n for q, n in queue_lengths.items()
+            if q != "__no_default__" and isinstance(n, int) and n > 500
+        }
+        if backlogged:
+            worst = max(backlogged.values())
+            alerts.append({
+                "severity": "critical" if worst > 5000 else "warning",
+                "category": "celery", "code": "queue_backlog_500",
+                "impact": "Fila Celery acumulada (>500) — workers não estão drenando o broker.",
+                "since": self.redis.as_of.isoformat() if self.redis.as_of else None,
+                "details": {"queues": backlogged, "worst": worst},
             })
 
         unrouted = self.redis.data.get("unrouted_backlog", 0)

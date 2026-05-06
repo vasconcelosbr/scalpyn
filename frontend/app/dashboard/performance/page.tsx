@@ -26,6 +26,8 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  Line,
+  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -133,7 +135,10 @@ interface OverviewResp {
         allow_24h?: number;
         block_24h?: number;
         allow_rate_24h?: number;
-        decisions_per_min?: number;
+        decisions_per_min_avg_24h?: number;
+        decisions_per_min_now?: number;
+        scores_per_min_now?: number;
+        series_60m?: { ts: string; decisions_per_min: number; scores_per_min: number }[];
         last_decision?: string | null;
         last_decision_age_seconds?: number | null;
       };
@@ -142,6 +147,10 @@ interface OverviewResp {
         min_score?: number | null;
         max_score?: number | null;
         stddev_score?: number | null;
+        avg_confidence?: number | null;
+        reject_ratio?: number;
+        missing_indicators_pct?: number;
+        stale_indicators_pct?: number;
         l1_pass_rate?: number;
         l2_pass_rate?: number;
         l3_pass_rate?: number;
@@ -149,6 +158,8 @@ interface OverviewResp {
       distribution?: {
         buckets?: { bucket: string; count: number }[];
         total_scored?: number;
+        p50_score?: number | null;
+        p95_score?: number | null;
       };
       // legacy mirrors (kept by backend for /system-status)
       decisions_24h?: number;
@@ -580,14 +591,32 @@ function ScoreEnginePanels({ envelope }: { envelope: OverviewResp["snapshots"]["
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.elevated2, border: `1px solid ${C.border}` }}>
           <p className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>Throughput</p>
-          <StatTile label="Decisões 24h" value={String(t.decisions_24h ?? 0)} />
           <div className="grid grid-cols-2 gap-3">
-            <StatTile label="ALLOW" value={String(t.allow_24h ?? 0)} color={C.ok} />
-            <StatTile label="BLOCK" value={String(t.block_24h ?? 0)} color={C.critical} />
+            <StatTile label="Decisões/min (now)" value={String(t.decisions_per_min_now ?? 0)} />
+            <StatTile label="Scores/min (now)" value={String(t.scores_per_min_now ?? 0)} />
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <StatTile label="ALLOW 24h" value={String(t.allow_24h ?? 0)} color={C.ok} />
+            <StatTile label="BLOCK 24h" value={String(t.block_24h ?? 0)} color={C.critical} />
+          </div>
+          {(t.series_60m ?? []).length > 0 ? (
+            <ResponsiveContainer width="100%" height={70}>
+              <LineChart data={t.series_60m} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                <XAxis dataKey="ts" hide />
+                <YAxis hide allowDecimals={false} />
+                <Tooltip
+                  contentStyle={{ background: C.elevated, border: `1px solid ${C.borderStrong}`, borderRadius: 12, fontSize: 11 }}
+                  labelFormatter={(v) => fmtTime(String(v))}
+                />
+                <Line type="monotone" dataKey="decisions_per_min" stroke={C.purple} strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="text-[11px]" style={{ color: C.textTertiary }}>Sem amostras nos últimos 60 min.</p>
+          )}
           <div className="flex justify-between text-[12px]">
-            <span style={{ color: C.textTertiary }}>Por minuto</span>
-            <span className="tabular-nums" style={{ color: C.textPrimary }}>{(t.decisions_per_min ?? 0).toFixed(2)}</span>
+            <span style={{ color: C.textTertiary }}>Média 24h/min</span>
+            <span className="tabular-nums" style={{ color: C.textPrimary }}>{(t.decisions_per_min_avg_24h ?? 0).toFixed(2)}</span>
           </div>
           <div className="flex justify-between text-[12px]">
             <span style={{ color: C.textTertiary }}>Última decisão</span>
@@ -597,12 +626,19 @@ function ScoreEnginePanels({ envelope }: { envelope: OverviewResp["snapshots"]["
         <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.elevated2, border: `1px solid ${C.border}` }}>
           <p className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>Qualidade</p>
           <div className="grid grid-cols-2 gap-3">
-            <StatTile label="Score médio" value={q.avg_score != null ? q.avg_score.toFixed(1) : "—"} />
-            <StatTile label="σ" value={q.stddev_score != null ? q.stddev_score.toFixed(2) : "—"} />
-            <StatTile label="Min" value={q.min_score != null ? q.min_score.toFixed(1) : "—"} />
-            <StatTile label="Max" value={q.max_score != null ? q.max_score.toFixed(1) : "—"} />
+            <StatTile label="Avg confidence" value={q.avg_confidence != null ? `${(q.avg_confidence * 100).toFixed(1)}%` : "—"} />
+            <StatTile label="Reject ratio" value={fmtPct(q.reject_ratio ?? null)} color={(q.reject_ratio ?? 0) > 0.5 ? C.warn : undefined} />
+            <StatTile label="% missing ind." value={fmtPct(q.missing_indicators_pct ?? null)} color={(q.missing_indicators_pct ?? 0) > 0.1 ? C.warn : undefined} />
+            <StatTile label="% stale ind." value={fmtPct(q.stale_indicators_pct ?? null)} color={(q.stale_indicators_pct ?? 0) > 0.1 ? C.warn : undefined} />
           </div>
           <div className="border-t pt-2 flex flex-col gap-1" style={{ borderColor: C.border }}>
+            <div className="flex justify-between text-[12px]">
+              <span style={{ color: C.textTertiary }}>Score médio (σ)</span>
+              <span className="tabular-nums" style={{ color: C.textPrimary }}>
+                {q.avg_score != null ? q.avg_score.toFixed(1) : "—"}
+                {q.stddev_score != null ? ` (±${q.stddev_score.toFixed(2)})` : ""}
+              </span>
+            </div>
             {stageRows.map((r) => (
               <div key={r.label} className="flex justify-between text-[12px]">
                 <span style={{ color: C.textTertiary }}>{r.label}</span>
@@ -616,7 +652,7 @@ function ScoreEnginePanels({ envelope }: { envelope: OverviewResp["snapshots"]["
           {buckets.length === 0 || (d.total_scored ?? 0) === 0 ? (
             <EmptyState message="Sem scores na janela." />
           ) : (
-            <ResponsiveContainer width="100%" height={150}>
+            <ResponsiveContainer width="100%" height={140}>
               <BarChart data={buckets} margin={{ top: 6, right: 6, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 4" stroke="rgba(255,255,255,0.04)" vertical={false} />
                 <XAxis dataKey="label" tick={{ fill: C.textTertiary, fontSize: 11 }} tickLine={false} axisLine={false} />
@@ -626,6 +662,10 @@ function ScoreEnginePanels({ envelope }: { envelope: OverviewResp["snapshots"]["
               </BarChart>
             </ResponsiveContainer>
           )}
+          <div className="grid grid-cols-2 gap-3">
+            <StatTile label="p50 score" value={d.p50_score != null ? d.p50_score.toFixed(1) : "—"} />
+            <StatTile label="p95 score" value={d.p95_score != null ? d.p95_score.toFixed(1) : "—"} />
+          </div>
           <div className="flex justify-between text-[12px]">
             <span style={{ color: C.textTertiary }}>Total scored</span>
             <span className="tabular-nums" style={{ color: C.textPrimary }}>{d.total_scored ?? 0}</span>
