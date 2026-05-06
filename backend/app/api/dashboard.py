@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -443,20 +443,27 @@ async def get_score_snapshot(_user_id: UUID = Depends(get_current_user_id)):
     return get_ops_service().score.to_dict()
 
 
-@router.get("/pipeline-latency")
+@router.get("/pipeline-latency", response_model=None)
 async def get_latency_snapshot(
     family: Optional[str] = Query(
         None,
-        description="ingestion | decision | processing.  Omit to receive all three.",
+        description="ingestion | decision | processing. Omit to receive all three.",
     ),
     _user_id: UUID = Depends(get_current_user_id),
 ):
     """Pipeline latency split into three families.
 
     * ``ingestion``  — gap between NOW and the most recent OHLCV candle.
-    * ``decision``   — p50/p95/max of ``decisions_log.latency_ms`` (1h).
+    * ``decision``   — p50/p95/max of candle→decision lag derived from a
+                       LATERAL join between ``ohlcv_candles`` and
+                       ``decisions_log`` over the last 24 h (capped at
+                       20k decisions for query budget).
     * ``processing`` — p50/p95 derived from the in-process Prometheus
                        ``indicator_computation_duration_seconds`` histogram.
+
+    Without ``family`` the response is a dict of three
+    :class:`SnapshotEnvelope`-shaped entries; with ``family`` it returns
+    a single envelope.
     """
     svc = get_ops_service()
     families = {
@@ -467,7 +474,6 @@ async def get_latency_snapshot(
     if family is None:
         return families
     if family not in families:
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"unknown latency family: {family}")
     return families[family]
 
@@ -480,6 +486,9 @@ async def get_ingestion_snapshot(_user_id: UUID = Depends(get_current_user_id)):
 @router.get("/alerts")
 async def get_alerts(_user_id: UUID = Depends(get_current_user_id)):
     return get_ops_service().get_alerts()
+
+
+_EVENT_CATEGORIES = {"alert", "worker", "redis", "all"}
 
 
 @router.get("/events", response_model=None)
@@ -497,9 +506,16 @@ async def get_events(
     (three buckets together — ``alert_history``, ``worker_events``,
     ``redis_degradations``).
     With ``category``: returns :class:`OperationalEventsFilteredResponse`
-    (single ``events`` array). The path-based variant
-    ``/events/{category}`` is kept as a strict-typed alias.
+    (single ``events`` array). Unknown categories yield 400 instead of
+    silently returning empty results, so caller mistakes surface early.
+    The path-based variant ``/events/{category}`` is kept as a
+    strict-typed alias.
     """
+    if category is not None and category not in _EVENT_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown event category: {category} (expected one of {sorted(_EVENT_CATEGORIES)})",
+        )
     return get_ops_service().get_events(category=category, limit=limit)
 
 
@@ -514,6 +530,11 @@ async def get_events_filtered(
 ):
     """Strict-typed alias for ``/events?category={category}`` — single
     category (``alert``, ``worker``, ``redis``, or ``all``)."""
+    if category not in _EVENT_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown event category: {category} (expected one of {sorted(_EVENT_CATEGORIES)})",
+        )
     return get_ops_service().get_events(category=category, limit=limit)
 
 
