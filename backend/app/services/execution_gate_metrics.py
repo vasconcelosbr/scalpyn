@@ -16,6 +16,24 @@ Two failure modes need to remain visible:
 Both counters degrade to no-ops when ``prometheus_client`` is not
 installed (tests / dev shells). Importers can always call
 ``record_*`` without guarding the optional dependency.
+
+Stage-label taxonomy (Task #232, reviewer round 13)
+====================================================
+The ``stage`` / ``from_stage`` / ``to_stage`` labels here use the
+**transition names** (``pool``, ``metadata``, ``profile_filter``,
+``blocking``) that match the actual function boundaries inside
+``pipeline_scan`` rather than the abstract POOL/L1/L2/L3 framing
+used in operator runbooks. The mapping is:
+
+  * ``pool``           ↔ POOL (operator-curated ``pool_coins``)
+  * ``metadata``       ↔ L1 metadata enrichment
+  * ``profile_filter`` ↔ L2 profile-discovery filter
+  * ``blocking``       ↔ L3 trading-eligibility gate
+
+Dashboards that want the L1/L2/L3 framing should use Grafana's
+``label_replace`` rather than re-labeling at the metric-emission
+site, so the source of truth here stays aligned with the code paths
+it instruments.
 """
 
 from __future__ import annotations

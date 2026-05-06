@@ -1,4 +1,19 @@
-"""Celery Task — evaluate signals, check blocks, apply risk, execute trades."""
+"""Celery Task — evaluate signals, check blocks, apply risk, execute trades.
+
+Task #232 scope clarification (reviewer round 13):
+``evaluate_signals`` is the **legacy** signal-evaluation path retained
+for backward-compat with users that have not yet been migrated to the
+L3 pipeline. It enforces the EXECUTION gate (``is_tradable``) at the
+buy decision point (see ~line 90 onward) so a non-tradable symbol
+never produces an order, but it does NOT enforce L3 watchlist
+membership — that is a deliberate design decision so legacy users
+without an L3 profile keep working through the rolling deploy.
+
+The canonical execution path is ``execute_buy``, which DOES join
+through ``pipeline_watchlist`` (L1) → ``pipeline_watchlist_assets``
+(L3) before placing an order. Both paths are gated by ``is_tradable``;
+only ``execute_buy`` is gated by L3 presence.
+"""
 
 import asyncio
 import logging
