@@ -37,7 +37,14 @@ async def _collect_all_async():
     logger.info(f"[COLLECT] symbols={raw_symbols}")
 
     if not raw_symbols:
-        raise RuntimeError("[FATAL] No approved symbols")
+        # Task #231: pool sem aprovados é estado operacional válido (criptos no
+        # pool aguardando promoção pela L3 do pipeline watchlist/profile).
+        # NÃO levantar — o raise faz o Celery retry em loop, satura workers,
+        # enche a fila e cascateia 4 alertas críticos no Centro Operacional.
+        logger.warning(
+            "[COLLECT] no approved symbols — skipping cycle (approved_count=0)"
+        )
+        return 0
 
     # Validate and deduplicate
     valid_symbols = []
@@ -57,7 +64,14 @@ async def _collect_all_async():
     logger.info(f"[COLLECT] valid_symbols={len(valid_symbols)}")
 
     if not valid_symbols:
-        raise RuntimeError("[FATAL] No approved symbols after validation")
+        # Task #231: idem — todos os símbolos aprovados foram filtrados pela
+        # validação. Tratar como ciclo vazio em vez de erro fatal.
+        logger.warning(
+            "[COLLECT] no approved symbols after validation — skipping cycle "
+            "(raw_count=%d, valid_count=0)",
+            len(raw_symbols),
+        )
+        return 0
 
     symbols = valid_symbols
 
@@ -284,12 +298,15 @@ def collect_all():
         )
     # Chain to compute indicators (Task #216: dedup wrapper, structural queue).
     # TTL = compute time_limit (600s) + 60s safety margin.
-    from . import task_dispatch
-    task_dispatch.enqueue(
-        "app.tasks.compute_indicators.compute",
-        dedup_key="compute",
-        ttl_seconds=660,
-    )
+    # Task #231: pular o chain quando o pool está sem aprovados — não há
+    # candles novos para computar indicadores e enfileirar só geraria ruído.
+    if count > 0:
+        from . import task_dispatch
+        task_dispatch.enqueue(
+            "app.tasks.compute_indicators.compute",
+            dedup_key="compute",
+            ttl_seconds=660,
+        )
     return f"Collected {count} symbols"
 
 
@@ -316,7 +333,11 @@ async def _collect_5m_async():
     logger.info(f"[COLLECT] symbols={raw_syms}")
 
     if not raw_syms:
-        raise RuntimeError("[FATAL] No approved symbols")
+        # Task #231: ver _collect_all_async — pool sem aprovados é estado válido.
+        logger.warning(
+            "[COLLECT] no approved symbols — skipping 5m cycle (approved_count=0)"
+        )
+        return 0
 
     # Validate and deduplicate
     valid_symbols = []
@@ -336,7 +357,13 @@ async def _collect_5m_async():
     logger.info(f"[COLLECT] valid_symbols={len(valid_symbols)}")
 
     if not valid_symbols:
-        raise RuntimeError("[FATAL] No approved symbols after validation")
+        # Task #231: idem — ciclo 5m vazio em vez de erro fatal.
+        logger.warning(
+            "[COLLECT] no approved symbols after validation — skipping 5m cycle "
+            "(raw_count=%d, valid_count=0)",
+            len(raw_syms),
+        )
+        return 0
 
     symbols = valid_symbols
 
@@ -581,10 +608,12 @@ def collect_5m():
     count = _run_async(_collect_5m_async())
     # Chain: fresh 5m candles → compute 5m indicators (microstructure queue).
     # TTL = compute_5m time_limit (180s) + 30s margin.
-    from . import task_dispatch
-    task_dispatch.enqueue(
-        "app.tasks.compute_indicators.compute_5m",
-        dedup_key="compute_5m",
-        ttl_seconds=210,
-    )
+    # Task #231: pular o chain quando não há candles novos a computar.
+    if count > 0:
+        from . import task_dispatch
+        task_dispatch.enqueue(
+            "app.tasks.compute_indicators.compute_5m",
+            dedup_key="compute_5m",
+            ttl_seconds=210,
+        )
     return f"Collected 5m data for {count} symbols"
