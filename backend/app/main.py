@@ -413,18 +413,57 @@ async def health_check_persistence():
     import json as _json
     from .services.persistence import get_persistence_snapshot
 
-    payload = get_persistence_snapshot()
+    raw_payload = get_persistence_snapshot()
+    raw_queue = raw_payload.get("queue") or {}
+    raw_workers = raw_payload.get("workers") or {}
+    raw_db = raw_payload.get("db") or {}
+    raw_pool = (raw_db.get("pool") or {}) if isinstance(raw_db, dict) else {}
     public_payload = {
-        **payload,
+        "status": raw_payload.get("status", "unknown"),
+        "service": raw_payload.get("service"),
+        "started_at": raw_payload.get("started_at"),
+        "queue": {
+            "size": raw_queue.get("size", 0),
+            "maxsize": raw_queue.get("maxsize", 0),
+            "utilization": raw_queue.get("utilization", 0.0),
+            "saturated": raw_queue.get("saturated", False),
+            "total_enqueued": raw_queue.get("total_enqueued", 0),
+            "total_processed": raw_queue.get("total_processed", 0),
+            "total_failed": raw_queue.get("total_failed", 0),
+        },
+        "workers": {
+            "configured": raw_workers.get("configured", 0),
+            "alive": raw_workers.get("alive", 0),
+        },
+        "db": {
+            "acquire_latency_ms_last": raw_db.get("acquire_latency_ms_last", 0.0),
+            "transaction_time_ms_last": raw_db.get("transaction_time_ms_last", 0.0),
+            "rollback_count": raw_db.get("rollback_count", 0),
+            "retry_count": raw_db.get("retry_count", 0),
+            "pool": {
+                "size": raw_pool.get("size"),
+                "checked_out": raw_pool.get("checked_out"),
+                "checked_in": raw_pool.get("checked_in"),
+                "overflow": raw_pool.get("overflow"),
+                "pool_size_limit": raw_pool.get("pool_size_limit"),
+                "max_overflow": raw_pool.get("max_overflow"),
+                "pool_timeout_seconds": raw_pool.get("pool_timeout_seconds"),
+                "saturated": raw_pool.get("saturated", False),
+                "overflow_exhausted": raw_pool.get("overflow_exhausted", False),
+            },
+        },
         "domains": {
             name: {
-                **domain,
+                "processed": domain.get("processed", 0),
+                "failed": domain.get("failed", 0),
+                "last_success_at": domain.get("last_success_at"),
                 "last_error": "internal_error" if domain.get("last_error") else None,
             }
-            for name, domain in (payload.get("domains") or {}).items()
+            for name, domain in (raw_payload.get("domains") or {}).items()
+            if isinstance(domain, dict)
         },
     }
-    if payload.get("status") != "ok":
+    if public_payload.get("status") != "ok":
         return Response(
             content=_json.dumps(public_payload),
             status_code=503,

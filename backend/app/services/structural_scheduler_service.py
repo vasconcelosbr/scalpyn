@@ -183,14 +183,6 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
                     "docs/runbooks/scheduler-group-drift.md."
                 )
                 _scheduler_group_drift_logged = True
-            try:
-                if db.in_transaction():
-                    await db.rollback()
-            except Exception as rb_exc:
-                logger.warning(
-                    "[STRUCT-SCHED] rollback after scheduler_group drift failed: %s",
-                    rb_exc,
-                )
             return
         logger.error("[STRUCT-SCHED] indicators insert failed for %s: %s", symbol, exc, exc_info=True)
 
