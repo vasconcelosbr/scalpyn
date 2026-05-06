@@ -137,13 +137,21 @@ class OperationalEvent(BaseModel):
 
 
 class OperationalEventsResponse(BaseModel):
-    """Legacy envelope (no filter): three buckets returned together.
+    """Unfiltered envelope: three buckets returned together.
 
-    When ``/events`` is called with ``?category=…`` the handler returns
-    a different shape (``events`` + ``category``) and bypasses this model
-    via ``response_model=None``.
+    Returned by ``GET /api/dashboard/events`` (no query params).
     """
     as_of: str
     alert_history: List[OperationalEvent] = []
     worker_events: List[OperationalEvent] = []
     redis_degradations: List[OperationalEvent] = []
+
+
+class OperationalEventsFilteredResponse(BaseModel):
+    """Filtered envelope: events from a single category.
+
+    Returned by ``GET /api/dashboard/events/{category}``.
+    """
+    as_of: str
+    category: str
+    events: List[OperationalEvent] = []

@@ -1167,7 +1167,7 @@ export default function PerformanceDashboardPage() {
   // payload (Task #225 contract).  /events is fetched on-demand to avoid a
   // second background loop on dependencies that are already represented in
   // the alert engine via the snapshot status fields.
-  const overview = usePoll<OverviewResp>("/dashboard/overview", 10_000);
+  const overview = usePoll<OverviewResp>("/dashboard/overview", 15_000);
   const [eventsData, setEventsData] = useState<EventsResp | null>(null);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [eventsError, setEventsError] = useState<string | null>(null);

@@ -39,6 +39,7 @@ from ..schemas.dashboard import (
     OhlcvBucket,
     OhlcvRateResponse,
     OperationalEventsResponse,
+    OperationalEventsFilteredResponse,
     OperationalOverviewResponse,
     ScoreBucket,
     SnapshotEnvelope,
@@ -481,21 +482,27 @@ async def get_alerts(_user_id: UUID = Depends(get_current_user_id)):
     return get_ops_service().get_alerts()
 
 
-@router.get("/events")
+@router.get("/events", response_model=OperationalEventsResponse)
 async def get_events(
-    category: Optional[str] = Query(
-        None,
-        description="alert | worker | redis | all.  Omit for all three buckets.",
-    ),
     limit: int = Query(50, ge=1, le=100),
     _user_id: UUID = Depends(get_current_user_id),
 ):
-    """Filtered event stream.
+    """Unfiltered event stream — all three buckets together
+    (``alert_history``, ``worker_events``, ``redis_degradations``)."""
+    return get_ops_service().get_events(category=None, limit=limit)
 
-    Without ``category`` the response shape matches
-    :class:`OperationalEventsResponse` (three buckets together).  When a
-    category is supplied the response collapses to ``{events: [...]}``.
-    """
+
+@router.get(
+    "/events/{category}",
+    response_model=OperationalEventsFilteredResponse,
+)
+async def get_events_filtered(
+    category: str,
+    limit: int = Query(50, ge=1, le=100),
+    _user_id: UUID = Depends(get_current_user_id),
+):
+    """Filtered event stream — single category (``alert``, ``worker``,
+    ``redis``, or ``all``)."""
     return get_ops_service().get_events(category=category, limit=limit)
 
 

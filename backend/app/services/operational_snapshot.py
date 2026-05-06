@@ -346,9 +346,13 @@ class OperationalSnapshotService:
             "alive": False,
         }
         try:
+            # Strict absolute budget: the inner inspect() call already
+            # passes `timeout=CELERY_TIMEOUT_S` to kombu, and the outer
+            # wait_for caps the to_thread wrapper at the same value so
+            # the probe can never exceed CELERY_TIMEOUT_S end-to-end.
             data = await asyncio.wait_for(
                 asyncio.to_thread(_inspect_celery_blocking),
-                timeout=CELERY_TIMEOUT_S + 1.0,
+                timeout=CELERY_TIMEOUT_S,
             )
         except asyncio.TimeoutError:
             self._apply_failure(
