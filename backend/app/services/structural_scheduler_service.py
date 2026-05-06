@@ -131,11 +131,12 @@ def _env_int(name: str, default: int) -> int:
 
 
 async def _collect_symbols(db) -> List[str]:
+    # Task #232 — ingestion gate is ``is_active`` only; the execution
+    # path (evaluate_signals/execute_buy) gates on ``is_tradable``.
     rows = (await db.execute(text("""
         SELECT DISTINCT symbol
         FROM pool_coins
         WHERE is_active = true
-          AND is_approved = true
           AND symbol IS NOT NULL AND symbol <> ''
     """))).fetchall()
     return [r.symbol for r in rows]

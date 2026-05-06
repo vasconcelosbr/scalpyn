@@ -45,6 +45,10 @@ def _coin_to_dict(coin: PoolCoin) -> Dict[str, Any]:
         "symbol": coin.symbol,
         "market_type": coin.market_type,
         "is_active": coin.is_active,
+        # Task #232 — surface the new execution gate to the frontend.
+        # ``getattr`` keeps the response shape stable when the migration
+        # has not yet been applied (column missing → returns False).
+        "is_tradable": bool(getattr(coin, "is_tradable", False)),
         "added_at": coin.added_at.isoformat() if coin.added_at else None,
         "origin": coin.origin if coin.origin else "manual",
         "discovered_at": coin.discovered_at.isoformat() if coin.discovered_at else None,
@@ -283,6 +287,52 @@ async def bulk_add_pool_coins(
         "added_symbols": added,
         "skipped_symbols": skipped,
     }
+
+
+@router.post("/{pool_id}/coins/{symbol}/tradable")
+async def set_pool_coin_tradable(
+    pool_id: UUID,
+    symbol: str,
+    payload: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Toggle the execution gate (``is_tradable``) for a single pool coin.
+
+    Task #232 — separates execution authorisation from ingestion. Setting
+    ``is_tradable=true`` is the explicit operator action that promotes a
+    symbol from "monitored" to "trading critical path".  No bulk endpoint
+    is exposed by design: every promotion is a per-symbol decision.
+    """
+    pool_query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id)
+    pool_result = await db.execute(pool_query)
+    if not pool_result.scalars().first():
+        raise HTTPException(status_code=404, detail="Pool not found")
+
+    coin_query = select(PoolCoin).where(
+        PoolCoin.pool_id == pool_id,
+        PoolCoin.symbol == symbol.upper(),
+    )
+    coin = (await db.execute(coin_query)).scalars().first()
+    if not coin:
+        raise HTTPException(status_code=404, detail="Symbol not found in pool")
+
+    desired = bool(payload.get("is_tradable", False))
+    if not coin.is_active and desired:
+        # Defensive: cannot trade a symbol that is not even being ingested.
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot mark inactive symbol as tradable — activate it first.",
+        )
+    coin.is_tradable = desired
+    await db.commit()
+    await db.refresh(coin)
+    logger.info(
+        "[POOL] is_tradable %s for %s (pool=%s, user=%s)",
+        "ENABLED" if desired else "DISABLED",
+        coin.symbol, pool_id, user_id,
+    )
+    return _coin_to_dict(coin)
 
 
 @router.delete("/{pool_id}/coins/{symbol}")

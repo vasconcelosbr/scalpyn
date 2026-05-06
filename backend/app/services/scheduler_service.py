@@ -78,12 +78,17 @@ def _env_int(name: str, default: int) -> int:
 
 
 async def _collect_watchlist_symbols(db) -> List[str]:
-    """Approved pool symbols (pool_coins.is_approved = true) — the exclusive symbol universe."""
+    """Task #232 — ingestion universe is ``pool_coins.is_active = true``.
+
+    The execution gate (``is_tradable``) is enforced downstream inside
+    ``evaluate_signals`` / ``execute_buy``; the structural collector
+    must observe every active symbol so the funnel and scoring engine
+    have full coverage.
+    """
     rows = (await db.execute(text("""
         SELECT DISTINCT symbol
         FROM pool_coins
         WHERE is_active = true
-          AND is_approved = true
           AND symbol IS NOT NULL AND symbol <> ''
     """))).fetchall()
     return [r.symbol for r in rows]

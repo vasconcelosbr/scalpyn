@@ -320,37 +320,42 @@ def collect_all():
 async def _collect_5m_async():
     """Collect 5-minute OHLCV candles for pipeline scan freshness.
 
-    Universe = all approved symbols (pool_coins.is_approved = true) across spot + futures.
+    Task #232 — universe is every ``is_active = true`` pool coin (spot +
+    futures). The execution gate (``is_tradable``) is irrelevant here:
+    indicators must keep flowing for every monitored symbol so the L2/L3
+    funnel and the operator dashboards see fresh data even before a
+    symbol is authorised to trade.
     """
     from ..services.pool_service import (
-        get_approved_pool_symbols_with_market_type,
+        get_active_pool_symbols_with_market_type,
         get_pool_symbols_with_market_type,
     )
     from ..utils.symbol_filters import filter_real_assets
     from ..database import run_db_task
     from sqlalchemy import text
 
-    logger.info("Starting 5m market data collection (approved symbols only)...")
+    logger.info("Starting 5m market data collection (active symbols only)...")
 
-    async def _load_approved(db):
-        approved = await get_approved_pool_symbols_with_market_type(db)
+    async def _load_active(db):
+        active = await get_active_pool_symbols_with_market_type(db)
         total = await get_pool_symbols_with_market_type(db)
-        return approved, len(total)
+        return active, len(total)
 
     symbol_market_type: dict[str, str]
     pool_count: int
-    symbol_market_type, pool_count = await run_db_task(_load_approved, celery=True)
+    symbol_market_type, pool_count = await run_db_task(_load_active, celery=True)
 
     raw_syms = filter_real_assets(list(symbol_market_type.keys()))
 
-    logger.info(f"[COLLECT] approved_symbols_count={len(raw_syms)} pool_count={pool_count}")
+    logger.info(f"[COLLECT] active_symbols_count={len(raw_syms)} pool_count={pool_count}")
     logger.info(f"[COLLECT] symbols={raw_syms}")
 
     if not raw_syms:
-        # Task #231: ver _collect_all_async — pool sem aprovados é estado válido.
+        # Task #231 / #232: pool sem símbolos ativos é estado válido —
+        # log loud-but-no-retry, devolve 0 e o ciclo se encerra.
         logger.warning(
-            "[COLLECT] no approved symbols — skipping 5m cycle "
-            "(pool_count=%d, approved_count=0)",
+            "[COLLECT] no active symbols — skipping 5m cycle "
+            "(pool_count=%d, active_count=0)",
             pool_count,
         )
         return 0

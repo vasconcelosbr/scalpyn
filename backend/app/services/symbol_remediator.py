@@ -178,21 +178,27 @@ class GateSymbolValidator:
 
 
 async def _bulk_approve(db, symbols: Iterable[str]) -> int:
-    """Set ``is_approved = true`` for every symbol in one statement.
+    """Re-activate ingestion for every symbol in one statement.
 
-    Three guards are baked into the WHERE clause per Etapa 3.1 of the
-    prompt — the statement itself enforces the business rule, never the
-    caller, so a misuse of this helper still cannot promote a futures or
-    inactive row:
+    Task #232 — what the audit calls "approve a NOT_APPROVED symbol"
+    became "re-activate ingestion": flip ``is_active = TRUE`` on rows
+    the operator (or this very function in a previous cycle) had set to
+    ``is_active = FALSE``. The execution gate (``is_tradable``) is a
+    deliberate human decision and **must not** be auto-flipped here —
+    auto-promoting symbols to live trading would defeat the whole point
+    of the split.
 
-    * ``is_active = TRUE``    — never approve a row the operator already
-                                disabled.
-    * ``is_approved = FALSE`` — strictly idempotent (no UPDATE storm on
-                                a re-run).
+    Three guards remain baked into the WHERE clause per Etapa 3.1 of
+    the original prompt — the statement itself enforces the business
+    rule so a misuse of this helper still cannot flip a futures or
+    already-active row:
+
+    * ``is_active = FALSE`` — strictly idempotent (no UPDATE storm on
+                              a re-run).
     * ``pool_id IN (SELECT id FROM pools WHERE market_type = 'spot')`` —
-                                **never** flip a futures row, even if a
-                                symbol exists in both spot and futures
-                                pools simultaneously.
+                              **never** flip a futures row, even if a
+                              symbol exists in both spot and futures
+                              pools simultaneously.
     """
     syms = [s for s in symbols if s]
     if not syms:
@@ -200,10 +206,9 @@ async def _bulk_approve(db, symbols: Iterable[str]) -> int:
     res = await db.execute(
         text("""
             UPDATE pool_coins
-               SET is_approved = TRUE
+               SET is_active = TRUE
              WHERE symbol = ANY(:syms)
-               AND is_active = TRUE
-               AND is_approved = FALSE
+               AND is_active = FALSE
                AND pool_id IN (
                    SELECT id FROM pools WHERE market_type = 'spot'
                )
@@ -214,8 +219,13 @@ async def _bulk_approve(db, symbols: Iterable[str]) -> int:
     return int(res.rowcount or 0)
 
 
+# Backwards-compat alias kept for any caller that imported the old
+# private name. New code should use ``_bulk_activate``.
+_bulk_activate = _bulk_approve
+
+
 async def _verify_approved(db, symbols: Iterable[str]) -> Set[str]:
-    """Return the subset of ``symbols`` whose pool_coins row is now approved + active.
+    """Return the subset of ``symbols`` whose pool_coins row is now ingestion-active.
 
     Per-symbol verification gate (Etapa 8 of the prompt). Only symbols
     confirmed as ``is_active=TRUE AND is_approved=TRUE`` post-update may
@@ -227,12 +237,14 @@ async def _verify_approved(db, symbols: Iterable[str]) -> Set[str]:
     syms = [s for s in symbols if s]
     if not syms:
         return set()
+    # Task #232: verification matches what _bulk_approve actually
+    # does — flips ``is_active`` back to TRUE. The execution gate
+    # ``is_tradable`` is intentionally not checked here.
     res = await db.execute(
         text("""
             SELECT symbol FROM pool_coins
              WHERE symbol = ANY(:syms)
                AND is_active = TRUE
-               AND is_approved = TRUE
                AND pool_id IN (SELECT id FROM pools WHERE market_type = 'spot')
         """),
         {"syms": syms},

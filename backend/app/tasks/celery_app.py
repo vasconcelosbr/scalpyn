@@ -32,7 +32,11 @@ Architectural invariants enforced at lint level
     4. Every registered task name appears in ``task_routes`` below; an
        unrouted task would otherwise silently land on a non-existent
        fallback queue and never run.
-    5. Pool universe queries always include ``is_approved = true``.
+    5. Pool universe queries gate on the right column (Task #232):
+       ingestion-side modules (collector, indicators, scoring,
+       pipeline_scan funnel) filter on ``is_active = true``; execution
+       modules (evaluate_signals, execute_buy) additionally require
+       ``is_tradable = true``.
 
 Cost guards live in ``task_annotations`` (Celery's documented mechanism
 for applying ``time_limit`` / ``soft_time_limit`` / ``rate_limit`` /

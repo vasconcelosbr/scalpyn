@@ -28,7 +28,15 @@ class PoolCoin(Base):
     symbol = Column(String(20), nullable=False)
     market_type = Column(String(10), default='spot')
     is_active = Column(Boolean, default=True)
+    # Task #232 — operator approval is now split in two domains:
+    #   is_approved : legacy "operator authorised collection AND trading"
+    #                 kept for backwards-compat until the rolling-deploy
+    #                 trigger is removed (migration N+2).
+    #   is_tradable : NEW execution-only gate. ``False`` means the
+    #                 collector/funnel still observe the symbol but
+    #                 evaluate_signals + execute_buy must SKIP it.
     is_approved = Column(Boolean, default=False)
+    is_tradable = Column(Boolean, default=False)
     added_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     origin = Column(String(20), default='manual')          # "manual" or "discovered"
     discovered_at = Column(DateTime(timezone=True), nullable=True)

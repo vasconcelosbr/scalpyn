@@ -233,24 +233,73 @@ def test_no_silent_default_queue_fallback() -> None:
     )
 
 
-# ── Invariant #5: pool universe is_approved=true ───────────────────────────
+# ── Invariant #5 (Task #232): split ingestion vs execution gate ────────────
+#
+# The pool universe is now gated by two disjoint columns:
+#   * ``is_active``   — ingestion gate (collector, indicators, scoring,
+#                       pipeline_scan funnel entry, WS subscription).
+#   * ``is_tradable`` — execution gate. Only ``evaluate_signals`` and
+#                       ``execute_buy`` are allowed to add it.
+#
+# The lint test below splits the four decision-task modules into the
+# two groups and asserts the correct gate is present in each.
 
-@pytest.mark.parametrize("module_name", DECISION_TASK_MODULES)
-def test_pool_queries_filter_is_approved(module_name: str) -> None:
-    """Any ``FROM pool_coins`` query inside the four decision tasks
-    must include ``is_approved = true``. A missing filter would put
-    untrusted symbols on the trading critical path."""
+_INGESTION_DECISION_FILES = (
+    "app.tasks.pipeline_scan",
+    "app.tasks.compute_scores",
+)
+_EXECUTION_DECISION_FILES = (
+    "app.tasks.evaluate_signals",
+    "app.tasks.execute_buy",
+)
+
+
+@pytest.mark.parametrize("module_name", _INGESTION_DECISION_FILES)
+def test_pool_queries_filter_is_active(module_name: str) -> None:
+    """Ingestion-side decision tasks must filter on ``is_active = true``.
+
+    They MUST NOT additionally require ``is_tradable`` — that would
+    starve the funnel and the scoring engine of candidates the operator
+    has not yet authorised for live trading.
+    """
     module = __import__(module_name, fromlist=["__name__"])
     src = inspect.getsource(module)
     code = _strip_comments(src).lower()
     if "from pool_coins" not in code:
-        # Module does not query pool_coins; invariant is vacuously satisfied.
         return
-    assert "is_approved" in code, (
+    assert "is_active" in code, (
         f"{module_name}: queries FROM pool_coins but never references "
-        "is_approved — sanctioned-universe filter is missing."
+        "is_active — ingestion-universe filter is missing."
     )
-    assert "is_approved = true" in code or "is_approved=true" in code, (
-        f"{module_name}: pool_coins query references is_approved but the "
-        "exact ``is_approved = true`` predicate is missing."
+    assert "is_active = true" in code or "is_active=true" in code, (
+        f"{module_name}: pool_coins query references is_active but the "
+        "exact ``is_active = true`` predicate is missing."
+    )
+    assert "is_tradable" not in code, (
+        f"{module_name}: ingestion-side task must NOT filter on "
+        "is_tradable — that gate belongs to execution-side tasks only."
+    )
+
+
+@pytest.mark.parametrize("module_name", _EXECUTION_DECISION_FILES)
+def test_pool_queries_filter_execution_gate(module_name: str) -> None:
+    """Execution-side decision tasks must filter on
+    ``is_active = true AND is_tradable = true``.
+
+    ``is_active`` alone admits symbols still pending operator trading
+    authorisation onto the live critical path; ``is_tradable`` alone
+    skips the ingestion check and would re-enable a paused symbol.
+    Both predicates are required.
+    """
+    module = __import__(module_name, fromlist=["__name__"])
+    src = inspect.getsource(module)
+    code = _strip_comments(src).lower()
+    if "from pool_coins" not in code:
+        return
+    assert "is_active = true" in code or "is_active=true" in code, (
+        f"{module_name}: pool_coins query missing ``is_active = true``."
+    )
+    assert "is_tradable = true" in code or "is_tradable=true" in code, (
+        f"{module_name}: execution-side task must require "
+        "``is_tradable = true`` — Task #232 split execution from ingestion."
     )

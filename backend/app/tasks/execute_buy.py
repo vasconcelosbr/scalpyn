@@ -254,14 +254,14 @@ async def _execute_buy_cycle_async() -> dict:
                 # margin that quarantine + threshold filtering downstream
                 # still has plenty of candidates to choose from before the
                 # ``max_opps`` placement cap is hit.
-                # Task #216 invariant #5: sanctioned-universe filter MUST
-                # include ``is_approved = true``. ``is_active`` alone admits
-                # symbols still pending operator approval onto the trading
-                # critical path; the lint test
-                # ``test_pool_queries_filter_is_approved`` enforces this.
+                # Task #232: execution-only path. Requires the explicit
+                # ``is_tradable = true`` gate. ``is_active`` alone is
+                # the ingestion gate; trading authorisation is a
+                # separate operator decision.  Enforced by lint test
+                # ``test_pool_queries_filter_execution_gate``.
                 pool_res = await db.execute(text("""
                     SELECT symbol FROM pool_coins
-                    WHERE  is_active = true AND is_approved = true
+                    WHERE  is_active = true AND is_tradable = true
                     LIMIT  :cap
                 """), {"cap": max(max_opps * 20, 50)})
                 pool_symbols = [r.symbol for r in pool_res.fetchall()]

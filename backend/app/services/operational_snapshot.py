@@ -259,6 +259,10 @@ class OperationalSnapshotService:
         from sqlalchemy import text
         from ..database import AsyncSessionLocal
 
+        # Task #232: ``active_pool_count`` is sampled in the same probe
+        # so the alert engine can distinguish "ingestion broken" (pool
+        # has work but no candles arrive) from "pool starved" (no
+        # active symbol exists, ingestion legitimately idle).
         sql = text(
             """
             WITH last_c AS (
@@ -272,17 +276,29 @@ class OperationalSnapshotService:
                 FROM ohlcv
                 WHERE timeframe = '5m'
                   AND time > NOW() - INTERVAL '15 minutes'
+            ),
+            pool AS (
+                SELECT COUNT(DISTINCT symbol)::int AS active_pool_count
+                FROM pool_coins
+                WHERE is_active = true
             )
             SELECT win.rows_window, win.distinct_symbols, last_c.last_candle,
-                   EXTRACT(EPOCH FROM (NOW() - last_c.last_candle))::float AS delay_seconds
-            FROM win, last_c
+                   EXTRACT(EPOCH FROM (NOW() - last_c.last_candle))::float AS delay_seconds,
+                   pool.active_pool_count
+            FROM win, last_c, pool
             """
         )
         try:
             async with AsyncSessionLocal() as db:
                 row = (await asyncio.wait_for(db.execute(sql), timeout=DB_TIMEOUT_S)).one()
             delay = float(row.delay_seconds) if row.delay_seconds is not None else None
-            if delay is None:
+            active_pool_count = int(row.active_pool_count or 0)
+            # When the pool is empty no candles can arrive — degrade the
+            # raw ``status`` accordingly so the dashboard does not flash
+            # red on a deliberate operator state.
+            if active_pool_count == 0:
+                status = "ok"
+            elif delay is None:
                 status = "unknown"
             elif delay < 600:
                 status = "ok"
@@ -295,6 +311,7 @@ class OperationalSnapshotService:
                 "distinct_symbols": int(row.distinct_symbols or 0),
                 "last_candle": row.last_candle.isoformat() if row.last_candle else None,
                 "delay_seconds": delay,
+                "active_pool_count": active_pool_count,
             }
             self._apply_success("ingestion", data, status)
             # Mirror onto the latency family so /pipeline-latency has a
@@ -950,7 +967,26 @@ class OperationalSnapshotService:
             })
 
         delay = self.ingestion.data.get("delay_seconds")
-        if isinstance(delay, (int, float)):
+        # Task #232: when the pool has zero active symbols, an "OHLCV
+        # is stale" alert is misleading — there is simply nothing to
+        # ingest. The ingestion probe stamps ``active_pool_count`` so
+        # the alert engine can downgrade ``ingestion_stale`` to a
+        # lower-severity ``pool_starved`` notice in that case.
+        active_pool_count = self.ingestion.data.get("active_pool_count")
+        pool_starved = (
+            isinstance(active_pool_count, int) and active_pool_count == 0
+        )
+        if pool_starved:
+            alerts.append({
+                "severity": "info", "category": "ingestion", "code": "pool_starved",
+                "impact": (
+                    "Nenhum símbolo com is_active=true em pool_coins — collector e "
+                    "indicadores estão em ciclo vazio por design (Task #232)."
+                ),
+                "since": self.ingestion.as_of.isoformat() if self.ingestion.as_of else None,
+                "details": {"active_pool_count": 0},
+            })
+        elif isinstance(delay, (int, float)):
             if delay > 1200:
                 alerts.append({
                     "severity": "critical", "category": "ingestion", "code": "ingestion_stale",

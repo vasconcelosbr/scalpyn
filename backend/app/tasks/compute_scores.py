@@ -81,9 +81,11 @@ async def _score_async():
         # ``DISTINCT ON`` anti-pattern is gone here too. compute_scores
         # writes ``alpha_scores``, which is consumed downstream — feeding
         # it micro-only-latest payloads would write incomplete scores
-        # for the same ~67% of cycles. Candidate symbol universe comes
-        # from active + approved pool_coins (sanctioned source); merged
-        # indicator payload + completeness guard match the other tasks.
+        # for the same ~67% of cycles.
+        # Task #232: scoring is INGESTION-DOMAIN — every active symbol
+        # must be scored so the L2/L3 funnel sees its full candidate
+        # universe. Trading authorisation (``is_tradable``) is enforced
+        # later in evaluate_signals/execute_buy and never here.
         from ..services.indicators_provider import (
             get_merged_indicators,
             is_complete,
@@ -92,7 +94,7 @@ async def _score_async():
 
         pool_res = await db.execute(text("""
             SELECT DISTINCT symbol FROM pool_coins
-            WHERE is_active = true AND is_approved = true
+            WHERE is_active = true
         """))
         pool_symbols = [r.symbol for r in pool_res.fetchall()]
 

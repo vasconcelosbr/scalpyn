@@ -4,9 +4,23 @@
 Gate.io (or any other exchange) is a data source only — never a universe source.
 
 Every pipeline stage (collect, ohlcv, indicators, scores, decisions) MUST
-obtain its symbol list exclusively via :func:`get_pool_symbols`.  No symbol
-outside this set should enter any stage.
+obtain its symbol list exclusively via :func:`get_pool_symbols` (raw pool)
+or :func:`get_active_pool_symbols` (post-Task #232 ingestion gate).
+
+Task #232 — semantic split
+---------------------------
+* ``is_active`` gates **ingestion** (collect, indicators, scoring,
+  pipeline_scan, WS subscription resolver). Default ``true``.
+* ``is_tradable`` gates **execution** only. Default ``false``. Read
+  exclusively by ``evaluate_signals`` and ``execute_buy``.
+
+The legacy helper :func:`get_approved_pool_symbols` is kept as a thin
+:class:`DeprecationWarning`-emitting alias of :func:`get_active_pool_symbols`
+so an unmerged caller cannot silently change its symbol universe semantics
+during the transition.
 """
+
+import warnings
 
 from sqlalchemy import text
 
@@ -108,19 +122,20 @@ async def get_approved_symbols_with_market_type(db) -> dict[str, str]:
     return {normalize_pool_symbol(r.symbol): r.market_mode for r in rows}
 
 
-async def get_approved_pool_symbols(db, market_type: str = None) -> list[str]:
-    """Return symbols from pool_coins where is_approved = true.
+async def get_active_pool_symbols(db, market_type: str = None) -> list[str]:
+    """Return symbols from ``pool_coins`` where ``is_active = true``.
 
-    Uses ``pool_coins.is_approved`` as the single source of truth — bypasses
-    the pipeline watchlist (L3) so that symbols approved directly in the DB
-    are collected even before they reach an L3 watchlist.
+    Task #232 — this is the INGESTION universe (collector, indicators,
+    pipeline_scan entry, WS subscription resolver). The execution path
+    (``evaluate_signals`` / ``execute_buy``) must additionally filter on
+    ``is_tradable = true``.
 
     Args:
         db: SQLAlchemy async session.
         market_type: Optional ``'spot'`` or ``'futures'`` filter.
 
     Returns:
-        Deduplicated, normalized list of approved symbols.
+        Deduplicated, normalized list of active symbols.
     """
     if market_type:
         rows = (await db.execute(
@@ -128,7 +143,6 @@ async def get_approved_pool_symbols(db, market_type: str = None) -> list[str]:
                 SELECT DISTINCT symbol
                 FROM pool_coins
                 WHERE is_active = true
-                  AND is_approved = true
                   AND market_type = :market_type
             """),
             {"market_type": market_type},
@@ -139,7 +153,6 @@ async def get_approved_pool_symbols(db, market_type: str = None) -> list[str]:
                 SELECT DISTINCT symbol
                 FROM pool_coins
                 WHERE is_active = true
-                  AND is_approved = true
             """),
         )).fetchall()
 
@@ -147,25 +160,55 @@ async def get_approved_pool_symbols(db, market_type: str = None) -> list[str]:
     return list(set(filter_real_assets([normalize_pool_symbol(r.symbol) for r in rows])))
 
 
-async def get_approved_pool_symbols_with_market_type(db) -> dict[str, str]:
-    """Return a mapping of normalized symbol → market_type for all approved pool coins.
+async def get_active_pool_symbols_with_market_type(db) -> dict[str, str]:
+    """Return a ``{symbol: market_type}`` mapping for every active pool coin.
 
-    Uses ``pool_coins.is_approved`` directly.  Covers all market types in a
-    single round-trip; used by the 5m collector.
-
-    Returns:
-        Dict of ``{ "BTC_USDT": "spot", "ETH_USDT": "futures", ... }``.
+    Task #232 ingestion-side helper — same shape as the historical
+    ``get_approved_pool_symbols_with_market_type`` but gated on
+    ``is_active`` only. The execution path uses a separate query.
     """
     rows = (await db.execute(
         text("""
             SELECT DISTINCT symbol, market_type
             FROM pool_coins
             WHERE is_active = true
-              AND is_approved = true
         """),
     )).fetchall()
 
     return {normalize_pool_symbol(r.symbol): r.market_type for r in rows}
+
+
+# ── Backwards-compatibility shims (Task #232 transition) ─────────────────────
+# Removed in deploy N+2 once no caller imports these names anymore.
+
+async def get_approved_pool_symbols(db, market_type: str = None) -> list[str]:
+    """DEPRECATED — use :func:`get_active_pool_symbols`.
+
+    Kept as a thin alias so unmerged callers do not silently change semantics
+    while the rolling deploy is in flight. The ingestion gate is now
+    ``is_active`` (operator added the symbol to the pool); the execution gate
+    moved to ``is_tradable`` and is read directly inside ``evaluate_signals``
+    and ``execute_buy``.
+    """
+    warnings.warn(
+        "get_approved_pool_symbols() is deprecated — use get_active_pool_symbols() "
+        "(ingestion gate). For the execution gate, query is_tradable directly "
+        "inside evaluate_signals/execute_buy.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return await get_active_pool_symbols(db, market_type)
+
+
+async def get_approved_pool_symbols_with_market_type(db) -> dict[str, str]:
+    """DEPRECATED — use :func:`get_active_pool_symbols_with_market_type`."""
+    warnings.warn(
+        "get_approved_pool_symbols_with_market_type() is deprecated — "
+        "use get_active_pool_symbols_with_market_type().",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return await get_active_pool_symbols_with_market_type(db)
 
 
 async def get_pool_symbols_with_market_type(db) -> dict[str, str]:

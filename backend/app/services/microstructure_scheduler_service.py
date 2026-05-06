@@ -132,14 +132,14 @@ def _is_is_approved_drift(exc: BaseException) -> bool:
 
 
 async def _collect_symbols(db) -> List[str]:
-    """Return active+approved spot symbols, degrading when migration 035 missing.
+    """Task #232 — ingestion gate is ``is_active`` only.
 
-    The scheduler must keep running even when ``pool_coins.is_approved`` is
-    absent (migration 035 not applied) — otherwise every cycle crashes the
-    loop and the operator never sees the schema-drift alert in logs.  The
-    degraded fallback returns an empty list so no symbols are processed
-    until the migration is applied; the alert flag exposed via
-    ``[MICRO-SCHED] SCHEMA DRIFT`` makes the issue actionable.
+    The scheduler must keep running even when ``pool_coins.is_active`` is
+    somehow missing (schema drift / partial rollback) — otherwise every
+    cycle crashes the loop and the operator never sees the schema-drift
+    alert in logs.  The degraded fallback returns an empty list so no
+    symbols are processed until the schema is repaired; the alert flag
+    exposed via ``[MICRO-SCHED] SCHEMA DRIFT`` makes the issue actionable.
     """
     global _is_approved_drift_logged
     try:
@@ -147,7 +147,6 @@ async def _collect_symbols(db) -> List[str]:
             SELECT DISTINCT symbol
             FROM pool_coins
             WHERE is_active = true
-              AND is_approved = true
               AND symbol IS NOT NULL AND symbol <> ''
         """))).fetchall()
         return [r.symbol for r in rows]

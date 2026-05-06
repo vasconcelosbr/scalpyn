@@ -203,12 +203,15 @@ async def _resolve_spot_symbols() -> list[str]:
     """
     try:
         async with AsyncSessionLocal() as db:
+            # Task #232: WS leader subscribes to every active spot
+            # symbol so indicators / order-flow stay populated even for
+            # symbols not yet authorised to trade. Execution gate is
+            # enforced inside evaluate_signals/execute_buy.
             rows = (await db.execute(text("""
                 SELECT DISTINCT pc.symbol
                 FROM pool_coins pc
                 JOIN pools p ON p.id = pc.pool_id
                 WHERE pc.is_active = TRUE
-                  AND pc.is_approved = TRUE
                   AND p.market_type = 'spot'
                   AND pc.symbol IS NOT NULL
                   AND pc.symbol <> ''

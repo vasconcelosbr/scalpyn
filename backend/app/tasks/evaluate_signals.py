@@ -69,14 +69,15 @@ async def _evaluate_async():
                 )
                 from ..services.indicator_validity import unwrap_envelope_value
 
-                # Task #216 invariant #5: sanctioned-universe filter MUST
-                # include ``is_approved = true``. ``is_active`` alone admits
-                # symbols still pending operator approval onto the trading
-                # critical path; the lint test
-                # ``test_pool_queries_filter_is_approved`` enforces this.
+                # Task #232: execution-side filter is now the explicit
+                # ``is_tradable`` gate. ``is_active`` alone authorises
+                # ingestion; lifting a symbol onto the trading critical
+                # path requires a separate operator action. The lint
+                # test ``test_pool_queries_filter_execution_gate``
+                # enforces this for every execution-side module.
                 pool_res = await db.execute(text("""
                     SELECT DISTINCT symbol FROM pool_coins
-                    WHERE is_active = true AND is_approved = true
+                    WHERE is_active = true AND is_tradable = true
                 """))
                 pool_symbols = [r.symbol for r in pool_res.fetchall()]
                 if not pool_symbols:
