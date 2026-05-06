@@ -6,12 +6,12 @@ gate at the buy decision point:
 
     is_active = true  AND  is_tradable = true  AND  EXISTS L3 row
 
-When the per-user L3 chain (Pool → L1 → L2 → L3 PipelineWatchlist)
-resolves, candidates are restricted to its
-``pipeline_watchlist_assets`` set; symbols absent from L3 are skipped
-with ``reason=NOT_IN_L3``. Users without an L3 chain configured fall
-back to the active+tradable set (degraded mode) so a fresh tenant is
-not silently locked out before the operator builds a profile.
+L3 enforcement is **strict** (round 17): the per-user
+Pool → L1 → L2 → L3 ``PipelineWatchlist`` chain MUST resolve, and
+candidates are restricted to its ``pipeline_watchlist_assets`` set.
+Symbols absent from L3 → ``reason=NOT_IN_L3``. Users without a built
+chain → ``reason=NO_L3_CHAIN`` and the cycle skips that user — no
+silent fallback to active+tradable.
 """
 
 import asyncio
@@ -146,10 +146,21 @@ async def _evaluate_async():
                             l3_symbols = {r[0] for r in l3_rows}
                 except Exception as _l3_exc:
                     logger.warning(
-                        "[evaluate_signals] L3 chain unresolved for user %s: %s "
-                        "— degrading to active+tradable gate only.",
+                        "[evaluate_signals] L3 chain query failed for user %s: %s",
                         user.id, _l3_exc,
                     )
+
+                # Task #232 round 17 — STRICT L3 enforcement (no fallback).
+                # The execution contract requires Pool → L1 → L2 → L3 to
+                # exist before any order. Skip the user cleanly when the
+                # chain is missing instead of degrading to active+tradable.
+                if l3_symbols is None:
+                    logger.warning(
+                        "[evaluate_signals] SKIPPED user=%s reason=NO_L3_CHAIN — "
+                        "operator must build Pool→L1→L2→L3 before trades execute.",
+                        user.id,
+                    )
+                    continue
 
                 merged_by_sym = await get_merged_indicators(db, pool_symbols)
 
@@ -225,7 +236,7 @@ async def _evaluate_async():
                             symbol, alpha_score, signal_result.get("direction"),
                         )
                         continue
-                    if l3_symbols is not None and symbol not in l3_symbols:
+                    if symbol not in l3_symbols:
                         logger.info(
                             "[evaluate_signals] SKIPPED %s reason=NOT_IN_L3 "
                             "score=%.2f direction=%s — qualified buy blocked "

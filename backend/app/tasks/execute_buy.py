@@ -404,14 +404,24 @@ async def _execute_buy_cycle_async() -> dict:
 
                 buys_this_cycle = 0
 
-                # Restrict candidates to L3 pipeline watchlist symbols (if pipeline is configured)
-                if l3_symbols is not None:
-                    before_l3 = len(candidates)
-                    candidates = [r for r in candidates if r.symbol in l3_symbols]
-                    logger.info(
-                        "L3 pipeline filter for user %s: %d → %d candidates (%d removed)",
-                        user_id, before_l3, len(candidates), before_l3 - len(candidates),
+                # Task #232 round 17 — STRICT L3 enforcement (no fallback).
+                # If the L3 chain is missing/unresolved, the execution
+                # contract requires we drop ALL candidates for this user
+                # rather than silently degrading to active+tradable only.
+                if l3_symbols is None:
+                    logger.warning(
+                        "[execute_buy] SKIPPED user=%s reason=NO_L3_CHAIN — "
+                        "%d candidates dropped: operator must build the "
+                        "Pool→L1→L2→L3 pipeline before trades execute.",
+                        user_id, len(candidates),
                     )
+                    continue
+                before_l3 = len(candidates)
+                candidates = [r for r in candidates if r.symbol in l3_symbols]
+                logger.info(
+                    "L3 pipeline filter for user %s: %d → %d candidates (%d removed)",
+                    user_id, before_l3, len(candidates), before_l3 - len(candidates),
+                )
 
                 # Robust authoritative selector. Imported once per cycle
                 # so the per-row loop just dispatches.

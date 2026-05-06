@@ -226,6 +226,15 @@ def test_unified_execution_gate_includes_l3_in_both_paths() -> None:
             f"{mod.__name__}: must read pipeline_watchlist_assets to "
             "compute the L3 symbol set."
         )
+        # Round 17 — STRICT L3: when the chain is missing the user's
+        # cycle MUST be skipped (NO_L3_CHAIN), not degrade to
+        # active+tradable. We assert both modules emit the explicit
+        # NO_L3_CHAIN skip code so the contract is locked.
+        assert "no_l3_chain" in code, (
+            f"{mod.__name__}: must skip with reason=NO_L3_CHAIN when "
+            "the Pool→L1→L2→L3 pipeline is missing (no permissive "
+            "fallback per Task #232 round 17)."
+        )
 
 
 def test_execute_buy_orders_tradable_before_limit() -> None:
