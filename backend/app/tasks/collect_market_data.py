@@ -22,32 +22,34 @@ def _run_async(coro):
 
 async def _collect_all_async():
     from ..services.market_data_service import market_data_service
-    from ..services.pool_service import get_approved_pool_symbols, get_pool_symbols
+    # Task #232 — semantic cleanup: ingestion is gated by ``is_active``,
+    # not by the legacy ``is_approved`` column. Use the active helper.
+    from ..services.pool_service import get_active_pool_symbols, get_pool_symbols
     from ..database import run_db_task
     from sqlalchemy import text
 
-    logger.info("Starting market data collection (approved spot symbols)...")
+    logger.info("Starting market data collection (active spot symbols)...")
 
     async def _load_spot_syms(db):
-        # Buscar aprovados + total da pool no mesmo session para diferenciar
-        # "pool vazia" de "pool povoada mas sem aprovados" no log de WARNING.
-        approved = await get_approved_pool_symbols(db, "spot")
+        # Buscar ativos + total da pool no mesmo session para diferenciar
+        # "pool vazia" de "pool povoada mas sem ativos" no log de WARNING.
+        active = await get_active_pool_symbols(db, "spot")
         total = await get_pool_symbols(db, "spot")
-        return approved, len(total)
+        return active, len(total)
 
     raw_symbols, pool_count = await run_db_task(_load_spot_syms, celery=True)
 
-    logger.info(f"[COLLECT] approved_symbols_count={len(raw_symbols)} pool_count={pool_count}")
+    logger.info(f"[COLLECT] active_symbols_count={len(raw_symbols)} pool_count={pool_count}")
     logger.info(f"[COLLECT] symbols={raw_symbols}")
 
     if not raw_symbols:
-        # Task #231: pool sem aprovados é estado operacional válido (criptos no
-        # pool aguardando promoção pela L3 do pipeline watchlist/profile).
-        # NÃO levantar — o raise faz o Celery retry em loop, satura workers,
-        # enche a fila e cascateia 4 alertas críticos no Centro Operacional.
+        # Task #231/#232: pool sem símbolos ativos é estado operacional
+        # válido (aguardando promoção pela L3 do pipeline). NÃO levantar
+        # — o raise faz o Celery retry em loop, satura workers, enche a
+        # fila e cascateia 4 alertas críticos no Centro Operacional.
         logger.warning(
-            "[COLLECT] no approved symbols — skipping cycle "
-            "(pool_count=%d, approved_count=0)",
+            "[COLLECT] no active symbols — skipping cycle "
+            "(pool_count=%d, active_count=0)",
             pool_count,
         )
         return 0
@@ -79,8 +81,8 @@ async def _collect_all_async():
         # Task #231: idem — todos os símbolos aprovados foram filtrados pela
         # validação. Tratar como ciclo vazio em vez de erro fatal.
         logger.warning(
-            "[COLLECT] no approved symbols after validation — skipping cycle "
-            "(pool_count=%d, approved_count=%d, valid_count=0)",
+            "[COLLECT] no active symbols after validation — skipping cycle "
+            "(pool_count=%d, active_count=%d, valid_count=0)",
             pool_count,
             len(raw_symbols),
         )
@@ -92,7 +94,7 @@ async def _collect_all_async():
         collected = 0
         failures = 0
 
-        for symbol in symbols:  # process only approved symbols
+        for symbol in symbols:  # process only active symbols
             try:
                 logger.info(f"[COLLECT][START] symbol={symbol}")
                 df = await market_data_service.fetch_ohlcv(symbol, "1h", limit=100)
@@ -392,8 +394,8 @@ async def _collect_5m_async():
     if not valid_symbols:
         # Task #231: idem — ciclo 5m vazio em vez de erro fatal.
         logger.warning(
-            "[COLLECT] no approved symbols after validation — skipping 5m cycle "
-            "(pool_count=%d, approved_count=%d, valid_count=0)",
+            "[COLLECT] no active symbols after validation — skipping 5m cycle "
+            "(pool_count=%d, active_count=%d, valid_count=0)",
             pool_count,
             len(raw_syms),
         )
@@ -406,7 +408,7 @@ async def _collect_5m_async():
         collected = 0
         failures = 0
 
-        for symbol in symbols:  # no cap — approved symbols only
+        for symbol in symbols:  # no cap — active symbols only
             sym_market_type = symbol_market_type.get(symbol, "spot")
             try:
                 logger.info(f"[COLLECT][START] symbol={symbol} timeframe=5m")

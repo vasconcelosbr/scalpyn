@@ -289,11 +289,23 @@ async def bulk_add_pool_coins(
     }
 
 
+class _TradableTogglePayload(__import__("pydantic").BaseModel):
+    """Strict body for POST /api/pools/{id}/coins/{symbol}/tradable.
+
+    Both keys accepted for one rolling deploy; ``tradable`` wins when
+    both are present. Pydantic enforces strict bool — string ``"false"``
+    or numeric coercions are rejected at validation time.
+    """
+    model_config = {"extra": "ignore"}
+    tradable: bool | None = None
+    is_tradable: bool | None = None
+
+
 @router.post("/{pool_id}/coins/{symbol}/tradable")
 async def set_pool_coin_tradable(
     pool_id: UUID,
     symbol: str,
-    payload: Dict[str, Any],
+    payload: _TradableTogglePayload,
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
@@ -321,8 +333,15 @@ async def set_pool_coin_tradable(
         raise HTTPException(status_code=404, detail="Symbol not found in pool")
 
     # Canonical body key is ``tradable``; ``is_tradable`` accepted as
-    # backwards-compatible alias for one rolling deploy.
-    desired = bool(payload.get("tradable", payload.get("is_tradable", False)))
+    # backwards-compatible alias for one rolling deploy. Pydantic has
+    # already enforced strict-bool typing on both fields.
+    desired_raw = payload.tradable if payload.tradable is not None else payload.is_tradable
+    if desired_raw is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Body must include `tradable` (bool) or legacy `is_tradable` (bool).",
+        )
+    desired = bool(desired_raw)
     if not coin.is_active and desired:
         # Defensive: cannot trade a symbol that is not even being ingested.
         raise HTTPException(
@@ -332,10 +351,12 @@ async def set_pool_coin_tradable(
     coin.is_tradable = desired
     await db.commit()
     await db.refresh(coin)
+    # Task #232 — standardized log event for ops grep contract.
     logger.info(
-        "[POOL] is_tradable %s for %s (pool=%s, caller=%s, admin=%s)",
+        "[TRADABLE-TOGGLE] symbol=%s pool=%s state=%s caller=%s admin=%s",
+        coin.symbol, pool_id,
         "ENABLED" if desired else "DISABLED",
-        coin.symbol, pool_id, user_id, is_admin,
+        user_id, is_admin,
     )
     return _coin_to_dict(coin)
 
