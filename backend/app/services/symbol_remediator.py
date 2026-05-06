@@ -2,10 +2,17 @@
 
 Maps each :data:`STATUS_*` to a deterministic, idempotent repair action:
 
-    NOT_APPROVED        → bulk UPDATE pool_coins.is_approved = true
-                          (gated by external Gate REST validator so we
-                          never approve a symbol that does not exist
-                          on the exchange)
+    NOT_APPROVED        → bulk UPDATE pool_coins.is_active = TRUE
+                          (Task #232: re-activate INGESTION only;
+                          the execution gate ``is_tradable`` is a
+                          manual operator decision and is NEVER
+                          flipped here. Gated by GateSymbolValidator
+                          so we never re-activate a symbol that does
+                          not exist on the exchange.)
+    PENDING_TRADABLE    → diagnostic warning only, never a write.
+                          Surfaces (is_active=true, is_tradable=false)
+                          rows older than 7 days so the operator
+                          knows there is a manual promotion backlog.
     NOT_SUBSCRIBED      → request the WS leader to refresh subscriptions
     NO_REDIS_DATA       → wait for the buffer (3 retries × 2 s); if the
                           buffer is still empty after the WS refresh the
@@ -237,7 +244,7 @@ async def _verify_approved(db, symbols: Iterable[str]) -> Set[str]:
     """Return the subset of ``symbols`` whose pool_coins row is now ingestion-active.
 
     Per-symbol verification gate (Etapa 8 of the prompt). Only symbols
-    confirmed as ``is_active=TRUE AND is_approved=TRUE`` post-update may
+    confirmed as ``is_active=TRUE`` post-update may
     be marked ``executed=True`` so the operator-facing ``corrigidos``
     counter is truthful — bulk rowcount alone hides per-row failures
     such as the row being deleted between SELECT and UPDATE, or the
@@ -454,7 +461,7 @@ class SymbolRemediator:
             actions.append(RemediationAction(
                 symbol=rec.symbol,
                 action=ACTION_APPROVE,
-                reason="NOT_APPROVED → set pool_coins.is_approved = true",
+                reason="NOT_APPROVED → set pool_coins.is_active = TRUE (Task #232)",
             ))
 
         # ── ACTION 1: bulk approve + per-symbol verification ─────────────

@@ -714,6 +714,17 @@ def _apply_level_filter(
                     if _check_condition_would_fail(cond, val):
                         rejection_counts[field] = rejection_counts.get(field, 0) + 1
 
+        # Task #232 — publish per-reason rejection_rate so dashboards
+        # can break down the profile_filter stage by which condition
+        # rejected the candidate (was previously only a log line).
+        try:
+            from ..services.execution_gate_metrics import record_pipeline_rejection_reason
+            entered = len(assets)
+            for reason, cnt in rejection_counts.items():
+                record_pipeline_rejection_reason("profile_filter", reason, cnt, entered)
+        except Exception as exc:
+            logger.debug("[PipelineScan] rejection-reason metrics failed: %s", exc)
+
         if rejection_counts or null_counts:
             logger.info(
                 "[PipelineScan] %s filter diagnostics (%d assets):\n"
@@ -1731,9 +1742,11 @@ async def _broadcast_scan_funnel(
     # per stage without scraping log lines.
     try:
         from ..services.execution_gate_metrics import record_pipeline_stage
-        record_pipeline_stage("metadata", pool_total, with_metadata)
-        record_pipeline_stage("profile_filter", profile_candidates, after_profile_filter)
-        record_pipeline_stage("blocking", after_profile_filter, after_blocking)
+        record_pipeline_stage("pool", "metadata", pool_total, with_metadata)
+        record_pipeline_stage("metadata", "profile_filter",
+                              profile_candidates, after_profile_filter)
+        record_pipeline_stage("profile_filter", "blocking",
+                              after_profile_filter, after_blocking)
     except Exception as exc:
         logger.debug("[PipelineScan] funnel metrics failed: %s", exc)
 

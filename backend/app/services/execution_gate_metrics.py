@@ -72,19 +72,25 @@ def _init() -> None:
             "Active symbols entering pipeline_scan per stage (Task #232).",
             ["stage"],
         )
+        # Rate is keyed by ``{stage,reason}`` so dashboards can chart
+        # both the per-stage aggregate (``reason="any"``) and the
+        # per-reason breakdown coming from the rejection tracker.
         _PIPELINE_REJECTION = Gauge(
             "scalpyn_pipeline_rejection_rate",
-            "Fraction of pipeline_scan candidates rejected per stage (0.0-1.0).",
-            ["stage"],
+            "Fraction of pipeline_scan candidates rejected (0.0-1.0).",
+            ["stage", "reason"],
         )
         _COLLECT_UNIVERSE = Gauge(
             "scalpyn_collect_universe_size",
             "Active spot symbols processed by collect_market_data (Task #232).",
         )
+    # Throughput keyed by ``{from_stage,to_stage}`` so each funnel
+    # transition is its own time-series — matches the audit narrative
+    # "X candidates entered stage A, Y survived to stage B".
     _PIPELINE_THROUGHPUT = Counter(
         "scalpyn_pipeline_throughput_total",
-        "Symbols that survived a pipeline_scan stage (Task #232).",
-        ["stage"],
+        "Symbols that survived a pipeline_scan transition (Task #232).",
+        ["from_stage", "to_stage"],
     )
 
 
@@ -114,27 +120,55 @@ def record_orphans_cleaned(count: int) -> None:
         logger.debug("orphans counter inc failed: %s", exc)
 
 
-def record_pipeline_stage(stage: str, entered: int, survived: int) -> None:
-    """Publish the three pipeline funnel metrics for a single stage.
+def record_pipeline_stage(
+    from_stage: str,
+    to_stage: str,
+    entered: int,
+    survived: int,
+) -> None:
+    """Publish the funnel metrics for one ``from_stage → to_stage`` transition.
 
-    * ``scalpyn_pipeline_universe_size{stage}`` — symbols that ENTERED.
-    * ``scalpyn_pipeline_throughput_total{stage}`` — counter of symbols
-      that SURVIVED (monotonic).
-    * ``scalpyn_pipeline_rejection_rate{stage}`` — (entered-survived)/entered.
+    * ``scalpyn_pipeline_universe_size{stage=from_stage}`` — entered count.
+    * ``scalpyn_pipeline_throughput_total{from_stage,to_stage}`` — survived (monotonic counter).
+    * ``scalpyn_pipeline_rejection_rate{stage=from_stage,reason="any"}``
+      — aggregate (entered-survived)/entered. Per-reason breakdown is
+      published separately via :func:`record_pipeline_rejection_reason`.
     """
     _init()
     try:
         if _PIPELINE_UNIVERSE is not None:
-            _PIPELINE_UNIVERSE.labels(stage=stage).set(max(0, int(entered)))
+            _PIPELINE_UNIVERSE.labels(stage=from_stage).set(max(0, int(entered)))
         if _PIPELINE_THROUGHPUT is not None and survived > 0:
-            _PIPELINE_THROUGHPUT.labels(stage=stage).inc(int(survived))
+            _PIPELINE_THROUGHPUT.labels(
+                from_stage=from_stage, to_stage=to_stage,
+            ).inc(int(survived))
         if _PIPELINE_REJECTION is not None:
             rate = 0.0
             if entered > 0:
                 rate = max(0.0, min(1.0, 1.0 - (survived / entered)))
-            _PIPELINE_REJECTION.labels(stage=stage).set(rate)
+            _PIPELINE_REJECTION.labels(stage=from_stage, reason="any").set(rate)
     except Exception as exc:  # pragma: no cover
-        logger.debug("pipeline stage metrics failed (%s): %s", stage, exc)
+        logger.debug("pipeline stage metrics failed (%s→%s): %s", from_stage, to_stage, exc)
+
+
+def record_pipeline_rejection_reason(
+    stage: str,
+    reason: str,
+    rejected: int,
+    entered: int,
+) -> None:
+    """Publish ``scalpyn_pipeline_rejection_rate{stage,reason}`` for one reason."""
+    if entered <= 0 or _PIPELINE_REJECTION is None:
+        _init()
+    if _PIPELINE_REJECTION is None:
+        return
+    try:
+        rate = 0.0
+        if entered > 0:
+            rate = max(0.0, min(1.0, rejected / entered))
+        _PIPELINE_REJECTION.labels(stage=stage, reason=reason).set(rate)
+    except Exception as exc:  # pragma: no cover
+        logger.debug("rejection reason metric failed (%s/%s): %s", stage, reason, exc)
 
 
 def record_collect_universe(active_count: int) -> None:
