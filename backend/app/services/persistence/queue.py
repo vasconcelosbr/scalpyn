@@ -89,7 +89,10 @@ class PersistenceQueue:
         category = getattr(msg, "category", "compute")
         kind = getattr(msg, "kind", type(msg).__name__)
 
-        if category == "critical":
+        if category in ("critical", "scheduler"):
+            # Both block forever: critical = trades/decisions (never drop),
+            # scheduler = recurring indicator writes that the user expects to
+            # land every cycle (silent drop = stale dashboard).
             await self._q.put(msg)
             self._depth_by_category[category] += 1
             _m.record_enqueue(category, kind)

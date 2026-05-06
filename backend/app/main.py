@@ -238,16 +238,13 @@ async def lifespan(app: FastAPI):
             except (asyncio.CancelledError, Exception):
                 pass
 
-        # Stop persistence workers AFTER the schedulers so any in-flight
-        # enqueue from a scheduler shutdown still drains.  Stopped FIRST
-        # in this loop because we want to drain before anything else
-        # tied to ops_snapshot / WS leader closes Redis / DB pools.
-        try:
-            from .services.persistence import stop_workers as _stop_persistence
-            await _stop_persistence(timeout=10.0)
-        except Exception as e:
-            _log.warning("Persistence workers shutdown error: %s", e)
-
+        # Order matters here:
+        #   1. Stop schedulers / WS leader / ops snapshot FIRST so no new
+        #      messages get enqueued.  If we stopped persistence workers
+        #      first, any scheduler still running would call enqueue() on
+        #      a closed queue and hit the `shutdown` drop path — silent
+        #      data loss for the very last cycle (Task #226 review fix).
+        #   2. Drain + stop persistence workers AFTER producers are quiet.
         for _stop_fn, _name in [
             (stop_persistence, "Persistence service"),
             (stop_structural_scheduler, "Structural scheduler"),
@@ -262,6 +259,16 @@ async def lifespan(app: FastAPI):
                     await _stop_fn()
                 except Exception as e:
                     _log.warning("%s shutdown error: %s", _name, e)
+
+        # Producers are quiet — drain and stop persistence workers.  The
+        # 10 s drain budget covers any in-flight enqueue from the schedulers
+        # above; the queue stops accepting new puts after close().
+        try:
+            from .services.persistence import stop_workers as _stop_persistence
+            await _stop_persistence(timeout=10.0)
+        except Exception as e:
+            _log.warning("Persistence workers shutdown error: %s", e)
+
         if pool_stats_task is not None:
             pool_stats_task.cancel()
             try:

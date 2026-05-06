@@ -18,9 +18,18 @@ Categories
 ``category`` controls backpressure policy when the queue is full
 (see ``persistence.queue.PersistenceQueue.put``):
 
-* ``ingest``   — high-frequency tick/orderbook data; drop oldest on overflow.
-* ``compute``  — periodic indicator/score writes; block producer on overflow.
-* ``critical`` — decisions/trades/reconciliation; block producer indefinitely.
+* ``ingest``    — high-frequency tick/orderbook data; drop oldest on overflow.
+* ``compute``   — best-effort periodic writes (e.g. cache warmups);
+                  block producer with timeout, drop on timeout.
+* ``scheduler`` — periodic indicator/score writes that MUST land every cycle;
+                  block producer indefinitely (no drop).
+* ``critical``  — decisions/trades/reconciliation; block producer indefinitely.
+
+The distinction between ``compute`` and ``scheduler`` exists because the
+recurring scheduler writes are the system's primary data source — a
+silent drop here means a user sees stale indicators on the dashboard
+without any error surfacing.  ``compute`` is reserved for derived /
+recoverable writes that the next cycle would naturally re-emit.
 """
 
 from __future__ import annotations

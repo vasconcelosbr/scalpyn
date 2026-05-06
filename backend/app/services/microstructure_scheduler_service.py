@@ -370,8 +370,8 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore,
                 ),
                 default=str,
             )
-            await _pq.enqueue(_pq.IndicatorsUpsert(
-                category="compute",
+            await _pq.enqueue_or_log(producer="micro-sched", msg=_pq.IndicatorsUpsert(
+                category="scheduler",
                 enqueued_at=_pq.now_monotonic(),
                 symbol=symbol,
                 timeframe=TIMEFRAME,
@@ -384,8 +384,8 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore,
             spread_pct = (spread_payload or {}).get("spread_pct")
             depth = (spread_payload or {}).get("orderbook_depth_usdt")
             if spread_pct is not None or depth is not None:
-                await _pq.enqueue(_pq.MarketMetadataUpsert(
-                    category="compute",
+                await _pq.enqueue_or_log(producer="micro-sched", msg=_pq.MarketMetadataUpsert(
+                    category="scheduler",
                     enqueued_at=_pq.now_monotonic(),
                     symbol=symbol,
                     last_updated=now,

@@ -262,8 +262,8 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
                                     default_confidence=0.85),
                     default=str,
                 )
-                await _pq.enqueue(_pq.IndicatorsUpsert(
-                    category="compute",
+                await _pq.enqueue_or_log(producer="struct-sched", msg=_pq.IndicatorsUpsert(
+                    category="scheduler",
                     enqueued_at=_pq.now_monotonic(),
                     symbol=symbol,
                     timeframe=TIMEFRAME,
@@ -278,8 +278,8 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
             except Exception:
                 last_close = None
             if last_close is not None:
-                await _pq.enqueue(_pq.MarketMetadataUpsert(
-                    category="compute",
+                await _pq.enqueue_or_log(producer="struct-sched", msg=_pq.MarketMetadataUpsert(
+                    category="scheduler",
                     enqueued_at=_pq.now_monotonic(),
                     symbol=symbol,
                     last_updated=now,

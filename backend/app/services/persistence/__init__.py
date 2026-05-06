@@ -70,6 +70,7 @@ from .worker import start_workers, stop_workers, workers_alive
 __all__ = [
     "is_enabled",
     "enqueue",
+    "enqueue_or_log",
     "start_workers",
     "stop_workers",
     "workers_alive",
@@ -97,9 +98,33 @@ async def enqueue(msg: Any) -> bool:
     """Enqueue *msg* on the singleton queue.
 
     Returns ``True`` when accepted, ``False`` when dropped (only possible
-    for ``ingest`` and ``compute`` categories — see ``queue.PersistenceQueue.put``).
+    for ``ingest`` and ``compute`` categories — ``scheduler`` and
+    ``critical`` block indefinitely until accepted; see
+    ``queue.PersistenceQueue.put``).
     """
     return await get_queue().put(msg)
+
+
+async def enqueue_or_log(msg: Any, *, producer: str) -> bool:
+    """Enqueue and emit a WARNING when the queue rejects the message.
+
+    Producers should prefer this helper over the bare ``enqueue`` so that
+    drops surface in logs instead of being silently lost — even when the
+    category is ``scheduler``/``critical`` (which only reject during
+    lifespan shutdown), the surfaced warning makes the data-loss path
+    auditable.
+    """
+    accepted = await get_queue().put(msg)
+    if not accepted:
+        import logging
+        logging.getLogger(__name__).warning(
+            "[persistence] DROPPED %s from producer=%s category=%s — "
+            "queue rejected (full or shutting down)",
+            getattr(msg, "kind", type(msg).__name__),
+            producer,
+            getattr(msg, "category", "?"),
+        )
+    return accepted
 
 
 def get_queue_snapshot() -> dict[str, Any]:
