@@ -69,28 +69,14 @@ async def _evaluate_async():
                 )
                 from ..services.indicator_validity import unwrap_envelope_value
 
-                # Task #232: ingestion vs execution gate split.
-                #
-                # The candidate universe is the INGESTION set
-                # (``is_active = true``) — we deliberately do NOT
-                # pre-filter on ``is_tradable`` here. Every active
-                # symbol is run through the full scoring + signal +
-                # risk pipeline; the ``is_tradable`` gate is checked
-                # ONLY at the decision point right before
-                # ``execution_engine.execute_trade``. That way the
-                # ``NOT_TRADABLE`` skip telemetry reflects symbols that
-                # would otherwise have been buys had the operator
-                # authorised them — a true audit signal, not the
-                # over-reported full active∖tradable diff.
+                # Task #232 — candidate universe = INGESTION set
+                # (is_active=true, per-tenant via JOIN pools p ON
+                # p.user_id = :uid). is_tradable is projected here but
+                # enforced only at the buy decision point below, so the
+                # NOT_TRADABLE skip log reflects qualified buys blocked
+                # by the gate — not the active∖tradable diff.
                 from ..services.execution_gate_metrics import record_not_tradable
 
-                # Per-tenant scoping is critical: ``pool_coins`` is a
-                # per-pool table, so the same symbol can exist in two
-                # users' pools with different ``is_tradable`` values.
-                # We scope by ``pools.user_id`` and aggregate with
-                # ``bool_or(is_tradable)`` so the per-symbol gate is
-                # deterministic AND tenant-isolated — one user's
-                # toggle can never influence another user's execution.
                 pool_rows_res = await db.execute(text("""
                     SELECT pc.symbol,
                            bool_or(pc.is_tradable) AS is_tradable
@@ -168,13 +154,9 @@ async def _evaluate_async():
                         logger.info(f"Trade for {symbol} rejected by risk: {risk_result.get('rejection_reason')}")
                         continue
 
-                    # Task #232 — execution gate. The symbol passed
-                    # scoring + signal + block + risk, so it WOULD be
-                    # bought right now if the operator had marked it
-                    # tradable. Surface the gap explicitly: per-symbol
-                    # log line + Prometheus counter. Anything earlier
-                    # would over-report (e.g. a low-score symbol that
-                    # would never have been bought anyway).
+                    # Task #232 — execution gate. Symbol passed
+                    # scoring+signal+block+risk; would be bought if
+                    # tradable. Per-symbol skip log + counter.
                     if not tradable_by_symbol.get(symbol, False):
                         record_not_tradable("evaluate_signals")
                         logger.info(

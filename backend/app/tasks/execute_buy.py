@@ -254,26 +254,12 @@ async def _execute_buy_cycle_async() -> dict:
                 # margin that quarantine + threshold filtering downstream
                 # still has plenty of candidates to choose from before the
                 # ``max_opps`` placement cap is hit.
-                # Task #232: ingestion vs execution gate split.
-                #
-                # The candidate universe is the INGESTION set
-                # (``is_active = true``) — the ``is_tradable`` flag is
-                # carried alongside each row but enforced ONLY at the
-                # buy-decision point below, AFTER scoring + signal +
-                # risk qualification. That way the ``NOT_TRADABLE``
-                # skip log reflects "qualified buy blocked by gate",
-                # not the entire active∖tradable diff (which would
-                # over-report symbols that would never have been
-                # bought anyway).
+                # Task #232 — candidate universe = INGESTION set
+                # (is_active=true, per-tenant via JOIN pools p ON
+                # p.user_id = :uid). is_tradable is projected here but
+                # enforced only at the buy decision point below.
                 from ..services.execution_gate_metrics import record_not_tradable
 
-                # Per-tenant scoping (Task #232): ``pool_coins`` is
-                # per-pool, so the same symbol can exist in two users'
-                # pools with different ``is_tradable`` values. We
-                # scope by ``pools.user_id`` and aggregate with
-                # ``bool_or(is_tradable)`` so the gate is deterministic
-                # AND tenant-isolated — one tenant's toggle cannot
-                # influence another tenant's buy decisions.
                 cap = max(max_opps * 20, 50)
                 pool_rows_res = await db.execute(text("""
                     SELECT pc.symbol,
@@ -524,13 +510,9 @@ async def _execute_buy_cycle_async() -> dict:
                         "stop_loss_price":   None,  # sell engine manages exits
                     }
 
-                    # Task #232 — execution gate. The candidate just
-                    # passed scoring + signal + block + risk + capital
-                    # checks; it WOULD be bought right now if the
-                    # operator had marked it tradable. Surface the gap
-                    # explicitly per-symbol so the dashboard can show
-                    # "qualified but not authorised" symbols. Anything
-                    # earlier would over-report.
+                    # Task #232 — execution gate. Candidate passed
+                    # scoring+signal+block+risk+capital; would buy if
+                    # tradable. Per-symbol skip log + counter.
                     if not tradable_by_symbol.get(symbol, False):
                         record_not_tradable("execute_buy")
                         logger.info(

@@ -415,7 +415,13 @@ def _classify(
 
     raw_is_approved = bool(pool.get("is_approved", False))
     raw_is_active = bool(pool.get("is_active", False))
-    is_approved = raw_is_approved and raw_is_active
+    # Task #232: NOT_APPROVED (kept as the public status name for one
+    # rolling deploy) is now driven by the INGESTION gate ``is_active``
+    # only — that is exactly what ``_bulk_approve`` mutates and what
+    # ``_verify_approved`` checks. Mixing in the legacy ``is_approved``
+    # column here used to leave (is_active=true, is_approved=false)
+    # rows stuck flagged forever without ever being repaired.
+    is_approved = raw_is_active
     pool_exists = bool(pool.get("exists", False))
 
     record = SymbolHealth(

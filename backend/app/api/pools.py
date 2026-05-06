@@ -299,31 +299,30 @@ async def set_pool_coin_tradable(
 ):
     """Toggle the execution gate (``is_tradable``) for a single pool coin.
 
-    Task #232 — separates execution authorisation from ingestion. Setting
-    ``is_tradable=true`` is the explicit operator action that promotes a
-    symbol from "monitored" to "trading critical path".  No bulk endpoint
-    is exposed by design: every promotion is a per-symbol decision.
+    Task #232 — admin OR pool owner. No bulk endpoint by design.
     """
-    pool_query = select(Pool).where(Pool.id == pool_id, Pool.user_id == user_id)
-    pool_result = await db.execute(pool_query)
-    if not pool_result.scalars().first():
+    from ..models.user import User
+
+    caller = (await db.execute(select(User).where(User.id == user_id))).scalars().first()
+    is_admin = caller is not None and (caller.role or "").lower() in {"admin", "superuser"}
+
+    pool_filter = [Pool.id == pool_id]
+    if not is_admin:
+        pool_filter.append(Pool.user_id == user_id)
+    pool = (await db.execute(select(Pool).where(*pool_filter))).scalars().first()
+    if not pool:
         raise HTTPException(status_code=404, detail="Pool not found")
 
-    coin_query = select(PoolCoin).where(
+    coin = (await db.execute(select(PoolCoin).where(
         PoolCoin.pool_id == pool_id,
         PoolCoin.symbol == symbol.upper(),
-    )
-    coin = (await db.execute(coin_query)).scalars().first()
+    ))).scalars().first()
     if not coin:
         raise HTTPException(status_code=404, detail="Symbol not found in pool")
 
-    # Task #232 — canonical body key is ``tradable``; ``is_tradable``
-    # is accepted as a backwards-compatible alias for one rolling
-    # deploy of any caller that still sends the old key.
-    if "tradable" in payload:
-        desired = bool(payload.get("tradable"))
-    else:
-        desired = bool(payload.get("is_tradable", False))
+    # Canonical body key is ``tradable``; ``is_tradable`` accepted as
+    # backwards-compatible alias for one rolling deploy.
+    desired = bool(payload.get("tradable", payload.get("is_tradable", False)))
     if not coin.is_active and desired:
         # Defensive: cannot trade a symbol that is not even being ingested.
         raise HTTPException(
@@ -334,9 +333,9 @@ async def set_pool_coin_tradable(
     await db.commit()
     await db.refresh(coin)
     logger.info(
-        "[POOL] is_tradable %s for %s (pool=%s, user=%s)",
+        "[POOL] is_tradable %s for %s (pool=%s, caller=%s, admin=%s)",
         "ENABLED" if desired else "DISABLED",
-        coin.symbol, pool_id, user_id,
+        coin.symbol, pool_id, user_id, is_admin,
     )
     return _coin_to_dict(coin)
 
