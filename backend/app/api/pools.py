@@ -46,10 +46,8 @@ def _coin_to_dict(coin: PoolCoin) -> Dict[str, Any]:
         "symbol": coin.symbol,
         "market_type": coin.market_type,
         "is_active": coin.is_active,
-        # Task #232 — surface the new execution gate to the frontend.
-        # ``getattr`` keeps the response shape stable when the migration
-        # has not yet been applied (column missing → returns False).
-        "is_tradable": bool(getattr(coin, "is_tradable", False)),
+        # Task #232 — execution gate column added in migration 043.
+        "is_tradable": bool(coin.is_tradable),
         "added_at": coin.added_at.isoformat() if coin.added_at else None,
         "origin": coin.origin if coin.origin else "manual",
         "discovered_at": coin.discovered_at.isoformat() if coin.discovered_at else None,
@@ -341,13 +339,16 @@ async def set_pool_coin_tradable(
             status_code=400,
             detail="Cannot mark inactive symbol as tradable — activate it first.",
         )
+    previous = bool(coin.is_tradable)
     coin.is_tradable = desired
     await db.commit()
     await db.refresh(coin)
-    # Task #232 — standardized log event for ops grep contract.
+    # Task #232 — standardized log event for ops grep contract,
+    # including ``from``/``to`` for an audit-friendly transition.
     logger.info(
-        "[TRADABLE-TOGGLE] symbol=%s pool=%s state=%s caller=%s admin=%s",
+        "[TRADABLE-TOGGLE] symbol=%s pool=%s from=%s to=%s caller=%s admin=%s",
         coin.symbol, pool_id,
+        "ENABLED" if previous else "DISABLED",
         "ENABLED" if desired else "DISABLED",
         user_id, is_admin,
     )

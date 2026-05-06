@@ -56,7 +56,12 @@ logger = logging.getLogger(__name__)
 
 
 # ── Action types ────────────────────────────────────────────────────────────
-ACTION_APPROVE: str = "approve"
+# Task #232 — canonical name is ACTION_ACTIVATE (matches the new
+# ingestion gate ``is_active``). ACTION_APPROVE retained as an alias
+# for one rolling deploy so callers/log greps that still use the
+# legacy term keep working.
+ACTION_ACTIVATE: str = "activate"
+ACTION_APPROVE: str = ACTION_ACTIVATE
 ACTION_REFRESH_WS: str = "refresh_ws_subscriptions"
 ACTION_RETRY_BUFFER: str = "retry_buffer"
 ACTION_RECOMPUTE_INDICATORS: str = "recompute_indicators"
@@ -779,6 +784,7 @@ class SymbolRemediator:
 
 __all__ = [
     "ACTION_APPROVE",
+    "ACTION_ACTIVATE",
     "ACTION_REFRESH_WS",
     "ACTION_RETRY_BUFFER",
     "ACTION_RECOMPUTE_INDICATORS",

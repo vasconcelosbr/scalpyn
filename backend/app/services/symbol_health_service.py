@@ -42,7 +42,12 @@ logger = logging.getLogger(__name__)
 
 
 # ── Classification statuses ──────────────────────────────────────────────────
-STATUS_NOT_APPROVED: str = "NOT_APPROVED"
+# Task #232 — canonical name is STATUS_NOT_ACTIVE (matches the new
+# ingestion gate ``is_active``). STATUS_NOT_APPROVED retained as an
+# alias for one rolling deploy so log greps and dashboards that still
+# match on the legacy literal keep working.
+STATUS_NOT_ACTIVE: str = "NOT_APPROVED"
+STATUS_NOT_APPROVED: str = STATUS_NOT_ACTIVE
 STATUS_NOT_SUBSCRIBED: str = "NOT_SUBSCRIBED"
 STATUS_NO_REDIS_DATA: str = "NO_REDIS_DATA"
 STATUS_NO_INDICATOR_DATA: str = "NO_INDICATOR_DATA"
@@ -707,6 +712,7 @@ def build_etapa8_envelope(
 
 __all__ = [
     "STATUS_NOT_APPROVED",
+    "STATUS_NOT_ACTIVE",
     "STATUS_NOT_SUBSCRIBED",
     "STATUS_NO_REDIS_DATA",
     "STATUS_NO_INDICATOR_DATA",
