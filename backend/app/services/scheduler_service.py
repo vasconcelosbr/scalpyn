@@ -244,6 +244,7 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
         except Exception:
             last_close = None
 
+<<<<<<< HEAD
         await get_persistence_service().enqueue(
             PersistenceJob(
                 domain="scheduler_combined",
@@ -281,6 +282,78 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
                 ),
             )
         )
+=======
+        # ── Task #226: opt-in persistence queue path ──────────────────────
+        from . import persistence as _pq
+        if _pq.is_enabled():
+            if df is not None and not df.empty:
+                rows = tuple(
+                    {
+                        "time": row["time"],
+                        "open": row["open"],
+                        "high": row["high"],
+                        "low": row["low"],
+                        "close": row["close"],
+                        "volume": row["volume"],
+                        "quote_volume": (
+                            row["quote_volume"]
+                            if row.get("quote_volume") is not None
+                            else float(row["close"]) * float(row["volume"])
+                        ),
+                    }
+                    for _, row in df.iterrows()
+                )
+                await _pq.enqueue(_pq.OhlcvBatch(
+                    category="compute",
+                    enqueued_at=_pq.now_monotonic(),
+                    symbol=symbol,
+                    exchange=exchange_attr,
+                    timeframe=TIMEFRAME,
+                    market_type="spot",
+                    rows=tuple(rows),
+                ))
+            if results:
+                await _pq.enqueue(_pq.IndicatorsUpsert(
+                    category="compute",
+                    enqueued_at=_pq.now_monotonic(),
+                    symbol=symbol,
+                    timeframe=TIMEFRAME,
+                    market_type="spot",
+                    scheduler_group="combined",
+                    time=now,
+                    payload_json=json.dumps(results, default=str),
+                    mode="upsert",
+                ))
+            last_close = None
+            if df is not None and not df.empty:
+                try:
+                    last_close = float(df.iloc[-1]["close"])
+                except Exception:
+                    last_close = None
+            spread_pct = (spread_payload or {}).get("spread_pct")
+            depth = (spread_payload or {}).get("orderbook_depth_usdt")
+            if last_close is not None or spread_pct is not None or depth is not None:
+                await _pq.enqueue(_pq.MarketMetadataUpsert(
+                    category="compute",
+                    enqueued_at=_pq.now_monotonic(),
+                    symbol=symbol,
+                    last_updated=now,
+                    price=last_close,
+                    spread_pct=spread_pct,
+                    orderbook_depth_usdt=depth,
+                ))
+            return (
+                f"{symbol}: queued candles={0 if df is None else len(df)} "
+                f"src={exchange_attr}"
+            )
+
+        async def _persist(db) -> None:
+            await _persist_ohlcv(db, symbol, df, exchange_attr)
+            await _persist_indicators(db, symbol, results, now)
+            await _refresh_market_metadata(db, symbol, df, spread_payload, now)
+
+        await run_db_task(_persist, celery=False)
+>>>>>>> f0bcd5b (Task #226: Persistence Architecture Refactor — foundation + scheduler migration)
 
         return (
             f"{symbol}: ok candles={len(df)} src={exchange_attr} "

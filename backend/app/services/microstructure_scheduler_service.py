@@ -357,6 +357,43 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore,
 
         now = datetime.now(timezone.utc)
 
+        # ── Task #226: opt-in persistence queue path ──────────────────────
+        from . import persistence as _pq
+        if _pq.is_enabled():
+            from ..utils.indicator_merge import envelop_results
+            payload_json = json.dumps(
+                envelop_results(
+                    results,
+                    default_source="gate_candles",
+                    default_confidence=0.85,
+                    key_source_map=_get_micro_key_source_map(),
+                ),
+                default=str,
+            )
+            await _pq.enqueue(_pq.IndicatorsUpsert(
+                category="compute",
+                enqueued_at=_pq.now_monotonic(),
+                symbol=symbol,
+                timeframe=TIMEFRAME,
+                market_type="spot",
+                scheduler_group=SCHEDULER_GROUP,
+                time=now,
+                payload_json=payload_json,
+                mode="insert_only",
+            ))
+            spread_pct = (spread_payload or {}).get("spread_pct")
+            depth = (spread_payload or {}).get("orderbook_depth_usdt")
+            if spread_pct is not None or depth is not None:
+                await _pq.enqueue(_pq.MarketMetadataUpsert(
+                    category="compute",
+                    enqueued_at=_pq.now_monotonic(),
+                    symbol=symbol,
+                    last_updated=now,
+                    spread_pct=spread_pct,
+                    orderbook_depth_usdt=depth,
+                ))
+            return f"{symbol}: queued indicators={len(results)}"
+
         async def _persist(db) -> None:
             # Fail fast on lock contention for the indicators write where
             # deadlock cycles are possible (concurrent structural + micro

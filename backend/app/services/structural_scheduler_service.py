@@ -247,6 +247,46 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
 
         now = datetime.now(timezone.utc)
 
+        # ── Task #226: opt-in persistence queue path ──────────────────────
+        # When USE_PERSISTENCE_QUEUE=1 we never open a DB session here; we
+        # enqueue idempotent UPSERT messages and return immediately.  The
+        # PersistenceWorker pool drains them inside short transactions, so
+        # the scheduler stops contending for DB connections.
+        from . import persistence as _pq
+        if _pq.is_enabled():
+            from ..utils.indicator_merge import envelop_results
+            if results:
+                payload_json = json.dumps(
+                    envelop_results(results,
+                                    default_source="gate_candles",
+                                    default_confidence=0.85),
+                    default=str,
+                )
+                await _pq.enqueue(_pq.IndicatorsUpsert(
+                    category="compute",
+                    enqueued_at=_pq.now_monotonic(),
+                    symbol=symbol,
+                    timeframe=TIMEFRAME,
+                    market_type="spot",
+                    scheduler_group=SCHEDULER_GROUP,
+                    time=now,
+                    payload_json=payload_json,
+                    mode="upsert",
+                ))
+            try:
+                last_close = float(df.iloc[-1]["close"]) if not df.empty else None
+            except Exception:
+                last_close = None
+            if last_close is not None:
+                await _pq.enqueue(_pq.MarketMetadataUpsert(
+                    category="compute",
+                    enqueued_at=_pq.now_monotonic(),
+                    symbol=symbol,
+                    last_updated=now,
+                    price=last_close,
+                ))
+            return f"{symbol}: queued indicators={len(results)}"
+
         async def _persist(db) -> None:
             # Fail fast on lock contention for the indicators write where
             # deadlock cycles are possible (concurrent structural + micro

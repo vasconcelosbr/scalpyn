@@ -396,6 +396,36 @@ def _evaluate_queue_alert(redis_client, queue_name: str, depth: int) -> tuple[st
     return new_state, alert_fired
 
 
+@router.get("/persistence", include_in_schema=False)
+async def persistence_status(authorization: Optional[str] = Header(None)):
+    """Snapshot of the persistence queue / worker pool (Task #226).
+
+    Bearer-gated (``DIAGNOSTICS_BEARER_TOKEN``) — same protection as
+    ``/celery-diagnostics`` and ``/metrics``.  Even though the payload is
+    only counts/depth, leaking queue saturation is a useful signal for an
+    attacker probing for backpressure-induced DoS.
+    """
+    _require_diagnostics_bearer(authorization)
+    from ..services.persistence import get_queue_snapshot
+    snap = get_queue_snapshot()
+    # Healthy when queue is well below capacity AND at least one worker is
+    # alive when the feature flag is on.  When the flag is off we still
+    # report status="ok" because workers are intentionally idle.
+    depth = snap["depth_total"]
+    maxsize = snap["maxsize"]
+    workers = snap["workers_alive"]
+    enabled = snap["enabled"]
+    if enabled and workers == 0:
+        status = "critical"
+    elif depth >= int(maxsize * 0.9):
+        status = "degraded"
+    elif depth >= int(maxsize * 0.5):
+        status = "warning"
+    else:
+        status = "ok"
+    return {"status": status, **snap}
+
+
 @router.get("/celery-status")
 async def get_celery_status():
     """Per-queue Celery worker + queue health (Task #216, operator spec).

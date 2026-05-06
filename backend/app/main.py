@@ -182,6 +182,18 @@ async def lifespan(app: FastAPI):
         _log.warning("Gate WS leader election failed to start: %s", e)
         stop_gate_ws_leader = None
 
+    # ── Persistence queue + worker pool (Task #226) ────────────────────────
+    # Long-running persistence workers consume messages from the bounded
+    # PersistenceQueue and execute one short transaction per message.  When
+    # USE_PERSISTENCE_QUEUE != "1" the workers still start (cheap, idle) so
+    # producers that opt into the new path during a single deploy never
+    # silently lose writes — the queue is always drained.
+    try:
+        from .services.persistence import start_workers as _start_persistence
+        _start_persistence()
+    except Exception as e:
+        _log.warning("Persistence workers failed to start: %s", e)
+
     # ── Operational snapshot service (Task #225) ───────────────────────────
     # Keeps eventually-consistent snapshots of Celery / Redis / DB / score
     # engine / latency so /api/dashboard/overview can answer in O(1).  The
@@ -225,6 +237,16 @@ async def lifespan(app: FastAPI):
                 await decision_subscriber_task
             except (asyncio.CancelledError, Exception):
                 pass
+
+        # Stop persistence workers AFTER the schedulers so any in-flight
+        # enqueue from a scheduler shutdown still drains.  Stopped FIRST
+        # in this loop because we want to drain before anything else
+        # tied to ops_snapshot / WS leader closes Redis / DB pools.
+        try:
+            from .services.persistence import stop_workers as _stop_persistence
+            await _stop_persistence(timeout=10.0)
+        except Exception as e:
+            _log.warning("Persistence workers shutdown error: %s", e)
 
         for _stop_fn, _name in [
             (stop_persistence, "Persistence service"),
