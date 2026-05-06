@@ -1225,7 +1225,7 @@ export default function PerformanceDashboardPage() {
         <div>
           <h1 className="text-2xl font-bold" style={{ color: C.textPrimary }}>Centro Operacional</h1>
           <p className="text-[13px] mt-1" style={{ color: C.textSecondary }}>
-            Saúde do pipeline e alertas — atualização automática a cada 10 s.
+            Saúde do pipeline e alertas — atualização automática a cada 15 s.
           </p>
         </div>
         <button
