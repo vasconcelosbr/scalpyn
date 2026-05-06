@@ -113,15 +113,15 @@ Quatro de cinco linhas têm `metrics.score=NULL` e `metrics.can_trade=NULL`. Ist
 
 ---
 
-## 6. Comparação shadow / dual-write — **N/A**
+## 6. Comparação shadow / dual-write — **INCONCLUSIVO**
 
-**Não aplicável.** A Phase 4 do rollout removeu definitivamente o caminho shadow:
+**Classificação INCONCLUSIVO** (regra: shadow não está ativo → não há divergência observável a comparar). A Phase 4 do rollout removeu definitivamente o caminho shadow:
 
 - `robust_indicators.md:117-133` lista símbolos removidos: `select_score`, `bucketing`, `shadow`, `is_shadow_enabled`, `run_shadow_scan`, `select_authoritative_score`, settings `USE_ROBUST_INDICATORS`, `LEGACY_PIPELINE_ROLLBACK`, etc.
 - `pipeline_watchlist_assets.engine_tag` é `robust` em 100 % das linhas escritas após Phase 4 (183/192 = 95.3 %; as 9 NULL são pré-Phase-4 — ver §3).
 - `alpha_scores.scoring_version` é sempre `v1` por design (engine v2 foi descontinuado).
 
-Não há divergência observável a comparar — qualquer auditoria comparativa exigiria reativar artefatos removidos. Classificação: **N/A**.
+Não há divergência observável a comparar — qualquer auditoria comparativa exigiria reativar artefatos removidos. **Classificação INCONCLUSIVO** porque o shadow mode não está ativo; reabilitar este eixo demandaria restaurar `select_authoritative_score` + `divergence_bucket` + `run_shadow_scan` (atualmente fora do código), o que está fora do escopo desta auditoria read-only.
 
 ---
 
@@ -218,3 +218,38 @@ Justificativa: arquitetura limpa pós-#232 (split de gates correto, fallbacks re
 - Sem acesso a logs de produção (Cloud Logging / Cloud Run) — nenhuma evidência de tracebacks recentes em prod.
 - Janela de log dev curta (~1h ativa) — métricas de longo prazo (rejection rate diário, latência P95 24h) não computadas.
 - Nenhum scrape direto de `/metrics` foi executado (depende de `PROMETHEUS_BEARER_TOKEN` e endpoint público — fora do escopo dev).
+
+---
+
+## Anexo — Evidências de produção pendentes (closure note)
+
+Esta auditoria é uma **conclusão parcial**. As seções §1, §2, §5 e parte de §7 ficaram **INCONCLUSIVAS** porque o ambiente de produção (Cloud Run + Neon + Cloud Logging) não está acessível a partir deste repl. Para fechar a auditoria com confiança suficiente para suportar decisão de rollout/rollback, executar a checklist mínima abaixo num ambiente com credenciais de leitura de prod e **anexar os resultados a este mesmo arquivo** (não reescrever — apêndice).
+
+### Checklist mínima de evidências de produção
+
+**§1 — Saúde geral (prod):**
+- [ ] `GET /api/health/schema` retorna `200` (CRITICAL_COLUMNS presentes).
+- [ ] `GET /api/dashboard/overview` retorna `status=ok` para `ingestion`, `celery`, `redis`, `db`, `score`.
+- [ ] Cloud Logging (últimas 24h): `severity>=ERROR` filtrado por `resource.type=cloud_run_revision` — contar e classificar tracebacks; verificar ausência de `PendingRollbackError`, `QueuePool limit`, `InFailedSQLTransactionError`, `UndefinedColumnError`.
+- [ ] `gcloud run services describe scalpyn-backend --format='value(status.latestReadyRevisionName)'` confirma a revisão pós-#232 ativa.
+
+**§2 — Qualidade dos dados (prod):**
+- [ ] `SELECT COUNT(*) FILTER (WHERE is_active), COUNT(*) FILTER (WHERE is_tradable), COUNT(*) FILTER (WHERE is_approved) FROM pool_coins;`
+- [ ] `SELECT MAX(time), EXTRACT(EPOCH FROM (NOW()-MAX(time))) FROM ohlcv WHERE timeframe='5m';` → deve estar < 600s.
+- [ ] `SELECT COUNT(DISTINCT symbol), COUNT(*) FROM ohlcv WHERE timeframe='5m' AND time > NOW()-INTERVAL '15 minutes';`
+- [ ] `SELECT scheduler_group, market_type, COUNT(*), MAX(time) FROM indicators WHERE time > NOW()-INTERVAL '15 minutes' GROUP BY 1,2;`
+
+**§5 — Indicadores de fluxo (prod):**
+- [ ] `echo $ENABLE_GATE_WS` na revisão ativa do Cloud Run → deve ser `1`.
+- [ ] Cloud Logging: pesquisar `"[gate-ws-leader] elected leader"` nas últimas 4h → confirmar exatamente 1 leader vencedor.
+- [ ] `redis-cli GET gate_ws:leader` (via bastion) → deve estar populado.
+- [ ] `SELECT COUNT(*) FILTER (WHERE indicators_json->'taker_ratio'->>'status'='NO_DATA') * 100.0 / COUNT(*) FROM indicator_snapshots WHERE timestamp > NOW()-INTERVAL '15 minutes';` → deve ser baixo (< 25%).
+
+**§7 — Monitoramento (prod):**
+- [ ] `curl -H "Authorization: Bearer $PROMETHEUS_BEARER_TOKEN" $PROD_URL/metrics | grep -E "indicator_confidence|indicator_staleness|score_rejection_total"` → confirma emissão.
+- [ ] Grafana: estado das 4 alert rules (A1/A2/A3/A4) — todas devem estar `Normal` ou justificadas.
+- [ ] `ROBUST_ALERTS_OPS_WEBHOOK_URL` populada em prod (env var presente, não vazia).
+
+### Critério de fechamento
+
+Esta auditoria deve ser re-emitida com status atualizado quando **todas** as 17 verificações acima forem coletadas e anexadas. Até lá, o score `0.78` reflete confiança parcial e a recomendação operacional é **prosseguir com monitoramento elevado por 7 dias** antes de marcar o rollout #232 como definitivamente concluído.
