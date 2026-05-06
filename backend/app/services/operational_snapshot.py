@@ -225,22 +225,37 @@ class OperationalSnapshotService:
         error: str,
         soft_status: str = "degraded",
         hard_status: str = "critical",
+        down_data: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Record a failed probe.  Status only changes after FAIL_TOLERANCE
-        consecutive failures.  Until then we keep the previous status to
-        absorb single transient errors (network blip, GC pause)."""
+        """Record a failed probe.
+
+        Status only flips after FAIL_TOLERANCE consecutive failures, but
+        liveness-critical fields (``alive``, ``worker_count``, queue
+        lengths…) are overwritten **immediately** via ``down_data`` so
+        the dashboard never shows stale "online" while the snapshot is
+        actually critical.  Refreshers for liveness-shaped probes (Redis,
+        Celery) MUST pass an explicit ``down_data`` reflecting the
+        offline state.  Other numeric/window probes (DB pool, latency,
+        score) can omit it — for those, keeping the previous data
+        prevents graphs from blanking on a single transient failure.
+        """
         prev: Snapshot = getattr(self, attr)
         streak = prev.failure_streak + 1
         if streak < FAIL_TOLERANCE:
-            # Keep last-known status; only annotate the error so the
-            # dashboard can surface "1/3 strikes" without paging.
             new_status = prev.status if prev.status != "unknown" else soft_status
         else:
             new_status = hard_status
+        if down_data is not None:
+            # Merge so any keys the refresher didn't bother re-stating
+            # are preserved (e.g. last-known queue list shape) but
+            # liveness fields the caller did set always win.
+            merged = {**(prev.data or {}), **down_data}
+        else:
+            merged = prev.data
         setattr(self, attr, Snapshot(
             as_of=datetime.now(timezone.utc),
             status=new_status,
-            data=prev.data,            # keep last-known so graphs don't blank
+            data=merged,
             error=error,
             failure_streak=streak,
         ))
@@ -318,27 +333,47 @@ class OperationalSnapshotService:
         gates the eventual degradation — a single network blip on the
         broker no longer flips the snapshot to ``critical`` immediately.
         """
+        # Liveness-shaped fields written on every failure path so the UI
+        # never reads a stale "online" view while status is critical.
+        celery_down: Dict[str, Any] = {
+            "workers": [],
+            "worker_count": 0,
+            "active_tasks": 0,
+            "reserved_tasks": 0,
+            "scheduled_tasks": 0,
+            "registered_tasks": 0,
+            "per_queue": {},
+            "alive": False,
+        }
         try:
             data = await asyncio.wait_for(
                 asyncio.to_thread(_inspect_celery_blocking),
                 timeout=CELERY_TIMEOUT_S + 1.0,
             )
         except asyncio.TimeoutError:
-            self._apply_failure("celery", f"Celery inspect timeout after {CELERY_TIMEOUT_S}s")
+            self._apply_failure(
+                "celery",
+                f"Celery inspect timeout after {CELERY_TIMEOUT_S}s",
+                down_data=celery_down,
+            )
             return
         except Exception as exc:
-            self._apply_failure("celery", f"{type(exc).__name__}: {exc}")
+            self._apply_failure("celery", f"{type(exc).__name__}: {exc}", down_data=celery_down)
             return
 
         if data.get("error"):
-            self._apply_failure("celery", str(data["error"]))
+            self._apply_failure("celery", str(data["error"]), down_data=celery_down)
             return
 
         workers = sorted(data.get("workers", []))
         if not workers:
             # No workers reachable is itself a probe-level signal: route
             # through the failure path so we honour the 3-strike contract.
-            self._apply_failure("celery", "No workers responded to inspect()")
+            self._apply_failure(
+                "celery",
+                "No workers responded to inspect()",
+                down_data=celery_down,
+            )
             return
 
         per_queue = data.get("per_queue", {})
@@ -399,17 +434,27 @@ class OperationalSnapshotService:
 
     async def _refresh_redis(self) -> None:
         """Redis liveness + INFO + per-queue LLEN (1 s budget)."""
+        # Liveness-shaped fields written on every failure path so the UI
+        # never reads a stale "alive" view while status is critical.
+        redis_down: Dict[str, Any] = {
+            "alive": False,
+            "ping_ms": None,
+            "queue_lengths": {q: -1 for q in _queue_names()},
+            "backlog_total": 0,
+            "unrouted_backlog": 0,
+        }
         try:
             from .redis_client import get_async_redis
         except Exception as exc:
-            self._apply_failure("redis", f"redis_client import failed: {exc}")
+            self._apply_failure(
+                "redis", f"redis_client import failed: {exc}", down_data=redis_down,
+            )
             return
 
         rc = await get_async_redis()
-        now = datetime.now(timezone.utc)
         if rc is None:
             self._record_redis_transition(False, "Redis client unavailable")
-            self._apply_failure("redis", "Redis client unavailable")
+            self._apply_failure("redis", "Redis client unavailable", down_data=redis_down)
             return
 
         async def _probe() -> Dict[str, Any]:
@@ -456,10 +501,15 @@ class OperationalSnapshotService:
             self._apply_success("redis", data, status if alive else "critical")
         except asyncio.TimeoutError:
             self._record_redis_transition(False, f"Redis probe timeout after {REDIS_TIMEOUT_S}s")
-            self._apply_failure("redis", f"Redis probe timeout after {REDIS_TIMEOUT_S}s")
+            self._apply_failure(
+                "redis", f"Redis probe timeout after {REDIS_TIMEOUT_S}s",
+                down_data=redis_down,
+            )
         except Exception as exc:
             self._record_redis_transition(False, f"{type(exc).__name__}: {exc}")
-            self._apply_failure("redis", f"{type(exc).__name__}: {exc}")
+            self._apply_failure(
+                "redis", f"{type(exc).__name__}: {exc}", down_data=redis_down,
+            )
 
     def _record_redis_transition(self, alive: bool, err: Optional[str]) -> None:
         now = datetime.now(timezone.utc)
@@ -852,11 +902,14 @@ class OperationalSnapshotService:
         # refresher runs every CELERY_INTERVAL_S (15 s), and `_apply_failure`
         # only flips status to ``degraded`` after FAIL_TOLERANCE strikes —
         # so failure_streak >= 4 is ≈ 60 s of confirmed worker absence.
+        # Predicate driven by status + failure_streak only — never by the
+        # `worker_count` field, which could be stale on a fresh outage.
+        # The celery refresher overwrites worker_count=0 in down_data on
+        # every failure, but the alert engine must not depend on that.
         worker_failure_streak = self.celery.failure_streak
         if (
             self.celery.status in ("degraded", "critical")
             and worker_failure_streak >= 4
-            and self.celery.data.get("worker_count", 0) == 0
         ):
             alerts.append({
                 "severity": "critical", "category": "celery", "code": "worker_offline_60s",
