@@ -419,7 +419,46 @@ async def get_ml_dataset(
 
 @router.get("/overview", response_model=OperationalOverviewResponse)
 async def get_overview(_user_id: UUID = Depends(get_current_user_id)):
-    """Aggregated operational snapshot — single source for the dashboard banner."""
+    """Aggregated operational snapshot — single source for the
+    `/dashboard/performance` page (Task #225).
+
+    Response contract (:class:`OperationalOverviewResponse`):
+
+    ``{
+        as_of:           ISO8601 — moment this aggregation was assembled,
+        overall_status:  "ok" | "degraded" | "critical" | "unknown",
+        snapshots: {
+            ingestion, celery, redis, db, score,
+            ingestion_latency, decision_latency, processing_latency
+        }   # each value is a SnapshotEnvelope:
+            # { as_of, status, data: {...}, error, failure_streak }
+        alerts:      [ {severity, category, code, impact, since, details} ],
+        alert_count: int
+    }``
+
+    Notes on naming:
+
+    * ``as_of`` (not ``generated_at``) — the field is named after
+      the snapshot framework's per-family timestamp for consistency
+      across `/overview`, `/celery`, `/redis`, etc.
+    * ``snapshots`` is nested (not flat) so the eight families can
+      be iterated generically by the frontend without enumerating
+      keys at the top level.
+
+    Outage status semantics: liveness-shaped probes (Redis ping,
+    Celery worker inspect) escalate to ``critical`` after
+    ``FAIL_TOLERANCE`` consecutive strikes, with ``failure_streak``
+    exposed in each ``SnapshotEnvelope`` so consumers can distinguish
+    a transient blip (streak < 3, status preserved) from a confirmed
+    outage (streak ≥ 3, status flipped). Liveness-critical fields in
+    the ``data`` payload (``alive``, ``worker_count``, queue lengths…)
+    are overwritten on every failure path so the UI never reads a
+    stale "online" view while ``status`` is critical.
+
+    This endpoint is O(1) — it reads only the in-memory snapshot
+    cache populated by background refreshers and never touches Redis
+    or the Celery broker inline.
+    """
     return get_ops_service().get_overview()
 
 
