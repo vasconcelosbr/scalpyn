@@ -997,58 +997,66 @@ def _evaluate_l3_decisions(
 
 async def _persist_decision_logs(db, user_id, decisions: list[dict]):
     from ..models.backoffice import DecisionLog
-    from sqlalchemy import text
+    from sqlalchemy import or_, and_, select
 
     if not decisions:
         return []
 
-    # DEDUPLICATION: Check for recent duplicate decisions (last 5 minutes)
-    # This prevents duplicate logging from multiple pipeline cycles
+    # DEDUPLICATION: Check for recent duplicate decisions (last 5 minutes).
+    # Previously used raw SQL ``(col1, col2) IN :checks`` which is not
+    # supported by asyncpg's parameter binding and could silently match nothing,
+    # allowing duplicate rows on Redis restarts. Replaced with ORM-native
+    # ``or_()`` conditions which are always correctly parameterised.
     now = datetime.now(timezone.utc)
     recent_window = now - timedelta(minutes=5)
 
-    # Build dedup query to check for existing recent decisions
     dedup_checks = []
     for decision in decisions:
-        symbol = decision["symbol"]
-        strategy = decision["strategy"]
-        direction = decision.get("direction")
+        dedup_checks.append((
+            decision["symbol"],
+            decision["strategy"],
+            decision.get("direction"),
+        ))
 
-        dedup_checks.append((symbol, strategy, direction))
-
-    # Query for existing decisions in the recent window
     if dedup_checks:
-        # Create a set to check uniquely
         unique_checks = list(set(dedup_checks))
 
-        existing_result = await db.execute(text("""
-            SELECT DISTINCT symbol, strategy, direction
-            FROM decisions_log
-            WHERE created_at >= :recent_window
-              AND (symbol, strategy, COALESCE(direction, '')) IN :checks
-        """), {
-            "recent_window": recent_window,
-            "checks": tuple((s, st, d or "") for s, st, d in unique_checks)
-        })
+        # Build ORM-safe OR clause: each tuple becomes an AND condition.
+        row_conditions = []
+        for s, st, d in unique_checks:
+            dir_cond = (DecisionLog.direction == d) if d is not None else DecisionLog.direction.is_(None)
+            row_conditions.append(and_(
+                DecisionLog.symbol == s,
+                DecisionLog.strategy == st,
+                dir_cond,
+            ))
+
+        existing_result = await db.execute(
+            select(DecisionLog.symbol, DecisionLog.strategy, DecisionLog.direction)
+            .where(and_(
+                DecisionLog.created_at >= recent_window,
+                or_(*row_conditions),
+            ))
+            .distinct()
+        )
 
         existing_decisions = {
             (row.symbol, row.strategy, row.direction or None)
             for row in existing_result.fetchall()
         }
 
-        # Filter out duplicates
         decisions_to_insert = []
         skipped_count = 0
         for decision in decisions:
             key = (
                 decision["symbol"],
                 decision["strategy"],
-                decision.get("direction")
+                decision.get("direction"),
             )
             if key in existing_decisions:
                 logger.debug(
                     "[Decision] SKIP duplicate: %s | strategy=%s | direction=%s (logged in last 5 min)",
-                    key[0], key[1], key[2] or "—"
+                    key[0], key[1], key[2] or "—",
                 )
                 skipped_count += 1
             else:
@@ -1056,11 +1064,10 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
 
         if skipped_count > 0:
             logger.info(
-                "[Decision] Deduplication: skipped %d duplicate(s), inserting %d new decision(s)",
-                skipped_count, len(decisions_to_insert)
+                "[Decision] dedup_conflict: skipped %d duplicate(s), inserting %d new decision(s)",
+                skipped_count, len(decisions_to_insert),
             )
 
-        # Use filtered list
         decisions = decisions_to_insert
 
     if not decisions:
@@ -2298,9 +2305,9 @@ async def _run_pipeline_scan():
                     await _update_last_scanned(db, wl_id)
 
                     if decision_payloads:
-                        from ..api.websocket import broadcast_decision_created
+                        from ..services.realtime_bridge import publish_decision_event
                         for payload in decision_payloads:
-                            await broadcast_decision_created(payload)
+                            publish_decision_event(payload)
 
                     if new_syms:
                         stats["new_signals"] += len(new_syms)
