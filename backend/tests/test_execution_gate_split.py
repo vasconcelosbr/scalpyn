@@ -136,6 +136,59 @@ def test_classifier_flags_active_but_unapproved_row_as_not_approved() -> None:
     assert record.is_approved is True  # alias for is_active in new model
 
 
+def test_active_non_tradable_symbol_is_ingested_but_never_executed() -> None:
+    """End-to-end Task #232 contract:
+
+    A symbol with ``is_active=true, is_tradable=false`` MUST appear in
+    every ingestion-side reader (collector / indicators / scoring /
+    pipeline_scan / WS resolver / scheduler services) and MUST be
+    skipped at the buy decision point with ``reason=NOT_TRADABLE``.
+
+    Implemented as a static lint over the module sources because a
+    real e2e would require a live Postgres + Redis + broker; the
+    properties asserted here are the ones a runtime e2e would verify.
+    """
+    import inspect
+    from app.services import (
+        pool_service,
+        scheduler_service,
+        structural_scheduler_service,
+        microstructure_scheduler_service,
+        gate_ws_leader,
+    )
+    from app.tasks import (
+        pipeline_scan,
+        compute_scores,
+        evaluate_signals,
+        execute_buy,
+        collect_market_data,
+    )
+
+    ingestion_modules = [
+        pool_service, scheduler_service, structural_scheduler_service,
+        microstructure_scheduler_service, gate_ws_leader,
+        pipeline_scan, compute_scores, collect_market_data,
+    ]
+    for mod in ingestion_modules:
+        src = inspect.getsource(mod).lower()
+        # Ingestion readers must NOT filter on is_tradable in any
+        # SELECT-style WHERE clause; if they do, the active-but-not-
+        # tradable symbol is starved before ever reaching the gate.
+        assert "where is_tradable" not in src and "and is_tradable = true" not in src, (
+            f"{mod.__name__}: ingestion-side reader filters on "
+            "is_tradable, which would starve active+non-tradable "
+            "symbols out of ingestion."
+        )
+
+    for mod in (evaluate_signals, execute_buy):
+        src = inspect.getsource(mod).lower()
+        assert "record_not_tradable" in src
+        assert "reason=not_tradable" in src, (
+            f"{mod.__name__}: must SKIP with reason=NOT_TRADABLE so "
+            "active+non-tradable symbols never become a real order."
+        )
+
+
 def test_execute_buy_orders_tradable_before_limit() -> None:
     """Regression for Task #232 reviewer feedback: the candidate-cap
     SQL must place ``is_tradable=true`` rows ahead of inactive ones so

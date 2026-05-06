@@ -101,17 +101,23 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-# Boot-once flag for the is_approved schema-drift error so we log it a
+# Boot-once flag for the pool_coins schema-drift error so we log it a
 # single time per process rather than every cycle. Mirrors the pattern
-# used by ``_scheduler_group_drift_logged`` above.
+# used by ``_scheduler_group_drift_logged`` above. Task #232 widened
+# the check from ``is_approved`` to ``is_active`` since the scheduler
+# query now reads the new ingestion gate.
+_is_active_drift_logged: bool = False
+# Backwards-compat alias (one-deploy) for any external monitor that
+# imported the legacy variable name.
 _is_approved_drift_logged: bool = False
 
 
-def _is_is_approved_drift(exc: BaseException) -> bool:
-    """Return True iff *exc* is the pool_coins.is_approved missing-column error.
+def _is_pool_coins_gate_drift(exc: BaseException) -> bool:
+    """Return True iff *exc* is a pool_coins gate-column missing-column
+    error (``is_active`` post-#232; ``is_approved`` legacy).
 
-    Walks the exception chain (``__cause__`` and ``.orig`` are both used by
-    SQLAlchemy/asyncpg) so the check works whether the asyncpg native
+    Walks the exception chain (``__cause__`` and ``.orig`` are both used
+    by SQLAlchemy/asyncpg) so the check works whether the asyncpg native
     ``UndefinedColumnError`` is one or two wrappers deep — Cloud Run sees
     it wrapped twice (SQLAlchemy ProgrammingError → asyncpg adapter
     ProgrammingError → native UndefinedColumnError).
@@ -120,15 +126,24 @@ def _is_is_approved_drift(exc: BaseException) -> bool:
     current: Optional[BaseException] = exc
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, _AsyncpgUndefinedColumn) and "is_approved" in str(current):
+        msg = str(current)
+        if isinstance(current, _AsyncpgUndefinedColumn) and (
+            "is_active" in msg or "is_approved" in msg
+        ):
             return True
         # Final fallback: a SQLAlchemy ProgrammingError whose message text
         # explicitly mentions UndefinedColumnError + the column name.
-        msg = str(current)
-        if "UndefinedColumnError" in msg and "is_approved" in msg:
+        if "UndefinedColumnError" in msg and (
+            "is_active" in msg or "is_approved" in msg
+        ):
             return True
         current = getattr(current, "orig", None) or getattr(current, "__cause__", None)
     return False
+
+
+# Legacy alias — same predicate, broader matcher. Keeps any external
+# import of the old function name working for one rolling deploy.
+_is_is_approved_drift = _is_pool_coins_gate_drift
 
 
 async def _collect_symbols(db) -> List[str]:
@@ -141,7 +156,7 @@ async def _collect_symbols(db) -> List[str]:
     symbols are processed until the schema is repaired; the alert flag
     exposed via ``[MICRO-SCHED] SCHEMA DRIFT`` makes the issue actionable.
     """
-    global _is_approved_drift_logged
+    global _is_active_drift_logged
     try:
         rows = (await db.execute(text("""
             SELECT DISTINCT symbol
@@ -151,21 +166,23 @@ async def _collect_symbols(db) -> List[str]:
         """))).fetchall()
         return [r.symbol for r in rows]
     except Exception as exc:
-        if _is_is_approved_drift(exc):
-            if not _is_approved_drift_logged:
+        if _is_pool_coins_gate_drift(exc):
+            if not _is_active_drift_logged:
                 logger.error(
-                    "[MICRO-SCHED] SCHEMA DRIFT: pool_coins.is_approved column "
-                    "missing — migration 035 has not been applied. The "
-                    "microstructure scheduler will skip every cycle until the "
-                    "column is added. Hit /api/health/schema for details."
+                    "[MICRO-SCHED] SCHEMA DRIFT: pool_coins.is_active column "
+                    "missing — migration 043 (Task #232 ingestion-gate split) "
+                    "has not been applied. The microstructure scheduler will "
+                    "skip every cycle until the column is added. Hit "
+                    "/api/health/schema for details."
                 )
-                _is_approved_drift_logged = True
+                _is_active_drift_logged = True
             try:
                 if db.in_transaction():
                     await db.rollback()
             except Exception as rb_exc:
                 logger.warning(
-                    "[MICRO-SCHED] rollback after is_approved drift failed: %s", rb_exc
+                    "[MICRO-SCHED] rollback after pool_coins gate drift failed: %s",
+                    rb_exc,
                 )
             return []
         raise
