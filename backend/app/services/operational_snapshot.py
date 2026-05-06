@@ -304,8 +304,12 @@ class OperationalSnapshotService:
                 pool_state = "STARVED_NO_ACTIVE"
                 status = "ok"
             elif delay is None:
-                pool_state = "OK"
-                status = "unknown"
+                # Task #232 — active symbols exist but no candle has
+                # ever landed in the freshness window: this is a hard
+                # ingestion outage, not an "unknown". Treat as STALLED
+                # so the alert engine raises ingestion_stale.
+                pool_state = "STALLED"
+                status = "critical"
             elif delay < 600:
                 pool_state = "OK"
                 status = "ok"

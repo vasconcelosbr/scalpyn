@@ -1757,11 +1757,17 @@ async def _run_pipeline_scan():
         # touches symbols it sees in the current cycle). One bounded
         # DELETE per scan keeps the watchlist faithful to the pool.
         try:
+            # Task #232 — orphan = no row in the *ingestion-active*
+            # universe. A row that exists in pool_coins but has been
+            # toggled to is_active=false is no longer being ingested
+            # / scored, so its watchlist asset entry is just as stale
+            # as a fully deleted row.
             orphan_res = await db.execute(text("""
                 DELETE FROM pipeline_watchlist_assets pwa
                  WHERE NOT EXISTS (
                        SELECT 1 FROM pool_coins pc
-                        WHERE pc.symbol = pwa.symbol
+                        WHERE pc.symbol    = pwa.symbol
+                          AND pc.is_active = true
                  )
                 RETURNING pwa.symbol
             """))

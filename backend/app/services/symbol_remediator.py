@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, Iterable, List, Optional, Set
 
@@ -363,21 +364,41 @@ class SymbolRemediator:
         try:
             from ..database import AsyncSessionLocal
             async with AsyncSessionLocal() as _diag_db:
+                # Task #232 — only flag rows that have been waiting
+                # >7 days for operator promotion. Anything fresher is
+                # normal triage backlog and would create alert noise.
+                # Uses ``updated_at`` (last status mutation) and falls
+                # back to ``added_at`` when the column was never
+                # touched after insert.
                 pending_res = await _diag_db.execute(text("""
-                    SELECT symbol FROM pool_coins
-                    WHERE is_active = true
-                      AND is_tradable = false
+                    SELECT symbol,
+                           COALESCE(updated_at, added_at) AS since
+                      FROM pool_coins
+                     WHERE is_active = true
+                       AND is_tradable = false
+                       AND COALESCE(updated_at, added_at)
+                           < NOW() - INTERVAL '7 days'
                 """))
-                pending = [r.symbol for r in pending_res.fetchall()]
-            for sym in pending[:50]:  # cap to keep the report bounded
+                pending_rows = pending_res.fetchall()
+                pending = [r.symbol for r in pending_rows]
+            for row in pending_rows[:50]:  # cap to keep report bounded
+                age_days = None
+                if row.since is not None:
+                    try:
+                        age_days = int(
+                            (datetime.now(timezone.utc) - row.since).days
+                        )
+                    except Exception:
+                        age_days = None
                 actions.append(RemediationAction(
-                    symbol=sym,
+                    symbol=row.symbol,
                     action=ACTION_WARN_PENDING_TRADABLE,
                     reason=(
-                        "is_active=true AND is_tradable=false — symbol is "
-                        "ingested + scored but blocked at execution gate. "
-                        "Operator must flip is_tradable manually "
-                        "(POST /api/pools/{id}/coins/{symbol}/tradable)."
+                        f"is_active=true AND is_tradable=false for "
+                        f"{age_days if age_days is not None else '>7'} days "
+                        "— symbol is ingested + scored but blocked at "
+                        "execution gate. Operator must flip is_tradable "
+                        "manually (POST /api/pools/{id}/coins/{symbol}/tradable)."
                     ),
                     executed=False,  # diagnostic only — never writes
                     extra={"status": STATUS_PENDING_TRADABLE},
