@@ -22,18 +22,22 @@ def _run_async(coro):
 
 async def _collect_all_async():
     from ..services.market_data_service import market_data_service
-    from ..services.pool_service import get_approved_pool_symbols
+    from ..services.pool_service import get_approved_pool_symbols, get_pool_symbols
     from ..database import run_db_task
     from sqlalchemy import text
 
     logger.info("Starting market data collection (approved spot symbols)...")
 
     async def _load_spot_syms(db):
-        return await get_approved_pool_symbols(db, "spot")
+        # Buscar aprovados + total da pool no mesmo session para diferenciar
+        # "pool vazia" de "pool povoada mas sem aprovados" no log de WARNING.
+        approved = await get_approved_pool_symbols(db, "spot")
+        total = await get_pool_symbols(db, "spot")
+        return approved, len(total)
 
-    raw_symbols = await run_db_task(_load_spot_syms, celery=True)
+    raw_symbols, pool_count = await run_db_task(_load_spot_syms, celery=True)
 
-    logger.info(f"[COLLECT] approved_symbols_count={len(raw_symbols)}")
+    logger.info(f"[COLLECT] approved_symbols_count={len(raw_symbols)} pool_count={pool_count}")
     logger.info(f"[COLLECT] symbols={raw_symbols}")
 
     if not raw_symbols:
@@ -42,7 +46,9 @@ async def _collect_all_async():
         # NÃO levantar — o raise faz o Celery retry em loop, satura workers,
         # enche a fila e cascateia 4 alertas críticos no Centro Operacional.
         logger.warning(
-            "[COLLECT] no approved symbols — skipping cycle (approved_count=0)"
+            "[COLLECT] no approved symbols — skipping cycle "
+            "(pool_count=%d, approved_count=0)",
+            pool_count,
         )
         return 0
 
@@ -68,7 +74,8 @@ async def _collect_all_async():
         # validação. Tratar como ciclo vazio em vez de erro fatal.
         logger.warning(
             "[COLLECT] no approved symbols after validation — skipping cycle "
-            "(raw_count=%d, valid_count=0)",
+            "(pool_count=%d, approved_count=%d, valid_count=0)",
+            pool_count,
             len(raw_symbols),
         )
         return 0
@@ -315,7 +322,10 @@ async def _collect_5m_async():
 
     Universe = all approved symbols (pool_coins.is_approved = true) across spot + futures.
     """
-    from ..services.pool_service import get_approved_pool_symbols_with_market_type
+    from ..services.pool_service import (
+        get_approved_pool_symbols_with_market_type,
+        get_pool_symbols_with_market_type,
+    )
     from ..utils.symbol_filters import filter_real_assets
     from ..database import run_db_task
     from sqlalchemy import text
@@ -323,19 +333,25 @@ async def _collect_5m_async():
     logger.info("Starting 5m market data collection (approved symbols only)...")
 
     async def _load_approved(db):
-        return await get_approved_pool_symbols_with_market_type(db)
+        approved = await get_approved_pool_symbols_with_market_type(db)
+        total = await get_pool_symbols_with_market_type(db)
+        return approved, len(total)
 
-    symbol_market_type: dict[str, str] = await run_db_task(_load_approved, celery=True)
+    symbol_market_type: dict[str, str]
+    pool_count: int
+    symbol_market_type, pool_count = await run_db_task(_load_approved, celery=True)
 
     raw_syms = filter_real_assets(list(symbol_market_type.keys()))
 
-    logger.info(f"[COLLECT] approved_symbols_count={len(raw_syms)}")
+    logger.info(f"[COLLECT] approved_symbols_count={len(raw_syms)} pool_count={pool_count}")
     logger.info(f"[COLLECT] symbols={raw_syms}")
 
     if not raw_syms:
         # Task #231: ver _collect_all_async — pool sem aprovados é estado válido.
         logger.warning(
-            "[COLLECT] no approved symbols — skipping 5m cycle (approved_count=0)"
+            "[COLLECT] no approved symbols — skipping 5m cycle "
+            "(pool_count=%d, approved_count=0)",
+            pool_count,
         )
         return 0
 
@@ -360,7 +376,8 @@ async def _collect_5m_async():
         # Task #231: idem — ciclo 5m vazio em vez de erro fatal.
         logger.warning(
             "[COLLECT] no approved symbols after validation — skipping 5m cycle "
-            "(raw_count=%d, valid_count=0)",
+            "(pool_count=%d, approved_count=%d, valid_count=0)",
+            pool_count,
             len(raw_syms),
         )
         return 0
