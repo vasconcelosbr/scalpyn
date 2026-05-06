@@ -495,6 +495,12 @@ async def get_alerts(_user_id: UUID = Depends(get_current_user_id)):
 
 
 _EVENT_CATEGORIES = {"alert", "worker", "redis", "all"}
+# Path-variant has a strict response_model that requires the
+# filtered-envelope shape (`{as_of, category, events}`), so it cannot
+# accept "all" — that value returns the three-bucket unfiltered shape
+# and would raise FastAPI ResponseValidationError → 500.  Callers
+# wanting the unfiltered shape via the path API must use `/events`.
+_EVENT_CATEGORIES_FILTERED = {"alert", "worker", "redis"}
 
 
 @router.get("/events", response_model=None)
@@ -535,11 +541,22 @@ async def get_events_filtered(
     _user_id: UUID = Depends(get_current_user_id),
 ):
     """Strict-typed alias for ``/events?category={category}`` — single
-    category (``alert``, ``worker``, ``redis``, or ``all``)."""
-    if category not in _EVENT_CATEGORIES:
+    category (``alert``, ``worker``, or ``redis``).
+
+    Does **not** accept ``all`` because the underlying service returns
+    the three-bucket unfiltered envelope for that value, which would
+    fail this route's strict ``OperationalEventsFilteredResponse``
+    validation (FastAPI 500). Use ``GET /events`` (no category) for
+    the unfiltered envelope.
+    """
+    if category not in _EVENT_CATEGORIES_FILTERED:
         raise HTTPException(
             status_code=400,
-            detail=f"unknown event category: {category} (expected one of {sorted(_EVENT_CATEGORIES)})",
+            detail=(
+                f"unknown event category: {category} "
+                f"(expected one of {sorted(_EVENT_CATEGORIES_FILTERED)}; "
+                "use GET /events for the unfiltered envelope)"
+            ),
         )
     return get_ops_service().get_events(category=category, limit=limit)
 
