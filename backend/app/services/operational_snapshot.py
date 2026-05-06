@@ -1,60 +1,16 @@
-"""Operational snapshot service — eventually-consistent system observability.
+"""Operational snapshot service (Task #225).
 
-Task #225 — Centro Operacional de Observability.
+Probes Celery / Redis / DB / score / ingestion / latencies out-of-band,
+caches the results, serves them from ``/api/dashboard/*`` so request
+handlers never block on a slow dependency.
 
-Why a snapshot service
-----------------------
+Snapshot families (frontend keys off these names — do not rename):
+``ingestion``, ``celery``, ``redis``, ``db``, ``score``,
+``ingestion_latency``, ``decision_latency``, ``processing_latency``.
 
-Calling ``celery_app.control.inspect()``, ``redis.INFO`` or ``SELECT 1`` inside
-a request handler ties the user-facing latency of ``/api/dashboard/*`` to the
-slowest dependency.  When Redis goes away the inspect call hangs for the full
-``broker_transport_options`` timeout (~5 s default) and every dashboard tab
-spins.  Worse, every concurrent dashboard viewer opens its own probe.
-
-The fix is the standard pattern: probe out-of-band, cache the result, serve
-the cache.  This module owns:
-
-* one ``asyncio.Task`` per probe family (Celery, Redis, DB pool, score
-  throughput, ingestion freshness, plus three latency families);
-* a thread-safe-ish snapshot store (single writer per snapshot, many readers);
-* ring buffers for alert / worker / redis-degradation history;
-* an alert engine that re-derives the current alert list from the latest
-  snapshot every time ``get_overview()`` is called.
-
-Snapshot families (contract — never reorder, the frontend keys off these names)
-------------------------------------------------------------------------------
-
-* ``ingestion``       — OHLCV freshness (``time`` of last 5m candle) and
-                        per-window row/symbol counts.
-* ``celery``          — workers, per-queue active/reserved/scheduled
-                        breakdown, Beat heartbeat (mtime of beat schedule).
-* ``redis``           — ping liveness + ping ms, INFO stats, per-queue
-                        ``LLEN`` for ``microstructure``, ``structural``,
-                        ``execution`` and the ``__no_default__`` sentinel.
-* ``db``              — SELECT 1 timing + SQLAlchemy pool counters.
-* ``score``           — 24h decisions throughput, ALLOW/BLOCK split, score
-                        distribution stats, age of last decision.
-* ``ingestion_latency`` — single-number summary of the OHLCV gap (mirror
-                        of ingestion.delay_seconds, kept on its own snapshot
-                        so the latency family has a uniform shape).
-* ``decision_latency``  — p50/p95/max of ``decisions_log.latency_ms``
-                        in the last hour.
-* ``processing_latency`` — Prometheus
-                        ``indicator_computation_duration_seconds`` histogram
-                        — derives p50/p95 estimates from bucket cumcount.
-
-Failure-tolerance contract
---------------------------
-
-Each refresher tracks consecutive failures.  A snapshot's status only flips
-to ``degraded`` / ``critical`` after **three** consecutive failed probes —
-this prevents a single network blip from triggering pages.  On success, the
-counter resets to zero immediately.
-
-Eventually-consistent — a snapshot is at most ``interval_seconds`` old plus
-the probe's own ``timeout``.  Tune the intervals at the top of the module
-before raising them; longer intervals tighten the budget on inspect/INFO
-calls in exchange for staler data.
+A snapshot only flips to ``degraded`` / ``critical`` after three
+consecutive failed probes (see ``FAIL_TOLERANCE``); successful probes
+reset the streak immediately.
 """
 
 from __future__ import annotations
@@ -542,28 +498,63 @@ class OperationalSnapshotService:
             self._apply_failure("db", f"{type(exc).__name__}: {exc}")
 
     async def _refresh_score(self) -> None:
-        """Throughput / quality / distribution from decisions_log (24 h)."""
+        """Score engine telemetry split into three sub-families (24 h window):
+
+        * ``throughput``   — decision counts, ALLOW/BLOCK split, throughput/min,
+                             age of last decision.
+        * ``quality``      — score moments (avg/min/max/stddev) plus pass-rate
+                             across L1/L2/L3.
+        * ``distribution`` — score histogram (bucketed 0-20, 20-40, 40-60,
+                             60-80, 80-100) so the operator can see where the
+                             mass sits without pulling the full ``/decisions``
+                             endpoint.
+
+        All three live under ``snapshot.data`` keyed by family so the frontend
+        can render three distinct panels off a single payload.
+        """
         from sqlalchemy import text
         from ..database import AsyncSessionLocal
 
-        sql = text(
+        agg_sql = text(
             """
             SELECT
-                COUNT(*)::int                                                         AS total,
-                COALESCE(SUM(CASE WHEN decision='ALLOW' THEN 1 ELSE 0 END), 0)::int  AS allow_count,
-                COALESCE(SUM(CASE WHEN decision='BLOCK' THEN 1 ELSE 0 END), 0)::int  AS block_count,
-                AVG(score)::float                                                    AS avg_score,
-                MIN(score)::float                                                    AS min_score,
-                MAX(score)::float                                                    AS max_score,
-                MAX(created_at)                                                      AS last_decision
+                COUNT(*)::int                                                          AS total,
+                COALESCE(SUM(CASE WHEN decision='ALLOW' THEN 1 ELSE 0 END), 0)::int   AS allow_count,
+                COALESCE(SUM(CASE WHEN decision='BLOCK' THEN 1 ELSE 0 END), 0)::int   AS block_count,
+                AVG(score)::float                                                     AS avg_score,
+                MIN(score)::float                                                     AS min_score,
+                MAX(score)::float                                                     AS max_score,
+                STDDEV_SAMP(score)::float                                             AS stddev_score,
+                COALESCE(SUM(CASE WHEN l1_pass IS TRUE THEN 1 ELSE 0 END), 0)::int   AS l1_pass_count,
+                COALESCE(SUM(CASE WHEN l2_pass IS TRUE THEN 1 ELSE 0 END), 0)::int   AS l2_pass_count,
+                COALESCE(SUM(CASE WHEN l3_pass IS TRUE THEN 1 ELSE 0 END), 0)::int   AS l3_pass_count,
+                MAX(created_at)                                                       AS last_decision
             FROM decisions_log
             WHERE created_at > NOW() - INTERVAL '24 hours'
-            LIMIT 1
+            """
+        )
+        dist_sql = text(
+            """
+            SELECT bucket, COUNT(*)::int AS count
+            FROM (
+                SELECT CASE
+                    WHEN score < 20  THEN '0-20'
+                    WHEN score < 40  THEN '20-40'
+                    WHEN score < 60  THEN '40-60'
+                    WHEN score < 80  THEN '60-80'
+                    ELSE '80-100'
+                END AS bucket
+                FROM decisions_log
+                WHERE created_at > NOW() - INTERVAL '24 hours'
+                  AND score IS NOT NULL
+            ) sub
+            GROUP BY bucket
             """
         )
         try:
             async with AsyncSessionLocal() as db:
-                row = (await asyncio.wait_for(db.execute(sql), timeout=DB_TIMEOUT_S)).one()
+                row = (await asyncio.wait_for(db.execute(agg_sql), timeout=DB_TIMEOUT_S)).one()
+                dist_rows = (await asyncio.wait_for(db.execute(dist_sql), timeout=DB_TIMEOUT_S)).all()
             now = datetime.now(timezone.utc)
             total = int(row.total or 0)
             last = row.last_decision
@@ -578,15 +569,49 @@ class OperationalSnapshotService:
                 status = "degraded"
             else:
                 status = "ok"
+
+            allow = int(row.allow_count or 0)
+            block = int(row.block_count or 0)
+            buckets_keys = ["0-20", "20-40", "40-60", "60-80", "80-100"]
+            dist_map = {k: 0 for k in buckets_keys}
+            for r in dist_rows:
+                if r.bucket in dist_map:
+                    dist_map[r.bucket] = int(r.count)
+
             data = {
-                "decisions_24h": total,
-                "allow_24h": int(row.allow_count or 0),
-                "block_24h": int(row.block_count or 0),
-                "allow_rate_24h": (int(row.allow_count or 0) / total) if total else 0.0,
-                "avg_score": float(row.avg_score) if row.avg_score is not None else None,
-                "min_score": float(row.min_score) if row.min_score is not None else None,
-                "max_score": float(row.max_score) if row.max_score is not None else None,
-                "last_decision": last.isoformat() if last else None,
+                # Sub-family payloads (referenced by name on the frontend).
+                "throughput": {
+                    "decisions_24h":             total,
+                    "allow_24h":                 allow,
+                    "block_24h":                 block,
+                    "allow_rate_24h":            (allow / total) if total else 0.0,
+                    "decisions_per_min":         total / (24.0 * 60.0) if total else 0.0,
+                    "last_decision":             last.isoformat() if last else None,
+                    "last_decision_age_seconds": age_seconds,
+                },
+                "quality": {
+                    "avg_score":     float(row.avg_score)    if row.avg_score    is not None else None,
+                    "min_score":     float(row.min_score)    if row.min_score    is not None else None,
+                    "max_score":     float(row.max_score)    if row.max_score    is not None else None,
+                    "stddev_score":  float(row.stddev_score) if row.stddev_score is not None else None,
+                    "l1_pass_rate":  (int(row.l1_pass_count or 0) / total) if total else 0.0,
+                    "l2_pass_rate":  (int(row.l2_pass_count or 0) / total) if total else 0.0,
+                    "l3_pass_rate":  (int(row.l3_pass_count or 0) / total) if total else 0.0,
+                },
+                "distribution": {
+                    "buckets":       [{"bucket": k, "count": dist_map[k]} for k in buckets_keys],
+                    "total_scored":  sum(dist_map.values()),
+                },
+                # Top-level mirrors kept for the legacy system-status view and
+                # the alert engine — never remove without auditing both.
+                "decisions_24h":             total,
+                "allow_24h":                 allow,
+                "block_24h":                 block,
+                "allow_rate_24h":            (allow / total) if total else 0.0,
+                "avg_score":                 float(row.avg_score) if row.avg_score is not None else None,
+                "min_score":                 float(row.min_score) if row.min_score is not None else None,
+                "max_score":                 float(row.max_score) if row.max_score is not None else None,
+                "last_decision":             last.isoformat() if last else None,
                 "last_decision_age_seconds": age_seconds,
             }
             self._apply_success("score", data, status)
@@ -605,40 +630,70 @@ class OperationalSnapshotService:
         self._refresh_processing_latency()
 
     async def _refresh_decision_latency(self) -> None:
+        """Decision lag = ``decisions_log.created_at - candle.time`` (24 h).
+
+        For each decision we LATERAL-join the most recent OHLCV 5m candle
+        for the same symbol whose ``time`` is at or before the decision —
+        that candle is the one the score engine read.  The lag is the
+        end-to-end delay from "candle is available" to "decision logged".
+
+        Window: 24 h (operational SLO horizon — short enough to surface
+        fresh regressions, long enough to dampen single-decision noise).
+        Output is in seconds, but reported in ms for symmetry with the
+        other latency families.
+        """
         from sqlalchemy import text
         from ..database import AsyncSessionLocal
 
         sql = text(
             """
+            WITH lags AS (
+                SELECT EXTRACT(EPOCH FROM (d.created_at - c.time))::float AS lag_s
+                FROM decisions_log d
+                CROSS JOIN LATERAL (
+                    SELECT o.time
+                    FROM ohlcv o
+                    WHERE o.symbol = d.symbol
+                      AND o.timeframe = '5m'
+                      AND o.time <= d.created_at
+                    ORDER BY o.time DESC
+                    LIMIT 1
+                ) c
+                WHERE d.created_at > NOW() - INTERVAL '24 hours'
+            )
             SELECT
-                percentile_cont(0.50) WITHIN GROUP (ORDER BY latency_ms)::float AS p50,
-                percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms)::float AS p95,
-                MAX(latency_ms)::int AS max_latency,
+                percentile_cont(0.50) WITHIN GROUP (ORDER BY lag_s)::float AS p50_s,
+                percentile_cont(0.95) WITHIN GROUP (ORDER BY lag_s)::float AS p95_s,
+                MAX(lag_s)::float    AS max_s,
                 COUNT(*)::int        AS samples
-            FROM decisions_log
-            WHERE created_at > NOW() - INTERVAL '1 hour'
-              AND latency_ms IS NOT NULL
-            LIMIT 1
+            FROM lags
+            WHERE lag_s IS NOT NULL AND lag_s >= 0
             """
         )
         try:
             async with AsyncSessionLocal() as db:
                 row = (await asyncio.wait_for(db.execute(sql), timeout=DB_TIMEOUT_S)).one()
             samples = int(row.samples or 0)
-            p95 = float(row.p95) if row.p95 is not None else None
+            p50_ms = (float(row.p50_s) * 1000.0) if row.p50_s is not None else None
+            p95_ms = (float(row.p95_s) * 1000.0) if row.p95_s is not None else None
+            max_ms = (float(row.max_s) * 1000.0) if row.max_s is not None else None
+            # Thresholds: a 5m candle + small processing budget means the
+            # decision should land within ~30s of the candle.  Anything
+            # over 5 min is a real backlog; over 15 min is critical.
             if samples == 0:
                 status = "unknown"
-            elif p95 is not None and p95 > 5000:
+            elif p95_ms is not None and p95_ms > 15 * 60_000:
                 status = "critical"
-            elif p95 is not None and p95 > 2000:
+            elif p95_ms is not None and p95_ms > 5 * 60_000:
                 status = "degraded"
             else:
                 status = "ok"
             self._apply_success("decision_latency", {
-                "p50_ms": float(row.p50) if row.p50 is not None else None,
-                "p95_ms": p95,
-                "max_ms": int(row.max_latency) if row.max_latency is not None else None,
-                "samples_1h": samples,
+                "p50_ms": p50_ms,
+                "p95_ms": p95_ms,
+                "max_ms": max_ms,
+                "samples_24h": samples,
+                "formula": "decisions_log.created_at - ohlcv.time (latest <= created_at)",
             }, status)
         except asyncio.TimeoutError:
             self._apply_failure("decision_latency", f"DB query timeout after {DB_TIMEOUT_S}s")
@@ -771,13 +826,13 @@ class OperationalSnapshotService:
             })
 
         p95 = self.decision_latency.data.get("p95_ms")
-        if isinstance(p95, (int, float)) and p95 > 2000:
+        if isinstance(p95, (int, float)) and p95 > 5 * 60_000:
             alerts.append({
-                "severity": "critical" if p95 > 5000 else "warning",
+                "severity": "critical" if p95 > 15 * 60_000 else "warning",
                 "category": "latency", "code": "latency_spike",
-                "impact": "Avaliação de score lenta (>2s p95) — possível gargalo em fetch_merged_indicators.",
+                "impact": "Lag candle→decisão >5 min (p95) — pipeline_scan ou score engine atrasados.",
                 "since": self.decision_latency.as_of.isoformat() if self.decision_latency.as_of else None,
-                "details": {"p95_ms": p95, "samples_1h": self.decision_latency.data.get("samples_1h")},
+                "details": {"p95_ms": p95, "samples_24h": self.decision_latency.data.get("samples_24h")},
             })
 
         proc_p95 = self.processing_latency.data.get("p95_ms")

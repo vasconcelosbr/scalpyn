@@ -128,14 +128,32 @@ interface OverviewResp {
       status?: string;
     }>;
     score: SnapshotEnvelope<{
+      throughput?: {
+        decisions_24h?: number;
+        allow_24h?: number;
+        block_24h?: number;
+        allow_rate_24h?: number;
+        decisions_per_min?: number;
+        last_decision?: string | null;
+        last_decision_age_seconds?: number | null;
+      };
+      quality?: {
+        avg_score?: number | null;
+        min_score?: number | null;
+        max_score?: number | null;
+        stddev_score?: number | null;
+        l1_pass_rate?: number;
+        l2_pass_rate?: number;
+        l3_pass_rate?: number;
+      };
+      distribution?: {
+        buckets?: { bucket: string; count: number }[];
+        total_scored?: number;
+      };
+      // legacy mirrors (kept by backend for /system-status)
       decisions_24h?: number;
-      allow_24h?: number;
-      block_24h?: number;
       allow_rate_24h?: number;
       avg_score?: number | null;
-      min_score?: number | null;
-      max_score?: number | null;
-      last_decision?: string | null;
       last_decision_age_seconds?: number | null;
     }>;
     ingestion_latency: SnapshotEnvelope<{
@@ -147,7 +165,8 @@ interface OverviewResp {
       p50_ms?: number | null;
       p95_ms?: number | null;
       max_ms?: number | null;
-      samples_1h?: number;
+      samples_24h?: number;
+      formula?: string;
     }>;
     processing_latency: SnapshotEnvelope<{
       available?: boolean;
@@ -354,6 +373,7 @@ function OperationalBanner({ data }: { data: OverviewResp | null }) {
   const style = STATUS_STYLES[overall] ?? STATUS_STYLES.unknown;
   const ing = data?.snapshots?.ingestion?.data;
   const delay = ing?.delay_seconds ?? null;
+  const decisions24h = data?.snapshots?.score?.data?.throughput?.decisions_24h ?? data?.snapshots?.score?.data?.decisions_24h ?? 0;
   return (
     <div
       className="rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4"
@@ -374,6 +394,7 @@ function OperationalBanner({ data }: { data: OverviewResp | null }) {
         <StatTile label="Atraso ingest" value={fmtAge(delay)} color={style.text} />
         <StatTile label="Símbolos" value={String(ing?.distinct_symbols ?? "—")} />
         <StatTile label="Candles (15m)" value={String(ing?.rows_window ?? "—")} />
+        <StatTile label="Decisões 24h" value={String(decisions24h)} />
         <StatTile
           label="Alertas ativos"
           value={String(data?.alert_count ?? 0)}
@@ -529,6 +550,95 @@ function QueueBreakdown({
   );
 }
 
+// ─── Score engine sub-panels (Throughput / Quality / Distribution, 24 h) ───
+function ScoreEnginePanels({ envelope }: { envelope: OverviewResp["snapshots"]["score"] | undefined }) {
+  const status = envelope?.status ?? "unknown";
+  const color = statusColor(status);
+  const streak = envelope?.failure_streak ?? 0;
+  const t = envelope?.data.throughput ?? {};
+  const q = envelope?.data.quality ?? {};
+  const d = envelope?.data.distribution ?? {};
+  const buckets = (d.buckets ?? []).map((b) => ({ ...b, label: b.bucket }));
+  const stageRows = [
+    { label: "L1 pass-rate", v: q.l1_pass_rate ?? null },
+    { label: "L2 pass-rate", v: q.l2_pass_rate ?? null },
+    { label: "L3 pass-rate", v: q.l3_pass_rate ?? null },
+  ];
+  return (
+    <Panel
+      title="Score engine — 24 h"
+      icon={<Sigma size={16} />}
+      right={
+        <span
+          className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
+          style={{ background: `${color}22`, color, border: `1px solid ${color}55` }}
+        >
+          {status}{streak > 0 ? ` (${streak}/3)` : ""}
+        </span>
+      }
+    >
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.elevated2, border: `1px solid ${C.border}` }}>
+          <p className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>Throughput</p>
+          <StatTile label="Decisões 24h" value={String(t.decisions_24h ?? 0)} />
+          <div className="grid grid-cols-2 gap-3">
+            <StatTile label="ALLOW" value={String(t.allow_24h ?? 0)} color={C.ok} />
+            <StatTile label="BLOCK" value={String(t.block_24h ?? 0)} color={C.critical} />
+          </div>
+          <div className="flex justify-between text-[12px]">
+            <span style={{ color: C.textTertiary }}>Por minuto</span>
+            <span className="tabular-nums" style={{ color: C.textPrimary }}>{(t.decisions_per_min ?? 0).toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between text-[12px]">
+            <span style={{ color: C.textTertiary }}>Última decisão</span>
+            <span className="tabular-nums" style={{ color: C.textPrimary }}>{fmtAge(t.last_decision_age_seconds)}</span>
+          </div>
+        </div>
+        <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.elevated2, border: `1px solid ${C.border}` }}>
+          <p className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>Qualidade</p>
+          <div className="grid grid-cols-2 gap-3">
+            <StatTile label="Score médio" value={q.avg_score != null ? q.avg_score.toFixed(1) : "—"} />
+            <StatTile label="σ" value={q.stddev_score != null ? q.stddev_score.toFixed(2) : "—"} />
+            <StatTile label="Min" value={q.min_score != null ? q.min_score.toFixed(1) : "—"} />
+            <StatTile label="Max" value={q.max_score != null ? q.max_score.toFixed(1) : "—"} />
+          </div>
+          <div className="border-t pt-2 flex flex-col gap-1" style={{ borderColor: C.border }}>
+            {stageRows.map((r) => (
+              <div key={r.label} className="flex justify-between text-[12px]">
+                <span style={{ color: C.textTertiary }}>{r.label}</span>
+                <span className="tabular-nums" style={{ color: C.textPrimary }}>{fmtPct(r.v)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.elevated2, border: `1px solid ${C.border}` }}>
+          <p className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>Distribuição de score</p>
+          {buckets.length === 0 || (d.total_scored ?? 0) === 0 ? (
+            <EmptyState message="Sem scores na janela." />
+          ) : (
+            <ResponsiveContainer width="100%" height={150}>
+              <BarChart data={buckets} margin={{ top: 6, right: 6, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 4" stroke="rgba(255,255,255,0.04)" vertical={false} />
+                <XAxis dataKey="label" tick={{ fill: C.textTertiary, fontSize: 11 }} tickLine={false} axisLine={false} />
+                <YAxis tick={{ fill: C.textTertiary, fontSize: 11 }} tickLine={false} axisLine={false} width={28} allowDecimals={false} />
+                <Tooltip contentStyle={{ background: C.elevated, border: `1px solid ${C.borderStrong}`, borderRadius: 12 }} labelStyle={{ color: C.textSecondary }} itemStyle={{ color: C.textPrimary }} />
+                <Bar dataKey="count" fill={C.purple} radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+          <div className="flex justify-between text-[12px]">
+            <span style={{ color: C.textTertiary }}>Total scored</span>
+            <span className="tabular-nums" style={{ color: C.textPrimary }}>{d.total_scored ?? 0}</span>
+          </div>
+        </div>
+      </div>
+      {envelope?.error && (
+        <p className="text-[11px]" style={{ color: C.critical }}>{envelope.error}</p>
+      )}
+    </Panel>
+  );
+}
+
 // ─── Snapshot grid ──────────────────────────────────────────────────────────
 function OpsSnapshotsGrid({ data }: { data: OverviewResp | null }) {
   const s = data?.snapshots;
@@ -585,17 +695,6 @@ function OpsSnapshotsGrid({ data }: { data: OverviewResp | null }) {
           { label: "Overflow", value: String(s?.db.data.overflow ?? 0) },
         ]}
       />
-      <SnapshotCard
-        title="Score engine (24 h)"
-        icon={<Sigma size={14} />}
-        envelope={s?.score}
-        rows={[
-          { label: "Decisões", value: String(s?.score.data.decisions_24h ?? 0) },
-          { label: "Taxa ALLOW", value: fmtPct(s?.score.data.allow_rate_24h ?? null) },
-          { label: "Score médio", value: s?.score.data.avg_score != null ? s.score.data.avg_score.toFixed(1) : "—" },
-          { label: "Última decisão", value: `${fmtAge(s?.score.data.last_decision_age_seconds)} atrás` },
-        ]}
-      />
       <LatencyCard
         ingestion={s?.ingestion_latency}
         decision={s?.decision_latency}
@@ -612,7 +711,7 @@ function LatencyCard({
   processing,
 }: {
   ingestion: SnapshotEnvelope<{ delay_seconds?: number | null }> | undefined;
-  decision: SnapshotEnvelope<{ p50_ms?: number | null; p95_ms?: number | null; samples_1h?: number }> | undefined;
+  decision: SnapshotEnvelope<{ p50_ms?: number | null; p95_ms?: number | null; samples_24h?: number; formula?: string }> | undefined;
   processing: SnapshotEnvelope<{ p50_ms?: number | null; p95_ms?: number | null; samples?: number; available?: boolean }> | undefined;
 }) {
   const ranks: Record<string, number> = { unknown: 0, ok: 1, degraded: 2, critical: 3 };
@@ -650,7 +749,7 @@ function LatencyCard({
           label="Decisão p50/p95"
           value={`${fmtMs(decision?.data.p50_ms)} / ${fmtMs(decision?.data.p95_ms)}`}
           status={decision?.status}
-          hint={`${decision?.data.samples_1h ?? 0} amostras`}
+          hint={`${decision?.data.samples_24h ?? 0} amostras (24h, candle→decisão)`}
         />
         <LatencyRow
           label="Compute p50/p95"
@@ -682,10 +781,9 @@ function LatencyRow({ label, value, status, hint }: { label: string; value: stri
   );
 }
 
-// ─── Events history ─────────────────────────────────────────────────────────
-function EventsHistoryPanel({ data }: { data: EventsResp | null }) {
+// ─── Events history body (rendered inside an on-demand panel) ──────────────
+function EventsHistoryBody({ data }: { data: EventsResp }) {
   const merged = useMemo(() => {
-    if (!data) return [];
     const all: (EventItem & { kind: string })[] = [
       ...(data.alert_history ?? []).map((e) => ({ ...e, kind: e.category ?? "alert" })),
       ...(data.worker_events ?? []).map((e) => ({ ...e, kind: e.category ?? "worker" })),
@@ -693,29 +791,24 @@ function EventsHistoryPanel({ data }: { data: EventsResp | null }) {
     ];
     return all.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime()).slice(0, 30);
   }, [data]);
+  if (merged.length === 0) return <EmptyState message="Sem eventos registrados nesta sessão." />;
   return (
-    <Panel title="Histórico de eventos" icon={<History size={16} />}>
-      {merged.length === 0 ? (
-        <EmptyState message="Sem eventos registrados nesta sessão." />
-      ) : (
-        <ul className="flex flex-col gap-1.5">
-          {merged.map((e, i) => {
-            const recovered = e.code.includes("recovered") || e.code === "worker_online";
-            const dotColor = recovered ? C.ok : e.kind === "redis" ? C.warn : C.critical;
-            return (
-              <li key={`${e.ts}-${e.code}-${i}`} className="flex items-center gap-3 text-[12px] py-1">
-                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: dotColor }} />
-                <span className="tabular-nums" style={{ color: C.textTertiary }}>{fmtTime(e.ts)}</span>
-                <span className="font-mono text-[11px] px-1.5 py-0.5 rounded" style={{ background: C.elevated2, color: C.textSecondary }}>
-                  {e.code}
-                </span>
-                <span className="truncate" style={{ color: C.textPrimary }}>{e.message}</span>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </Panel>
+    <ul className="flex flex-col gap-1.5">
+      {merged.map((e, i) => {
+        const recovered = e.code.includes("recovered") || e.code === "worker_online";
+        const dotColor = recovered ? C.ok : e.kind === "redis" ? C.warn : C.critical;
+        return (
+          <li key={`${e.ts}-${e.code}-${i}`} className="flex items-center gap-3 text-[12px] py-1">
+            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: dotColor }} />
+            <span className="tabular-nums" style={{ color: C.textTertiary }}>{fmtTime(e.ts)}</span>
+            <span className="font-mono text-[11px] px-1.5 py-0.5 rounded" style={{ background: C.elevated2, color: C.textSecondary }}>
+              {e.code}
+            </span>
+            <span className="truncate" style={{ color: C.textPrimary }}>{e.message}</span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -1000,14 +1093,33 @@ export default function PerformanceDashboardPage() {
   // Observability surface: ONLY two endpoints poll continuously, both
   // backed by the OperationalSnapshotService cache so handlers never block
   // on Celery inspect or Redis INFO.
+  // Only /overview polls — every observability number lives in that single
+  // payload (Task #225 contract).  /events is fetched on-demand to avoid a
+  // second background loop on dependencies that are already represented in
+  // the alert engine via the snapshot status fields.
   const overview = usePoll<OverviewResp>("/dashboard/overview", 10_000);
-  const events   = usePoll<EventsResp>("/dashboard/events?limit=50", 30_000);
+  const [eventsData, setEventsData] = useState<EventsResp | null>(null);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventsError, setEventsError] = useState<string | null>(null);
+
+  const fetchEvents = useCallback(async () => {
+    setEventsLoading(true);
+    try {
+      const res = await apiGet<EventsResp>("/dashboard/events?limit=50");
+      setEventsData(res);
+      setEventsError(null);
+    } catch (e: unknown) {
+      setEventsError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEventsLoading(false);
+    }
+  }, []);
 
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
 
   const refreshOps = () => {
     overview.refresh();
-    events.refresh();
+    fetchEvents();
   };
 
   return (
@@ -1032,7 +1144,29 @@ export default function PerformanceDashboardPage() {
         <OperationalBanner data={overview.data} />
         <AlertsPanel data={overview.data} />
         <OpsSnapshotsGrid data={overview.data} />
-        <EventsHistoryPanel data={events.data} />
+        <ScoreEnginePanels envelope={overview.data?.snapshots?.score} />
+
+        <Panel
+          title="Histórico de eventos"
+          icon={<History size={16} />}
+          right={
+            <button
+              onClick={fetchEvents}
+              disabled={eventsLoading}
+              className="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+              style={{ background: C.elevated2, border: `1px solid ${C.border}`, color: C.textPrimary }}
+            >
+              <RefreshCw size={12} className={eventsLoading ? "animate-spin" : ""} />
+              {eventsData ? "Recarregar" : "Carregar eventos"}
+            </button>
+          }
+        >
+          {eventsData ? (
+            <EventsHistoryBody data={eventsData} />
+          ) : (
+            <EmptyState message={eventsError ?? "Clique em Carregar eventos para buscar o histórico."} />
+          )}
+        </Panel>
 
         {/* Lazy analytics section — does not poll until the operator opens it. */}
         <button
@@ -1055,7 +1189,7 @@ export default function PerformanceDashboardPage() {
         </button>
         {analyticsOpen && <AnalyticsSection />}
 
-        {(overview.error || events.error) && (
+        {(overview.error || eventsError) && (
           <div className="text-[12px] px-3 py-2 rounded-lg" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", color: C.critical }}>
             Falha ao buscar dados de observabilidade. Veja o console para detalhes.
           </div>
