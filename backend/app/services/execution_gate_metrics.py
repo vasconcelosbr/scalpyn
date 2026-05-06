@@ -138,6 +138,33 @@ def record_orphans_cleaned(count: int) -> None:
         logger.debug("orphans counter inc failed: %s", exc)
 
 
+# Task #232 round 18 — single source of truth for the stage label
+# taxonomy. Internal call sites still pass the transition names
+# (``pool``/``metadata``/``profile_filter``/``blocking``) that match
+# the actual code boundaries inside ``pipeline_scan``; the metric
+# helpers below normalise to the runbook/dashboard taxonomy
+# (``POOL``/``L1``/``L2``/``L3``) before emitting so operators don't
+# have to do ``label_replace`` in PromQL.
+_STAGE_LABEL_ALIASES: dict[str, str] = {
+    "pool":            "POOL",
+    "metadata":        "L1",
+    "profile_filter":  "L2",
+    "blocking":        "L3",
+}
+
+
+def _canonical_stage(stage: str) -> str:
+    """Map an internal transition name to the runbook L1/L2/L3 label.
+
+    Already-canonical labels (``POOL``/``L1``/``L2``/``L3``) and any
+    unknown value are returned unchanged so the helper is safe for
+    ad-hoc call sites.
+    """
+    if stage is None:
+        return stage
+    return _STAGE_LABEL_ALIASES.get(stage.lower(), stage)
+
+
 def record_pipeline_stage(
     from_stage: str,
     to_stage: str,
@@ -146,6 +173,10 @@ def record_pipeline_stage(
 ) -> None:
     """Publish the funnel metrics for one ``from_stage → to_stage`` transition.
 
+    Stage labels are normalised to the runbook taxonomy
+    (``POOL``/``L1``/``L2``/``L3``) before emit so dashboards and
+    Grafana alerts can use the documented names directly.
+
     * ``scalpyn_pipeline_universe_size{stage=from_stage}`` — entered count.
     * ``scalpyn_pipeline_throughput_total{from_stage,to_stage}`` — survived (monotonic counter).
     * ``scalpyn_pipeline_rejection_rate{stage=from_stage,reason="any"}``
@@ -153,20 +184,22 @@ def record_pipeline_stage(
       published separately via :func:`record_pipeline_rejection_reason`.
     """
     _init()
+    fs = _canonical_stage(from_stage)
+    ts = _canonical_stage(to_stage)
     try:
         if _PIPELINE_UNIVERSE is not None:
-            _PIPELINE_UNIVERSE.labels(stage=from_stage).set(max(0, int(entered)))
+            _PIPELINE_UNIVERSE.labels(stage=fs).set(max(0, int(entered)))
         if _PIPELINE_THROUGHPUT is not None and survived > 0:
             _PIPELINE_THROUGHPUT.labels(
-                from_stage=from_stage, to_stage=to_stage,
+                from_stage=fs, to_stage=ts,
             ).inc(int(survived))
         if _PIPELINE_REJECTION is not None:
             rate = 0.0
             if entered > 0:
                 rate = max(0.0, min(1.0, 1.0 - (survived / entered)))
-            _PIPELINE_REJECTION.labels(stage=from_stage, reason="any").set(rate)
+            _PIPELINE_REJECTION.labels(stage=fs, reason="any").set(rate)
     except Exception as exc:  # pragma: no cover
-        logger.debug("pipeline stage metrics failed (%s→%s): %s", from_stage, to_stage, exc)
+        logger.debug("pipeline stage metrics failed (%s→%s): %s", fs, ts, exc)
 
 
 def record_pipeline_rejection_reason(
@@ -175,7 +208,10 @@ def record_pipeline_rejection_reason(
     rejected: int,
     entered: int,
 ) -> None:
-    """Publish ``scalpyn_pipeline_rejection_rate{stage,reason}`` for one reason."""
+    """Publish ``scalpyn_pipeline_rejection_rate{stage,reason}`` for one reason.
+
+    ``stage`` is normalised to the runbook L1/L2/L3 taxonomy.
+    """
     if entered <= 0 or _PIPELINE_REJECTION is None:
         _init()
     if _PIPELINE_REJECTION is None:
@@ -184,7 +220,9 @@ def record_pipeline_rejection_reason(
         rate = 0.0
         if entered > 0:
             rate = max(0.0, min(1.0, rejected / entered))
-        _PIPELINE_REJECTION.labels(stage=stage, reason=reason).set(rate)
+        _PIPELINE_REJECTION.labels(
+            stage=_canonical_stage(stage), reason=reason,
+        ).set(rate)
     except Exception as exc:  # pragma: no cover
         logger.debug("rejection reason metric failed (%s/%s): %s", stage, reason, exc)
 
