@@ -378,13 +378,32 @@ function EmptyState({ message }: { message: string }) {
   );
 }
 
-// ─── Operational banner (driven by /overview) ───────────────────────────────
+// ─── Operational banner ────────────────────────────────────────────────────
+// Cor do banner é estritamente derivada do atraso de ingestão (10/20 min,
+// conforme contrato da Task #225). A severidade operacional dos demais
+// subsistemas (Celery/Redis/DB/score/latência) é exposta separadamente
+// como um badge — assim Redis degradado não mascara a saúde da ingestão.
+type StatusKey = "ok" | "degraded" | "critical" | "unknown";
+function ingestionStatusFromDelay(delay: number | null | undefined): StatusKey {
+  if (delay == null) return "unknown";
+  if (delay > 1200) return "critical"; // > 20 min
+  if (delay > 600)  return "degraded"; // 10–20 min
+  return "ok";
+}
+
 function OperationalBanner({ data }: { data: OverviewResp | null }) {
-  const overall = data?.overall_status ?? "unknown";
-  const style = STATUS_STYLES[overall] ?? STATUS_STYLES.unknown;
   const ing = data?.snapshots?.ingestion?.data;
   const delay = ing?.delay_seconds ?? null;
-  const decisions24h = data?.snapshots?.score?.data?.throughput?.decisions_24h ?? data?.snapshots?.score?.data?.decisions_24h ?? 0;
+  const ingestionStatus = ingestionStatusFromDelay(delay);
+  const style = STATUS_STYLES[ingestionStatus] ?? STATUS_STYLES.unknown;
+
+  const overall = data?.overall_status ?? "unknown";
+  const opsStyle = STATUS_STYLES[overall] ?? STATUS_STYLES.unknown;
+
+  const decisions24h =
+    data?.snapshots?.score?.data?.throughput?.decisions_24h ??
+    data?.snapshots?.score?.data?.decisions_24h ??
+    0;
   return (
     <div
       className="rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4"
@@ -394,10 +413,10 @@ function OperationalBanner({ data }: { data: OverviewResp | null }) {
         <div style={{ color: style.text }}>{style.icon}</div>
         <div className="flex flex-col">
           <span className="text-[18px] font-bold" style={{ color: style.text }}>
-            {STATUS_LABEL_PT[overall] ?? overall}
+            {STATUS_LABEL_PT[ingestionStatus] ?? ingestionStatus}
           </span>
           <span className="text-[12px]" style={{ color: C.textSecondary }}>
-            Limiares de ingestão: verde &lt; 10 min · amarelo 10–20 min · vermelho &gt; 20 min · degrada após 3 falhas consecutivas
+            Banner = atraso de ingestão · verde &lt; 10 min · amarelo 10–20 min · vermelho &gt; 20 min
           </span>
         </div>
       </div>
@@ -411,6 +430,17 @@ function OperationalBanner({ data }: { data: OverviewResp | null }) {
           value={String(data?.alert_count ?? 0)}
           color={(data?.alert_count ?? 0) > 0 ? C.critical : C.ok}
         />
+        <div className="flex flex-col items-start gap-0.5">
+          <span className="text-[10px] uppercase tracking-wider" style={{ color: C.textTertiary }}>
+            Severidade operacional
+          </span>
+          <span
+            className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
+            style={{ background: `${opsStyle.text}22`, color: opsStyle.text, border: `1px solid ${opsStyle.text}55` }}
+          >
+            {STATUS_LABEL_PT[overall] ?? overall}
+          </span>
+        </div>
       </div>
     </div>
   );
