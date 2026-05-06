@@ -193,13 +193,7 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
     """Refresh OHLCV + indicators + spread/depth for a single symbol."""
     from ..services.feature_engine import FeatureEngine
     from ..services.market_data_service import market_data_service
-    from ..services.persistence import (
-        IndicatorWrite,
-        MarketMetadataWrite,
-        OhlcvCandle,
-        PersistenceJob,
-        get_persistence_service,
-    )
+    from ..database import run_db_task
     from ..services.seed_service import DEFAULT_INDICATORS
 
     async with semaphore:
@@ -244,45 +238,6 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
         except Exception:
             last_close = None
 
-<<<<<<< HEAD
-        await get_persistence_service().enqueue(
-            PersistenceJob(
-                domain="scheduler_combined",
-                symbol=symbol,
-                market_type="spot",
-                exchange=exchange_attr,
-                timeframe=TIMEFRAME,
-                candles=tuple(
-                    OhlcvCandle(
-                        time=row["time"],
-                        open=float(row["open"]),
-                        high=float(row["high"]),
-                        low=float(row["low"]),
-                        close=float(row["close"]),
-                        volume=float(row["volume"]),
-                        quote_volume=float(
-                            row.get("quote_volume")
-                            if row.get("quote_volume") is not None
-                            else float(row["close"]) * float(row["volume"])
-                        ),
-                    )
-                    for _, row in df.iterrows()
-                ),
-                indicator=IndicatorWrite(
-                    time=now,
-                    timeframe=TIMEFRAME,
-                    market_type="spot",
-                    indicators_json=json.dumps(results, default=str),
-                ),
-                market_metadata=MarketMetadataWrite(
-                    updated_at=now,
-                    price=last_close,
-                    spread_pct=spread_payload.get("spread_pct") if spread_payload else None,
-                    orderbook_depth_usdt=spread_payload.get("orderbook_depth_usdt") if spread_payload else None,
-                ),
-            )
-        )
-=======
         # ── Task #226: opt-in persistence queue path ──────────────────────
         from . import persistence as _pq
         if _pq.is_enabled():
@@ -353,7 +308,6 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
             await _refresh_market_metadata(db, symbol, df, spread_payload, now)
 
         await run_db_task(_persist, celery=False)
->>>>>>> f0bcd5b (Task #226: Persistence Architecture Refactor — foundation + scheduler migration)
 
         return (
             f"{symbol}: ok candles={len(df)} src={exchange_attr} "
@@ -363,7 +317,6 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
 
 async def _run_one_cycle(concurrency: int) -> None:
     from ..database import run_db_task
-    from ..services.persistence import get_persistence_service
 
     cycle_start = datetime.now(timezone.utc)
 
@@ -389,7 +342,6 @@ async def _run_one_cycle(concurrency: int) -> None:
             *[_refresh_one_symbol(s, semaphore) for s in symbols],
             return_exceptions=True,
         )
-        await get_persistence_service().join()
 
         ok = sum(1 for r in results if isinstance(r, str) and (": ok " in r or ": queued" in r))
         failed = sum(1 for r in results if isinstance(r, BaseException))

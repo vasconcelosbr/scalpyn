@@ -210,12 +210,7 @@ async def _refresh_market_metadata(db, symbol: str, df: pd.DataFrame, when: date
 async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
     from ..services.feature_engine import FeatureEngine
     from ..services.market_data_service import market_data_service
-    from ..services.persistence import (
-        IndicatorWrite,
-        MarketMetadataWrite,
-        PersistenceJob,
-        get_persistence_service,
-    )
+    from ..database import run_db_task
     from ..services.seed_service import DEFAULT_INDICATORS
     from ..utils.indicator_merge import envelop_results
 
@@ -306,7 +301,6 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
 
 async def _run_one_cycle(concurrency: int) -> None:
     from ..database import run_db_task
-    from ..services.persistence import get_persistence_service
 
     cycle_start = datetime.now(timezone.utc)
     try:
@@ -324,7 +318,6 @@ async def _run_one_cycle(concurrency: int) -> None:
             *[_refresh_one_symbol(s, semaphore) for s in symbols],
             return_exceptions=True,
         )
-        await get_persistence_service().join()
 
         ok = sum(1 for r in results if isinstance(r, str) and (": ok " in r or ": queued" in r))
         failed = sum(1 for r in results if isinstance(r, BaseException))

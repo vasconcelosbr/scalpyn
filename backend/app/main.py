@@ -83,19 +83,6 @@ async def lifespan(app: FastAPI):
         _log.warning("Pool stats logger failed to start: %s", e)
         pool_stats_task = None
 
-    # ── Persistence service ────────────────────────────────────────────────
-    stop_persistence = None
-    try:
-        from .services.persistence import (
-            start_persistence_service,
-            stop_persistence_service,
-        )
-        await start_persistence_service()
-        stop_persistence = stop_persistence_service
-    except Exception as e:
-        _log.warning("Persistence service failed to start: %s", e)
-        stop_persistence = None
-
     # ── Structural indicator scheduler (15 min, 1h OHLCV) ────────────────
     # Computes slow technical indicators: RSI, ADX, EMA, ATR, MACD, Bollinger,
     # PSAR, Z-score, OBV, Stochastic.  Disable via SKIP_STRUCTURAL_SCHEDULER=1.
@@ -246,7 +233,6 @@ async def lifespan(app: FastAPI):
         #      data loss for the very last cycle (Task #226 review fix).
         #   2. Drain + stop persistence workers AFTER producers are quiet.
         for _stop_fn, _name in [
-            (stop_persistence, "Persistence service"),
             (stop_structural_scheduler, "Structural scheduler"),
             (stop_microstructure_scheduler, "Microstructure scheduler"),
             (stop_background_scheduler, "Combined scheduler"),
@@ -434,67 +420,6 @@ async def health_check_schema():
             media_type="application/json",
         )
     return payload
-
-
-@app.get("/api/health/persistence")
-async def health_check_persistence():
-    from fastapi import Response
-    import json as _json
-    from .services.persistence import get_persistence_snapshot
-
-    raw_payload = get_persistence_snapshot()
-    raw_queue = raw_payload.get("queue") or {}
-    raw_workers = raw_payload.get("workers") or {}
-    raw_db = raw_payload.get("db") or {}
-    raw_pool = (raw_db.get("pool") or {}) if isinstance(raw_db, dict) else {}
-    public_payload = {
-        "ok": raw_payload.get("status") == "ok",
-        "queue": {
-            "size": int(raw_queue.get("size", 0) or 0),
-            "maxsize": int(raw_queue.get("maxsize", 0) or 0),
-            "utilization": float(raw_queue.get("utilization", 0.0) or 0.0),
-            "saturated": bool(raw_queue.get("saturated", False)),
-            "total_enqueued": int(raw_queue.get("total_enqueued", 0) or 0),
-            "total_processed": int(raw_queue.get("total_processed", 0) or 0),
-            "total_failed": int(raw_queue.get("total_failed", 0) or 0),
-        },
-        "workers": {
-            "configured": int(raw_workers.get("configured", 0) or 0),
-            "alive": int(raw_workers.get("alive", 0) or 0),
-        },
-        "db": {
-            "acquire_latency_ms_last": float(raw_db.get("acquire_latency_ms_last", 0.0) or 0.0),
-            "transaction_time_ms_last": float(raw_db.get("transaction_time_ms_last", 0.0) or 0.0),
-            "rollback_count": int(raw_db.get("rollback_count", 0) or 0),
-            "retry_count": int(raw_db.get("retry_count", 0) or 0),
-            "pool": {
-                "size": int(raw_pool.get("size", 0) or 0),
-                "checked_out": int(raw_pool.get("checked_out", 0) or 0),
-                "checked_in": int(raw_pool.get("checked_in", 0) or 0),
-                "overflow": int(raw_pool.get("overflow", 0) or 0),
-                "pool_size_limit": int(raw_pool.get("pool_size_limit", 0) or 0),
-                "max_overflow": int(raw_pool.get("max_overflow", 0) or 0),
-                "pool_timeout_seconds": int(raw_pool.get("pool_timeout_seconds", 0) or 0),
-                "saturated": raw_pool.get("saturated", False),
-                "overflow_exhausted": raw_pool.get("overflow_exhausted", False),
-            },
-        },
-        "domains": {
-            name: {
-                "processed": int(domain.get("processed", 0) or 0),
-                "failed": int(domain.get("failed", 0) or 0),
-            }
-            for name, domain in (raw_payload.get("domains") or {}).items()
-            if isinstance(domain, dict)
-        },
-    }
-    if not public_payload["ok"]:
-        return Response(
-            content=_json.dumps(public_payload),
-            status_code=503,
-            media_type="application/json",
-        )
-    return public_payload
 
 
 @app.get("/api/market/scores")

@@ -1,32 +1,3 @@
-<<<<<<< HEAD
-from .jobs import (
-    IndicatorWrite,
-    MarketMetadataWrite,
-    OhlcvCandle,
-    PersistenceJob,
-)
-from .service import (
-    PersistenceService,
-    get_persistence_service,
-    get_persistence_snapshot,
-    run_persistence_batch,
-    start_persistence_service,
-    stop_persistence_service,
-)
-
-__all__ = [
-    "IndicatorWrite",
-    "MarketMetadataWrite",
-    "OhlcvCandle",
-    "PersistenceJob",
-    "PersistenceService",
-    "get_persistence_service",
-    "get_persistence_snapshot",
-    "run_persistence_batch",
-    "start_persistence_service",
-    "stop_persistence_service",
-]
-=======
 """Persistence layer — UnitOfWork + Repositories + bounded queue + workers.
 
 Public surface (the only symbols modules outside ``services/persistence``
@@ -137,4 +108,3 @@ def get_queue_snapshot() -> dict[str, Any]:
         "depth_by_category": q.depth_by_category(),
         "workers_alive": workers_alive(),
     }
->>>>>>> f0bcd5b (Task #226: Persistence Architecture Refactor — foundation + scheduler migration)
