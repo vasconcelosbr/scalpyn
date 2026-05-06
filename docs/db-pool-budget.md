@@ -29,6 +29,7 @@ size X reached, connection timed out`.
 | `DB_POOL_TIMEOUT` | 30 s | `backend/app/database.py` default |
 | `WEB_CONCURRENCY` (uvicorn workers) | **2** | `backend/Dockerfile` runtime stage `ENV WEB_CONCURRENCY=2` and `backend/start.sh` default |
 | `CELERY_CONCURRENCY` (Celery task slots) | 1 | `backend/start.sh` `--concurrency="${CELERY_CONCURRENCY:-1}"` |
+| `BACKGROUND_SCHEDULER_CONCURRENCY` | **3** | `structural_scheduler_service.py`, `microstructure_scheduler_service.py` — max simultaneous `run_db_task` calls per scheduler cycle (was 8, reduced to prevent pool exhaustion) |
 | Celery beat | 1 | always 1 |
 
 > **`CELERY_CONCURRENCY` vs `CELERY_WORKERS`**: Celery uses `NullPool`

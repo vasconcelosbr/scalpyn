@@ -47,7 +47,7 @@ def _is_scheduler_group_drift(exc: BaseException) -> bool:
     return False
 
 DEFAULT_INTERVAL_SECONDS = 900        # 15 min
-DEFAULT_CONCURRENCY = 8
+DEFAULT_CONCURRENCY = 3
 DEFAULT_FIRST_RUN_DELAY_SECONDS = 30
 DEFAULT_OHLCV_LIMIT = 200
 TIMEFRAME = "1h"
@@ -170,13 +170,8 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
                 "grp": SCHEDULER_GROUP,
             })
     except Exception as exc:
-        # Schema drift: indicators.scheduler_group column missing in the DB
-        # (migration 032 not applied yet).  Log ONCE per process, force a
-        # rollback on the OUTER session so subsequent statements in the same
-        # _persist callback (_refresh_market_metadata) don't inherit an
-        # InFailedSQLTransactionError, then return cleanly.  Without this,
-        # ~30k errors/day flooded Sentry and the failed transaction state
-        # blocked connections from being recycled to the pool.
+        # Schema drift: indicators.scheduler_group column missing (migration 032).
+        # Log once per process; savepoint already rolled back — just return.
         if _is_scheduler_group_drift(exc):
             global _scheduler_group_drift_logged
             if not _scheduler_group_drift_logged:
@@ -188,21 +183,10 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
                     "docs/runbooks/scheduler-group-drift.md."
                 )
                 _scheduler_group_drift_logged = True
-            # Guard the rollback on the actual session state. After the
-            # savepoint context manager exits with an exception, SQLAlchemy
-            # may have already rolled the outer transaction back (depends on
-            # whether asyncpg poisoned the parent before the savepoint
-            # release).  Calling rollback() on a session that is no longer in
-            # a transaction raises InvalidRequestError; gating on
-            # in_transaction() avoids that and still drains the failed state
-            # in the case where the outer transaction is still alive.
-            try:
-                if db.in_transaction():
-                    await db.rollback()
-            except Exception as rb_exc:
-                logger.warning(
-                    "[STRUCT-SCHED] rollback after schema drift failed: %s", rb_exc
-                )
+            # begin_nested() already rolled back the savepoint; the outer
+            # transaction managed by run_db_task is still valid — do NOT call
+            # db.rollback() here (that would close the outer transaction and
+            # poison every subsequent statement in the same _persist callback).
             return
         logger.error("[STRUCT-SCHED] indicators insert failed for %s: %s", symbol, exc, exc_info=True)
 
