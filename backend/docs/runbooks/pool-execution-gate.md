@@ -101,3 +101,32 @@ Drops the column, the trigger, the partial index. Once the migration is
 reverted, immediately revert the Task #232 application code as well —
 `evaluate_signals` and `execute_buy` would otherwise issue
 `column "is_tradable" does not exist` and never trade.
+
+## One-way alias trigger (rolling-deploy gotcha)
+
+The compatibility trigger added by migration 043 mirrors **only**
+``is_approved → is_tradable`` (not the reverse). During the rolling
+window:
+
+* Toggling ``is_tradable`` directly (UI / new API) **does NOT** update
+  ``is_approved``. Any legacy SQL path still reading ``is_approved``
+  will see stale data until it is migrated.
+* Toggling ``is_approved`` (legacy SQL or pre-#232 deploys) DOES
+  propagate to ``is_tradable`` so the new execution gate stays in sync.
+
+Action items for operators:
+1. Once the N+2 deploy ships and ``is_approved`` is dropped (per the
+   deprecation plan above), audit any external scripts/dashboards
+   still reading ``is_approved`` before the column is removed.
+2. Until then, treat ``is_tradable`` as the source of truth for
+   execution authorisation; ``is_approved`` is read-only legacy.
+
+## L3 chain resolution (round 19 hardening)
+
+Both ``evaluate_signals`` and ``execute_buy`` resolve the per-user
+L3 chain with explicit ``level=`` predicates and deterministic
+ordering (``ORDER BY created_at ASC, id ASC``). Multi-watchlist
+tenants therefore get stable selection — the *oldest* L1/L2/L3 rooted
+at the active pool wins. If the chain cannot be fully resolved the
+cycle skips the user with ``reason=NO_L3_CHAIN`` (no permissive
+fallback to active+tradable).

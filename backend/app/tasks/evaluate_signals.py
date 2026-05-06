@@ -125,17 +125,32 @@ async def _evaluate_async():
                         ).limit(1)
                     )).scalars().first()
                     if pool_for_l3 is not None:
+                        # Round 19 — explicit ``level=`` predicates +
+                        # deterministic ordering so multi-watchlist
+                        # tenants get stable chain selection.
                         l1 = (await db.execute(select(PipelineWatchlist).where(
                             PipelineWatchlist.source_pool_id == pool_for_l3.id,
                             PipelineWatchlist.user_id == user.id,
+                            PipelineWatchlist.level == "L1",
+                        ).order_by(
+                            PipelineWatchlist.created_at.asc(),
+                            PipelineWatchlist.id.asc(),
                         ).limit(1))).scalars().first()
                         l2 = (await db.execute(select(PipelineWatchlist).where(
                             PipelineWatchlist.source_watchlist_id == l1.id,
                             PipelineWatchlist.user_id == user.id,
+                            PipelineWatchlist.level == "L2",
+                        ).order_by(
+                            PipelineWatchlist.created_at.asc(),
+                            PipelineWatchlist.id.asc(),
                         ).limit(1))).scalars().first() if l1 else None
                         l3 = (await db.execute(select(PipelineWatchlist).where(
                             PipelineWatchlist.source_watchlist_id == l2.id,
                             PipelineWatchlist.user_id == user.id,
+                            PipelineWatchlist.level == "L3",
+                        ).order_by(
+                            PipelineWatchlist.created_at.asc(),
+                            PipelineWatchlist.id.asc(),
                         ).limit(1))).scalars().first() if l2 else None
                         if l3 is not None:
                             l3_rows = (await db.execute(

@@ -339,11 +339,21 @@ async def _execute_buy_cycle_async() -> dict:
                 block_engine:  Optional[BlockEngine]  = None
                 l3_symbols: Optional[set] = None  # restrict candidates to L3 assets
 
+                # Task #232 round 19 — explicit ``level=`` constraints +
+                # deterministic ordering by ``created_at ASC, id ASC``
+                # so multi-watchlist tenants don't see ambiguous chain
+                # selection (and never spurious NO_L3_CHAIN). The model
+                # carries a ``level`` column ("POOL"/"L1"/"L2"/"L3");
+                # we anchor each hop to its expected level.
                 try:
                     l1_res = await db.execute(
                         select(PipelineWatchlist).where(
                             PipelineWatchlist.source_pool_id == pool.id,
                             PipelineWatchlist.user_id == user_id,
+                            PipelineWatchlist.level == "L1",
+                        ).order_by(
+                            PipelineWatchlist.created_at.asc(),
+                            PipelineWatchlist.id.asc(),
                         ).limit(1)
                     )
                     l1_wl = l1_res.scalars().first()
@@ -353,6 +363,10 @@ async def _execute_buy_cycle_async() -> dict:
                             select(PipelineWatchlist).where(
                                 PipelineWatchlist.source_watchlist_id == l1_wl.id,
                                 PipelineWatchlist.user_id == user_id,
+                                PipelineWatchlist.level == "L2",
+                            ).order_by(
+                                PipelineWatchlist.created_at.asc(),
+                                PipelineWatchlist.id.asc(),
                             ).limit(1)
                         )
                         l2_wl = l2_res.scalars().first()
@@ -362,6 +376,10 @@ async def _execute_buy_cycle_async() -> dict:
                                 select(PipelineWatchlist).where(
                                     PipelineWatchlist.source_watchlist_id == l2_wl.id,
                                     PipelineWatchlist.user_id == user_id,
+                                    PipelineWatchlist.level == "L3",
+                                ).order_by(
+                                    PipelineWatchlist.created_at.asc(),
+                                    PipelineWatchlist.id.asc(),
                                 ).limit(1)
                             )
                             l3_wl = l3_res.scalars().first()
