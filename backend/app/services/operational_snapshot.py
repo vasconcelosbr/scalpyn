@@ -141,6 +141,11 @@ class OperationalSnapshotService:
 
         # Track previously-seen alert codes so we only push transitions.
         self._prev_alert_codes: set[str] = set()
+        # First-fire timestamp per active alert code, persisted across
+        # snapshot refreshes so the dashboard's `since` field is stable
+        # (otherwise it would "move forward" every probe interval as
+        # `snapshot.as_of` advances).  Cleared when an alert resolves.
+        self._alert_first_seen: Dict[str, str] = {}
         self._prev_workers: set[str] = set()
         self._prev_redis_alive: Optional[bool] = None
 
@@ -1029,7 +1034,9 @@ class OperationalSnapshotService:
 
         # Push *new* alert codes into history; clear codes that healed.
         cur_codes = {a["code"] for a in alerts}
+        now_iso = now.isoformat()
         for code in cur_codes - self._prev_alert_codes:
+            self._alert_first_seen[code] = now_iso
             matching = next((a for a in alerts if a["code"] == code), None)
             if matching:
                 self._alert_history.append(_Event(
@@ -1039,11 +1046,21 @@ class OperationalSnapshotService:
                     "alert",
                 ))
         for code in self._prev_alert_codes - cur_codes:
+            self._alert_first_seen.pop(code, None)
             self._alert_history.append(_Event(
                 now, f"{code}_recovered",
                 f"Alerta resolvido: {code}", {}, "alert",
             ))
         self._prev_alert_codes = cur_codes
+
+        # Stamp every active alert with its persisted first-seen timestamp
+        # so `since` reflects the true alert start, not the snapshot's
+        # rolling `as_of`.  Falls back to the snapshot timestamp only if
+        # the alert was already firing before this code was deployed.
+        for a in alerts:
+            persisted = self._alert_first_seen.get(a["code"])
+            if persisted:
+                a["since"] = persisted
 
         return alerts
 

@@ -482,14 +482,25 @@ async def get_alerts(_user_id: UUID = Depends(get_current_user_id)):
     return get_ops_service().get_alerts()
 
 
-@router.get("/events", response_model=OperationalEventsResponse)
+@router.get("/events", response_model=None)
 async def get_events(
+    category: Optional[str] = Query(
+        None,
+        description="alert | worker | redis | all. Omit for the three-bucket envelope.",
+    ),
     limit: int = Query(50, ge=1, le=100),
     _user_id: UUID = Depends(get_current_user_id),
 ):
-    """Unfiltered event stream — all three buckets together
-    (``alert_history``, ``worker_events``, ``redis_degradations``)."""
-    return get_ops_service().get_events(category=None, limit=limit)
+    """Operational event stream.
+
+    Without ``category``: returns :class:`OperationalEventsResponse`
+    (three buckets together — ``alert_history``, ``worker_events``,
+    ``redis_degradations``).
+    With ``category``: returns :class:`OperationalEventsFilteredResponse`
+    (single ``events`` array). The path-based variant
+    ``/events/{category}`` is kept as a strict-typed alias.
+    """
+    return get_ops_service().get_events(category=category, limit=limit)
 
 
 @router.get(
@@ -501,8 +512,8 @@ async def get_events_filtered(
     limit: int = Query(50, ge=1, le=100),
     _user_id: UUID = Depends(get_current_user_id),
 ):
-    """Filtered event stream — single category (``alert``, ``worker``,
-    ``redis``, or ``all``)."""
+    """Strict-typed alias for ``/events?category={category}`` — single
+    category (``alert``, ``worker``, ``redis``, or ``all``)."""
     return get_ops_service().get_events(category=category, limit=limit)
 
 
