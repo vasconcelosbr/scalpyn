@@ -549,7 +549,7 @@ async def _execute_buy_cycle_async() -> dict:
                     # scoring+signal+block+risk+capital; would buy if
                     # tradable. Per-symbol skip log + counter.
                     if not tradable_by_symbol.get(symbol, False):
-                        record_not_tradable("execute_buy")
+                        record_not_tradable("execute_buy", symbol)
                         logger.info(
                             "[execute_buy] SKIPPED %s reason=NOT_TRADABLE "
                             "score=%.2f size_usdt=%.2f — qualified buy "

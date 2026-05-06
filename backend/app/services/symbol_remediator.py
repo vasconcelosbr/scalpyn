@@ -416,11 +416,18 @@ class SymbolRemediator:
                     executed=False,  # diagnostic only — never writes
                     extra={"status": STATUS_PENDING_TRADABLE},
                 ))
-            if len(pending) > 50:
-                logger.info(
-                    "[AUDIT-FIX] PENDING_TRADABLE — %d symbols flagged "
-                    "(showing first 50 in report)",
-                    len(pending),
+            # Round 20 — align with runbook contract: WARNING severity,
+            # ``[POOL-AUDIT]`` prefix, bounded sample of offending
+            # symbols. Logged on every cycle that finds ≥ 1 row so the
+            # backlog stays visible in operator dashboards.
+            if pending:
+                sample = ", ".join(pending[:10])
+                more = f" (+{len(pending) - 10} more)" if len(pending) > 10 else ""
+                logger.warning(
+                    "[POOL-AUDIT] PENDING_TRADABLE — %d symbols active "
+                    "but not tradable for >7 days: %s%s. Operator must "
+                    "flip is_tradable manually.",
+                    len(pending), sample, more,
                 )
         except Exception as exc:
             logger.debug("[AUDIT-FIX] pending_tradable scan failed: %s", exc)

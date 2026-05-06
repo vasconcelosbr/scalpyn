@@ -71,10 +71,15 @@ def _init() -> None:
     global _PIPELINE_UNIVERSE, _PIPELINE_THROUGHPUT, _PIPELINE_REJECTION, _COLLECT_UNIVERSE
     if not _PROM_OK or _NOT_TRADABLE is not None:
         return
+    # Round 20 — counter is now keyed by ``{task, symbol}`` to match the
+    # acceptance contract. Cardinality is bounded by the active pool
+    # (operator-curated), which is the same set already labeled by
+    # ``scalpyn_pipeline_universe_size`` and ``scalpyn_collect_universe_size``,
+    # so per-symbol granularity is safe.
     _NOT_TRADABLE = Counter(
         "scalpyn_signals_skipped_not_tradable_total",
         "Buy signals skipped because pool_coins.is_tradable is false (Task #232).",
-        ["task"],
+        ["task", "symbol"],
     )
     _ORPHANS_CLEANED = Counter(
         "scalpyn_pipeline_orphans_cleaned_total",
@@ -112,15 +117,20 @@ def _init() -> None:
     )
 
 
-def record_not_tradable(task: str, count: int = 1) -> None:
-    """Increment the NOT_TRADABLE skip counter for ``task``."""
+def record_not_tradable(task: str, symbol: str = "_unknown", count: int = 1) -> None:
+    """Increment ``scalpyn_signals_skipped_not_tradable_total{task,symbol}``.
+
+    ``symbol`` defaults to a placeholder so the helper stays
+    backward-compatible with ad-hoc callers that don't have the symbol
+    in scope. All execution-gate call sites pass it explicitly.
+    """
     if count <= 0:
         return
     _init()
     if _NOT_TRADABLE is None:
         return
     try:
-        _NOT_TRADABLE.labels(task=task).inc(count)
+        _NOT_TRADABLE.labels(task=task, symbol=symbol).inc(count)
     except Exception as exc:  # pragma: no cover
         logger.debug("not_tradable counter inc failed: %s", exc)
 

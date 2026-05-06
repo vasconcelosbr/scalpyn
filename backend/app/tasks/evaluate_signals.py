@@ -243,7 +243,7 @@ async def _evaluate_async():
                     # below mirrors execute_buy: is_tradable AND (when
                     # the chain resolved) L3 membership.
                     if not tradable_by_symbol.get(symbol, False):
-                        record_not_tradable("evaluate_signals")
+                        record_not_tradable("evaluate_signals", symbol)
                         logger.info(
                             "[evaluate_signals] SKIPPED %s reason=NOT_TRADABLE "
                             "score=%.2f direction=%s — qualified buy blocked by "
