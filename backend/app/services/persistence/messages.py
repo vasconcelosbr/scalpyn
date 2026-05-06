@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
-Category = str  # one of: "ingest", "compute", "critical"
+Category = str  # one of: "ingest", "compute", "scheduler", "critical"
 
 
 @dataclass(frozen=True)

@@ -326,7 +326,7 @@ async def _run_one_cycle(concurrency: int) -> None:
         )
         await get_persistence_service().join()
 
-        ok = sum(1 for r in results if isinstance(r, str) and ": ok " in r)
+        ok = sum(1 for r in results if isinstance(r, str) and (": ok " in r or ": queued" in r))
         failed = sum(1 for r in results if isinstance(r, BaseException))
         duration = (datetime.now(timezone.utc) - cycle_start).total_seconds()
         logger.info("[STRUCT-SCHED] cycle done — %d/%d ok, %d exceptions, %.1fs",
