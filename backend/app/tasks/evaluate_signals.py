@@ -69,17 +69,45 @@ async def _evaluate_async():
                 )
                 from ..services.indicator_validity import unwrap_envelope_value
 
-                # Task #232: execution-side filter is now the explicit
-                # ``is_tradable`` gate. ``is_active`` alone authorises
-                # ingestion; lifting a symbol onto the trading critical
-                # path requires a separate operator action. The lint
-                # test ``test_pool_queries_filter_execution_gate``
-                # enforces this for every execution-side module.
-                pool_res = await db.execute(text("""
+                # Task #232: ingestion vs execution gate split.
+                #
+                # We deliberately fetch BOTH the ingestion universe
+                # (``is_active=true``) and the tradable subset
+                # (``is_active=true AND is_tradable=true``) instead of
+                # pre-filtering only on the tradable predicate. The
+                # set difference is the audit signal the operator
+                # cares about: "these symbols scored well enough to
+                # be candidates but I have not authorised them yet."
+                # Each one emits ``SKIPPED reason=NOT_TRADABLE`` and
+                # increments ``scalpyn_signals_skipped_not_tradable_total``
+                # so the dashboard does not silently hide them.
+                from ..services.execution_gate_metrics import record_not_tradable
+
+                active_res = await db.execute(text("""
+                    SELECT DISTINCT symbol FROM pool_coins
+                    WHERE is_active = true
+                """))
+                active_symbols = {r.symbol for r in active_res.fetchall()}
+
+                tradable_res = await db.execute(text("""
                     SELECT DISTINCT symbol FROM pool_coins
                     WHERE is_active = true AND is_tradable = true
                 """))
-                pool_symbols = [r.symbol for r in pool_res.fetchall()]
+                pool_symbols = [r.symbol for r in tradable_res.fetchall()]
+
+                not_tradable = active_symbols - set(pool_symbols)
+                if not_tradable:
+                    record_not_tradable("evaluate_signals", len(not_tradable))
+                    # One log line per cycle, not per symbol — a
+                    # 200-symbol pool would otherwise flood the
+                    # WARNING channel every minute.
+                    logger.info(
+                        "[evaluate_signals] SKIPPED reason=NOT_TRADABLE "
+                        "count=%d symbols=%s",
+                        len(not_tradable),
+                        sorted(not_tradable)[:10],
+                    )
+
                 if not pool_symbols:
                     continue
 

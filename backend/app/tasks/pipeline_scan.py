@@ -1751,6 +1751,42 @@ async def _run_pipeline_scan():
                     await db.commit()
                     _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY = True
 
+        # Task #232 — orphan cleanup. ``pipeline_watchlist_assets`` rows
+        # whose backing ``pool_coins`` entry was deleted between two
+        # scans would otherwise stay forever (the upsert path only
+        # touches symbols it sees in the current cycle). One bounded
+        # DELETE per scan keeps the watchlist faithful to the pool.
+        try:
+            orphan_res = await db.execute(text("""
+                DELETE FROM pipeline_watchlist_assets pwa
+                 WHERE NOT EXISTS (
+                       SELECT 1 FROM pool_coins pc
+                        WHERE pc.symbol = pwa.symbol
+                 )
+                RETURNING pwa.symbol
+            """))
+            orphan_rows = orphan_res.fetchall()
+            if orphan_rows:
+                from ..services.execution_gate_metrics import record_orphans_cleaned
+                record_orphans_cleaned(len(orphan_rows))
+                await db.commit()
+                logger.info(
+                    "[PipelineScan] Cleaned %d orphan watchlist asset(s) "
+                    "(symbol no longer in pool_coins): %s",
+                    len(orphan_rows),
+                    sorted({r.symbol for r in orphan_rows})[:20],
+                )
+            else:
+                # Roll back the empty DELETE so we do not hold a
+                # write lock on the table while the scan loop runs.
+                await db.rollback()
+        except Exception as exc:
+            logger.warning("[PipelineScan] orphan cleanup failed: %s", exc)
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+
         # Load all pipeline watchlists with auto_refresh=true
         wl_rows = (await db.execute(
             select(PipelineWatchlist).where(PipelineWatchlist.auto_refresh == True)

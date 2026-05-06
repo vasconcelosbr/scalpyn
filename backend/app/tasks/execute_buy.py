@@ -259,12 +259,37 @@ async def _execute_buy_cycle_async() -> dict:
                 # the ingestion gate; trading authorisation is a
                 # separate operator decision.  Enforced by lint test
                 # ``test_pool_queries_filter_execution_gate``.
+                #
+                # We also report the active-but-not-tradable subset so
+                # the operator can see how many symbols would have been
+                # eligible buys had they been authorised. See
+                # ``execution_gate_metrics.record_not_tradable``.
+                from ..services.execution_gate_metrics import record_not_tradable
+
+                cap = max(max_opps * 20, 50)
+                active_res = await db.execute(text("""
+                    SELECT symbol FROM pool_coins
+                    WHERE  is_active = true
+                    LIMIT  :cap
+                """), {"cap": cap})
+                active_symbols = {r.symbol for r in active_res.fetchall()}
+
                 pool_res = await db.execute(text("""
                     SELECT symbol FROM pool_coins
                     WHERE  is_active = true AND is_tradable = true
                     LIMIT  :cap
-                """), {"cap": max(max_opps * 20, 50)})
+                """), {"cap": cap})
                 pool_symbols = [r.symbol for r in pool_res.fetchall()]
+
+                not_tradable = active_symbols - set(pool_symbols)
+                if not_tradable:
+                    record_not_tradable("execute_buy", len(not_tradable))
+                    logger.info(
+                        "[execute_buy] SKIPPED reason=NOT_TRADABLE "
+                        "count=%d symbols=%s",
+                        len(not_tradable),
+                        sorted(not_tradable)[:10],
+                    )
 
                 if not pool_symbols:
                     logger.debug(

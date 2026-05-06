@@ -23,6 +23,7 @@ from __future__ import annotations
 import ast
 import inspect
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -254,52 +255,97 @@ _EXECUTION_DECISION_FILES = (
 )
 
 
+_TRIPLE_QUOTED_SQL = re.compile(r'"""([\s\S]*?)"""|\'\'\'([\s\S]*?)\'\'\'')
+
+
+def _select_pool_coins_statements(code: str) -> list[str]:
+    """Return every SQL statement (triple-quoted text) that performs a
+    ``SELECT ... FROM pool_coins`` in ``code`` (already lowercased &
+    comment-stripped). Non-SELECT statements (DELETE/UPDATE) and Python
+    identifiers that happen to contain "select" are excluded by design.
+    """
+    out: list[str] = []
+    for m in _TRIPLE_QUOTED_SQL.finditer(code):
+        body = m.group(1) or m.group(2) or ""
+        stmt = body.strip()
+        if not stmt.startswith("select"):
+            continue
+        if "from pool_coins" not in stmt:
+            continue
+        out.append(stmt)
+    return out
+
+
 @pytest.mark.parametrize("module_name", _INGESTION_DECISION_FILES)
 def test_pool_queries_filter_is_active(module_name: str) -> None:
-    """Ingestion-side decision tasks must filter on ``is_active = true``.
+    """Ingestion-side decision tasks must filter on ``is_active = true``
+    in every ``SELECT ... FROM pool_coins`` candidate-universe query.
 
     They MUST NOT additionally require ``is_tradable`` — that would
     starve the funnel and the scoring engine of candidates the operator
     has not yet authorised for live trading.
+
+    Non-SELECT statements (e.g. the orphan-cleanup ``DELETE FROM
+    pool_coins`` or the ``DELETE … WHERE NOT EXISTS (SELECT 1 FROM
+    pool_coins)`` pattern) are intentionally exempt — they are not
+    candidate-universe reads.
     """
     module = __import__(module_name, fromlist=["__name__"])
     src = inspect.getsource(module)
     code = _strip_comments(src).lower()
-    if "from pool_coins" not in code:
+    selects = _select_pool_coins_statements(code)
+    if not selects:
         return
-    assert "is_active" in code, (
-        f"{module_name}: queries FROM pool_coins but never references "
-        "is_active — ingestion-universe filter is missing."
-    )
-    assert "is_active = true" in code or "is_active=true" in code, (
-        f"{module_name}: pool_coins query references is_active but the "
-        "exact ``is_active = true`` predicate is missing."
-    )
-    assert "is_tradable" not in code, (
-        f"{module_name}: ingestion-side task must NOT filter on "
-        "is_tradable — that gate belongs to execution-side tasks only."
-    )
+    for stmt in selects:
+        assert "is_active = true" in stmt or "is_active=true" in stmt, (
+            f"{module_name}: SELECT FROM pool_coins missing "
+            "``is_active = true`` predicate. Statement was:\n"
+            f"{stmt[:200]}…"
+        )
+        assert "is_tradable" not in stmt, (
+            f"{module_name}: ingestion-side SELECT must NOT filter on "
+            "is_tradable — that gate belongs to execution-side tasks "
+            f"only. Statement was:\n{stmt[:200]}…"
+        )
 
 
 @pytest.mark.parametrize("module_name", _EXECUTION_DECISION_FILES)
 def test_pool_queries_filter_execution_gate(module_name: str) -> None:
-    """Execution-side decision tasks must filter on
-    ``is_active = true AND is_tradable = true``.
+    """Execution-side decision tasks must contain at least one
+    ``SELECT FROM pool_coins`` carrying both ``is_active = true`` AND
+    ``is_tradable = true`` (the live trading critical path) AND a
+    parallel ``is_active = true``-only SELECT used to surface the
+    ``NOT_TRADABLE`` skip telemetry (Task #232).
 
-    ``is_active`` alone admits symbols still pending operator trading
-    authorisation onto the live critical path; ``is_tradable`` alone
-    skips the ingestion check and would re-enable a paused symbol.
-    Both predicates are required.
+    Two queries side-by-side are the canonical pattern — a single
+    pre-filter would silently hide every "scored but unauthorised"
+    symbol from the dashboards, defeating the audit purpose.
     """
     module = __import__(module_name, fromlist=["__name__"])
     src = inspect.getsource(module)
     code = _strip_comments(src).lower()
-    if "from pool_coins" not in code:
+    selects = _select_pool_coins_statements(code)
+    if not selects:
         return
-    assert "is_active = true" in code or "is_active=true" in code, (
-        f"{module_name}: pool_coins query missing ``is_active = true``."
+    assert any(
+        ("is_active = true" in s or "is_active=true" in s)
+        and ("is_tradable = true" in s or "is_tradable=true" in s)
+        for s in selects
+    ), (
+        f"{module_name}: no SELECT FROM pool_coins gates on both "
+        "``is_active = true`` AND ``is_tradable = true`` — execution "
+        "critical path is open."
     )
-    assert "is_tradable = true" in code or "is_tradable=true" in code, (
-        f"{module_name}: execution-side task must require "
-        "``is_tradable = true`` — Task #232 split execution from ingestion."
+    assert any(
+        ("is_active = true" in s or "is_active=true" in s)
+        and "is_tradable" not in s
+        for s in selects
+    ), (
+        f"{module_name}: missing parallel SELECT on ``is_active = true`` "
+        "alone for the NOT_TRADABLE audit metric (Task #232 — see "
+        "execution_gate_metrics.record_not_tradable)."
+    )
+    assert "not_tradable" in code or "record_not_tradable" in code, (
+        f"{module_name}: NOT_TRADABLE skip telemetry call missing — "
+        "import and call execution_gate_metrics.record_not_tradable."
     )
