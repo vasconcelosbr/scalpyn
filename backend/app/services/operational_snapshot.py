@@ -1001,6 +1001,26 @@ class OperationalSnapshotService:
                     "pool_state": pool_state,
                 },
             })
+        elif pool_state == "STALLED" and delay is None:
+            # Task #232 — active symbols exist but no candle has ever
+            # landed in the freshness window. Treat as a hard outage:
+            # delay=None ⇒ unknown but ≥ window, so emit ingestion_stale
+            # critical instead of letting the alert engine skip on
+            # ``isinstance(delay, (int, float))``.
+            alerts.append({
+                "severity": "critical", "category": "ingestion", "code": "ingestion_stale",
+                "impact": (
+                    "Nenhuma vela OHLCV recente para os símbolos ativos — "
+                    "ingestão parada (delay desconhecido, >= janela de freshness)."
+                ),
+                "since": self.ingestion.as_of.isoformat() if self.ingestion.as_of else None,
+                "details": {
+                    "delay_seconds": None,
+                    "last_candle": self.ingestion.data.get("last_candle"),
+                    "active_pool_count": active_pool_count or 0,
+                    "pool_state": pool_state,
+                },
+            })
         elif isinstance(delay, (int, float)):
             if delay > 1200:
                 alerts.append({
