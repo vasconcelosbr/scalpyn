@@ -248,6 +248,14 @@ def test_no_silent_default_queue_fallback() -> None:
 _INGESTION_DECISION_FILES = (
     "app.tasks.pipeline_scan",
     "app.tasks.compute_scores",
+    # Task #232 — broaden coverage beyond the four decision modules:
+    # every ingestion-side reader of the candidate universe must use
+    # the ``is_active`` gate, never ``is_tradable``.
+    "app.services.pool_service",
+    "app.services.scheduler_service",
+    "app.services.structural_scheduler_service",
+    "app.services.microstructure_scheduler_service",
+    "app.services.gate_ws_leader",
 )
 _EXECUTION_DECISION_FILES = (
     "app.tasks.evaluate_signals",

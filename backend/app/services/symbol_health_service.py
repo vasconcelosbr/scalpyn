@@ -441,14 +441,11 @@ def _classify(
         probe_errors=errors,
     )
 
-    # Inactive rows (operator-disabled via ``pool_coins.is_active=false``)
-    # are NOT a pool inconsistency. Treat as OK to keep the public
-    # 5-status taxonomy and avoid surfacing them in rule-1 alerts or
-    # the remediator.
-    if pool_exists and not raw_is_active:
-        record.status = STATUS_OK
-        return record
-
+    # Task #232: ``is_approved`` is now an alias of ``is_active``, so
+    # an inactive row falls straight into NOT_APPROVED and the
+    # remediator's ``_bulk_approve`` (which flips is_active=TRUE) will
+    # repair it on the next cycle. Do NOT short-circuit to STATUS_OK
+    # here — that would make inactive rows invisible to remediation.
     if not is_approved:
         record.status = STATUS_NOT_APPROVED
         return record

@@ -95,9 +95,12 @@ def _fresh_ind() -> dict:
     }
 
 
-def test_classifier_treats_inactive_row_as_ok() -> None:
-    """Operator-disabled (is_active=false) rows are intentionally OK
-    so they do not flood the remediator (Task #232)."""
+def test_classifier_flags_inactive_row_as_not_approved() -> None:
+    """Inactive (is_active=false) rows MUST surface as NOT_APPROVED so
+    the remediator's ``_bulk_approve`` (which flips is_active=TRUE)
+    can repair them. Returning STATUS_OK here would make reactivation
+    unreachable (Task #232 reviewer feedback)."""
+    from app.services.symbol_health_service import STATUS_NOT_APPROVED
     record = _classify(
         symbol="BTC_USDT",
         pool=_pool(is_active=False, is_approved=True),
@@ -107,7 +110,8 @@ def test_classifier_treats_inactive_row_as_ok() -> None:
         indicator_max_age=600,
         buffer_newest_max_age=120,
     )
-    assert record.status == STATUS_OK
+    assert record.status == STATUS_NOT_APPROVED
+    assert record.is_active is False
 
 
 def test_classifier_flags_active_but_unapproved_row_as_not_approved() -> None:

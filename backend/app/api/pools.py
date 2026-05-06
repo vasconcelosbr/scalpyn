@@ -2,9 +2,10 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from uuid import UUID
 
 from ..database import get_db
@@ -289,16 +290,12 @@ async def bulk_add_pool_coins(
     }
 
 
-class _TradableTogglePayload(__import__("pydantic").BaseModel):
-    """Strict body for POST /api/pools/{id}/coins/{symbol}/tradable.
-
-    Both keys accepted for one rolling deploy; ``tradable`` wins when
-    both are present. Pydantic enforces strict bool — string ``"false"``
-    or numeric coercions are rejected at validation time.
+class _TradableTogglePayload(BaseModel):
+    """Body for the tradable toggle. ``tradable`` is canonical;
+    ``is_tradable`` is accepted as a one-deploy backwards-compat alias.
     """
-    model_config = {"extra": "ignore"}
-    tradable: bool | None = None
-    is_tradable: bool | None = None
+    tradable: Optional[bool] = None
+    is_tradable: Optional[bool] = None
 
 
 @router.post("/{pool_id}/coins/{symbol}/tradable")
@@ -332,16 +329,12 @@ async def set_pool_coin_tradable(
     if not coin:
         raise HTTPException(status_code=404, detail="Symbol not found in pool")
 
-    # Canonical body key is ``tradable``; ``is_tradable`` accepted as
-    # backwards-compatible alias for one rolling deploy. Pydantic has
-    # already enforced strict-bool typing on both fields.
-    desired_raw = payload.tradable if payload.tradable is not None else payload.is_tradable
-    if desired_raw is None:
+    desired = payload.tradable if payload.tradable is not None else payload.is_tradable
+    if desired is None:
         raise HTTPException(
             status_code=422,
             detail="Body must include `tradable` (bool) or legacy `is_tradable` (bool).",
         )
-    desired = bool(desired_raw)
     if not coin.is_active and desired:
         # Defensive: cannot trade a symbol that is not even being ingested.
         raise HTTPException(
