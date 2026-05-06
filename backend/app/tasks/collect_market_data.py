@@ -69,6 +69,12 @@ async def _collect_all_async():
 
     logger.info(f"[COLLECT] valid_symbols={len(valid_symbols)}")
 
+    try:
+        from ..services.execution_gate_metrics import record_collect_universe
+        record_collect_universe(len(valid_symbols))
+    except Exception as exc:
+        logger.debug("[COLLECT] universe gauge failed: %s", exc)
+
     if not valid_symbols:
         # Task #231: idem — todos os símbolos aprovados foram filtrados pela
         # validação. Tratar como ciclo vazio em vez de erro fatal.
@@ -376,6 +382,12 @@ async def _collect_5m_async():
         valid_symbols.append(s)
 
     logger.info(f"[COLLECT] valid_symbols={len(valid_symbols)}")
+
+    try:
+        from ..services.execution_gate_metrics import record_collect_universe
+        record_collect_universe(len(valid_symbols))
+    except Exception as exc:
+        logger.debug("[COLLECT] universe gauge failed: %s", exc)
 
     if not valid_symbols:
         # Task #231: idem — ciclo 5m vazio em vez de erro fatal.

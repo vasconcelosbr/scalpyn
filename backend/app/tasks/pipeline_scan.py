@@ -1726,6 +1726,17 @@ async def _broadcast_scan_funnel(
     except Exception as exc:
         logger.debug("[PipelineScan] Funnel broadcast failed: %s", exc)
 
+    # Task #232 — publish funnel observations to Prometheus so the
+    # dashboards can chart universe → throughput → rejection rate
+    # per stage without scraping log lines.
+    try:
+        from ..services.execution_gate_metrics import record_pipeline_stage
+        record_pipeline_stage("metadata", pool_total, with_metadata)
+        record_pipeline_stage("profile_filter", profile_candidates, after_profile_filter)
+        record_pipeline_stage("blocking", after_profile_filter, after_blocking)
+    except Exception as exc:
+        logger.debug("[PipelineScan] funnel metrics failed: %s", exc)
+
 
 # ─── core async pipeline ──────────────────────────────────────────────────────
 

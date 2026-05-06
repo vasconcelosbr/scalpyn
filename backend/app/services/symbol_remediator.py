@@ -370,14 +370,15 @@ class SymbolRemediator:
                 # Uses ``updated_at`` (last status mutation) and falls
                 # back to ``added_at`` when the column was never
                 # touched after insert.
+                # ``pool_coins`` exposes ``added_at`` only (no
+                # ``updated_at`` column), so age is measured from
+                # insertion. >7 days suppresses fresh-backlog noise.
                 pending_res = await _diag_db.execute(text("""
-                    SELECT symbol,
-                           COALESCE(updated_at, added_at) AS since
+                    SELECT symbol, added_at AS since
                       FROM pool_coins
                      WHERE is_active = true
                        AND is_tradable = false
-                       AND COALESCE(updated_at, added_at)
-                           < NOW() - INTERVAL '7 days'
+                       AND added_at < NOW() - INTERVAL '7 days'
                 """))
                 pending_rows = pending_res.fetchall()
                 pending = [r.symbol for r in pending_rows]
