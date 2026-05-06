@@ -61,6 +61,14 @@ ACTION_REMOVE_FROM_POOL: str = "remove_from_pool"
 # constant name. New code should use ACTION_REMOVE_FROM_POOL.
 ACTION_SKIP_NOT_TRADABLE: str = ACTION_REMOVE_FROM_POOL
 
+# Task #232 — diagnostic-only status. Emitted (never executed as a
+# write) when a symbol is healthy on the ingestion side
+# (``is_active = true``) but the operator has NOT yet flipped the
+# execution gate (``is_tradable = false``). The remediator MUST NOT
+# auto-promote it: ``is_tradable`` is a manual operator decision.
+STATUS_PENDING_TRADABLE: str = "pending_tradable"
+ACTION_WARN_PENDING_TRADABLE: str = "warn_pending_tradable"
+
 
 @dataclass
 class RemediationAction:
@@ -344,6 +352,44 @@ class SymbolRemediator:
         dry_run: bool = False,
     ) -> RemediationReport:
         actions: List[RemediationAction] = []
+
+        # ── Task #232 — PENDING_TRADABLE diagnostic pass ────────────────
+        # Symbols that are healthy on the ingestion side
+        # (``is_active = true``) but still have ``is_tradable = false``
+        # are surfaced here as a warning. The remediator MUST NOT
+        # auto-promote them: the execution gate is a manual operator
+        # decision by design (see runbook
+        # ``backend/docs/runbooks/pool-execution-gate.md``).
+        try:
+            from ..database import AsyncSessionLocal
+            async with AsyncSessionLocal() as _diag_db:
+                pending_res = await _diag_db.execute(text("""
+                    SELECT symbol FROM pool_coins
+                    WHERE is_active = true
+                      AND is_tradable = false
+                """))
+                pending = [r.symbol for r in pending_res.fetchall()]
+            for sym in pending[:50]:  # cap to keep the report bounded
+                actions.append(RemediationAction(
+                    symbol=sym,
+                    action=ACTION_WARN_PENDING_TRADABLE,
+                    reason=(
+                        "is_active=true AND is_tradable=false — symbol is "
+                        "ingested + scored but blocked at execution gate. "
+                        "Operator must flip is_tradable manually "
+                        "(POST /api/pools/{id}/coins/{symbol}/tradable)."
+                    ),
+                    executed=False,  # diagnostic only — never writes
+                    extra={"status": STATUS_PENDING_TRADABLE},
+                ))
+            if len(pending) > 50:
+                logger.info(
+                    "[AUDIT-FIX] PENDING_TRADABLE — %d symbols flagged "
+                    "(showing first 50 in report)",
+                    len(pending),
+                )
+        except Exception as exc:
+            logger.debug("[AUDIT-FIX] pending_tradable scan failed: %s", exc)
 
         approve_targets: List[str] = []
         remove_targets: List[str] = []

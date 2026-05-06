@@ -254,42 +254,28 @@ async def _execute_buy_cycle_async() -> dict:
                 # margin that quarantine + threshold filtering downstream
                 # still has plenty of candidates to choose from before the
                 # ``max_opps`` placement cap is hit.
-                # Task #232: execution-only path. Requires the explicit
-                # ``is_tradable = true`` gate. ``is_active`` alone is
-                # the ingestion gate; trading authorisation is a
-                # separate operator decision.  Enforced by lint test
-                # ``test_pool_queries_filter_execution_gate``.
+                # Task #232: ingestion vs execution gate split.
                 #
-                # We also report the active-but-not-tradable subset so
-                # the operator can see how many symbols would have been
-                # eligible buys had they been authorised. See
-                # ``execution_gate_metrics.record_not_tradable``.
+                # The candidate universe is the INGESTION set
+                # (``is_active = true``) — the ``is_tradable`` flag is
+                # carried alongside each row but enforced ONLY at the
+                # buy-decision point below, AFTER scoring + signal +
+                # risk qualification. That way the ``NOT_TRADABLE``
+                # skip log reflects "qualified buy blocked by gate",
+                # not the entire active∖tradable diff (which would
+                # over-report symbols that would never have been
+                # bought anyway).
                 from ..services.execution_gate_metrics import record_not_tradable
 
                 cap = max(max_opps * 20, 50)
-                active_res = await db.execute(text("""
-                    SELECT symbol FROM pool_coins
+                pool_rows_res = await db.execute(text("""
+                    SELECT symbol, is_tradable FROM pool_coins
                     WHERE  is_active = true
                     LIMIT  :cap
                 """), {"cap": cap})
-                active_symbols = {r.symbol for r in active_res.fetchall()}
-
-                pool_res = await db.execute(text("""
-                    SELECT symbol FROM pool_coins
-                    WHERE  is_active = true AND is_tradable = true
-                    LIMIT  :cap
-                """), {"cap": cap})
-                pool_symbols = [r.symbol for r in pool_res.fetchall()]
-
-                not_tradable = active_symbols - set(pool_symbols)
-                if not_tradable:
-                    record_not_tradable("execute_buy", len(not_tradable))
-                    logger.info(
-                        "[execute_buy] SKIPPED reason=NOT_TRADABLE "
-                        "count=%d symbols=%s",
-                        len(not_tradable),
-                        sorted(not_tradable)[:10],
-                    )
+                pool_rows = pool_rows_res.fetchall()
+                tradable_by_symbol = {r.symbol: bool(r.is_tradable) for r in pool_rows}
+                pool_symbols = list(tradable_by_symbol.keys())
 
                 if not pool_symbols:
                     logger.debug(
@@ -525,6 +511,24 @@ async def _execute_buy_cycle_async() -> dict:
                         "take_profit_price": tp_price,
                         "stop_loss_price":   None,  # sell engine manages exits
                     }
+
+                    # Task #232 — execution gate. The candidate just
+                    # passed scoring + signal + block + risk + capital
+                    # checks; it WOULD be bought right now if the
+                    # operator had marked it tradable. Surface the gap
+                    # explicitly per-symbol so the dashboard can show
+                    # "qualified but not authorised" symbols. Anything
+                    # earlier would over-report.
+                    if not tradable_by_symbol.get(symbol, False):
+                        record_not_tradable("execute_buy")
+                        logger.info(
+                            "[execute_buy] SKIPPED %s reason=NOT_TRADABLE "
+                            "score=%.2f size_usdt=%.2f — qualified buy "
+                            "blocked by is_tradable=false",
+                            symbol, alpha_score, trade_size_usdt,
+                        )
+                        stats["skipped"] += 1
+                        continue
 
                     # 6f. Execute
                     trade_result = await execution_engine.execute_trade(

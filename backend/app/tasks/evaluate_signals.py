@@ -71,42 +71,26 @@ async def _evaluate_async():
 
                 # Task #232: ingestion vs execution gate split.
                 #
-                # We deliberately fetch BOTH the ingestion universe
-                # (``is_active=true``) and the tradable subset
-                # (``is_active=true AND is_tradable=true``) instead of
-                # pre-filtering only on the tradable predicate. The
-                # set difference is the audit signal the operator
-                # cares about: "these symbols scored well enough to
-                # be candidates but I have not authorised them yet."
-                # Each one emits ``SKIPPED reason=NOT_TRADABLE`` and
-                # increments ``scalpyn_signals_skipped_not_tradable_total``
-                # so the dashboard does not silently hide them.
+                # The candidate universe is the INGESTION set
+                # (``is_active = true``) — we deliberately do NOT
+                # pre-filter on ``is_tradable`` here. Every active
+                # symbol is run through the full scoring + signal +
+                # risk pipeline; the ``is_tradable`` gate is checked
+                # ONLY at the decision point right before
+                # ``execution_engine.execute_trade``. That way the
+                # ``NOT_TRADABLE`` skip telemetry reflects symbols that
+                # would otherwise have been buys had the operator
+                # authorised them — a true audit signal, not the
+                # over-reported full active∖tradable diff.
                 from ..services.execution_gate_metrics import record_not_tradable
 
-                active_res = await db.execute(text("""
-                    SELECT DISTINCT symbol FROM pool_coins
+                pool_rows_res = await db.execute(text("""
+                    SELECT symbol, is_tradable FROM pool_coins
                     WHERE is_active = true
                 """))
-                active_symbols = {r.symbol for r in active_res.fetchall()}
-
-                tradable_res = await db.execute(text("""
-                    SELECT DISTINCT symbol FROM pool_coins
-                    WHERE is_active = true AND is_tradable = true
-                """))
-                pool_symbols = [r.symbol for r in tradable_res.fetchall()]
-
-                not_tradable = active_symbols - set(pool_symbols)
-                if not_tradable:
-                    record_not_tradable("evaluate_signals", len(not_tradable))
-                    # One log line per cycle, not per symbol — a
-                    # 200-symbol pool would otherwise flood the
-                    # WARNING channel every minute.
-                    logger.info(
-                        "[evaluate_signals] SKIPPED reason=NOT_TRADABLE "
-                        "count=%d symbols=%s",
-                        len(not_tradable),
-                        sorted(not_tradable)[:10],
-                    )
+                pool_rows = pool_rows_res.fetchall()
+                tradable_by_symbol = {r.symbol: bool(r.is_tradable) for r in pool_rows}
+                pool_symbols = list(tradable_by_symbol.keys())
 
                 if not pool_symbols:
                     continue
@@ -170,6 +154,23 @@ async def _evaluate_async():
 
                     if not risk_result.get("approved"):
                         logger.info(f"Trade for {symbol} rejected by risk: {risk_result.get('rejection_reason')}")
+                        continue
+
+                    # Task #232 — execution gate. The symbol passed
+                    # scoring + signal + block + risk, so it WOULD be
+                    # bought right now if the operator had marked it
+                    # tradable. Surface the gap explicitly: per-symbol
+                    # log line + Prometheus counter. Anything earlier
+                    # would over-report (e.g. a low-score symbol that
+                    # would never have been bought anyway).
+                    if not tradable_by_symbol.get(symbol, False):
+                        record_not_tradable("evaluate_signals")
+                        logger.info(
+                            "[evaluate_signals] SKIPPED %s reason=NOT_TRADABLE "
+                            "score=%.2f direction=%s — qualified buy blocked by "
+                            "is_tradable=false",
+                            symbol, alpha_score, signal_result.get("direction"),
+                        )
                         continue
 
                     signals_found += 1

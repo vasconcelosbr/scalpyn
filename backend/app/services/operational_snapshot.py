@@ -293,18 +293,27 @@ class OperationalSnapshotService:
                 row = (await asyncio.wait_for(db.execute(sql), timeout=DB_TIMEOUT_S)).one()
             delay = float(row.delay_seconds) if row.delay_seconds is not None else None
             active_pool_count = int(row.active_pool_count or 0)
-            # When the pool is empty no candles can arrive — degrade the
-            # raw ``status`` accordingly so the dashboard does not flash
-            # red on a deliberate operator state.
+            # Task #232 — explicit pool_state dimension so the alert
+            # engine and dashboard can branch on a single, named value
+            # instead of inferring intent from (active_pool_count,
+            # delay_seconds) tuples:
+            #   * OK                 — pool has work AND ingestion fresh
+            #   * STARVED_NO_ACTIVE  — zero active symbols, ingestion idle by design
+            #   * STALLED            — pool has work but ingestion is late
             if active_pool_count == 0:
+                pool_state = "STARVED_NO_ACTIVE"
                 status = "ok"
             elif delay is None:
+                pool_state = "OK"
                 status = "unknown"
             elif delay < 600:
+                pool_state = "OK"
                 status = "ok"
             elif delay <= 1200:
+                pool_state = "STALLED"
                 status = "degraded"
             else:
+                pool_state = "STALLED"
                 status = "critical"
             data = {
                 "rows_window": int(row.rows_window or 0),
@@ -312,6 +321,7 @@ class OperationalSnapshotService:
                 "last_candle": row.last_candle.isoformat() if row.last_candle else None,
                 "delay_seconds": delay,
                 "active_pool_count": active_pool_count,
+                "pool_state": pool_state,
             }
             self._apply_success("ingestion", data, status)
             # Mirror onto the latency family so /pipeline-latency has a
@@ -973,10 +983,8 @@ class OperationalSnapshotService:
         # the alert engine can downgrade ``ingestion_stale`` to a
         # lower-severity ``pool_starved`` notice in that case.
         active_pool_count = self.ingestion.data.get("active_pool_count")
-        pool_starved = (
-            isinstance(active_pool_count, int) and active_pool_count == 0
-        )
-        if pool_starved:
+        pool_state = self.ingestion.data.get("pool_state")
+        if pool_state == "STARVED_NO_ACTIVE":
             alerts.append({
                 "severity": "info", "category": "ingestion", "code": "pool_starved",
                 "impact": (
@@ -984,7 +992,10 @@ class OperationalSnapshotService:
                     "indicadores estão em ciclo vazio por design (Task #232)."
                 ),
                 "since": self.ingestion.as_of.isoformat() if self.ingestion.as_of else None,
-                "details": {"active_pool_count": 0},
+                "details": {
+                    "active_pool_count": active_pool_count or 0,
+                    "pool_state": pool_state,
+                },
             })
         elif isinstance(delay, (int, float)):
             if delay > 1200:
@@ -992,14 +1003,18 @@ class OperationalSnapshotService:
                     "severity": "critical", "category": "ingestion", "code": "ingestion_stale",
                     "impact": "OHLCV não atualiza há mais de 20 min — decisões usam dados velhos.",
                     "since": self.ingestion.as_of.isoformat() if self.ingestion.as_of else None,
-                    "details": {"delay_seconds": delay, "last_candle": self.ingestion.data.get("last_candle")},
+                    "details": {
+                        "delay_seconds": delay,
+                        "last_candle": self.ingestion.data.get("last_candle"),
+                        "pool_state": pool_state or "STALLED",
+                    },
                 })
             elif delay > 600:
                 alerts.append({
                     "severity": "warning", "category": "ingestion", "code": "ingestion_lagging",
                     "impact": "OHLCV atrasado entre 10 e 20 min — aceitável em catch-up multi-symbol.",
                     "since": self.ingestion.as_of.isoformat() if self.ingestion.as_of else None,
-                    "details": {"delay_seconds": delay},
+                    "details": {"delay_seconds": delay, "pool_state": pool_state or "OK"},
                 })
 
         last_age = self.score.data.get("last_decision_age_seconds")

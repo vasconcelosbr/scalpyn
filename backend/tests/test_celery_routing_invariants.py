@@ -311,15 +311,17 @@ def test_pool_queries_filter_is_active(module_name: str) -> None:
 
 @pytest.mark.parametrize("module_name", _EXECUTION_DECISION_FILES)
 def test_pool_queries_filter_execution_gate(module_name: str) -> None:
-    """Execution-side decision tasks must contain at least one
-    ``SELECT FROM pool_coins`` carrying both ``is_active = true`` AND
-    ``is_tradable = true`` (the live trading critical path) AND a
-    parallel ``is_active = true``-only SELECT used to surface the
-    ``NOT_TRADABLE`` skip telemetry (Task #232).
+    """Execution-side decision tasks must:
 
-    Two queries side-by-side are the canonical pattern — a single
-    pre-filter would silently hide every "scored but unauthorised"
-    symbol from the dashboards, defeating the audit purpose.
+    1. Query ``SELECT FROM pool_coins`` with the ``is_active = true``
+       ingestion predicate (so paused symbols never reach the buy
+       loop), and they must SELECT ``is_tradable`` into Python so the
+       per-symbol gate decision is visible to the audit.
+    2. Call ``execution_gate_metrics.record_not_tradable`` and emit a
+       ``SKIPPED ... reason=NOT_TRADABLE`` log line at the buy
+       decision point — *after* scoring + signal + risk qualification
+       — to expose qualified buys blocked by the operator gate
+       (Task #232).
     """
     module = __import__(module_name, fromlist=["__name__"])
     src = inspect.getsource(module)
@@ -329,23 +331,19 @@ def test_pool_queries_filter_execution_gate(module_name: str) -> None:
         return
     assert any(
         ("is_active = true" in s or "is_active=true" in s)
-        and ("is_tradable = true" in s or "is_tradable=true" in s)
+        and "is_tradable" in s
         for s in selects
     ), (
-        f"{module_name}: no SELECT FROM pool_coins gates on both "
-        "``is_active = true`` AND ``is_tradable = true`` — execution "
-        "critical path is open."
+        f"{module_name}: no SELECT FROM pool_coins carries the "
+        "``is_active = true`` predicate AND projects ``is_tradable`` "
+        "for the per-symbol gate decision."
     )
-    assert any(
-        ("is_active = true" in s or "is_active=true" in s)
-        and "is_tradable" not in s
-        for s in selects
-    ), (
-        f"{module_name}: missing parallel SELECT on ``is_active = true`` "
-        "alone for the NOT_TRADABLE audit metric (Task #232 — see "
-        "execution_gate_metrics.record_not_tradable)."
+    assert "record_not_tradable" in code, (
+        f"{module_name}: missing record_not_tradable() call — import "
+        "and emit it at the buy decision point so qualified-but-not-"
+        "authorised symbols stay visible to the audit (Task #232)."
     )
-    assert "not_tradable" in code or "record_not_tradable" in code, (
-        f"{module_name}: NOT_TRADABLE skip telemetry call missing — "
-        "import and call execution_gate_metrics.record_not_tradable."
+    assert "reason=not_tradable" in code, (
+        f"{module_name}: missing per-symbol ``reason=NOT_TRADABLE`` "
+        "decision log next to the gate check."
     )

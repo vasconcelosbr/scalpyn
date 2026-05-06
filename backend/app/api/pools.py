@@ -317,7 +317,13 @@ async def set_pool_coin_tradable(
     if not coin:
         raise HTTPException(status_code=404, detail="Symbol not found in pool")
 
-    desired = bool(payload.get("is_tradable", False))
+    # Task #232 — canonical body key is ``tradable``; ``is_tradable``
+    # is accepted as a backwards-compatible alias for one rolling
+    # deploy of any caller that still sends the old key.
+    if "tradable" in payload:
+        desired = bool(payload.get("tradable"))
+    else:
+        desired = bool(payload.get("is_tradable", False))
     if not coin.is_active and desired:
         # Defensive: cannot trade a symbol that is not even being ingested.
         raise HTTPException(

@@ -280,7 +280,7 @@ export default function PoolConfigPage() {
     );
     try {
       await apiPost(`/pools/${id}/coins/${coin.symbol}/tradable`, {
-        is_tradable: next,
+        tradable: next,
       });
     } catch (e: any) {
       setCoins((prev) =>
