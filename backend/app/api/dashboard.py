@@ -483,8 +483,14 @@ async def get_ingestion_snapshot(_user_id: UUID = Depends(get_current_user_id)):
     return get_ops_service().ingestion.to_dict()
 
 
-@router.get("/alerts")
+@router.get("/alerts", response_model=None)
 async def get_alerts(_user_id: UUID = Depends(get_current_user_id)):
+    """Current alerts + transition history.
+
+    Reads from the background-refreshed alert cache (recomputed every
+    ``ALERT_INTERVAL_S``) so transition bookkeeping is independent of
+    HTTP read traffic. Shape: ``{as_of, current: [...], history: [...]}``.
+    """
     return get_ops_service().get_alerts()
 
 

@@ -34,6 +34,7 @@ REDIS_INTERVAL_S     = int(os.environ.get("OPS_SNAP_REDIS_S", 15))
 DB_INTERVAL_S        = int(os.environ.get("OPS_SNAP_DB_S", 30))
 SCORE_INTERVAL_S     = int(os.environ.get("OPS_SNAP_SCORE_S", 60))
 LATENCY_INTERVAL_S   = int(os.environ.get("OPS_SNAP_LATENCY_S", 60))
+ALERT_INTERVAL_S     = int(os.environ.get("OPS_SNAP_ALERT_S", 5))
 
 # Per-probe timeout budgets — never let a hung dependency keep the loop in.
 CELERY_TIMEOUT_S = 2.0
@@ -146,6 +147,13 @@ class OperationalSnapshotService:
         # (otherwise it would "move forward" every probe interval as
         # `snapshot.as_of` advances).  Cleared when an alert resolves.
         self._alert_first_seen: Dict[str, str] = {}
+        # Cache populated by the dedicated alert refresh loop so transition
+        # bookkeeping (history pushes, first-seen stamps) happens on a
+        # background ticker — independent of HTTP read traffic.  API
+        # handlers read this cache rather than re-evaluating, ensuring no
+        # transition is lost during read-quiet periods.
+        self._alerts_cache: List[Dict[str, Any]] = []
+        self._alerts_cache_as_of: Optional[datetime] = None
         self._prev_workers: set[str] = set()
         self._prev_redis_alive: Optional[bool] = None
 
@@ -161,6 +169,7 @@ class OperationalSnapshotService:
             (self._refresh_db,        DB_INTERVAL_S,        "db"),
             (self._refresh_score,     SCORE_INTERVAL_S,     "score"),
             (self._refresh_latency,   LATENCY_INTERVAL_S,   "latency"),
+            (self._refresh_alerts,    ALERT_INTERVAL_S,     "alerts"),
         ]
         for fn, interval, name in loop_pairs:
             self._tasks.append(asyncio.create_task(
@@ -879,7 +888,14 @@ class OperationalSnapshotService:
         self._apply_success("processing_latency", stats, status)
 
     # ── alert engine ───────────────────────────────────────────────────────
-    def _evaluate_alerts(self) -> List[Dict[str, Any]]:
+    async def _refresh_alerts(self) -> None:
+        """Background ticker — recompute alerts and record transitions
+        every ALERT_INTERVAL_S so history is never tied to HTTP traffic."""
+        alerts = self._evaluate_alerts(record_transitions=True)
+        self._alerts_cache = alerts
+        self._alerts_cache_as_of = datetime.now(timezone.utc)
+
+    def _evaluate_alerts(self, record_transitions: bool = True) -> List[Dict[str, Any]]:
         """Re-derive alert list from current snapshots.
 
         Alert codes (stable, contract):
@@ -1033,25 +1049,31 @@ class OperationalSnapshotService:
             })
 
         # Push *new* alert codes into history; clear codes that healed.
+        # Only the background `_refresh_alerts` ticker passes
+        # ``record_transitions=True`` — HTTP read paths must never mutate
+        # `_alert_history` / `_alert_first_seen` / `_prev_alert_codes`,
+        # otherwise concurrent reads would race the ticker and lose
+        # transitions.
         cur_codes = {a["code"] for a in alerts}
-        now_iso = now.isoformat()
-        for code in cur_codes - self._prev_alert_codes:
-            self._alert_first_seen[code] = now_iso
-            matching = next((a for a in alerts if a["code"] == code), None)
-            if matching:
+        if record_transitions:
+            now_iso = now.isoformat()
+            for code in cur_codes - self._prev_alert_codes:
+                self._alert_first_seen[code] = now_iso
+                matching = next((a for a in alerts if a["code"] == code), None)
+                if matching:
+                    self._alert_history.append(_Event(
+                        now, code,
+                        f"[{matching['severity'].upper()}] {matching['impact']}",
+                        {"category": matching["category"], "details": matching.get("details", {})},
+                        "alert",
+                    ))
+            for code in self._prev_alert_codes - cur_codes:
+                self._alert_first_seen.pop(code, None)
                 self._alert_history.append(_Event(
-                    now, code,
-                    f"[{matching['severity'].upper()}] {matching['impact']}",
-                    {"category": matching["category"], "details": matching.get("details", {})},
-                    "alert",
+                    now, f"{code}_recovered",
+                    f"Alerta resolvido: {code}", {}, "alert",
                 ))
-        for code in self._prev_alert_codes - cur_codes:
-            self._alert_first_seen.pop(code, None)
-            self._alert_history.append(_Event(
-                now, f"{code}_recovered",
-                f"Alerta resolvido: {code}", {}, "alert",
-            ))
-        self._prev_alert_codes = cur_codes
+            self._prev_alert_codes = cur_codes
 
         # Stamp every active alert with its persisted first-seen timestamp
         # so `since` reflects the true alert start, not the snapshot's
@@ -1065,8 +1087,20 @@ class OperationalSnapshotService:
         return alerts
 
     # ── public API ─────────────────────────────────────────────────────────
+    def _current_alerts(self) -> List[Dict[str, Any]]:
+        """Read alerts from the background-refreshed cache.
+
+        Falls back to a one-off non-recording evaluation only on the
+        first request before the alert ticker has run once — this keeps
+        ``/overview`` answering immediately on cold boot without ever
+        racing the ticker on transition bookkeeping.
+        """
+        if self._alerts_cache_as_of is None:
+            return self._evaluate_alerts(record_transitions=False)
+        return list(self._alerts_cache)
+
     def get_overview(self) -> Dict[str, Any]:
-        alerts = self._evaluate_alerts()
+        alerts = self._current_alerts()
         ranks = {"unknown": 0, "ok": 1, "degraded": 2, "critical": 3}
         all_snapshots = (
             self.ingestion, self.celery, self.redis, self.db, self.score,
@@ -1099,7 +1133,7 @@ class OperationalSnapshotService:
         }
 
     def get_alerts(self) -> Dict[str, Any]:
-        alerts = self._evaluate_alerts()
+        alerts = self._current_alerts()
         return {
             "as_of": datetime.now(timezone.utc).isoformat(),
             "current": alerts,
