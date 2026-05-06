@@ -84,10 +84,22 @@ async def _evaluate_async():
                 # over-reported full active∖tradable diff.
                 from ..services.execution_gate_metrics import record_not_tradable
 
+                # Per-tenant scoping is critical: ``pool_coins`` is a
+                # per-pool table, so the same symbol can exist in two
+                # users' pools with different ``is_tradable`` values.
+                # We scope by ``pools.user_id`` and aggregate with
+                # ``bool_or(is_tradable)`` so the per-symbol gate is
+                # deterministic AND tenant-isolated — one user's
+                # toggle can never influence another user's execution.
                 pool_rows_res = await db.execute(text("""
-                    SELECT symbol, is_tradable FROM pool_coins
-                    WHERE is_active = true
-                """))
+                    SELECT pc.symbol,
+                           bool_or(pc.is_tradable) AS is_tradable
+                      FROM pool_coins pc
+                      JOIN pools p ON p.id = pc.pool_id
+                     WHERE pc.is_active = true
+                       AND p.user_id    = :uid
+                  GROUP BY pc.symbol
+                """), {"uid": user.id})
                 pool_rows = pool_rows_res.fetchall()
                 tradable_by_symbol = {r.symbol: bool(r.is_tradable) for r in pool_rows}
                 pool_symbols = list(tradable_by_symbol.keys())

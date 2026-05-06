@@ -267,12 +267,24 @@ async def _execute_buy_cycle_async() -> dict:
                 # bought anyway).
                 from ..services.execution_gate_metrics import record_not_tradable
 
+                # Per-tenant scoping (Task #232): ``pool_coins`` is
+                # per-pool, so the same symbol can exist in two users'
+                # pools with different ``is_tradable`` values. We
+                # scope by ``pools.user_id`` and aggregate with
+                # ``bool_or(is_tradable)`` so the gate is deterministic
+                # AND tenant-isolated — one tenant's toggle cannot
+                # influence another tenant's buy decisions.
                 cap = max(max_opps * 20, 50)
                 pool_rows_res = await db.execute(text("""
-                    SELECT symbol, is_tradable FROM pool_coins
-                    WHERE  is_active = true
-                    LIMIT  :cap
-                """), {"cap": cap})
+                    SELECT pc.symbol,
+                           bool_or(pc.is_tradable) AS is_tradable
+                      FROM pool_coins pc
+                      JOIN pools p ON p.id = pc.pool_id
+                     WHERE pc.is_active = true
+                       AND p.user_id    = :uid
+                  GROUP BY pc.symbol
+                     LIMIT :cap
+                """), {"uid": user_id, "cap": cap})
                 pool_rows = pool_rows_res.fetchall()
                 tradable_by_symbol = {r.symbol: bool(r.is_tradable) for r in pool_rows}
                 pool_symbols = list(tradable_by_symbol.keys())
