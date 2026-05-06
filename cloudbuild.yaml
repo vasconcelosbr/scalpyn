@@ -137,7 +137,7 @@ steps:
       #
       # See `docs/runbooks/celery-queue-topology.md` for the full topology.
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=0'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=0,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
 
   # ── Task #216: Celery worker — microstructure queue ─────────────────
   # Bursty 5-minute cadence (collect_5m → compute_5m). Sized to absorb
@@ -174,7 +174,7 @@ steps:
       - '--add-cloudsql-instances'
       - 'clickrate-477217:us-central1:scalpyn'
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=microstructure,RUN_BEAT=0,CELERY_CONCURRENCY=4'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=microstructure,RUN_BEAT=0,CELERY_CONCURRENCY=4,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
 
   # ── Task #216: Celery worker — structural queue ─────────────────────
   # Hourly+ heavy TA (collect_all → compute → score, pipeline_scan,
@@ -212,7 +212,7 @@ steps:
       - '--add-cloudsql-instances'
       - 'clickrate-477217:us-central1:scalpyn'
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=structural,RUN_BEAT=0,CELERY_CONCURRENCY=2'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=structural,RUN_BEAT=0,CELERY_CONCURRENCY=2,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
 
   # ── Task #216: Celery worker — execution queue ──────────────────────
   # Latency-sensitive trading critical path (evaluate, execute_buy,
@@ -250,7 +250,7 @@ steps:
       - '--add-cloudsql-instances'
       - 'clickrate-477217:us-central1:scalpyn'
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=execution,RUN_BEAT=0,CELERY_CONCURRENCY=2'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=execution,RUN_BEAT=0,CELERY_CONCURRENCY=2,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
 
   # ── Task #216: Celery beat — sole owner of the periodic schedule ────
   # MUST be a single revision (max-instances=1) so periodic schedules
@@ -287,7 +287,7 @@ steps:
       - '--add-cloudsql-instances'
       - 'clickrate-477217:us-central1:scalpyn'
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=1'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=1,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
 
 substitutions:
   _REGION: us-central1

@@ -165,6 +165,33 @@ def log_pool_stats() -> None:
         logger.warning("Failed to log DB pool stats: %s", exc)
 
 
+def get_pool_snapshot() -> dict:
+    """Return a best-effort snapshot of the pooled engine state."""
+    try:
+        pool = engine.pool
+        checked_out = pool.checkedout()
+        overflow = pool.overflow()
+        return {
+            "size": pool.size(),
+            "checked_out": checked_out,
+            "checked_in": pool.checkedin(),
+            "overflow": overflow,
+            "pool_size_limit": _pool_size,
+            "max_overflow": _max_overflow,
+            "pool_timeout_seconds": _pool_timeout,
+            "saturated": checked_out >= _pool_size,
+            "overflow_exhausted": overflow >= _max_overflow if _max_overflow >= 0 else False,
+            "status": pool.status(),
+        }
+    except Exception as exc:  # pragma: no cover — diagnostics only
+        return {
+            "error": f"{type(exc).__name__}: {exc}",
+            "pool_size_limit": _pool_size,
+            "max_overflow": _max_overflow,
+            "pool_timeout_seconds": _pool_timeout,
+        }
+
+
 async def _pool_stats_loop(interval_seconds: int) -> None:
     while True:
         try:

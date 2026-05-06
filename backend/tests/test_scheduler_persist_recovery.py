@@ -7,14 +7,11 @@ contract that ``_refresh_market_metadata`` relies on:
 
   1. when the INSERT raises the scheduler_group drift exception, the
      function MUST NOT re-raise (the scheduler loop survives),
-  2. ``db.rollback()`` MUST be called on the outer session whenever
-     ``db.in_transaction()`` returns True (so the next statement is
-     not blocked by InFailedSQLTransactionError),
-  3. ``db.rollback()`` MUST be skipped when ``db.in_transaction()``
-     returns False (so SQLAlchemy doesn't raise InvalidRequestError
-     against an already-closed transaction),
-  4. after the recovery branch returns, a follow-up ``db.execute()``
-     succeeds — i.e. the session is in a usable state.
+    2. the helper MUST NOT call ``db.rollback()`` on the outer session;
+       the nested savepoint already handled the failure and an outer
+       rollback would close the parent transaction managed by the caller,
+    3. after the recovery branch returns, a follow-up ``db.execute()``
+       succeeds — i.e. the session is in a usable state.
 
 We deliberately do NOT spin up a real Postgres connection here because
 asyncpg behavior under savepoint failure is driver-version-dependent;
@@ -100,11 +97,7 @@ async def test_struct_persist_indicators_swallows_drift_and_rolls_back() -> None
         when=datetime(2026, 5, 2, 12, 0, tzinfo=timezone.utc),
     )
 
-    # Contract 2: rollback was called exactly once.
-    assert session.rollback.await_count == 1, (
-        "rollback() must fire so _refresh_market_metadata gets a clean "
-        "outer transaction; otherwise InFailedSQLTransactionError cascades."
-    )
+    assert session.rollback.await_count == 0
 
     # Contract 4: a follow-up statement on the same session succeeds —
     # this is what _refresh_market_metadata depends on.
@@ -114,11 +107,9 @@ async def test_struct_persist_indicators_swallows_drift_and_rolls_back() -> None
 
 @pytest.mark.anyio
 async def test_struct_persist_indicators_skips_rollback_when_not_in_tx() -> None:
-    """Edge case: SQLAlchemy already auto-rolled the outer transaction back
-    while the savepoint context manager unwound (asyncpg can poison the
-    parent before the savepoint release).  Calling rollback() against a
-    session with no active transaction raises InvalidRequestError; the
-    in_transaction() guard must short-circuit before that happens."""
+    """Even when the mock reports no outer transaction, the helper still
+    must not call rollback() because the nested savepoint already handled
+    the failure."""
     struct_mod._scheduler_group_drift_logged = False
 
     session = _make_mock_session(in_tx_after_failure=False, execute_exc=_DRIFT_EXC)
@@ -130,11 +121,7 @@ async def test_struct_persist_indicators_skips_rollback_when_not_in_tx() -> None
         when=datetime(2026, 5, 2, 12, 0, tzinfo=timezone.utc),
     )
 
-    # Contract 3: rollback must be skipped to avoid InvalidRequestError.
-    assert session.rollback.await_count == 0, (
-        "rollback() must not fire when in_transaction() is False; "
-        "calling it raises InvalidRequestError on a closed transaction."
-    )
+    assert session.rollback.await_count == 0
 
 
 @pytest.mark.anyio
@@ -180,7 +167,7 @@ async def test_micro_persist_indicators_swallows_drift_and_rolls_back() -> None:
         when=datetime(2026, 5, 2, 12, 0, tzinfo=timezone.utc),
     )
 
-    assert session.rollback.await_count == 1
+    assert session.rollback.await_count == 0
     result = await session.execute("SELECT 1")
     assert result is not None
 
