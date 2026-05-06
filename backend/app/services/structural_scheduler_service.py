@@ -206,7 +206,9 @@ async def _refresh_market_metadata(db, symbol: str, df: pd.DataFrame, when: date
                     last_updated = :updated
             """), {"symbol": symbol, "price": last_close, "updated": when})
     except Exception as exc:
-        logger.error("[STRUCT-SCHED] market_metadata upsert failed for %s: %s", symbol, exc, exc_info=True)
+        level = logging.WARNING if "lock timeout" in str(exc).lower() else logging.ERROR
+        logger.log(level, "[STRUCT-SCHED] market_metadata upsert failed for %s: %s", symbol, exc,
+                   exc_info=(level == logging.ERROR))
 
 
 async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
@@ -244,10 +246,15 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
         now = datetime.now(timezone.utc)
 
         async def _persist(db) -> None:
-            # Fail fast on lock contention so we never block long enough
-            # to form a deadlock cycle with another concurrent writer.
+            # Fail fast on lock contention for the indicators write where
+            # deadlock cycles are possible (concurrent structural + micro
+            # writers compete on the same rows).
             await db.execute(text("SET LOCAL lock_timeout = '3s'"))
             await _persist_indicators(db, symbol, results, now)
+            # market_metadata is low-priority: reset the timeout so we wait
+            # for any row lock held by collect_market_data (which runs in a
+            # single long NullPool transaction) instead of aborting it.
+            await db.execute(text("SET LOCAL lock_timeout = '0'"))
             await _refresh_market_metadata(db, symbol, df, now)
 
         await run_db_task(_persist, celery=False)
