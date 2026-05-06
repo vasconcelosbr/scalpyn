@@ -419,51 +419,47 @@ async def health_check_persistence():
     raw_db = raw_payload.get("db") or {}
     raw_pool = (raw_db.get("pool") or {}) if isinstance(raw_db, dict) else {}
     public_payload = {
-        "status": raw_payload.get("status", "unknown"),
-        "service": raw_payload.get("service"),
-        "started_at": raw_payload.get("started_at"),
+        "ok": raw_payload.get("status") == "ok",
         "queue": {
-            "size": raw_queue.get("size", 0),
-            "maxsize": raw_queue.get("maxsize", 0),
-            "utilization": raw_queue.get("utilization", 0.0),
-            "saturated": raw_queue.get("saturated", False),
-            "total_enqueued": raw_queue.get("total_enqueued", 0),
-            "total_processed": raw_queue.get("total_processed", 0),
-            "total_failed": raw_queue.get("total_failed", 0),
+            "size": int(raw_queue.get("size", 0) or 0),
+            "maxsize": int(raw_queue.get("maxsize", 0) or 0),
+            "utilization": float(raw_queue.get("utilization", 0.0) or 0.0),
+            "saturated": bool(raw_queue.get("saturated", False)),
+            "total_enqueued": int(raw_queue.get("total_enqueued", 0) or 0),
+            "total_processed": int(raw_queue.get("total_processed", 0) or 0),
+            "total_failed": int(raw_queue.get("total_failed", 0) or 0),
         },
         "workers": {
-            "configured": raw_workers.get("configured", 0),
-            "alive": raw_workers.get("alive", 0),
+            "configured": int(raw_workers.get("configured", 0) or 0),
+            "alive": int(raw_workers.get("alive", 0) or 0),
         },
         "db": {
-            "acquire_latency_ms_last": raw_db.get("acquire_latency_ms_last", 0.0),
-            "transaction_time_ms_last": raw_db.get("transaction_time_ms_last", 0.0),
-            "rollback_count": raw_db.get("rollback_count", 0),
-            "retry_count": raw_db.get("retry_count", 0),
+            "acquire_latency_ms_last": float(raw_db.get("acquire_latency_ms_last", 0.0) or 0.0),
+            "transaction_time_ms_last": float(raw_db.get("transaction_time_ms_last", 0.0) or 0.0),
+            "rollback_count": int(raw_db.get("rollback_count", 0) or 0),
+            "retry_count": int(raw_db.get("retry_count", 0) or 0),
             "pool": {
-                "size": raw_pool.get("size"),
-                "checked_out": raw_pool.get("checked_out"),
-                "checked_in": raw_pool.get("checked_in"),
-                "overflow": raw_pool.get("overflow"),
-                "pool_size_limit": raw_pool.get("pool_size_limit"),
-                "max_overflow": raw_pool.get("max_overflow"),
-                "pool_timeout_seconds": raw_pool.get("pool_timeout_seconds"),
+                "size": int(raw_pool.get("size", 0) or 0),
+                "checked_out": int(raw_pool.get("checked_out", 0) or 0),
+                "checked_in": int(raw_pool.get("checked_in", 0) or 0),
+                "overflow": int(raw_pool.get("overflow", 0) or 0),
+                "pool_size_limit": int(raw_pool.get("pool_size_limit", 0) or 0),
+                "max_overflow": int(raw_pool.get("max_overflow", 0) or 0),
+                "pool_timeout_seconds": int(raw_pool.get("pool_timeout_seconds", 0) or 0),
                 "saturated": raw_pool.get("saturated", False),
                 "overflow_exhausted": raw_pool.get("overflow_exhausted", False),
             },
         },
         "domains": {
             name: {
-                "processed": domain.get("processed", 0),
-                "failed": domain.get("failed", 0),
-                "last_success_at": domain.get("last_success_at"),
-                "last_error": "internal_error" if domain.get("last_error") else None,
+                "processed": int(domain.get("processed", 0) or 0),
+                "failed": int(domain.get("failed", 0) or 0),
             }
             for name, domain in (raw_payload.get("domains") or {}).items()
             if isinstance(domain, dict)
         },
     }
-    if public_payload.get("status") != "ok":
+    if not public_payload["ok"]:
         return Response(
             content=_json.dumps(public_payload),
             status_code=503,

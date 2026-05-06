@@ -68,6 +68,3 @@ class UnitOfWork:
 
                     self._state.mark_failure(domain, key, exc)
                     raise
-
-        if last_exc is not None:
-            raise last_exc
