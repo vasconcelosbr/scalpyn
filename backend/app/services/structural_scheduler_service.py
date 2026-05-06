@@ -244,6 +244,9 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
         now = datetime.now(timezone.utc)
 
         async def _persist(db) -> None:
+            # Fail fast on lock contention so we never block long enough
+            # to form a deadlock cycle with another concurrent writer.
+            await db.execute(text("SET LOCAL lock_timeout = '3s'"))
             await _persist_indicators(db, symbol, results, now)
             await _refresh_market_metadata(db, symbol, df, now)
 
