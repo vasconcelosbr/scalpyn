@@ -238,6 +238,37 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
             return
         logger.error("[MICRO-SCHED] indicators insert failed for %s: %s", symbol, exc, exc_info=True)
 
+
+async def _refresh_market_metadata(db, symbol: str,
+                                   spread_payload: dict, when: datetime) -> None:
+    spread_pct = spread_payload.get("spread_pct")
+    depth = spread_payload.get("orderbook_depth_usdt")
+    if spread_pct is None and depth is None:
+        return
+    try:
+        # SAVEPOINT: isolates a market_metadata failure from the rest of the session.
+        async with db.begin_nested():
+            await db.execute(text("""
+                INSERT INTO market_metadata
+                    (symbol, spread_pct, orderbook_depth_usdt, last_updated)
+                VALUES
+                    (:symbol, :spread, :depth, :updated)
+                ON CONFLICT (symbol) DO UPDATE SET
+                    spread_pct = COALESCE(:spread, market_metadata.spread_pct),
+                    orderbook_depth_usdt = COALESCE(:depth, market_metadata.orderbook_depth_usdt),
+                    last_updated = :updated
+            """), {
+                "symbol": symbol,
+                "spread": spread_pct,
+                "depth": depth,
+                "updated": when,
+            })
+    except Exception as exc:
+        level = logging.WARNING if "lock timeout" in str(exc).lower() else logging.ERROR
+        logger.log(level, "[MICRO-SCHED] market_metadata upsert failed for %s: %s", symbol, exc,
+                   exc_info=(level == logging.ERROR))
+
+
 async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore,
                                of_window: int) -> str:
     from ..services.feature_engine import FeatureEngine
@@ -325,33 +356,20 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore,
             return f"{symbol}: no_data"
 
         now = datetime.now(timezone.utc)
-        await get_persistence_service().enqueue(
-            PersistenceJob(
-                domain="scheduler_microstructure",
-                symbol=symbol,
-                market_type="spot",
-                indicator=IndicatorWrite(
-                    time=now,
-                    timeframe=TIMEFRAME,
-                    market_type="spot",
-                    scheduler_group=SCHEDULER_GROUP,
-                    indicators_json=json.dumps(
-                        envelop_results(
-                            results,
-                            default_source="gate_candles",
-                            default_confidence=0.85,
-                            key_source_map=_get_micro_key_source_map(),
-                        ),
-                        default=str,
-                    ),
-                ),
-                market_metadata=MarketMetadataWrite(
-                    updated_at=now,
-                    spread_pct=(spread_payload or {}).get("spread_pct"),
-                    orderbook_depth_usdt=(spread_payload or {}).get("orderbook_depth_usdt"),
-                ),
-            )
-        )
+
+        async def _persist(db) -> None:
+            # Fail fast on lock contention for the indicators write where
+            # deadlock cycles are possible (concurrent structural + micro
+            # writers compete on the same rows).
+            await db.execute(text("SET LOCAL lock_timeout = '3s'"))
+            await _persist_indicators(db, symbol, results, now)
+            # market_metadata is low-priority: reset the timeout so we wait
+            # for any row lock held by collect_market_data (which runs in a
+            # single long NullPool transaction) instead of aborting it.
+            await db.execute(text("SET LOCAL lock_timeout = '0'"))
+            await _refresh_market_metadata(db, symbol, spread_payload or {}, now)
+
+        await run_db_task(_persist, celery=False)
 
         return f"{symbol}: ok indicators={len(results)}"
 

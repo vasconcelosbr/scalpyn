@@ -186,6 +186,27 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
             return
         logger.error("[STRUCT-SCHED] indicators insert failed for %s: %s", symbol, exc, exc_info=True)
 
+
+async def _refresh_market_metadata(db, symbol: str, df: pd.DataFrame, when: datetime) -> None:
+    if df is None or df.empty:
+        return
+    try:
+        # SAVEPOINT: isolates a market_metadata failure from the rest of the session.
+        async with db.begin_nested():
+            last_close = float(df.iloc[-1]["close"])
+            await db.execute(text("""
+                INSERT INTO market_metadata (symbol, price, last_updated)
+                VALUES (:symbol, :price, :updated)
+                ON CONFLICT (symbol) DO UPDATE SET
+                    price = COALESCE(:price, market_metadata.price),
+                    last_updated = :updated
+            """), {"symbol": symbol, "price": last_close, "updated": when})
+    except Exception as exc:
+        level = logging.WARNING if "lock timeout" in str(exc).lower() else logging.ERROR
+        logger.log(level, "[STRUCT-SCHED] market_metadata upsert failed for %s: %s", symbol, exc,
+                   exc_info=(level == logging.ERROR))
+
+
 async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
     from ..services.feature_engine import FeatureEngine
     from ..services.market_data_service import market_data_service
@@ -225,37 +246,20 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
             results = {}
 
         now = datetime.now(timezone.utc)
-        last_close = None
-        try:
-            last_close = float(df.iloc[-1]["close"])
-        except Exception:
-            last_close = None
 
-        await get_persistence_service().enqueue(
-            PersistenceJob(
-                domain="scheduler_structural",
-                symbol=symbol,
-                market_type="spot",
-                indicator=IndicatorWrite(
-                    time=now,
-                    timeframe=TIMEFRAME,
-                    market_type="spot",
-                    scheduler_group=SCHEDULER_GROUP,
-                    indicators_json=json.dumps(
-                        envelop_results(
-                            results,
-                            default_source="gate_candles",
-                            default_confidence=0.85,
-                        ),
-                        default=str,
-                    ),
-                ),
-                market_metadata=MarketMetadataWrite(
-                    updated_at=now,
-                    price=last_close,
-                ),
-            )
-        )
+        async def _persist(db) -> None:
+            # Fail fast on lock contention for the indicators write where
+            # deadlock cycles are possible (concurrent structural + micro
+            # writers compete on the same rows).
+            await db.execute(text("SET LOCAL lock_timeout = '3s'"))
+            await _persist_indicators(db, symbol, results, now)
+            # market_metadata is low-priority: reset the timeout so we wait
+            # for any row lock held by collect_market_data (which runs in a
+            # single long NullPool transaction) instead of aborting it.
+            await db.execute(text("SET LOCAL lock_timeout = '0'"))
+            await _refresh_market_metadata(db, symbol, df, now)
+
+        await run_db_task(_persist, celery=False)
 
         return f"{symbol}: ok indicators={len(results)}"
 

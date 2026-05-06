@@ -93,6 +93,28 @@ async def _collect_all_async():
             if missing:
                 logger.error(f"[PIPELINE] INVALID_COLUMNS symbol={symbol} missing={missing} columns={list(df.columns)}")
                 failures += 1
+                # NOTE: do NOT call ``await db.rollback()`` here. The
+                # ``async with db.begin_nested()`` above already rolls back
+                # the SAVEPOINT on exception. Calling ``db.rollback()`` on
+                # top of that closes the OUTER transaction opened by
+                # ``run_db_task`` (``async with session.begin()``) and
+                # poisons every subsequent symbol with
+                # "Can't operate on closed transaction inside context manager".
+                #
+                # However, some transaction-aborting errors (e.g. deadlock)
+                # cause PostgreSQL to abort the *outer* transaction as well,
+                # leaving the asyncpg connection in a failed state that the
+                # savepoint rollback cannot recover from. Detect this so we
+                # stop early instead of cascading InFailedSQLTransaction
+                # errors through every remaining symbol.
+                if not db.is_active:
+                    remaining = len(symbols) - symbols.index(symbol) - 1
+                    logger.error(
+                        "[COLLECT] outer transaction poisoned after %s — "
+                        "skipping remaining %d symbols; collected=%d",
+                        symbol, remaining, collected,
+                    )
+                    break
                 continue
 
             ohlcv_exchange = df.attrs.get("exchange", "gate.io")
