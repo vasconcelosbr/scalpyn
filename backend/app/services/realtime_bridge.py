@@ -48,6 +48,27 @@ _RECONNECT_DELAY_MAX = 30.0   # seconds
 # Publisher (synchronous — safe to call from Celery task or async loop)
 # ---------------------------------------------------------------------------
 
+# Module-level client cache so publish_decision_event() reuses the same
+# connection pool instead of creating a new client on every call.
+_sync_client: Any = None
+
+
+def _get_sync_client() -> Any:
+    """Return (or lazily create) the module-level synchronous Redis client."""
+    global _sync_client  # noqa: PLW0603
+    if _sync_client is None:
+        import redis as redis_lib
+        from ..config import settings
+
+        _sync_client = redis_lib.from_url(
+            settings.REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+    return _sync_client
+
+
 def publish_decision_event(payload: dict[str, Any]) -> None:
     """Publish a decision event to Redis so all uvicorn replicas forward it.
 
@@ -58,16 +79,9 @@ def publish_decision_event(payload: dict[str, Any]) -> None:
     Failures are logged but never re-raised — a missed real-time push must
     never abort the pipeline scan.
     """
+    global _sync_client  # noqa: PLW0603
     try:
-        import redis as redis_lib  # sync redis
-        from ..config import settings
-
-        client = redis_lib.from_url(
-            settings.REDIS_URL,
-            decode_responses=True,
-            socket_connect_timeout=2,
-            socket_timeout=2,
-        )
+        client = _get_sync_client()
         message = json.dumps({
             "type": "decision.created",
             "payload": payload,
@@ -80,6 +94,9 @@ def publish_decision_event(payload: dict[str, Any]) -> None:
             payload.get("symbol"), payload.get("event_type"),
         )
     except Exception as exc:
+        # Invalidate the cached client so the next call recreates it, in case
+        # the connection is in a broken state.
+        _sync_client = None
         logger.warning(
             "[RealtimeBridge] decision_event_published FAILED (non-fatal): %s", exc,
         )

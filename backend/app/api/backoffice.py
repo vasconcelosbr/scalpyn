@@ -253,6 +253,19 @@ async def get_asset_trace_by_symbol(
 # 3. Decision Log
 # ---------------------------------------------------------------------------
 
+def _parse_utc_datetime(value: str) -> "datetime":
+    """Parse an ISO 8601 date/datetime string as a UTC-aware datetime.
+
+    Handles both bare dates (``"2025-01-01"``) and timezone-aware strings
+    (``"2025-01-01T00:00:00Z"`` / ``"+05:30"``).  Naive datetimes are assumed
+    to be UTC — matching the ``TIMESTAMPTZ`` convention used throughout the DB.
+    """
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _build_decision_conditions(
     user_id: UUID,
     symbol: Optional[str],
@@ -279,21 +292,9 @@ def _build_decision_conditions(
     if score_max is not None:
         conditions.append(DecisionLog.score <= score_max)
     if start_date:
-        try:
-            dt = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-        except ValueError:
-            dt = datetime.fromisoformat(start_date)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        conditions.append(DecisionLog.created_at >= dt)
+        conditions.append(DecisionLog.created_at >= _parse_utc_datetime(start_date))
     if end_date:
-        try:
-            dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-        except ValueError:
-            dt = datetime.fromisoformat(end_date)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        conditions.append(DecisionLog.created_at <= dt)
+        conditions.append(DecisionLog.created_at <= _parse_utc_datetime(end_date))
     if decision:
         conditions.append(DecisionLog.decision == decision)
     return conditions
