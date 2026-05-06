@@ -235,10 +235,14 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
                     "docs/runbooks/scheduler-group-drift.md."
                 )
                 _scheduler_group_drift_logged = True
-            # begin_nested() already rolled back the savepoint; the outer
-            # transaction managed by run_db_task is still valid — do NOT call
-            # db.rollback() here (that would close the outer transaction and
-            # poison every subsequent statement in the same _persist callback).
+            try:
+                if db.in_transaction():
+                    await db.rollback()
+            except Exception as rb_exc:
+                logger.warning(
+                    "[MICRO-SCHED] rollback after scheduler_group drift failed: %s",
+                    rb_exc,
+                )
             return
         logger.error("[MICRO-SCHED] indicators insert failed for %s: %s", symbol, exc, exc_info=True)
 
@@ -273,10 +277,16 @@ async def _refresh_market_metadata(db, symbol: str,
 
 async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore,
                                of_window: int) -> str:
-    from ..database import run_db_task
     from ..services.feature_engine import FeatureEngine
     from ..services.market_data_service import market_data_service
+    from ..services.persistence import (
+        IndicatorWrite,
+        MarketMetadataWrite,
+        PersistenceJob,
+        get_persistence_service,
+    )
     from ..services.seed_service import DEFAULT_INDICATORS
+    from ..utils.indicator_merge import envelop_results
 
     async with semaphore:
         # Fetch 5m OHLCV for volume/VWAP computation
@@ -352,21 +362,40 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore,
             return f"{symbol}: no_data"
 
         now = datetime.now(timezone.utc)
-
-        async def _persist(db) -> None:
-            # Fail fast on lock contention so we never block long enough
-            # to form a deadlock cycle with another concurrent writer.
-            await db.execute(text("SET LOCAL lock_timeout = '3s'"))
-            await _persist_indicators(db, symbol, results, now)
-            await _refresh_market_metadata(db, symbol, spread_payload or {}, now)
-
-        await run_db_task(_persist, celery=False)
+        await get_persistence_service().enqueue(
+            PersistenceJob(
+                domain="scheduler_microstructure",
+                symbol=symbol,
+                market_type="spot",
+                indicator=IndicatorWrite(
+                    time=now,
+                    timeframe=TIMEFRAME,
+                    market_type="spot",
+                    scheduler_group=SCHEDULER_GROUP,
+                    indicators_json=json.dumps(
+                        envelop_results(
+                            results,
+                            default_source="gate_candles",
+                            default_confidence=0.85,
+                            key_source_map=_get_micro_key_source_map(),
+                        ),
+                        default=str,
+                    ),
+                ),
+                market_metadata=MarketMetadataWrite(
+                    updated_at=now,
+                    spread_pct=(spread_payload or {}).get("spread_pct"),
+                    orderbook_depth_usdt=(spread_payload or {}).get("orderbook_depth_usdt"),
+                ),
+            )
+        )
 
         return f"{symbol}: ok indicators={len(results)}"
 
 
 async def _run_one_cycle(concurrency: int, of_window: int) -> None:
     from ..database import run_db_task
+    from ..services.persistence import get_persistence_service
 
     cycle_start = datetime.now(timezone.utc)
     try:
@@ -384,6 +413,7 @@ async def _run_one_cycle(concurrency: int, of_window: int) -> None:
             *[_refresh_one_symbol(s, semaphore, of_window) for s in symbols],
             return_exceptions=True,
         )
+        await get_persistence_service().join()
 
         ok = sum(1 for r in results if isinstance(r, str) and ": ok " in r)
         failed = sum(1 for r in results if isinstance(r, BaseException))

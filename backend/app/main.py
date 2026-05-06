@@ -83,6 +83,19 @@ async def lifespan(app: FastAPI):
         _log.warning("Pool stats logger failed to start: %s", e)
         pool_stats_task = None
 
+    # ── Persistence service ────────────────────────────────────────────────
+    stop_persistence = None
+    try:
+        from .services.persistence import (
+            start_persistence_service,
+            stop_persistence_service,
+        )
+        await start_persistence_service()
+        stop_persistence = stop_persistence_service
+    except Exception as e:
+        _log.warning("Persistence service failed to start: %s", e)
+        stop_persistence = None
+
     # ── Structural indicator scheduler (15 min, 1h OHLCV) ────────────────
     # Computes slow technical indicators: RSI, ADX, EMA, ATR, MACD, Bollinger,
     # PSAR, Z-score, OBV, Stochastic.  Disable via SKIP_STRUCTURAL_SCHEDULER=1.
@@ -214,6 +227,7 @@ async def lifespan(app: FastAPI):
                 pass
 
         for _stop_fn, _name in [
+            (stop_persistence, "Persistence service"),
             (stop_structural_scheduler, "Structural scheduler"),
             (stop_microstructure_scheduler, "Microstructure scheduler"),
             (stop_background_scheduler, "Combined scheduler"),
@@ -385,6 +399,22 @@ async def health_check_schema():
         "missing": missing,
     }
     if missing:
+        return Response(
+            content=_json.dumps(payload),
+            status_code=503,
+            media_type="application/json",
+        )
+    return payload
+
+
+@app.get("/api/health/persistence")
+async def health_check_persistence():
+    from fastapi import Response
+    import json as _json
+    from .services.persistence import get_persistence_snapshot
+
+    payload = get_persistence_snapshot()
+    if payload.get("status") != "ok":
         return Response(
             content=_json.dumps(payload),
             status_code=503,

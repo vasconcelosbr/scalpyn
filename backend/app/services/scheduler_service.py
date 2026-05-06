@@ -191,9 +191,15 @@ async def _refresh_market_metadata(db, symbol: str, df: pd.DataFrame,
 
 async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
     """Refresh OHLCV + indicators + spread/depth for a single symbol."""
-    from ..database import run_db_task
     from ..services.feature_engine import FeatureEngine
     from ..services.market_data_service import market_data_service
+    from ..services.persistence import (
+        IndicatorWrite,
+        MarketMetadataWrite,
+        OhlcvCandle,
+        PersistenceJob,
+        get_persistence_service,
+    )
     from ..services.seed_service import DEFAULT_INDICATORS
 
     async with semaphore:
@@ -232,13 +238,49 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
 
         now = datetime.now(timezone.utc)
         exchange_attr = df.attrs.get("exchange", "gate.io")
+        last_close = None
+        try:
+            last_close = float(df.iloc[-1]["close"])
+        except Exception:
+            last_close = None
 
-        async def _persist(db) -> None:
-            await _persist_ohlcv(db, symbol, df, exchange_attr)
-            await _persist_indicators(db, symbol, results, now)
-            await _refresh_market_metadata(db, symbol, df, spread_payload, now)
-
-        await run_db_task(_persist, celery=False)
+        await get_persistence_service().enqueue(
+            PersistenceJob(
+                domain="scheduler_combined",
+                symbol=symbol,
+                market_type="spot",
+                exchange=exchange_attr,
+                timeframe=TIMEFRAME,
+                candles=tuple(
+                    OhlcvCandle(
+                        time=row["time"],
+                        open=float(row["open"]),
+                        high=float(row["high"]),
+                        low=float(row["low"]),
+                        close=float(row["close"]),
+                        volume=float(row["volume"]),
+                        quote_volume=float(
+                            row.get("quote_volume")
+                            if row.get("quote_volume") is not None
+                            else float(row["close"]) * float(row["volume"])
+                        ),
+                    )
+                    for _, row in df.iterrows()
+                ),
+                indicator=IndicatorWrite(
+                    time=now,
+                    timeframe=TIMEFRAME,
+                    market_type="spot",
+                    indicators_json=json.dumps(results, default=str),
+                ),
+                market_metadata=MarketMetadataWrite(
+                    updated_at=now,
+                    price=last_close,
+                    spread_pct=spread_payload.get("spread_pct") if spread_payload else None,
+                    orderbook_depth_usdt=spread_payload.get("orderbook_depth_usdt") if spread_payload else None,
+                ),
+            )
+        )
 
         return (
             f"{symbol}: ok candles={len(df)} src={exchange_attr} "
@@ -248,6 +290,7 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
 
 async def _run_one_cycle(concurrency: int) -> None:
     from ..database import run_db_task
+    from ..services.persistence import get_persistence_service
 
     cycle_start = datetime.now(timezone.utc)
 
@@ -273,6 +316,7 @@ async def _run_one_cycle(concurrency: int) -> None:
             *[_refresh_one_symbol(s, semaphore) for s in symbols],
             return_exceptions=True,
         )
+        await get_persistence_service().join()
 
         ok = sum(1 for r in results if isinstance(r, str) and ": ok " in r)
         failed = sum(1 for r in results if isinstance(r, BaseException))
