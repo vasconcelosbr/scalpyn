@@ -1,0 +1,295 @@
+# REFACTOR ARQUITETURAL — SEPARAÇÃO DE ESTÁGIOS DO PIPELINE E REMOÇÃO DA SOBRECARGA SEMÂNTICA DE is_approved
+
+## CONTEXTO
+
+O sistema atualmente utiliza um único campo:
+
+```python
+is_approved
+
+para múltiplas responsabilidades diferentes:
+
+símbolo monitorado
+símbolo elegível para ingestão
+símbolo promovido no pipeline
+símbolo elegível para score
+símbolo elegível para operação
+símbolo apto para compra/venda
+
+Isso criou ambiguidade semântica e possivelmente um deadlock lógico:
+
+INGESTÃO
+→ gera indicadores
+→ promove L1/L2/L3
+→ define is_approved
+
+mas atualmente a ingestão parece depender de:
+
+WHERE is_approved = true
+
+o que cria dependência circular.
+
+Além disso:
+
+o sistema possui pipeline explícito:
+POOL → L1 → L2 → L3
+a UI confirma que “Approved” é estado do L3
+portanto is_approved NÃO representa apenas “ativo presente no pool”
+OBJETIVO DO REFACTOR
+
+Separar claramente:
+
+Monitoramento
+Progressão no pipeline
+Elegibilidade operacional
+Elegibilidade de trade
+
+Eliminando a sobrecarga semântica do campo único is_approved.
+
+NOVA MODELAGEM DE DOMÍNIO
+Arquitetura desejada
+Ativos no POOL
+
+Todo ativo presente no pool:
+
+manualmente
+ou
+automaticamente
+
+deve ser considerado:
+
+is_monitored = true
+
+Esses ativos:
+
+DEVEM ser coletados
+DEVEM gerar indicadores
+DEVEM participar do pipeline
+
+independentemente de aprovação operacional.
+
+PROGRESSÃO DO PIPELINE
+L1
+
+Ativos monitorados são processados pelo filtro L1.
+
+Se aprovados:
+
+is_approved_l1 = true
+L2
+
+L2 consome:
+
+is_approved_l1 = true
+
+Se aprovado:
+
+is_approved_l2 = true
+L3
+
+L3 consome:
+
+is_approved_l2 = true
+
+Se aprovado:
+
+SPOT:
+is_tradeok_spot = true
+FUTURES LONG:
+is_tradeok_long = true
+FUTURES SHORT:
+is_tradeok_short = true
+IMPORTANTE
+
+O coletor NÃO deve depender de:
+
+is_tradeok
+L1
+L2
+L3
+
+A coleta deve depender apenas de:
+
+is_monitored = true
+
+ou equivalente semântico do POOL.
+
+OBJETIVOS TÉCNICOS
+1. Eliminar dependência circular
+
+Corrigir:
+
+APPROVED → INGESTÃO
+
+para:
+
+POOL/MONITORADO
+→ INGESTÃO
+→ INDICADORES
+→ L1
+→ L2
+→ L3
+→ TRADE_OK
+2. Tornar pipeline explicitamente auditável
+
+Precisamos conseguir medir:
+
+quantos ativos estão no pool
+quantos passaram L1
+quantos passaram L2
+quantos chegaram em L3
+quantos ficaram elegíveis para operação
+3. Eliminar ambiguidades semânticas
+
+Cada campo deve possuir:
+
+uma responsabilidade única
+um significado inequívoco
+INVESTIGAR ANTES DE IMPLEMENTAR
+1. Mapear TODOS os usos atuais de is_approved
+
+Buscar:
+
+grep -R "is_approved" backend/
+
+Classificar:
+
+ingestão
+pipeline
+score
+simulation
+execution
+UI
+scheduler
+metrics
+watchlist
+pool_service
+2. Identificar dependências ocultas
+
+Verificar:
+
+queries SQL
+filtros ORM
+joins
+caches
+schedulers
+jobs Celery
+dashboards
+métricas
+APIs frontend
+3. Confirmar estados persistidos
+
+Descobrir:
+
+quais tabelas armazenam estágio
+como L1/L2/L3 são persistidos hoje
+se já existe enum/status reutilizável
+PREFERÊNCIA ARQUITETURAL
+
+Evitar explosão de múltiplos booleans permanentes.
+
+ANTES de implementar:
+avaliar arquitetura mais robusta baseada em:
+
+pipeline_stage
+
+Exemplo:
+
+POOL
+L1
+L2
+L3
+TRADE_OK_SPOT
+TRADE_OK_LONG
+TRADE_OK_SHORT
+REJECTED
+
+com campos auxiliares separados:
+
+market_type
+trade_direction
+is_active
+
+Comparar:
+
+Opção A
+
+múltiplos booleans:
+
+is_approved_l1
+is_approved_l2
+is_tradeok_spot
+etc
+Opção B
+
+enum/status_stage centralizado
+
+Avaliar:
+
+consistência
+auditabilidade
+risco de estados inválidos
+simplicidade operacional
+impacto no frontend
+impacto no banco
+facilidade de migração
+O QUE PRODUZIR COMO SAÍDA
+1. Diagnóstico arquitetural
+
+Responder:
+
+o modelo atual está semanticamente incorreto?
+existe dependência circular?
+quais responsabilidades estão misturadas?
+2. Proposta de modelagem definitiva
+
+Definir:
+
+nomes corretos
+responsabilidades corretas
+relacionamento entre estágios
+3. Fluxograma completo
+
+Desenhar:
+
+ATUAL
+vs
+PROPOSTO
+
+4. Plano de migração
+
+Descrever:
+
+migrations
+compatibilidade retroativa
+impacto em APIs
+impacto em Celery
+impacto em dashboards
+impacto em queries
+impacto em índices
+5. Riscos operacionais
+
+Identificar:
+
+pontos de quebra
+riscos de regressão
+inconsistências históricas
+estados inválidos já existentes no banco
+IMPORTANTE
+
+NÃO fazer implementação parcial improvisada.
+
+Primeiro:
+
+entender completamente o domínio
+mapear todos os usos atuais
+validar dependências
+confirmar semântica correta
+
+Somente depois:
+
+propor migrations
+propor refactor
+alterar pipeline
+alterar collectors
+alterar execution flow
