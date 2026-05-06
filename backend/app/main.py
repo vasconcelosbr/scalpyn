@@ -140,6 +140,21 @@ async def lifespan(app: FastAPI):
         _log.warning("Pipeline scheduler failed to start: %s", e)
         stop_pipeline_scheduler = None  # type: ignore[assignment]
 
+    # ── Decision event subscriber (Redis→WebSocket IPC bridge) ───────────
+    # Celery workers publish decision events to a Redis pub/sub channel;
+    # this background task subscribes and forwards them to connected browsers
+    # via ConnectionManager.broadcast(). Without this bridge, real-time
+    # updates on the /decisions page are silently dropped because the
+    # ConnectionManager singleton in the Celery process has no WS connections.
+    # Failure to start is non-fatal — the REST polling fallback still works.
+    decision_subscriber_task = None
+    try:
+        from .services.realtime_bridge import start_decision_event_subscriber
+        decision_subscriber_task = await start_decision_event_subscriber()
+    except Exception as e:
+        _log.warning("Decision event subscriber failed to start: %s", e)
+        decision_subscriber_task = None
+
     # ── Gate.io WebSocket — real-time order flow ingestion (Task #171) ────
     # Behind ENABLE_GATE_WS=1.  In multi-instance deployments only the
     # replica that wins the Redis ``gate_ws:leader`` lock opens the WS;
@@ -177,6 +192,14 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # Cancel the decision event subscriber background task
+        if decision_subscriber_task is not None:
+            decision_subscriber_task.cancel()
+            try:
+                await decision_subscriber_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
         for _stop_fn, _name in [
             (stop_structural_scheduler, "Structural scheduler"),
             (stop_microstructure_scheduler, "Microstructure scheduler"),

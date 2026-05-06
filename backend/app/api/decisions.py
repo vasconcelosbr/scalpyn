@@ -235,8 +235,8 @@ async def get_decisions(
     end_date: Optional[str] = Query(None),
     symbol: Optional[str] = Query(None),
     strategy: Optional[str] = Query(None),
-    score_min: float = Query(0, ge=0, le=100),
-    score_max: float = Query(100, ge=0, le=100),
+    score_min: Optional[float] = Query(None, ge=0, le=100),
+    score_max: Optional[float] = Query(None, ge=0, le=100),
     decision: str = Query("ALL"),
     limit: Optional[int] = Query(None, ge=1),
     cursor: Optional[str] = Query(None),
@@ -244,7 +244,7 @@ async def get_decisions(
     user_id: UUID = Depends(get_current_user_id),
 ):
     try:
-        if score_min > score_max:
+        if score_min is not None and score_max is not None and score_min > score_max:
             raise HTTPException(status_code=422, detail="score_min cannot be greater than score_max")
         settings = await _get_decision_log_settings(db, user_id)
         return await _fetch_decisions(
@@ -274,14 +274,14 @@ async def get_decisions_summary(
     end_date: Optional[str] = Query(None),
     symbol: Optional[str] = Query(None),
     strategy: Optional[str] = Query(None),
-    score_min: float = Query(0, ge=0, le=100),
-    score_max: float = Query(100, ge=0, le=100),
+    score_min: Optional[float] = Query(None, ge=0, le=100),
+    score_max: Optional[float] = Query(None, ge=0, le=100),
     decision: str = Query("ALL"),
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
     try:
-        if score_min > score_max:
+        if score_min is not None and score_max is not None and score_min > score_max:
             raise HTTPException(status_code=422, detail="score_min cannot be greater than score_max")
 
         normalized_decision = _sanitize_decision(decision)
@@ -490,20 +490,23 @@ async def list_approved_snapshot_watchlists(
         raise HTTPException(status_code=500, detail="Failed to list watchlists") from exc
 
 
+_MAX_EXPORT_ROWS = 10_000
+
+
 @router.get("/export")
 async def export_decisions(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     symbol: Optional[str] = Query(None),
     strategy: Optional[str] = Query(None),
-    score_min: float = Query(0, ge=0, le=100),
-    score_max: float = Query(100, ge=0, le=100),
+    score_min: Optional[float] = Query(None, ge=0, le=100),
+    score_max: Optional[float] = Query(None, ge=0, le=100),
     decision: str = Query("ALL"),
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
     try:
-        if score_min > score_max:
+        if score_min is not None and score_max is not None and score_min > score_max:
             raise HTTPException(status_code=422, detail="score_min cannot be greater than score_max")
 
         normalized_decision = _sanitize_decision(decision)
@@ -518,7 +521,35 @@ async def export_decisions(
             decision=normalized_decision,
         )
 
-        query = select(DecisionLog).where(and_(*filters)).order_by(desc(DecisionLog.created_at), desc(DecisionLog.id))
+        # Safety gate: count rows before loading into memory. Loading an
+        # unbounded result set crashes Cloud Run (OOM) at ~50k rows.
+        count_result = await db.execute(
+            select(func.count(DecisionLog.id)).where(and_(*filters))
+        )
+        total_count = count_result.scalar() or 0
+        if total_count > _MAX_EXPORT_ROWS:
+            logger.warning(
+                "[Decision] export_aborted | user=%s | matched=%d | limit=%d",
+                user_id, total_count, _MAX_EXPORT_ROWS,
+            )
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Export exceeds safe operational limit: {total_count} rows matched, "
+                    f"maximum is {_MAX_EXPORT_ROWS}. Add filters to narrow the result."
+                ),
+            )
+
+        logger.info(
+            "[Decision] export_started | user=%s | rows=%d",
+            user_id, total_count,
+        )
+        query = (
+            select(DecisionLog)
+            .where(and_(*filters))
+            .order_by(desc(DecisionLog.created_at), desc(DecisionLog.id))
+            .limit(_MAX_EXPORT_ROWS)
+        )
         result = await db.execute(query)
         rows = result.scalars().all()
 
@@ -558,6 +589,10 @@ async def export_decisions(
 
         output.seek(0)
         filename = f"decisions_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
+        logger.info(
+            "[Decision] export_completed | user=%s | rows=%d | filename=%s",
+            user_id, len(rows), filename,
+        )
         return StreamingResponse(
             iter([output.getvalue()]),
             media_type="text/csv",
