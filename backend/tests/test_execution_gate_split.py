@@ -136,6 +136,26 @@ def test_classifier_flags_active_but_unapproved_row_as_not_approved() -> None:
     assert record.is_approved is True  # alias for is_active in new model
 
 
+def test_execute_buy_orders_tradable_before_limit() -> None:
+    """Regression for Task #232 reviewer feedback: the candidate-cap
+    SQL must place ``is_tradable=true`` rows ahead of inactive ones so
+    a wide pool of non-tradable symbols cannot starve tradable
+    candidates out of the ``LIMIT :cap`` window.
+    """
+    import inspect
+    from app.tasks import execute_buy
+
+    src = inspect.getsource(execute_buy).lower()
+    # The query must (a) carry the LIMIT, (b) order by tradable DESC
+    # ahead of that LIMIT.
+    assert "limit :cap" in src
+    assert "order by bool_or(pc.is_tradable) desc" in src, (
+        "execute_buy candidate query MUST `ORDER BY bool_or(pc."
+        "is_tradable) DESC` before the LIMIT — otherwise non-tradable "
+        "rows can crowd out tradable ones in the evaluation cap."
+    )
+
+
 def test_classifier_missing_pool_row_is_not_approved() -> None:
     """A symbol with no pool_coins row at all is still NOT_APPROVED."""
     record = _classify(

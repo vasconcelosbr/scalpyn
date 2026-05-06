@@ -355,3 +355,16 @@ def test_pool_queries_filter_execution_gate(module_name: str) -> None:
         f"{module_name}: missing per-symbol ``reason=NOT_TRADABLE`` "
         "decision log next to the gate check."
     )
+    # Invariant #5b (Task #232 reviewer): a SELECT FROM pool_coins
+    # that carries ``LIMIT`` MUST also order by ``is_tradable DESC``
+    # so non-tradable rows cannot starve the tradable subset out of
+    # the cap window.
+    for stmt in selects:
+        if "limit" not in stmt:
+            continue
+        assert "order by" in stmt and "is_tradable" in stmt and "desc" in stmt, (
+            f"{module_name}: capped SELECT FROM pool_coins must "
+            "``ORDER BY ... is_tradable ... DESC`` before the LIMIT "
+            "so the tradable subset is not starved by inactive rows. "
+            f"Statement was:\n{stmt[:300]}…"
+        )

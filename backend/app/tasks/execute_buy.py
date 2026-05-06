@@ -261,6 +261,12 @@ async def _execute_buy_cycle_async() -> dict:
                 from ..services.execution_gate_metrics import record_not_tradable
 
                 cap = max(max_opps * 20, 50)
+                # Task #232 — ORDER BY tradable DESC BEFORE LIMIT so a
+                # large pool of non-tradable rows can never starve the
+                # tradable subset out of the cap window. Without this
+                # ordering the unbounded SQL ``LIMIT`` could return
+                # only ``is_tradable=false`` rows and drop every
+                # tradable symbol from this user's evaluation cycle.
                 pool_rows_res = await db.execute(text("""
                     SELECT pc.symbol,
                            bool_or(pc.is_tradable) AS is_tradable
@@ -269,6 +275,7 @@ async def _execute_buy_cycle_async() -> dict:
                      WHERE pc.is_active = true
                        AND p.user_id    = :uid
                   GROUP BY pc.symbol
+                  ORDER BY bool_or(pc.is_tradable) DESC, pc.symbol ASC
                      LIMIT :cap
                 """), {"uid": user_id, "cap": cap})
                 pool_rows = pool_rows_res.fetchall()
