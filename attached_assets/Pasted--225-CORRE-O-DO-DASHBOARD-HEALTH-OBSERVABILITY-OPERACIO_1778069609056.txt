@@ -1,0 +1,365 @@
+#225 — CORREÇÃO DO DASHBOARD HEALTH + OBSERVABILITY OPERACIONAL COMPLETA
+
+## CONTEXTO
+
+O dashboard `/dashboard/performance` está apresentando falso negativo operacional.
+
+O sistema REAL está saudável:
+
+- Redis operacional
+- Celery Worker operacional
+- Celery Beat operacional
+- collect_5m operacional
+- persistência OHLCV operacional
+- 51 símbolos ativos
+- ingestão funcionando
+
+Porém o dashboard mostra:
+
+- PARADO
+- símbolos = 0
+- candles = 0
+- delay crítico
+
+A investigação confirmou:
+
+```sql
+SELECT
+    COUNT(*) AS rows_1h,
+    MAX(time) AS last_candle,
+    NOW() - MAX(time) AS delay,
+    COUNT(DISTINCT symbol) AS symbols
+FROM ohlcv
+WHERE time > NOW() - INTERVAL '1 hour';
+
+Resultado:
+
+rows_1h > 0
+symbols = 51
+delay ≈ 8 min
+
+ROOT CAUSE confirmado:
+O dashboard assume incorretamente persistência sub-5min, mas o pipeline real opera em:
+
+batch
+fila Celery
+persistência assíncrona
+delay operacional normal ≈ 7–9 min
+
+Portanto:
+o erro é EXCLUSIVAMENTE na lógica do dashboard health.
+
+OBJETIVO
+Corrigir o falso negativo do dashboard
+Transformar /dashboard/performance em um painel operacional completo (observability center)
+Adicionar monitoramento operacional em tempo real dos processos críticos do sistema
+NÃO usar Grafana
+NÃO usar iframe
+Tudo integrado ao sistema atual
+RESTRIÇÕES CRÍTICAS
+
+NÃO modificar:
+
+pipeline_scan
+collect_market_data
+indicators_provider
+fetch_merged_indicators
+score_engine
+block_engine
+execute_buy
+evaluate_signals
+lógica de trading
+
+NÃO alterar:
+
+schema operacional existente
+tabelas core
+Celery topology
+
+Permitido:
+
+endpoints read-only
+queries SQL agregadas
+frontend dashboard
+monitoramento
+telemetry
+observability
+métricas
+PARTE 1 — CORREÇÃO DO HEALTH DASHBOARD
+Corrigir thresholds
+
+Trocar:
+
+INTERVAL '5 minutes'
+
+por:
+
+INTERVAL '15 minutes'
+Novos thresholds operacionais
+VERDE
+
+delay < 10 min
+
+AMARELO
+
+10–20 min
+
+VERMELHO
+
+20 min
+
+Métricas corretas
+Candles
+COUNT(*)
+WHERE time > NOW() - INTERVAL '15 minutes'
+Símbolos
+COUNT(DISTINCT symbol)
+Delay
+NOW() - MAX(time)
+PARTE 2 — NOVO CENTRO OPERACIONAL (OBSERVABILITY)
+
+Expandir /dashboard/performance para um centro operacional completo contendo:
+
+SEÇÃO A — PIPELINE HEALTH
+
+Painéis:
+
+Último candle
+Delay ingestão
+Candles últimos 15m
+Símbolos ativos
+Throughput candles/min
+Tempo médio persistência
+Tempo médio ciclo collect_5m
+Tempo médio pipeline_scan
+Tempo médio score_engine
+Tempo médio evaluate_signals
+SEÇÃO B — CELERY OPERATIONS
+
+Monitorar em tempo real:
+
+Worker online/offline
+Beat online/offline
+Último heartbeat
+Filas:
+microstructure
+structural
+execution
+Quantidade de tasks:
+queued
+active
+failed
+retried
+succeeded
+Tempo médio task
+Tempo máximo task
+Último erro
+Última execução de:
+collect_5m
+pipeline_scan
+trade_monitor
+trade_reconciliation
+decision_log_enricher
+SEÇÃO C — REDIS HEALTH
+
+Monitorar:
+
+Redis ping latency
+Connected clients
+Memory usage
+Queue backlog
+Redis status
+Total commands/sec
+Cache hit ratio
+Último reconnect
+Queue congestion
+SEÇÃO D — SCORE ENGINE
+
+Monitorar:
+
+Tempo médio score
+Scores/min
+Distribuição de score
+Quantidade:
+ALLOW
+BLOCK
+WATCHLIST
+FAIL
+Principais motivos de bloqueio
+Regras mais acionadas
+Confidence médio
+Breakdown médio
+Pipeline stages:
+L1
+L2
+L3
+Throughput do engine
+SEÇÃO E — DECISION LOG ANALYTICS
+Decisions/min
+ALLOW vs BLOCK
+Heatmap horário
+Estratégias mais acionadas
+Latência pipeline
+Tempo entre:
+coleta
+score
+decisão
+execução
+SEÇÃO F — TRADE OPERATIONS
+Trades abertos
+Trades simulados
+Trades reais
+Win rate
+Avg pnl
+Avg holding
+Timeout rate
+TP hit rate
+SL hit rate
+Simulado vs real
+SEÇÃO G — SYSTEM HEALTH
+Cloud Run status
+CPU usage
+RAM usage
+DB pool usage
+Active DB connections
+Query latency
+Slow queries
+API latency
+Request rate
+Error rate
+SEÇÃO H — ALERTAS OPERACIONAIS
+
+Banner automático:
+
+Redis down
+Worker offline
+Beat offline
+Pipeline delay
+Queue congestion
+DB latency
+Error spike
+No ingestion
+No decisions
+No score processing
+BACKEND
+
+Criar router isolado:
+
+/api/observability/*
+
+Endpoints read-only:
+
+health
+celery
+redis
+score-engine
+ingestion
+pipeline
+decisions
+trades
+system
+
+Usar:
+
+SQL agregada
+Redis INFO
+Celery inspect
+métricas internas
+
+NÃO criar polling agressivo.
+
+FRONTEND
+
+Expandir:
+
+/dashboard/performance
+
+Tecnologias:
+
+SWR
+recharts
+Tailwind
+lucide-react
+
+Layout:
+
+dark mode
+responsive
+grids
+cards
+live status badges
+AUTO REFRESH
+
+Health crítico:
+10s
+
+Métricas operacionais:
+30s
+
+Analytics pesadas:
+60s
+
+PERFORMANCE
+
+Endpoints devem responder:
+<500ms
+
+Sem:
+
+N+1
+scan pesado
+full table scan
+
+Usar:
+
+LIMIT
+índices existentes
+agregação temporal
+VALIDAÇÃO OBRIGATÓRIA
+Dashboard NÃO pode mais mostrar falso "PARADO"
+Delay real deve refletir:
+≈ 7–9 min
+Dashboard deve mostrar:
+Redis healthy
+Worker online
+Beat online
+queues ativas
+score engine operacional
+ingestion operacional
+Validar:
+SELECT MAX(time), NOW() - MAX(time)
+FROM ohlcv;
+
+deve bater com o banner visual.
+
+FORMATO DA ENTREGA
+
+Retornar:
+
+IMPLEMENTADO
+
+(lista completa)
+
+MÉTRICAS NOVAS
+
+(lista)
+
+ENDPOINTS NOVOS
+
+(lista)
+
+FRONTEND NOVO
+
+(lista)
+
+EVIDÊNCIAS
+
+(queries + payloads + screenshots)
+
+STATUS FINAL
+
+(health operacional)
+
+RISCO
+
+(baixo/médio/alto)
