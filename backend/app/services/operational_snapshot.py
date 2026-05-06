@@ -142,16 +142,9 @@ class OperationalSnapshotService:
 
         # Track previously-seen alert codes so we only push transitions.
         self._prev_alert_codes: set[str] = set()
-        # First-fire timestamp per active alert code, persisted across
-        # snapshot refreshes so the dashboard's `since` field is stable
-        # (otherwise it would "move forward" every probe interval as
-        # `snapshot.as_of` advances).  Cleared when an alert resolves.
+        # First-fire timestamp per code; persisted so `since` is stable.
         self._alert_first_seen: Dict[str, str] = {}
-        # Cache populated by the dedicated alert refresh loop so transition
-        # bookkeeping (history pushes, first-seen stamps) happens on a
-        # background ticker — independent of HTTP read traffic.  API
-        # handlers read this cache rather than re-evaluating, ensuring no
-        # transition is lost during read-quiet periods.
+        # Filled by _refresh_alerts so HTTP reads never mutate transitions.
         self._alerts_cache: List[Dict[str, Any]] = []
         self._alerts_cache_as_of: Optional[datetime] = None
         self._prev_workers: set[str] = set()
@@ -241,17 +234,9 @@ class OperationalSnapshotService:
         hard_status: str = "critical",
         down_data: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Record a failed probe.
-
-        Status only flips after FAIL_TOLERANCE consecutive failures, but
-        liveness-critical fields (``alive``, ``worker_count``, queue
-        lengths…) are overwritten **immediately** via ``down_data`` so
-        the dashboard never shows stale "online" while the snapshot is
-        actually critical.  Refreshers for liveness-shaped probes (Redis,
-        Celery) MUST pass an explicit ``down_data`` reflecting the
-        offline state.  Other numeric/window probes (DB pool, latency,
-        score) can omit it — for those, keeping the previous data
-        prevents graphs from blanking on a single transient failure.
+        """Record a failed probe. Status flips only after FAIL_TOLERANCE
+        strikes, but liveness-shaped probes (Redis, Celery) must pass
+        ``down_data`` so the UI never reads stale "online" mid-outage.
         """
         prev: Snapshot = getattr(self, attr)
         streak = prev.failure_streak + 1
@@ -259,13 +244,7 @@ class OperationalSnapshotService:
             new_status = prev.status if prev.status != "unknown" else soft_status
         else:
             new_status = hard_status
-        if down_data is not None:
-            # Merge so any keys the refresher didn't bother re-stating
-            # are preserved (e.g. last-known queue list shape) but
-            # liveness fields the caller did set always win.
-            merged = {**(prev.data or {}), **down_data}
-        else:
-            merged = prev.data
+        merged = {**(prev.data or {}), **down_data} if down_data is not None else prev.data
         setattr(self, attr, Snapshot(
             as_of=datetime.now(timezone.utc),
             status=new_status,
@@ -360,10 +339,7 @@ class OperationalSnapshotService:
             "alive": False,
         }
         try:
-            # Strict absolute budget: the inner inspect() call already
-            # passes `timeout=CELERY_TIMEOUT_S` to kombu, and the outer
-            # wait_for caps the to_thread wrapper at the same value so
-            # the probe can never exceed CELERY_TIMEOUT_S end-to-end.
+            # End-to-end budget = CELERY_TIMEOUT_S (kombu inspect + wait_for).
             data = await asyncio.wait_for(
                 asyncio.to_thread(_inspect_celery_blocking),
                 timeout=CELERY_TIMEOUT_S,
@@ -385,8 +361,7 @@ class OperationalSnapshotService:
 
         workers = sorted(data.get("workers", []))
         if not workers:
-            # No workers reachable is itself a probe-level signal: route
-            # through the failure path so we honour the 3-strike contract.
+            # Route through failure path to honour the 3-strike contract.
             self._apply_failure(
                 "celery",
                 "No workers responded to inspect()",
@@ -452,8 +427,7 @@ class OperationalSnapshotService:
 
     async def _refresh_redis(self) -> None:
         """Redis liveness + INFO + per-queue LLEN (1 s budget)."""
-        # Liveness-shaped fields written on every failure path so the UI
-        # never reads a stale "alive" view while status is critical.
+        # Liveness-shaped down_data — written on every failure path.
         redis_down: Dict[str, Any] = {
             "alive": False,
             "ping_ms": None,
@@ -503,9 +477,7 @@ class OperationalSnapshotService:
             data = await asyncio.wait_for(_probe(), timeout=REDIS_TIMEOUT_S)
             alive = bool(data.get("alive"))
             self._record_redis_transition(alive, None)
-            # Backlog on __no_default__ is an architectural alarm (invariant
-            # #4 — task escaped TASK_ROUTES).  We expose the number so the
-            # alert engine and the dashboard can show it.
+            # __no_default__ backlog = invariant #4 alarm (task escaped TASK_ROUTES).
             no_default = data["queue_lengths"].get("__no_default__", 0)
             backlog_total = sum(
                 v for k, v in data["queue_lengths"].items()
@@ -889,8 +861,7 @@ class OperationalSnapshotService:
 
     # ── alert engine ───────────────────────────────────────────────────────
     async def _refresh_alerts(self) -> None:
-        """Background ticker — recompute alerts and record transitions
-        every ALERT_INTERVAL_S so history is never tied to HTTP traffic."""
+        """Background ticker — recompute alerts every ALERT_INTERVAL_S."""
         alerts = self._evaluate_alerts(record_transitions=True)
         self._alerts_cache = alerts
         self._alerts_cache_as_of = datetime.now(timezone.utc)
@@ -916,21 +887,14 @@ class OperationalSnapshotService:
 
         if self.redis.status == "critical":
             alerts.append({
-                "severity": "critical", "category": "infra", "code": "redis_down",
+                "severity": "critical", "category": "redis", "code": "redis_down",
                 "impact": "WS leader election parado, indicators_provider sem cache, throttle desabilitado.",
                 "since": self.redis.as_of.isoformat() if self.redis.as_of else None,
                 "details": {"error": self.redis.error},
             })
 
-        # worker_offline_60s — fires only after the celery probe has been
-        # failing long enough to cross the ~60 s threshold.  The celery
-        # refresher runs every CELERY_INTERVAL_S (15 s), and `_apply_failure`
-        # only flips status to ``degraded`` after FAIL_TOLERANCE strikes —
-        # so failure_streak >= 4 is ≈ 60 s of confirmed worker absence.
-        # Predicate driven by status + failure_streak only — never by the
-        # `worker_count` field, which could be stale on a fresh outage.
-        # The celery refresher overwrites worker_count=0 in down_data on
-        # every failure, but the alert engine must not depend on that.
+        # worker_offline_60s — status + streak only (≥4 strikes ≈ 60s at
+        # CELERY_INTERVAL_S=15s). Never reads worker_count which can be stale.
         worker_failure_streak = self.celery.failure_streak
         if (
             self.celery.status in ("degraded", "critical")
@@ -989,14 +953,14 @@ class OperationalSnapshotService:
         if isinstance(delay, (int, float)):
             if delay > 1200:
                 alerts.append({
-                    "severity": "critical", "category": "ingest", "code": "ingestion_stale",
+                    "severity": "critical", "category": "ingestion", "code": "ingestion_stale",
                     "impact": "OHLCV não atualiza há mais de 20 min — decisões usam dados velhos.",
                     "since": self.ingestion.as_of.isoformat() if self.ingestion.as_of else None,
                     "details": {"delay_seconds": delay, "last_candle": self.ingestion.data.get("last_candle")},
                 })
             elif delay > 600:
                 alerts.append({
-                    "severity": "warning", "category": "ingest", "code": "ingestion_lagging",
+                    "severity": "warning", "category": "ingestion", "code": "ingestion_lagging",
                     "impact": "OHLCV atrasado entre 10 e 20 min — aceitável em catch-up multi-symbol.",
                     "since": self.ingestion.as_of.isoformat() if self.ingestion.as_of else None,
                     "details": {"delay_seconds": delay},
@@ -1008,7 +972,7 @@ class OperationalSnapshotService:
         cold = self.score.status != "unknown" and (decisions_24h or 0) == 0
         if stalled or cold:
             alerts.append({
-                "severity": "critical", "category": "score", "code": "no_decisions",
+                "severity": "critical", "category": "decisions", "code": "no_decisions",
                 "impact": (
                     "Nenhuma decisão nas últimas 24h — score engine sem dados/regra ou pipeline_scan parado."
                     if cold else
@@ -1048,12 +1012,8 @@ class OperationalSnapshotService:
                 "details": {"p95_ms": proc_p95, "samples": self.processing_latency.data.get("samples")},
             })
 
-        # Push *new* alert codes into history; clear codes that healed.
-        # Only the background `_refresh_alerts` ticker passes
-        # ``record_transitions=True`` — HTTP read paths must never mutate
-        # `_alert_history` / `_alert_first_seen` / `_prev_alert_codes`,
-        # otherwise concurrent reads would race the ticker and lose
-        # transitions.
+        # Push new codes / clear healed codes. Only the background ticker
+        # mutates state — HTTP reads pass record_transitions=False.
         cur_codes = {a["code"] for a in alerts}
         if record_transitions:
             now_iso = now.isoformat()
@@ -1075,10 +1035,7 @@ class OperationalSnapshotService:
                 ))
             self._prev_alert_codes = cur_codes
 
-        # Stamp every active alert with its persisted first-seen timestamp
-        # so `since` reflects the true alert start, not the snapshot's
-        # rolling `as_of`.  Falls back to the snapshot timestamp only if
-        # the alert was already firing before this code was deployed.
+        # Stamp `since` with the persisted first-seen so it doesn't drift.
         for a in alerts:
             persisted = self._alert_first_seen.get(a["code"])
             if persisted:
@@ -1088,13 +1045,7 @@ class OperationalSnapshotService:
 
     # ── public API ─────────────────────────────────────────────────────────
     def _current_alerts(self) -> List[Dict[str, Any]]:
-        """Read alerts from the background-refreshed cache.
-
-        Falls back to a one-off non-recording evaluation only on the
-        first request before the alert ticker has run once — this keeps
-        ``/overview`` answering immediately on cold boot without ever
-        racing the ticker on transition bookkeeping.
-        """
+        """Read from alert cache; fall back to read-only eval on cold boot."""
         if self._alerts_cache_as_of is None:
             return self._evaluate_alerts(record_transitions=False)
         return list(self._alerts_cache)

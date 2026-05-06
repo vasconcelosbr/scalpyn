@@ -419,45 +419,10 @@ async def get_ml_dataset(
 
 @router.get("/overview", response_model=OperationalOverviewResponse)
 async def get_overview(_user_id: UUID = Depends(get_current_user_id)):
-    """Aggregated operational snapshot — single source for the
-    `/dashboard/performance` page (Task #225).
+    """Aggregated operational snapshot — single source for /dashboard/performance.
 
-    Response contract (:class:`OperationalOverviewResponse`):
-
-    ``{
-        as_of:           ISO8601 — moment this aggregation was assembled,
-        overall_status:  "ok" | "degraded" | "critical" | "unknown",
-        snapshots: {
-            ingestion, celery, redis, db, score,
-            ingestion_latency, decision_latency, processing_latency
-        }   # each value is a SnapshotEnvelope:
-            # { as_of, status, data: {...}, error, failure_streak }
-        alerts:      [ {severity, category, code, impact, since, details} ],
-        alert_count: int
-    }``
-
-    Notes on naming:
-
-    * ``as_of`` (not ``generated_at``) — the field is named after
-      the snapshot framework's per-family timestamp for consistency
-      across `/overview`, `/celery`, `/redis`, etc.
-    * ``snapshots`` is nested (not flat) so the eight families can
-      be iterated generically by the frontend without enumerating
-      keys at the top level.
-
-    Outage status semantics: liveness-shaped probes (Redis ping,
-    Celery worker inspect) escalate to ``critical`` after
-    ``FAIL_TOLERANCE`` consecutive strikes, with ``failure_streak``
-    exposed in each ``SnapshotEnvelope`` so consumers can distinguish
-    a transient blip (streak < 3, status preserved) from a confirmed
-    outage (streak ≥ 3, status flipped). Liveness-critical fields in
-    the ``data`` payload (``alive``, ``worker_count``, queue lengths…)
-    are overwritten on every failure path so the UI never reads a
-    stale "online" view while ``status`` is critical.
-
-    This endpoint is O(1) — it reads only the in-memory snapshot
-    cache populated by background refreshers and never touches Redis
-    or the Celery broker inline.
+    O(1) read from OperationalSnapshotService cache. See
+    :class:`OperationalOverviewResponse` for the shape.
     """
     return get_ops_service().get_overview()
 
@@ -486,23 +451,13 @@ async def get_score_snapshot(_user_id: UUID = Depends(get_current_user_id)):
 async def get_latency_snapshot(
     family: Optional[str] = Query(
         None,
-        description="ingestion | decision | processing. Omit to receive all three.",
+        description="ingestion | decision | processing. Omit for all three.",
     ),
     _user_id: UUID = Depends(get_current_user_id),
 ):
-    """Pipeline latency split into three families.
-
-    * ``ingestion``  — gap between NOW and the most recent OHLCV candle.
-    * ``decision``   — p50/p95/max of candle→decision lag derived from a
-                       LATERAL join between ``ohlcv_candles`` and
-                       ``decisions_log`` over the last 24 h (capped at
-                       20k decisions for query budget).
-    * ``processing`` — p50/p95 derived from the in-process Prometheus
-                       ``indicator_computation_duration_seconds`` histogram.
-
-    Without ``family`` the response is a dict of three
-    :class:`SnapshotEnvelope`-shaped entries; with ``family`` it returns
-    a single envelope.
+    """Latency snapshots: ingestion (NOW − last candle), decision
+    (candle→decision p50/p95/max via LATERAL join over 24h, capped 20k),
+    processing (Prometheus indicator_computation_duration_seconds p50/p95).
     """
     svc = get_ops_service()
     families = {
@@ -524,21 +479,15 @@ async def get_ingestion_snapshot(_user_id: UUID = Depends(get_current_user_id)):
 
 @router.get("/alerts", response_model=None)
 async def get_alerts(_user_id: UUID = Depends(get_current_user_id)):
-    """Current alerts + transition history.
-
-    Reads from the background-refreshed alert cache (recomputed every
-    ``ALERT_INTERVAL_S``) so transition bookkeeping is independent of
-    HTTP read traffic. Shape: ``{as_of, current: [...], history: [...]}``.
+    """Current alerts + transition history (read from alert cache).
+    Shape: {as_of, current: [...], history: [...]}.
     """
     return get_ops_service().get_alerts()
 
 
 _EVENT_CATEGORIES = {"alert", "worker", "redis", "all"}
-# Path-variant has a strict response_model that requires the
-# filtered-envelope shape (`{as_of, category, events}`), so it cannot
-# accept "all" — that value returns the three-bucket unfiltered shape
-# and would raise FastAPI ResponseValidationError → 500.  Callers
-# wanting the unfiltered shape via the path API must use `/events`.
+# Path variant excludes "all" — that value returns the unfiltered shape
+# which fails the strict response_model on /events/{category}.
 _EVENT_CATEGORIES_FILTERED = {"alert", "worker", "redis"}
 
 
@@ -546,21 +495,15 @@ _EVENT_CATEGORIES_FILTERED = {"alert", "worker", "redis"}
 async def get_events(
     category: Optional[str] = Query(
         None,
-        description="alert | worker | redis | all. Omit for the three-bucket envelope.",
+        description="alert | worker | redis | all. Omit for the unfiltered envelope.",
     ),
     limit: int = Query(50, ge=1, le=100),
     _user_id: UUID = Depends(get_current_user_id),
 ):
     """Operational event stream.
 
-    Without ``category``: returns :class:`OperationalEventsResponse`
-    (three buckets together — ``alert_history``, ``worker_events``,
-    ``redis_degradations``).
-    With ``category``: returns :class:`OperationalEventsFilteredResponse`
-    (single ``events`` array). Unknown categories yield 400 instead of
-    silently returning empty results, so caller mistakes surface early.
-    The path-based variant ``/events/{category}`` is kept as a
-    strict-typed alias.
+    Without ``category``: returns OperationalEventsResponse (3 buckets).
+    With ``category``: returns OperationalEventsFilteredResponse.
     """
     if category is not None and category not in _EVENT_CATEGORIES:
         raise HTTPException(
@@ -579,14 +522,8 @@ async def get_events_filtered(
     limit: int = Query(50, ge=1, le=100),
     _user_id: UUID = Depends(get_current_user_id),
 ):
-    """Strict-typed alias for ``/events?category={category}`` — single
-    category (``alert``, ``worker``, or ``redis``).
-
-    Does **not** accept ``all`` because the underlying service returns
-    the three-bucket unfiltered envelope for that value, which would
-    fail this route's strict ``OperationalEventsFilteredResponse``
-    validation (FastAPI 500). Use ``GET /events`` (no category) for
-    the unfiltered envelope.
+    """Strict-typed alias for /events?category={alert|worker|redis}.
+    Does not accept "all" — use GET /events for the unfiltered envelope.
     """
     if category not in _EVENT_CATEGORIES_FILTERED:
         raise HTTPException(

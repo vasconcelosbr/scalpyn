@@ -137,10 +137,7 @@ class OperationalEvent(BaseModel):
 
 
 class OperationalEventsResponse(BaseModel):
-    """Unfiltered envelope: three buckets returned together.
-
-    Returned by ``GET /api/dashboard/events`` (no query params).
-    """
+    """Unfiltered envelope returned by GET /api/dashboard/events."""
     as_of: str
     alert_history: List[OperationalEvent] = []
     worker_events: List[OperationalEvent] = []
@@ -148,10 +145,7 @@ class OperationalEventsResponse(BaseModel):
 
 
 class OperationalEventsFilteredResponse(BaseModel):
-    """Filtered envelope: events from a single category.
-
-    Returned by ``GET /api/dashboard/events/{category}``.
-    """
+    """Single-category envelope (GET /api/dashboard/events/{category})."""
     as_of: str
     category: str
     events: List[OperationalEvent] = []

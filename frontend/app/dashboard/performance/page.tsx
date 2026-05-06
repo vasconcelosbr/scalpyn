@@ -416,7 +416,7 @@ function OperationalBanner({ data }: { data: OverviewResp | null }) {
             {STATUS_LABEL_PT[ingestionStatus] ?? ingestionStatus}
           </span>
           <span className="text-[12px]" style={{ color: C.textSecondary }}>
-            Banner = atraso de ingestão · verde &lt; 10 min · amarelo 10–20 min · vermelho &gt; 20 min
+            Atraso de ingestão · verde &lt; 10 min · amarelo 10–20 min · vermelho &gt; 20 min
           </span>
         </div>
       </div>
@@ -859,7 +859,7 @@ function EventsHistoryBody({ data }: { data: EventsResp }) {
       ...(data.worker_events ?? []).map((e) => ({ ...e, kind: e.category ?? "worker" })),
       ...(data.redis_degradations ?? []).map((e) => ({ ...e, kind: e.category ?? "redis" })),
     ];
-    return all.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime()).slice(0, 30);
+    return all.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime()).slice(0, 100);
   }, [data]);
   if (merged.length === 0) return <EmptyState message="Sem eventos registrados nesta sessão." />;
   return (
@@ -1132,41 +1132,68 @@ function MLDatasetPanel({ data }: { data: MlResp | null }) {
 }
 
 // ─── Lazy analytics section ──────────────────────────────────────────────────
+// Auxiliary KPI charts. Fetched once on-demand (no polling) so this page
+// only ever has ONE continuous polling loop (`/overview`) per Task #225.
 function AnalyticsSection() {
-  // Polling endpoints only mount when the section is expanded — that
-  // satisfies the Task #225 invariant that observability panels must not
-  // poll legacy /api/dashboard/{decisions,trades,ml-dataset,...} endpoints.
-  // These are auxiliary KPI charts the operator can choose to load.
-  const ingest    = usePoll<OhlcvRateResp>("/dashboard/ohlcv-rate?minutes=60", 60_000);
-  const decisions = usePoll<DecisionsResp>("/dashboard/decisions?hours=24", 60_000);
-  const trades    = usePoll<TradesResp>("/dashboard/trades?days=30", 120_000);
-  const comp      = usePoll<CompResp>("/dashboard/trade-comparison?days=30", 120_000);
-  const ml        = usePoll<MlResp>("/dashboard/ml-dataset?limit=100", 120_000);
+  const [ingest, setIngest]       = useState<OhlcvRateResp | null>(null);
+  const [decisions, setDecisions] = useState<DecisionsResp | null>(null);
+  const [trades, setTrades]       = useState<TradesResp | null>(null);
+  const [comp, setComp]           = useState<CompResp | null>(null);
+  const [ml, setMl]               = useState<MlResp | null>(null);
+  const [loading, setLoading]     = useState(false);
+  const [err, setErr]             = useState<string | null>(null);
+
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const [a, b, c, d, e] = await Promise.all([
+        apiGet<OhlcvRateResp>("/dashboard/ohlcv-rate?minutes=60"),
+        apiGet<DecisionsResp>("/dashboard/decisions?hours=24"),
+        apiGet<TradesResp>("/dashboard/trades?days=30"),
+        apiGet<CompResp>("/dashboard/trade-comparison?days=30"),
+        apiGet<MlResp>("/dashboard/ml-dataset?limit=100"),
+      ]);
+      setIngest(a); setDecisions(b); setTrades(c); setComp(d); setMl(e);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
 
   return (
     <div className="flex flex-col gap-5">
+      <div className="flex justify-end">
+        <button
+          onClick={loadAll}
+          disabled={loading}
+          className="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+          style={{ background: C.elevated2, border: `1px solid ${C.border}`, color: C.textPrimary }}
+        >
+          <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
+          Recarregar
+        </button>
+      </div>
+      {err && <EmptyState message={`Erro ao carregar: ${err}`} />}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <IngestRateChart data={ingest.data} />
-        <DecisionStatsPanel data={decisions.data} />
+        <IngestRateChart data={ingest} />
+        <DecisionStatsPanel data={decisions} />
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <div className="lg:col-span-2"><TradePerformancePanel data={trades.data} /></div>
-        <SimVsRealPanel data={comp.data} />
+        <div className="lg:col-span-2"><TradePerformancePanel data={trades} /></div>
+        <SimVsRealPanel data={comp} />
       </div>
-      <MLDatasetPanel data={ml.data} />
+      <MLDatasetPanel data={ml} />
     </div>
   );
 }
 
 // ─── Page root ───────────────────────────────────────────────────────────────
 export default function PerformanceDashboardPage() {
-  // Observability surface: ONLY two endpoints poll continuously, both
-  // backed by the OperationalSnapshotService cache so handlers never block
-  // on Celery inspect or Redis INFO.
-  // Only /overview polls — every observability number lives in that single
-  // payload (Task #225 contract).  /events is fetched on-demand to avoid a
-  // second background loop on dependencies that are already represented in
-  // the alert engine via the snapshot status fields.
+  // Only /overview polls continuously (Task #225). /events is on-demand.
   const overview = usePoll<OverviewResp>("/dashboard/overview", 15_000);
   const [eventsData, setEventsData] = useState<EventsResp | null>(null);
   const [eventsLoading, setEventsLoading] = useState(false);
@@ -1175,7 +1202,7 @@ export default function PerformanceDashboardPage() {
   const fetchEvents = useCallback(async () => {
     setEventsLoading(true);
     try {
-      const res = await apiGet<EventsResp>("/dashboard/events?limit=50");
+      const res = await apiGet<EventsResp>("/dashboard/events?limit=100");
       setEventsData(res);
       setEventsError(null);
     } catch (e: unknown) {
