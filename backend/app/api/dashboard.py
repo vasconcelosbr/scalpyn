@@ -38,22 +38,28 @@ from ..schemas.dashboard import (
     MlDatasetResponse,
     OhlcvBucket,
     OhlcvRateResponse,
+    OperationalEventsResponse,
+    OperationalOverviewResponse,
     ScoreBucket,
+    SnapshotEnvelope,
     SystemStatusResponse,
     TradeComparisonItem,
     TradeComparisonResponse,
     TradesAggResponse,
 )
+from ..services.operational_snapshot import get_service as get_ops_service
 from .config import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
-# Health thresholds (segundos).  6 min = ok, 6–10 min = warn, >10 min = critical.
-# Mirrored on the frontend — keep both in sync.
-HEALTH_OK_SECONDS = 6 * 60
-HEALTH_WARN_SECONDS = 10 * 60
+# Health thresholds (segundos).  10 min = ok, 10–20 min = warn, >20 min = critical.
+# Loosened in Task #225 after observing that legitimate Celery/collect_all cycles
+# can stretch up to 12-14 min during multi-symbol catch-ups; the previous 6/10
+# thresholds were paging on healthy operation.  Mirrored on the frontend banner.
+HEALTH_OK_SECONDS = 10 * 60
+HEALTH_WARN_SECONDS = 20 * 60
 
 
 def _classify_health(delay_seconds: Optional[float]) -> tuple[str, str]:
@@ -429,6 +435,65 @@ async def get_ml_dataset(
         for r in rows
     ]
     return MlDatasetResponse(total=len(items), items=items)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Task #225 — Operational observability
+# ─────────────────────────────────────────────────────────────────────────────
+# All endpoints below read from the OperationalSnapshotService cache.  They
+# are O(1) and never touch Redis / Celery / DB synchronously — the background
+# refreshers in services/operational_snapshot.py do that off-loop.
+#
+# `/overview` is the single endpoint the frontend banner uses (one HTTP call
+# instead of six).  The per-family endpoints are kept for debugging and so
+# operators can curl one snapshot at a time.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/overview", response_model=OperationalOverviewResponse)
+async def get_overview(_user_id: UUID = Depends(get_current_user_id)):
+    """Aggregated operational snapshot — single source for the dashboard banner."""
+    return get_ops_service().get_overview()
+
+
+@router.get("/celery", response_model=SnapshotEnvelope)
+async def get_celery_snapshot(_user_id: UUID = Depends(get_current_user_id)):
+    return get_ops_service().celery.to_dict()
+
+
+@router.get("/redis", response_model=SnapshotEnvelope)
+async def get_redis_snapshot(_user_id: UUID = Depends(get_current_user_id)):
+    return get_ops_service().redis.to_dict()
+
+
+@router.get("/db-health", response_model=SnapshotEnvelope)
+async def get_db_snapshot(_user_id: UUID = Depends(get_current_user_id)):
+    return get_ops_service().db.to_dict()
+
+
+@router.get("/score-engine", response_model=SnapshotEnvelope)
+async def get_score_snapshot(_user_id: UUID = Depends(get_current_user_id)):
+    return get_ops_service().score.to_dict()
+
+
+@router.get("/pipeline-latency", response_model=SnapshotEnvelope)
+async def get_latency_snapshot(_user_id: UUID = Depends(get_current_user_id)):
+    return get_ops_service().latency.to_dict()
+
+
+@router.get("/ingestion", response_model=SnapshotEnvelope)
+async def get_ingestion_snapshot(_user_id: UUID = Depends(get_current_user_id)):
+    return get_ops_service().ingestion.to_dict()
+
+
+@router.get("/alerts")
+async def get_alerts(_user_id: UUID = Depends(get_current_user_id)):
+    return get_ops_service().get_alerts()
+
+
+@router.get("/events", response_model=OperationalEventsResponse)
+async def get_events(_user_id: UUID = Depends(get_current_user_id)):
+    return get_ops_service().get_events()
 
 
 @router.get("/ml-dataset/export")

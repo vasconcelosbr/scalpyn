@@ -154,6 +154,19 @@ async def lifespan(app: FastAPI):
         _log.warning("Gate WS leader election failed to start: %s", e)
         stop_gate_ws_leader = None
 
+    # ── Operational snapshot service (Task #225) ───────────────────────────
+    # Keeps eventually-consistent snapshots of Celery / Redis / DB / score
+    # engine / latency so /api/dashboard/overview can answer in O(1).  The
+    # service swallows its own probe failures — if it cannot start at all
+    # the dashboard degrades gracefully (snapshots stay status=unknown).
+    stop_ops_snapshot = None
+    try:
+        from .services.operational_snapshot import start_operational_snapshot
+        stop_ops_snapshot = await start_operational_snapshot()
+    except Exception as e:
+        _log.warning("Operational snapshot service failed to start: %s", e)
+        stop_ops_snapshot = None
+
     # ── Consolidated scheduler startup summary (env-derived intervals) ──────
     _struct_interval   = int(os.environ.get("STRUCTURAL_SCHEDULER_INTERVAL_SECONDS", 900))
     _micro_interval    = int(os.environ.get("MICROSTRUCTURE_SCHEDULER_INTERVAL_SECONDS", 300))
@@ -183,6 +196,7 @@ async def lifespan(app: FastAPI):
             (stop_background_scheduler, "Combined scheduler"),
             (stop_pipeline_scheduler, "Pipeline scheduler"),
             (stop_gate_ws_leader, "Gate WS leader"),
+            (stop_ops_snapshot, "Operational snapshot service"),
         ]:
             if _stop_fn is not None:
                 try:

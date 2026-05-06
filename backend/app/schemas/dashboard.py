@@ -97,3 +97,43 @@ class MlDatasetItem(BaseModel):
 class MlDatasetResponse(BaseModel):
     total: int
     items: List[MlDatasetItem]
+
+
+# ── Task #225 — Operational overview ────────────────────────────────────────
+class SnapshotEnvelope(BaseModel):
+    """Generic envelope for any snapshot family in the operational service."""
+    as_of: Optional[str] = None
+    status: str  # "ok" | "degraded" | "critical" | "unknown"
+    data: dict
+    error: Optional[str] = None
+
+
+class OperationalAlert(BaseModel):
+    severity: str  # "warning" | "critical"
+    category: str  # "infra" | "celery" | "ingest" | "score" | "db" | "latency"
+    code: str
+    impact: str
+    since: Optional[str] = None
+    details: dict
+
+
+class OperationalOverviewResponse(BaseModel):
+    as_of: str
+    overall_status: str  # "ok" | "degraded" | "critical" | "unknown"
+    snapshots: dict  # ingestion / celery / redis / db / score / latency
+    alerts: List[OperationalAlert]
+    alert_count: int
+
+
+class OperationalEvent(BaseModel):
+    ts: str
+    code: str
+    message: str
+    extra: dict
+
+
+class OperationalEventsResponse(BaseModel):
+    as_of: str
+    alert_history: List[OperationalEvent]
+    worker_events: List[OperationalEvent]
+    redis_degradations: List[OperationalEvent]

@@ -13,6 +13,10 @@ import {
   ShieldAlert,
   Sigma,
   TrendingUp,
+  Cpu,
+  Zap,
+  Clock,
+  History,
 } from "lucide-react";
 import {
   Area,
@@ -54,6 +58,12 @@ const STATUS_STYLES: Record<string, { bg: string; border: string; text: string; 
     text: C.ok,
     icon: <CheckCircle2 size={20} />,
   },
+  degraded: {
+    bg: "rgba(245,158,11,0.12)",
+    border: "rgba(245,158,11,0.45)",
+    text: C.warn,
+    icon: <AlertTriangle size={20} />,
+  },
   warn: {
     bg: "rgba(245,158,11,0.12)",
     border: "rgba(245,158,11,0.45)",
@@ -74,25 +84,95 @@ const STATUS_STYLES: Record<string, { bg: string; border: string; text: string; 
   },
 };
 
+const STATUS_LABEL_PT: Record<string, string> = {
+  ok: "Pipeline saudável",
+  degraded: "Degradado",
+  warn: "Atrasado",
+  critical: "Crítico",
+  unknown: "Sem dados",
+};
+
 // ─── Types ───────────────────────────────────────────────────────────────────
-interface HealthResp {
-  rows_window: number;
-  distinct_symbols: number;
-  last_candle: string | null;
-  delay_seconds: number | null;
-  status: "ok" | "warn" | "critical" | "unknown";
-  status_label: string;
+interface SnapshotEnvelope<T = Record<string, unknown>> {
+  as_of: string | null;
+  status: "ok" | "degraded" | "critical" | "unknown";
+  data: T;
+  error: string | null;
 }
 
-interface SystemStatusResp {
-  redis_alive: boolean;
-  redis_error: string | null;
-  last_ohlcv_ts: string | null;
-  last_ohlcv_age_seconds: number | null;
-  last_decision_ts: string | null;
-  last_decision_age_seconds: number | null;
-  last_pipeline_scan_ts: string | null;
-  last_pipeline_scan_age_seconds: number | null;
+interface OperationalAlert {
+  severity: "warning" | "critical";
+  category: string;
+  code: string;
+  impact: string;
+  since: string | null;
+  details: Record<string, unknown>;
+}
+
+interface OverviewResp {
+  as_of: string;
+  overall_status: "ok" | "degraded" | "critical" | "unknown";
+  snapshots: {
+    ingestion: SnapshotEnvelope<{
+      rows_window?: number;
+      distinct_symbols?: number;
+      last_candle?: string | null;
+      delay_seconds?: number | null;
+    }>;
+    celery: SnapshotEnvelope<{
+      workers?: string[];
+      worker_count?: number;
+      active_tasks?: number;
+      registered_tasks?: number;
+    }>;
+    redis: SnapshotEnvelope<{
+      alive?: boolean;
+      connected_clients?: number;
+      used_memory_human?: string;
+      instantaneous_ops_per_sec?: number;
+      total_commands_processed?: number;
+    }>;
+    db: SnapshotEnvelope<{
+      select1_ms?: number;
+      pool_size?: number;
+      checked_out?: number;
+      checked_in?: number;
+      overflow?: number;
+      status?: string;
+    }>;
+    score: SnapshotEnvelope<{
+      decisions_24h?: number;
+      allow_24h?: number;
+      block_24h?: number;
+      allow_rate_24h?: number;
+      avg_score?: number | null;
+      min_score?: number | null;
+      max_score?: number | null;
+      last_decision?: string | null;
+      last_decision_age_seconds?: number | null;
+    }>;
+    latency: SnapshotEnvelope<{
+      p50_ms?: number | null;
+      p95_ms?: number | null;
+      max_ms?: number | null;
+      samples_1h?: number;
+    }>;
+  };
+  alerts: OperationalAlert[];
+  alert_count: number;
+}
+
+interface EventItem {
+  ts: string;
+  code: string;
+  message: string;
+  extra: Record<string, unknown>;
+}
+interface EventsResp {
+  as_of: string;
+  alert_history: EventItem[];
+  worker_events: EventItem[];
+  redis_degradations: EventItem[];
 }
 
 interface OhlcvRateResp {
@@ -203,6 +283,12 @@ function fmtTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
+function statusColor(s: string | undefined | null): string {
+  if (s === "ok") return C.ok;
+  if (s === "degraded" || s === "warn") return C.warn;
+  if (s === "critical") return C.critical;
+  return C.textSecondary;
+}
 
 // ─── Shared UI ───────────────────────────────────────────────────────────────
 function Panel({
@@ -265,87 +351,264 @@ function EmptyState({ message }: { message: string }) {
   );
 }
 
-// ─── Health banner ───────────────────────────────────────────────────────────
-function HealthBanner({ data }: { data: HealthResp | null }) {
-  const status = data?.status ?? "unknown";
-  const style = STATUS_STYLES[status];
+// ─── Operational banner (driven by /overview) ───────────────────────────────
+function OperationalBanner({ data }: { data: OverviewResp | null }) {
+  const overall = data?.overall_status ?? "unknown";
+  const style = STATUS_STYLES[overall] ?? STATUS_STYLES.unknown;
+  const ing = data?.snapshots?.ingestion?.data;
+  const delay = ing?.delay_seconds ?? null;
   return (
     <div
       className="rounded-2xl p-5 flex items-center justify-between gap-4"
-      style={{
-        background: style.bg,
-        border: `1px solid ${style.border}`,
-      }}
+      style={{ background: style.bg, border: `1px solid ${style.border}` }}
     >
       <div className="flex items-center gap-4">
         <div style={{ color: style.text }}>{style.icon}</div>
         <div className="flex flex-col">
           <span className="text-[18px] font-bold" style={{ color: style.text }}>
-            {data?.status_label ?? "Carregando…"}
+            {STATUS_LABEL_PT[overall] ?? overall}
           </span>
           <span className="text-[12px]" style={{ color: C.textSecondary }}>
-            Limiares: verde &lt; 6 min · amarelo 6–10 min · vermelho &gt; 10 min
+            Limiares de ingestão: verde &lt; 10 min · amarelo 10–20 min · vermelho &gt; 20 min
           </span>
         </div>
       </div>
       <div className="flex items-center gap-6">
+        <StatTile label="Atraso ingest" value={fmtAge(delay)} color={style.text} />
+        <StatTile label="Símbolos" value={String(ing?.distinct_symbols ?? "—")} />
+        <StatTile label="Candles (15m)" value={String(ing?.rows_window ?? "—")} />
         <StatTile
-          label="Atraso"
-          value={fmtAge(data?.delay_seconds)}
-          color={style.text}
-        />
-        <StatTile
-          label="Símbolos"
-          value={String(data?.distinct_symbols ?? "—")}
-        />
-        <StatTile
-          label="Candles (15m)"
-          value={String(data?.rows_window ?? "—")}
-        />
-        <StatTile
-          label="Último candle"
-          value={fmtTime(data?.last_candle)}
-          hint={data?.last_candle ? new Date(data.last_candle).toLocaleDateString("pt-BR") : undefined}
+          label="Alertas ativos"
+          value={String(data?.alert_count ?? 0)}
+          color={(data?.alert_count ?? 0) > 0 ? C.critical : C.ok}
         />
       </div>
     </div>
   );
 }
 
-// ─── System status panel ────────────────────────────────────────────────────
-function SystemStatusPanel({ data }: { data: SystemStatusResp | null }) {
+// ─── Alerts list ────────────────────────────────────────────────────────────
+function AlertsPanel({ data }: { data: OverviewResp | null }) {
+  const alerts = data?.alerts ?? [];
   return (
-    <Panel title="System Status" icon={<Server size={16} />}>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="flex items-center gap-2">
-          <span
-            className="w-2.5 h-2.5 rounded-full"
-            style={{ background: data?.redis_alive ? C.ok : C.critical }}
-          />
-          <span className="text-sm" style={{ color: C.textPrimary }}>
-            Redis {data?.redis_alive ? "online" : "offline"}
-          </span>
+    <Panel title={`Alertas (${alerts.length})`} icon={<ShieldAlert size={16} />}>
+      {alerts.length === 0 ? (
+        <div className="flex items-center gap-2 py-2" style={{ color: C.ok }}>
+          <CheckCircle2 size={16} />
+          <span className="text-sm">Nenhum alerta ativo. Tudo operacional.</span>
         </div>
-        <StatTile
-          label="Último candle OHLCV"
-          value={fmtAge(data?.last_ohlcv_age_seconds)}
-          hint="atrás"
-        />
-        <StatTile
-          label="Última decisão"
-          value={fmtAge(data?.last_decision_age_seconds)}
-          hint={data?.last_decision_ts ? fmtTime(data.last_decision_ts) : "sem registros"}
-        />
-        <StatTile
-          label="Última varredura"
-          value={fmtAge(data?.last_pipeline_scan_age_seconds)}
-          hint="≈ pelo decisions_log"
-        />
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {alerts.map((a) => {
+            const sev = a.severity === "critical" ? C.critical : C.warn;
+            return (
+              <li
+                key={a.code}
+                className="rounded-xl p-3 flex flex-col gap-1"
+                style={{
+                  background: a.severity === "critical" ? "rgba(239,68,68,0.06)" : "rgba(245,158,11,0.06)",
+                  border: `1px solid ${a.severity === "critical" ? "rgba(239,68,68,0.30)" : "rgba(245,158,11,0.30)"}`,
+                }}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide"
+                      style={{ background: sev, color: "white" }}
+                    >
+                      {a.severity}
+                    </span>
+                    <span className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>
+                      {a.category}
+                    </span>
+                    <span className="text-[12px] font-mono" style={{ color: C.textSecondary }}>
+                      {a.code}
+                    </span>
+                  </div>
+                  {a.since && (
+                    <span className="text-[11px]" style={{ color: C.textTertiary }}>
+                      desde {fmtTime(a.since)}
+                    </span>
+                  )}
+                </div>
+                <p className="text-[13px]" style={{ color: C.textPrimary }}>
+                  {a.impact}
+                </p>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
+// ─── Snapshot card grid ─────────────────────────────────────────────────────
+function SnapshotCard({
+  title,
+  icon,
+  envelope,
+  rows,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  envelope: SnapshotEnvelope | undefined;
+  rows: { label: string; value: string }[];
+}) {
+  const status = envelope?.status ?? "unknown";
+  const color = statusColor(status);
+  return (
+    <div
+      className="rounded-2xl p-4 flex flex-col gap-3"
+      style={{ background: C.elevated, border: `1px solid ${C.border}` }}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span style={{ color: C.textSecondary }}>{icon}</span>
+          <h4 className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: C.textSecondary }}>
+            {title}
+          </h4>
+        </div>
+        <span
+          className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
+          style={{ background: `${color}22`, color, border: `1px solid ${color}55` }}
+        >
+          {status}
+        </span>
       </div>
-      {data?.redis_error && (
-        <p className="text-[11px] mt-2" style={{ color: C.critical }}>
-          {data.redis_error}
+      <div className="flex flex-col gap-1.5">
+        {rows.map((r) => (
+          <div key={r.label} className="flex justify-between text-[13px]">
+            <span style={{ color: C.textTertiary }}>{r.label}</span>
+            <span className="tabular-nums font-medium" style={{ color: C.textPrimary }}>
+              {r.value}
+            </span>
+          </div>
+        ))}
+      </div>
+      {envelope?.error && (
+        <p className="text-[11px] mt-1 truncate" title={envelope.error} style={{ color: C.critical }}>
+          {envelope.error}
         </p>
+      )}
+      {envelope?.as_of && (
+        <p className="text-[10px]" style={{ color: C.textTertiary }}>
+          atualizado {fmtTime(envelope.as_of)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function OpsSnapshotsGrid({ data }: { data: OverviewResp | null }) {
+  const s = data?.snapshots;
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <SnapshotCard
+        title="Ingestão OHLCV"
+        icon={<Gauge size={14} />}
+        envelope={s?.ingestion}
+        rows={[
+          { label: "Atraso", value: fmtAge(s?.ingestion.data.delay_seconds) },
+          { label: "Símbolos (15m)", value: String(s?.ingestion.data.distinct_symbols ?? "—") },
+          { label: "Candles (15m)", value: String(s?.ingestion.data.rows_window ?? "—") },
+          { label: "Último candle", value: fmtTime(s?.ingestion.data.last_candle) },
+        ]}
+      />
+      <SnapshotCard
+        title="Celery"
+        icon={<Cpu size={14} />}
+        envelope={s?.celery}
+        rows={[
+          { label: "Workers", value: String(s?.celery.data.worker_count ?? 0) },
+          { label: "Tarefas ativas", value: String(s?.celery.data.active_tasks ?? 0) },
+          { label: "Tarefas registradas", value: String(s?.celery.data.registered_tasks ?? 0) },
+        ]}
+      />
+      <SnapshotCard
+        title="Redis"
+        icon={<Zap size={14} />}
+        envelope={s?.redis}
+        rows={[
+          { label: "Status", value: s?.redis.data.alive ? "online" : "offline" },
+          { label: "Clientes", value: String(s?.redis.data.connected_clients ?? "—") },
+          { label: "Memória", value: s?.redis.data.used_memory_human ?? "—" },
+          { label: "Ops/s", value: String(s?.redis.data.instantaneous_ops_per_sec ?? "—") },
+        ]}
+      />
+      <SnapshotCard
+        title="Banco de dados"
+        icon={<Database size={14} />}
+        envelope={s?.db}
+        rows={[
+          { label: "SELECT 1", value: s?.db.data.select1_ms != null ? `${s.db.data.select1_ms.toFixed(1)} ms` : "—" },
+          { label: "Pool", value: `${s?.db.data.checked_out ?? 0}/${s?.db.data.pool_size ?? 0}` },
+          { label: "Overflow", value: String(s?.db.data.overflow ?? 0) },
+        ]}
+      />
+      <SnapshotCard
+        title="Score engine (24 h)"
+        icon={<Sigma size={14} />}
+        envelope={s?.score}
+        rows={[
+          { label: "Decisões", value: String(s?.score.data.decisions_24h ?? 0) },
+          { label: "Taxa ALLOW", value: fmtPct(s?.score.data.allow_rate_24h ?? null) },
+          { label: "Score médio", value: s?.score.data.avg_score != null ? s.score.data.avg_score.toFixed(1) : "—" },
+          { label: "Última decisão", value: fmtAge(s?.score.data.last_decision_age_seconds) + " atrás" },
+        ]}
+      />
+      <SnapshotCard
+        title="Latência decisão (1 h)"
+        icon={<Clock size={14} />}
+        envelope={s?.latency}
+        rows={[
+          { label: "p50", value: s?.latency.data.p50_ms != null ? `${s.latency.data.p50_ms.toFixed(0)} ms` : "—" },
+          { label: "p95", value: s?.latency.data.p95_ms != null ? `${s.latency.data.p95_ms.toFixed(0)} ms` : "—" },
+          { label: "Máx", value: s?.latency.data.max_ms != null ? `${s.latency.data.max_ms} ms` : "—" },
+          { label: "Amostras", value: String(s?.latency.data.samples_1h ?? 0) },
+        ]}
+      />
+    </div>
+  );
+}
+
+// ─── Events history ─────────────────────────────────────────────────────────
+function EventsHistoryPanel({ data }: { data: EventsResp | null }) {
+  const merged = useMemo(() => {
+    if (!data) return [];
+    const all: (EventItem & { kind: string })[] = [
+      ...data.alert_history.map((e) => ({ ...e, kind: "alert" })),
+      ...data.worker_events.map((e) => ({ ...e, kind: "worker" })),
+      ...data.redis_degradations.map((e) => ({ ...e, kind: "redis" })),
+    ];
+    return all
+      .sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
+      .slice(0, 20);
+  }, [data]);
+  return (
+    <Panel title="Histórico de eventos" icon={<History size={16} />}>
+      {merged.length === 0 ? (
+        <EmptyState message="Sem eventos registrados nesta sessão." />
+      ) : (
+        <ul className="flex flex-col gap-1.5">
+          {merged.map((e, i) => {
+            const recovered = e.code.includes("recovered") || e.code === "worker_online";
+            const dotColor = recovered ? C.ok : e.kind === "redis" ? C.warn : C.critical;
+            return (
+              <li
+                key={`${e.ts}-${e.code}-${i}`}
+                className="flex items-center gap-3 text-[12px] py-1"
+              >
+                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: dotColor }} />
+                <span className="tabular-nums" style={{ color: C.textTertiary }}>{fmtTime(e.ts)}</span>
+                <span className="font-mono text-[11px] px-1.5 py-0.5 rounded" style={{ background: C.elevated2, color: C.textSecondary }}>
+                  {e.code}
+                </span>
+                <span className="truncate" style={{ color: C.textPrimary }}>{e.message}</span>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </Panel>
   );
@@ -645,16 +908,16 @@ function MLDatasetPanel({ data }: { data: MlResp | null }) {
 
 // ─── Page root ─────────────────────────────────────────────────────────────
 export default function PerformanceDashboardPage() {
-  const health = usePoll<HealthResp>("/dashboard/health", 10_000);
-  const sysstat = usePoll<SystemStatusResp>("/dashboard/system-status", 60_000);
-  const ingest = usePoll<OhlcvRateResp>("/dashboard/ohlcv-rate?minutes=60", 15_000);
+  const overview = usePoll<OverviewResp>("/dashboard/overview", 10_000);
+  const events   = usePoll<EventsResp>("/dashboard/events", 30_000);
+  const ingest   = usePoll<OhlcvRateResp>("/dashboard/ohlcv-rate?minutes=60", 15_000);
   const decisions = usePoll<DecisionsResp>("/dashboard/decisions?hours=24", 60_000);
-  const trades = usePoll<TradesResp>("/dashboard/trades?days=30", 60_000);
-  const comp = usePoll<CompResp>("/dashboard/trade-comparison?days=30", 60_000);
-  const ml = usePoll<MlResp>("/dashboard/ml-dataset?limit=100", 60_000);
+  const trades   = usePoll<TradesResp>("/dashboard/trades?days=30", 60_000);
+  const comp     = usePoll<CompResp>("/dashboard/trade-comparison?days=30", 60_000);
+  const ml       = usePoll<MlResp>("/dashboard/ml-dataset?limit=100", 60_000);
 
   const refreshAll = () => {
-    health.refresh(); sysstat.refresh(); ingest.refresh();
+    overview.refresh(); events.refresh(); ingest.refresh();
     decisions.refresh(); trades.refresh(); comp.refresh(); ml.refresh();
   };
 
@@ -663,10 +926,10 @@ export default function PerformanceDashboardPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold" style={{ color: C.textPrimary }}>
-            Performance Operacional
+            Centro Operacional
           </h1>
           <p className="text-[13px] mt-1" style={{ color: C.textSecondary }}>
-            Saúde do pipeline, decisões e desempenho — atualização automática.
+            Saúde do pipeline, alertas e desempenho — atualização automática a cada 10 s.
           </p>
         </div>
         <button
@@ -679,9 +942,11 @@ export default function PerformanceDashboardPage() {
       </div>
 
       <div className="flex flex-col gap-5">
-        <HealthBanner data={health.data} />
+        <OperationalBanner data={overview.data} />
+        <AlertsPanel data={overview.data} />
+        <OpsSnapshotsGrid data={overview.data} />
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <SystemStatusPanel data={sysstat.data} />
+          <EventsHistoryPanel data={events.data} />
           <IngestRateChart data={ingest.data} />
         </div>
         <DecisionStatsPanel data={decisions.data} />
@@ -691,7 +956,7 @@ export default function PerformanceDashboardPage() {
         </div>
         <MLDatasetPanel data={ml.data} />
 
-        {(health.error || sysstat.error || ingest.error || decisions.error || trades.error || comp.error || ml.error) && (
+        {(overview.error || events.error || ingest.error || decisions.error || trades.error || comp.error || ml.error) && (
           <div className="text-[12px] px-3 py-2 rounded-lg" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", color: C.critical }}>
             Falha em algum endpoint do dashboard. Veja o console para detalhes.
           </div>

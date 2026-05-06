@@ -62,6 +62,7 @@ Scalpyn is an institutional-grade cryptocurrency trading platform that provides 
 - **Trade History & P&L Tracking**: Imports and analyzes closed spot orders, calculating profit and loss.
 - **Operational Monitoring**: Integrates with Grafana for real-time monitoring of system health, data quality, and alerts.
 - **Native Performance Dashboard** (`/dashboard/performance`, Task #224): seven panels (health, system status, ingest rate, decisions, trades, sim-vs-real, ML dataset) backed by `GET /api/dashboard/*` read-only aggregations. Native alternative to the Grafana iframe — the legacy MonitoringTab is retained for backward compatibility.
+- **Centro Operacional** (`/dashboard/performance`, Task #225): rewrite of the perf page powered by the eventually-consistent `OperationalSnapshotService` (`backend/app/services/operational_snapshot.py`). Six background refreshers (ingestion 10s, celery 15s, redis 15s, db 30s, score 60s, latency 60s) feed `GET /api/dashboard/overview` (single O(1) aggregation: snapshots + alerts). Per-family endpoints kept for debugging (`/celery`, `/redis`, `/db-health`, `/score-engine`, `/pipeline-latency`, `/ingestion`, `/alerts`, `/events`). Health thresholds raised 6/10 → 10/20 min after observing legitimate catch-ups stretching to 12-14 min.
 
 ## User preferences
 
@@ -80,6 +81,7 @@ Scalpyn is an institutional-grade cryptocurrency trading platform that provides 
 - **Dev pipeline boot (Replit)**: Celery requires three workflows — `Redis` (port 6379), `Celery Worker` (`--queues=microstructure,structural,execution`), and `Celery Beat`. After fresh DB setup, manually approve representative symbols in dev (`UPDATE pool_coins SET is_approved=true WHERE symbol IN (...)`) — `collect_market_data.collect_all` raises `[FATAL] No approved symbols` otherwise (invariant #5 from Task #216).
 - **`compute_indicators_robust` window**: The `window_seconds` for order flow data is standardized at 300s. Inconsistencies can lead to `VALID` vs `NO_DATA` flapping.
 - **Nested-savepoint rollback rule**: Never call `await db.rollback()` inside a loop that uses `async with db.begin_nested()` — the SAVEPOINT is already rolled back by the context manager on exception. The extra `db.rollback()` closes the OUTER transaction opened by `run_db_task` (`async with session.begin()`) and poisons every subsequent iteration with `Can't operate on closed transaction inside context manager` (Task #222).
+- **No inline Celery/Redis probes in HTTP handlers (Task #225)**: `/api/dashboard/*` reads only from `OperationalSnapshotService` cache. Adding `celery_app.control.inspect()` or `redis.info()` directly inside a handler hangs the user-facing response on the slowest dependency (5+ s when broker is down). Always extend the snapshot service instead.
 
 ## Pointers
 
