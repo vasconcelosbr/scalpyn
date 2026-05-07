@@ -37,7 +37,18 @@ LATENCY_INTERVAL_S   = int(os.environ.get("OPS_SNAP_LATENCY_S", 60))
 ALERT_INTERVAL_S     = int(os.environ.get("OPS_SNAP_ALERT_S", 5))
 
 # Per-probe timeout budgets — never let a hung dependency keep the loop in.
-CELERY_TIMEOUT_S = 2.0
+# Celery uses TWO budgets (Task #246):
+#   * ``CELERY_INSPECT_TIMEOUT_S`` — passed to each ``inspect(timeout=...)`` so
+#     a single broadcast doesn't block forever when the broker is silent.
+#   * ``CELERY_INSPECT_BUDGET_S`` — wraps the whole probe (multiple sequential
+#     broadcasts) via ``asyncio.wait_for``. Must be larger than the per-call
+#     timeout × number of broadcasts; otherwise busy workers on a high-RTT
+#     broker (Redis Labs us-central1) miss the aggregate window and the
+#     snapshot reports zero workers even though they're alive.
+CELERY_INSPECT_TIMEOUT_S = float(os.environ.get("CELERY_INSPECT_TIMEOUT_S", 2.0))
+CELERY_INSPECT_BUDGET_S  = float(os.environ.get("CELERY_INSPECT_BUDGET_S", 8.0))
+# Backwards-compat alias — older code paths import this name.
+CELERY_TIMEOUT_S = CELERY_INSPECT_TIMEOUT_S
 REDIS_TIMEOUT_S  = 1.0
 DB_TIMEOUT_S     = 3.0
 
@@ -370,15 +381,20 @@ class OperationalSnapshotService:
             "alive": False,
         }
         try:
-            # End-to-end budget = CELERY_TIMEOUT_S (kombu inspect + wait_for).
+            # Two budgets (Task #246):
+            #   * each inspect() broadcast → CELERY_INSPECT_TIMEOUT_S
+            #   * the whole probe (sequential broadcasts) → CELERY_INSPECT_BUDGET_S
+            # Unifying them caused false "Workers: 0" + CRITICAL on prod when
+            # workers were busy and the high-RTT broker pushed the aggregate
+            # over the per-call timeout.
             data = await asyncio.wait_for(
                 asyncio.to_thread(_inspect_celery_blocking),
-                timeout=CELERY_TIMEOUT_S,
+                timeout=CELERY_INSPECT_BUDGET_S,
             )
         except asyncio.TimeoutError:
             self._apply_failure(
                 "celery",
-                f"Celery inspect timeout after {CELERY_TIMEOUT_S}s",
+                f"Celery inspect timeout after {CELERY_INSPECT_BUDGET_S}s",
                 down_data=celery_down,
             )
             return
@@ -1228,10 +1244,14 @@ def _inspect_celery_blocking() -> Dict[str, Any]:
     """
     try:
         from ..tasks.celery_app import celery_app, ALL_QUEUES
-        insp = celery_app.control.inspect(timeout=CELERY_TIMEOUT_S)
+        # Task #246: only ``active()`` + ``registered()`` are kept on the
+        # snapshot path. ``reserved()`` and ``scheduled()`` were dropped —
+        # each broadcast is one network round-trip per worker, and waiting
+        # backlog is already observable via the per-queue Redis ``LLEN``
+        # probe (see ``_refresh_redis``). Dropping the two saves up to
+        # ``2 × CELERY_INSPECT_TIMEOUT_S`` per cycle when the broker is slow.
+        insp = celery_app.control.inspect(timeout=CELERY_INSPECT_TIMEOUT_S)
         active = insp.active() or {}
-        reserved = insp.reserved() or {}
-        scheduled = insp.scheduled() or {}
         registered = insp.registered() or {}
 
         flat: set[str] = set()
@@ -1240,7 +1260,9 @@ def _inspect_celery_blocking() -> Dict[str, Any]:
                 flat.add(n)
 
         # Per-queue breakdown.  Each task descriptor has
-        # ``delivery_info.routing_key`` set to its queue name.
+        # ``delivery_info.routing_key`` set to its queue name. ``reserved``
+        # and ``scheduled`` columns are kept on the shape for backward
+        # compatibility with the dashboard but always 0 on the snapshot path.
         per_queue: Dict[str, Dict[str, int]] = {
             q: {"active": 0, "reserved": 0, "scheduled": 0} for q in ALL_QUEUES
         }
@@ -1256,8 +1278,6 @@ def _inspect_celery_blocking() -> Dict[str, Any]:
                     per_queue[rk][key] += 1
 
         _bucket(active, "active")
-        _bucket(reserved, "reserved")
-        _bucket(scheduled, "scheduled")
 
         workers = sorted(set(active.keys()) | set(registered.keys()))
         return {
