@@ -21,9 +21,17 @@ steps:
         gcloud run services list --region="${_REGION}" \
           --filter="metadata.name~scalpyn" \
           --format='table(metadata.name,status.conditions[0].type,status.conditions[0].status)' 2>&1 || true
-        echo "==> [preflight] Cloud Run quota (services per region — limit + usage):"
-        gcloud compute project-info describe --project="${PROJECT_ID}" \
-          --format='value(quotas)' 2>&1 | tr ',' '\n' | grep -i -E 'run|service' || true
+        echo "==> [preflight] Cloud Run API enabled?"
+        gcloud services list --enabled --project="${PROJECT_ID}" \
+          --filter='config.name=run.googleapis.com' \
+          --format='value(config.name,state)' 2>&1 || true
+        echo "==> [preflight] Cloud Build SA roles on project (top-level only):"
+        BUILD_SA="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -1)"
+        echo "    BUILD_SA=$BUILD_SA"
+        gcloud projects get-iam-policy "${PROJECT_ID}" \
+          --flatten='bindings[].members' \
+          --filter="bindings.members:${BUILD_SA}" \
+          --format='value(bindings.role)' 2>&1 || true
         echo "==> [preflight] Service-account scalpyn-service-account@${PROJECT_ID}.iam exists?"
         gcloud iam service-accounts describe \
           "scalpyn-service-account@${PROJECT_ID}.iam.gserviceaccount.com" \
