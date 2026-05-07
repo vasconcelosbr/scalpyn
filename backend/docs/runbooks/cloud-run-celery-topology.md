@@ -100,13 +100,17 @@ Snapshot novo de `/api/system/celery-status` às 17:36 e logs Cloud SQL/Cloud Ru
 - **Revisão final que ficou de pé:** `scalpyn-00436-gp5` (commit `da680b3` ou superior — a revisão promovida pelo `suggest_deploy` do `8351ba6` ainda não tinha aparecido como "Last deployed" no momento da consulta; preencher na próxima passagem).
 - **Timestamp de recuperação:** ~17:50 UTC após o purge da fila.
 
-**Estado pós-recuperação parcial:** o sintoma agudo (backlog `execution` crescendo + connection storm derivado dele) está mitigado. **Mas a causa raiz estrutural permanece**: prod tem topologia mono-serviço, não a topologia 5-serviços da Task #239. Beat schedulando tasks que ninguém em Cloud Run consome, e o broker prod sendo "salvo" por um worker rodando no laptop de dev é uma situação inaceitável.
+**Estado pós-recuperação parcial:** o sintoma agudo (backlog `execution` crescendo + connection storm derivado dele) está mitigado. **Mas a causa raiz estrutural permanece**: prod tem topologia mono-serviço, não a topologia 5-serviços da Task #239. Beat (se estiver vivo em alguma revisão órfã) schedulando tasks que ninguém em Cloud Run consome.
 
-**Task #243 a ser aberta** com escopo:
+**Task #243 — escopo final reconciliado** (fase agente já executada; itens abaixo restam para fase manual no Cloud Shell):
 
-1. Investigar por que o `cloudbuild.yaml` da Task #239 não criou (ou rolou de volta) os 4 serviços `scalpyn-worker-{micro,structural,execution}` + `scalpyn-beat` em prod. O step `topology-check` do `cloudbuild.yaml` deveria ter falhado vermelho — verificar histórico do Cloud Build.
-2. Promover a topologia 5-serviços de fato. Confirmar via `gcloud run services list` que os 5 serviços ficam `Serving`.
-3. **Antes** de promover, garantir que o `Celery Worker` do workflow do Replit deixa de apontar para o `REDIS_URL` de prod — caso contrário continuamos com workers fantasmas drenando filas e qualquer deploy quebrado fica invisível por dias.
-4. Hardening pós-#243: alerta no Centro Operacional quando `gcloud run services list | wc -l < 5` (já era a Task #240, mas claramente nunca foi implementada — confirmar).
+1. Investigar por que o `cloudbuild.yaml` da Task #239 não criou (ou rolou de volta) os 4 serviços `scalpyn-worker-{micro,structural,execution}` + `scalpyn-beat` em prod. O step `topology-check` do `cloudbuild.yaml` deveria ter falhado vermelho — verificar histórico com `gcloud builds list --limit=20` filtrando builds posteriores ao merge da Task #239 e abrir os logs dos vermelhos.
+2. Aplicar a correção identificada (provavelmente IAM da SA do Cloud Build sobre os novos serviços, quota Cloud Run, ou argumento inválido em `cloudbuild.yaml`).
+3. Disparar `gcloud builds submit --config=cloudbuild.yaml` e validar que termina verde. Confirmar via `gcloud run services list --region=us-central1 --filter="metadata.name~scalpyn"` que os 5 serviços ficam `Serving`.
+4. Identificar a origem real do `worker_count=1` órfão observado em `/api/system/celery-status` antes da promoção (`gcloud run revisions list --service=scalpyn --region=us-central1` + idem para os 4 nomes esperados — pode haver revisão pré-Task #216 com worker embedded ainda viva).
+5. Monitorar 30 minutos pós-deploy: `execution.depth ≤ 50`, `oldest_age_s < 60` em todas as filas, sem novos alertas `pool_starved`/`ingestion_stale`.
+6. Atualizar este runbook com (a) erro real do build vermelho, (b) correção aplicada, (c) timestamp de recuperação, (d) snapshot final do `gcloud run services list`.
 
-Se o connection storm voltar mesmo após a topologia correta estar em prod, abrir Task #244 focada em (a) tirar `start_gate_ws_with_leader_election` do critical path do lifespan e (b) reduzir `pool_recycle` ou aumentar `authentication_timeout` no Cloud SQL para evitar realimentação do storm.
+**Item descartado pela fase agente:** "garantir que o `Celery Worker` do Replit deixa de apontar para `REDIS_URL` de prod" — refutado acima (config dev é `redis://localhost:6379/0`, Replit Redis local responde PONG; Replit nunca tocou o broker prod). Não é pré-requisito da promoção.
+
+**Hardening pós-#243** (não fazer dentro da #243): alerta no Centro Operacional quando algum dos 5 serviços some — Task #240 já existe para isso, confirmar status. Se o connection storm voltar mesmo após topologia correta, abrir Task #244 focada em (a) tirar `start_gate_ws_with_leader_election` do critical path do lifespan e (b) reduzir `pool_recycle` ou aumentar `authentication_timeout` no Cloud SQL.
