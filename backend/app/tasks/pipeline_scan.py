@@ -902,9 +902,50 @@ def _evaluate_l3_decisions(
 
 async def _persist_decision_logs(db, user_id, decisions: list[dict]):
     from ..models.backoffice import DecisionLog
+    from sqlalchemy import text
 
     if not decisions:
         return []
+
+    # ── Deduplication guard ───────────────────────────────────────────────────
+    # decisions_log só deve registrar TRANSIÇÕES de estado.
+    # BLOCK repetido (sem mudança) é ruído — skip silencioso com DEBUG.
+    # ALLOW sempre persiste (aprovação real com l3_pass=True).
+    _symbols = list({d["symbol"] for d in decisions})
+    _strategies = list({d["strategy"] for d in decisions})
+    _last_state: dict[tuple[str, str], str] = {}
+    try:
+        _state_rows = (await db.execute(
+            text("""
+                SELECT DISTINCT ON (symbol, strategy)
+                    symbol, strategy, decision
+                FROM decisions_log
+                WHERE symbol = ANY(:symbols)
+                  AND strategy = ANY(:strategies)
+                ORDER BY symbol, strategy, created_at DESC
+            """),
+            {"symbols": _symbols, "strategies": _strategies},
+        )).fetchall()
+        for _r in _state_rows:
+            _last_state[(_r.symbol, _r.strategy)] = _r.decision
+    except Exception as _exc:
+        logger.debug("[Decision] Dedup state query failed — guard skipped: %s", _exc)
+
+    _deduped: list[dict] = []
+    for _d in decisions:
+        _key = (_d["symbol"], _d["strategy"])
+        if _d["decision"] == "BLOCK" and _last_state.get(_key) == "BLOCK":
+            logger.debug(
+                "[Decision] SKIP repeated BLOCK %s/%s — no state change",
+                _d["symbol"], _d["strategy"],
+            )
+            continue
+        _deduped.append(_d)
+    decisions = _deduped
+
+    if not decisions:
+        return []
+    # ─────────────────────────────────────────────────────────────────────────
 
     rows = [
         DecisionLog(
