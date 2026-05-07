@@ -304,6 +304,7 @@ steps:
   # service exits 1, marking the build red so the operator sees the gap
   # immediately rather than discovering it days later via stale OHLCV.
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'topology-check'
     entrypoint: bash
     args:
       - '-c'
