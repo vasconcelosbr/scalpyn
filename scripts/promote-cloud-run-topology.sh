@@ -3,9 +3,10 @@
 #
 # Reproducible recovery automation for the Task #239 Cloud Run topology.
 # Creates (or reconciles) the 4 worker/beat services that should accompany
-# the `scalpyn` API service, using the image currently running in the API
-# service as the source of truth (so it cannot drift from the deployed
-# code). Idempotent: re-runs deploy a new revision but never breaks an
+# the `scalpyn` API service, using the image AND the REDIS_URL currently
+# running in the API service as the source of truth (so it cannot drift
+# from the deployed code and no plaintext credential is duplicated in this
+# script). Idempotent: re-runs deploy a new revision but never breaks an
 # existing one.
 #
 # WHEN TO USE:
@@ -27,7 +28,8 @@
 #   - Run from Cloud Shell (or any host) with `gcloud` authenticated and
 #     IAM permissions to deploy Cloud Run services in
 #     `clickrate-477217:us-central1`.
-#   - The `scalpyn` API service must already exist (we read its image).
+#   - The `scalpyn` API service must already exist (we read its image and
+#     REDIS_URL from it).
 #
 # USAGE:
 #   bash scripts/promote-cloud-run-topology.sh
@@ -40,16 +42,11 @@ set -euo pipefail
 REGION="${REGION:-us-central1}"
 PROJECT="${PROJECT:-clickrate-477217}"
 
-# Broker URL kept inline to mirror cloudbuild.yaml exactly. Migrate to
-# Secret Manager (gotcha listed in cloudbuild.yaml comments) is preexisting
-# follow-up — out of scope for this recovery script.
-REDIS_URL="${REDIS_URL:-redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0}"
-
 # FORCE_RESTART bumped to current UTC so the deploy creates a new revision
 # even if all other args match an existing one (kills any poisoned worker).
 FORCE_RESTART="${FORCE_RESTART:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 
-echo "==> Reading current image from scalpyn API service..."
+echo "==> Reading current image + REDIS_URL from scalpyn API service..."
 IMAGE="$(gcloud run services describe scalpyn \
   --region="$REGION" \
   --project="$PROJECT" \
@@ -59,13 +56,39 @@ if [ -z "$IMAGE" ]; then
   echo "FATAL: could not read image from scalpyn service. Is it deployed?" >&2
   exit 1
 fi
-echo "    Using image: $IMAGE"
-echo "    FORCE_RESTART=$FORCE_RESTART"
+
+# Read REDIS_URL from the running scalpyn service so we don't hardcode the
+# credential here. Reviewer concern (Task #243): plaintext duplication
+# increases credential exposure surface. Sourcing from the live service
+# means rotation in cloudbuild.yaml + redeploy of scalpyn automatically
+# propagates here on next run.
+REDIS_URL="$(gcloud run services describe scalpyn \
+  --region="$REGION" \
+  --project="$PROJECT" \
+  --format='value(spec.template.spec.containers[0].env.filter("name:REDIS_URL").extract(value).flatten())')"
+
+if [ -z "$REDIS_URL" ]; then
+  echo "FATAL: could not read REDIS_URL env var from scalpyn service." >&2
+  echo "       Set it manually via REDIS_URL=… before re-running." >&2
+  exit 1
+fi
+
+echo "    Image: $IMAGE"
+echo "    REDIS_URL: <read from scalpyn service, ${#REDIS_URL} chars>"
+echo "    FORCE_RESTART: $FORCE_RESTART"
 echo
 
-deploy_worker() {
+# Build env-vars string. Workers carry CELERY_CONCURRENCY; beat does not
+# (mirrors cloudbuild.yaml line 334 — beat has no CELERY_CONCURRENCY env).
+deploy_service() {
   local name="$1" queues="$2" max_inst="$3" memory="$4" concurrency="$5" run_beat="$6"
-  echo "==> Deploying $name (queues=${queues:-<none>}, max=$max_inst, mem=$memory, beat=$run_beat)..."
+
+  local env_vars="REDIS_URL=$REDIS_URL,FORCE_RESTART=$FORCE_RESTART,ENABLE_GATE_WS=1,WORKER_QUEUES=$queues,RUN_BEAT=$run_beat,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1"
+  if [ -n "$concurrency" ]; then
+    env_vars="$env_vars,CELERY_CONCURRENCY=$concurrency"
+  fi
+
+  echo "==> Deploying $name (queues='${queues}', max=$max_inst, mem=$memory, beat=$run_beat, concurrency='${concurrency:-<unset>}')..."
   gcloud run deploy "$name" \
     --image="$IMAGE" \
     --region="$REGION" \
@@ -83,15 +106,16 @@ deploy_worker() {
     --cpu-boost \
     --memory="$memory" \
     --add-cloudsql-instances="$PROJECT:$REGION:scalpyn" \
-    --update-env-vars="REDIS_URL=$REDIS_URL,FORCE_RESTART=$FORCE_RESTART,ENABLE_GATE_WS=1,WORKER_QUEUES=$queues,RUN_BEAT=$run_beat,CELERY_CONCURRENCY=$concurrency,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1"
+    --update-env-vars="$env_vars"
   echo
 }
 
-# Mirrors cloudbuild.yaml lines 142-290 exactly (queues, sizing, env).
-deploy_worker "scalpyn-worker-micro"       "microstructure" "5" "2Gi" "4" "0"
-deploy_worker "scalpyn-worker-structural"  "structural"     "3" "2Gi" "2" "0"
-deploy_worker "scalpyn-worker-execution"   "execution"      "2" "1Gi" "2" "0"
-deploy_worker "scalpyn-beat"               ""               "1" "1Gi" "2" "1"
+# Mirrors cloudbuild.yaml lines 142-334 EXACTLY:
+#                              name                        queues          max  mem   concurrency  run_beat
+deploy_service "scalpyn-worker-micro"        "microstructure" "5" "2Gi" "4" "0"
+deploy_service "scalpyn-worker-structural"   "structural"     "3" "2Gi" "2" "0"
+deploy_service "scalpyn-worker-execution"    "execution"      "2" "1Gi" "2" "0"
+deploy_service "scalpyn-beat"                ""               "1" "1Gi" ""  "1"
 
 echo "==> Final state of Cloud Run topology in $REGION:"
 gcloud run services list \
