@@ -3,114 +3,156 @@
 #
 # Reproducible recovery automation for the Task #239 Cloud Run topology.
 # Creates (or reconciles) the 4 worker/beat services that should accompany
-# the `scalpyn` API service, using the image AND the REDIS_URL currently
-# running in the API service as the source of truth (so it cannot drift
-# from the deployed code and no plaintext credential is duplicated in this
-# script). Idempotent: re-runs deploy a new revision but never breaks an
-# existing one.
+# the `scalpyn` API service. Approach: clone the entire `scalpyn` service
+# spec via `gcloud run services describe --format=export`, then patch
+# only the worker-specific fields (name, scaling, env vars). This way we
+# inherit DATABASE_URL, JWT_SECRET, ENCRYPTION_KEY, AI_KEYS_ENCRYPTION_KEY,
+# REDIS_URL and any Secret Manager bindings already configured on the API
+# service — without ever touching the credentials in this script.
+#
+# Why describe + replace (instead of `gcloud run deploy --update-env-vars`):
+# Workers are NEW services. `deploy` creates them with ONLY the env vars
+# we pass — DATABASE_URL etc. would be missing and the container would
+# exit 1 on `start.sh` line 39 (env diagnostics) or line 90 (alembic).
+# `services replace` accepts the full spec and creates the service in one
+# atomic call.
 #
 # WHEN TO USE:
 #   - Cloud Build trigger silently dropped the worker/beat deploy steps
 #     (observed 2026-05-07: 6 consecutive green builds while
-#     `gcloud run services list` showed only `scalpyn`). Symptom in the
-#     app: queues fill up, nothing drains, /api/system/celery-status
-#     reports a single embedded worker.
+#     `gcloud run services list` showed only `scalpyn`).
 #   - Manual recovery when you need to bring topology back fast without
 #     waiting on the next Cloud Build cycle.
 #
 # WHAT IT DOES NOT REPLACE:
-#   - The canonical definition stays in `cloudbuild.yaml`. This script is
-#     a recovery shortcut, not the steady-state pipeline. After running
-#     it, still investigate why the trigger / topology-check failed to
-#     prevent the gap (Task #244 candidate).
+#   - The canonical definition stays in `cloudbuild.yaml`. After running
+#     this, still investigate why the trigger / topology-check failed.
 #
 # REQUIREMENTS:
-#   - Run from Cloud Shell (or any host) with `gcloud` authenticated and
-#     IAM permissions to deploy Cloud Run services in
+#   - `gcloud` authenticated with permissions to deploy in
 #     `clickrate-477217:us-central1`.
-#   - The `scalpyn` API service must already exist (we read its image and
-#     REDIS_URL from it).
+#   - The `scalpyn` API service must already exist (we read its spec).
+#   - Python 3 available (used to patch the YAML — preinstalled in Cloud Shell).
 #
 # USAGE:
 #   bash scripts/promote-cloud-run-topology.sh
-#
-# Override defaults via env-vars if needed:
-#   PROJECT=…  REGION=…  bash scripts/promote-cloud-run-topology.sh
 #
 set -euo pipefail
 
 REGION="${REGION:-us-central1}"
 PROJECT="${PROJECT:-clickrate-477217}"
-
-# FORCE_RESTART bumped to current UTC so the deploy creates a new revision
-# even if all other args match an existing one (kills any poisoned worker).
 FORCE_RESTART="${FORCE_RESTART:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+TMPDIR="$(mktemp -d -t scalpyn-topology.XXXXXX)"
+trap 'rm -rf "$TMPDIR"' EXIT
 
-echo "==> Reading current image + REDIS_URL from scalpyn API service..."
-IMAGE="$(gcloud run services describe scalpyn \
+echo "==> Exporting scalpyn service spec..."
+gcloud run services describe scalpyn \
   --region="$REGION" \
   --project="$PROJECT" \
-  --format='value(spec.template.spec.containers[0].image)')"
-
-if [ -z "$IMAGE" ]; then
-  echo "FATAL: could not read image from scalpyn service. Is it deployed?" >&2
-  exit 1
-fi
-
-# Read REDIS_URL from the running scalpyn service so we don't hardcode the
-# credential here. Reviewer concern (Task #243): plaintext duplication
-# increases credential exposure surface. Sourcing from the live service
-# means rotation in cloudbuild.yaml + redeploy of scalpyn automatically
-# propagates here on next run.
-REDIS_URL="$(gcloud run services describe scalpyn \
-  --region="$REGION" \
-  --project="$PROJECT" \
-  --format='value(spec.template.spec.containers[0].env.filter("name:REDIS_URL").extract(value).flatten())')"
-
-if [ -z "$REDIS_URL" ]; then
-  echo "FATAL: could not read REDIS_URL env var from scalpyn service." >&2
-  echo "       Set it manually via REDIS_URL=… before re-running." >&2
-  exit 1
-fi
-
-echo "    Image: $IMAGE"
-echo "    REDIS_URL: <read from scalpyn service, ${#REDIS_URL} chars>"
+  --format=export > "$TMPDIR/scalpyn.yaml"
+echo "    Saved to $TMPDIR/scalpyn.yaml ($(wc -l <"$TMPDIR/scalpyn.yaml") lines)"
 echo "    FORCE_RESTART: $FORCE_RESTART"
 echo
 
-# Build env-vars string. Workers carry CELERY_CONCURRENCY; beat does not
-# (mirrors cloudbuild.yaml line 334 — beat has no CELERY_CONCURRENCY env).
+# Patch the exported spec into a worker/beat spec.
+# Args:  $1=src_yaml  $2=dst_yaml  $3=new_name  $4=queues  $5=concurrency
+#        $6=run_beat  $7=max_instances  $8=memory
+patch_spec() {
+  local src="$1" dst="$2" new_name="$3" queues="$4" concurrency="$5"
+  local run_beat="$6" max_inst="$7" memory="$8"
+
+  python3 - "$src" "$dst" "$new_name" "$queues" "$concurrency" \
+    "$run_beat" "$max_inst" "$memory" "$FORCE_RESTART" <<'PY'
+import sys, yaml, re
+
+src, dst, new_name, queues, concurrency, run_beat, max_inst, memory, force_restart = sys.argv[1:10]
+
+with open(src) as f:
+    spec = yaml.safe_load(f)
+
+# Rename the service
+spec['metadata']['name'] = new_name
+
+# Strip read-only / instance-specific server-side fields that `services
+# replace` rejects (they're regenerated on apply).
+spec['metadata'].pop('uid', None)
+spec['metadata'].pop('resourceVersion', None)
+spec['metadata'].pop('generation', None)
+spec['metadata'].pop('creationTimestamp', None)
+spec['metadata'].pop('selfLink', None)
+ann = spec['metadata'].setdefault('annotations', {})
+for k in list(ann):
+    if k.startswith('serving.knative.dev/') or k.startswith('run.googleapis.com/operation-id'):
+        ann.pop(k, None)
+spec.pop('status', None)
+
+# Rename the revision template (otherwise create fails with "revision name
+# already exists" because the API service's revision name is in there).
+template = spec['spec']['template']
+template['metadata'].pop('name', None)
+tmpl_ann = template['metadata'].setdefault('annotations', {})
+
+# Scaling
+tmpl_ann['autoscaling.knative.dev/minScale'] = '1'
+tmpl_ann['autoscaling.knative.dev/maxScale'] = max_inst
+
+# Patch container env vars: keep all secrets/secret-refs from API, override
+# only the worker-specific ones. ENABLE_GATE_WS=1 is also forced because
+# the original cloudbuild.yaml sets it on every service.
+container = template['spec']['containers'][0]
+env = container.setdefault('env', [])
+
+worker_overrides = {
+    'WORKER_QUEUES': queues,
+    'RUN_BEAT': run_beat,
+    'FORCE_RESTART': force_restart,
+    'ENABLE_GATE_WS': '1',
+    'SKIP_STRUCTURAL_SCHEDULER': '1',
+    'SKIP_MICROSTRUCTURE_SCHEDULER': '1',
+    'SKIP_PIPELINE_SCHEDULER': '1',
+}
+if concurrency:
+    worker_overrides['CELERY_CONCURRENCY'] = concurrency
+
+# Remove existing env entries we want to override (keeps secret-refs intact)
+to_override = set(worker_overrides) | {'CELERY_CONCURRENCY'}
+env[:] = [e for e in env if e.get('name') not in to_override or 'valueFrom' not in e]
+# Drop plain-value duplicates of the override keys
+env[:] = [e for e in env if not (e.get('name') in worker_overrides and 'value' in e)]
+# If concurrency not set for this service (beat), drop any leftover entry
+if not concurrency:
+    env[:] = [e for e in env if e.get('name') != 'CELERY_CONCURRENCY']
+# Append fresh values
+for k, v in worker_overrides.items():
+    env.append({'name': k, 'value': v})
+
+# Memory
+res = container.setdefault('resources', {}).setdefault('limits', {})
+res['memory'] = memory
+
+with open(dst, 'w') as f:
+    yaml.safe_dump(spec, f, sort_keys=False)
+print(f"  patched -> {dst}", file=sys.stderr)
+PY
+}
+
 deploy_service() {
   local name="$1" queues="$2" max_inst="$3" memory="$4" concurrency="$5" run_beat="$6"
+  local spec="$TMPDIR/$name.yaml"
 
-  local env_vars="REDIS_URL=$REDIS_URL,FORCE_RESTART=$FORCE_RESTART,ENABLE_GATE_WS=1,WORKER_QUEUES=$queues,RUN_BEAT=$run_beat,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1"
-  if [ -n "$concurrency" ]; then
-    env_vars="$env_vars,CELERY_CONCURRENCY=$concurrency"
-  fi
+  echo "==> Building spec for $name (queues='${queues}', max=$max_inst, mem=$memory, beat=$run_beat, concurrency='${concurrency:-<unset>}')..."
+  patch_spec "$TMPDIR/scalpyn.yaml" "$spec" "$name" "$queues" "$concurrency" "$run_beat" "$max_inst" "$memory"
 
-  echo "==> Deploying $name (queues='${queues}', max=$max_inst, mem=$memory, beat=$run_beat, concurrency='${concurrency:-<unset>}')..."
-  gcloud run deploy "$name" \
-    --image="$IMAGE" \
+  echo "==> Applying $name via services replace..."
+  gcloud run services replace "$spec" \
     --region="$REGION" \
     --project="$PROJECT" \
-    --platform=managed \
-    --quiet \
-    --no-allow-unauthenticated \
-    --ingress=internal \
-    --port=8080 \
-    --timeout=300 \
-    --min-instances=1 \
-    --max-instances="$max_inst" \
-    --no-cpu-throttling \
-    --cpu-boost \
-    --memory="$memory" \
-    --add-cloudsql-instances="$PROJECT:$REGION:scalpyn" \
-    --update-env-vars="$env_vars"
+    --quiet
   echo
 }
 
-# Mirrors cloudbuild.yaml lines 142-334 EXACTLY:
-#                              name                        queues          max  mem   concurrency  run_beat
+# Mirrors cloudbuild.yaml topology:
+#                              name                       queues          max  mem   concurrency  run_beat
 deploy_service "scalpyn-worker-micro"        "microstructure" "5" "2Gi" "4" "0"
 deploy_service "scalpyn-worker-structural"   "structural"     "3" "2Gi" "2" "0"
 deploy_service "scalpyn-worker-execution"    "execution"      "2" "1Gi" "2" "0"
@@ -124,6 +166,6 @@ gcloud run services list \
   --format="table(metadata.name, status.conditions[0].status, status.latestReadyRevisionName)"
 
 echo
-echo "==> Expected: 5 rows, all status=True. If fewer, inspect the failed"
-echo "    deploy output above and consult"
-echo "    backend/docs/runbooks/cloud-run-celery-topology.md"
+echo "==> Expected: 5 rows, all status=True. If fewer, run:"
+echo "    gcloud run services describe <name> --region=$REGION --format='value(status.conditions)'"
+echo "    to see why the failed one didn't reach Ready."
