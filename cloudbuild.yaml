@@ -353,15 +353,21 @@ steps:
         set -euo pipefail
         EXPECTED="scalpyn scalpyn-worker-micro scalpyn-worker-structural scalpyn-worker-execution scalpyn-beat"
         echo "==> [topology-check] Verifying all 5 Cloud Run services exist in ${_REGION}..."
-        FOUND=$(gcloud run services list \
+        # Task #244: no server-side --filter here. The previous filter
+        # `metadata.name=(A OR B OR ...)` was a known foot-gun: depending
+        # on gcloud SDK version it could silently return success with an
+        # empty result set (false-positive), which let 6 builds in a row
+        # go green while prod was missing all 4 worker/beat services.
+        # We list every service in the region and grep locally — robust
+        # against filter syntax drift across gcloud versions.
+        ALL=$(gcloud run services list \
           --region="${_REGION}" \
-          --format="value(metadata.name)" \
-          --filter="metadata.name=(scalpyn OR scalpyn-worker-micro OR scalpyn-worker-structural OR scalpyn-worker-execution OR scalpyn-beat)")
-        echo " [topology-check] Found:"
-        echo "$FOUND" | sed 's/^/   - /'
+          --format="value(metadata.name)")
+        echo " [topology-check] All services in region:"
+        echo "$ALL" | sed 's/^/   - /'
         MISSING=""
         for svc in $EXPECTED; do
-          if ! echo "$FOUND" | grep -qx "$svc"; then
+          if ! echo "$ALL" | grep -qx "$svc"; then
             MISSING="$MISSING $svc"
           fi
         done
@@ -370,7 +376,29 @@ steps:
           echo "==> See backend/docs/runbooks/cloud-run-celery-topology.md" >&2
           exit 1
         fi
-        echo "==> [topology-check] OK: all 5 Cloud Run services present."
+        # Belt-and-suspenders: verify each expected service is also Ready=True.
+        # A service that exists but has Ready=False (failed revision, no live
+        # instance) means workers won't actually consume tasks even though
+        # the bare existence check passed.
+        NOT_READY=""
+        for svc in $EXPECTED; do
+          # Filter by condition type=Ready instead of index [0] — Cloud Run
+          # does not guarantee ordering of status.conditions across SDK
+          # versions, and a non-Ready condition (e.g. ConfigurationsReady)
+          # at index 0 would otherwise misreport the service.
+          READY=$(gcloud run services describe "$svc" \
+            --region="${_REGION}" \
+            --format='value(status.conditions.filter("type:Ready").extract(status))' 2>/dev/null || echo "MISSING")
+          if [ "$READY" != "True" ]; then
+            NOT_READY="$NOT_READY $svc(ready=$READY)"
+          fi
+        done
+        if [ -n "$NOT_READY" ]; then
+          echo "==> [topology-check] FAIL: services not Ready:$NOT_READY" >&2
+          echo "==> See backend/docs/runbooks/cloud-run-celery-topology.md" >&2
+          exit 1
+        fi
+        echo "==> [topology-check] OK: all 5 Cloud Run services present and Ready."
 
 substitutions:
   _REGION: us-central1

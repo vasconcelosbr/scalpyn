@@ -21,7 +21,9 @@
 2. Reescrito `scripts/promote-cloud-run-topology.sh` para usar `gcloud run services describe scalpyn --format=export` + `gcloud run services replace`. Workers eram **services novos** — `gcloud run deploy --update-env-vars` só passava REDIS_URL, faltavam `DATABASE_URL`/`JWT_SECRET`/`ENCRYPTION_KEY`/`AI_KEYS_ENCRYPTION_KEY` (containers exitam em `start.sh:39-45` antes de abrir porta 8080). Clonando o spec inteiro do `scalpyn` herdamos secrets + env (commit `8d651f3`).
 3. Habilitada API `cloudresourcemanager.googleapis.com` no projeto (`gcloud services enable cloudresourcemanager.googleapis.com`) — pré-requisito do `services replace`.
 
-**Follow-up pendente** (não bloqueia a recuperação atual): corrigir o filter do step `topology-check` em `cloudbuild.yaml:362` para que builds futuros falhem vermelho de verdade quando algum serviço some.
+**Follow-up aplicado** (Task #244, mesmo PR): step `topology-check` em `cloudbuild.yaml` reescrito.
+- Removido o `--filter="metadata.name=(A OR B OR ...)"` server-side (foot-gun: dependendo da versão do gcloud SDK podia retornar success com result-set vazio → falso-positivo verde). Agora lista todos os serviços da região com `gcloud run services list --format="value(metadata.name)"` e faz `grep -qx` local por cada um dos 5 esperados.
+- Adicionado segundo loop "belt-and-suspenders" que roda `gcloud run services describe <svc> --format="value(status.conditions[0].status)"` para cada serviço esperado e exige `Ready=True`. Sem isso, um serviço criado com revisão falha (`Ready=False`, sem instância viva — workers não consomem nada) passaria pelo check de mera existência. Com isso, builds futuros falham vermelho tanto para serviço ausente quanto para serviço presente-mas-quebrado.
 
 ### Pós-recovery (~19:20Z): "Workers: 0" no dashboard com workers vivos
 
@@ -56,13 +58,23 @@ Definição canônica em [`cloudbuild.yaml`](../../../cloudbuild.yaml) (Task #21
 ## Comando de verificação
 
 ```bash
-gcloud run services list \
-  --region=us-central1 \
-  --format="value(metadata.name)" \
-  --filter="metadata.name=(scalpyn OR scalpyn-worker-micro OR scalpyn-worker-structural OR scalpyn-worker-execution OR scalpyn-beat)"
+# Lista todos os serviços da região e checa cada nome esperado localmente.
+# Mesmo método usado pelo step `topology-check` em cloudbuild.yaml.
+ALL=$(gcloud run services list --region=us-central1 --format="value(metadata.name)")
+for svc in scalpyn scalpyn-worker-micro scalpyn-worker-structural scalpyn-worker-execution scalpyn-beat; do
+  if echo "$ALL" | grep -qx "$svc"; then
+    READY=$(gcloud run services describe "$svc" --region=us-central1 \
+      --format="value(status.conditions.filter(\"type:Ready\").extract(status))" 2>/dev/null)
+    echo "OK  $svc ready=$READY"
+  else
+    echo "MISS $svc"
+  fi
+done
 ```
 
-Saída esperada: **5 linhas**, uma por serviço acima. Qualquer outro número é incidente.
+Saída esperada: **5 linhas `OK ... ready=True`**. Qualquer `MISS` ou `ready` diferente de `True` é incidente.
+
+> Histórico: até a Task #244, este comando usava `--filter="metadata.name=(A OR B OR ...)"` server-side. Esse filter foi descontinuado porque, dependendo da versão do gcloud SDK, retornava success com result-set vazio (falso-positivo verde). Não voltar a usá-lo aqui nem em automação.
 
 O mesmo check roda como último step do `cloudbuild.yaml` (`topology-check`); builds futuros que percam um serviço falham vermelho na hora.
 
