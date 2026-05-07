@@ -1,0 +1,338 @@
+### 🧠 PROMPT — DASHBOARD OPERACIONAL + INTELIGÊNCIA (INTEGRADO)
+
+---
+
+## 🔒 BLOCO DE PROTEÇÃO (OBRIGATÓRIO)
+
+NÃO ALTERAR:
+
+* `fetch_merged_indicators`
+* `indicators_provider`
+* `pipeline_scan`
+* `evaluate_signals`
+* `execute_buy`
+* `score_engine`
+* `block_engine`
+* estrutura das tabelas existentes (`ohlcv`, `indicators`, `decision_logs`)
+
+NÃO refatorar lógica de trading.
+NÃO alterar Celery, filas ou scheduler.
+
+---
+
+## 🎯 OBJETIVO
+
+Criar um **dashboard moderno, profissional e integrado ao sistema**, sem uso de Grafana, com:
+
+```text id="6g0fb0"
+monitoramento em tempo real + análise de performance + base para XGBoost
+```
+
+---
+
+# 🧩 ARQUITETURA
+
+## Backend
+
+* FastAPI (já existente)
+* Criar novos endpoints em:
+
+```text id="7f01lp"
+backend/app/api/dashboard.py
+```
+
+---
+
+## Frontend
+
+* Integrar no frontend existente (`/dashboard`)
+  OU
+* Criar nova rota:
+
+```text id="5y5l1g"
+/dashboard/performance
+```
+
+---
+
+## Stack Frontend
+
+* React / Next.js (se já existir)
+* Charts: Recharts ou ECharts
+* UI: Tailwind / shadcn
+
+---
+
+# 📊 MÓDULOS DO DASHBOARD
+
+---
+
+## 1. 🟢 HEALTH DO PIPELINE (CRÍTICO)
+
+### Endpoint:
+
+```text id="0ns1s6"
+GET /api/dashboard/health
+```
+
+### Query:
+
+```sql id="vlybzn"
+SELECT 
+  COUNT(*) AS rows_5m,
+  MAX(time) AS last_candle,
+  NOW() - MAX(time) AS delay,
+  COUNT(DISTINCT symbol) AS symbols
+FROM ohlcv
+WHERE timeframe = '5m'
+  AND time > NOW() - INTERVAL '15 minutes';
+```
+
+### UI:
+
+* indicador verde/amarelo/vermelho
+* texto:
+
+```text id="4clpfu"
+"Pipeline saudável" / "Atrasado" / "Parado"
+```
+
+---
+
+## 2. 📈 VOLUME DE INGESTÃO
+
+### Endpoint:
+
+```text id="f71v67"
+GET /api/dashboard/ohlcv-rate
+```
+
+### Métrica:
+
+* candles por minuto
+* candles por símbolo
+
+### UI:
+
+* gráfico de linha (últimos 60 min)
+
+---
+
+## 3. 🧠 DECISION LOG ANALYTICS
+
+### Endpoint:
+
+```text id="m5l3xv"
+GET /api/dashboard/decisions
+```
+
+### Métricas:
+
+* total decisões
+* % ALLOW vs BLOCK
+* score médio
+* confidence média
+
+### UI:
+
+* gráfico de pizza (ALLOW/BLOCK)
+* gráfico de distribuição de score
+
+---
+
+## 4. 💰 PERFORMANCE DE TRADES
+
+### Endpoint:
+
+```text id="r6jx6x"
+GET /api/dashboard/trades
+```
+
+### Métricas:
+
+* win rate
+* pnl médio
+* holding time médio
+* quantidade de trades (real vs simulado)
+
+### UI:
+
+* cards KPI
+* gráfico cumulativo de PnL
+
+---
+
+## 5. 🧪 SIMULADOS vs REAIS
+
+### Endpoint:
+
+```text id="cc0qbt"
+GET /api/dashboard/trade-comparison
+```
+
+### Métricas:
+
+* taxa de acerto simulado vs real
+* diferença de performance
+
+---
+
+## 6. 🤖 XGBOOST DATASET PREVIEW
+
+### Endpoint:
+
+```text id="rq5o5x"
+GET /api/dashboard/ml-dataset
+```
+
+### Dados:
+
+* features (score, indicators)
+* label (win/loss)
+
+### UI:
+
+* tabela com filtros
+* export CSV
+
+---
+
+## 7. 📉 DISTRIBUIÇÃO DE FEATURES
+
+### Endpoint:
+
+```text id="g7w5x5"
+GET /api/dashboard/feature-distribution
+```
+
+### Exemplo:
+
+* RSI distribuição
+* ADX distribuição
+* score vs outcome
+
+---
+
+## 8. 🚨 ALERTAS
+
+### Lógica:
+
+```text id="n0m78k"
+if delay > 10 min → ALERTA CRÍTICO
+```
+
+### UI:
+
+* banner vermelho fixo no topo
+
+---
+
+# 🧩 BACKEND — IMPLEMENTAÇÃO
+
+Criar:
+
+```text id="p4x7xk"
+backend/app/api/dashboard.py
+```
+
+Com:
+
+* router isolado
+* queries SQL otimizadas
+* respostas JSON estruturadas
+
+---
+
+# 🧩 FRONTEND — IMPLEMENTAÇÃO
+
+Criar página:
+
+```text id="9dp9a6"
+/dashboard/performance
+```
+
+Componentes:
+
+* `<HealthCard />`
+* `<PipelineChart />`
+* `<DecisionStats />`
+* `<TradePerformance />`
+* `<FeatureAnalysis />`
+
+---
+
+# ⚙️ ATUALIZAÇÃO EM TEMPO REAL
+
+* polling a cada 10–30 segundos
+  OU
+* WebSocket (opcional)
+
+---
+
+# 📊 DESIGN
+
+* layout estilo trading terminal
+* cores:
+
+  * verde = OK
+  * amarelo = warning
+  * vermelho = crítico
+* responsivo
+
+---
+
+# 📌 OUTPUT OBRIGATÓRIO
+
+A IA deve entregar:
+
+---
+
+## 1. Estrutura de arquivos criada
+
+---
+
+## 2. Endpoints implementados
+
+---
+
+## 3. Componentes frontend
+
+---
+
+## 4. Como acessar:
+
+```text id="mq6qfz"
+/dashboard/performance
+```
+
+---
+
+## 5. Evidência:
+
+* prints
+* logs
+* JSON responses
+
+---
+
+# ⚠️ REGRA FINAL
+
+Se qualquer parte exigir alteração em:
+
+```text id="t3rvru"
+pipeline_scan / indicators / score_engine
+```
+
+→ PARAR
+→ NÃO EXECUTAR
+
+---
+
+# 🎯 RESULTADO ESPERADO
+
+```text id="z5j2fm"
+Dashboard completo, integrado, sem dependência externa
+Base pronta para evolução do XGBoost
+```
+
+---

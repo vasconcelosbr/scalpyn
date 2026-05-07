@@ -827,20 +827,15 @@ async def _get_assets_with_indicators(db: AsyncSession, symbols: List[str]) -> L
         metadata_result = await db.execute(metadata_query)
         metadata_rows = metadata_result.fetchall()
         
-        # Get latest indicators
-        indicators_query = text(f"""
-            SELECT DISTINCT ON (symbol)
-                symbol, indicators_json
-            FROM indicators
-            WHERE symbol IN ({symbols_str})
-            ORDER BY symbol, time DESC
-        """)
+        # Get latest indicators via dual-scheduler merge
         try:
-            indicators_result = await db.execute(indicators_query)
-            indicators_rows = indicators_result.fetchall()
-            indicators_map = {r.symbol: r.indicators_json or {} for r in indicators_rows}
+            from ..utils.indicator_merge import fetch_merged_indicators
+            _merged = await fetch_merged_indicators(db, list(symbols), include_stale=True)
+            indicators_map = {sym: mi.as_flat_dict() for sym, mi in _merged.items()}
+            enriched_map = {sym: mi.as_enriched_dict() for sym, mi in _merged.items()}
         except Exception:
             indicators_map = {}
+            enriched_map = {}
         
         # Get latest scores
         scores_query = text(f"""
@@ -871,6 +866,7 @@ async def _get_assets_with_indicators(db: AsyncSession, symbols: List[str]) -> L
                 "market_cap": float(row.market_cap) if row.market_cap else 0,
                 "volume_24h": float(row.volume_24h) if row.volume_24h else 0,
                 "indicators": indicators,
+                "indicators_meta": enriched_map.get(row.symbol, {}),
             }
             
             # Flatten indicators for filtering

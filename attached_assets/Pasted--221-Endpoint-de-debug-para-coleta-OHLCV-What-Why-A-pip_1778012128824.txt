@@ -1,0 +1,42 @@
+#221 - Endpoint de debug para coleta OHLCV
+What & Why
+A pipeline está parada na origem: ohlcv em zero linhas nas últimas 6h, indicadores nulos, 100% dos ativos quarentenados, pipeline_scan produzindo new_signals=0 em todo ciclo. Não dá para diferenciar, hoje, se o problema é (A) Celery/beat não consumindo a fila microstructure, ou (B) o coletor (collect_market_data._collect_all_async / _collect_5m_async) falhar ao buscar/persistir candles. Esta tarefa adiciona um endpoint isolado de debug que dispara o coletor in-process, com logs estruturados, para triar A vs B sem mexer em nada do core de trading.
+
+Done looks like
+Novo endpoint GET /debug/run-collect responde 200 com payload contendo status, symbols_attempted, symbols_persisted, errors[], duration_ms, most_recent_ohlcv_time.
+Aceita query param opcional ?market=spot|futures (default spot) e ?limit=N para restringir aos N primeiros símbolos aprovados (default sem limite).
+Logs estruturados visíveis no workflow Backend API ao chamar o endpoint:
+DEBUG COLLECT START market=… approved_count=…
+[DEBUG COLLECT] symbol=BTC_USDT fetched_candles=N
+[DEBUG COLLECT] symbol=BTC_USDT persisted=N
+[DEBUG COLLECT] symbol=BTC_USDT error=… (com símbolo + tipo de exceção, sem stacktrace gigante)
+DEBUG COLLECT END duration_ms=… inserted=… errors=…
+Após chamar o endpoint manualmente, SELECT COUNT(*) FROM ohlcv WHERE time > NOW() - INTERVAL '5 minute' retorna > 0 se o coletor estiver íntegro.
+Diagnóstico final reportado no chat (no formato pedido pelo prompt — ROOT CAUSE / EVIDÊNCIA / STATUS / PRÓXIMA AÇÃO) classificando CASO A (coletor funciona → problema é Celery/fila) ou CASO B (coletor falha → API/símbolo/persistência).
+Nenhum arquivo do core de trading foi tocado: pipeline_scan, evaluate_signals, execute_buy, score_engine, block_engine, indicators_provider, fetch_merged_indicators, schema da tabela indicators, rotas de fila Celery existentes — todos byte-idênticos.
+Out of scope
+Corrigir o STRUCT-SCHED cycle crashed: column "is_approved" (coberto pela Task #220).
+Subir worker/beat Celery, provisionar Redis ou aplicar migrações Alembic (Task #220).
+Refatorar collect_market_data.py ou trocar formato de símbolo (BTC_USDT permanece como está).
+Mexer em filtros de pipeline, scoring, ou regras de quarentena.
+Endpoint de produção: o /debug/run-collect fica gated por header simples ou flag de dev (sem expor em prod sem auth).
+Steps
+Criar backend/app/api/debug_collect.py — novo APIRouter isolado com GET /debug/run-collect. Importar _collect_all_async (e/ou _collect_5m_async) já existente em app/tasks/collect_market_data.py e executá-lo dentro do request via await ou _run_async. Capturar exceções por símbolo, agregar resultado, retornar JSON. Gate por header X-Debug-Token comparado a uma env var (ou settings.ENV != "production") para evitar exposição acidental.
+Registrar router no backend/app/main.py — apenas o app.include_router(debug_collect.router). Nenhuma outra mudança no main.py.
+Adicionar logs estruturados — apenas dentro do novo arquivo de debug (envoltório em torno do coletor existente). Não editar collect_market_data.py. Os logs devem cobrir: início, contagem de símbolos aprovados, por-símbolo (fetched / persisted / erro), e fim com totais.
+Validação manual + diagnóstico — chamar curl -H "X-Debug-Token: …" $REPLIT_DEV_DOMAIN/debug/run-collect, depois rodar a query SELECT COUNT(*), MAX(time) FROM ohlcv WHERE time > NOW() - INTERVAL '5 minute'. Com base no resultado:
+CASO A (linhas inseridas): confirmar que app.tasks.collect_market_data.collect_5m está em TASK_ROUTES (fila microstructure) e em beat_schedule (já confirmado nos logs); reportar que problema é ausência de worker/beat — apontar para Task #220.
+CASO B (zero linhas): inspecionar os logs do endpoint para identificar se falha é em get_approved_pool_symbols (drift do is_approved), na chamada da exchange, ou no INSERT em ohlcv. Reportar evidência.
+Responder com o output obrigatório do prompt — bloco final em PT-BR com ROOT CAUSE, EVIDÊNCIA (logs + queries), STATUS (RESOLVIDO/BLOQUEADO) e PRÓXIMA AÇÃO objetiva.
+Constraint duro: nenhum dos arquivos protegidos (pipeline_scan.py, evaluate_signals.py, execute_buy.py, score_engine*, block_engine*, indicators_provider.py, fetch_merged_indicators*, schema indicators) pode ser editado nesta tarefa. Diff esperado: 1 arquivo novo (debug_collect.py) + 1–2 linhas adicionadas em main.py. Se a investigação revelar que o coletor precisa de fix de código para funcionar, reportar e parar — não corrigir aqui.
+
+Relevant files
+backend/app/tasks/collect_market_data.py:23-272,274-555
+backend/app/tasks/celery_app.py:73-200,280-340
+backend/app/services/pool_service.py
+backend/app/services/market_data_service.py
+backend/app/services/microstructure_scheduler_service.py:104-160
+backend/app/main.py
+backend/app/api/__init__.py
+backend/app/api/admin_diagnostics.py
+backend/app/api/debug_indicators.py

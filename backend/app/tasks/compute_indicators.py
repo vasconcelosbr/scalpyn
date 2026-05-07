@@ -8,10 +8,125 @@ from datetime import datetime, timezone
 import pandas as pd
 from sqlalchemy import text
 
+from ..services import persistence as _pq
 from ..tasks.celery_app import celery_app
+from ..utils.indicator_merge import envelop_results, _ORDER_FLOW_KEYS
 
 logger = logging.getLogger(__name__)
 _STOCHASTIC_WARMUP_OVERLAP = 2
+
+
+def _compute_score_fields(results: dict) -> dict:
+    """Compute a deterministic basic score from flat indicator values.
+
+    Returns four fields that are injected into ``indicators_json`` so that
+    every indicators row has a self-contained score — independent of the
+    user-configured robust engine in ``compute_scores``.
+
+    Scoring criteria (each criterion contributes up to 20 points):
+      * RSI in [40, 70]                    — momentum zone
+      * EMA9 > EMA21                       — short-term trend up
+      * volume_spike > 1.5                 — volume expansion
+      * ATR% > 0.5                         — sufficient volatility
+      * macd_signal == "positive"          — MACD bullish cross
+      * price > vwap                       — price above VWAP
+
+    score_normalized (0–100) = score_raw / score_max * 100
+    score mirrors score_normalized for direct use in ranking/display.
+    """
+    score = 0
+    max_score = 0
+
+    rsi = results.get("rsi")
+    if rsi is not None:
+        max_score += 20
+        try:
+            if 40 <= float(rsi) <= 70:
+                score += 20
+        except (TypeError, ValueError):
+            pass
+
+    ema9 = results.get("ema9")
+    ema21 = results.get("ema21")
+    if ema9 is not None and ema21 is not None:
+        max_score += 20
+        try:
+            if float(ema9) > float(ema21):
+                score += 20
+        except (TypeError, ValueError):
+            pass
+
+    volume_spike = results.get("volume_spike")
+    if volume_spike is not None:
+        max_score += 20
+        try:
+            if float(volume_spike) > 1.5:
+                score += 20
+        except (TypeError, ValueError):
+            pass
+
+    atr_pct = results.get("atr_pct")
+    if atr_pct is not None:
+        max_score += 20
+        try:
+            if float(atr_pct) > 0.5:
+                score += 20
+        except (TypeError, ValueError):
+            pass
+
+    if results.get("macd_signal") == "positive":
+        max_score += 20
+        score += 20
+
+    price = results.get("price")
+    vwap = results.get("vwap")
+    if price is not None and vwap is not None:
+        max_score += 20
+        try:
+            if float(price) > float(vwap):
+                score += 20
+        except (TypeError, ValueError):
+            pass
+
+    score_normalized = round((score / max_score) * 100, 2) if max_score > 0 else 0.0
+
+    return {
+        "score_raw": score,
+        "score_max": max_score,
+        "score_normalized": score_normalized,
+        "score": score_normalized,
+    }
+
+# Source/confidence map for order-flow keys fetched from real trades.
+# Technical indicators from FeatureEngine use the default "candle_computed"/0.80.
+_COMPUTE_KEY_SOURCE_MAP: dict = {k: ("gate_trades", 1.00) for k in _ORDER_FLOW_KEYS}
+
+
+def _merge_order_flow_into_results(results: dict, of_data: dict) -> None:
+    """Merge order-flow payload into ``results`` without overwriting valid values with ``None``.
+
+    Pre-Task #171 the merge was a single ``results.update(...)`` that
+    silently overwrote a previously-computed (and still-valid)
+    ``taker_ratio`` or ``volume_delta`` whenever the new ``of_data`` lookup
+    returned ``None`` (empty 60s window).  Under high cadence + 100+
+    symbols that produced an envelope storm of ``NO_DATA`` rows even when
+    the previous snapshot had a perfectly good signal.
+
+    New contract:
+      * For the five order-flow value keys (``taker_ratio``,
+        ``buy_pressure``, ``volume_delta``, ``taker_buy_volume``,
+        ``taker_sell_volume``): only overwrite when the new value is not
+        ``None`` OR the existing value is missing/``None``.
+      * ``taker_source`` and ``taker_window`` are metadata — always
+        updated so the envelope reflects the actual fetch attempt.
+      * Any other key in ``of_data`` is merged with normal ``update`` semantics.
+    """
+    for key, value in of_data.items():
+        if key in _ORDER_FLOW_KEYS:
+            if value is not None or results.get(key) is None:
+                results[key] = value
+        else:
+            results[key] = value
 
 
 def _calc_stochastic_warmup(stochastic_config: dict) -> int:
@@ -61,21 +176,22 @@ async def _load_market_metadata_map(db) -> dict:
 
 
 async def _upsert_market_metadata_snapshot(db, symbol: str, results: dict, updated_at: datetime) -> None:
+    # `volume_24h` is owned by collect_market_data (Gate.io ticker). We write
+    # only price/spread/depth here; the candle-aggregated figure is kept in
+    # indicators_json as `volume_24h_usdt_aggregated` for diagnostics.
     await db.execute(text("""
         INSERT INTO market_metadata (
-            symbol, price, volume_24h, spread_pct, orderbook_depth_usdt, last_updated
+            symbol, price, spread_pct, orderbook_depth_usdt, last_updated
         )
-        VALUES (:symbol, :price, :volume_24h, :spread_pct, :orderbook_depth_usdt, :updated)
+        VALUES (:symbol, :price, :spread_pct, :orderbook_depth_usdt, :updated)
         ON CONFLICT (symbol) DO UPDATE SET
             price = COALESCE(:price, market_metadata.price),
-            volume_24h = COALESCE(:volume_24h, market_metadata.volume_24h),
             spread_pct = COALESCE(:spread_pct, market_metadata.spread_pct),
             orderbook_depth_usdt = COALESCE(:orderbook_depth_usdt, market_metadata.orderbook_depth_usdt),
             last_updated = :updated
     """), {
         "symbol": symbol,
         "price": results.get("price"),
-        "volume_24h": results.get("volume_24h_usdt"),
         "spread_pct": results.get("spread_pct"),
         "orderbook_depth_usdt": results.get("orderbook_depth_usdt"),
         "updated": updated_at,
@@ -83,7 +199,13 @@ async def _upsert_market_metadata_snapshot(db, symbol: str, results: dict, updat
 
 
 def _derive_min_candles(indicators_config: dict, timeframe: str) -> int:
-    ema_periods = indicators_config.get("ema", {}).get("periods", [])
+    # EMA periods are intentionally excluded from the min-candle gate.
+    # pandas ewm() produces values for any series length (converging with more
+    # data); including max(ema_periods)=200 would gate the entire 5m pipeline
+    # behind 24h of data, preventing ATR/RSI/ADX from being computed for coins
+    # that have been tracked for only a few hours.
+    # We still query up to 288 candles (see query_limit_5m) when available so
+    # EMA200 accuracy is preserved for coins with a longer history.
     stochastic = indicators_config.get("stochastic", {})
 
     required = [
@@ -94,10 +216,9 @@ def _derive_min_candles(indicators_config: dict, timeframe: str) -> int:
         indicators_config.get("atr", {}).get("period", 0),
         indicators_config.get("bollinger", {}).get("period", 0),
         indicators_config.get("zscore", {}).get("lookback", 0),
-        max(ema_periods) if ema_periods else 0,
         _calc_stochastic_warmup(stochastic),
         _calc_volume_lookback(indicators_config),
-        288 if timeframe == "5m" else 24,
+        48 if timeframe == "5m" else 24,
     ]
     return max(required)
 
@@ -118,87 +239,164 @@ async def _compute_async():
     computed = 0
 
     async with AsyncSessionLocal() as db:
-        # Get all symbols with recent OHLCV data
-        symbols_result = await db.execute(text("""
-            SELECT DISTINCT symbol FROM ohlcv
-            WHERE time > now() - interval '7 days'
-        """))
-        symbols = [row.symbol for row in symbols_result.fetchall()]
-        metadata_map = await _load_market_metadata_map(db)
+        try:
+            # Task #232: ingestion-side gate is ``is_active`` only.
+            # ``is_approved`` was overloaded; the execution gate moved
+            # to ``is_tradable`` and lives in evaluate_signals/execute_buy.
+            symbols_result = await db.execute(text("""
+                SELECT DISTINCT o.symbol
+                FROM ohlcv o
+                JOIN pool_coins p ON o.symbol = p.symbol
+                WHERE p.is_active = true
+                  AND p.market_type = 'spot'
+                  AND o.time > now() - interval '7 days'
+            """))
+            symbols = [row.symbol for row in symbols_result.fetchall()]
+            metadata_map = await _load_market_metadata_map(db)
 
-        for symbol in symbols:
-            try:
-                # Fetch OHLCV data for this symbol
-                ohlcv_result = await db.execute(text("""
-                    SELECT time, open, high, low, close, volume, quote_volume
-                    FROM ohlcv
-                    WHERE symbol = :symbol AND timeframe = '1h'
-                    ORDER BY time DESC
-                    LIMIT :limit
-                """), {"symbol": symbol, "limit": query_limit_1h})
-                rows = ohlcv_result.fetchall()
+            for symbol in symbols:
+                try:
+                    # Fetch OHLCV data for this symbol
+                    ohlcv_result = await db.execute(text("""
+                        SELECT time, open, high, low, close, volume, quote_volume
+                        FROM ohlcv
+                        WHERE symbol = :symbol AND timeframe = '1h'
+                        ORDER BY time DESC
+                        LIMIT :limit
+                    """), {"symbol": symbol, "limit": query_limit_1h})
+                    rows = ohlcv_result.fetchall()
 
-                if len(rows) < min_candles_1h:
-                    logger.debug(
-                        "Skipping 1h indicator computation for %s: only %d candles (need ≥%d)",
-                        symbol, len(rows), min_candles_1h,
+                    if len(rows) < min_candles_1h:
+                        logger.debug(
+                            "Skipping 1h indicator computation for %s: only %d candles (need ≥%d)",
+                            symbol, len(rows), min_candles_1h,
+                        )
+                        continue
+
+                    df = pd.DataFrame([{
+                        "time": r.time, "open": float(r.open), "high": float(r.high),
+                        "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
+                        "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
+                    } for r in reversed(rows)])
+
+                    market_data = await market_data_service.fetch_indicator_fallbacks(
+                        symbol,
+                        existing_data=metadata_map.get(symbol),
                     )
+                    # Calculate OHLCV-based indicators
+                    results = engine.calculate(df, market_data=market_data)
+                    if not results:
+                        continue
+
+                    logger.debug(
+                        "Indicator volume audit %s[1h]: last_base=%s last_usdt=%s agg24h_usdt=%s ticker24h_usdt=%s coverage_h=%s candles_24h=%s",
+                        symbol,
+                        results.get("volume_last_candle_base"),
+                        results.get("volume_last_candle_usdt"),
+                        results.get("volume_24h_usdt_aggregated"),
+                        results.get("volume_24h_usdt"),
+                        results.get("volume_24h_coverage_hours"),
+                        results.get("volume_24h_candles"),
+                    )
+
+                    # Merge real order flow data (taker_ratio, buy_pressure).
+                    # Window aligned to Redis buffer TTL (Task #171: TRADE_BUFFER_TTL_SECONDS=360,
+                    # max consumed window 300s) so the buffer covers the entire lookback.
+                    of_data = await get_order_flow_data(
+                        symbol, window_seconds=300, market_type="spot"
+                    )
+                    _merge_order_flow_into_results(results, of_data)
+
+                    # Compute and persist score fields inside indicators_json so
+                    # every row is self-contained.  Must happen BEFORE envelop_results.
+                    results.update(_compute_score_fields(results))
+
+                    now = datetime.now(timezone.utc)
+
+                    payload_json = json.dumps(envelop_results(
+                        results,
+                        default_source="candle_computed",
+                        default_confidence=0.80,
+                        key_source_map=_COMPUTE_KEY_SOURCE_MAP,
+                    ))
+
+                    # Task #236: persistence-queue path. When enabled, never
+                    # open a savepoint here — enqueue idempotent UPSERT messages
+                    # so the dedicated worker pool drains them in short
+                    # transactions. Removes the structural ↔ microstructure
+                    # ↔ collect_market_data lock contention on indicators /
+                    # market_metadata observed in May-2026 prod.
+                    if _pq.is_enabled():
+                        await _pq.enqueue_or_log(
+                            producer="compute-1h",
+                            msg=_pq.IndicatorsUpsert(
+                                category="scheduler",
+                                enqueued_at=_pq.now_monotonic(),
+                                symbol=symbol,
+                                timeframe="1h",
+                                market_type="spot",
+                                scheduler_group="structural",
+                                time=now,
+                                payload_json=payload_json,
+                                mode="upsert",
+                            ),
+                        )
+                        # market_metadata: only price/spread/depth here.
+                        # volume_24h is owned by collect_market_data (Gate ticker).
+                        if (
+                            results.get("price") is not None
+                            or results.get("spread_pct") is not None
+                            or results.get("orderbook_depth_usdt") is not None
+                        ):
+                            await _pq.enqueue_or_log(
+                                producer="compute-1h",
+                                msg=_pq.MarketMetadataUpsert(
+                                    category="scheduler",
+                                    enqueued_at=_pq.now_monotonic(),
+                                    symbol=symbol,
+                                    last_updated=now,
+                                    price=results.get("price"),
+                                    spread_pct=results.get("spread_pct"),
+                                    orderbook_depth_usdt=results.get("orderbook_depth_usdt"),
+                                ),
+                            )
+                    else:
+                        # SAVEPOINT: isolates this symbol's writes so that a
+                        # failure here does not roll back other symbols' data.
+                        async with db.begin_nested():
+                            await _upsert_market_metadata_snapshot(db, symbol, results, now)
+
+                            # Store in TimescaleDB (envelope format — value + source + confidence + status).
+                            # Task #216: write ``scheduler_group`` explicitly so the read
+                            # path (indicators_provider) can merge structural + microstructure
+                            # rows by group rather than guessing from legacy NULL/'combined'.
+                            await db.execute(text("""
+                                INSERT INTO indicators
+                                    (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
+                                VALUES
+                                    (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
+                            """), {
+                                "time": now,
+                                "symbol": symbol,
+                                "timeframe": "1h",
+                                "market_type": "spot",  # 1h collector is spot-only (pool query above filters p.market_type='spot')
+                                "scheduler_group": "structural",
+                                "indicators": payload_json,
+                            })
+
+                    computed += 1
+
+                except Exception as e:
+                    logger.warning(f"Failed to compute indicators for {symbol}: {e}")
+                    # begin_nested() savepoint auto-rolled back on exception;
+                    # outer transaction remains healthy — no db.rollback() needed.
                     continue
 
-                df = pd.DataFrame([{
-                    "time": r.time, "open": float(r.open), "high": float(r.high),
-                    "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
-                    "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
-                } for r in reversed(rows)])
-
-                market_data = await market_data_service.fetch_indicator_fallbacks(
-                    symbol,
-                    existing_data=metadata_map.get(symbol),
-                )
-                # Calculate OHLCV-based indicators
-                results = engine.calculate(df, market_data=market_data)
-                if not results:
-                    continue
-
-                logger.debug(
-                    "Indicator volume audit %s[1h]: last_base=%s last_usdt=%s agg24h_usdt=%s coverage_h=%s candles_24h=%s",
-                    symbol,
-                    results.get("volume_last_candle_base"),
-                    results.get("volume_last_candle_usdt"),
-                    results.get("volume_24h_usdt"),
-                    results.get("volume_24h_coverage_hours"),
-                    results.get("volume_24h_candles"),
-                )
-
-                # Merge real order flow data (taker_ratio, buy_pressure — 60s trade window)
-                of_data = await get_order_flow_data(symbol, window_seconds=60)
-                results.update({k: v for k, v in of_data.items() if v is not None or k in {
-                    "taker_ratio", "buy_pressure", "volume_delta",
-                    "taker_buy_volume", "taker_sell_volume",
-                }})
-
-
-                now = datetime.now(timezone.utc)
-                await _upsert_market_metadata_snapshot(db, symbol, results, now)
-
-                # Store in TimescaleDB
-                await db.execute(text("""
-                    INSERT INTO indicators (time, symbol, timeframe, indicators_json)
-                    VALUES (:time, :symbol, :timeframe, :indicators)
-                """), {
-                    "time": now,
-                    "symbol": symbol,
-                    "timeframe": "1h",
-                    "indicators": json.dumps(results),
-                })
-
-                computed += 1
-
-            except Exception as e:
-                logger.warning(f"Failed to compute indicators for {symbol}: {e}")
-                continue
-
-        await db.commit()
+            await db.commit()
+        except Exception as e:
+            logger.error("Indicator computation failed: %s", e)
+            await db.rollback()
+            raise
 
     logger.info(f"Indicator computation complete: {computed} symbols")
     return computed
@@ -207,7 +405,13 @@ async def _compute_async():
 @celery_app.task(name="app.tasks.compute_indicators.compute")
 def compute():
     count = _run_async(_compute_async())
-    celery_app.send_task("app.tasks.compute_scores.score")
+    # Chain to scoring (structural queue). Dedup TTL = score time_limit + 60s.
+    from . import task_dispatch
+    task_dispatch.enqueue(
+        "app.tasks.compute_scores.score",
+        dedup_key="score",
+        ttl_seconds=660,
+    )
     return f"Computed indicators for {count} symbols"
 
 
@@ -228,83 +432,153 @@ async def _compute_5m_async():
     query_limit_5m = max(288, min_candles_5m)
 
     async with AsyncSessionLocal() as db:
-        # Only symbols that have recent 5m candles
-        symbols_result = await db.execute(text("""
-            SELECT DISTINCT symbol FROM ohlcv
-            WHERE timeframe = '5m'
-              AND time > now() - interval '2 hours'
-        """))
-        symbols = [row.symbol for row in symbols_result.fetchall()]
-        metadata_map = await _load_market_metadata_map(db)
+        try:
+            # Task #232: ingestion gate is ``is_active`` only — see
+            # ``compute_indicators._compute_async`` above for rationale.
+            symbols_result = await db.execute(text("""
+                SELECT DISTINCT o.symbol, p.market_type
+                FROM ohlcv o
+                JOIN pool_coins p ON o.symbol = p.symbol
+                WHERE p.is_active = true
+                  AND o.timeframe = '5m'
+                  AND o.time > now() - interval '2 hours'
+            """))
+            symbol_rows = symbols_result.fetchall()
+            symbols = [row.symbol for row in symbol_rows]
+            symbol_market_type = {row.symbol: row.market_type for row in symbol_rows}
+            metadata_map = await _load_market_metadata_map(db)
 
-        for symbol in symbols:
-            try:
-                ohlcv_result = await db.execute(text("""
-                    SELECT time, open, high, low, close, volume, quote_volume
-                    FROM ohlcv
-                    WHERE symbol = :symbol AND timeframe = '5m'
-                    ORDER BY time DESC
-                    LIMIT :limit
-                """), {"symbol": symbol, "limit": query_limit_5m})
-                rows = ohlcv_result.fetchall()
+            for symbol in symbols:
+                try:
+                    ohlcv_result = await db.execute(text("""
+                        SELECT time, open, high, low, close, volume, quote_volume
+                        FROM ohlcv
+                        WHERE symbol = :symbol AND timeframe = '5m'
+                        ORDER BY time DESC
+                        LIMIT :limit
+                    """), {"symbol": symbol, "limit": query_limit_5m})
+                    rows = ohlcv_result.fetchall()
 
-                if len(rows) < min_candles_5m:
-                    logger.debug(
-                        "Skipping 5m indicator computation for %s: only %d candles (need ≥%d)",
-                        symbol, len(rows), min_candles_5m,
+                    if len(rows) < min_candles_5m:
+                        logger.debug(
+                            "Skipping 5m indicator computation for %s: only %d candles (need ≥%d)",
+                            symbol, len(rows), min_candles_5m,
+                        )
+                        continue
+
+                    df = pd.DataFrame([{
+                        "time": r.time, "open": float(r.open), "high": float(r.high),
+                        "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
+                        "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
+                    } for r in reversed(rows)])
+
+                    market_data = await market_data_service.fetch_indicator_fallbacks(
+                        symbol,
+                        existing_data=metadata_map.get(symbol),
                     )
+                    results = engine.calculate(df, market_data=market_data)
+                    if not results:
+                        continue
+
+                    logger.debug(
+                        "Indicator volume audit %s[5m]: last_base=%s last_usdt=%s agg24h_usdt=%s ticker24h_usdt=%s coverage_h=%s candles_24h=%s",
+                        symbol,
+                        results.get("volume_last_candle_base"),
+                        results.get("volume_last_candle_usdt"),
+                        results.get("volume_24h_usdt_aggregated"),
+                        results.get("volume_24h_usdt"),
+                        results.get("volume_24h_coverage_hours"),
+                        results.get("volume_24h_candles"),
+                    )
+
+                    # Merge real order flow data (taker_ratio, buy_pressure).
+                    # Window aligned to Redis buffer TTL (Task #171: 300s consumed, 360s TTL).
+                    of_data = await get_order_flow_data(
+                        symbol, window_seconds=300, market_type="spot"
+                    )
+                    _merge_order_flow_into_results(results, of_data)
+
+                    # Compute and persist score fields inside indicators_json so
+                    # every row is self-contained.  Must happen BEFORE envelop_results.
+                    results.update(_compute_score_fields(results))
+
+                    now = datetime.now(timezone.utc)
+
+                    payload_json = json.dumps(envelop_results(
+                        results,
+                        default_source="candle_computed",
+                        default_confidence=0.80,
+                        key_source_map=_COMPUTE_KEY_SOURCE_MAP,
+                    ))
+
+                    # Task #236: persistence-queue path. See _compute_async for rationale.
+                    if _pq.is_enabled():
+                        await _pq.enqueue_or_log(
+                            producer="compute-5m",
+                            msg=_pq.IndicatorsUpsert(
+                                category="scheduler",
+                                enqueued_at=_pq.now_monotonic(),
+                                symbol=symbol,
+                                timeframe="5m",
+                                market_type=symbol_market_type.get(symbol, "spot"),
+                                scheduler_group="microstructure",
+                                time=now,
+                                payload_json=payload_json,
+                                mode="upsert",
+                            ),
+                        )
+                        if (
+                            results.get("price") is not None
+                            or results.get("spread_pct") is not None
+                            or results.get("orderbook_depth_usdt") is not None
+                        ):
+                            await _pq.enqueue_or_log(
+                                producer="compute-5m",
+                                msg=_pq.MarketMetadataUpsert(
+                                    category="scheduler",
+                                    enqueued_at=_pq.now_monotonic(),
+                                    symbol=symbol,
+                                    last_updated=now,
+                                    price=results.get("price"),
+                                    spread_pct=results.get("spread_pct"),
+                                    orderbook_depth_usdt=results.get("orderbook_depth_usdt"),
+                                ),
+                            )
+                    else:
+                        # SAVEPOINT: isolates this symbol's writes so that a
+                        # failure here does not roll back other symbols' data.
+                        async with db.begin_nested():
+                            await _upsert_market_metadata_snapshot(db, symbol, results, now)
+                            # Store in TimescaleDB (envelope format — value + source + confidence + status).
+                            # Task #216: explicit ``scheduler_group='microstructure'`` so the
+                            # read path can identify which cadence wrote each row.
+                            await db.execute(text("""
+                                INSERT INTO indicators
+                                    (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
+                                VALUES
+                                    (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
+                            """), {
+                                "time":            now,
+                                "symbol":          symbol,
+                                "timeframe":       "5m",
+                                "market_type":     symbol_market_type.get(symbol, "spot"),
+                                "scheduler_group": "microstructure",
+                                "indicators":      payload_json,
+                            })
+
+                    computed += 1
+
+                except Exception as e:
+                    logger.warning(f"Failed to compute 5m indicators for {symbol}: {e}")
+                    # begin_nested() savepoint auto-rolled back on exception;
+                    # outer transaction remains healthy — no db.rollback() needed.
                     continue
 
-                df = pd.DataFrame([{
-                    "time": r.time, "open": float(r.open), "high": float(r.high),
-                    "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
-                    "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
-                } for r in reversed(rows)])
-
-                market_data = await market_data_service.fetch_indicator_fallbacks(
-                    symbol,
-                    existing_data=metadata_map.get(symbol),
-                )
-                results = engine.calculate(df, market_data=market_data)
-                if not results:
-                    continue
-
-                logger.debug(
-                    "Indicator volume audit %s[5m]: last_base=%s last_usdt=%s agg24h_usdt=%s coverage_h=%s candles_24h=%s",
-                    symbol,
-                    results.get("volume_last_candle_base"),
-                    results.get("volume_last_candle_usdt"),
-                    results.get("volume_24h_usdt"),
-                    results.get("volume_24h_coverage_hours"),
-                    results.get("volume_24h_candles"),
-                )
-
-                # Merge real order flow data (taker_ratio, buy_pressure — 60s trade window)
-                of_data = await get_order_flow_data(symbol, window_seconds=60)
-                results.update({k: v for k, v in of_data.items() if v is not None or k in {
-                    "taker_ratio", "buy_pressure", "volume_delta",
-                    "taker_buy_volume", "taker_sell_volume",
-                }})
-
-                now = datetime.now(timezone.utc)
-                await _upsert_market_metadata_snapshot(db, symbol, results, now)
-                await db.execute(text("""
-                    INSERT INTO indicators (time, symbol, timeframe, indicators_json)
-                    VALUES (:time, :symbol, :timeframe, :indicators)
-                """), {
-                    "time":       now,
-                    "symbol":     symbol,
-                    "timeframe":  "5m",
-                    "indicators": json.dumps(results),
-                })
-
-                computed += 1
-
-            except Exception as e:
-                logger.warning(f"Failed to compute 5m indicators for {symbol}: {e}")
-                continue
-
-        await db.commit()
+            await db.commit()
+        except Exception as e:
+            logger.error("5m indicator computation failed: %s", e)
+            await db.rollback()
+            raise
 
     logger.info(f"5m indicator computation complete: {computed} symbols")
     return computed
@@ -313,6 +587,12 @@ async def _compute_5m_async():
 @celery_app.task(name="app.tasks.compute_indicators.compute_5m")
 def compute_5m():
     count = _run_async(_compute_5m_async())
-    # Chain: fresh 5m indicators → pipeline scan re-evaluates all layers
-    celery_app.send_task("app.tasks.pipeline_scan.scan")
+    # Chain: fresh 5m indicators → pipeline scan (microstructure queue).
+    # TTL = pipeline_scan time_limit (180s) + 30s margin.
+    from . import task_dispatch
+    task_dispatch.enqueue(
+        "app.tasks.pipeline_scan.scan",
+        dedup_key="pipeline_scan",
+        ttl_seconds=210,
+    )
     return f"Computed 5m indicators for {count} symbols"

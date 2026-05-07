@@ -9,6 +9,18 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "supersecret"
     ENCRYPTION_KEY: str = "0123456789abcdef0123456789abcdef"
 
+    # Single ops-only Slack webhook for robust-indicator alert
+    # notifications (staleness / low-confidence / rejection-rate). When
+    # unset, alerts are logged at INFO and dropped — they are NEVER
+    # broadcast to per-user webhooks (would leak one tenant's
+    # symbol/score data into another tenant's Slack).
+    ROBUST_ALERTS_OPS_WEBHOOK_URL: str = ""
+
+    # Maximum seconds a trade may remain open before the Trade Monitor closes
+    # it with outcome = "timeout".  Override via the TRADE_MONITOR_TIMEOUT_SECONDS
+    # environment variable.  Default is 24 hours (86 400 s).
+    TRADE_MONITOR_TIMEOUT_SECONDS: int = 86_400
+
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
     def fix_db_url(cls, v: str) -> str:

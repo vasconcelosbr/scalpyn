@@ -26,8 +26,23 @@ class DecisionLog(Base):
     reasons = Column(JSONB, nullable=True)
     metrics = Column(JSONB, nullable=True)
     latency_ms = Column(Integer, nullable=True)
+    direction = Column(String(10), nullable=True)
+    event_type = Column(String(40), nullable=True)
+    processed = Column(Boolean, nullable=False, default=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    # Populated by Trade Reconciliation (Module 2) using dedicated columns
+    # rather than patching the immutable metrics JSONB.
+    trade_executed = Column(Boolean, nullable=True)
+    execution_type = Column(String(10), nullable=True)
+    execution_entry_price = Column(Float, nullable=True)
+    execution_entry_time = Column(DateTime(timezone=True), nullable=True)
+
+    # Populated by Trade Monitor (Module 3) once the trade closes.
+    outcome = Column(String(20), nullable=True)        # 'tp' | 'sl' | 'timeout'
+    pnl_pct = Column(Float, nullable=True)
+    holding_seconds = Column(Integer, nullable=True)
 
 
 class AssetTrace(Base):

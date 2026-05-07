@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from .indicator_validity import RuleStatus
 from .rule_engine import RuleEngine
 
 FIELD_LABELS: Dict[str, str] = {
@@ -45,6 +46,138 @@ FIELD_LABELS: Dict[str, str] = {
     "momentum_score": "Momentum Score",
     "signal_score": "Signal Score",
 }
+
+
+# ---------------------------------------------------------------------------
+# Trace-asset builder
+# ---------------------------------------------------------------------------
+#
+# `build_asset_evaluation_trace` and `_passes_profile_filters` both consume a
+# flat dict per symbol that mixes market_metadata fields with
+# indicators_json fields. Two independent call-sites in the watchlists API
+# used to construct that dict by hand and disagreed on the merge order —
+# the older one seeded the dict with `meta.get(...)` first (often `None`)
+# and then merged indicators with a `if k not in asset_entry` guard, so
+# any meta `None` would shadow a perfectly valid indicator value (the SUI
+# "SEM DADOS / aguardando coleta" false-negative reported in task #69).
+#
+# This helper centralises the contract so the merge order can never drift
+# again:
+#
+#   * `indicators_json` is the SOLE source of truth for indicator values.
+#   * `market_metadata` complements `current_price`, `price_change_24h`,
+#     `volume_24h`, `market_cap`.
+#   * `spread_pct` and `orderbook_depth_usdt` are hybrid — indicators win
+#     when present, otherwise meta supplies them.
+#   * Common alias spellings (`bollinger_width`, `volume_24h_usdt`, ...)
+#     are normalised so a profile rule that references either spelling
+#     finds the value.
+
+# Hybrid fields. Indicator value wins; meta value used as fallback.
+# (Required meta-source fields — current_price, price_change_24h,
+# volume_24h, market_cap — are seeded explicitly inside `build_trace_asset`
+# because they must always be present in the dict, even when both meta
+# and indicators omit them, so DB-write paths can index them safely.)
+_HYBRID_FIELDS = ("spread_pct", "orderbook_depth_usdt")
+
+# Indicator-payload string keys allowed to propagate to the trace asset.
+# Other strings are dropped because the rule engine treats them as
+# unevaluable scalars.
+_PROFILE_STRING_INDICATORS = frozenset(
+    {"macd_signal", "psar_trend", "ema_align_label"}
+)
+
+# Variant aliases. When a profile rule references one of these field
+# names, we want the trace to find the canonical value (and vice versa)
+# so that legacy DB drift is not falsely reported as "no data".
+_INDICATOR_FIELD_ALIASES: Dict[str, tuple] = {
+    "bb_width":             ("bollinger_width", "bollinger_band_width"),
+    "volume_24h":           ("volume_24h_usdt", "vol_24h"),
+    "volume_spike":         ("vol_spike",),
+    "price_change_24h":     ("price_change_24h_pct",),
+    "spread_pct":           ("spread_percent",),
+    "atr_pct":              ("atr_percent",),
+    "orderbook_depth_usdt": ("orderbook_depth",),
+    "current_price":        ("price",),
+}
+
+
+def build_trace_asset(
+    symbol: str,
+    *,
+    indicators: Optional[Dict[str, Any]] = None,
+    meta: Optional[Dict[str, Any]] = None,
+    alpha_score: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Merge indicators_json + market_metadata into a single dict suitable
+    for `build_asset_evaluation_trace` and `_passes_profile_filters`.
+
+    Critical invariant: if an indicator value is non-None it must NEVER
+    be shadowed by a None coming from meta. This is the regression
+    locked in by `tests/test_build_trace_asset.py`.
+    """
+    meta = meta or {}
+    indicators = indicators or {}
+    asset: Dict[str, Any] = {"symbol": symbol}
+
+    # 1. Required meta fields — always present (None when not collected).
+    asset["current_price"] = meta.get("current_price", meta.get("price"))
+    asset["price_change_24h"] = meta.get("price_change_24h")
+    asset["volume_24h"] = meta.get("volume_24h")
+    asset["market_cap"] = meta.get("market_cap")
+
+    # 2. Indicator payload — wins for any field where the value is usable.
+    #    Envelope dicts ({"value": v, "source": …}) are unwrapped as a safety
+    #    net so that callers passing raw indicators_json still get scalars.
+    #    Non-scalar entries are dropped to keep the dict JSON-safe.
+    for key, value in indicators.items():
+        if value is None:
+            continue
+        if isinstance(value, dict):
+            value = value.get("value")
+            if value is None:
+                continue
+        if isinstance(value, (int, float, bool)) or (
+            isinstance(value, str) and key in _PROFILE_STRING_INDICATORS
+        ):
+            asset[key] = value
+
+    # 3. Hybrid fields: prefer indicators (already merged), else meta.
+    for key in _HYBRID_FIELDS:
+        if asset.get(key) is None:
+            value = meta.get(key)
+            if value is not None:
+                asset[key] = value
+
+    # 4. Alias map — populate canonical from variant and vice versa so
+    #    legacy field naming does not cause a false 'data not available'.
+    for canonical, variants in _INDICATOR_FIELD_ALIASES.items():
+        canon_value = asset.get(canonical)
+        for variant in variants:
+            variant_value = asset.get(variant)
+            if canon_value is None and variant_value is not None:
+                asset[canonical] = variant_value
+                canon_value = variant_value
+        if canon_value is not None:
+            for variant in variants:
+                if asset.get(variant) is None:
+                    asset[variant] = canon_value
+
+    # 5. price/current_price compatibility (legacy rules query 'price').
+    if asset.get("price") is None and asset.get("current_price") is not None:
+        asset["price"] = asset["current_price"]
+
+    # 6. change_24h alias kept for legacy profile filters.
+    if asset.get("change_24h") is None and asset.get("price_change_24h") is not None:
+        asset["change_24h"] = asset["price_change_24h"]
+
+    # 7. Alpha score — always present; None propagates as SKIPPED in the
+    #    rule engine via indicator_validity.
+    asset["alpha_score"] = alpha_score
+    if "score" not in asset:
+        asset["score"] = alpha_score
+
+    return asset
 
 
 def jsonable_value(value: Any) -> Any:
@@ -121,15 +254,57 @@ def _evaluate_filter(
     asset: Dict[str, Any],
     condition: Dict[str, Any],
 ) -> Dict[str, Any]:
-    passed, detail = rule_engine.evaluate_condition(condition, asset, field_key="field")
-    return {
+    status, detail = rule_engine.evaluate_condition_status(condition, asset, field_key="field")
+    payload: Dict[str, Any] = {
         "type": "filter",
         "indicator": _condition_indicator(condition, field_key="field"),
         "condition": format_condition_text(condition, field_key="field"),
         "expected": format_expected(condition),
         "current_value": _detail_actual(detail),
-        "status": "PASS" if passed else "FAIL",
+        "status": status.value,
     }
+    if status == RuleStatus.SKIPPED and isinstance(detail, dict) and detail.get("reason"):
+        payload["reason"] = detail["reason"]
+    return payload
+
+
+def _evaluate_entry_trigger(
+    rule_engine: RuleEngine,
+    asset: Dict[str, Any],
+    condition: Dict[str, Any],
+) -> Dict[str, Any]:
+    status, detail = rule_engine.evaluate_condition_status(condition, asset, field_key="indicator")
+    payload: Dict[str, Any] = {
+        "type": "entry_trigger",
+        "indicator": _condition_indicator(condition, field_key="indicator"),
+        "condition": format_condition_text(condition, field_key="indicator"),
+        "expected": format_expected(condition),
+        "current_value": _detail_actual(detail),
+        "status": status.value,
+    }
+    if status == RuleStatus.SKIPPED and isinstance(detail, dict) and detail.get("reason"):
+        payload["reason"] = detail["reason"]
+    return payload
+
+
+def _evaluate_signal_condition(
+    rule_engine: RuleEngine,
+    asset: Dict[str, Any],
+    condition: Dict[str, Any],
+) -> Dict[str, Any]:
+    field_key = "indicator" if condition.get("indicator") else "field"
+    status, detail = rule_engine.evaluate_condition_status(condition, asset, field_key=field_key)
+    payload: Dict[str, Any] = {
+        "type": "signal",
+        "indicator": _condition_indicator(condition, field_key=field_key),
+        "condition": format_condition_text(condition, field_key=field_key),
+        "expected": format_expected(condition),
+        "current_value": _detail_actual(detail),
+        "status": status.value,
+    }
+    if status == RuleStatus.SKIPPED and isinstance(detail, dict) and detail.get("reason"):
+        payload["reason"] = detail["reason"]
+    return payload
 
 
 def _evaluate_block_rule(
@@ -142,10 +317,12 @@ def _evaluate_block_rule(
     details: List[Dict[str, Any]] = []
 
     for condition in conditions:
-        passed, detail = rule_engine.evaluate_condition(condition, asset, field_key="indicator")
+        status, detail = rule_engine.evaluate_condition_status(
+            condition, asset, field_key="indicator"
+        )
         details.append(
             {
-                "passed": passed,
+                "status": status,
                 "condition": condition,
                 "detail": detail,
             }
@@ -158,11 +335,44 @@ def _evaluate_block_rule(
             "condition": block.get("name") or "Unnamed Block",
             "expected": block.get("reason") or None,
             "current_value": None,
-            "status": "PASS",
+            "status": RuleStatus.PASS.value,
             "triggered": False,
         }
 
-    triggered = any(item["passed"] for item in details) if logic == "OR" else all(item["passed"] for item in details)
+    # Aggregate per-condition tristate into a block-level tristate using the
+    # same semantics as BlockEngine._evaluate_block_group:
+    #   - AND with any SKIPPED → block SKIPPED.
+    #   - OR with all SKIPPED  → block SKIPPED.
+    #   - Otherwise the block is decided by the non-SKIPPED conditions.
+    statuses = [item["status"] for item in details]
+    if logic == "OR":
+        decided = [s for s in statuses if s != RuleStatus.SKIPPED]
+        if not decided:
+            block_status = RuleStatus.SKIPPED
+        else:
+            block_status = RuleStatus.PASS if any(s == RuleStatus.PASS for s in decided) else RuleStatus.FAIL
+    else:
+        if any(s == RuleStatus.SKIPPED for s in statuses):
+            block_status = RuleStatus.SKIPPED
+        else:
+            block_status = RuleStatus.PASS if all(s == RuleStatus.PASS for s in statuses) else RuleStatus.FAIL
+
+    skip_reason: Optional[str] = None
+    if block_status == RuleStatus.SKIPPED:
+        # Preserve the most informative reason — invalid_value beats
+        # not_available so traders can tell when an indicator was present
+        # but implausible (e.g. taker_ratio == 0).
+        seen_reasons = [
+            item["detail"].get("reason")
+            for item in details
+            if item["status"] == RuleStatus.SKIPPED and isinstance(item.get("detail"), dict)
+        ]
+        if "indicator_invalid_value" in seen_reasons:
+            skip_reason = "indicator_invalid_value"
+        else:
+            skip_reason = next((r for r in seen_reasons if r), "indicator_not_available")
+
+    triggered = block_status == RuleStatus.PASS
     indicator = block.get("name") or _condition_indicator(details[0]["condition"], field_key="indicator")
     actual_payload = {
         _condition_indicator(item["condition"], field_key="indicator"): _detail_actual(item["detail"])
@@ -172,15 +382,27 @@ def _evaluate_block_rule(
         format_condition_text(item["condition"], field_key="indicator")
         for item in details
     )
-    return {
+    # External callers (build_asset_evaluation_trace) treat status=="FAIL"
+    # as "this block triggered → reject the asset". We keep that contract:
+    # a SKIPPED block is reported as SKIPPED so the asset is NOT rejected.
+    if block_status == RuleStatus.PASS:
+        external_status = "FAIL"  # block triggered, asset must be rejected
+    elif block_status == RuleStatus.FAIL:
+        external_status = "PASS"  # block did not trigger, asset is fine
+    else:
+        external_status = RuleStatus.SKIPPED.value
+    payload: Dict[str, Any] = {
         "type": "block_rule",
         "indicator": indicator,
         "condition": condition_text,
         "expected": block.get("reason") or condition_text,
         "current_value": actual_payload if len(actual_payload) > 1 else next(iter(actual_payload.values()), None),
-        "status": "FAIL" if triggered else "PASS",
+        "status": external_status,
         "triggered": triggered,
     }
+    if external_status == RuleStatus.SKIPPED.value and skip_reason:
+        payload["reason"] = skip_reason
+    return payload
 
 
 def _build_decision_details(trace: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
@@ -242,7 +464,7 @@ def build_analysis_snapshot(
 
 
 def _normalized_trace_item(item: Dict[str, Any]) -> Dict[str, Any]:
-    return {
+    normalized: Dict[str, Any] = {
         "type": item["type"],
         "name": item.get("indicator") or item.get("name") or "Unknown",
         "indicator": item.get("indicator") or item.get("name") or "Unknown",
@@ -251,33 +473,45 @@ def _normalized_trace_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "current_value": jsonable_value(item.get("current_value")),
         "status": item["status"],
     }
+    # Preserve the SKIPPED reason so frontend traces can explain why a
+    # rule was undecidable (indicator_not_available vs indicator_invalid_value).
+    reason = item.get("reason")
+    if reason:
+        normalized["reason"] = reason
+    return normalized
 
 
-def _skipped_block_rule(block: Dict[str, Any]) -> Dict[str, Any]:
+def _skipped_block_rule(
+    block: Dict[str, Any], *, reason: Optional[str] = None
+) -> Dict[str, Any]:
     name = block.get("name") or "Unnamed Block"
-    return _normalized_trace_item(
-        {
-            "type": "block_rule",
-            "indicator": name,
-            "condition": block.get("reason") or name,
-            "expected": block.get("reason"),
-            "current_value": None,
-            "status": "SKIPPED",
-        }
-    )
+    item: Dict[str, Any] = {
+        "type": "block_rule",
+        "indicator": name,
+        "condition": block.get("reason") or name,
+        "expected": block.get("reason"),
+        "current_value": None,
+        "status": "SKIPPED",
+    }
+    if reason:
+        item["reason"] = reason
+    return _normalized_trace_item(item)
 
 
-def _skipped_filter(condition: Dict[str, Any]) -> Dict[str, Any]:
-    return _normalized_trace_item(
-        {
-            "type": "filter",
-            "indicator": _condition_indicator(condition, field_key="field"),
-            "condition": format_condition_text(condition, field_key="field"),
-            "expected": format_expected(condition),
-            "current_value": None,
-            "status": "SKIPPED",
-        }
-    )
+def _skipped_filter(
+    condition: Dict[str, Any], *, reason: Optional[str] = None
+) -> Dict[str, Any]:
+    item: Dict[str, Any] = {
+        "type": "filter",
+        "indicator": _condition_indicator(condition, field_key="field"),
+        "condition": format_condition_text(condition, field_key="field"),
+        "expected": format_expected(condition),
+        "current_value": None,
+        "status": "SKIPPED",
+    }
+    if reason:
+        item["reason"] = reason
+    return _normalized_trace_item(item)
 
 
 def _build_asset_evaluation_trace(
@@ -301,6 +535,17 @@ def _build_asset_evaluation_trace(
     )
     filter_logic = str(filters_config.get("logic", "AND")).upper()
 
+    entry_triggers = [
+        cond
+        for cond in ((profile_config.get("entry_triggers") or {}).get("conditions", []) or [])
+        if cond.get("enabled", True)
+    ]
+    signal_conditions = [
+        cond
+        for cond in ((profile_config.get("signals") or {}).get("conditions", []) or [])
+        if cond.get("enabled", True)
+    ]
+
     trace: List[Dict[str, Any]] = []
     failed_trace: Optional[Dict[str, Any]] = None
 
@@ -310,9 +555,17 @@ def _build_asset_evaluation_trace(
         if block_trace["status"] == "FAIL":
             failed_trace = block_trace
             for remaining_block in block_rules[index + 1:]:
-                trace.append(_skipped_block_rule(remaining_block))
+                trace.append(
+                    _skipped_block_rule(remaining_block, reason="cascade_short_circuit")
+                )
             for condition in filters:
-                trace.append(_skipped_filter(condition))
+                trace.append(
+                    _skipped_filter(condition, reason="cascade_short_circuit")
+                )
+            for condition in entry_triggers:
+                trace.append(_normalized_trace_item(_evaluate_entry_trigger(rule_engine, asset, condition)))
+            for condition in signal_conditions:
+                trace.append(_normalized_trace_item(_evaluate_signal_condition(rule_engine, asset, condition)))
             return trace, failed_trace
 
     filter_results: List[Dict[str, Any]] = []
@@ -323,14 +576,35 @@ def _build_asset_evaluation_trace(
         if filter_logic != "OR" and filter_trace["status"] == "FAIL":
             failed_trace = filter_trace
             for remaining_condition in filters[index + 1:]:
-                trace.append(_skipped_filter(remaining_condition))
+                trace.append(
+                    _skipped_filter(remaining_condition, reason="cascade_short_circuit")
+                )
+            for condition in entry_triggers:
+                trace.append(_normalized_trace_item(_evaluate_entry_trigger(rule_engine, asset, condition)))
+            for condition in signal_conditions:
+                trace.append(_normalized_trace_item(_evaluate_signal_condition(rule_engine, asset, condition)))
             return trace, failed_trace
 
     if filter_logic == "OR" and filter_results and not any(
         item["status"] == "PASS" for item in filter_results
     ):
         failed_trace = next((item for item in filter_results if item["status"] == "FAIL"), None)
+        for condition in entry_triggers:
+            trace.append(_normalized_trace_item(_evaluate_entry_trigger(rule_engine, asset, condition)))
+        for condition in signal_conditions:
+            trace.append(_normalized_trace_item(_evaluate_signal_condition(rule_engine, asset, condition)))
         return trace, failed_trace
+
+    for condition in entry_triggers:
+        result = _normalized_trace_item(_evaluate_entry_trigger(rule_engine, asset, condition))
+        trace.append(result)
+        if failed_trace is None and result["status"] == "FAIL":
+            failed_trace = result
+    for condition in signal_conditions:
+        result = _normalized_trace_item(_evaluate_signal_condition(rule_engine, asset, condition))
+        trace.append(result)
+        if failed_trace is None and result["status"] == "FAIL":
+            failed_trace = result
 
     return trace, failed_trace
 
@@ -348,6 +622,54 @@ def build_asset_evaluation_trace(
         selected_filter_conditions=selected_filter_conditions,
     )
     return jsonable_value(trace)
+
+
+def recompute_rejection_trace(
+    symbol: str,
+    *,
+    profile_config: Optional[Dict[str, Any]],
+    indicators: Optional[Dict[str, Any]],
+    meta: Optional[Dict[str, Any]],
+    stored_trace: Optional[List[Dict[str, Any]]] = None,
+    selected_filter_conditions: Optional[Sequence[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """Recompute a single rejection trace from current indicators + meta.
+
+    The Rejected tab calls this on read so backend semantics changes
+    (cascade SKIPPED reasons, plausibility bounds) appear immediately,
+    without having to wait for the 30-min scheduler to repopulate
+    `pipeline_watchlist_rejections.evaluation_trace`.
+
+    Falls back to `stored_trace` when:
+      * `profile_config` is missing (nothing to evaluate against), or
+      * `indicators` is empty/None for the symbol — even when `meta` is
+        present. Indicators are the source of truth for the bulk of the
+        rules (rsi, taker_ratio, volume_spike, bb_width, …); without
+        them recomputation would mass-downgrade everything to SEM DADOS
+        and lose the historical reason that rejected the asset, which is
+        the opposite of the user-visible improvement we want here.
+      * the trace builder raises (defensive — never break the endpoint
+        because of one bad row).
+    """
+    fallback = list(stored_trace or [])
+    if not profile_config:
+        return fallback
+    if not indicators:
+        return fallback
+    try:
+        trace_asset = build_trace_asset(
+            symbol,
+            indicators=indicators,
+            meta=meta or {},
+            alpha_score=None,
+        )
+        return build_asset_evaluation_trace(
+            trace_asset,
+            profile_config=profile_config,
+            selected_filter_conditions=selected_filter_conditions,
+        )
+    except Exception:
+        return fallback
 
 
 def evaluate_rejections(
@@ -424,6 +746,12 @@ def evaluate_rejections(
                 "current_values": analysis_snapshot["current_values"],
                 "expected_values": analysis_snapshot["expected_values"],
                 "analysis_snapshot": analysis_snapshot,
+                # Phase 2 — carry over the rollout engine tag from the
+                # source asset so the rejection row records which engine
+                # produced the score that was rejected. Falls through as
+                # None for assets evaluated before the rollout was wired
+                # into the upstream stage.
+                "engine_tag": asset.get("engine_tag"),
             }
         )
 

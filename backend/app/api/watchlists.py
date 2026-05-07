@@ -13,12 +13,13 @@ Routes:
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from sqlalchemy import select, text, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,8 +32,11 @@ from ..models.pipeline_watchlist import (
 )
 from ..services.market_data_service import _is_etf_pair
 from ..services.pipeline_rejections import (
+    build_analysis_snapshot,
     build_asset_evaluation_trace,
+    build_trace_asset,
     evaluate_rejections,
+    recompute_rejection_trace,
     rejection_metrics,
 )
 from ..utils.pipeline_profile_filters import (
@@ -51,6 +55,27 @@ logger = logging.getLogger(__name__)
 GATE_TICKERS_URL = "https://api.gateio.ws/api/v4/spot/tickers"
 MAX_WATCHLIST_AUTO_REFRESH_DEPTH = 5
 _PROFILE_STRING_INDICATORS = {"macd_signal", "psar_trend", "ema_align_label"}
+
+# Default upper bound on how stale `pipeline_watchlist.last_scanned_at` is
+# allowed to be before an on-read request triggers a refresh. Tunable via the
+# PIPELINE_SCAN_STALE_SECONDS env var. Default 900 s (15 min) so the on-read
+# fallback only fires when the in-process pipeline scheduler missed several
+# cycles (it normally runs every PIPELINE_SCHEDULER_INTERVAL_SECONDS = 600 s).
+_PIPELINE_SCAN_STALE_SECONDS_DEFAULT = 900
+
+
+def _pipeline_scan_stale_threshold_seconds() -> int:
+    raw = os.environ.get("PIPELINE_SCAN_STALE_SECONDS")
+    if raw is None or raw == "":
+        return _PIPELINE_SCAN_STALE_SECONDS_DEFAULT
+    try:
+        return max(int(raw), 1)
+    except (TypeError, ValueError):
+        logger.warning(
+            "[Pipeline] Invalid PIPELINE_SCAN_STALE_SECONDS=%r — using default %ds",
+            raw, _PIPELINE_SCAN_STALE_SECONDS_DEFAULT,
+        )
+        return _PIPELINE_SCAN_STALE_SECONDS_DEFAULT
 
 
 def _normalize_and_validate_watchlist_sources(
@@ -266,7 +291,7 @@ FIELD_MAP: Dict[str, str] = {
 
 # Human-readable labels
 FIELD_LABELS: Dict[str, str] = {
-    "_meta:volume_24h":    "Volume 24h",
+    "_meta:volume_24h":    "Vol 24h (Gate Spot)",
     "_meta:market_cap":    "Market Cap",
     "_meta:price_change_24h": "24h%",
     "atr_pct":             "ATR%",
@@ -311,13 +336,13 @@ def _extract_profile_indicator_fields(profile_config: Optional[Dict[str, Any]]) 
     Signal/entry-trigger conditions are not included because they apply at a
     different stage of the pipeline.
 
-    Returns [{"key": "_meta:volume_24h", "label": "Volume 24h", "field": "volume_24h"}, ...]
+    Returns [{"key": "_meta:volume_24h", "label": "Vol 24h (Gate Spot)", "field": "volume_24h"}, ...]
     """
     if not profile_config:
         # Default columns when no profile is assigned
         return [
             {"key": "_meta:price_change_24h", "label": "24h%",       "field": "price_change_24h"},
-            {"key": "_meta:volume_24h",       "label": "Volume 24h", "field": "volume_24h"},
+            {"key": "_meta:volume_24h",       "label": "Vol 24h (Gate Spot)", "field": "volume_24h"},
             {"key": "_meta:market_cap",       "label": "Market Cap", "field": "market_cap"},
         ]
 
@@ -353,21 +378,32 @@ def _extract_profile_indicator_fields(profile_config: Optional[Dict[str, Any]]) 
     return result
 
 
-async def _fetch_indicators_map(db: AsyncSession, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
-    """Fetch latest indicators_json per symbol from the indicators table."""
+async def _fetch_indicators_map(
+    db: AsyncSession,
+    symbols: List[str],
+    *,
+    include_stale: bool = False,
+) -> Dict[str, Dict[str, Any]]:
+    """Fetch merged indicator values per symbol, returning flat scalar dicts.
+
+    Uses ``fetch_merged_indicators`` which correctly:
+      1. Merges across scheduler groups (structural + microstructure).
+      2. Unwraps envelope format (``{"value": v, "source": …}`` → ``v``).
+      3. Filters stale rows per group staleness limits (unless
+         ``include_stale`` is True).
+      4. Falls back to legacy rows when the scheduler_group column is absent.
+
+    Returns ``{symbol: {key: scalar, …}}`` — the same contract as the
+    previous simple-query implementation so all downstream consumers
+    (``build_trace_asset``, on-demand fallback check, score engine) keep
+    working without changes.
+    """
     if not symbols:
         return {}
     try:
-        rows = (await db.execute(
-            text("""
-                SELECT DISTINCT ON (symbol) symbol, indicators_json
-                FROM indicators
-                WHERE symbol = ANY(:symbols)
-                ORDER BY symbol, time DESC
-            """),
-            {"symbols": list(symbols)},
-        )).fetchall()
-        return {r.symbol: (r.indicators_json or {}) for r in rows}
+        from ..utils.indicator_merge import fetch_merged_indicators
+        merged = await fetch_merged_indicators(db, list(symbols), include_stale=include_stale)
+        return {sym: mi.as_flat_dict() for sym, mi in merged.items()}
     except Exception as exc:
         logger.warning("[Pipeline] indicators fetch failed: %s", exc)
         return {}
@@ -458,6 +494,7 @@ def _wl_to_dict(wl: PipelineWatchlist) -> Dict[str, Any]:
         "id":                   str(wl.id),
         "name":                 wl.name,
         "level":                wl.level,
+        "market_mode":          getattr(wl, "market_mode", "spot") or "spot",
         "source_pool_id":       str(wl.source_pool_id) if wl.source_pool_id else None,
         "source_watchlist_id":  str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
         "profile_id":           str(wl.profile_id) if wl.profile_id else None,
@@ -555,6 +592,8 @@ def _normalize_decision_snapshot(
     profile_id: Optional[str],
     timestamp: Optional[str],
     snapshot: Optional[Dict[str, Any]],
+    alpha_score: Optional[float] = None,
+    score_rules: Optional[list] = None,
 ) -> Dict[str, Any]:
     raw_snapshot = snapshot or {}
     raw_details = raw_snapshot.get("details") if isinstance(raw_snapshot.get("details"), dict) else {}
@@ -569,11 +608,24 @@ def _normalize_decision_snapshot(
     details["expected_values"] = dict(details.get("expected_values") or {})
     details["evaluation_trace"] = list(details.get("evaluation_trace") or [])
 
+    # alpha_score fallback: explicit arg wins; otherwise read from snapshot
+    # (written there by the pipeline since task #84).
+    resolved_alpha = alpha_score
+    if resolved_alpha is None:
+        _snap_score = raw_snapshot.get("alpha_score")
+        if _snap_score is not None:
+            try:
+                resolved_alpha = float(_snap_score)
+            except (TypeError, ValueError):
+                resolved_alpha = None
+
     return {
         "symbol": symbol,
         "status": raw_snapshot.get("status") or status,
         "stage": raw_snapshot.get("stage") or stage,
         "profile_id": raw_snapshot.get("profile_id") or profile_id,
+        "alpha_score": resolved_alpha,
+        "score_rules": list(score_rules if score_rules is not None else (raw_snapshot.get("score_rules") or [])),
         "failed_indicators": list(raw_snapshot.get("failed_indicators") or []),
         "conditions": list(raw_snapshot.get("conditions") or details["conditions"]),
         "current_values": dict(raw_snapshot.get("current_values") or details["current_values"]),
@@ -665,10 +717,14 @@ async def create_watchlist(
         source_watchlist_id=source_watchlist_id,
     )
 
+    raw_mode = payload.get("market_mode", "spot")
+    market_mode = "futures" if str(raw_mode).lower() == "futures" else "spot"
+
     wl = PipelineWatchlist(
         user_id=user_id,
         name=name,
         level=level,
+        market_mode=market_mode,
         source_pool_id=source_pool_id,
         source_watchlist_id=source_watchlist_id,
         profile_id=_to_uuid(payload.get("profile_id")),
@@ -736,6 +792,9 @@ async def update_watchlist(
         wl.auto_refresh = bool(payload["auto_refresh"])
     if "filters_json" in payload:
         wl.filters_json = payload["filters_json"]
+    if "market_mode" in payload:
+        raw_mode = payload["market_mode"]
+        wl.market_mode = "futures" if str(raw_mode).lower() == "futures" else "spot"
     wl.updated_at = datetime.now(timezone.utc)
 
     logger.info(
@@ -1173,28 +1232,60 @@ async def _auto_refresh_watchlist_assets_if_needed(
             )
             await db.refresh(parent)
 
-    should_refresh = not assets
-    if not should_refresh:
+    refresh_reason: Optional[str] = None
+
+    if not assets:
+        refresh_reason = "empty_assets"
+
+    if refresh_reason is None:
         persisted_symbols = {a.symbol for a in assets}
         upstream_symbols = (
             {a.symbol for a in parent_assets}
             if parent is not None
             else set(await _get_base_symbols(wl, user_id, db, depth=depth))
         )
-        should_refresh = _should_refresh_for_upstream_delta(
+        if _should_refresh_for_upstream_delta(
             persisted_symbols=persisted_symbols,
             upstream_symbols=upstream_symbols,
             exact_match=_watchlist_requires_exact_upstream_sync(effective_level),
-        )
-        if (
-            not should_refresh
-            and parent
+        ):
+            refresh_reason = "upstream_delta"
+        elif (
+            parent
             and _is_upstream_scan_newer(parent.last_scanned_at, wl.last_scanned_at)
         ):
-            should_refresh = True
+            refresh_reason = "upstream_drift"
 
-    if not should_refresh:
+    # ── Staleness fallback ────────────────────────────────────────────────
+    # If the in-process pipeline scheduler has not landed a cycle for this
+    # watchlist (last_scanned_at is NULL or older than the threshold), fire a
+    # refresh so the Rejected tab and approved-assets snapshot reflect current
+    # indicator values instead of returning an empty / stale snapshot.  This
+    # is the second arm of Task #92 — without it, fresh databases (or those
+    # whose Celery worker never ran) keep serving an empty
+    # `pipeline_watchlist_rejections` table forever.
+    if refresh_reason is None:
+        threshold_seconds = _pipeline_scan_stale_threshold_seconds()
+        last_scanned = wl.last_scanned_at
+        if last_scanned is None:
+            refresh_reason = "never_scanned"
+        else:
+            if last_scanned.tzinfo is None:
+                last_scanned = last_scanned.replace(tzinfo=timezone.utc)
+            age_seconds = (datetime.now(timezone.utc) - last_scanned).total_seconds()
+            if age_seconds > threshold_seconds:
+                refresh_reason = "stale_threshold"
+
+    if refresh_reason is None:
         return assets
+
+    logger.info(
+        "[Pipeline] Auto-refresh firing for wl=%s level=%s reason=%s "
+        "assets=%d last_scanned_at=%s",
+        wl.id, effective_level, refresh_reason,
+        len(assets),
+        wl.last_scanned_at.isoformat() if wl.last_scanned_at else None,
+    )
 
     await _resolve_and_persist(wl, user_id, db)
     return await _load_active_watchlist_assets(wl.id, db)
@@ -1231,10 +1322,12 @@ async def _resolve_and_persist(
         await db.commit()
         return []
 
-    # NOTE: filters_json on the watchlist is IGNORED at runtime.
-    # All filtering criteria (min_score, require_signal, market_cap, volume, etc.)
-    # come exclusively from the associated Profile (profile.config.filters.conditions).
-    # The watchlist is purely an organisational grouping (POOL/L1/L2/L3) + profile reference.
+    # NOTE: filters_json on the watchlist is partially respected at runtime.
+    # Most filtering criteria (require_signal, market_cap, volume, etc.) come
+    # exclusively from the associated Profile (profile.config.filters.conditions).
+    # Exception: filters_json.min_alpha_score IS enforced for all effective levels —
+    # assets that pass all indicator gates but have a score below this threshold
+    # are moved to the Rejected tab with reason "Alpha Score < threshold".
 
     # Fetch market metadata for these symbols (include liquidity columns so profile
     # filter conditions on spread_pct / orderbook_depth_usdt can be evaluated).
@@ -1339,15 +1432,9 @@ async def _resolve_and_persist(
     # Load indicators for scoring + signal evaluation
     ind_map: Dict[str, Dict] = {}
     try:
-        ind_rows = (await db.execute(
-            text("""
-                SELECT DISTINCT ON (symbol) symbol, indicators_json
-                FROM indicators WHERE symbol = ANY(:symbols)
-                ORDER BY symbol, time DESC
-            """),
-            {"symbols": list(base_symbols)},
-        )).fetchall()
-        ind_map = {r.symbol: (r.indicators_json or {}) for r in ind_rows}
+        from ..utils.indicator_merge import fetch_merged_indicators as _fmi
+        _merged_by_sym = await _fmi(db, list(base_symbols), include_stale=True)
+        ind_map = {sym: mi.as_flat_dict() for sym, mi in _merged_by_sym.items()}
     except Exception:
         pass
 
@@ -1395,6 +1482,7 @@ async def _resolve_and_persist(
     merged_score_config = merge_score_config(global_score_config, profile_config_full)
     _score_engine = _SE(merged_score_config)
     live_score_map: Dict[str, float] = {}
+    score_rules_map: Dict[str, list] = {}
     for sym in base_symbols:
         ind = ind_map.get(sym, {})
         meta = meta_map.get(sym, {})
@@ -1406,7 +1494,10 @@ async def _resolve_and_persist(
                 "market_cap": meta.get("market_cap", 0),
                 "change_24h": meta.get("price_change_24h", 0),
             }
-            r = _score_engine.compute_alpha_score(eval_data)
+            # Task #193: single robust call for both score + per-rule
+            # breakdown — avoids the duplicate compute the prior pair of
+            # calls incurred for every asset in the watchlist loop.
+            r, score_rules_map[sym] = _score_engine.compute_score_with_breakdown(eval_data)
             live_score_map[sym] = round(r.get("total_score", 0), 1)
         else:
             live_score_map[sym] = precomp_score_map.get(sym, 0.0)
@@ -1423,6 +1514,9 @@ async def _resolve_and_persist(
     p_logic = pf_cfg.get("logic", "AND")
     profile_min_score: float = float(pf_cfg.get("min_score", 0))
     profile_require_signal: bool = bool(pf_cfg.get("require_signal", False))
+    # Watchlist-level minimum score (filters_json.min_alpha_score).  Applied at ALL
+    # effective levels — distinct from profile_min_score which is L2/L3 only.
+    wl_min_score: float = float((wl.filters_json or {}).get("min_alpha_score") or 0)
 
     # Source-pool watchlists with actual profile filter conditions must honor that
     # profile even if legacy data stored them as "custom". Those legacy boards are
@@ -1474,27 +1568,17 @@ async def _resolve_and_persist(
 
         meta = meta_map.get(symbol, {})
         ind = ind_map.get(symbol, {})
-        # Build asset dict with BOTH meta AND indicator data so that profile
-        # filter conditions on indicator fields (atr_pct, rsi, etc.) can be
-        # evaluated properly in _passes_profile_filters.
-        asset_entry: Dict[str, Any] = {
-            "symbol":               symbol,
-            "current_price":        meta.get("price"),
-            "price_change_24h":     meta.get("price_change_24h"),
-            "change_24h":           meta.get("price_change_24h"),   # alias for conditions
-            "volume_24h":           meta.get("volume_24h"),
-            "market_cap":           meta.get("market_cap"),
-            "spread_pct":           meta.get("spread_pct"),
-            "orderbook_depth_usdt": meta.get("orderbook_depth_usdt"),
-            "alpha_score":          alpha if scoring_data_available else None,
-        }
-        # Merge indicator values (skip non-scalar) for profile filter evaluation
-        for k, v in ind.items():
-            if (
-                (isinstance(v, (int, float, bool)) or (isinstance(v, str) and k in _PROFILE_STRING_INDICATORS))
-                and k not in asset_entry
-            ):
-                asset_entry[k] = v
+        # Build asset dict via the shared helper so the merge contract
+        # (indicators_json wins; meta None never shadows a real indicator
+        # value) is identical between this path and `get_watchlist_assets`.
+        # See `pipeline_rejections.build_trace_asset` for the full
+        # invariants — task #69.
+        asset_entry = build_trace_asset(
+            symbol,
+            indicators=ind,
+            meta=meta,
+            alpha_score=alpha if scoring_data_available else None,
+        )
         candidate_assets.append(asset_entry)
 
     assets_out = list(candidate_assets)
@@ -1562,11 +1646,56 @@ async def _resolve_and_persist(
     # Apply score/signal gates after the profile block/filter decision path.
     if scoring_data_available and assets_out:
         gated_assets: List[Dict[str, Any]] = []
+        _ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         for asset in assets_out:
             alpha = asset.get("alpha_score") or 0.0
             if should_apply_min_score and profile_min_score and alpha < profile_min_score:
                 continue
             if should_require_signal and profile_require_signal and not signal_status.get(asset["symbol"], True):
+                continue
+            # Watchlist-level min score gate (applies at all effective levels).
+            if wl_min_score > 0 and alpha < wl_min_score:
+                _sym = str(asset.get("symbol") or "")
+                _condition = f"Score >= {wl_min_score:g}"
+                _score_trace = [
+                    {
+                        "type": "filter",
+                        "indicator": "Alpha Score",
+                        "status": "FAIL",
+                        "condition": _condition,
+                        "current_value": round(alpha, 1),
+                        "expected": wl_min_score,
+                    }
+                ]
+                _snapshot = build_analysis_snapshot(
+                    symbol=_sym,
+                    stage=effective_level,
+                    profile_id=str(wl.profile_id) if wl.profile_id else None,
+                    status="rejected",
+                    trace=_score_trace,
+                    timestamp=_ts,
+                )
+                rejected_rows.append(
+                    {
+                        "symbol": _sym,
+                        "stage": effective_level,
+                        "profile_id": str(wl.profile_id) if wl.profile_id else None,
+                        "failed_type": "filter",
+                        "failed_indicator": "Alpha Score",
+                        "condition": _condition,
+                        "current_value": round(alpha, 1),
+                        "expected": str(wl_min_score),
+                        "timestamp": _ts,
+                        "evaluation_trace": _score_trace,
+                        "status": _snapshot["status"],
+                        "details": _snapshot["details"],
+                        "failed_indicators": _snapshot["failed_indicators"],
+                        "conditions": _snapshot["conditions"],
+                        "current_values": _snapshot["current_values"],
+                        "expected_values": _snapshot["expected_values"],
+                        "analysis_snapshot": _snapshot,
+                    }
+                )
                 continue
             gated_assets.append(asset)
         assets_out = gated_assets
@@ -1576,6 +1705,54 @@ async def _resolve_and_persist(
             "[Pipeline] %s (%s): monitoring mode enabled — keeping all %d pool assets visible.",
             wl.name, wl.level, len(assets_out),
         )
+
+    # Futures mode: inject dual LONG/SHORT scores on-demand so values are
+    # always fresh even between scheduled pipeline_scan runs.
+    # Mirrors the same config-guard used in pipeline_scan (no scoring_futures
+    # key → degrade silently to spot, not run with unknown defaults).
+    if assets_out and getattr(wl, "market_mode", "spot") == "futures":
+        try:
+            from ..services.robust_indicators import compute_asset_score
+            _rules = (
+                (merged_score_config or {}).get("scoring_rules")
+                or (merged_score_config or {}).get("rules")
+                or DEFAULT_SCORE.get("scoring_rules")
+                or []
+            )
+            for _asset in assets_out:
+                _ind = ind_map.get(_asset["symbol"], {})
+                _fr = compute_asset_score(
+                    _asset["symbol"], _ind, _rules, is_futures=True,
+                )
+                if _fr is None:
+                    # Robust engine couldn't score — leave the persisted
+                    # values from the last pipeline_scan in place.
+                    continue
+                _asset["score_long"]          = _fr["score_long"]
+                _asset["score_short"]         = _fr["score_short"]
+                _asset["confidence_score"]    = _fr["confidence_score"]
+                _asset["futures_direction"]   = _fr["futures_direction"]
+                # ENTRY-block gates were a property of the legacy futures
+                # scorer; under the robust engine the bias model itself
+                # produces the LONG/SHORT split, so the boolean gates are
+                # always False unless an upstream layer fills them in.
+                _asset.setdefault("entry_long_blocked", False)
+                _asset.setdefault("entry_short_blocked", False)
+        except Exception as _e:
+            logger.debug("[Pipeline] on-demand robust futures scoring error: %s", _e)
+
+    for _rrow in rejected_rows:
+        _rsym = _rrow.get("symbol")
+        if _rsym and _rsym in score_rules_map:
+            _rsnap = dict(_rrow.get("analysis_snapshot") or {})
+            _rsnap["score_rules"] = score_rules_map[_rsym]
+            # Persist alpha_score so the Rejected tab can display the score
+            # bar without recomputing it on every read (task #84).
+            # Use live_score_map (computed from current indicators, same eval_data
+            # as score_rules_map) so the displayed score matches the rule breakdown.
+            # _rrow itself has no "alpha_score" key — using it always stored None.
+            _rsnap["alpha_score"] = live_score_map.get(_rsym)
+            _rrow["analysis_snapshot"] = _rsnap
 
     await _replace_rejection_snapshot(wl, rejected_rows, db)
 
@@ -1599,7 +1776,18 @@ async def _resolve_and_persist(
             row.market_cap       = asset_data["market_cap"]
             row.alpha_score      = asset_data["alpha_score"]
             row.refreshed_at     = now
-            row.analysis_snapshot = asset_data.get("analysis_snapshot") or {}
+            _snap = dict(asset_data.get("analysis_snapshot") or {})
+            if sym in score_rules_map:
+                _snap["score_rules"] = score_rules_map[sym]
+            row.analysis_snapshot = _snap
+            # Futures fields (only written when futures scoring ran; otherwise unchanged)
+            if "score_long" in asset_data:
+                row.score_long          = asset_data["score_long"]
+                row.score_short         = asset_data["score_short"]
+                row.confidence_score    = asset_data["confidence_score"]
+                row.futures_direction   = asset_data["futures_direction"]
+                row.entry_long_blocked  = asset_data.get("entry_long_blocked", False)
+                row.entry_short_blocked = asset_data.get("entry_short_blocked", False)
             # Re-activate asset if it was previously marked as "down"
             if row.level_direction == "down":
                 row.level_direction = "up"
@@ -1615,11 +1803,20 @@ async def _resolve_and_persist(
                 volume_24h=asset_data["volume_24h"],
                 market_cap=asset_data["market_cap"],
                 alpha_score=asset_data["alpha_score"],
+                score_long=asset_data.get("score_long"),
+                score_short=asset_data.get("score_short"),
+                confidence_score=asset_data.get("confidence_score"),
+                futures_direction=asset_data.get("futures_direction"),
+                entry_long_blocked=asset_data.get("entry_long_blocked", False),
+                entry_short_blocked=asset_data.get("entry_short_blocked", False),
                 entered_at=now,
                 refreshed_at=now,
                 level_direction="up",
                 level_change_at=now,
-                analysis_snapshot=asset_data.get("analysis_snapshot") or {},
+                analysis_snapshot={
+                    **dict(asset_data.get("analysis_snapshot") or {}),
+                    **({"score_rules": score_rules_map[sym]} if sym in score_rules_map else {}),
+                },
             )
             db.add(row)
             asset_data["level_direction"] = "up"
@@ -1642,6 +1839,7 @@ async def _resolve_and_persist(
 @router.get("/{watchlist_id}/assets")
 async def get_watchlist_assets(
     watchlist_id: UUID,
+    hide_neutral: bool = Query(False, description="Futures mode: omit assets with no direction assigned (score gap < 5 pts)"),
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1684,15 +1882,30 @@ async def get_watchlist_assets(
 
     # ── Fetch live indicator values for all asset symbols ─────────────────────
     symbols = [a.symbol for a in assets]
-    ind_map = await _fetch_indicators_map(db, symbols) if symbols else {}
+    ind_map = await _fetch_indicators_map(db, symbols, include_stale=True) if symbols else {}
 
     # On-demand computation: if some symbols have no indicators in DB OR are
-    # missing key indicator fields (stale cache), fetch OHLCV and recompute.
-    _KEY_INDICATOR_FIELDS = {"taker_ratio", "ema9_distance_pct", "rsi"}
+    # missing key indicator fields (stale/partial cache), fetch OHLCV and recompute.
+    # We check both *presence* and *non-None value* so that a row with e.g.
+    # rsi=66 but adx=None still triggers a full re-compute.
+    # Values may still arrive as envelope dicts if the merge path failed to
+    # unwrap — treat those as missing too ({"value": None} → missing,
+    # {"value": 0} would already have been unwrapped to 0 by the merge).
+    _KEY_INDICATOR_FIELDS = {"taker_ratio", "ema9_distance_pct", "rsi", "adx", "bb_width", "volume_spike"}
+
+    def _is_indicator_missing(v: Any) -> bool:
+        if v is None:
+            return True
+        if isinstance(v, dict):
+            return v.get("value") is None
+        return False
+
     if symbols:
         missing = [
             s for s in symbols
-            if not ind_map.get(s) or not _KEY_INDICATOR_FIELDS.issubset(ind_map[s].keys())
+            if not ind_map.get(s) or any(
+                _is_indicator_missing(ind_map[s].get(f)) for f in _KEY_INDICATOR_FIELDS
+            )
         ]
         if missing:
             on_demand = await _compute_indicators_on_demand(db, missing)
@@ -1702,6 +1915,8 @@ async def get_watchlist_assets(
     # Uses global scoring rules merged with the profile's Alpha Score Weights
     # so watchlist scores respect both configurations.
     score_override: Dict[str, Optional[float]] = {}
+    ml_predictions: Dict[str, Dict[str, Any]] = {}  # Store ML predictions per symbol
+
     if ind_map:
         try:
             from ..services.score_engine import ScoreEngine as _SE, merge_score_config
@@ -1729,7 +1944,7 @@ async def get_watchlist_assets(
                     "change_24h": float(a.price_change_24h) if a.price_change_24h else 0.0,
                     **ind,
                 }
-                result = _score_engine.compute_alpha_score(eval_data)
+                result = _score_engine.compute_score(eval_data)
                 fresh_score = result.get("total_score")
                 if fresh_score is not None:
                     score_override[a.symbol] = round(float(fresh_score), 1)
@@ -1748,6 +1963,84 @@ async def get_watchlist_assets(
                 await db.commit()
         except Exception as _e:
             logger.debug("[Pipeline] On-demand scoring error: %s", _e)
+
+    # ── ML-enhanced ranking for L3 (if enabled) ──────────────────────────────────
+    # Apply ML predictions to calculate final_score and optionally block trades
+    # based on probability threshold from ai-settings config.
+    if wl.level == "L3" and ind_map:
+        try:
+            from ..services.config_service import config_service
+            from ..ml.predict_service import get_predict_service
+
+            # Get AI settings
+            ai_settings = {}
+            try:
+                ai_settings = await config_service.get_config(
+                    db=db, config_type="ai-settings", user_id=user_id
+                )
+            except Exception:
+                pass
+
+            ml_enabled = ai_settings.get("ml_enabled", False)
+            use_ml_ranking = ai_settings.get("use_ml_ranking", False)
+
+            if ml_enabled and use_ml_ranking:
+                model_path = ai_settings.get("model_path", "/tmp/scalpyn_models/model.pkl")
+                ai_block_threshold = ai_settings.get("ai_block_threshold", 0.5)
+
+                # Get prediction service
+                predict_service = get_predict_service(model_path=model_path)
+
+                if predict_service.is_ready():
+                    market_mode = getattr(wl, "market_mode", "spot") or "spot"
+                    profile_type = "FUTURES" if market_mode == "futures" else "SPOT"
+
+                    for a in assets:
+                        ind = ind_map.get(a.symbol)
+                        if not ind:
+                            continue
+
+                        base_score = score_override.get(a.symbol) or (
+                            float(a.alpha_score) if a.alpha_score is not None else 0.0
+                        )
+
+                        try:
+                            # Predict best direction and probability
+                            prediction = predict_service.predict_best_direction(
+                                features=ind,
+                                profile_type=profile_type,
+                            )
+
+                            # Calculate final score
+                            final_score = predict_service.calculate_final_score(
+                                score=base_score,
+                                probability=prediction["probability"],
+                            )
+
+                            # Check if trade should be blocked
+                            blocked_by_ml = predict_service.should_block(
+                                probability=prediction["probability"],
+                                ai_block_threshold=ai_block_threshold,
+                            )
+
+                            # Store prediction
+                            ml_predictions[a.symbol] = {
+                                "probability": prediction["probability"],
+                                "direction": prediction["direction"],
+                                "base_score": base_score,
+                                "final_score": final_score * 100,  # Scale back to 0-100
+                                "blocked_by_ml": blocked_by_ml,
+                            }
+
+                        except Exception as pred_err:
+                            logger.debug(f"[ML] Prediction failed for {a.symbol}: {pred_err}")
+
+                    logger.info(f"[ML] Generated {len(ml_predictions)} predictions for L3")
+                else:
+                    logger.warning("[ML] Model not loaded, skipping ML predictions")
+        except Exception as ml_err:
+            logger.warning(f"[ML] ML prediction pipeline error: {ml_err}")
+
 
     # Fresh meta (some values may be missing from pipeline_watchlist_assets)
     meta_map: Dict[str, Dict[str, Any]] = {}
@@ -1863,6 +2156,8 @@ async def get_watchlist_assets(
             symbols_with_meta=sum(1 for symbol in symbols if meta_map.get(symbol)),
         )["conditions"]
 
+    is_futures = getattr(wl, "market_mode", "spot") == "futures"
+
     enriched = []
     for a in assets:
         indicators = ind_map.get(a.symbol)
@@ -1883,26 +2178,81 @@ async def get_watchlist_assets(
         )
         evaluation_trace = normalized_snapshot["details"]["evaluation_trace"]
         if not evaluation_trace and profile_config:
-            trace_asset = {
-                "symbol": a.symbol,
-                "price": enriched_asset.get("current_price"),
-                "current_price": enriched_asset.get("current_price"),
-                "price_change_24h": enriched_asset.get("price_change_24h"),
-                "change_24h": enriched_asset.get("price_change_24h"),
-                "volume_24h": enriched_asset.get("volume_24h"),
-                "market_cap": enriched_asset.get("market_cap"),
-                "spread_pct": (meta or {}).get("spread_pct"),
-                "orderbook_depth_usdt": (meta or {}).get("orderbook_depth_usdt"),
-                "alpha_score": enriched_asset.get("alpha_score"),
-                **(indicators or {}),
-            }
+            # Pass `enriched_asset` values via the meta dict so the
+            # helper's "indicators win over meta None" rule still applies
+            # but we keep the existing fallback to DB-stored asset
+            # columns when meta_map is incomplete.
+            trace_asset = build_trace_asset(
+                a.symbol,
+                indicators=indicators,
+                meta={
+                    "current_price":        enriched_asset.get("current_price"),
+                    "price_change_24h":     enriched_asset.get("price_change_24h"),
+                    "volume_24h":           enriched_asset.get("volume_24h"),
+                    "market_cap":           enriched_asset.get("market_cap"),
+                    "spread_pct":           (meta or {}).get("spread_pct"),
+                    "orderbook_depth_usdt": (meta or {}).get("orderbook_depth_usdt"),
+                },
+                alpha_score=enriched_asset.get("alpha_score"),
+            )
             evaluation_trace = build_asset_evaluation_trace(
                 trace_asset,
                 profile_config=profile_config,
                 selected_filter_conditions=selected_trace_conditions,
             )
         enriched_asset["evaluation_trace"] = evaluation_trace
+
+        # ML prediction fields (L3 only, if ML enabled)
+        ml_pred = ml_predictions.get(a.symbol)
+        if ml_pred:
+            enriched_asset["ml_probability"]  = ml_pred["probability"]
+            enriched_asset["ml_direction"]    = ml_pred["direction"]
+            enriched_asset["ml_base_score"]   = ml_pred["base_score"]
+            enriched_asset["ml_final_score"]  = ml_pred["final_score"]
+            enriched_asset["blocked_by_ml"]   = ml_pred["blocked_by_ml"]
+
+        # Futures-mode fields — always present for futures watchlists, null for spot
+        if is_futures:
+            enriched_asset["score_long"]          = float(a.score_long)          if a.score_long          is not None else None
+            enriched_asset["score_short"]         = float(a.score_short)         if a.score_short         is not None else None
+            enriched_asset["confidence_score"]    = float(a.confidence_score)    if a.confidence_score    is not None else None
+            enriched_asset["futures_direction"]   = getattr(a, "futures_direction",   None)
+            enriched_asset["entry_long_blocked"]  = bool(getattr(a, "entry_long_blocked",  False))
+            enriched_asset["entry_short_blocked"] = bool(getattr(a, "entry_short_blocked", False))
+
         enriched.append(enriched_asset)
+
+    # Futures: server-side neutral filter + sort by confidence DESC
+    # hide_neutral removes NEUTRAL (gap < direction_gap_min at L3) assets.
+    # Assets without direction (non-L3 levels) have futures_direction = None
+    # and are NOT hidden by hide_neutral — they are pre-L3 and not yet rated.
+    if is_futures:
+        if hide_neutral:
+            enriched = [
+                e for e in enriched
+                if e.get("futures_direction") != "NEUTRAL"
+            ]
+        # Sort by ML final_score (if available), otherwise confidence_score
+        enriched.sort(
+            key=lambda e: (
+                e.get("ml_final_score") is None,                           # ML predictions first
+                -(e.get("ml_final_score") or 0),                          # ML final_score DESC
+                e.get("confidence_score") is None,                         # Then confidence
+                -(e.get("confidence_score") or 0),                        # confidence DESC
+                -max(e.get("score_long") or 0, e.get("score_short") or 0), # tiebreak
+            )
+        )
+    else:
+        # SPOT: sort by ML final_score (if available), otherwise alpha_score
+        enriched.sort(
+            key=lambda e: (
+                e.get("ml_final_score") is None,                           # ML predictions first
+                -(e.get("ml_final_score") or 0),                          # ML final_score DESC
+                -(e.get("alpha_score") or 0),                             # alpha_score DESC
+            )
+        )
+
+
     approved_items = [
         _normalize_decision_snapshot(
             symbol=asset.symbol,
@@ -1911,6 +2261,8 @@ async def get_watchlist_assets(
             profile_id=str(wl.profile_id) if wl.profile_id else None,
             timestamp=_iso_utc(getattr(asset, "refreshed_at", None)),
             snapshot=asset.analysis_snapshot,
+            alpha_score=float(asset.alpha_score) if asset.alpha_score is not None else None,
+            score_rules=list((asset.analysis_snapshot or {}).get("score_rules") or []),
         )
         for asset in assets
     ]
@@ -1922,6 +2274,8 @@ async def get_watchlist_assets(
         "profile_indicators": profile_indicators,  # [{key, label, field}, ...]
         # Alpha Score visible only at L2 (Stage 2) and L3 (Stage 3).
         "show_score":         (wl.level or "").upper() in {"L2", "L3"},
+        "market_mode":        getattr(wl, "market_mode", "spot") or "spot",
+        "is_futures":         is_futures,
     }
 
 
@@ -1956,25 +2310,167 @@ async def _get_watchlist_rejections_payload(
         .order_by(PipelineWatchlistRejection.recorded_at.desc(), PipelineWatchlistRejection.symbol.asc())
     )).scalars().all()
 
-    items = [
-        {
-            **_normalize_decision_snapshot(
-                symbol=row.symbol,
-                status="rejected",
-                stage=row.stage,
-                profile_id=str(row.profile_id) if row.profile_id else None,
-                timestamp=_iso_utc(row.recorded_at),
-                snapshot=row.analysis_snapshot,
-            ),
+    # Recompute evaluation_trace on read so the Rejected tab always reflects
+    # the current backend rule semantics (cascade SKIPPED reasons, taker_ratio
+    # plausibility, etc.) without waiting for the 30 min scheduler to refresh
+    # `pipeline_watchlist_rejections.evaluation_trace`. The stored column is
+    # left untouched (out of scope) and is used as a defensive fallback when
+    # the indicators table has no entry for a symbol.
+    rejection_symbols = sorted({row.symbol for row in rows})
+    ind_map = await _fetch_indicators_map(db, rejection_symbols, include_stale=True) if rejection_symbols else {}
+    meta_map: Dict[str, Dict[str, Any]] = {}
+    if rejection_symbols:
+        try:
+            meta_rows = await db.execute(
+                text("""
+                    SELECT symbol, price, price_change_24h, volume_24h, market_cap,
+                           spread_pct, orderbook_depth_usdt
+                    FROM market_metadata
+                    WHERE symbol = ANY(:symbols)
+                """),
+                {"symbols": list(rejection_symbols)},
+            )
+            meta_map = {
+                r.symbol: {
+                    "current_price":        float(r.price) if r.price is not None else None,
+                    "price_change_24h":     float(r.price_change_24h) if r.price_change_24h is not None else None,
+                    "volume_24h":           float(r.volume_24h) if r.volume_24h is not None else None,
+                    "market_cap":           float(r.market_cap) if r.market_cap is not None else None,
+                    "spread_pct":           float(r.spread_pct) if r.spread_pct is not None else None,
+                    "orderbook_depth_usdt": float(r.orderbook_depth_usdt) if r.orderbook_depth_usdt is not None else None,
+                }
+                for r in meta_rows.fetchall()
+            }
+        except Exception:
+            try:
+                meta_rows = await db.execute(
+                    text("""
+                        SELECT symbol, price, price_change_24h, volume_24h, market_cap
+                        FROM market_metadata
+                        WHERE symbol = ANY(:symbols)
+                    """),
+                    {"symbols": list(rejection_symbols)},
+                )
+                meta_map = {
+                    r.symbol: {
+                        "current_price":    float(r.price) if r.price is not None else None,
+                        "price_change_24h": float(r.price_change_24h) if r.price_change_24h is not None else None,
+                        "volume_24h":       float(r.volume_24h) if r.volume_24h is not None else None,
+                        "market_cap":       float(r.market_cap) if r.market_cap is not None else None,
+                    }
+                    for r in meta_rows.fetchall()
+                }
+            except Exception:
+                meta_map = {}
+
+    trace_filter_conditions = list(((profile_config or {}).get("filters") or {}).get("conditions") or [])
+    selected_trace_conditions = trace_filter_conditions
+    if effective_level in ("L1", "L2", "L3") and wl.profile_id and trace_filter_conditions and rejection_symbols:
+        try:
+            selected_trace_conditions = select_profile_filter_conditions(
+                trace_filter_conditions,
+                total_symbols=len(rejection_symbols),
+                symbols_with_meta=sum(1 for s in rejection_symbols if meta_map.get(s)),
+            )["conditions"]
+        except Exception:
+            selected_trace_conditions = trace_filter_conditions
+
+    # Build a ScoreEngine for live alpha_score computation on rows that pre-date
+    # task #84 and therefore have no alpha_score stored in analysis_snapshot.
+    _rejection_se = None
+    if profile_config and ind_map:
+        try:
+            from ..services.score_engine import ScoreEngine as _SE, merge_score_config
+            from ..services.seed_service import DEFAULT_SCORE
+            _rejection_se = _SE(merge_score_config(DEFAULT_SCORE, profile_config))
+        except Exception as _e:
+            logger.debug("[Pipeline] ScoreEngine init for rejections failed: %s", _e)
+
+    def _resolve_alpha_score(row: PipelineWatchlistRejection) -> Optional[float]:
+        """Return alpha_score for a rejected row.
+
+        Priority:
+        1. Already in analysis_snapshot (set by the pipeline since task #84).
+        2. Computed live from current indicators (for legacy rows).
+        3. None — no indicator data available.
+        """
+        snap_score = (row.analysis_snapshot or {}).get("alpha_score")
+        if snap_score is not None:
+            try:
+                return float(snap_score)
+            except (TypeError, ValueError):
+                pass
+        if _rejection_se is None:
+            return None
+        ind = ind_map.get(row.symbol)
+        if not ind:
+            return None
+        meta = meta_map.get(row.symbol) or {}
+        eval_data = {
+            **ind,
+            "price":      meta.get("current_price", 0),
+            "volume_24h": meta.get("volume_24h", 0),
+            "market_cap": meta.get("market_cap", 0),
+            "change_24h": meta.get("price_change_24h", 0),
+        }
+        try:
+            result = _rejection_se.compute_score(eval_data)
+            return round(float(result.get("total_score", 0)), 1)
+        except Exception:
+            return None
+
+    def _recompute_trace(row: PipelineWatchlistRejection) -> List[Dict[str, Any]]:
+        stored = row.evaluation_trace or []
+        indicators = ind_map.get(row.symbol)
+        meta = meta_map.get(row.symbol)
+        if profile_config and not indicators:
+            # Discreet warning so we can spot persistent collector gaps
+            # in production logs without spamming on every poll.
+            logger.warning(
+                "[Pipeline] Rejected trace recompute falling back to stored snapshot "
+                "for %s (no indicators row; has_meta=%s)",
+                row.symbol,
+                bool(meta),
+            )
+        return recompute_rejection_trace(
+            row.symbol,
+            profile_config=profile_config,
+            indicators=indicators,
+            meta=meta,
+            stored_trace=stored,
+            selected_filter_conditions=selected_trace_conditions,
+        )
+
+    items = []
+    for row in rows:
+        normalized = _normalize_decision_snapshot(
+            symbol=row.symbol,
+            status="rejected",
+            stage=row.stage,
+            profile_id=str(row.profile_id) if row.profile_id else None,
+            timestamp=_iso_utc(row.recorded_at),
+            snapshot=row.analysis_snapshot,
+            alpha_score=_resolve_alpha_score(row),
+        )
+        recomputed_trace = _recompute_trace(row)
+        # The Rejected tab UI (RejectedAssetTable.tsx) reads
+        # `item.details.evaluation_trace`, NOT the top-level field, so we
+        # must overwrite it here too — otherwise the recompute is invisible
+        # to traders and the original bug ("Current: aguardando coleta")
+        # would still show on rows snapshotted before #71.
+        normalized["details"] = {
+            **normalized["details"],
+            "evaluation_trace": recomputed_trace,
+        }
+        items.append({
+            **normalized,
             "failed_type": row.failed_type,
             "failed_indicator": row.failed_indicator,
             "condition": row.condition_text,
             "current_value": row.current_value,
             "expected": row.expected_value,
-            "evaluation_trace": row.evaluation_trace or [],
-        }
-        for row in rows
-    ]
+            "evaluation_trace": recomputed_trace,
+        })
     metrics = rejection_metrics(items)
     metrics["approved_count"] = len(await _load_active_watchlist_assets(wl.id, db))
     metrics["available_indicators"] = sorted({item["failed_indicator"] for item in items if item.get("failed_indicator")})

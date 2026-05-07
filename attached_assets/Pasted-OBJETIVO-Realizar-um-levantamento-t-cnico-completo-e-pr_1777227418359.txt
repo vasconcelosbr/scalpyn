@@ -1,0 +1,227 @@
+OBJETIVO
+Realizar um levantamento técnico completo e preciso do sistema Scalpyn em produção, com foco exclusivo em identificar lacunas, inconsistências e ajustes necessários para concluir a implementação do módulo de FUTURES, garantindo compatibilidade total com a arquitetura existente (spot já funcional).
+
+---
+
+INSTRUÇÕES GERAIS
+
+* Basear todas as respostas no código atual (não assumir comportamento).
+* Indicar arquivos, funções, serviços e fluxos reais sempre que possível.
+* Destacar claramente o que já está implementado vs. o que está incompleto ou inconsistente.
+* Priorizar problemas que impactam execução, risco e precisão operacional.
+
+---
+
+1. ARQUITETURA ATUAL (SPOT vs FUTURES)
+
+1.1 Estrutura existente:
+
+* O sistema já possui separação entre spot e futures? Onde?
+* Existe reutilização de código entre os dois modos?
+* Futures já possui rotas, serviços ou módulos próprios?
+
+1.2 Fluxo operacional:
+
+* Descrever fluxo completo atual do SPOT:
+  ingestão → indicadores → L1 → L2 → L3 → execução
+* Futures segue esse mesmo fluxo ou possui variações?
+
+---
+
+2. INGESTÃO DE DADOS (FUTURES)
+
+2.1 Fontes:
+
+* Futures já consome dados específicos (ex: funding rate, open interest)?
+* Quais endpoints estão integrados?
+
+2.2 Diferenças críticas:
+
+* Há distinção entre dados de spot e futures no sistema?
+* O order flow de futures está sendo capturado corretamente?
+
+2.3 Lacunas:
+
+* Quais dados essenciais de futures ainda não estão sendo utilizados?
+
+---
+
+3. INDICADORES E MÉTRICAS (FUTURES)
+
+3.1 Indicadores existentes:
+
+* Futures reutiliza indicadores do spot?
+* Existem indicadores específicos de derivativos implementados?
+
+3.2 Indicadores ausentes (avaliar existência):
+
+* Open Interest
+* Funding Rate
+* Long/Short Ratio
+* Liquidation data
+
+3.3 Pipeline:
+
+* O cálculo de indicadores suporta múltiplos contextos (spot/futures)?
+* Existe conflito ou sobrescrita de dados?
+
+---
+
+4. ESTRUTURA DE DECISÃO (L1, L2, L3)
+
+4.1 Compatibilidade:
+
+* L1, L2 e L3 funcionam corretamente para futures?
+* Há regras específicas para alavancagem?
+
+4.2 Ajustes necessários:
+
+* Quais filtros precisam ser adaptados para futures?
+* Existe diferenciação entre long e short?
+
+4.3 Score:
+
+* O sistema de score atual considera contexto de futures?
+* Existe necessidade de score separado?
+
+---
+
+5. EXECUÇÃO DE ORDENS (FUTURES)
+
+5.1 Integração:
+
+* API de futures está integrada corretamente?
+* Diferença entre execução spot vs futures está tratada?
+
+5.2 Tipos de ordem:
+
+* Market, Limit, Stop, Reduce-only, Post-only estão implementados?
+
+5.3 Gestão de posição:
+
+* Sistema suporta:
+
+  * long e short simultaneamente?
+  * hedge mode vs one-way?
+
+---
+
+6. GESTÃO DE RISCO (CRÍTICO)
+
+6.1 Parâmetros atuais:
+
+* Stop loss está adaptado para alavancagem?
+* Take profit considera margem e liquidação?
+
+6.2 Riscos específicos de futures:
+
+* Existe controle de liquidação?
+* Existe limite de exposição por ativo?
+
+6.3 Lacunas:
+
+* O que falta para evitar risco sistêmico?
+
+---
+
+7. CONFIGURAÇÕES (/settings)
+
+7.1 Estrutura:
+
+* Existe separação clara entre configurações de spot e futures?
+
+7.2 Skills:
+
+* Skills suportam futures?
+* É possível ativar/desativar futures por skill?
+
+7.3 Trading Desk:
+
+* /trading-desk/futures está funcional?
+* Está integrado com profiles e watchlist?
+
+---
+
+8. WATCHLIST E POOL
+
+8.1 Comportamento:
+
+* Watchlist se adapta para futures?
+* Pool possui distinção entre spot e futures?
+
+8.2 Filtros:
+
+* Existem filtros específicos para derivativos?
+
+---
+
+9. SCORE ENGINE
+
+9.1 Integração:
+
+* Entry triggers dos profiles estão conectados ao score?
+
+9.2 Futures:
+
+* Score atual funciona para ambos os mercados?
+* Necessário separar lógica?
+
+---
+
+10. RADAR / SCANNER (SE EXISTENTE)
+
+* Existe algum scanner ativo?
+* Ele considera dados de futures?
+* Pode ser reutilizado para identificar oportunidades em derivativos?
+
+---
+
+11. PERFORMANCE E LATÊNCIA
+
+* Futures está sendo processado com a mesma eficiência do spot?
+* Há gargalos ao ativar futures?
+
+---
+
+12. LOGS E MONITORAMENTO
+
+* Execuções de futures são rastreáveis?
+* Logs distinguem spot vs futures?
+
+---
+
+13. LACUNAS CRÍTICAS (RESPOSTA OBRIGATÓRIA)
+
+Listar objetivamente:
+
+* O que está parcialmente implementado
+* O que está ausente
+* O que está inconsistente
+* O que impede operação segura em produção
+
+---
+
+14. PLANO DE AJUSTE
+
+Com base na análise:
+
+* Quais ajustes são obrigatórios (alta prioridade)
+* Quais são melhorias (média prioridade)
+* Quais são opcionais
+
+---
+
+FORMATO DA RESPOSTA
+
+* Seguir a numeração acima
+* Ser técnico e direto
+* Evitar explicações genéricas
+
+---
+
+RESULTADO ESPERADO
+Diagnóstico completo do estado atual do módulo de FUTURES, permitindo:
+
+* finalização rápida sem retrabalho
+* redução de risco operacional
+* integração perfeita com L1/L2/L3 e Score Engine

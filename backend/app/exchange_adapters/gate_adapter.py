@@ -12,6 +12,10 @@ import httpx
 
 from .base_adapter import BaseExchangeAdapter
 from ..utils.gate_market_data import parse_gate_spot_candle
+from ..services.robust_indicators.metrics import (
+    increment_exchange_error,
+    observe_exchange_latency,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -167,19 +171,28 @@ class GateAdapter(BaseExchangeAdapter):
         if query:
             url += f"?{query}"
 
-        async with httpx.AsyncClient(timeout=15) as client:
-            if method == "GET":
-                r = await client.get(url, headers=headers)
-            elif method == "POST":
-                r = await client.post(url, headers=headers, content=body_str)
-            elif method == "PUT":
-                r = await client.put(url, headers=headers, content=body_str)
-            elif method == "DELETE":
-                r = await client.delete(url, headers=headers)
-            else:
-                raise ValueError(f"Unsupported HTTP method: {method}")
+        _start = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                if method == "GET":
+                    r = await client.get(url, headers=headers)
+                elif method == "POST":
+                    r = await client.post(url, headers=headers, content=body_str)
+                elif method == "PUT":
+                    r = await client.put(url, headers=headers, content=body_str)
+                elif method == "DELETE":
+                    r = await client.delete(url, headers=headers)
+                else:
+                    raise ValueError(f"Unsupported HTTP method: {method}")
+        except Exception:
+            observe_exchange_latency("gate", time.monotonic() - _start)
+            increment_exchange_error("gate", "transport")
+            raise
+
+        observe_exchange_latency("gate", time.monotonic() - _start)
 
         if r.status_code not in (200, 201):
+            increment_exchange_error("gate", "http")
             self._raise_gate_error(r)
 
         return r.json()
@@ -640,15 +653,83 @@ class GateAdapter(BaseExchangeAdapter):
     @staticmethod
     async def _public_get(url: str, params: Optional[Dict] = None) -> Any:
         """Unsigned GET for Gate.io public endpoints."""
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.get(
-                url,
-                params=params,
-                headers={"Accept": "application/json"},
-            )
+        _start = time.monotonic()
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                r = await client.get(
+                    url,
+                    params=params,
+                    headers={"Accept": "application/json"},
+                )
+        except Exception:
+            observe_exchange_latency("gate", time.monotonic() - _start)
+            increment_exchange_error("gate", "transport")
+            raise
+
+        observe_exchange_latency("gate", time.monotonic() - _start)
+
         if r.status_code != 200:
+            increment_exchange_error("gate", "http")
             raise GateAPIError(r.status_code, "PUBLIC_ERROR", r.text[:300])
         return r.json()
+
+    async def get_my_closed_spot_orders(
+        self,
+        days: int = 90,
+        page: int = 1,
+        limit: int = 100,
+        from_timestamp: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        GET /spot/orders?status=finished — authenticated, returns user's closed spot orders.
+
+        Returns list of dicts with keys:
+            id, currency_pair, side ("buy"|"sell"), amount, price, avg_deal_price,
+            filled_total (quote filled), left, fee, fee_currency,
+            create_time, finish_time, status ("closed"|"cancelled").
+
+        When from_timestamp is provided it is used directly; otherwise it is
+        computed from days (relative to now).
+        """
+        from datetime import datetime, timezone, timedelta
+        if from_timestamp is not None:
+            start_ts = from_timestamp
+        else:
+            start_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+        return await self._request(
+            "GET",
+            "/spot/orders",
+            params={
+                "status": "finished",
+                "page": str(page),
+                "limit": str(limit),
+                "from": str(start_ts),
+            },
+        )
+
+    async def get_my_spot_trades(
+        self,
+        currency_pair: Optional[str] = None,
+        days: int = 90,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """
+        GET /spot/my_trades — authenticated, returns user's personal trade fills.
+
+        Returns list of dicts with keys:
+            id, create_time, create_time_ms, order_id, currency_pair,
+            side ("buy"|"sell"), amount, price, role ("maker"|"taker"),
+            fee, fee_currency, point_fee, gt_fee.
+        """
+        from datetime import datetime, timezone, timedelta
+        start_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+        params: Dict[str, str] = {
+            "limit": str(limit),
+            "from": str(start_ts),
+        }
+        if currency_pair:
+            params["currency_pair"] = self._normalize_symbol(currency_pair)
+        return await self._request("GET", "/spot/my_trades", params=params)
 
     async def get_spot_trades(
         self,
@@ -666,6 +747,34 @@ class GateAdapter(BaseExchangeAdapter):
         return await self._public_get(
             f"{self.SPOT_BASE}/spot/trades",
             params={"currency_pair": pair, "limit": str(limit)},
+        )
+
+    async def get_my_futures_trades(
+        self,
+        contract: Optional[str] = None,
+        days: int = 7,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        GET /futures/usdt/my_trades — authenticated personal futures fill history.
+
+        Returns list of dicts with keys:
+            id, contract, create_time, create_time_ms, order_id,
+            size (positive=long fill, negative=short fill), price,
+            role ("maker"|"taker"), fee, text.
+        """
+        from datetime import datetime, timezone, timedelta
+        start_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+        params: Dict[str, str] = {
+            "limit": str(limit),
+            "from": str(start_ts),
+        }
+        if contract:
+            params["contract"] = self._normalize_symbol(contract)
+        return await self._request(
+            "GET", f"/futures/{self.SETTLE}/my_trades",
+            params=params,
+            base_url=self._futures_url(),
         )
 
     async def list_spot_pairs(self) -> List[Dict[str, Any]]:

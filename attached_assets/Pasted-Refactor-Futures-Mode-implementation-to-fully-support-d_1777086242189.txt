@@ -1,0 +1,198 @@
+Refactor Futures Mode implementation to fully support directional scoring (LONG/SHORT), strict ENTRY separation, and correct L3 decision logic.
+
+Base reference: existing Futures Mode spec 
+
+---
+
+### 1) CRITICAL FIX — Separate ENTRY from SCORING
+
+Current issue:
+ENTRY logic is implicitly mixed with scoring.
+
+Required fix:
+
+* ENTRY must be evaluated independently from scoring
+* ENTRY must NOT be derived from score
+* ENTRY must act as a hard gate
+
+Implementation:
+
+entry_long = evaluate(entry.long conditions)
+entry_short = evaluate(entry.short conditions)
+
+Rules:
+
+* If entry_long = false → cannot be LONG
+* If entry_short = false → cannot be SHORT
+
+---
+
+### 2) CRITICAL FIX — Direction Logic (L3 ONLY)
+
+Update direction computation:
+
+if level != "L3":
+direction = None
+return scores only
+
+if base_score < min_quality:
+direction = "NEUTRAL"
+
+elif blocked:
+direction = "NEUTRAL"
+
+elif entry_long AND long_score > short_score AND long_score >= threshold:
+direction = "LONG"
+
+elif entry_short AND short_score > long_score AND short_score >= threshold:
+direction = "SHORT"
+
+else:
+direction = "NEUTRAL"
+
+---
+
+### 3) Ensure TRUE Dual Scoring (No Shared Bias)
+
+Enforce:
+
+* long_score and short_score MUST be computed independently
+* No reuse of inverted values
+* Each condition must explicitly belong to one side
+
+Example:
+
+long:
+rsi > 55 → +2
+
+short:
+rsi < 45 → +2
+
+DO NOT:
+
+* use symmetric subtraction
+* derive one score from the other
+
+---
+
+### 4) Update futures_pipeline_scorer.py
+
+Return structure MUST be:
+
+{
+base_score: number,
+long_score: number | null,
+short_score: number | null,
+confidence: number | null,
+direction: "LONG" | "SHORT" | "NEUTRAL"
+}
+
+Rules:
+
+* confidence = abs(long_score - short_score)
+* If missing data:
+  → return None for that score (DO NOT block)
+
+---
+
+### 5) BLOCK + ENTRY Integration
+
+Reuse block_engine.py but enforce:
+
+blocked = evaluate_block_conditions()
+entry_long = evaluate_entry_long()
+entry_short = evaluate_entry_short()
+
+Priority:
+
+BLOCK > ENTRY > SCORE
+
+---
+
+### 6) Watchlist Rendering Fix
+
+When market_mode == "futures":
+
+Columns MUST be:
+
+* base_score
+* long_score
+* short_score
+* confidence
+* direction
+
+Direction rendering:
+
+* LONG → green
+* SHORT → red
+* NEUTRAL → gray
+
+---
+
+### 7) Sorting Fix (Important)
+
+Server-side sorting MUST follow:
+
+ORDER BY:
+confidence DESC,
+GREATEST(long_score, short_score) DESC
+
+Fallback:
+
+* If scores null → send to bottom
+
+---
+
+### 8) Hide Neutral (Server + Client Safe)
+
+If filter active:
+
+exclude where:
+direction == "NEUTRAL"
+
+---
+
+### 9) Pipeline Scan Integration Fix
+
+In pipeline_scan.py:
+
+When market_mode == "futures":
+
+* compute scores BEFORE persisting
+* persist:
+  long_score
+  short_score
+  confidence
+  direction
+
+DO NOT recompute in frontend
+
+---
+
+### 10) Performance Optimization (Important)
+
+* Compute indicators once per asset
+* Share across long/short evaluation
+* Avoid recomputing layers
+
+---
+
+### 11) Backward Safety
+
+* If `/settings/score/futures` missing:
+  → fallback to spot silently
+
+* If indicators missing:
+  → skip condition (do NOT block asset)
+
+---
+
+### 12) Final Goal
+
+Transform current Futures Mode into:
+
+* true dual-direction engine
+* ENTRY-driven execution filter
+* L3-only decision layer
+* fully deterministic LONG vs SHORT output
+* zero interference with SPOT/TRADFI

@@ -76,7 +76,7 @@ const RULE_INDICATORS: RuleIndicatorOption[] = [
   { value: "macd", label: "MACD", kind: "number" },
   { value: "macd_histogram", label: "MACD Histogram", kind: "number" },
   { value: "volume_spike", label: "Volume Spike", kind: "number" },
-  { value: "taker_ratio", label: "Taker Ratio", kind: "number" },
+  { value: "taker_ratio", label: "Taker Ratio (buy/(buy+sell), 0-1)", kind: "number" },
   { value: "volume_delta", label: "Volume Delta", kind: "number" },
   { value: "orderbook_pressure", label: "Orderbook Pressure", kind: "number" },
   { value: "bid_ask_imbalance", label: "Bid/Ask Imbalance", kind: "number" },
@@ -126,13 +126,19 @@ const NO_TF_INDICATORS = new Set([
   "funding_rate",
 ]);
 
+const DEFAULT_SCORING_CONFIG = {
+  enabled: true,
+  selected_rule_ids: [] as string[],
+  weights: { liquidity: 25, market_structure: 25, momentum: 25, signal: 25 },
+};
+
 const DEFAULT_CONFIG = {
   default_timeframe: "5m",
   filters:       { logic: "AND", conditions: [] },
-  scoring:       { enabled: true, weights: { liquidity: 25, market_structure: 25, momentum: 25, signal: 25 } },
-  signals:       { logic: "AND", conditions: [] },
+  scoring:       { ...DEFAULT_SCORING_CONFIG },
+  signals:       { logic: "AND", conditions: [], scoring: { ...DEFAULT_SCORING_CONFIG } },
   block_rules:   { blocks: [] },
-  entry_triggers: { logic: "AND", conditions: [] },
+  entry_triggers: { logic: "AND", conditions: [], scoring: { ...DEFAULT_SCORING_CONFIG } },
 };
 
 type ActiveTab = "filters" | "scoring" | "signals" | "block_rules" | "entry_triggers";
@@ -303,6 +309,11 @@ function normalizeProfileConfig(rawConfig: any) {
   return {
     ...DEFAULT_CONFIG,
     ...(rawConfig || {}),
+    signals: {
+      logic: rawConfig?.signals?.logic || "AND",
+      conditions: rawConfig?.signals?.conditions || [],
+      scoring: rawConfig?.signals?.scoring ?? { ...DEFAULT_SCORING_CONFIG },
+    },
     block_rules: {
       blocks: (rawConfig?.block_rules?.blocks || []).map(normalizeBlockRule),
     },
@@ -310,8 +321,147 @@ function normalizeProfileConfig(rawConfig: any) {
       logic: rawConfig?.entry_triggers?.logic || "AND",
       logic_preview_text: rawConfig?.entry_triggers?.logic_preview_text,
       conditions: (rawConfig?.entry_triggers?.conditions || []).map(normalizeEntryTrigger),
+      scoring: rawConfig?.entry_triggers?.scoring ?? { ...DEFAULT_SCORING_CONFIG },
     },
   };
+}
+
+interface ScoreEngineConfigPanelProps {
+  scoreRules: ScoreRule[];
+  selectedIds: string[];
+  onToggleRuleId: (id: string) => void;
+  onClearSelection: () => void;
+  isEnabled: boolean;
+  weights: { liquidity: number; market_structure: number; momentum: number; signal: number };
+  onUpdateWeights: (weights: any) => void;
+  onToggleEnabled: (enabled: boolean) => void;
+  testid?: string;
+}
+
+function ScoreEngineConfigPanel({
+  scoreRules,
+  selectedIds,
+  onToggleRuleId,
+  onClearSelection,
+  isEnabled,
+  weights,
+  onUpdateWeights,
+  onToggleEnabled,
+  testid = "score-engine",
+}: ScoreEngineConfigPanelProps) {
+  return (
+    <div className="space-y-6">
+      <div className="space-y-3">
+        <div>
+          <h3 className="font-semibold text-[var(--text-primary)]">Score Engine Configuration</h3>
+          <p className="text-[12px] text-[var(--text-secondary)]">
+            Select which global scoring rules apply to this profile. Unselected rules will not affect the Alpha Score.
+            {scoreRules.length === 0 && " (Configure scoring rules in Settings → Score Engine)"}
+          </p>
+        </div>
+        {scoreRules.length > 0 ? (
+          <div className="space-y-1.5" data-testid={`${testid}-rule-selection`}>
+            {scoreRules.map((rule) => {
+              const isExplicitlySelected = selectedIds.includes(rule.id);
+              return (
+                <div
+                  key={rule.id}
+                  className={`flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
+                    isExplicitlySelected
+                      ? "bg-[var(--accent-primary)]/8 border-[var(--accent-primary)]/30"
+                      : selectedIds.length > 0
+                      ? "bg-[var(--bg-secondary)] border-[var(--border-subtle)] opacity-50"
+                      : "bg-[var(--bg-secondary)] border-[var(--border-subtle)]"
+                  }`}
+                  onClick={() => onToggleRuleId(rule.id)}
+                  data-testid={`${testid}-rule-toggle-${rule.id}`}
+                >
+                  <div className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 ${
+                    isExplicitlySelected
+                      ? "bg-[var(--accent-primary)] border-[var(--accent-primary)]"
+                      : "border-[var(--border-default)]"
+                  }`}>
+                    {isExplicitlySelected && (
+                      <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[13px] font-medium text-[var(--text-primary)]">
+                      {rule.indicator}
+                    </span>
+                    <span className="text-[11px] text-[var(--text-tertiary)] ml-2">
+                      {rule.operator} {rule.min != null && rule.max != null ? `${rule.min}–${rule.max}` : rule.value ?? ""}
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-[var(--text-tertiary)] capitalize shrink-0">
+                    {(rule.category || "").replace("_", " ")}
+                  </span>
+                  <span className="text-[12px] font-mono font-semibold text-[var(--accent-primary)] shrink-0">
+                    {rule.points} pts
+                  </span>
+                </div>
+              );
+            })}
+            {selectedIds.length > 0 && (
+              <button
+                className="text-[11px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] mt-1"
+                onClick={onClearSelection}
+                data-testid={`${testid}-rules-clear-selection`}
+              >
+                Clear selection (use all rules)
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="p-4 text-center bg-[var(--bg-secondary)] rounded-lg border border-dashed border-[var(--border-subtle)]">
+            <Target className="w-6 h-6 text-[var(--text-tertiary)] mx-auto mb-2" />
+            <p className="text-[12px] text-[var(--text-tertiary)]">
+              No global scoring rules configured. Go to{" "}
+              <a href="/settings/score" className="text-[var(--accent-primary)] hover:underline">
+                Settings → Score Engine
+              </a>{" "}
+              to add scoring rules.
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-3 pt-4 border-t border-[var(--border-subtle)]">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold text-[var(--text-primary)]">Alpha Score Weights</h3>
+            <p className="text-[12px] text-[var(--text-secondary)]">Customize how the Alpha Score categories are weighted</p>
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <span className="text-[12px] text-[var(--text-secondary)]">
+              {isEnabled ? "Enabled" : "Disabled"}
+            </span>
+            <div
+              className={`relative w-10 h-5 rounded-full transition-colors ${
+                isEnabled ? "bg-[var(--accent-primary)]" : "bg-[var(--bg-secondary)]"
+              }`}
+              onClick={() => onToggleEnabled(!isEnabled)}
+            >
+              <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                isEnabled ? "translate-x-5" : "translate-x-0.5"
+              }`} />
+            </div>
+          </label>
+        </div>
+        {isEnabled ? (
+          <WeightSliders weights={weights} onChange={onUpdateWeights} />
+        ) : (
+          <div className="p-8 text-center bg-[var(--bg-secondary)] rounded-lg">
+            <p className="text-[var(--text-tertiary)] text-[13px]">
+              Alpha Score Weights are disabled. Default weights will be used.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProps) {
@@ -326,6 +476,12 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   const [saving, setSaving]                 = useState(false);
   const [scoringEnabled, setScoringEnabled] = useState(
     profile?.config?.scoring?.enabled !== false
+  );
+  const [signalsScoringEnabled, setSignalsScoringEnabled] = useState(
+    profile?.config?.signals?.scoring?.enabled !== false
+  );
+  const [entryTriggersScoringEnabled, setEntryTriggersScoringEnabled] = useState(
+    profile?.config?.entry_triggers?.scoring?.enabled !== false
   );
   const [entryLogicPreview, setEntryLogicPreview] = useState(
     profile?.config?.entry_triggers?.logic_preview_text || ""
@@ -373,7 +529,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     setConfig((c: any) => ({ ...c, filters: { logic, conditions } }));
 
   const updateSignals  = (conditions: Condition[], logic: string) =>
-    setConfig((c: any) => ({ ...c, signals: { logic, conditions } }));
+    setConfig((c: any) => ({ ...c, signals: { ...c.signals, logic, conditions } }));
 
   const updateWeights  = (weights: any) =>
     setConfig((c: any) => ({ ...c, scoring: { ...c.scoring, weights } }));
@@ -390,6 +546,40 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   const toggleScoringEnabled = (enabled: boolean) => {
     setScoringEnabled(enabled);
     setConfig((c: any) => ({ ...c, scoring: { ...c.scoring, enabled } }));
+  };
+
+  const toggleSignalsScoringRuleId = (ruleId: string) =>
+    setConfig((c: any) => {
+      const current: string[] = c.signals?.scoring?.selected_rule_ids ?? [];
+      const next = current.includes(ruleId)
+        ? current.filter((id: string) => id !== ruleId)
+        : [...current, ruleId];
+      return { ...c, signals: { ...c.signals, scoring: { ...c.signals?.scoring, selected_rule_ids: next } } };
+    });
+
+  const updateSignalsWeights = (weights: any) =>
+    setConfig((c: any) => ({ ...c, signals: { ...c.signals, scoring: { ...c.signals?.scoring, weights } } }));
+
+  const toggleSignalsScoringEnabled = (enabled: boolean) => {
+    setSignalsScoringEnabled(enabled);
+    setConfig((c: any) => ({ ...c, signals: { ...c.signals, scoring: { ...c.signals?.scoring, enabled } } }));
+  };
+
+  const toggleEntryTriggersScoringRuleId = (ruleId: string) =>
+    setConfig((c: any) => {
+      const current: string[] = c.entry_triggers?.scoring?.selected_rule_ids ?? [];
+      const next = current.includes(ruleId)
+        ? current.filter((id: string) => id !== ruleId)
+        : [...current, ruleId];
+      return { ...c, entry_triggers: { ...c.entry_triggers, scoring: { ...c.entry_triggers?.scoring, selected_rule_ids: next } } };
+    });
+
+  const updateEntryTriggersWeights = (weights: any) =>
+    setConfig((c: any) => ({ ...c, entry_triggers: { ...c.entry_triggers, scoring: { ...c.entry_triggers?.scoring, weights } } }));
+
+  const toggleEntryTriggersScoringEnabled = (enabled: boolean) => {
+    setEntryTriggersScoringEnabled(enabled);
+    setConfig((c: any) => ({ ...c, entry_triggers: { ...c.entry_triggers, scoring: { ...c.entry_triggers?.scoring, enabled } } }));
   };
 
   // ── Block Rules helpers ─────────────────────────────────────────────────────
@@ -624,7 +814,8 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
       signals: incoming.signals ? {
         ...incoming.signals,
         conditions: fixConditions(incoming.signals.conditions ?? []),
-      } : incoming.signals,
+        scoring: incoming.signals.scoring ?? { ...DEFAULT_SCORING_CONFIG },
+      } : { logic: "AND", conditions: [], scoring: { ...DEFAULT_SCORING_CONFIG } },
       block_rules: incoming.block_rules ? {
         ...incoming.block_rules,
         blocks: fixBlocks(incoming.block_rules.blocks ?? []),
@@ -638,7 +829,8 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
           enabled: c.enabled !== false,
           required: c.required || false,
         })),
-      } : { logic: "AND", conditions: [] },
+        scoring: incoming.entry_triggers.scoring ?? { ...DEFAULT_SCORING_CONFIG },
+      } : { logic: "AND", conditions: [], scoring: { ...DEFAULT_SCORING_CONFIG } },
     };
   };
 
@@ -649,6 +841,12 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
       setEntryLogicPreview(normalized.entry_triggers?.logic_preview_text || "");
       if (normalized.scoring?.enabled !== undefined) {
         setScoringEnabled(normalized.scoring.enabled !== false);
+      }
+      if (normalized.signals?.scoring?.enabled !== undefined) {
+        setSignalsScoringEnabled(normalized.signals.scoring.enabled !== false);
+      }
+      if (normalized.entry_triggers?.scoring?.enabled !== undefined) {
+        setEntryTriggersScoringEnabled(normalized.entry_triggers.scoring.enabled !== false);
       }
     }
   };
@@ -812,151 +1010,56 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
 
           {/* ── SCORING ── */}
           {activeTab === "scoring" && (
-            <div className="space-y-6">
-              {/* Score Engine Configuration — rule selection */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-semibold text-[var(--text-primary)]">Score Engine Configuration</h3>
-                    <p className="text-[12px] text-[var(--text-secondary)]">
-                      Select which global scoring rules apply to this profile. Unselected rules will not affect the Alpha Score.
-                      {scoreRules.length === 0 && " (Configure scoring rules in Settings → Score Engine)"}
-                    </p>
-                  </div>
-                </div>
-                {scoreRules.length > 0 ? (
-                  <div className="space-y-1.5" data-testid="scoring-rule-selection">
-                    {scoreRules.map((rule) => {
-                      const selectedIds: string[] = config.scoring?.selected_rule_ids ?? [];
-                      const isExplicitlySelected = selectedIds.includes(rule.id);
-                      return (
-                        <div
-                          key={rule.id}
-                          className={`flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
-                            isExplicitlySelected
-                              ? "bg-[var(--accent-primary)]/8 border-[var(--accent-primary)]/30"
-                              : selectedIds.length > 0
-                              ? "bg-[var(--bg-secondary)] border-[var(--border-subtle)] opacity-50"
-                              : "bg-[var(--bg-secondary)] border-[var(--border-subtle)]"
-                          }`}
-                          onClick={() => toggleScoringRuleId(rule.id)}
-                          data-testid={`scoring-rule-toggle-${rule.id}`}
-                        >
-                          <div className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 ${
-                            isExplicitlySelected
-                              ? "bg-[var(--accent-primary)] border-[var(--accent-primary)]"
-                              : "border-[var(--border-default)]"
-                          }`}>
-                            {isExplicitlySelected && (
-                              <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                              </svg>
-                            )}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <span className="text-[13px] font-medium text-[var(--text-primary)]">
-                              {rule.indicator}
-                            </span>
-                            <span className="text-[11px] text-[var(--text-tertiary)] ml-2">
-                              {rule.operator} {rule.min != null && rule.max != null ? `${rule.min}–${rule.max}` : rule.value ?? ""}
-                            </span>
-                          </div>
-                          <span className="text-[11px] text-[var(--text-tertiary)] capitalize shrink-0">
-                            {(rule.category || "").replace("_", " ")}
-                          </span>
-                          <span className="text-[12px] font-mono font-semibold text-[var(--accent-primary)] shrink-0">
-                            {rule.points} pts
-                          </span>
-                        </div>
-                      );
-                    })}
-                    {(config.scoring?.selected_rule_ids ?? []).length > 0 && (
-                      <button
-                        className="text-[11px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] mt-1"
-                        onClick={() => setConfig((c: any) => ({ ...c, scoring: { ...c.scoring, selected_rule_ids: [] } }))}
-                        data-testid="scoring-rules-clear-selection"
-                      >
-                        Clear selection (use all rules)
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  <div className="p-4 text-center bg-[var(--bg-secondary)] rounded-lg border border-dashed border-[var(--border-subtle)]">
-                    <Target className="w-6 h-6 text-[var(--text-tertiary)] mx-auto mb-2" />
-                    <p className="text-[12px] text-[var(--text-tertiary)]">
-                      No global scoring rules configured. Go to{" "}
-                      <a href="/settings/score" className="text-[var(--accent-primary)] hover:underline">
-                        Settings → Score Engine
-                      </a>{" "}
-                      to add scoring rules.
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              {/* Alpha Score Weights */}
-              <div className="space-y-3 pt-4 border-t border-[var(--border-subtle)]">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-semibold text-[var(--text-primary)]">Alpha Score Weights</h3>
-                    <p className="text-[12px] text-[var(--text-secondary)]">Customize how the Alpha Score categories are weighted</p>
-                  </div>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <span className="text-[12px] text-[var(--text-secondary)]">
-                      {scoringEnabled ? "Enabled" : "Disabled"}
-                    </span>
-                    <div
-                      className={`relative w-10 h-5 rounded-full transition-colors ${
-                        scoringEnabled ? "bg-[var(--accent-primary)]" : "bg-[var(--bg-secondary)]"
-                      }`}
-                      onClick={() => toggleScoringEnabled(!scoringEnabled)}
-                    >
-                      <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                        scoringEnabled ? "translate-x-5" : "translate-x-0.5"
-                      }`} />
-                    </div>
-                  </label>
-                </div>
-                {scoringEnabled ? (
-                  <WeightSliders
-                    weights={config.scoring?.weights ?? { liquidity: 25, market_structure: 25, momentum: 25, signal: 25 }}
-                    onChange={updateWeights}
-                  />
-                ) : (
-                  <div className="p-8 text-center bg-[var(--bg-secondary)] rounded-lg">
-                    <p className="text-[var(--text-tertiary)] text-[13px]">
-                      Alpha Score Weights are disabled. Default weights will be used.
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
+            <ScoreEngineConfigPanel
+              scoreRules={scoreRules}
+              selectedIds={config.scoring?.selected_rule_ids ?? []}
+              onToggleRuleId={toggleScoringRuleId}
+              onClearSelection={() => setConfig((c: any) => ({ ...c, scoring: { ...c.scoring, selected_rule_ids: [] } }))}
+              isEnabled={scoringEnabled}
+              weights={config.scoring?.weights ?? { liquidity: 25, market_structure: 25, momentum: 25, signal: 25 }}
+              onUpdateWeights={updateWeights}
+              onToggleEnabled={toggleScoringEnabled}
+              testid="scoring"
+            />
           )}
 
           {/* ── SIGNALS ── */}
           {activeTab === "signals" && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="font-semibold text-[var(--text-primary)]">Signal Entry Conditions</h3>
-                  <p className="text-[12px] text-[var(--text-secondary)]">Define when a trading signal should be triggered</p>
-                </div>
-                <select
-                  className="input w-24"
-                  value={config.signals?.logic ?? "AND"}
-                  onChange={(e) => updateSignals(config.signals?.conditions ?? [], e.target.value)}
-                  data-testid="signal-logic-select"
-                >
-                  <option value="AND">AND</option>
-                  <option value="OR">OR</option>
-                </select>
-              </div>
-              <ConditionBuilder
-                conditions={config.signals?.conditions ?? []}
-                onChange={(conditions) => updateSignals(conditions, config.signals?.logic ?? "AND")}
-                showRequired={true}
-                defaultTimeframe={config.default_timeframe || "5m"}
+            <div className="space-y-6">
+              <ScoreEngineConfigPanel
+                scoreRules={scoreRules}
+                selectedIds={config.signals?.scoring?.selected_rule_ids ?? []}
+                onToggleRuleId={toggleSignalsScoringRuleId}
+                onClearSelection={() => setConfig((c: any) => ({ ...c, signals: { ...c.signals, scoring: { ...c.signals?.scoring, selected_rule_ids: [] } } }))}
+                isEnabled={signalsScoringEnabled}
+                weights={config.signals?.scoring?.weights ?? { liquidity: 25, market_structure: 25, momentum: 25, signal: 25 }}
+                onUpdateWeights={updateSignalsWeights}
+                onToggleEnabled={toggleSignalsScoringEnabled}
+                testid="signals-scoring"
               />
+              <div className="space-y-4 pt-4 border-t border-[var(--border-subtle)]">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-semibold text-[var(--text-primary)]">Signal Entry Conditions</h3>
+                    <p className="text-[12px] text-[var(--text-secondary)]">Define when a trading signal should be triggered</p>
+                  </div>
+                  <select
+                    className="input w-24"
+                    value={config.signals?.logic ?? "AND"}
+                    onChange={(e) => updateSignals(config.signals?.conditions ?? [], e.target.value)}
+                    data-testid="signal-logic-select"
+                  >
+                    <option value="AND">AND</option>
+                    <option value="OR">OR</option>
+                  </select>
+                </div>
+                <ConditionBuilder
+                  conditions={config.signals?.conditions ?? []}
+                  onChange={(conditions) => updateSignals(conditions, config.signals?.logic ?? "AND")}
+                  showRequired={true}
+                  defaultTimeframe={config.default_timeframe || "5m"}
+                />
+              </div>
             </div>
           )}
 
@@ -1224,7 +1327,19 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
 
           {/* ── ENTRY TRIGGERS ── */}
           {activeTab === "entry_triggers" && (
-            <div className="space-y-4">
+            <div className="space-y-6">
+              <ScoreEngineConfigPanel
+                scoreRules={scoreRules}
+                selectedIds={config.entry_triggers?.scoring?.selected_rule_ids ?? []}
+                onToggleRuleId={toggleEntryTriggersScoringRuleId}
+                onClearSelection={() => setConfig((c: any) => ({ ...c, entry_triggers: { ...c.entry_triggers, scoring: { ...c.entry_triggers?.scoring, selected_rule_ids: [] } } }))}
+                isEnabled={entryTriggersScoringEnabled}
+                weights={config.entry_triggers?.scoring?.weights ?? { liquidity: 25, market_structure: 25, momentum: 25, signal: 25 }}
+                onUpdateWeights={updateEntryTriggersWeights}
+                onToggleEnabled={toggleEntryTriggersScoringEnabled}
+                testid="entry-triggers-scoring"
+              />
+              <div className="space-y-4 pt-4 border-t border-[var(--border-subtle)]">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="font-semibold text-[var(--text-primary)]">Entry Triggers</h3>
@@ -1509,6 +1624,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                   </div>
                 </div>
               )}
+              </div>
             </div>
           )}
 

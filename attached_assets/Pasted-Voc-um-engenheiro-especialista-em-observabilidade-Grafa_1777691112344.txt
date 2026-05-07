@@ -1,0 +1,234 @@
+Você é um engenheiro especialista em observabilidade (Grafana + Prometheus + PostgreSQL).
+
+Sua tarefa é criar um dashboard completo no Grafana para um trading engine em produção, seguindo exatamente o padrão visual e funcional descrito abaixo.
+
+---
+
+## 🎯 OBJETIVO
+
+Criar um dashboard chamado:
+
+**"Scalpyn Trading Engine - Monitoramento"**
+
+Com foco em:
+
+* saúde do sistema
+* qualidade dos dados
+* score e confidence
+* decisões de trade
+* integridade dos indicadores
+
+---
+
+## 📊 ESTRUTURA DO DASHBOARD
+
+### 🔹 1. RESUMO GERAL (TOP CARDS)
+
+Criar painéis tipo "Stat":
+
+1. STATUS DO SISTEMA
+
+* Verde: OK
+* Lógica:
+
+  * error_rate < 5%
+  * confidence > 0.6
+  * NO_DATA < 20%
+
+---
+
+2. SCORE MÉDIO (GERAL)
+
+* Query:
+  avg(score)
+
+---
+
+3. CONFIDENCE MÉDIA
+
+* Query:
+  avg(confidence)
+
+---
+
+4. DATA QUALITY (% válidos)
+
+* Query:
+  valid_indicators / total_indicators
+
+---
+
+5. REJECTION RATE
+
+* Query:
+  rejected_trades / total_trades
+
+---
+
+6. TRADES (ÚLTIMA HORA)
+
+* aprovados vs rejeitados
+
+---
+
+## 🔹 2. QUALIDADE DOS DADOS (GAUGES)
+
+Criar gauges:
+
+* Indicadores válidos (%)
+* NO_DATA (%)
+* STALE (%)
+* ERROR (%)
+
+Thresholds:
+
+* Verde: OK
+* Amarelo: alerta
+* Vermelho: crítico
+
+---
+
+## 🔹 3. CONFIDENCE AO LONGO DO TEMPO
+
+Tipo: Line Chart
+
+* métrica:
+  indicator_confidence
+
+* linha de limite:
+  0.60 (mínimo aceitável)
+
+---
+
+## 🔹 4. STATUS DAS EXCHANGES
+
+Tabela:
+
+Colunas:
+
+* Exchange
+* Status
+* Latência média
+* Taxa de erro
+* Última atualização
+
+Fontes:
+
+* binance latency
+* gate latency
+
+---
+
+## 🔹 5. SCORE POR ATIVO (TIME SERIES)
+
+* BTC, ETH, XRP, etc.
+* métrica:
+  score por símbolo
+
+---
+
+## 🔹 6. INDICADORES CRÍTICOS (TABLE)
+
+Mostrar:
+
+* indicador
+* ativo
+* timeframe
+* valor
+* status
+* source
+* confidence
+
+Dados vindos de:
+
+indicator_snapshots (PostgreSQL)
+
+---
+
+## 🔹 7. REJEIÇÕES POR MOTIVO
+
+Gráfico donut:
+
+Categorias:
+
+* NO_DATA (flow)
+* STALE
+* LOW_CONFIDENCE
+* ERROR
+
+---
+
+## 🔹 8. ALERTAS IMPORTANTES
+
+Criar alertas no Grafana:
+
+1. confidence < 0.6
+2. NO_DATA > 25%
+3. rejection_rate > 50%
+4. error_rate > 10%
+
+---
+
+## 🔌 FONTES DE DADOS
+
+### Prometheus:
+
+* indicator_confidence
+* indicator_staleness_seconds
+* score_rejection_total
+* computation_duration_seconds
+
+---
+
+### PostgreSQL:
+
+Tabela:
+indicator_snapshots
+
+Campos:
+
+* indicators_json
+* score
+* confidence
+* timestamp
+
+---
+
+## 🎨 VISUAL
+
+* Tema escuro
+* Verde = OK
+* Amarelo = alerta
+* Vermelho = crítico
+
+---
+
+## 📦 OUTPUT
+
+Gerar:
+
+1. JSON completo do dashboard Grafana
+2. Queries PromQL e SQL
+3. Configuração dos painéis
+4. Thresholds definidos
+5. Instruções de importação no Grafana
+
+---
+
+## 🚫 REGRAS
+
+* Não simplificar
+* Não omitir métricas
+* Não usar dados fictícios
+* Estrutura pronta para produção
+
+---
+
+## 🎯 RESULTADO FINAL
+
+Dashboard completo que permita:
+
+* validar se o sistema está saudável
+* detectar falhas rapidamente
+* acompanhar qualidade dos dados
+* validar decisões de trade em tempo real

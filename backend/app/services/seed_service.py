@@ -22,6 +22,9 @@ DEFAULT_INDICATORS = {
     "parabolic_sar": {"enabled": True, "step": 0.02, "max_step": 0.2},
     "bollinger": {"enabled": True, "period": 20, "deviation": 2.0},
     "zscore": {"enabled": False, "lookback": 20},
+    # Robust indicators: when no real trade-flow data is available the
+    # FeatureEngine returns None and the envelope tags the indicator as
+    # NO_DATA. Candle-derived approximations are no longer supported.
     "volume_delta": {"enabled": True},
     "volume_metrics": {"enabled": True, "min_coverage_hours": 23.5},
     "volume_spike": {"enabled": True, "lookback": 20},
@@ -49,7 +52,7 @@ DEFAULT_SCORE = {
     ],
     "thresholds": {"strong_buy": 80, "buy": 65, "neutral": 40},
     "auto_select_top_n": 5,
-    "auto_select_min_score": 80
+    "auto_select_min_score": 80,
 }
 
 DEFAULT_SIGNAL = {
@@ -103,6 +106,19 @@ DEFAULT_DECISION_LOG = {
     "client_buffer_size": 200,
     "max_displayed_metrics": 16,
     "realtime_highlight_ms": 3000,
+    "score_delta_threshold": 5.0,
+    "direction_change_logs": True,
+}
+
+DEFAULT_AI_SETTINGS = {
+    "ml_enabled": True,
+    "model_path": "/tmp/scalpyn_models/model.pkl",
+    "ai_block_threshold": 0.5,
+    "use_ml_ranking": True,
+    "fallback_probability": 1.0,
+    "auto_retrain_enabled": False,
+    "retrain_interval_days": 7,
+    "min_simulations_for_training": 1000,
 }
 
 async def seed_user_defaults(db: AsyncSession, user_id: UUID) -> None:
@@ -120,3 +136,4 @@ async def seed_user_defaults(db: AsyncSession, user_id: UUID) -> None:
         await config_service.update_config(db, 'strategy', user_id, DEFAULT_STRATEGY, user_id, change_description="System Seed Reset")
         await config_service.update_config(db, 'universe', user_id, DEFAULT_UNIVERSE, user_id, change_description="System Seed Reset")
         await config_service.update_config(db, 'decision_log', user_id, DEFAULT_DECISION_LOG, user_id, change_description="System Seed Reset")
+        await config_service.update_config(db, 'ai-settings', user_id, DEFAULT_AI_SETTINGS, user_id, change_description="System Seed Reset")

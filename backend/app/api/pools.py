@@ -2,9 +2,10 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from uuid import UUID
 
 from ..database import get_db
@@ -45,6 +46,8 @@ def _coin_to_dict(coin: PoolCoin) -> Dict[str, Any]:
         "symbol": coin.symbol,
         "market_type": coin.market_type,
         "is_active": coin.is_active,
+        # Task #232 — execution gate column added in migration 043.
+        "is_tradable": bool(coin.is_tradable),
         "added_at": coin.added_at.isoformat() if coin.added_at else None,
         "origin": coin.origin if coin.origin else "manual",
         "discovered_at": coin.discovered_at.isoformat() if coin.discovered_at else None,
@@ -283,6 +286,73 @@ async def bulk_add_pool_coins(
         "added_symbols": added,
         "skipped_symbols": skipped,
     }
+
+
+class _TradableTogglePayload(BaseModel):
+    """Body for the tradable toggle. ``tradable`` is canonical;
+    ``is_tradable`` is accepted as a one-deploy backwards-compat alias.
+    """
+    tradable: Optional[bool] = None
+    is_tradable: Optional[bool] = None
+
+
+@router.post("/{pool_id}/coins/{symbol}/tradable")
+async def set_pool_coin_tradable(
+    pool_id: UUID,
+    symbol: str,
+    payload: _TradableTogglePayload,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Toggle the execution gate (``is_tradable``) for a single pool coin.
+
+    Task #232 — admin OR pool owner. No bulk endpoint by design.
+    """
+    from ..models.user import User
+
+    caller = (await db.execute(select(User).where(User.id == user_id))).scalars().first()
+    is_admin = caller is not None and (caller.role or "").lower() in {"admin", "superuser"}
+
+    pool_filter = [Pool.id == pool_id]
+    if not is_admin:
+        pool_filter.append(Pool.user_id == user_id)
+    pool = (await db.execute(select(Pool).where(*pool_filter))).scalars().first()
+    if not pool:
+        raise HTTPException(status_code=404, detail="Pool not found")
+
+    coin = (await db.execute(select(PoolCoin).where(
+        PoolCoin.pool_id == pool_id,
+        PoolCoin.symbol == symbol.upper(),
+    ))).scalars().first()
+    if not coin:
+        raise HTTPException(status_code=404, detail="Symbol not found in pool")
+
+    desired = payload.tradable if payload.tradable is not None else payload.is_tradable
+    if desired is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Body must include `tradable` (bool) or legacy `is_tradable` (bool).",
+        )
+    if not coin.is_active and desired:
+        # Defensive: cannot trade a symbol that is not even being ingested.
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot mark inactive symbol as tradable — activate it first.",
+        )
+    previous = bool(coin.is_tradable)
+    coin.is_tradable = desired
+    await db.commit()
+    await db.refresh(coin)
+    # Task #232 — standardized log event for ops grep contract,
+    # including ``from``/``to`` for an audit-friendly transition.
+    logger.info(
+        "[TRADABLE-TOGGLE] symbol=%s pool=%s from=%s to=%s caller=%s admin=%s",
+        coin.symbol, pool_id,
+        "ENABLED" if previous else "DISABLED",
+        "ENABLED" if desired else "DISABLED",
+        user_id, is_admin,
+    )
+    return _coin_to_dict(coin)
 
 
 @router.delete("/{pool_id}/coins/{symbol}")

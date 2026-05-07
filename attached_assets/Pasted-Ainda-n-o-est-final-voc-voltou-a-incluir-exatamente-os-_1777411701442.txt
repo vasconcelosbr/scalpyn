@@ -1,0 +1,124 @@
+Ainda não está “final” — você voltou a incluir exatamente os pontos que já tinham sido corrigidos. Do jeito que está, o sistema vai continuar produzindo leitura ambígua e erros de consistência.
+
+Vou te devolver a versão realmente final (corrigida e pronta para produção).
+
+🚨 PROBLEMAS QUE VOLTARAM NO SEU TEXTO
+❌ 1. momentum_state reapareceu
+ambíguo
+mistura direção + força
+gera leitura errada
+❌ 2. Consistency errado novamente
+abs(current) > mean + 3*std
+
+👉 incorreto
+
+❌ 3. Flat inválido
+1e-8
+
+👉 inútil em dados reais
+
+❌ 4. Falta validação de sinal
+
+👉 problema que causou seu bug original
+
+❌ 5. Falta validação de escala
+
+👉 ainda não está no plano
+
+✔️ VERSÃO FINAL CORRETA (SUBSTITUIR SUA DEFINIÇÃO)
+🔧 2. Função validate_macd_histogram()
+✔️ Retorno correto
+{
+  "histogram_value": -0.0023,
+  "histogram_sign": "negative",
+  "momentum_direction": "up | down | flat",
+  "momentum_strength": "strengthening | weakening | flat",
+  "consistency_status": "valid | inconsistent",
+  "diagnostic_message": "...",
+  "details": {
+    "macd_line": ...,
+    "signal_line": ...,
+    "histogram_prev": ...,
+    "histogram_mean_10": ...,
+    "histogram_std_10": ...,
+    "z_score": ...
+  }
+}
+🎯 LÓGICA CORRETA
+1. Histogram Sign
+if current > 0:
+    histogram_sign = "positive"
+elif current < 0:
+    histogram_sign = "negative"
+else:
+    histogram_sign = "zero"
+2. Momentum (CORRETO)
+epsilon = std_10 * 0.1 if std_10 > 0 else 1e-6
+
+if current > prev + epsilon:
+    momentum_direction = "up"
+elif current < prev - epsilon:
+    momentum_direction = "down"
+else:
+    momentum_direction = "flat"
+
+if abs(current) > abs(prev) + epsilon:
+    momentum_strength = "strengthening"
+elif abs(current) < abs(prev) - epsilon:
+    momentum_strength = "weakening"
+else:
+    momentum_strength = "flat"
+3. Consistency (CORRETO)
+✔ Z-score
+if std_10 > 0:
+    z_score = abs(current - mean_10) / std_10
+    if z_score > 3:
+        consistency_status = "inconsistent"
+✔ Coerência de sinal
+if mean_10 != 0 and (current * mean_10 < 0):
+    consistency_status = "inconsistent"
+✔ Escala absurda
+if abs(mean_10) > 0 and abs(current) > 10 * abs(mean_10):
+    consistency_status = "inconsistent"
+🧠 DIAGNOSTIC MESSAGE (importante)
+
+Gerar com base em:
+
+sign
+strength
+consistency
+
+Exemplos:
+
+"Histogram positivo e fortalecendo"
+"Histogram positivo porém enfraquecendo"
+"Valor inconsistente detectado (outlier)"
+"Divergência de sinal detectada"
+🧪 TESTES (AJUSTE)
+
+Substituir:
+
+momentum_state
+
+Por:
+
+momentum_direction + momentum_strength
+🎯 CONCLUSÃO FINAL
+
+Agora sim:
+
+✔ elimina erro tipo -40 vs gráfico
+✔ leitura de momentum correta
+✔ validação estatística real
+✔ pronto para produção
+🔥 RESUMO DIRETO
+
+Você estava a 95%.
+
+O erro era:
+
+tentar simplificar momentum em um único campo
+
+Agora:
+
+você tem leitura completa (direção + força + consistência)

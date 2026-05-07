@@ -1,0 +1,90 @@
+Backend — refinamentos
+1) Clamp também no numerador (defensivo)
+
+Evita casos raros de drift onde earned_positive ultrapassa o máximo:
+
+earned_positive = min(earned_positive, positive_possible)
+2) Evitar arredondar cedo demais
+
+Arredondar no backend pode introduzir divergência acumulada em agregações.
+
+Recomendação:
+
+Backend: manter precisão (float)
+Frontend: formatar (exibição)
+
+Se quiser manter no backend:
+
+category_score = float(f"{category_score:.4f}")
+3) Assertions → logging estruturado
+
+Em produção, não use assert (pode ser removido com otimização -O).
+
+Use:
+
+if earned_positive > positive_possible + 1e-6:
+    logger.warning("earned_positive overflow", extra={...})
+
+if penalties > 1e-6:
+    logger.warning("penalties positive anomaly", extra={...})
+4) Consistência de tipos no breakdown
+
+Garanta que tudo é serializável e consistente:
+
+"positive_possible": float(positive_possible),
+"earned_positive": float(earned_positive),
+"penalties": float(penalties),
+"final_score": float(category_score),
+5) Ordem determinística no backend (opcional, mas ideal)
+
+Já que o frontend ordena, ainda assim recomendo enviar ordenado:
+
+reduz inconsistência entre ambientes
+facilita debug
+Frontend — ajustes finos
+1) Evitar perda de informação no fmt
+
+Hoje você faz Math.round, isso pode esconder nuances.
+
+Sugestão melhor:
+
+const fmt = (v: number): string => {
+  if (Math.abs(v) < 0.5) return '0';
+  const r = Math.round(v);
+  return r > 0 ? `+${r}` : `${r}`;
+};
+2) Tooltip com precisão maior
+
+Badge: inteiro
+Tooltip: 2 casas decimais
+
+v.toFixed(2)
+3) Penalidade = 0 não deve aparecer
+if (penalty !== 0) showPenalty()
+Testes — você já está acima da média
+
+Os 14 cenários estão excelentes. Só acrescentaria:
+
+15) Drift extremo
++1e6, -1e6 → score = 0
+16) Muitos positivos + muitas penalidades
+
+→ garantir estabilidade numérica
+
+Observabilidade (muito recomendado)
+
+Log por categoria:
+
+{
+  "category": "signal",
+  "positive_possible": 30,
+  "earned_positive": 15,
+  "penalties": -15,
+  "score": 0.0
+}
+
+E monitore:
+
+média de score antes vs depois
+% de penalidades acionadas
+distribuição (histograma)

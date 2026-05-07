@@ -1,16 +1,42 @@
-"""Score Engine — calculates Alpha Score dynamically from config rules and weights."""
+"""Score Engine — thin adapter that routes ``compute_score`` through the
+robust scoring engine.
+
+After the Phase 4 cleanup the legacy 4-bucket weighted-total math was
+removed. This module keeps the original ``ScoreEngine`` shape (constructor
++ ``compute_score`` + ``get_full_breakdown`` + ``_classify``) so the API,
+``ProfileEngine``, and ``spot_scanner`` callers don't have to be rewritten,
+but every call to ``compute_score`` is delegated to
+``app.services.robust_indicators.compute_asset_score``.
+
+What was removed:
+  * ``_evaluate_category_rules`` — the per-bucket positive/penalty math.
+  * The 4-bucket weighted-total formula in ``compute_score``.
+  * Reading ``self.weights`` (kept on the instance for back-compat but no
+    longer drives scoring).
+
+What was kept (observability primitives, no scoring math):
+  * ``_evaluate_rule`` / ``_get_matched_rules`` / ``get_full_breakdown`` —
+    used by the drilldown UI to show "did this rule's indicator condition
+    match?". These never did scoring math themselves.
+  * ``_classify`` — threshold-band classification for the robust score.
+  * ``merge_score_config`` / ``hydrate_profile_scoring`` /
+    ``resolve_profile_scoring_rules`` / ``resolve_rule_category`` — config
+    helpers used by the API layer; unchanged.
+"""
 
 from copy import deepcopy
 import logging
 import math
 import operator as op
-from typing import Dict, Any, List, Optional, Set
+
+from .indicator_validity import unwrap_envelope_value
+from typing import Dict, Any, List, Optional, Set, Tuple
 
 # ── Display labels per indicator name ─────────────────────────────────────────
 _IND_LABELS: Dict[str, str] = {
     "rsi": "RSI", "volume_spike": "Vol Spike",
-    "taker_ratio": "Taker Ratio (buy/sell)",
-    "buy_pressure": "Buy Pressure (0-1)",
+    "taker_ratio": "Taker Ratio (buy/(buy+sell))",
+    "buy_pressure": "Buy Pressure (buy/(buy+sell))",
     "taker_buy_volume": "Taker Buy Vol", "taker_sell_volume": "Taker Sell Vol",
     "adx": "ADX", "macd_histogram": "MACD Hist", "macd": "MACD",
     "macd_signal": "MACD Signal", "ema9_gt_ema50": "EMA 9>50",
@@ -25,13 +51,12 @@ _IND_LABELS: Dict[str, str] = {
 }
 
 # ── Category per indicator name ────────────────────────────────────────────────
-# taker_ratio  = buy / sell          → [0, ∞)  → lives in "signal" (threshold > 1)
-# buy_pressure = buy / (buy + sell)  → [0, 1]  → lives in "liquidity" (threshold > 0.5)
 _IND_CATEGORY: Dict[str, str] = {
     "volume_spike": "liquidity", "volume_24h": "liquidity",
     "spread_pct": "liquidity", "orderbook_depth_usdt": "liquidity",
     "obv": "liquidity",
-    "buy_pressure": "liquidity",          # buy/(buy+sell), [0, 1]
+    "buy_pressure": "liquidity",
+    "taker_ratio":  "liquidity",
     "taker_buy_volume": "liquidity",
     "taker_sell_volume": "liquidity",
     "adx": "market_structure", "ema_trend": "market_structure",
@@ -43,7 +68,6 @@ _IND_CATEGORY: Dict[str, str] = {
     "macd_histogram": "momentum", "stoch_k": "momentum",
     "stoch_d": "momentum", "zscore": "momentum", "vwap_distance_pct": "momentum",
     "ema9_distance_pct": "momentum",
-    "taker_ratio": "signal",              # buy/sell, [0, ∞), threshold > 1 meaningful
     "adx_acceleration": "signal", "volume_delta": "signal",
     "funding_rate": "signal", "ema9_gt_ema50": "signal",
     "ema50_gt_ema200": "signal", "ema_full_alignment": "signal",
@@ -103,11 +127,10 @@ def resolve_profile_scoring_rules(
 
     Priority order (first non-empty wins):
     1. ``scoring.selected_rule_ids`` — explicit list of rule IDs chosen in the
-       Scoring tab of the profile editor (new contract, decoupled from Filters).
-    2. ``filters.conditions[].rule_id`` — legacy coupling where filter conditions
-       referenced global rules; kept for backward compatibility.
-    3. Free-form field/operator/value match against global rules — for even
-       older profiles that pre-date rule IDs in conditions.
+       Scoring tab of the profile editor.
+    2. ``filters.conditions[].rule_id`` — legacy coupling where filter
+       conditions referenced global rules; kept for backward compatibility.
+    3. Free-form field/operator/value match against global rules.
     4. Full global rule set — fallback when no match is found.
     """
     if not global_rules:
@@ -116,7 +139,6 @@ def resolve_profile_scoring_rules(
     if not profile_config:
         return list(global_rules)
 
-    # ── 1. New: scoring.selected_rule_ids ────────────────────────────────────
     scoring_section = profile_config.get("scoring") or {}
     selected_ids_new = scoring_section.get("selected_rule_ids") or []
     if selected_ids_new:
@@ -127,7 +149,6 @@ def resolve_profile_scoring_rules(
         if selected:
             return selected
 
-    # ── 2. Legacy: filters.conditions[].rule_id ───────────────────────────────
     conditions = ((profile_config.get("filters") or {}).get("conditions") or [])
 
     selected_rule_ids = {
@@ -146,7 +167,6 @@ def resolve_profile_scoring_rules(
     if not conditions:
         return list(global_rules)
 
-    # ── 3. Legacy: field/operator/value matching ──────────────────────────────
     matched_rules: List[Dict[str, Any]] = []
     seen_ids: Set[str] = set()
     for cond in conditions:
@@ -166,15 +186,7 @@ def merge_score_config(
     global_config: Dict[str, Any],
     profile_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Merge global score config (/settings/score) with profile scoring weights.
-
-    Rules always come from the global config.  Weights come from the profile's
-    ``config.scoring.weights`` when the profile has scoring enabled; otherwise
-    the global weights are used.
-
-    This ensures every watchlist score respects the user-configured rules while
-    honouring per-profile weight customisations (Alpha Score Weights).
-    """
+    """Merge global score config with profile scoring weights."""
     merged = deepcopy(global_config)
     global_rules = (
         merged.get("scoring_rules")
@@ -188,7 +200,6 @@ def merge_score_config(
 
     scoring_section = profile_config.get("scoring") or {}
 
-    # Only apply profile weights when scoring is explicitly enabled
     if scoring_section.get("enabled") is False:
         return merged
 
@@ -234,118 +245,145 @@ OPERATORS = {
 }
 
 
+_LEGACY_BUCKETS = ("liquidity", "market_structure", "momentum", "signal")
+
+
 class ScoreEngine:
-    """Calculates Alpha Score using weights and scoring rules from config."""
+    """Thin adapter — every ``compute_score`` call routes through the robust
+    deterministic engine (Task #211). The legacy 4-bucket math was removed in
+    Phase 4.
+
+    The instance still accepts the legacy config shape (``weights`` /
+    ``scoring_rules`` / ``rules`` / ``thresholds``) so existing callers
+    don't break, but only ``rules`` and ``thresholds`` are read at score
+    time. ``weights`` is retained on the instance for backward compatibility
+    only (the robust engine has no per-category weighting).
+    """
 
     def __init__(self, score_config: Dict[str, Any]):
-        self.config = score_config
-        self.weights = score_config.get("weights", {
+        self.config = score_config or {}
+        self.weights = self.config.get("weights", {
             "liquidity": 35, "market_structure": 25, "momentum": 25, "signal": 15
         })
         # Accept both "scoring_rules" (global config key) and "rules" (profile scoring key)
         self.rules = (
-            score_config.get("scoring_rules")
-            or score_config.get("rules")
+            self.config.get("scoring_rules")
+            or self.config.get("rules")
             or []
         )
-        self.thresholds = score_config.get("thresholds", {
+        self.thresholds = self.config.get("thresholds", {
             "strong_buy": 80, "buy": 65, "neutral": 40
         })
 
-    def compute_alpha_score(self, indicators: Dict[str, Any]) -> Dict[str, Any]:
-        """Compute the composite Alpha Score from indicator values.
+    def _robust_payload(
+        self, indicators: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Single point that calls the robust scoring engine.
 
-        Returns dict with: total_score, classification, component scores, matched rules.
+        Both ``compute_score`` and ``get_full_breakdown`` route through
+        here so a hot caller can run the robust math exactly once per
+        asset and still get a fully-shaped response from each method
+        (via ``compute_score_with_breakdown``). Returns ``None`` when
+        the engine rejects (critical/confidence gate, sparse fixtures)
+        or raises — caller decides whether to render legacy fallback.
         """
         if not indicators:
-            return {"total_score": 0, "classification": "no_data", "components": {}}
+            return None
+        from .robust_indicators import compute_asset_score
 
-        category_summaries = {
-            category: self._evaluate_category_rules(indicators, category)
-            for category in ("liquidity", "market_structure", "momentum", "signal")
-        }
-
-        component_scores = {
-            category: (
-                round(min(100.0, (summary["earned_points"] / summary["possible_points"]) * 100), 2)
-                if summary["possible_points"] > 0
-                else 0.0
+        symbol = str(indicators.get("symbol") or "ADAPTER")
+        flow_hint = (
+            indicators.get("taker_source")
+            if isinstance(indicators, dict) else None
+        )
+        try:
+            return compute_asset_score(
+                symbol,
+                indicators,
+                self.rules,
+                is_futures=False,
+                flow_source_hint=flow_hint,
             )
-            for category, summary in category_summaries.items()
+        except Exception as exc:
+            logger.debug("ScoreEngine._robust_payload: failed: %s", exc)
+            return None
+
+    def compute_score(self, indicators: Dict[str, Any]) -> Dict[str, Any]:
+        """Compute the Alpha Score via the robust engine, shaped like the
+        legacy response so callers (API, profile_engine, spot_scanner)
+        keep working.
+
+        Returns dict with: ``total_score``, ``classification``,
+        ``components`` (legacy bucket keys + ``engine``/confidence
+        breadcrumbs), ``category_summaries``, ``matched_rules``.
+        """
+        if not indicators:
+            return self._empty_response("no_data")
+
+        payload = self._robust_payload(indicators)
+
+        # Robust matched rules carry IDs (and confidence weighting). The
+        # legacy ``_get_matched_rules`` is still useful as a fallback for
+        # observability when the robust engine rejects (e.g. sparse test
+        # fixtures with no envelopes) — it tells the UI which rule
+        # *conditions* matched even when no score could be produced.
+        if payload is None:
+            return self._empty_response(
+                "no_data",
+                matched_rules=self._get_matched_rules(indicators),
+            )
+
+        total_score = float(payload.get("score", 0.0))
+        return {
+            "total_score": round(total_score, 2),
+            "classification": self._classify(total_score),
+            "components": {
+                # Legacy bucket keys preserved for response-shape compatibility.
+                # The robust engine works at the indicator level (no per-bucket
+                # math), so these are reported as ``0.0`` and the real signal
+                # lives in ``engine`` + the confidence fields below.
+                "liquidity_score": 0.0,
+                "market_structure_score": 0.0,
+                "momentum_score": 0.0,
+                "signal_score": 0.0,
+                "engine": "robust",
+                "score_confidence": float(payload.get("score_confidence", 0.0)),
+                "global_confidence": float(payload.get("global_confidence", 0.0)),
+            },
+            "category_summaries": {},
+            "matched_rules": [
+                m.get("rule_id") if isinstance(m, dict) else m
+                for m in (payload.get("matched_rules") or [])
+            ],
         }
 
-        # Apply weights only to categories that have active scoring rules.
-        w = self.weights
-        weighted_categories = [
-            category for category, summary in category_summaries.items()
-            if summary["possible_points"] > 0
-        ]
-        total_weight = sum(w.get(category, 25) for category in weighted_categories)
-
-        if total_weight > 0:
-            total_score = sum(
-                component_scores[category] * w.get(category, 25)
-                for category in weighted_categories
-            ) / total_weight
-        else:
-            total_score = 0.0
-
-        total_score = round(min(100, max(0, total_score)), 2)
-
-        # Classification
-        classification = self._classify(total_score) if total_weight > 0 else "no_data"
-
+    def _empty_response(
+        self,
+        classification: str,
+        *,
+        matched_rules: Optional[List[Any]] = None,
+    ) -> Dict[str, Any]:
         return {
-            "total_score": total_score,
+            "total_score": 0.0,
             "classification": classification,
             "components": {
-                "liquidity_score": component_scores["liquidity"],
-                "market_structure_score": component_scores["market_structure"],
-                "momentum_score": component_scores["momentum"],
-                "signal_score": component_scores["signal"],
+                "liquidity_score": 0.0,
+                "market_structure_score": 0.0,
+                "momentum_score": 0.0,
+                "signal_score": 0.0,
+                "engine": "robust",
+                "score_confidence": 0.0,
+                "global_confidence": 0.0,
             },
-            "matched_rules": self._get_matched_rules(indicators),
+            "category_summaries": {},
+            "matched_rules": list(matched_rules or []),
         }
 
-    def _evaluate_category_rules(self, indicators: Dict[str, Any], category: str) -> Dict[str, float]:
-        """Evaluate scoring rules and summarize earned vs. possible points.
-
-        Each rule is assigned to exactly ONE category based on _IND_CATEGORY
-        (the canonical mapping).  This prevents double-counting — e.g. an
-        ``ema_trend`` rule counts only in ``market_structure``, never also in
-        ``signal``.
-
-        Rules are mapped to categories by indicator type:
-        - liquidity:        volume_spike, volume_24h, spread_pct, orderbook_depth_usdt, obv,
-                            buy_pressure (buy/(buy+sell), 0-1), taker_buy_volume, taker_sell_volume
-        - market_structure: adx, ema_trend, atr, atr_pct, psar_trend, bb_width, di_plus, di_minus, di_trend
-        - momentum:         rsi, macd, macd_signal, macd_histogram, stoch_k, stoch_d, zscore, vwap_distance_pct
-        - signal:           taker_ratio (buy/sell, 0-∞), adx_acceleration, volume_delta, funding_rate,
-                            ema9_gt_ema50, ema50_gt_ema200, ema_full_alignment
-
-        buy_pressure  = buy / (buy + sell)  → [0, 1],  equilibrium = 0.5
-        taker_ratio   = buy / sell          → [0, ∞),  equilibrium ≈ 1.0
-        """
-        earned_points = 0.0
-        possible_points = 0.0
-
-        for rule in self.rules:
-            # Use _IND_CATEGORY as the single source of truth for which
-            # category an indicator belongs to.  Default to "other" so that
-            # unknown indicators are never silently dropped into a wrong bucket.
-            rule_category = resolve_rule_category(rule)
-            if rule_category != category:
-                continue
-
-            points = float(rule.get("points") if rule.get("points") is not None else 0)
-            possible_points += points
-            if self._evaluate_rule(rule, indicators):
-                earned_points += points
-
-        return {
-            "earned_points": earned_points,
-            "possible_points": possible_points,
-        }
+    # ── Observability primitives (rule pass/fail evaluation) ──────────────────
+    # These never did scoring math themselves — they're used by the
+    # drilldown UI to show whether each rule's indicator condition matched.
+    # Kept verbatim from the pre-Phase-4 implementation so the drilldown
+    # response shape is unchanged.
 
     def _evaluate_rule(self, rule: Dict[str, Any], indicators: Dict[str, Any]) -> bool:
         """Evaluate a single scoring rule against indicator values."""
@@ -353,20 +391,26 @@ class ScoreEngine:
         operator_str = rule.get("operator", "")
         target_value = rule.get("value")
 
+        def get_indicator_value(name: str) -> Any:
+            # Indicator payloads use the envelope shape
+            # ``{"value": v, "status": ...}``. Unwrap so every operator
+            # below compares against the scalar instead of the dict.
+            return unwrap_envelope_value(indicators.get(name))
+
         # Special EMA trend operators
         if operator_str == "ema9>ema50>ema200":
-            return bool(indicators.get("ema_full_alignment", False))
+            return bool(get_indicator_value("ema_full_alignment") or False)
         elif operator_str == "ema9>ema50":
-            return bool(indicators.get("ema9_gt_ema50", False))
+            return bool(get_indicator_value("ema9_gt_ema50") or False)
         elif operator_str == "ema50>ema200":
-            return bool(indicators.get("ema50_gt_ema200", False))
+            return bool(get_indicator_value("ema50_gt_ema200") or False)
         elif operator_str == "ema9<ema50":
-            return not bool(indicators.get("ema9_gt_ema50", True))
+            return not bool(get_indicator_value("ema9_gt_ema50") or True)
 
-        # DI directional comparison: DI+ > DI- (real trend confirmation, not just DI+ > 0)
+        # DI directional comparison
         if operator_str == "di+>di-":
-            di_plus = indicators.get("di_plus")
-            di_minus = indicators.get("di_minus")
+            di_plus = get_indicator_value("di_plus")
+            di_minus = get_indicator_value("di_minus")
             if di_plus is None or di_minus is None:
                 return False
             try:
@@ -374,8 +418,8 @@ class ScoreEngine:
             except (TypeError, ValueError):
                 return False
         if operator_str == "di->di+":
-            di_plus = indicators.get("di_plus")
-            di_minus = indicators.get("di_minus")
+            di_plus = get_indicator_value("di_plus")
+            di_minus = get_indicator_value("di_minus")
             if di_plus is None or di_minus is None:
                 return False
             try:
@@ -385,26 +429,25 @@ class ScoreEngine:
 
         # ADX acceleration operators
         if operator_str == ">prev+" and indicator_name == "adx_acceleration":
-            accel = indicators.get("adx_acceleration")
+            accel = get_indicator_value("adx_acceleration")
             if accel is None:
                 return False
             return accel > (target_value or 0)
         elif operator_str == ">prev" and indicator_name == "adx_acceleration":
-            accel = indicators.get("adx_acceleration")
+            accel = get_indicator_value("adx_acceleration")
             if accel is None:
                 return False
             return accel > 0
 
-        # String equality (e.g., macd_signal = "positive")
+        # String equality
         if operator_str == "=" and isinstance(target_value, str):
-            return indicators.get(indicator_name) == target_value
+            return get_indicator_value(indicator_name) == target_value
 
         # Standard numeric operators
-        actual_value = indicators.get(indicator_name)
+        actual_value = get_indicator_value(indicator_name)
         if actual_value is None:
             return False
 
-        # Between operator — uses min/max fields instead of value
         if operator_str == "between":
             min_val = rule.get("min", 0)
             max_val = rule.get("max", 100)
@@ -429,21 +472,68 @@ class ScoreEngine:
         return False
 
     def _get_matched_rules(self, indicators: Dict[str, Any]) -> List[str]:
-        """Return list of rule IDs that matched."""
+        """Return list of rule IDs whose indicator conditions matched."""
         matched = []
         for rule in self.rules:
             if self._evaluate_rule(rule, indicators):
                 matched.append(rule.get("id", "unknown"))
         return matched
 
-    def get_full_breakdown(self, indicators: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def get_full_breakdown(
+        self,
+        indicators: Dict[str, Any],
+        *,
+        score_payload: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
         """Return per-rule detailed breakdown for transparency/drilldown UI.
 
-        Each element:
-          id, indicator, label, operator, target_value, min, max,
-          actual_value, passed, points_awarded, points_possible,
-          condition_text, category
+        Task #211: scoring is now deterministic — ``awarded_points`` equals
+        the configured ``points`` for every matched rule (no confidence
+        weighting). ``indicator_confidence`` is preserved per rule for
+        observability / tooltips but does NOT reduce the awarded points.
+
+        Args:
+            indicators:    indicator dict (same shape ``compute_score``
+                           takes).
+            score_payload: optional pre-computed result of
+                           ``compute_asset_score(...)`` for this same
+                           asset. When provided, the breakdown reuses
+                           ``payload['matched_rules']`` instead of
+                           re-running the robust engine — eliminates the
+                           duplicate scoring call hot callers (pipeline
+                           refresh, watchlist trace) would otherwise pay.
+                           Pass ``None`` to keep the legacy self-contained
+                           behaviour.
         """
+        robust_lookup: Dict[str, Dict[str, float]] = {}
+        evaluated_ids: set = set()
+        payload: Optional[Dict[str, Any]] = (
+            score_payload
+            if score_payload is not None
+            else self._robust_payload(indicators)
+        )
+        try:
+            if payload:
+                for matched in (payload.get("matched_rules") or []):
+                    if not isinstance(matched, dict):
+                        continue
+                    rid = matched.get("rule_id")
+                    if rid is None:
+                        continue
+                    robust_lookup[str(rid)] = {
+                        "awarded_points": float(matched.get("awarded_points", matched.get("points", 0.0))),
+                        "indicator_confidence": float(matched.get("confidence", 0.0)),
+                        "data_available": bool(matched.get("data_available", True)),
+                    }
+                for eid in (payload.get("evaluated_rule_ids") or []):
+                    evaluated_ids.add(str(eid))
+        except Exception as exc:
+            logger.debug(
+                "get_full_breakdown: robust enrichment failed (%s); "
+                "rendering nominal-only breakdown",
+                exc,
+            )
+
         result = []
         for rule in self.rules:
             indicator = rule.get("indicator", "")
@@ -451,38 +541,45 @@ class ScoreEngine:
             target = rule.get("value")
             pts = float(rule.get("points", 0))
 
-            # ── Resolve actual_value and human-readable condition text ──
             lbl = _IND_LABELS.get(indicator, indicator.upper())
 
+            # All reads below go through the unwrap helper so envelope
+            # payloads ({"value": v, "status": "VALID"}) are interpreted
+            # by their scalar payload rather than by dict truthiness.
+            def _ind(key: str) -> Any:
+                return unwrap_envelope_value(indicators.get(key))
+
             if operator_str == "ema9>ema50>ema200":
-                actual: Any = bool(indicators.get("ema_full_alignment", False))
+                actual: Any = bool(_ind("ema_full_alignment") or False)
                 cond = "EMA 9>50>200"
             elif operator_str == "ema9>ema50":
-                actual = bool(indicators.get("ema9_gt_ema50", False))
+                actual = bool(_ind("ema9_gt_ema50") or False)
                 cond = "EMA 9>50"
             elif operator_str == "ema9<ema50":
-                actual = not bool(indicators.get("ema9_gt_ema50", True))
+                _flag = _ind("ema9_gt_ema50")
+                actual = not bool(_flag if _flag is not None else True)
                 cond = "EMA 9<50"
             elif operator_str == "ema50>ema200":
-                actual = bool(indicators.get("ema50_gt_ema200", False))
+                actual = bool(_ind("ema50_gt_ema200") or False)
                 cond = "EMA 50>200"
             elif operator_str == "di+>di-":
-                actual = indicators.get("di_plus")
+                actual = _ind("di_plus")
                 cond = "DI+ > DI-"
             elif operator_str == "di->di+":
-                actual = indicators.get("di_minus")
+                actual = _ind("di_minus")
                 cond = "DI- > DI+"
             elif operator_str == "between":
-                actual = indicators.get(indicator)
+                actual = _ind(indicator)
                 mn, mx = rule.get("min", 0), rule.get("max", 100)
                 cond = f"{lbl} {mn}–{mx}"
             else:
-                actual = indicators.get(indicator)
+                actual = _ind(indicator)
                 cond = f"{lbl} {operator_str} {target}" if target is not None else f"{lbl} {operator_str}"
 
             passed = self._evaluate_rule(rule, indicators)
-            result.append({
-                "id": rule.get("id", f"{indicator}_{operator_str}"),
+            rule_id = rule.get("id", f"{indicator}_{operator_str}")
+            entry: Dict[str, Any] = {
+                "id": rule_id,
                 "indicator": indicator,
                 "label": lbl,
                 "operator": operator_str,
@@ -491,12 +588,69 @@ class ScoreEngine:
                 "max": rule.get("max"),
                 "actual_value": actual if not isinstance(actual, dict) else None,
                 "passed": passed,
-                "points_awarded": pts if passed else 0.0,
-                "points_possible": pts,
+                "points_awarded": float(pts) if passed else 0.0,
+                "points_possible": float(pts),
+                "type": "positive" if pts > 0 else ("penalty" if pts < 0 else "neutral"),
                 "condition_text": cond,
                 "category": resolve_rule_category(rule),
-            })
-        return result
+            }
+            robust_info = robust_lookup.get(str(rule_id))
+            if robust_info is not None:
+                entry["awarded_points"] = robust_info["awarded_points"]
+                entry["indicator_confidence"] = robust_info["indicator_confidence"]
+                entry["data_available"] = robust_info["data_available"]
+            elif payload is not None and pts > 0:
+                data_avail = str(rule_id) in evaluated_ids
+                entry["awarded_points"] = float(pts) if (passed and data_avail) else 0.0
+                entry["indicator_confidence"] = 0.0
+                entry["data_available"] = data_avail
+            result.append(entry)
+
+        positive_rules = [r for r in result if r["type"] == "positive"]
+        penalty_rules  = [r for r in result if r["type"] == "penalty"]
+        positive_rules.sort(key=lambda r: -(r["points_possible"] or 0))
+        penalty_rules.sort(key=lambda r:  (r["points_possible"] or 0))
+        return positive_rules + penalty_rules
+
+    def compute_score_with_breakdown(
+        self, indicators: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """Convenience for hot paths (pipeline_watchlists, watchlists) that
+        need both ``compute_score`` *and* ``get_full_breakdown`` for the
+        same asset. Runs the robust engine exactly once and threads the
+        payload into both consumers — eliminates the duplicate scoring
+        call that the per-method API would incur.
+        """
+        payload = self._robust_payload(indicators) if indicators else None
+        if not indicators:
+            score = self._empty_response("no_data")
+        elif payload is None:
+            score = self._empty_response(
+                "no_data",
+                matched_rules=self._get_matched_rules(indicators),
+            )
+        else:
+            total_score = float(payload.get("score", 0.0))
+            score = {
+                "total_score": round(total_score, 2),
+                "classification": self._classify(total_score),
+                "components": {
+                    "liquidity_score": 0.0,
+                    "market_structure_score": 0.0,
+                    "momentum_score": 0.0,
+                    "signal_score": 0.0,
+                    "engine": "robust",
+                    "score_confidence": float(payload.get("score_confidence", 0.0)),
+                    "global_confidence": float(payload.get("global_confidence", 0.0)),
+                },
+                "category_summaries": {},
+                "matched_rules": [
+                    m.get("rule_id") if isinstance(m, dict) else m
+                    for m in (payload.get("matched_rules") or [])
+                ],
+            }
+        breakdown = self.get_full_breakdown(indicators, score_payload=payload)
+        return score, breakdown
 
     def _classify(self, score: float) -> str:
         if score >= self.thresholds.get("strong_buy", 80):

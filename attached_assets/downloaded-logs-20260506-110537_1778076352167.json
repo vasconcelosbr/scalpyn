@@ -1,0 +1,1015 @@
+[
+  {
+    "textPayload": "2026-05-06 14:03:00.562 UTC [153203]: [36-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b21e;b=611034922472440d996701ab4475db58;m=228675ac06;t=651269d05ebe7;x=e9ca5fec9a9d7ffe-0@an",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:00.562533Z",
+    "severity": "ERROR",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "LOG_BUCKET_NUM": "55"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:03.049887866Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:02.864 UTC [153293]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b2f5;b=611034922472440d996701ab4475db58;m=2288a53363;t=651269f357344;x=141bcd9c5a44bb47-0@a2",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:02.864684Z",
+    "severity": "ERROR",
+    "labels": {
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "LOG_BUCKET_NUM": "55",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:03.556477069Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:02.873 UTC [153299]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b2f5;b=611034922472440d996701ab4475db58;m=2288a53363;t=651269f357344;x=141bcd9c5a44bb47-0@a5",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:02.873579Z",
+    "severity": "ERROR",
+    "labels": {
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "LOG_BUCKET_NUM": "55",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:03.556477069Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:02.882 UTC [153294]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b2f5;b=611034922472440d996701ab4475db58;m=2288a53363;t=651269f357344;x=141bcd9c5a44bb47-0@a8",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:02.882531Z",
+    "severity": "ERROR",
+    "labels": {
+      "LOG_BUCKET_NUM": "55",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:03.556477069Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:02.894 UTC [153300]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b2f5;b=611034922472440d996701ab4475db58;m=2288a53363;t=651269f357344;x=141bcd9c5a44bb47-0@ab",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:02.894721Z",
+    "severity": "ERROR",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "LOG_BUCKET_NUM": "55"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:03.556477069Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:03.235 UTC [153228]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b2f5;b=611034922472440d996701ab4475db58;m=2288a53363;t=651269f357344;x=141bcd9c5a44bb47-0@ak",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:03.235571Z",
+    "severity": "ERROR",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "LOG_BUCKET_NUM": "55"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:03.556477069Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:03.254 UTC [153224]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b345;b=611034922472440d996701ab4475db58;m=2288b8cd49;t=651269f490d29;x=25425694bc5a04dd-0@a2",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:03.254693Z",
+    "severity": "ERROR",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "LOG_BUCKET_NUM": "55"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:04.712773704Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:03.271 UTC [153227]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b345;b=611034922472440d996701ab4475db58;m=2288b8cd49;t=651269f490d29;x=25425694bc5a04dd-0@a5",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:03.271820Z",
+    "severity": "ERROR",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "LOG_BUCKET_NUM": "55"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:04.712773704Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:03.624 UTC [153269]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b345;b=611034922472440d996701ab4475db58;m=2288b8cd49;t=651269f490d29;x=25425694bc5a04dd-0@a8",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:03.626296Z",
+    "severity": "ERROR",
+    "labels": {
+      "LOG_BUCKET_NUM": "55",
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:04.712773704Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:03.642 UTC [153225]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b345;b=611034922472440d996701ab4475db58;m=2288b8cd49;t=651269f490d29;x=25425694bc5a04dd-0@ab",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:03.642705Z",
+    "severity": "ERROR",
+    "labels": {
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "LOG_BUCKET_NUM": "55",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:04.712773704Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:03.643 UTC [153270]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b345;b=611034922472440d996701ab4475db58;m=2288b8cd49;t=651269f490d29;x=25425694bc5a04dd-0@ae",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:03.643752Z",
+    "severity": "ERROR",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "LOG_BUCKET_NUM": "55"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:04.712773704Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:03.654 UTC [153226]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b345;b=611034922472440d996701ab4475db58;m=2288b8cd49;t=651269f490d29;x=25425694bc5a04dd-0@ah",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:03.655028Z",
+    "severity": "ERROR",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "LOG_BUCKET_NUM": "55",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:04.712773704Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:03.666 UTC [153268]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b345;b=611034922472440d996701ab4475db58;m=2288b8cd49;t=651269f490d29;x=25425694bc5a04dd-0@ak",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:03.666448Z",
+    "severity": "ERROR",
+    "labels": {
+      "LOG_BUCKET_NUM": "55",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:04.712773704Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:03.674 UTC [153291]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b345;b=611034922472440d996701ab4475db58;m=2288b8cd49;t=651269f490d29;x=25425694bc5a04dd-0@an",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:03.674354Z",
+    "severity": "ERROR",
+    "labels": {
+      "LOG_BUCKET_NUM": "55",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:04.712773704Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:04.024 UTC [153229]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b345;b=611034922472440d996701ab4475db58;m=2288b8cd49;t=651269f490d29;x=25425694bc5a04dd-0@aw",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:04.024938Z",
+    "severity": "ERROR",
+    "labels": {
+      "LOG_BUCKET_NUM": "55",
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:04.712773704Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:04.033 UTC [153231]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b345;b=611034922472440d996701ab4475db58;m=2288b8cd49;t=651269f490d29;x=25425694bc5a04dd-0@az",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:04.033542Z",
+    "severity": "ERROR",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "LOG_BUCKET_NUM": "55"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:04.712773704Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:04.042 UTC [153230]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b345;b=611034922472440d996701ab4475db58;m=2288b8cd49;t=651269f490d29;x=25425694bc5a04dd-0@b12",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:04.043026Z",
+    "severity": "ERROR",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "LOG_BUCKET_NUM": "55"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:04.712773704Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:04.049 UTC [153273]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b345;b=611034922472440d996701ab4475db58;m=2288b8cd49;t=651269f490d29;x=25425694bc5a04dd-0@b15",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:04.050350Z",
+    "severity": "ERROR",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "LOG_BUCKET_NUM": "55",
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:04.712773704Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:04.058 UTC [153275]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b345;b=611034922472440d996701ab4475db58;m=2288b8cd49;t=651269f490d29;x=25425694bc5a04dd-0@b18",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:04.058850Z",
+    "severity": "ERROR",
+    "labels": {
+      "LOG_BUCKET_NUM": "55",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:04.712773704Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:04.067 UTC [153272]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b345;b=611034922472440d996701ab4475db58;m=2288b8cd49;t=651269f490d29;x=25425694bc5a04dd-0@b1b",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:04.067540Z",
+    "severity": "ERROR",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "LOG_BUCKET_NUM": "55"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:04.712773704Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:04.136 UTC [153203]: [41-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b345;b=611034922472440d996701ab4475db58;m=2288b8cd49;t=651269f490d29;x=25425694bc5a04dd-0@b1e",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:04.137290Z",
+    "severity": "ERROR",
+    "labels": {
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "LOG_BUCKET_NUM": "55",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:04.712773704Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:04.492 UTC [153276]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b40f;b=611034922472440d996701ab4475db58;m=2288c68ed4;t=651269f56ceb5;x=53ae5c86fb0fbab5-0@a5",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:04.493354Z",
+    "severity": "ERROR",
+    "labels": {
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "LOG_BUCKET_NUM": "55",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:06.108756650Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:16.368 UTC [153203]: [46-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b433;b=611034922472440d996701ab4475db58;m=2288cbfdcc;t=651269f5c3dad;x=2112162cd4c1b972-0@a3",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:16.368289Z",
+    "severity": "ERROR",
+    "labels": {
+      "LOG_BUCKET_NUM": "55",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:32.481877805Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:20.548 UTC [153206]: [2-1] db=scalpyn,user=postgres,host=[local] FATAL:  connection to client lost",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b433;b=611034922472440d996701ab4475db58;m=2288cbfdcc;t=651269f5c3dad;x=2112162cd4c1b972-0@a9",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:20.549637Z",
+    "severity": "ALERT",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "LOG_BUCKET_NUM": "55",
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:32.481877805Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:20.548 UTC [153279]: [2-1] db=scalpyn,user=postgres,host=[local] FATAL:  connection to client lost",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b433;b=611034922472440d996701ab4475db58;m=2288cbfdcc;t=651269f5c3dad;x=2112162cd4c1b972-0@ac",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:20.550145Z",
+    "severity": "ALERT",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "LOG_BUCKET_NUM": "55",
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:32.481877805Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:03:25.683 UTC [153217]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b433;b=611034922472440d996701ab4475db58;m=2288cbfdcc;t=651269f5c3dad;x=2112162cd4c1b972-0@am",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:25.684355Z",
+    "severity": "ERROR",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "LOG_BUCKET_NUM": "55",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:03:32.481877805Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/app/services/microstructure_scheduler_service.py\", line 255, in _refresh_market_metadata\n    await db.execute(text(\"\"\"\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py\", line 449, in execute\n    result = await greenlet_spawn(\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 203, in greenlet_spawn\n    result = context.switch(value)\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2351, in execute\n    return self._execute_internal(\n           ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2258, in _execute_internal\n    result = conn.execute(\n             ^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1419, in execute\n    return meth(\n           ^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/elements.py\", line 527, in _execute_on_connection\n    return connection._execute_clauseelement(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1641, in _execute_clauseelement\n    ret = self._execute_context(\n          ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1846, in _execute_context\n    return self._exec_single_context(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1986, in _exec_single_context\n    self._handle_dbapi_exception(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 2366, in _handle_dbapi_exception\n    raise exc_info[1].with_traceback(exc_info[2])\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1967, in _exec_single_context\n    self.dialect.do_execute(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py\", line 952, in do_execute\n    cursor.execute(statement, parameters)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 585, in execute\n    self._adapt_connection.await_(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 563, in _prepare_and_execute\n    self._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 513, in _handle_exception\n    self._adapt_connection._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 799, in _handle_exception\n    raise error\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 550, in _prepare_and_execute\n    self._rows = deque(await prepared_stmt.fetch(*parameters))\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 177, in fetch\n    data = await self.__bind_execute(args, 0, timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 268, in __bind_execute\n    data, status, _ = await self.__do_execute(\n                      ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 257, in __do_execute\n    return await executor(protocol)\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"asyncpg/protocol/protocol.pyx\", line 205, in bind_execute",
+    "insertId": "69fb4a2d000a9ce27a8a36b0",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "scalpyn-00422-7mp",
+        "project_id": "clickrate-477217",
+        "location": "us-central1",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-06T14:03:25.695522Z",
+    "severity": "ERROR",
+    "labels": {
+      "gcb-build-id": "57a15fdc-f10e-4ac6-9963-54b4e5c00820",
+      "gcb-trigger-region": "global",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "commit-sha": "747f32b4f796aaf2e4db010dd0e4ca693e7d9c57",
+      "instanceId": "0007b734d93f06727b3036ec51832b2ef19c20ca2d4e38e0e7f80b16e96acacd30d6b48dcb59dc7b290454071abdb1731fde72a8bec58afffa62df3772d0199f5332a426e40aad4674c75d6214e7"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-06T14:03:25.821238088Z",
+    "errorGroups": [
+      {
+        "id": "CPWDqLSKh4CnuAE"
+      }
+    ]
+  },
+  {
+    "textPayload": "2026-05-06 14:04:24.622 UTC [153335]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b6a7;b=611034922472440d996701ab4475db58;m=228d2830aa;t=65126a3b8708b;x=111f037cd72a0edc-0@a8",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-06T14:04:24.622931Z",
+    "severity": "ERROR",
+    "labels": {
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "LOG_BUCKET_NUM": "55",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:04:33.293146547Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/app/services/structural_scheduler_service.py\", line 201, in _refresh_market_metadata\n    await db.execute(text(\"\"\"\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py\", line 449, in execute\n    result = await greenlet_spawn(\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 203, in greenlet_spawn\n    result = context.switch(value)\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2351, in execute\n    return self._execute_internal(\n           ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2258, in _execute_internal\n    result = conn.execute(\n             ^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1419, in execute\n    return meth(\n           ^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/elements.py\", line 527, in _execute_on_connection\n    return connection._execute_clauseelement(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1641, in _execute_clauseelement\n    ret = self._execute_context(\n          ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1846, in _execute_context\n    return self._exec_single_context(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1986, in _exec_single_context\n    self._handle_dbapi_exception(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 2366, in _handle_dbapi_exception\n    raise exc_info[1].with_traceback(exc_info[2])\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1967, in _exec_single_context\n    self.dialect.do_execute(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py\", line 952, in do_execute\n    cursor.execute(statement, parameters)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 585, in execute\n    self._adapt_connection.await_(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 563, in _prepare_and_execute\n    self._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 513, in _handle_exception\n    self._adapt_connection._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 799, in _handle_exception\n    raise error\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 550, in _prepare_and_execute\n    self._rows = deque(await prepared_stmt.fetch(*parameters))\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 177, in fetch\n    data = await self.__bind_execute(args, 0, timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 268, in __bind_execute\n    data, status, _ = await self.__do_execute(\n                      ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 257, in __do_execute\n    return await executor(protocol)\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"asyncpg/protocol/protocol.pyx\", line 205, in bind_execute",
+    "insertId": "69fb4a680009f7c7ac9e9215",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "scalpyn-00422-7mp",
+        "project_id": "clickrate-477217",
+        "location": "us-central1",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-06T14:04:24.653255Z",
+    "severity": "ERROR",
+    "labels": {
+      "commit-sha": "747f32b4f796aaf2e4db010dd0e4ca693e7d9c57",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "instanceId": "0007b734d93f06727b3036ec51832b2ef19c20ca2d4e38e0e7f80b16e96acacd30d6b48dcb59dc7b290454071abdb1731fde72a8bec58afffa62df3772d0199f5332a426e40aad4674c75d6214e7",
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "57a15fdc-f10e-4ac6-9963-54b4e5c00820"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-06T14:04:24.762303393Z",
+    "errorGroups": [
+      {
+        "id": "CPWDqLSKh4CnuAE"
+      }
+    ]
+  },
+  {
+    "textPayload": "2026-05-06 14:04:25.028 UTC [153333]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b6a7;b=611034922472440d996701ab4475db58;m=228d2830aa;t=65126a3b8708b;x=111f037cd72a0edc-0@ab",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:04:25.028643Z",
+    "severity": "ERROR",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "LOG_BUCKET_NUM": "55",
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:04:33.293146547Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/app/services/structural_scheduler_service.py\", line 201, in _refresh_market_metadata\n    await db.execute(text(\"\"\"\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py\", line 449, in execute\n    result = await greenlet_spawn(\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 203, in greenlet_spawn\n    result = context.switch(value)\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2351, in execute\n    return self._execute_internal(\n           ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2258, in _execute_internal\n    result = conn.execute(\n             ^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1419, in execute\n    return meth(\n           ^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/elements.py\", line 527, in _execute_on_connection\n    return connection._execute_clauseelement(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1641, in _execute_clauseelement\n    ret = self._execute_context(\n          ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1846, in _execute_context\n    return self._exec_single_context(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1986, in _exec_single_context\n    self._handle_dbapi_exception(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 2366, in _handle_dbapi_exception\n    raise exc_info[1].with_traceback(exc_info[2])\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1967, in _exec_single_context\n    self.dialect.do_execute(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py\", line 952, in do_execute\n    cursor.execute(statement, parameters)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 585, in execute\n    self._adapt_connection.await_(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 563, in _prepare_and_execute\n    self._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 513, in _handle_exception\n    self._adapt_connection._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 799, in _handle_exception\n    raise error\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 550, in _prepare_and_execute\n    self._rows = deque(await prepared_stmt.fetch(*parameters))\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 177, in fetch\n    data = await self.__bind_execute(args, 0, timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 268, in __bind_execute\n    data, status, _ = await self.__do_execute(\n                      ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 257, in __do_execute\n    return await executor(protocol)\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"asyncpg/protocol/protocol.pyx\", line 205, in bind_execute",
+    "insertId": "69fb4a69000091e8b7fae0d5",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00422-7mp",
+        "service_name": "scalpyn",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-06T14:04:25.037352Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "0007b734d93f06727b3036ec51832b2ef19c20ca2d4e38e0e7f80b16e96acacd30d6b48dcb59dc7b290454071abdb1731fde72a8bec58afffa62df3772d0199f5332a426e40aad4674c75d6214e7",
+      "commit-sha": "747f32b4f796aaf2e4db010dd0e4ca693e7d9c57",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "57a15fdc-f10e-4ac6-9963-54b4e5c00820"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-06T14:04:25.098874150Z",
+    "errorGroups": [
+      {
+        "id": "CPWDqLSKh4CnuAE"
+      }
+    ]
+  },
+  {
+    "textPayload": "2026-05-06 14:04:25.519 UTC [153302]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b6a7;b=611034922472440d996701ab4475db58;m=228d2830aa;t=65126a3b8708b;x=111f037cd72a0edc-0@ae",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:04:25.519873Z",
+    "severity": "ERROR",
+    "labels": {
+      "LOG_BUCKET_NUM": "55",
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:04:33.293146547Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/app/services/structural_scheduler_service.py\", line 201, in _refresh_market_metadata\n    await db.execute(text(\"\"\"\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py\", line 449, in execute\n    result = await greenlet_spawn(\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 203, in greenlet_spawn\n    result = context.switch(value)\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2351, in execute\n    return self._execute_internal(\n           ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2258, in _execute_internal\n    result = conn.execute(\n             ^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1419, in execute\n    return meth(\n           ^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/elements.py\", line 527, in _execute_on_connection\n    return connection._execute_clauseelement(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1641, in _execute_clauseelement\n    ret = self._execute_context(\n          ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1846, in _execute_context\n    return self._exec_single_context(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1986, in _exec_single_context\n    self._handle_dbapi_exception(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 2366, in _handle_dbapi_exception\n    raise exc_info[1].with_traceback(exc_info[2])\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1967, in _exec_single_context\n    self.dialect.do_execute(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py\", line 952, in do_execute\n    cursor.execute(statement, parameters)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 585, in execute\n    self._adapt_connection.await_(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 563, in _prepare_and_execute\n    self._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 513, in _handle_exception\n    self._adapt_connection._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 799, in _handle_exception\n    raise error\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 550, in _prepare_and_execute\n    self._rows = deque(await prepared_stmt.fetch(*parameters))\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 177, in fetch\n    data = await self.__bind_execute(args, 0, timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 268, in __bind_execute\n    data, status, _ = await self.__do_execute(\n                      ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 257, in __do_execute\n    return await executor(protocol)\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"asyncpg/protocol/protocol.pyx\", line 205, in bind_execute",
+    "insertId": "69fb4a690008102cd39cd80f",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "scalpyn",
+        "location": "us-central1",
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00422-7mp",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-06T14:04:25.528428Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "0007b734d93f06727b3036ec51832b2ef19c20ca2d4e38e0e7f80b16e96acacd30d6b48dcb59dc7b290454071abdb1731fde72a8bec58afffa62df3772d0199f5332a426e40aad4674c75d6214e7",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "commit-sha": "747f32b4f796aaf2e4db010dd0e4ca693e7d9c57",
+      "gcb-build-id": "57a15fdc-f10e-4ac6-9963-54b4e5c00820",
+      "gcb-trigger-region": "global"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-06T14:04:25.761516276Z",
+    "errorGroups": [
+      {
+        "id": "CPWDqLSKh4CnuAE"
+      }
+    ]
+  },
+  {
+    "textPayload": "2026-05-06 14:04:25.627 UTC [153337]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b6a7;b=611034922472440d996701ab4475db58;m=228d2830aa;t=65126a3b8708b;x=111f037cd72a0edc-0@ah",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-06T14:04:25.628806Z",
+    "severity": "ERROR",
+    "labels": {
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "LOG_BUCKET_NUM": "55",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:04:33.293146547Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:04:25.635 UTC [153288]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b6a7;b=611034922472440d996701ab4475db58;m=228d2830aa;t=65126a3b8708b;x=111f037cd72a0edc-0@ak",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:04:25.635345Z",
+    "severity": "ERROR",
+    "labels": {
+      "LOG_BUCKET_NUM": "55",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:04:33.293146547Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:04:25.642 UTC [153220]: [3-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b6a7;b=611034922472440d996701ab4475db58;m=228d2830aa;t=65126a3b8708b;x=111f037cd72a0edc-0@an",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:04:25.643103Z",
+    "severity": "ERROR",
+    "labels": {
+      "LOG_BUCKET_NUM": "55",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:04:33.293146547Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:04:25.652 UTC [153385]: [9-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b6a7;b=611034922472440d996701ab4475db58;m=228d2830aa;t=65126a3b8708b;x=111f037cd72a0edc-0@aq",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:04:25.652610Z",
+    "severity": "ERROR",
+    "labels": {
+      "LOG_BUCKET_NUM": "55",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:04:33.293146547Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:04:25.998 UTC [153370]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b6a7;b=611034922472440d996701ab4475db58;m=228d2830aa;t=65126a3b8708b;x=111f037cd72a0edc-0@at",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn"
+      }
+    },
+    "timestamp": "2026-05-06T14:04:25.999570Z",
+    "severity": "ERROR",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "LOG_BUCKET_NUM": "55"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:04:33.293146547Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:04:26.007 UTC [153305]: [9-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b6a7;b=611034922472440d996701ab4475db58;m=228d2830aa;t=65126a3b8708b;x=111f037cd72a0edc-0@aw",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn"
+      }
+    },
+    "timestamp": "2026-05-06T14:04:26.007739Z",
+    "severity": "ERROR",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "LOG_BUCKET_NUM": "55"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:04:33.293146547Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:04:26.015 UTC [153334]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b6a7;b=611034922472440d996701ab4475db58;m=228d2830aa;t=65126a3b8708b;x=111f037cd72a0edc-0@az",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn"
+      }
+    },
+    "timestamp": "2026-05-06T14:04:26.015441Z",
+    "severity": "ERROR",
+    "labels": {
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "LOG_BUCKET_NUM": "55",
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:04:33.293146547Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:04:26.022 UTC [153289]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b6a7;b=611034922472440d996701ab4475db58;m=228d2830aa;t=65126a3b8708b;x=111f037cd72a0edc-0@b12",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-06T14:04:26.022545Z",
+    "severity": "ERROR",
+    "labels": {
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "PROJECT_NUMBER": "330575088921",
+      "LOG_BUCKET_NUM": "55",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:04:33.293146547Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:04:26.029 UTC [153336]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b6a7;b=611034922472440d996701ab4475db58;m=228d2830aa;t=65126a3b8708b;x=111f037cd72a0edc-0@b15",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-06T14:04:26.029955Z",
+    "severity": "ERROR",
+    "labels": {
+      "LOG_BUCKET_NUM": "55",
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:04:33.293146547Z"
+  },
+  {
+    "textPayload": "2026-05-06 14:04:26.391 UTC [153376]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=10b6a7;b=611034922472440d996701ab4475db58;m=228d2830aa;t=65126a3b8708b;x=111f037cd72a0edc-0@b18",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-06T14:04:26.391454Z",
+    "severity": "ERROR",
+    "labels": {
+      "LOG_BUCKET_NUM": "55",
+      "PROJECT_NUMBER": "330575088921",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-06T14:04:33.293146547Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/app/tasks/simulation.py\", line 120, in _run\n    result = await run_db_task(_inner, celery=True)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/database.py\", line 255, in run_db_task\n    return await fn(session)\n           ^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/simulation.py\", line 111, in _inner\n    return await service.run_simulation_batch(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/services/simulation_service.py\", line 328, in run_simulation_batch\n    raise RuntimeError(error_msg)\nRuntimeError: OHLCV validation FAILED: No recent candle data found for exchange=gate",
+    "insertId": "69fb4a930009663eb3903557",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "location": "us-central1",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00422-7mp",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-06T14:05:07.615998Z",
+    "severity": "ERROR",
+    "labels": {
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "57a15fdc-f10e-4ac6-9963-54b4e5c00820",
+      "instanceId": "0007b734d9815488157847867e3bf8f68893457661d1a2990ef49d110c53bc14e469cb79b50fefce8662e0eff4d23135459a2a34663af991ce086dcd59b41741e18a43ee4415bd59d33dd93f33ab",
+      "commit-sha": "747f32b4f796aaf2e4db010dd0e4ca693e7d9c57",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-06T14:05:07.721478218Z",
+    "errorGroups": [
+      {
+        "id": "CLuonuO69pz0ywE"
+      }
+    ]
+  }
+]

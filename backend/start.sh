@@ -1,100 +1,271 @@
 #!/bin/bash
 # Scalpyn backend startup script
 #
-# Strategy: run Alembic migrations synchronously but with a hard wall-clock
-# limit so the container always proceeds to start uvicorn within Cloud Run's
-# startup-probe window (~240 s).  Migrations use IF-NOT-EXISTS and are
-# idempotent; they will catch up on the next deploy if skipped here.
+# Strategy: Alembic is the AUTHORITATIVE schema gate.
+#   1. `alembic upgrade head` (3 retries with backoff, time-boxed at 180s per
+#      attempt, exit 1 on persistent failure).
+#
+# Migration 021 mirrors 1:1 every DDL in `backend/app/init_db.py`, so
+# `alembic upgrade head` alone is enough to converge any production state to a
+# known-good schema. `init_db.py` is kept as a dev-only convenience (lifespan
+# runs it when SKIP_LIFESPAN_INIT_DB is unset).
+#
+# Defenses against the failure mode that broke the Task #44 deploy:
+#   - asyncpg `server_settings` in alembic/env.py sets `lock_timeout=10s` and
+#     `statement_timeout=60s` at session level, before any transaction. This
+#     is more reliable than SET LOCAL inside alembic's transaction (which was
+#     silently inert in production with asyncpg + run_sync + SQLAlchemy 2.0).
+#     Migrations that try to ALTER a table held by the OLD revision's Celery
+#     beat fail in 10s with a clear "lock timeout" error instead of blocking.
+#   - `timeout 50s` per attempt (3 retries × 50s + 35s delays = 185s max) —
+#     bounded wall-clock so the container never exceeds the Cloud Run startup
+#     probe window (~240s). With lock_timeout firing at 10s, expected total
+#     on contention is ~65s.
+#
+# If the gate fails, the container exits non-zero — Cloud Run rolls back to
+# the previous revision automatically.  /api/health/schema independently
+# probes information_schema for critical columns post-boot.
 
 set -e
 
-# ── Synchronous migration runner (time-boxed) ────────────────────────────────
-run_migrations() {
+# Tell the FastAPI lifespan to skip its own init_db() call — start.sh owns
+# bootstrap now and double-running it just slows boot.
+export SKIP_LIFESPAN_INIT_DB=1
+
+# ── Boot diagnostics ──────────────────────────────────────────────────────────
+# Print PRESENT/MISSING for required env vars so deploy failures can be
+# diagnosed from Cloud Run logs.  Never log values or lengths.
+echo "==> [boot] Scalpyn backend starting (PORT=${PORT:-8080}, WEB_CONCURRENCY=${WEB_CONCURRENCY:-2})"
+for var in DATABASE_URL JWT_SECRET ENCRYPTION_KEY REDIS_URL AI_KEYS_ENCRYPTION_KEY; do
+    if [ -n "${!var}" ]; then
+        echo " [boot] env $var: PRESENT"
+    else
+        echo " [boot] env $var: MISSING"
+    fi
+done
+
+# ── Schema gate: Alembic migrations (authoritative, time-boxed) ──────────────
+ALEMBIC_TIMEOUT_PER_ATTEMPT=${ALEMBIC_TIMEOUT_PER_ATTEMPT:-50}
+
+run_alembic_upgrade() {
     local max_attempts=3
-    local delay=2
+    local delay=5
     local attempt=1
 
-    echo "==> [migrations] Checking alembic state..."
+    echo "==> [migrations] alembic upgrade head"
 
-    python - <<'PYEOF'
-    import os, sys
-    try:
-        from sqlalchemy import create_engine, text, inspect
-        from alembic.config import Config
-        from alembic import command
-
-        db_url = os.environ.get("DATABASE_URL", "")
-        if not db_url:
-            print(" [migrations] DATABASE_URL not set -- skipping stamp check")
-            sys.exit(0)
-
-        sync_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
-        engine = create_engine(sync_url, connect_args={"connect_timeout": 10})
-
-        with engine.connect() as conn:
-            insp = inspect(conn)
-            has_alembic = insp.has_table("alembic_version")
-            versions = []
-            if has_alembic:
-                result = conn.execute(text("SELECT version_num FROM alembic_version"))
-                versions = [r[0] for r in result]
-            has_pools = insp.has_table("pools")
-            engine.dispose()
-        
-            if has_pools and not versions:
-                print(" [migrations] Stamping alembic to base revision (create_all DB)...")
-                cfg = Config("/app/alembic.ini")
-                command.stamp(cfg, "base")
-                print(" [migrations] Stamped at base.")
-            elif versions:
-                print(f" [migrations] Current revision(s): {versions}")
-            else:
-                print(" [migrations] Fresh database -- running all migrations.")
-    except Exception as e:
-        print(f" [migrations] Stamp check failed ({e}) -- proceeding with upgrade anyway")
-PYEOF
-    
     while [ $attempt -le $max_attempts ]; do
-        echo " [migrations] alembic upgrade head (attempt $attempt/$max_attempts)..."
-        if alembic upgrade head; then
-            echo "==> [migrations] Complete."
+        echo " [migrations] attempt $attempt/$max_attempts (timeout ${ALEMBIC_TIMEOUT_PER_ATTEMPT}s) ..."
+        # `timeout` exits 124 on hard wall-clock expiry; treat that the same
+        # as an alembic failure so the retry/backoff loop kicks in.
+        if timeout "${ALEMBIC_TIMEOUT_PER_ATTEMPT}s" alembic upgrade head; then
+            echo "==> [migrations] alembic upgrade head OK"
             return 0
         fi
-        echo " [migrations] Failed -- retrying in ${delay}s..."
+        rc=$?
+        if [ "$rc" = "124" ]; then
+            echo " [migrations] attempt $attempt timed out after ${ALEMBIC_TIMEOUT_PER_ATTEMPT}s -- retry in ${delay}s"
+        else
+            echo " [migrations] attempt $attempt failed (exit $rc) -- retry in ${delay}s"
+        fi
         sleep $delay
+        delay=$((delay * 2))
         attempt=$((attempt + 1))
     done
-    echo " [migrations] WARNING: all attempts failed -- server may start without latest schema."
-    return 0
+
+    echo "==> [migrations] FATAL: alembic upgrade head failed after ${max_attempts} attempts" >&2
+    return 1
 }
 
-# ── Run migrations synchronously but time-boxed ──────────────────────────────
-# Hard wall-clock limit prevents migration retries from consuming the entire
-# Cloud Run startup window.  Default 60 s leaves ~180 s for Celery + uvicorn.
-MIGRATION_TIMEOUT=${MIGRATION_TIMEOUT:-60}
-
-export -f run_migrations                      # make function visible to subshell
-timeout "$MIGRATION_TIMEOUT" bash -c 'run_migrations' || {
-    echo "==> [migrations] Timed out or failed after ${MIGRATION_TIMEOUT}s -- proceeding."
+validate_critical_schema() {
+    echo "==> [schema] Validating critical schema..."
+    if ! python3 -m scripts.check_critical_schema; then
+        echo "==> Aborting startup: critical schema drift detected." >&2
+        echo "==> See docs/runbooks/critical-schema-drift.md to apply missing DDL manually." >&2
+        exit 1
+    fi
+    echo "==> [schema] Critical schema OK."
 }
 
-# ── Start Celery worker ──────────────────────────────────────────────────────
-echo "==> Starting Celery worker..."
-celery -A app.tasks.celery_app worker \
-    --loglevel=info \
-    --concurrency="${CELERY_CONCURRENCY:-1}" \
-    --queues=celery \
-    &
-CELERY_WORKER_PID=$!
-echo " Celery worker PID: $CELERY_WORKER_PID"
+if ! run_alembic_upgrade; then
+    # ── Stamp fallback ────────────────────────────────────────────────────
+    # If alembic upgrade head fails (typically lock contention from the old
+    # Celery beat kept alive by Cloud Run --min-instances=1 during rolling
+    # deploy), stamp head as a last resort so uvicorn can start.
+    #
+    # "alembic stamp head" only writes to the alembic_version table — no DDL
+    # locks on data tables needed.  /api/health/schema will detect any real
+    # schema drift post-boot and return 503 if critical columns are missing,
+    # providing a clear signal for follow-up action.
+    echo "==> [migrations] All attempts failed (lock contention from old revision)." >&2
+    echo "==> [migrations] Attempting alembic stamp head fallback..." >&2
+    echo "==> [migrations] Rationale: DDL may already exist from a previous init_db.py run." >&2
+    if timeout 30s alembic stamp head 2>&1; then
+        echo "==> [migrations] Stamped at head."
+        # Stamp head only writes to alembic_version — it never runs DDL.
+        validate_critical_schema
+    else
+        echo "==> Aborting startup: cannot upgrade or stamp schema." >&2
+        exit 1
+    fi
+fi
 
-# ── Start Celery beat ────────────────────────────────────────────────────────
-echo "==> Starting Celery beat..."
-celery -A app.tasks.celery_app beat \
-    --loglevel=info \
-    &
-CELERY_BEAT_PID=$!
-echo " Celery beat PID: $CELERY_BEAT_PID"
+# Even when `alembic upgrade head` succeeds, the database may already be
+# drifted from a previous `stamp head` incident (e.g. version table advanced
+# to 032 while indicators.scheduler_group never existed). In that case Alembic
+# will happily apply only newer revisions and the app would boot broken unless
+# we probe information_schema here as well.
+validate_critical_schema
+
+# ── Pre-flight: Redis connectivity (Tarefas 3+7) ─────────────────────────────
+# Hard fail-safe: if the broker is unreachable, abort startup with exit 1
+# instead of letting Celery silently retry-and-give-up
+# (broker_connection_max_retries=10 in celery_app.py). Cloud Run will then
+# roll back to the previous revision automatically. This catches misconfigured
+# REDIS_URL (e.g. missing /0 db suffix) before the pipeline silently stalls.
+echo "==> [redis] Verifying Redis connectivity..."
+if ! python3 - <<'PY'
+import os, sys
+try:
+    import redis
+except ImportError as e:
+    print(f"ERROR: redis package not installed: {e}", file=sys.stderr)
+    sys.exit(1)
+
+url = os.environ.get("REDIS_URL", "")
+if not url:
+    print("ERROR: REDIS_URL is empty -- cannot connect to broker", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    r = redis.from_url(url, socket_connect_timeout=5, socket_timeout=5)
+    if r.ping() is not True:
+        print("ERROR: Redis ping returned False", file=sys.stderr)
+        sys.exit(1)
+    print("[redis] connected OK")
+except Exception as e:
+    # Never log the URL itself -- it carries the broker password.
+    print(f"ERROR: Redis connection failed: {type(e).__name__}: {e}", file=sys.stderr)
+    sys.exit(1)
+PY
+then
+    echo "==> Aborting startup: Redis connection failed" >&2
+    exit 1
+fi
+
+# Loglevel for Celery worker/beat. Default `info`. Set CELERY_LOGLEVEL=debug
+# in Cloud Run env to capture startup-error tracebacks (broker URL parse,
+# import errors, beat schedule wiring) without rebuilding.
+CELERY_LOGLEVEL="${CELERY_LOGLEVEL:-info}"
+
+# ── Queue topology (Task #216, operator spec parts 4 + 7 + 9) ────────────────
+# WORKER_QUEUES selects which Celery queues this container consumes.
+#   - "microstructure,structural,execution"  (default — single-container dev)
+#   - "microstructure"                       (Cloud Run scalpyn-worker-micro)
+#   - "structural"                           (Cloud Run scalpyn-worker-structural)
+#   - "execution"                            (Cloud Run scalpyn-worker-execution)
+#   - "" (empty)                             (Cloud Run scalpyn API or scalpyn-beat
+#                                             — NO Celery worker is started here)
+#
+# RUN_BEAT controls the beat scheduler:
+#   - "1" (default dev / scalpyn-beat)       → beat IS started here.
+#   - "0" (every other Cloud Run service)    → beat is OFF; the dedicated
+#                                              scalpyn-beat revision owns the
+#                                              periodic schedule so it can
+#                                              never double-fire.
+#
+# At least one of {worker, beat} must be enabled — an "all-off" container
+# would be the API-only role, which is the intended shape for the `scalpyn`
+# Cloud Run service that fronts HTTP traffic.
+WORKER_QUEUES="${WORKER_QUEUES-microstructure,structural,execution}"
+RUN_BEAT="${RUN_BEAT:-1}"
+
+CELERY_WORKER_PID=""
+CELERY_BEAT_PID=""
+
+# ── Start Celery worker (only when WORKER_QUEUES is non-empty) ───────────────
+# Setting WORKER_QUEUES="" on the API service skips the worker entirely so
+# HTTP latency is never co-tenant with task execution. CELERY_CONCURRENCY
+# is sized per queue by the deploy config (4 for microstructure burst, 2
+# for structural/execution); the dev default of 2 keeps the single-container
+# Replit setup responsive without overloading the local broker.
+# ── Unique Celery nodename (Cloud Run hostname is always "localhost") ────────
+# Without --hostname, every Cloud Run instance announces itself to the broker
+# as `celery@localhost`. When the API calls `celery_app.control.inspect()`,
+# replies from different instances collide on the same nodename — the client
+# de-duplicates, returns 0 workers, and the dashboard alarms `worker_offline_60s`
+# even though workers are healthy and draining queues. Use K_SERVICE (Cloud Run
+# service name) + a random suffix so each instance is uniquely addressable.
+NODENAME_SUFFIX="$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' | head -c 8 || echo "$$")"
+CELERY_NODENAME="${K_SERVICE:-celery}-${NODENAME_SUFFIX}"
+
+if [ -n "$WORKER_QUEUES" ]; then
+    echo "==> STARTING CELERY WORKER (queues=${WORKER_QUEUES} concurrency=${CELERY_CONCURRENCY:-2} loglevel=${CELERY_LOGLEVEL} hostname=celery@${CELERY_NODENAME})..."
+    celery -A app.tasks.celery_app worker \
+        --loglevel="${CELERY_LOGLEVEL}" \
+        --concurrency="${CELERY_CONCURRENCY:-2}" \
+        --queues="${WORKER_QUEUES}" \
+        --hostname="celery@${CELERY_NODENAME}" \
+        &
+    CELERY_WORKER_PID=$!
+    echo " Celery worker PID: $CELERY_WORKER_PID"
+else
+    echo "==> SKIPPING CELERY WORKER (WORKER_QUEUES is empty; this container is API-only or beat-only)"
+fi
+
+# ── Start Celery beat (only when RUN_BEAT=1) ─────────────────────────────────
+if [ "$RUN_BEAT" = "1" ]; then
+    echo "==> STARTING CELERY BEAT (loglevel=${CELERY_LOGLEVEL})..."
+    celery -A app.tasks.celery_app beat \
+        --loglevel="${CELERY_LOGLEVEL}" \
+        &
+    CELERY_BEAT_PID=$!
+    echo " Celery beat PID: $CELERY_BEAT_PID"
+else
+    echo "==> SKIPPING CELERY BEAT (RUN_BEAT=${RUN_BEAT}; this container only runs workers or API)"
+fi
+
+# ── Fail-fast: 5s post-start liveness check (Tarefas 1, 4, 5) ────────────────
+# If a Celery process we did start dies within 5 seconds of fork, the
+# container exits 1 so Cloud Run rolls back to the previous revision. This
+# catches:
+#   - Redis URL malformed (parse error in celery_app.py module load)
+#   - Module import errors (missing dependency, syntax error in tasks)
+#   - Beat schedule wiring errors (invalid cron, missing task ref)
+# Without this gate, the watchdog only catches deaths AFTER the 120s grace
+# period, by which time Cloud Run has already marked the revision Ready.
+# An API-only container has neither PID set, so this check is a no-op for it.
+if [ -n "$CELERY_WORKER_PID" ] || [ -n "$CELERY_BEAT_PID" ]; then
+    echo "==> [celery-check] Waiting 5s for Celery processes to stabilize..."
+    sleep 5
+    echo "==> [celery-check] ps aux | grep -E 'celery|beat' (excluding grep):"
+    ps aux | grep -E 'celery|beat' | grep -v grep || true
+
+    CELERY_FAILED=false
+    if [ -n "$CELERY_WORKER_PID" ] && ! kill -0 "$CELERY_WORKER_PID" 2>/dev/null; then
+        echo "ERROR: Celery WORKER (PID $CELERY_WORKER_PID) died within 5s of start" >&2
+        CELERY_FAILED=true
+    fi
+    if [ -n "$CELERY_BEAT_PID" ] && ! kill -0 "$CELERY_BEAT_PID" 2>/dev/null; then
+        echo "ERROR: Celery BEAT (PID $CELERY_BEAT_PID) died within 5s of start" >&2
+        CELERY_FAILED=true
+    fi
+    if [ "$CELERY_FAILED" = true ]; then
+        echo "==> CELERY FAILED TO START -- aborting container (Cloud Run will roll back)" >&2
+        echo "==> Check the lines above for the celery worker/beat traceback." >&2
+        echo "==> Re-deploy with CELERY_LOGLEVEL=debug for verbose startup output." >&2
+        exit 1
+    fi
+    if [ -n "$CELERY_WORKER_PID" ] && [ -n "$CELERY_BEAT_PID" ]; then
+        echo "==> [celery-check] Worker (PID $CELERY_WORKER_PID) and Beat (PID $CELERY_BEAT_PID) both alive after 5s. ✓"
+    elif [ -n "$CELERY_WORKER_PID" ]; then
+        echo "==> [celery-check] Worker (PID $CELERY_WORKER_PID) alive after 5s. ✓ (beat skipped)"
+    else
+        echo "==> [celery-check] Beat (PID $CELERY_BEAT_PID) alive after 5s. ✓ (worker skipped)"
+    fi
+else
+    echo "==> [celery-check] No Celery worker or beat started — API-only container."
+fi
 
 # Capture the PID that exec uvicorn will inherit (shell PID becomes uvicorn PID)
 MAIN_PID=$$
@@ -104,37 +275,66 @@ MAIN_PID=$$
 # triggering an immediate container shutdown.
 WATCHDOG_GRACE=${WATCHDOG_GRACE:-120}
 
+# is_process_alive PID
+# Returns true (0) only when the process EXISTS and is NOT a zombie.
+#
+# Why not just `kill -0 $PID`?
+# When a background process exits while its parent (uvicorn, after `exec`) is
+# alive but never calls waitpid(), the child becomes a zombie — it retains its
+# PID entry in the process table but performs no work.  `kill -0` returns 0
+# (success) for zombie processes because the PID entry still exists, so the
+# watchdog would incorrectly conclude that Celery is healthy.  Checking the
+# `stat` column from `ps` and rejecting entries that start with Z (zombie)
+# prevents this false-positive.
+is_process_alive() {
+    local pid=$1
+    local stat
+    stat=$(ps -o stat= -p "$pid" 2>/dev/null)
+    # Non-empty AND does NOT start with Z (zombie)
+    [ -n "$stat" ] && case "$stat" in Z*) return 1 ;; esac
+}
+
 # Watchdog: wait for grace period, then monitor Celery health.
-# Only kill uvicorn if Celery is STILL dead after retries.
-(
-    echo " [watchdog] Waiting ${WATCHDOG_GRACE}s grace period before monitoring Celery..."
-    sleep "$WATCHDOG_GRACE"
-    echo " [watchdog] Grace period over -- monitoring Celery processes."
+# Only kill uvicorn if a Celery process we *started* is STILL dead after retries.
+# An API-only container (no worker, no beat) skips the watchdog entirely.
+if [ -n "$CELERY_WORKER_PID" ] || [ -n "$CELERY_BEAT_PID" ]; then
+    (
+        echo " [watchdog] Waiting ${WATCHDOG_GRACE}s grace period before monitoring Celery..."
+        sleep "$WATCHDOG_GRACE"
+        echo " [watchdog] Grace period over -- monitoring Celery processes."
 
-    while sleep 30; do
-        WORKER_OK=true
-        BEAT_OK=true
+        while sleep 30; do
+            WORKER_OK=true
+            BEAT_OK=true
 
-        if ! kill -0 "$CELERY_WORKER_PID" 2>/dev/null; then
-            WORKER_OK=false
-        fi
-        if ! kill -0 "$CELERY_BEAT_PID" 2>/dev/null; then
-            BEAT_OK=false
-        fi
+            # Empty PID means the role is owned by a sibling container; do not
+            # mark it as failing on this side.
+            if [ -n "$CELERY_WORKER_PID" ] && ! is_process_alive "$CELERY_WORKER_PID"; then
+                WORKER_OK=false
+            fi
+            if [ -n "$CELERY_BEAT_PID" ] && ! is_process_alive "$CELERY_BEAT_PID"; then
+                BEAT_OK=false
+            fi
 
-        if [ "$WORKER_OK" = false ] || [ "$BEAT_OK" = false ]; then
-            echo "WARNING: Celery process down (worker=$WORKER_OK beat=$BEAT_OK) -- shutting down container"
-            kill -TERM "$MAIN_PID" 2>/dev/null
-            break
-        fi
-    done
-) &
+            if [ "$WORKER_OK" = false ] || [ "$BEAT_OK" = false ]; then
+                echo "WARNING: Celery process down or zombie (worker=$WORKER_OK beat=$BEAT_OK) -- shutting down container"
+                kill -TERM "$MAIN_PID" 2>/dev/null
+                break
+            fi
+        done
+    ) &
+fi
 
 # Graceful cleanup: when uvicorn/container receives SIGTERM, stop children first
 cleanup() {
     echo "==> SIGTERM received -- stopping background processes..."
-    kill -TERM "$CELERY_WORKER_PID" "$CELERY_BEAT_PID" 2>/dev/null
-    wait "$CELERY_WORKER_PID" "$CELERY_BEAT_PID" 2>/dev/null
+    PIDS_TO_KILL=""
+    [ -n "$CELERY_WORKER_PID" ] && PIDS_TO_KILL="$PIDS_TO_KILL $CELERY_WORKER_PID"
+    [ -n "$CELERY_BEAT_PID" ]   && PIDS_TO_KILL="$PIDS_TO_KILL $CELERY_BEAT_PID"
+    if [ -n "$PIDS_TO_KILL" ]; then
+        kill -TERM $PIDS_TO_KILL 2>/dev/null
+        wait $PIDS_TO_KILL 2>/dev/null
+    fi
 }
 trap cleanup TERM INT
 

@@ -1,0 +1,193 @@
+Você deve atuar como arquiteto sênior Python/AsyncIO/SQLAlchemy/Postgres especializado em sistemas distribuídos de alta concorrência.
+
+Precisamos corrigir definitivamente um problema estrutural de concorrência, persistência e lifecycle transacional em um sistema de trading/scanner assíncrono.
+
+O objetivo NÃO é aplicar hotfixes temporários.
+O objetivo é eliminar a causa raiz arquitetural.
+
+# CONTEXTO OPERACIONAL
+
+O sistema possui:
+
+* FastAPI
+* SQLAlchemy AsyncSession
+* Postgres
+* Celery
+* Redis
+* múltiplos schedulers
+* pipelines de ingestão OHLCV
+* compute de indicadores
+* score engine
+* reconciliation/trade monitor
+
+Principais módulos envolvidos:
+
+* collect_market_data.py
+* compute_indicators.py
+* compute_scores.py
+* pipeline_scan.py
+* trade_monitor_service.py
+* trade_reconciliation_service.py
+* scheduler_service.py
+* structural_scheduler_service.py
+* microstructure_scheduler_service.py
+
+# SINTOMAS OBSERVADOS
+
+## Pool starvation
+
+Erros recorrentes:
+
+sqlalchemy.exc.TimeoutError:
+QueuePool limit of size 5 overflow 5 reached
+
+## Sessões ruins
+
+Encontrado em pg_stat_activity:
+
+* idle in transaction
+* transações abertas por 20s+
+* múltiplas sessões active simultaneamente
+* conexões não retornando rapidamente ao pool
+
+## Pipeline degradado
+
+Dashboard operacional confirmou:
+
+* ingestão 15m parada
+* score engine parado
+* celery backlog acumulando
+* workers congestionados
+* alpha_scores sem atualização
+* decisions_log sem novas decisões
+
+## Queries observadas
+
+Transações abertas envolvendo:
+
+INSERT INTO ohlcv(...)
+INSERT INTO market_metadata(...)
+SELECT FROM reconciled_gate_trades(...)
+
+## Lock contention
+
+Existem RowExclusiveLocks normais, mas NÃO há deadlock massivo.
+O problema principal parece ser:
+
+* transações longas
+* persistência concorrente excessiva
+* lifecycle incorreto de AsyncSession
+* compute acoplado à persistência
+* ausência de backpressure
+
+# DIAGNÓSTICO CONFIRMADO
+
+O sistema sofre de:
+
+write concurrency amplification
+
+causado por:
+
+* writes concorrentes distribuídos
+* fan-out sem controle
+* sessões compartilhadas ou long-lived
+* commit tardio
+* persistência dentro de loops longos
+* await externo com transação aberta
+* scheduler produzindo mais rápido do que o banco consegue drenar
+
+O problema NÃO deve ser resolvido apenas aumentando pool_size/max_overflow.
+
+# OBJETIVO DA REFATORAÇÃO
+
+Implementar uma arquitetura definitiva baseada em:
+
+* persistência desacoplada
+* backpressure explícito
+* bounded queues
+* persistence workers fixos
+* session-per-unit-of-work
+* transações curtas
+* Unit of Work
+* repositories
+* retry controlado
+* idempotência
+* controle explícito de concorrência
+
+# ARQUITETURA DESEJADA
+
+## Fluxo correto
+
+Collectors/Schedulers
+→ Compute
+→ Async Queue
+→ Persistence Workers limitados
+→ Postgres
+
+## Regras obrigatórias
+
+* scheduler NÃO escreve mais diretamente no banco
+* compute NÃO mantém transação aberta
+* cada persistência usa sua própria AsyncSession
+* commit imediato após write
+* rollback obrigatório
+* close obrigatório
+* transações devem durar milissegundos
+* nenhuma chamada HTTP/Redis/API externa dentro da transação
+* nenhuma sessão compartilhada entre coroutines
+* eliminar asyncio.gather com writes usando shared session
+* limitar concorrência de persistência explicitamente
+
+# O QUE VOCÊ DEVE FAZER
+
+1. Auditar todos os pontos de persistência do projeto
+2. Identificar sessões long-lived
+3. Identificar fan-out concorrente perigoso
+4. Identificar gather massivo
+5. Identificar await externo dentro de transações
+6. Identificar commit tardio
+7. Identificar loops com session.execute sem commit curto
+8. Identificar padrões de shared AsyncSession
+
+Depois:
+
+9. Projetar a nova camada services/persistence
+10. Criar bounded queue
+11. Criar persistence workers fixos
+12. Implementar UnitOfWork
+13. Implementar repositories
+14. Refatorar os schedulers para enqueue ao invés de persistir
+15. Refatorar pipelines para transações curtas
+16. Implementar retry seguro apenas para falhas transitórias
+17. Implementar backpressure real
+18. Implementar métricas e observabilidade
+19. Implementar healthcheck de persistência
+20. Garantir idempotência de UPSERTs
+
+# IMPORTANTE
+
+Você NÃO deve propor:
+
+* aumentar pool indefinidamente
+* retry infinito
+* sleeps aleatórios
+* hotfixes superficiais
+* “soluções” apenas de configuração
+* esconder o problema com max_overflow alto
+
+# ENTREGA ESPERADA
+
+Forneça:
+
+1. Diagnóstico arquitetural detalhado
+2. Root causes específicas no código
+3. Mapa de fluxos perigosos
+4. Refatoração proposta por módulo
+5. Nova arquitetura de persistência
+6. Código exemplo production-grade
+7. Estratégia de migração gradual
+8. Estratégia de rollout seguro
+9. Estratégia de observabilidade
+10. Checklist de validação operacional
+
+Priorize correção estrutural definitiva e estabilidade operacional sob alta concorrência.

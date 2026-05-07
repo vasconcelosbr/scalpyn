@@ -1,63 +1,33 @@
 name: Deploy
 
+# Backend deploys to Cloud Run are owned by the Google Cloud Build trigger
+# `rmgpgab-scalpyn-us-central1-vasconcelosbr-scalpyn--majye` (project
+# `clickrate-477217`) — see `cloudbuild.yaml` at the repo root.
+#
+# This workflow USED TO build & deploy the backend in two flavors (Workload
+# Identity Federation + Service Account Key fallback). Both jobs were guarded
+# by `if:` clauses on GCP secrets that aren't configured in this repository,
+# so every push produced a phantom failure check. We removed them; the only
+# job left here is the frontend build validation.
+
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      skip_frontend:
+        description: 'Skip frontend validation'
+        required: false
+        default: 'false'
+        type: boolean
 
 jobs:
-  # ── Backend: build, push and deploy to Cloud Run ──────────
-  deploy-backend:
-    name: Deploy Backend (Cloud Run)
-    runs-on: ubuntu-latest
-    # Skip this job when GCP credentials are not configured (e.g. forks, development).
-    # The validate-frontend job below still runs as the required code quality gate.
-    if: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && secrets.GCP_SERVICE_ACCOUNT != '' }}
-    permissions:
-      contents: read
-      id-token: write   # required for Workload Identity Federation
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
-
-      - name: Build Docker image
-        run: |
-          docker build \
-            -t ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REPO }}/${{ vars.CLOUD_RUN_SERVICE }}:${{ github.sha }} \
-            -t ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REPO }}/${{ vars.CLOUD_RUN_SERVICE }}:latest \
-            backend
-
-      - name: Push Docker image
-        run: |
-          docker push --all-tags \
-            ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REPO }}/${{ vars.CLOUD_RUN_SERVICE }}
-
-      - name: Deploy to Cloud Run
-        run: |
-          gcloud run deploy ${{ vars.CLOUD_RUN_SERVICE }} \
-            --image ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REPO }}/${{ vars.CLOUD_RUN_SERVICE }}:${{ github.sha }} \
-            --region ${{ vars.GCP_REGION }} \
-            --platform managed \
-            --allow-unauthenticated \
-            --port 8000
-
   # ── Frontend: validate build (Vercel deploys automatically) ─
   validate-frontend:
     name: Validate Frontend Build
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_frontend == 'false' }}
     permissions:
       contents: read
 

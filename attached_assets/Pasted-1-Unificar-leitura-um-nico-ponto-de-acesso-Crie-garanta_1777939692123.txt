@@ -1,0 +1,108 @@
+1) Unificar leitura → um único ponto de acesso
+
+Crie/garanta um wrapper usado por todos os consumidores:
+
+# app/services/indicators_provider.py
+
+from app.utils.indicator_merge import fetch_merged_indicators
+
+REQUIRED_CORE = ("rsi", "macd_histogram", "adx")
+
+async def get_merged_indicators(db, symbols, now=None):
+    merged = await fetch_merged_indicators(db, symbols=symbols, now=now)
+    # retorno: Dict[symbol, Dict[key, envelope]]
+    return merged
+Substituir nos dois tasks
+backend/app/tasks/evaluate_signals.py
+backend/app/tasks/execute_buy.py
+
+Remover completamente qualquer:
+
+SELECT DISTINCT ON (i.symbol) ...
+
+e passar a usar get_merged_indicators(...).
+
+2) Guard de completude (mesma regra em todos os caminhos)
+
+Extraia o guard para um módulo comum e use nos três caminhos (pipeline_scan, evaluate_signals, execute_buy):
+
+# app/services/indicator_validity.py
+
+def unwrap(v):
+    return v.get("value") if isinstance(v, dict) else v
+
+def is_complete(indicators: dict) -> bool:
+    for k in ("rsi", "macd_histogram", "adx"):
+        if unwrap(indicators.get(k)) is None:
+            return False
+    return True
+Uso (exemplo)
+ind = merged[symbol]
+
+if not is_complete(ind):
+    # mesma política em todos:
+    return SKIP_INCOMPLETE_DATA
+
+Resultado: consistência total entre UI, pipeline_scan e execução.
+
+3) Ajustar drift (evitar drop do estrutural)
+
+Hoje:
+
+INDICATOR_MAX_DRIFT_SECONDS = 900
+STRUCTURAL_INTERVAL         = 900
+Corrigir para margem segura
+INDICATOR_MAX_DRIFT_SECONDS = 1800  # >= 2x structural
+
+Ou, melhor:
+
+INDICATOR_MAX_DRIFT_SECONDS = STRUCTURAL_INTERVAL + 300  # margem explícita
+
+Evita perda de RSI/MACD por jitter de poucos segundos.
+
+4) Contrato de merge (clareza e previsibilidade)
+
+Garanta no fetch_merged_indicators:
+
+Merge por chave (não por linha)
+“latest timestamp wins” por chave
+não remover grupo estrutural por pequenos deltas
+anexar metadados úteis por chave (opcional, mas recomendado):
+source_group
+age_seconds
+stale
+5) Persistir o snapshot usado na decisão (auditoria)
+
+Para acabar com “não sei o que foi usado na hora”:
+
+decision_log.metrics["indicators_snapshot"] = {
+    k: {"value": unwrap(v), "ts": v.get("time")} for k, v in indicators.items()
+}
+
+Permite comparar decisão vs banco depois.
+
+🔎 Validações pós-implementação (obrigatórias)
+A) Consistência UI × execução
+Para um símbolo X no mesmo timestamp:
+UI (watchlist/trace) e decisão devem mostrar mesmos valores de RSI/MACD.
+B) Taxa de “SEM DADOS”
+Deve cair drasticamente (próximo de zero, exceto warmup).
+C) Query de cobertura
+SELECT
+  COUNT(*) FILTER (WHERE indicators_json->'rsi'->>'value' IS NULL) AS missing_rsi,
+  COUNT(*) AS total
+FROM indicators;
+D) Log do payload usado
+
+Logar (temporariamente) 1% das execuções:
+
+logger.info("indicators_used", extra={"symbol": s, "keys": list(ind.keys())})
+⚠️ Pontos de atenção
+execute_buy (janela 2 min): com merge + guard, deve parar de “ver nada”.
+warmup de novos ativos: continuarão como SKIP_INCOMPLETE_DATA (correto).
+compute_indicators (combined): não deve sobrescrever/mascarar grupos; manter política clara de conflito.
+🧠 Resultado esperado
+✔ Todos os consumidores usam o MESMO snapshot lógico
+✔ RSI/MACD disponíveis sempre que existem
+✔ Decisões consistentes com UI
+✔ Fim dos falsos “SEM DADOS”

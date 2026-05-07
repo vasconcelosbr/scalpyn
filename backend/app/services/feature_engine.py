@@ -14,94 +14,217 @@ class FeatureEngine:
     def __init__(self, indicators_config: Dict[str, Any]):
         self.config = indicators_config
 
-    def calculate(self, df: pd.DataFrame, market_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Calculate all enabled indicators for the given OHLCV DataFrame.
+    def calculate(
+        self,
+        df: pd.DataFrame,
+        market_data: Optional[Dict[str, Any]] = None,
+        group: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Calculate enabled indicators for the given OHLCV DataFrame.
 
         Args:
             df: DataFrame with columns [open, high, low, close, volume]
                 and optional [time, quote_volume].
+            market_data: Live market-data dict (orderbook, spread, taker data).
+            group: Optional filter — 'structural' computes only slow/OHLCV-based
+                indicators; 'microstructure' computes only fast/live-data
+                indicators.  None (default) computes everything (legacy path).
 
         Returns:
             Dictionary of indicator_name -> value (latest value).
         """
+        from .indicator_classifier import STRUCTURAL_CALC_KEYS, MICROSTRUCTURE_CALC_KEYS
+
+        def _want(key: str) -> bool:
+            """Return True when this calc-key should run for the requested group.
+
+            "ema" is in BOTH sets because each group computes different period
+            subsets; post-compute filtering strips the irrelevant periods.
+            "stochastic" is microstructure (fast signal on 5m candles).
+            """
+            if group is None or group == "all":
+                return True
+            if group == "structural":
+                return key in STRUCTURAL_CALC_KEYS
+            if group == "microstructure":
+                return key in MICROSTRUCTURE_CALC_KEYS
+            return True
         if df is None or df.empty or len(df) < 2:
             logger.warning("Insufficient data for indicator calculation")
             return {}
 
         results: Dict[str, Any] = {}
 
-        try:
-            if self.config.get("rsi", {}).get("enabled"):
+        # ── Per-indicator isolation: each calc runs in its own try/except so
+        # that a failure in one indicator does not abort the remaining ones.
+        if _want("rsi") and self.config.get("rsi", {}).get("enabled"):
+            try:
                 results.update(self._calc_rsi(df))
+            except Exception as e:
+                logger.exception("rsi calculation failed: %s", e)
 
-            if self.config.get("adx", {}).get("enabled"):
+        if _want("adx") and self.config.get("adx", {}).get("enabled"):
+            try:
                 results.update(self._calc_adx(df))
+            except Exception as e:
+                logger.exception("adx calculation failed: %s", e)
 
-            if self.config.get("ema", {}).get("enabled"):
+        if _want("ema") and self.config.get("ema", {}).get("enabled"):
+            try:
                 results.update(self._calc_ema(df))
+            except Exception as e:
+                logger.exception("ema calculation failed: %s", e)
 
-            if self.config.get("atr", {}).get("enabled"):
+        if _want("atr") and self.config.get("atr", {}).get("enabled"):
+            try:
                 results.update(self._calc_atr(df))
+            except Exception as e:
+                logger.exception("atr calculation failed: %s", e)
 
-            if self.config.get("macd", {}).get("enabled"):
+        if _want("macd") and self.config.get("macd", {}).get("enabled"):
+            try:
                 results.update(self._calc_macd(df))
+            except Exception as e:
+                logger.exception("macd calculation failed: %s", e)
 
-            if self.config.get("vwap", {}).get("enabled"):
+        if _want("vwap") and self.config.get("vwap", {}).get("enabled"):
+            try:
                 results.update(self._calc_vwap(df))
+            except Exception as e:
+                logger.exception("vwap calculation failed: %s", e)
 
-            if self.config.get("stochastic", {}).get("enabled"):
+        if _want("stochastic") and self.config.get("stochastic", {}).get("enabled"):
+            try:
                 results.update(self._calc_stochastic(df))
+            except Exception as e:
+                logger.exception("stochastic calculation failed: %s", e)
 
-            if self.config.get("obv", {}).get("enabled"):
+        if _want("obv") and self.config.get("obv", {}).get("enabled"):
+            try:
                 results.update(self._calc_obv(df))
+            except Exception as e:
+                logger.exception("obv calculation failed: %s", e)
 
-            if self.config.get("bollinger", {}).get("enabled"):
+        if _want("bollinger") and self.config.get("bollinger", {}).get("enabled"):
+            try:
                 results.update(self._calc_bollinger(df))
+            except Exception as e:
+                logger.exception("bollinger calculation failed: %s", e)
 
-            if self.config.get("parabolic_sar", {}).get("enabled"):
+        if _want("parabolic_sar") and self.config.get("parabolic_sar", {}).get("enabled"):
+            try:
                 results.update(self._calc_parabolic_sar(df))
+            except Exception as e:
+                logger.exception("parabolic_sar calculation failed: %s", e)
 
-            if self.config.get("zscore", {}).get("enabled"):
+        if _want("zscore") and self.config.get("zscore", {}).get("enabled"):
+            try:
                 results.update(self._calc_zscore(df))
+            except Exception as e:
+                logger.exception("zscore calculation failed: %s", e)
 
-            if self.config.get("volume_delta", {}).get("enabled"):
+        if _want("volume_delta") and self.config.get("volume_delta", {}).get("enabled"):
+            try:
                 results.update(self._calc_volume_delta(df))
+            except Exception as e:
+                logger.exception("volume_delta calculation failed: %s", e)
 
-            if self.config.get("volume_metrics", {}).get("enabled", True):
+        if _want("volume_metrics") and self.config.get("volume_metrics", {}).get("enabled", True):
+            try:
                 results.update(self._calc_volume_metrics(df))
+            except Exception as e:
+                logger.exception("volume_metrics calculation failed: %s", e)
 
-            # Derived: volume spike (always useful)
-            if self.config.get("volume_spike", {}).get("enabled", True):
+        if _want("volume_spike") and self.config.get("volume_spike", {}).get("enabled", True):
+            try:
                 results.update(self._calc_volume_spike(df))
+            except Exception as e:
+                logger.exception("volume_spike calculation failed: %s", e)
 
-            # Derived: taker buy ratio (proxy from candle direction)
-            if self.config.get("taker_ratio", {}).get("enabled", True):
+        if _want("taker_ratio") and self.config.get("taker_ratio", {}).get("enabled", True):
+            try:
                 results.update(self._calc_taker_ratio(df))
+            except Exception as e:
+                logger.exception("taker_ratio calculation failed: %s", e)
 
-            # Derived: EMA trend alignment
-            if "ema9" in results and "ema21" in results:
-                results["ema9_gt_ema21"] = results["ema9"] > results["ema21"]
-            if "ema9" in results and "ema50" in results:
-                results["ema9_gt_ema50"] = results["ema9"] > results["ema50"]
-            if "ema50" in results and "ema200" in results:
-                results["ema50_gt_ema200"] = results["ema50"] > results["ema200"]
-            if "ema9" in results and "ema50" in results and "ema200" in results:
-                results["ema_full_alignment"] = (
-                    results["ema9"] > results["ema50"] > results["ema200"]
-                )
+        try:
+            # ── Post-compute: EMA period filtering by group ────────────────────
+            # "ema" calc key runs in both groups but each stores only its subset:
+            #   structural   → EMA50, EMA200 (slow, anchor for trend structure)
+            #   microstructure → EMA5, EMA9, EMA21 (fast, entry timing)
+            # Hybrid derived values (ema9_gt_ema50, ema_full_alignment) are
+            # computed at query-merge time when both groups' data is available;
+            # each scheduler only stores what it can compute independently.
+            _EMA_STRUCT_KEYS = frozenset({
+                "ema50", "ema200", "ema50_gt_ema200",
+            })
+            _EMA_MICRO_KEYS = frozenset({
+                "ema5", "ema9", "ema21",
+                "ema9_gt_ema21",   # EMA9 vs EMA21 — both in micro
+                "ema9_distance_pct",
+            })
 
-            results["close"] = float(df["close"].iloc[-1])
-            results["price"] = results["close"]
+            if group == "structural":
+                # Strip fast-EMA keys — structural scheduler only stores EMA50/200
+                for _k in list(_EMA_MICRO_KEYS):
+                    results.pop(_k, None)
+                # Also strip ema-vs-micro derived hybrids (need merge to compute)
+                results.pop("ema9_gt_ema50", None)
+                results.pop("ema_full_alignment", None)
+            elif group == "microstructure":
+                # Strip slow-EMA keys — micro scheduler only stores EMA5/9/21
+                for _k in list(_EMA_STRUCT_KEYS):
+                    results.pop(_k, None)
+                # Strip hybrids — need structural EMA50/200 to be meaningful
+                results.pop("ema9_gt_ema50", None)
+                results.pop("ema_full_alignment", None)
+                results.pop("ema50_gt_ema200", None)
+
+            # ── EMA-derived alignment flags (group=None / "all" only) ─────────
+            if group is None or group == "all":
+                if "ema9" in results and "ema21" in results:
+                    results["ema9_gt_ema21"] = results["ema9"] > results["ema21"]
+                if "ema9" in results and "ema50" in results:
+                    results["ema9_gt_ema50"] = results["ema9"] > results["ema50"]
+                if "ema50" in results and "ema200" in results:
+                    results["ema50_gt_ema200"] = results["ema50"] > results["ema200"]
+                if "ema9" in results and "ema50" in results and "ema200" in results:
+                    results["ema_full_alignment"] = (
+                        results["ema9"] > results["ema50"] > results["ema200"]
+                    )
+
+            # EMA9-vs-EMA21 alignment (within microstructure group)
+            if group == "microstructure":
+                if "ema9" in results and "ema21" in results:
+                    results["ema9_gt_ema21"] = results["ema9"] > results["ema21"]
+
+            # EMA50-vs-EMA200 alignment (within structural group)
+            if group == "structural":
+                if "ema50" in results and "ema200" in results:
+                    results["ema50_gt_ema200"] = results["ema50"] > results["ema200"]
+
+            # close/price: structural and combined keep the 1h close
+            if group is None or group == "all" or group == "structural":
+                results["close"] = float(df["close"].iloc[-1])
+                results["price"] = results["close"]
+            # Microstructure keeps the 5m close for distance computation
+            if group == "microstructure":
+                _close_5m = float(df["close"].iloc[-1])
+                results["close_5m"] = _close_5m
+
             # ATR as percentage of price
-            if "atr" in results:
-                results["atr_pct"] = round((results["atr"] / results["close"]) * 100, 4) if results["close"] > 0 else 0
+            if results.get("atr") is not None and results.get("close"):
+                results["atr_pct"] = round(
+                    (results["atr"] / results["close"]) * 100, 4
+                ) if results["close"] > 0 else 0
             if "atr_pct" in results:
                 results["atr_percent"] = results["atr_pct"]
 
             # Derived: EMA 9 distance as percentage of current price
-            if "ema9" in results and results["close"] > 0 and results["ema9"] > 0:
+            _close_for_dist = results.get("close") or results.get("close_5m")
+            if "ema9" in results and _close_for_dist and _close_for_dist > 0 and results["ema9"] > 0:
                 results["ema9_distance_pct"] = round(
-                    (results["close"] - results["ema9"]) / results["ema9"] * 100, 4
+                    (_close_for_dist - results["ema9"]) / results["ema9"] * 100, 4
                 )
 
             if market_data:
@@ -177,8 +300,10 @@ class FeatureEngine:
             )
             return result
 
-        result["volume_24h_base"] = round(float(base_volume.loc[window_mask].sum()), 8)
-        result["volume_24h_usdt"] = round(float(quote_volume.loc[window_mask].sum()), 8)
+        # Diagnostic-only candle sums. The canonical 24h volume comes from the
+        # Gate.io ticker; these can undercount when OHLCV has gaps.
+        result["volume_24h_base_aggregated"] = round(float(base_volume.loc[window_mask].sum()), 8)
+        result["volume_24h_usdt_aggregated"] = round(float(quote_volume.loc[window_mask].sum()), 8)
         return result
 
     def _calc_rsi(self, df: pd.DataFrame) -> Dict[str, Any]:
@@ -264,11 +389,43 @@ class FeatureEngine:
         macd_val = macd_line.iloc[-1]
         sig_val = signal_line.iloc[-1]
         hist_val = histogram.iloc[-1]
+
+        hist_prev = histogram.iloc[-2] if len(histogram) >= 2 else None
+        # Use the 10 candles prior to (excluding) the current one so that
+        # the stored mean/std match the baseline used by validate_macd_histogram.
+        hist_prior = histogram.iloc[-11:-1] if len(histogram) >= 11 else histogram.iloc[:-1]
+        hist_mean = hist_prior.mean() if len(hist_prior) >= 1 else float("nan")
+        hist_std = hist_prior.std(ddof=0) if len(hist_prior) >= 2 else 0.0
+
+        hist_slope: Optional[float] = (
+            round(float(hist_val - hist_prev), 8)
+            if hist_prev is not None and pd.notna(hist_val) and pd.notna(hist_prev)
+            else None
+        )
+
+        # Robust indicators (Phase 1): macd_histogram_pct expresses the
+        # raw histogram as a percentage of the latest close price so it is
+        # comparable across symbols of wildly different price scales.
+        close_val = df["close"].iloc[-1] if len(df) else float("nan")
+        if (
+            pd.notna(hist_val)
+            and pd.notna(close_val)
+            and float(close_val) != 0.0
+        ):
+            macd_histogram_pct = round(float(hist_val) / float(close_val) * 100.0, 6)
+        else:
+            macd_histogram_pct = None
+
         return {
             "macd": round(float(macd_val), 8) if pd.notna(macd_val) else None,
             "macd_signal_line": round(float(sig_val), 8) if pd.notna(sig_val) else None,
             "macd_histogram": round(float(hist_val), 8) if pd.notna(hist_val) else None,
+            "macd_histogram_pct": macd_histogram_pct,
             "macd_signal": "positive" if pd.notna(macd_val) and macd_val > sig_val else "negative",
+            "macd_histogram_prev": round(float(hist_prev), 8) if hist_prev is not None and pd.notna(hist_prev) else None,
+            "macd_histogram_slope": hist_slope,
+            "macd_histogram_mean_10": round(float(hist_mean), 8) if pd.notna(hist_mean) else None,
+            "macd_histogram_std_10": round(float(hist_std), 8) if pd.notna(hist_std) else None,
         }
 
     def _calc_vwap(self, df: pd.DataFrame) -> Dict[str, Any]:
@@ -378,10 +535,14 @@ class FeatureEngine:
         return {"zscore": round(float(val), 4) if pd.notna(val) else None}
 
     def _calc_volume_delta(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Approximated volume delta using candle direction."""
-        direction = np.sign(df["close"] - df["open"])
-        delta = (direction * self._base_volume(df)).iloc[-1]
-        return {"volume_delta": round(float(delta), 2) if pd.notna(delta) else 0}
+        """Volume delta requires real taker buy/sell flow.
+
+        Robust-indicators contract: never approximate from candle direction.
+        When the primary order-flow source has not provided ``volume_delta``,
+        return ``None`` so the envelope tags the indicator as ``NO_DATA``
+        instead of producing a fake signal.
+        """
+        return {"volume_delta": None}
 
     def _calc_volume_spike(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Volume relative to 20-period average."""
@@ -395,24 +556,17 @@ class FeatureEngine:
         return {"volume_spike": 1.0}
 
     def _calc_taker_ratio(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Approximate taker buy ratio from candle direction over last 20 periods.
+        """Taker ratio requires real taker buy/sell flow.
 
-        Uses bullish candle volume / total volume as a proxy for buy pressure.
-        Returns value between 0.0 and 1.0 where > 0.5 indicates net buying.
+        Robust-indicators contract: never approximate from candle direction.
+        When the primary order-flow source has not provided ``taker_ratio``,
+        return ``None`` so the envelope tags the indicator as ``NO_DATA``
+        instead of producing a misleading proxy.
         """
-        lookback = min(max(int(self.config.get("taker_ratio", {}).get("lookback", 20)), 1), len(df))
-        recent = df.tail(lookback)
-        volume = self._base_volume(recent)
-        if recent.empty or volume.sum() == 0:
-            return {"taker_ratio": 0.5}
-
-        bullish_mask = recent["close"] >= recent["open"]
-        buy_volume = volume.loc[bullish_mask].sum()
-        total_volume = volume.sum()
-        ratio = buy_volume / total_volume if total_volume > 0 else 0.5
-        return {"taker_ratio": round(float(ratio), 4)}
+        return {"taker_ratio": None}
 
     def _apply_market_data_overrides(self, market_data: Dict[str, Any]) -> Dict[str, Any]:
+        # Canonical ticker values from MarketDataService override candle sums.
         overrides: Dict[str, Any] = {}
         for key in (
             "volume_24h_base",

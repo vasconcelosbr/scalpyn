@@ -3,7 +3,15 @@
 import Link from 'next/link';
 import { Pause, Play, BarChart3, AlertTriangle, TrendingUp, TrendingDown } from 'lucide-react';
 import { useEngineStatus, type TradingProfile } from '@/hooks/useEngineStatus';
+import { ApiError } from '@/lib/api';
+import { pickActivePositionsCount, pickUnderwaterCount } from '@/lib/engineStatus';
 import { useState } from 'react';
+
+function formatActionError(err: unknown): string {
+  if (err instanceof ApiError) return err.toDescriptiveString();
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -185,21 +193,23 @@ function MacroRegimeBadge({ regime }: { regime: string }) {
 
 function SpotBody({
   positions,
+  positionsSummary,
   capital,
 }: {
   positions: Record<string, any>[];
+  positionsSummary: Record<string, any> | null;
   capital: { total: number; used: number; free: number } | null;
 }) {
-  const underwaterCount = positions.filter(
-    (p) => p.unrealized_pnl != null && p.unrealized_pnl < 0
-  ).length;
+  const safePositions = Array.isArray(positions) ? positions : [];
+  const activeCount = pickActivePositionsCount(positionsSummary, safePositions);
+  const underwaterCount = pickUnderwaterCount(positionsSummary, safePositions);
 
   const deployedPct =
     capital && capital.total > 0 ? (capital.used / capital.total) * 100 : null;
 
   return (
     <>
-      <Metric label="Active Positions" value={positions.length} />
+      <Metric label="Active Positions" value={activeCount} />
       <Divider />
       {underwaterCount > 0 ? (
         <Metric
@@ -240,15 +250,19 @@ function SpotBody({
 
 function FuturesBody({
   positions,
+  positionsSummary,
   capital,
   balance,
 }: {
   positions: Record<string, any>[];
+  positionsSummary: Record<string, any> | null;
   capital: { total: number; used: number; free: number } | null;
   balance: Record<string, any> | null;
 }) {
-  const longs = positions.filter((p) => p.side === 'long' || p.direction === 'long').length;
-  const shorts = positions.filter((p) => p.side === 'short' || p.direction === 'short').length;
+  const safePositions = Array.isArray(positions) ? positions : [];
+  const openCount = pickActivePositionsCount(positionsSummary, safePositions);
+  const longs = safePositions.filter((p) => p && (p.side === 'long' || p.direction === 'long')).length;
+  const shorts = safePositions.filter((p) => p && (p.side === 'short' || p.direction === 'short')).length;
 
   const unrealizedPnl: number | null = balance?.unrealized_pnl ?? null;
   const pnlPositive = unrealizedPnl != null && unrealizedPnl >= 0;
@@ -264,7 +278,7 @@ function FuturesBody({
 
   return (
     <>
-      <Metric label="Open Positions" value={positions.length} />
+      <Metric label="Open Positions" value={openCount} />
       <Divider />
       <Metric
         label="Longs"
@@ -362,10 +376,21 @@ function SkeletonBar() {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function EngineStatusBar({ profile }: EngineStatusBarProps) {
-  const { isRunning, isPaused, positions, capital, balance, isLoading, startEngine, pauseEngine, resumeEngine } =
-    useEngineStatus(profile);
+  const {
+    isRunning,
+    isPaused,
+    positions,
+    positionsSummary,
+    capital,
+    balance,
+    isLoading,
+    startEngine,
+    pauseEngine,
+    resumeEngine,
+  } = useEngineStatus(profile);
 
   const [actionLoading, setActionLoading] = useState<'start' | 'pause' | 'resume' | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const engineState = resolveEngineState(isRunning, isPaused);
   const stateCfg = STATE_CONFIG[engineState];
@@ -374,8 +399,13 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
 
   async function handleStart() {
     setActionLoading('start');
+    setError(null);
     try {
       await startEngine();
+    } catch (err) {
+      const message = formatActionError(err);
+      setError(message);
+      console.error('Failed to start engine:', err);
     } finally {
       setActionLoading(null);
     }
@@ -383,8 +413,13 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
 
   async function handlePause() {
     setActionLoading('pause');
+    setError(null);
     try {
       await pauseEngine();
+    } catch (err) {
+      const message = formatActionError(err);
+      setError(message);
+      console.error('Failed to pause engine:', err);
     } finally {
       setActionLoading(null);
     }
@@ -392,16 +427,89 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
 
   async function handleResume() {
     setActionLoading('resume');
+    setError(null);
     try {
       await resumeEngine();
+    } catch (err) {
+      const message = formatActionError(err);
+      setError(message);
+      console.error('Failed to resume engine:', err);
     } finally {
       setActionLoading(null);
     }
   }
 
   return (
-    <div
-      style={{
+    <>
+      {error && (
+        <div
+          style={{
+            padding: '12px 16px',
+            background: 'var(--color-loss-muted)',
+            border: '1px solid var(--color-loss-border)',
+            borderRadius: 'var(--radius-lg)',
+            marginBottom: '12px',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '12px',
+          }}
+          role="alert"
+        >
+          <AlertTriangle size={16} style={{ color: 'var(--color-loss)', flexShrink: 0, marginTop: '2px' }} />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)' }}>
+              Failed to start {profile} engine
+            </span>
+            <span
+              style={{
+                fontSize: '12px',
+                color: 'var(--text-secondary)',
+                lineHeight: 1.5,
+                fontFamily: 'var(--font-mono)',
+                wordBreak: 'break-word',
+              }}
+            >
+              {error}
+            </span>
+            {(error.includes('config') || error.includes('connection')) && (
+              <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                Make sure you have configured your {profile === 'spot' ? 'Spot' : 'Futures'} Engine settings and connected your Gate.io API keys.
+              </span>
+            )}
+            {/^404\b/.test(error) && (
+              <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                The upstream API returned 404 for this route. If the issue persists, try a hard refresh (Cmd/Ctrl+Shift+R) and contact support with the path shown above.
+              </span>
+            )}
+            {/^5\d\d\b/.test(error) && (
+              <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                The backend returned a server error. Server logs will have full details — please retry in a moment.
+              </span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-tertiary)',
+              cursor: 'pointer',
+              padding: '4px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 'var(--radius-sm)',
+              flexShrink: 0,
+            }}
+            aria-label="Dismiss error"
+          >
+            ×
+          </button>
+        </div>
+      )}
+      <div
+        style={{
         display: 'flex',
         alignItems: 'center',
         gap: '0',
@@ -462,9 +570,18 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
         }}
       >
         {profile === 'spot' ? (
-          <SpotBody positions={positions} capital={capital} />
+          <SpotBody
+            positions={positions}
+            positionsSummary={positionsSummary}
+            capital={capital}
+          />
         ) : (
-          <FuturesBody positions={positions} capital={capital} balance={balance} />
+          <FuturesBody
+            positions={positions}
+            positionsSummary={positionsSummary}
+            capital={capital}
+            balance={balance}
+          />
         )}
       </div>
 
@@ -536,5 +653,6 @@ export function EngineStatusBar({ profile }: EngineStatusBarProps) {
         </Link>
       </div>
     </div>
+    </>
   );
 }

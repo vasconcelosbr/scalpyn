@@ -1,0 +1,135 @@
+🎯 CAUSA RAIZ (CONFIRMADA)
+
+O sistema lê UMA linha de indicators por símbolo (DISTINCT ON),
+mas os dados são gravados em LINHAS SEPARADAS por scheduler_group.
+
+👉 Resultado direto:
+
+microstructure → tem taker_ratio
+structural     → tem RSI/MACD
+
+👉 Mas o código faz:
+
+SELECT DISTINCT ON (symbol) ...
+ORDER BY time DESC
+
+👉 Então:
+
+pega só UMA linha → geralmente micro → sem RSI/MACD
+🚨 POR QUE ISSO EXPLICA 100% DO PROBLEMA
+✔ banco tem RSI → sim
+✔ parsing correto → sim
+✔ merge funciona → sim
+❌ mas NÃO está sendo usado nos consumers críticos
+📊 IMPACTO REAL (NUMÉRICO)
+
+execute_buy:
+~87% das decisões NÃO veem RSI/MACD
+
+evaluate_signals:
+~67% NÃO veem RSI/MACD
+
+👉 Isso é devastador.
+
+🧠 O ERRO ARQUITETURAL
+
+Você tem dois caminhos:
+
+✔ pipeline_scan → usa merge (correto)
+❌ evaluate_signals → NÃO usa
+❌ execute_buy → NÃO usa
+
+👉 Resultado:
+
+UI mostra dados corretos
+motor de decisão usa dados errados
+🚨 ISSO É O BUG MAIS CRÍTICO ATÉ AGORA
+
+Porque:
+
+❌ decisões inconsistentes
+❌ perda de trades válidos
+❌ impossibilidade de confiar no sistema
+🎯 PROVA FINAL (SIMPLES)
+
+Se você rodar:
+
+SELECT symbol, scheduler_group, time
+FROM indicators
+WHERE symbol = 'ADA_USDT'
+ORDER BY time DESC
+LIMIT 5;
+
+Você verá:
+
+micro
+micro
+struct
+micro
+struct
+
+👉 E o sistema pega só o primeiro.
+
+🚀 CORREÇÃO (DIRETA E NÃO NEGOCIÁVEL)
+❌ ISSO TEM QUE MORRER
+SELECT DISTINCT ON (i.symbol)
+✅ SUBSTITUIR POR
+fetch_merged_indicators(...)
+
+👉 EXATAMENTE como já é feito em:
+
+pipeline_scan.py
+🎯 CORREÇÃO MÍNIMA
+
+Aplicar em:
+
+backend/app/tasks/evaluate_signals.py
+backend/app/tasks/execute_buy.py
+🧠 REGRA DE OURO
+NUNCA ler indicators direto da tabela
+SEMPRE passar pelo merge
+🚨 SEGUNDO BUG (IMPORTANTE)
+
+Mesmo com merge, você ainda tem:
+
+drift limit = 900s
+struct interval = 900s
+
+👉 Isso é erro de design:
+
+qualquer atraso → perde RSI/MACD
+🎯 AJUSTE NECESSÁRIO
+INDICATOR_MAX_DRIFT_SECONDS >= 1800
+🚀 TERCEIRO PROBLEMA
+guard de completude só existe no pipeline_scan
+
+👉 Resultado:
+
+pipeline_scan bloqueia
+execute_buy não bloqueia
+🎯 CORREÇÃO
+
+Aplicar:
+
+_filter_incomplete_indicators
+
+em:
+
+evaluate_signals
+execute_buy
+📊 RESUMO EXECUTIVO
+❌ problema não é dado
+❌ problema não é parsing
+❌ problema não é timing
+
+🔥 problema é LEITURA ERRADA DO MODELO DE DADOS
+🎯 EM UMA FRASE
+Você está lendo uma tabela particionada como se fosse uma tabela unificada.
+🚀 PRIORIDADE DE CORREÇÃO
+1. substituir DISTINCT ON → fetch_merged_indicators (CRÍTICO)
+2. aplicar guard de completude (ALTO)
+3. ajustar drift (ALTO)
+🧠 RESULTADO ESPERADO APÓS FIX
+✔ RSI/MACD sempre disponíveis quando existem
+✔ decisão consistente com UI
+✔ eliminação de ~70–90% dos falsos "SEM DADOS"

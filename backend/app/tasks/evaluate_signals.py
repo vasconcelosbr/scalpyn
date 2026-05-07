@@ -1,9 +1,21 @@
-"""Celery Task — evaluate signals, check blocks, apply risk, execute trades."""
+"""Celery Task — evaluate signals, check blocks, apply risk, execute trades.
+
+Task #232 (reviewer round 16): unified execution gating. Both
+``evaluate_signals`` and ``execute_buy`` now require the same triple
+gate at the buy decision point:
+
+    is_active = true  AND  is_tradable = true  AND  EXISTS L3 row
+
+L3 enforcement is **strict** (round 17): the per-user
+Pool → L1 → L2 → L3 ``PipelineWatchlist`` chain MUST resolve, and
+candidates are restricted to its ``pipeline_watchlist_assets`` set.
+Symbols absent from L3 → ``reason=NOT_IN_L3``. Users without a built
+chain → ``reason=NO_L3_CHAIN`` and the cycle skips that user — no
+silent fallback to active+tradable.
+"""
 
 import asyncio
-import json
 import logging
-from datetime import datetime, timezone
 
 from sqlalchemy import text, select
 
@@ -36,13 +48,11 @@ async def _evaluate_async():
     signals_found = 0
 
     async with AsyncSessionLocal() as db:
-        # Get all active users
         users_result = await db.execute(select(User).where(User.is_active == True))
         users = users_result.scalars().all()
 
         for user in users:
             try:
-                # Get user configs
                 signal_config = await config_service.get_config(db, "signal", user.id)
                 block_config = await config_service.get_config(db, "block", user.id)
                 risk_config = await config_service.get_config(db, "risk", user.id)
@@ -54,29 +64,150 @@ async def _evaluate_async():
                 block_engine = BlockEngine(block_config) if block_config else None
                 risk_engine = RiskEngine(risk_config)
 
-                # Get daily summary for circuit breaker data
                 daily = await analytics_service.get_daily_summary(db, user.id)
 
-                # Get latest scores + indicators
-                ranked = await db.execute(text("""
-                    SELECT DISTINCT ON (a.symbol)
-                        a.symbol, a.score, i.indicators_json
-                    FROM alpha_scores a
-                    JOIN indicators i ON a.symbol = i.symbol
-                    WHERE a.time > now() - interval '2 hours'
-                      AND i.time > now() - interval '2 hours'
-                      AND a.score >= 60
-                    ORDER BY a.symbol, a.time DESC
-                """))
-                candidates = ranked.fetchall()
+                # Robust authoritative scoring (Task #215): candidate
+                # symbols come from active ``pool_coins`` (the operator-
+                # curated tradable set), and the indicator payload is
+                # resolved via the unified provider so structural
+                # RSI/MACD/ADX are always merged with microstructure
+                # taker/spread. The previous ``DISTINCT ON (i.symbol)``
+                # join silently dropped structural indicators ~67% of the
+                # time. Selection is gated by ``_compute_robust_score``
+                # below — the legacy ``alpha_scores.score`` column was
+                # joined in the old query but never read in this loop, so
+                # it is no longer fetched.
+                from ..services.indicators_provider import (
+                    get_merged_indicators,
+                    is_complete,
+                )
+                from ..services.indicator_validity import unwrap_envelope_value
 
-                for candidate in candidates:
-                    symbol = candidate.symbol
-                    alpha_score = float(candidate.score)
-                    indicators = candidate.indicators_json or {}
-                    current_price = indicators.get("close", 0)
+                # Task #232 — candidate universe = INGESTION set
+                # (is_active=true, per-tenant via JOIN pools p ON
+                # p.user_id = :uid). is_tradable is projected here but
+                # enforced only at the buy decision point below, so the
+                # NOT_TRADABLE skip log reflects qualified buys blocked
+                # by the gate — not the active∖tradable diff.
+                from ..services.execution_gate_metrics import record_not_tradable
+
+                pool_rows_res = await db.execute(text("""
+                    SELECT pc.symbol,
+                           bool_or(pc.is_tradable) AS is_tradable
+                      FROM pool_coins pc
+                      JOIN pools p ON p.id = pc.pool_id
+                     WHERE pc.is_active = true
+                       AND p.user_id    = :uid
+                  GROUP BY pc.symbol
+                """), {"uid": user.id})
+                pool_rows = pool_rows_res.fetchall()
+                tradable_by_symbol = {r.symbol: bool(r.is_tradable) for r in pool_rows}
+                pool_symbols = list(tradable_by_symbol.keys())
+
+                if not pool_symbols:
+                    continue
+
+                # Task #232 round 16 — resolve the per-user L3 symbol
+                # set so the execution gate matches ``execute_buy``.
+                # Best-effort: if any link in the chain is missing,
+                # ``l3_symbols`` stays None and we degrade to the
+                # active+tradable universe (fresh tenants without an
+                # L3 profile keep working through the rolling deploy).
+                from ..models.pipeline_watchlist import (
+                    PipelineWatchlist, PipelineWatchlistAsset,
+                )
+                l3_symbols: set | None = None
+                try:
+                    pool_for_l3 = (await db.execute(
+                        select(Pool).where(
+                            Pool.user_id == user.id,
+                            Pool.is_active == True,  # noqa: E712
+                        ).limit(1)
+                    )).scalars().first()
+                    if pool_for_l3 is not None:
+                        # Round 19 — explicit ``level=`` predicates +
+                        # deterministic ordering so multi-watchlist
+                        # tenants get stable chain selection.
+                        l1 = (await db.execute(select(PipelineWatchlist).where(
+                            PipelineWatchlist.source_pool_id == pool_for_l3.id,
+                            PipelineWatchlist.user_id == user.id,
+                            PipelineWatchlist.level == "L1",
+                        ).order_by(
+                            PipelineWatchlist.created_at.asc(),
+                            PipelineWatchlist.id.asc(),
+                        ).limit(1))).scalars().first()
+                        l2 = (await db.execute(select(PipelineWatchlist).where(
+                            PipelineWatchlist.source_watchlist_id == l1.id,
+                            PipelineWatchlist.user_id == user.id,
+                            PipelineWatchlist.level == "L2",
+                        ).order_by(
+                            PipelineWatchlist.created_at.asc(),
+                            PipelineWatchlist.id.asc(),
+                        ).limit(1))).scalars().first() if l1 else None
+                        l3 = (await db.execute(select(PipelineWatchlist).where(
+                            PipelineWatchlist.source_watchlist_id == l2.id,
+                            PipelineWatchlist.user_id == user.id,
+                            PipelineWatchlist.level == "L3",
+                        ).order_by(
+                            PipelineWatchlist.created_at.asc(),
+                            PipelineWatchlist.id.asc(),
+                        ).limit(1))).scalars().first() if l2 else None
+                        if l3 is not None:
+                            l3_rows = (await db.execute(
+                                select(PipelineWatchlistAsset.symbol).where(
+                                    PipelineWatchlistAsset.watchlist_id == l3.id
+                                )
+                            )).fetchall()
+                            l3_symbols = {r[0] for r in l3_rows}
+                except Exception as _l3_exc:
+                    logger.warning(
+                        "[evaluate_signals] L3 chain query failed for user %s: %s",
+                        user.id, _l3_exc,
+                    )
+
+                # Task #232 round 17 — STRICT L3 enforcement (no fallback).
+                # The execution contract requires Pool → L1 → L2 → L3 to
+                # exist before any order. Skip the user cleanly when the
+                # chain is missing instead of degrading to active+tradable.
+                if l3_symbols is None:
+                    logger.warning(
+                        "[evaluate_signals] SKIPPED user=%s reason=NO_L3_CHAIN — "
+                        "operator must build Pool→L1→L2→L3 before trades execute.",
+                        user.id,
+                    )
+                    continue
+
+                merged_by_sym = await get_merged_indicators(db, pool_symbols)
+
+                for symbol, mi in merged_by_sym.items():
+                    # ``MergedIndicators.values`` already carries scalars
+                    # unwrapped from per-key envelopes; downstream engines
+                    # accept either flat or envelope shape (they call
+                    # ``unwrap_envelope_value`` internally).
+                    indicators = mi.as_flat_dict()
+
+                    # Shared completeness guard (Task #215) — same rule
+                    # used by pipeline_scan and execute_buy. Skip cleanly
+                    # when core indicators are still warming up.
+                    ok, missing = is_complete(indicators)
+                    if not ok:
+                        logger.warning(
+                            "[evaluate_signals] QUARANTINED %s — missing core: %s",
+                            symbol, missing,
+                        )
+                        continue
+
+                    # ``close`` may be stored as the envelope
+                    # ``{"value": 1234.5, "status": "VALID"}``. Unwrap so
+                    # the price guard below compares a scalar.
+                    current_price = unwrap_envelope_value(indicators.get("close")) or 0
 
                     if current_price <= 0:
+                        continue
+
+                    # Authoritative robust score from envelopes.
+                    alpha_score = _compute_robust_score(symbol, indicators)
+                    if alpha_score is None:
                         continue
 
                     # 1. Evaluate signal
@@ -97,7 +228,7 @@ async def _evaluate_async():
                         direction=signal_result.get("direction", "long"),
                         current_price=current_price,
                         indicators=indicators,
-                        available_capital=100000,  # Would come from user's actual capital
+                        available_capital=100000,
                         open_positions=daily.get("open_positions", 0),
                         daily_pnl=daily.get("total_pnl", 0),
                         consecutive_losses=daily.get("consecutive_losses", 0),
@@ -105,6 +236,28 @@ async def _evaluate_async():
 
                     if not risk_result.get("approved"):
                         logger.info(f"Trade for {symbol} rejected by risk: {risk_result.get('rejection_reason')}")
+                        continue
+
+                    # Task #232 round 16 — unified execution gate.
+                    # Symbol passed scoring+signal+block+risk; the gate
+                    # below mirrors execute_buy: is_tradable AND (when
+                    # the chain resolved) L3 membership.
+                    if not tradable_by_symbol.get(symbol, False):
+                        record_not_tradable("evaluate_signals", symbol)
+                        logger.info(
+                            "[evaluate_signals] SKIPPED %s reason=NOT_TRADABLE "
+                            "score=%.2f direction=%s — qualified buy blocked by "
+                            "is_tradable=false",
+                            symbol, alpha_score, signal_result.get("direction"),
+                        )
+                        continue
+                    if symbol not in l3_symbols:
+                        logger.info(
+                            "[evaluate_signals] SKIPPED %s reason=NOT_IN_L3 "
+                            "score=%.2f direction=%s — qualified buy blocked "
+                            "by L3 watchlist membership.",
+                            symbol, alpha_score, signal_result.get("direction"),
+                        )
                         continue
 
                     signals_found += 1
@@ -133,7 +286,6 @@ async def _evaluate_async():
                     if trade_result.get("success"):
                         logger.info(f"Trade executed: {symbol} {signal_result['direction']} for user {user.id}")
 
-                        # 6. Send notification
                         await notification_service.send_trade_alert(
                             db, user.id, "buy",
                             {"symbol": symbol, "price": current_price, "score": alpha_score}
@@ -143,11 +295,47 @@ async def _evaluate_async():
                 logger.exception(f"Error evaluating signals for user {user.id}: {e}")
                 continue
 
-        # Also check exit conditions for open positions
         await _check_exits(db)
 
     logger.info(f"Signal evaluation complete: {signals_found} signals generated")
     return signals_found
+
+
+def _compute_robust_score(symbol: str, indicators: dict) -> float | None:
+    """Run the authoritative robust score for a single symbol.
+
+    Returns the bounded ``[0, 100]`` score, or ``None`` when the engine
+    cannot produce a value (missing indicators, gate rejection, etc.) so
+    the caller can skip the candidate.
+    """
+    from ..services.robust_indicators import (
+        calculate_score_with_confidence,
+        envelope_indicators,
+    )
+    from ..services.seed_service import DEFAULT_SCORE
+
+    if not indicators:
+        return None
+
+    try:
+        envelopes = envelope_indicators(
+            symbol,
+            indicators,
+            flow_source_hint=indicators.get("taker_source"),
+        )
+        rules = (
+            DEFAULT_SCORE.get("scoring_rules")
+            or DEFAULT_SCORE.get("rules")
+            or []
+        )
+        result = calculate_score_with_confidence(envelopes, rules)
+    except Exception as exc:
+        logger.debug("[evaluate_signals] robust score failed for %s: %s", symbol, exc)
+        return None
+
+    if result.rejected or result.score is None:
+        return None
+    return float(result.score)
 
 
 async def _check_exits(db):
@@ -163,7 +351,6 @@ async def _check_exits(db):
 
     for trade in trades:
         try:
-            # Get current price from metadata
             price_result = await db.execute(text(
                 "SELECT price FROM market_metadata WHERE symbol = :symbol"
             ), {"symbol": trade.symbol})

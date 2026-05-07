@@ -1,22 +1,28 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, CheckCircle2, XCircle } from "lucide-react";
 import {
   EvaluationTraceBreakdown,
+  classifySkip,
   formatEvaluationTraceValue,
   type EvaluationTraceItem,
 } from "./EvaluationTraceBreakdown";
+import type { ScoreRule } from "./PipelineAssetTable";
+import { RULE_COLORS, fmtPts, sortScoreRules } from "./PipelineAssetTable";
+import { scoreBand, scorePct, SCORE_TOOLTIP, RULES_TOOLTIP } from "@/lib/scoreBand";
+import { summarizeScoreRules, fmtConfidence } from "@/lib/scoreRulesSummary";
 
 const DECISION_SUMMARY_INDICATOR_LIMIT = 3;
 
 export interface DecisionTraceItem {
-  type: "filter" | "block_rule";
+  type: "filter" | "block_rule" | "entry_trigger" | "signal";
   indicator: string;
   condition: string;
   expected?: string | null;
   current_value?: unknown;
   status: "PASS" | "FAIL" | "SKIPPED";
+  reason?: string | null;
 }
 
 export interface DecisionDetails {
@@ -34,6 +40,8 @@ export interface WatchlistDecisionItem {
   stage?: string | null;
   profile_id?: string | null;
   timestamp?: string | null;
+  alpha_score?: number | null;
+  score_rules?: ScoreRule[];
   failed_indicators: string[];
   conditions: string[];
   current_values: Record<string, unknown>;
@@ -46,6 +54,32 @@ export type RejectedAssetItem = WatchlistDecisionItem;
 
 function fmtValue(value: unknown): string {
   return formatEvaluationTraceValue(value);
+}
+
+function scoreColor(pct: number | null): string {
+  if (pct == null) return "#64748B";
+  if (pct >= 70) return "#34D399";
+  if (pct >= 45) return "#FBBF24";
+  return "#F87171";
+}
+
+function ScoreBar({ value }: { value?: number | null }) {
+  if (value == null) return <span className="text-[#334155] text-xs">—</span>;
+  const pct = Math.min(100, Math.max(0, value));
+  const color = scoreColor(pct);
+  return (
+    <div className="flex items-center gap-2 min-w-[110px]">
+      <div className="relative flex-1 h-1.5 bg-[#1A2035] rounded-full overflow-hidden">
+        <div
+          className="h-full rounded-full transition-all duration-700"
+          style={{ width: `${pct}%`, backgroundColor: color }}
+        />
+      </div>
+      <span className="text-sm font-bold tabular-nums w-7 text-right" style={{ color }}>
+        {Math.round(value)}
+      </span>
+    </div>
+  );
 }
 
 function itemPalette(status: "approved" | "rejected") {
@@ -186,6 +220,7 @@ export function WatchlistDecisionTable({
               <tr className="border-b border-[#1A2035] bg-[#060810]">
                 <th className="w-8 px-2 py-2.5" />
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Symbol</th>
+                <th className="px-3 py-2.5 text-left text-[#4B5563] min-w-[130px]">Score</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Stage</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Status</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Indicators</th>
@@ -208,6 +243,7 @@ export function WatchlistDecisionTable({
                         {isExpanded ? <ChevronDown size={13} className="text-[#60A5FA]" /> : <ChevronRight size={13} />}
                       </td>
                       <td className="px-3 py-2.5 font-semibold text-[#E2E8F0]">{item.symbol}</td>
+                      <td className="px-3 py-2.5"><ScoreBar value={item.alpha_score} /></td>
                       <td className="px-3 py-2.5 text-[#94A3B8]">{item.stage ?? "—"}</td>
                       <td className="px-3 py-2.5">
                         <span className={`inline-flex rounded px-2 py-0.5 text-[10px] font-semibold ${palette.badge}`}>
@@ -220,7 +256,7 @@ export function WatchlistDecisionTable({
                     </tr>
                     {isExpanded && (
                       <tr className="border-b border-[#1A2035] bg-[#06080E]">
-                        <td colSpan={7} className="p-4">
+                        <td colSpan={8} className="p-4">
                           <div className="grid gap-4 lg:grid-cols-2">
                             <TraceSection
                               title="Block Rules"
@@ -229,6 +265,20 @@ export function WatchlistDecisionTable({
                             <TraceSection
                               title="Filters"
                               items={item.details.evaluation_trace.filter((trace) => trace.type === "filter")}
+                            />
+                            <TraceSection
+                              title="Entry Triggers"
+                              items={item.details.evaluation_trace.filter((trace) => trace.type === "entry_trigger")}
+                            />
+                            <TraceSection
+                              title="Signals"
+                              items={item.details.evaluation_trace.filter((trace) => trace.type === "signal")}
+                            />
+                          </div>
+                          <div className="mt-4">
+                            <ScoreBreakdownSection
+                              rules={item.score_rules ?? []}
+                              alphaScore={item.alpha_score ?? null}
                             />
                           </div>
                         </td>
@@ -270,30 +320,253 @@ function TraceSection({ title, items }: { title: string; items: DecisionTraceIte
       <div className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[#4B5563]">{title}</div>
       <div className="space-y-2">
         {items.map((item, index) => {
+          const skip = classifySkip(item);
           const cls =
             item.status === "PASS"
               ? "border-[#14532D]/40 bg-[#061E14] text-[#86EFAC]"
-              : item.status === "FAIL"
-                ? item.type === "block_rule"
-                  ? "border-[#6B21A8]/40 bg-[#1A0A2A] text-[#D8B4FE]"
-                  : "border-[#7F1D1D]/25 bg-[#150A0A] text-[#FCA5A5]"
-                : "border-[#1E2433] bg-[#06080E] text-[#64748B]";
+              : skip
+                ? skip.cls
+                : item.status === "FAIL"
+                  ? item.type === "block_rule"
+                    ? "border-[#6B21A8]/40 bg-[#1A0A2A] text-[#D8B4FE]"
+                    : "border-[#7F1D1D]/25 bg-[#150A0A] text-[#FCA5A5]"
+                  : "border-[#1E2433] bg-[#06080E] text-[#64748B]";
           return (
             <div key={index} className={`rounded-lg border px-3 py-2 text-xs ${cls}`}>
               <div className="flex items-center justify-between gap-3">
                 <span className="font-semibold">{item.indicator}</span>
-                <span className="font-mono text-[10px]">{item.status}</span>
+                <span className="font-mono text-[10px]">{skip ? skip.label : item.status}</span>
               </div>
               <div className="mt-1 text-[#CBD5E1]">{item.condition}</div>
               <div className="mt-1 flex flex-wrap gap-3 text-[11px]">
-                <span>Current: <span className="font-mono">{fmtValue(item.current_value)}</span></span>
-                <span>Expected: <span className="font-mono">{item.expected ?? "—"}</span></span>
+                <span>
+                  Current:{" "}
+                  <span className="font-mono">
+                    {skip && skip.currentText
+                      ? <span className="italic opacity-60">{skip.currentText}</span>
+                      : fmtValue(item.current_value)}
+                  </span>
+                </span>
+                <span>
+                  Expected:{" "}
+                  <span className="font-mono">
+                    {skip?.expectedOverride ?? (item.expected ?? "—")}
+                  </span>
+                </span>
               </div>
             </div>
           );
         })}
         {items.length === 0 && <div className="text-xs text-[#4B5563]">No rules configured.</div>}
       </div>
+    </div>
+  );
+}
+
+const SCORE_CATEGORY_ORDER = ["momentum", "market_structure", "liquidity", "signal", "other"];
+const SCORE_CATEGORY_LABELS: Record<string, string> = {
+  momentum: "Momentum",
+  market_structure: "Estrutura de Mercado",
+  liquidity: "Liquidez",
+  signal: "Sinal",
+  other: "Outros",
+};
+
+function fmtRuleValue(value: ScoreRule["actual_value"]): string {
+  if (value == null) return "—";
+  if (typeof value === "boolean") return value ? "✓" : "✗";
+  if (typeof value === "number") {
+    if (Math.abs(value) >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+    if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+    if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+    return value % 1 === 0 ? String(value) : value.toFixed(2);
+  }
+  return String(value);
+}
+
+function ScoreBreakdownSection({
+  rules,
+  alphaScore,
+}: {
+  rules: ScoreRule[];
+  alphaScore: number | null;
+}) {
+  const summary = summarizeScoreRules(rules);
+  const {
+    matchedCount,
+    positiveCount,
+    totalPossible,
+    nominalEarned,
+    awardedEarned,
+    hasEnriched,
+    totalPenalties,
+  } = summary;
+  const earnedDisplay = hasEnriched ? awardedEarned : nominalEarned;
+  // Single source of truth for label + color (Task #187 review fix). The
+  // file-local `scoreColor` helper still backs the table-row ScoreBar
+  // (different visual context, kept out of scope), but the breakdown
+  // panel now derives both from the unified robust-engine thresholds so
+  // the band label and bar color can never disagree.
+  const band = scoreBand(alphaScore);
+  const pct = scorePct(alphaScore);
+
+  const byCategory = SCORE_CATEGORY_ORDER.reduce<Record<string, ScoreRule[]>>((acc, cat) => {
+    const catRules = sortScoreRules(rules.filter((r) => r.category === cat));
+    if (catRules.length) acc[cat] = catRules;
+    return acc;
+  }, {});
+
+  const uncategorized = sortScoreRules(rules.filter((r) => !SCORE_CATEGORY_ORDER.includes(r.category)));
+  if (uncategorized.length) byCategory["other"] = [...(byCategory["other"] ?? []), ...uncategorized];
+
+  return (
+    <div className="rounded-xl border border-[#1E2433] bg-[#0A0B10] p-4">
+      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[#4B5563]">
+        Score Breakdown
+      </div>
+
+      {/* Score row — robust 0–100 metric */}
+      <div className="flex items-center gap-3">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-[#4B5563] w-[90px] shrink-0">
+          Score
+        </span>
+        <div
+          className="flex-1 h-1.5 bg-[#1A2035] rounded-full overflow-hidden"
+          title={SCORE_TOOLTIP}
+        >
+          <div
+            className="h-full rounded-full transition-all duration-700"
+            style={{ width: `${pct}%`, backgroundColor: band.color }}
+          />
+        </div>
+        <span
+          className="text-sm font-bold tabular-nums w-16 text-right"
+          style={{ color: band.color }}
+          title={SCORE_TOOLTIP}
+        >
+          {alphaScore == null ? '—' : `${alphaScore.toFixed(1)}/100`}
+        </span>
+        <span
+          className="text-[10px] font-semibold uppercase tracking-wider w-14 text-right"
+          style={{ color: band.color }}
+          title={SCORE_TOOLTIP}
+          data-testid="score-band-label"
+        >
+          {band.label}
+        </span>
+      </div>
+
+      {/* Rules row — secondary counter, distinct visual (no bar) */}
+      <div className="flex items-center gap-3 mt-1.5 mb-3">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-[#4B5563] w-[90px] shrink-0">
+          Regras
+        </span>
+        <span
+          className="text-[11px] text-[#64748B] flex-1"
+          title={RULES_TOOLTIP}
+        >
+          {rules.length === 0 ? (
+            'Sem regras configuradas'
+          ) : (
+            <>
+              {matchedCount}/{positiveCount} matched ·{' '}
+              {`+${earnedDisplay.toFixed(0)}`}
+              /{totalPossible.toFixed(0)} pts
+              {!hasEnriched && matchedCount > 0 && (
+                <span className="ml-1.5 text-[9px] text-[#475569] uppercase tracking-wider">
+                  (legacy)
+                </span>
+              )}
+            </>
+          )}
+        </span>
+        {totalPenalties !== 0 && (
+          <span className="text-[10px] text-[#F87171] shrink-0">
+            Penalty: {fmtPts(totalPenalties)}
+          </span>
+        )}
+      </div>
+
+      {rules.length === 0 ? (
+        <p className="text-xs text-[#334155] text-center py-2">
+          Sem regras de scoring configuradas.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {Object.entries(byCategory).map(([cat, catRules]) => (
+            <div key={cat}>
+              <div className="text-[10px] font-medium text-[#334155] uppercase tracking-wider mb-1.5">
+                {SCORE_CATEGORY_LABELS[cat] ?? cat}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1">
+                {catRules.map((rule) => {
+                  const isPenalty = rule.type === 'penalty';
+                  const isNeutral = rule.type === 'neutral';
+                  const isFired   = rule.passed;
+                  const isGood    = !isPenalty && !isNeutral && isFired;
+                  const colors    = isNeutral
+                    ? RULE_COLORS.positiveUnmatched
+                    : isPenalty
+                      ? (isFired ? RULE_COLORS.penaltyFired : RULE_COLORS.penaltyIdle)
+                      : (isFired ? RULE_COLORS.positiveMatched : RULE_COLORS.positiveUnmatched);
+
+                  const hasAwarded =
+                    rule.passed &&
+                    typeof rule.awarded_points === 'number' &&
+                    Number.isFinite(rule.awarded_points);
+                  const awardedDisplay = rule.passed
+                    ? hasAwarded
+                      ? `+${(rule.awarded_points as number).toFixed(0)}`
+                      : fmtPts(rule.points_awarded)
+                    : '0';
+                  const ptsTooltip = hasAwarded
+                    ? `${(rule.awarded_points as number).toFixed(0)}` +
+                      ` / ${rule.points_possible.toFixed(0)} pts` +
+                      ` (conf ${fmtConfidence(rule.indicator_confidence)})`
+                    : `${rule.passed ? rule.points_awarded.toFixed(2) : '0'} /` +
+                      ` ${rule.points_possible.toFixed(2)} pts`;
+
+                  return (
+                    <div
+                      key={rule.id}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs border ${colors.bg}`}
+                    >
+                      {isGood || (isPenalty && !isFired) || (isNeutral && isFired) ? (
+                        <CheckCircle2 size={11} className={`${isGood ? 'text-[#34D399]' : 'text-[#4B5563]'} shrink-0`} />
+                      ) : (
+                        <XCircle size={11} className={`${isNeutral ? 'text-[#4B5563]' : 'text-[#F87171]'} shrink-0`} />
+                      )}
+                      <span
+                        className={`flex-1 truncate ${
+                          isGood ? 'text-[#94A3B8]' : isPenalty && isFired ? 'text-[#F87171]' : 'text-[#4B5563]'
+                        }`}
+                        title={rule.condition_text}
+                      >
+                        {rule.condition_text}
+                      </span>
+                      <span
+                        className={`font-mono text-[10px] shrink-0 ${
+                          rule.actual_value != null
+                            ? isGood ? 'text-[#CBD5E1]' : isPenalty && isFired ? 'text-[#FCA5A5]' : 'text-[#64748B]'
+                            : 'text-[#334155]'
+                        }`}
+                      >
+                        {fmtRuleValue(rule.actual_value)}
+                      </span>
+                      <span
+                        className={`font-mono text-[10px] shrink-0 w-20 text-right ${colors.text}`}
+                        title={ptsTooltip}
+                      >
+                        {awardedDisplay}/{fmtPts(rule.points_possible)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

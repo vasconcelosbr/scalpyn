@@ -4,6 +4,7 @@ expertMode = true
 
 [nix]
 channel = "stable-25_05"
+packages = ["glibcLocales"]
 
 [workflows]
 runButton = "Project"
@@ -20,6 +21,18 @@ args = "Backend API"
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "Start application"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Redis"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Celery Worker"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Celery Beat"
 
 [[workflows.workflow]]
 name = "Backend API"
@@ -45,6 +58,43 @@ waitForPort = 5000
 [workflows.workflow.metadata]
 outputType = "webview"
 
+[[workflows.workflow]]
+name = "Redis"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "redis-server --port 6379 --bind 127.0.0.1 --save '' --appendonly no --maxmemory 128mb --maxmemory-policy allkeys-lru"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Celery Worker"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd backend && celery -A app.tasks.celery_app worker --loglevel=info --queues=microstructure,structural,execution --concurrency=2"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Celery Beat"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd backend && celery -A app.tasks.celery_app beat --loglevel=info"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[ports]]
+localPort = 3000
+externalPort = 3000
+
 [[ports]]
 localPort = 5000
 externalPort = 5000
@@ -52,3 +102,12 @@ externalPort = 5000
 [[ports]]
 localPort = 8000
 externalPort = 80
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 120000
+
+[userenv]
+
+[userenv.shared]
+REDIS_URL = "redis://localhost:6379/0"

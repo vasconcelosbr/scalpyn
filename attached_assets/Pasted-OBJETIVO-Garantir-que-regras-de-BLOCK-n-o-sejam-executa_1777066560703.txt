@@ -1,0 +1,126 @@
+OBJETIVO
+Garantir que regras de BLOCK não sejam executadas quando o indicador estiver ausente, inválido ou não calculado. Nesses casos, a regra deve ser marcada como SKIPPED (ou INVALID), nunca FAIL.
+
+---
+
+DEFINIÇÃO DE DADO VÁLIDO
+
+Um indicador é considerado válido apenas se:
+
+* existe no payload
+* não é null
+* não é undefined
+* não é NaN
+* não é 0 quando 0 não é valor plausível (ex: taker_ratio)
+* está dentro de faixa esperada (ex: > 0 para ratios)
+
+---
+
+REGRA GLOBAL (OBRIGATÓRIA)
+
+Antes de executar QUALQUER regra:
+
+```python
+def is_valid(value, indicator_name):
+    if value is None:
+        return False
+    if isinstance(value, float) and math.isnan(value):
+        return False
+    if indicator_name == "taker_ratio" and value == 0:
+        return False
+    return True
+```
+
+---
+
+EXECUÇÃO DAS BLOCK RULES
+
+Substituir lógica atual por:
+
+```python
+value = indicators.get("taker_ratio")
+
+if not is_valid(value, "taker_ratio"):
+    return RuleResult(
+        status="SKIPPED",
+        reason="indicator_not_available"
+    )
+
+if value < 1.05:
+    return RuleResult(status="FAIL")
+
+return RuleResult(status="PASS")
+```
+
+---
+
+PADRÃO PARA TODOS OS INDICADORES
+
+Aplicar o mesmo comportamento para:
+
+* taker_ratio
+* volume_spike
+* adx
+* bb_width
+* spread
+* rsi
+* macd_histogram
+
+---
+
+STATUS PADRONIZADO
+
+Adicionar novo estado:
+
+* PASS → regra satisfeita
+* FAIL → bloqueado
+* SKIPPED → dado não disponível
+* INVALID → dado inconsistente (opcional)
+
+---
+
+REGRAS IMPORTANTES
+
+1. Dado ausente NUNCA pode gerar FAIL
+2. FAIL só pode ocorrer com dado válido
+3. SKIPPED não deve impedir entrada
+4. Logs devem indicar claramente quando um indicador não foi encontrado
+
+---
+
+LOG DE DEBUG
+
+```json
+{
+  "indicator": "taker_ratio",
+  "value": null,
+  "status": "SKIPPED",
+  "reason": "missing_or_invalid_data"
+}
+```
+
+---
+
+RESULTADO ESPERADO
+
+* Sistema não bloqueia trades por falha de dados
+* Redução de falsos negativos
+* Maior confiabilidade do motor de decisão
+* Facilidade de debug
+
+---
+
+VALIDAÇÃO FINAL
+
+Testar cenários:
+
+1. indicador válido → regra funciona normalmente
+2. indicador = 0 (inválido) → SKIPPED
+3. indicador ausente → SKIPPED
+4. indicador válido e ruim → FAIL
+
+---
+
+IMPORTANTE
+
+Essa regra deve ser aplicada globalmente no motor de decisão, não apenas no Taker Ratio.

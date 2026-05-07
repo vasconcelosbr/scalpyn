@@ -1,0 +1,190 @@
+Você é um engenheiro sênior responsável por ENCERRAR um incidente: o pipeline de coleta (ohlcv/indicators/decisions) não está gerando dados novos.
+
+Já foi comprovado que:
+
+* `pool_coins` possui dados válidos (ex: 141 ativos spot)
+* normalização e filtros NÃO removem os ativos
+* o código de coleta depende de `symbols = get_pool_symbols(db, "spot")`
+* se `symbols` estiver vazio, o pipeline retorna 0 sem erro
+
+Seu objetivo é **resolver definitivamente** ou **provar com evidência concreta por que não é possível resolver sem mais dados**.
+
+---
+
+# 🎯 OBJETIVO
+
+Determinar e comprovar:
+
+1. Se o worker está conectado ao mesmo banco que o cliente SQL
+2. Se `symbols` está vazio em runtime e por quê
+3. Se o loop de coleta está executando
+4. Se há tentativa de escrita em `ohlcv`
+5. Onde exatamente o fluxo para (com evidência)
+
+---
+
+# 🔴 REGRAS
+
+* NÃO assumir nada
+* NÃO sugerir hipóteses sem prova
+* SEM linguagem vaga
+* Sempre retornar **valores reais (logs, queries, contagens)**
+* Se não conseguir provar algo → dizer exatamente o que falta
+
+---
+
+# 🔍 ETAPA 1 — IDENTIDADE DO BANCO EM RUNTIME (OBRIGATÓRIO)
+
+Executar no worker:
+
+```python
+from sqlalchemy import text
+
+row = (await db.execute(text("""
+SELECT 
+  current_database(),
+  inet_server_addr(),
+  inet_server_port()
+"""))).fetchone()
+
+print("DB_NAME:", row[0])
+print("DB_HOST:", row[1])
+print("DB_PORT:", row[2])
+```
+
+Também retornar:
+
+* valor completo de `DATABASE_URL`
+* ambiente (ENV)
+
+---
+
+# 🔍 ETAPA 2 — PROVA DO POOL NO MESMO CONTEXTO
+
+```python
+row = (await db.execute(text("""
+SELECT COUNT(*) 
+FROM pool_coins 
+WHERE is_active = true 
+AND market_type = 'spot'
+"""))).fetchone()
+
+print("POOL_COUNT_RUNTIME:", row[0])
+```
+
+---
+
+# 🔍 ETAPA 3 — CARREGAMENTO REAL
+
+```python
+symbols = await get_pool_symbols(db, "spot")
+
+print("SYMBOLS_COUNT:", len(symbols))
+print("SYMBOLS_SAMPLE:", symbols[:10])
+```
+
+---
+
+# 🔍 ETAPA 4 — CONSISTÊNCIA DB vs RUNTIME
+
+Responder explicitamente:
+
+* POOL_COUNT_RUNTIME == SYMBOLS_COUNT ? (SIM/NÃO)
+
+---
+
+# 🔍 ETAPA 5 — EXECUÇÃO DO LOOP
+
+```python
+processed = 0
+
+for symbol in symbols:
+    print("PROCESSING:", symbol)
+    processed += 1
+
+print("TOTAL_PROCESSED:", processed)
+```
+
+---
+
+# 🔍 ETAPA 6 — VALIDAÇÃO DE FETCH
+
+Dentro do loop:
+
+```python
+df = await fetch_ohlcv(...)
+
+print("FETCH_RESULT:", symbol, "EMPTY" if df is None or df.empty else "OK")
+```
+
+---
+
+# 🔍 ETAPA 7 — VALIDAÇÃO DE ESCRITA
+
+```sql
+SELECT COUNT(*) 
+FROM ohlcv
+WHERE time >= NOW() - INTERVAL '2 minutes';
+```
+
+---
+
+# 🔍 ETAPA 8 — LOG CRÍTICO
+
+Verificar ocorrência de:
+
+"No spot pool symbols to collect data for"
+
+---
+
+# 🔍 ETAPA 9 — STATUS DO WORKER
+
+Retornar:
+
+* worker ativo (sim/não)
+* beat ativo (sim/não)
+* frequência real de execução
+* timestamp do último run
+
+---
+
+# 📊 FORMATO DE RESPOSTA (OBRIGATÓRIO)
+
+Responder com:
+
+1. DB (nome, host)
+2. DATABASE_URL (mascarado se necessário)
+3. POOL_COUNT_RUNTIME
+4. SYMBOLS_COUNT
+5. LOOP EXECUTADO (quantidade)
+6. FETCH RESULT (ok/empty)
+7. INSERTS RECENTES (count)
+8. LOG CRÍTICO (presente/ausente)
+
+---
+
+# 🎯 DECISÃO FINAL (OBRIGATÓRIA)
+
+Escolher UMA:
+
+A) ✅ Problema resolvido
+→ explicar causa raiz COM PROVA
+
+B) ❌ Problema identificado mas não resolvido
+→ explicar causa raiz COM PROVA
+
+C) ⚠️ Informação insuficiente
+→ listar EXATAMENTE quais dados faltam
+
+---
+
+# 🚨 PROIBIDO
+
+* respostas genéricas
+* sugestões sem validação
+* "provavelmente"
+* "pode ser"
+
+---
+
+Seu objetivo é encerrar o incidente com evidência técnica inequívoca.

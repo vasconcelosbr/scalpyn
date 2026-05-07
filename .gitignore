@@ -202,3 +202,7 @@ credentials.json
 *.pem
 *.key
 .credentials
+
+# Celery Beat persistent schedule (runtime state)
+backend/celerybeat-schedule
+backend/celerybeat-schedule.*

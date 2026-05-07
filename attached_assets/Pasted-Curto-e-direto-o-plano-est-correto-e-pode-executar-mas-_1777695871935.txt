@@ -1,0 +1,132 @@
+Curto e direto: o plano está correto e pode executar, mas há 4 ajustes críticos que eu faria antes de ir para produção. Sem isso, você pode trocar um problema por outro.
+
+✅ VEREDITO
+PLANO: correto (nível produção)
+AÇÃO: executar COM ajustes abaixo
+⚠️ AJUSTES CRÍTICOS (FAÇA ANTES)
+🔴 1. Normalização de símbolo (RISCO ALTO)
+
+Hoje você usa:
+
+trades_buffer:{symbol}
+
+👉 problema:
+
+Gate usa: BTC_USDT
+sistema pode usar: BTCUSDT
+
+👉 resultado:
+
+buffer nunca será lido → NO_DATA continua
+✔ Correção obrigatória
+normalized = GateAdapter._normalize_symbol(symbol)
+key = f"trades_buffer:{normalized}"
+🔴 2. Multi-instância (Cloud Run / FastAPI)
+
+Se você tiver múltiplas instâncias:
+
+cada instância abre um WebSocket
+
+👉 resultado:
+
+duplicação de trades
+custo maior
+possível inconsistência
+✔ Correção recomendada
+
+Adicionar proteção:
+
+ENABLE_GATE_WS_INSTANCE=leader
+
+ou:
+
+rodar WS só em 1 instância
+🔴 3. Volume de Redis (PERFORMANCE)
+
+Você está fazendo:
+
+1 ZADD por trade
+
+👉 problema:
+
+BTCUSDT pode gerar milhares/min
+Redis pode virar gargalo
+✔ Mitigação mínima
+
+Agrupar (batch):
+
+# opcional, mas recomendado
+pipeline.zadd(...)
+
+ou limitar:
+
+maxlen por símbolo
+🔴 4. Uso de Redis em cada chamada
+
+Se fizer isso:
+
+aioredis.from_url(...)
+
+dentro da função:
+
+👉 erro grave
+
+✔ Correto
+redis_client = get_global_redis()
+
+Singleton obrigatório.
+
+⚠️ AJUSTES IMPORTANTES (NÃO BLOQUEIAM)
+🟡 5. Diferença de source
+
+Você definiu:
+
+gate_trades_ws
+gate_io_trades
+
+✔ correto — mas:
+
+👉 garanta que o score engine aceita ambos
+
+🟡 6. microstructure_scheduler_service
+
+Plano diz:
+
+não alterar
+
+👉 correto para agora
+
+Mas saiba:
+
+vai continuar inconsistente com Celery
+🟡 7. TTL vs janela
+
+Você definiu:
+
+TTL: 90s
+janela: 300s
+
+👉 isso gera:
+
+janela maior que buffer
+✔ Melhor:
+TTL ≥ janela
+
+Ex:
+
+TTL = 300s
+🧠 O QUE ESTÁ MUITO CERTO (IMPORTANTE)
+
+Seu plano acertou os pontos mais difíceis:
+
+✔ WS no lifespan (não em Celery)
+✔ buffer Redis compartilhado
+✔ buffer-first com fallback REST
+✔ merge sem sobrescrever None
+✔ métricas de observabilidade
+
+👉 isso é arquitetura profissional
+
+🚀 DECISÃO FINAL
+EXECUTAR: SIM
+MAS aplicar os 4 ajustes críticos antes

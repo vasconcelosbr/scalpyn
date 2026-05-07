@@ -24,6 +24,10 @@ interface Coin {
   symbol: string;
   market_type: string;
   is_active: boolean;
+  // Task #232 — execution-only gate (separate from is_active which is
+  // the ingestion gate). Toggled via the "Tradable" switch in the
+  // assets table; defaults to false so trading is opt-in per symbol.
+  is_tradable: boolean;
   origin?: string;
   discovered_at?: string | null;
 }
@@ -265,6 +269,27 @@ export default function PoolConfigPage() {
       setError(e.message ?? "Failed to add coin.");
     }
     setAddingCoin(false);
+  };
+
+  // ── Toggle is_tradable (Task #232 execution gate) ─────────────────────────
+  const handleToggleTradable = async (coin: Coin, next: boolean) => {
+    // Optimistic update — if the request fails we revert and surface
+    // the error in the global error banner.
+    setCoins((prev) =>
+      prev.map((c) => (c.id === coin.id ? { ...c, is_tradable: next } : c))
+    );
+    try {
+      await apiPost(`/pools/${id}/coins/${coin.symbol}/tradable`, {
+        tradable: next,
+      });
+    } catch (e: any) {
+      setCoins((prev) =>
+        prev.map((c) =>
+          c.id === coin.id ? { ...c, is_tradable: !next } : c
+        )
+      );
+      setError(e.message ?? "Failed to update trading authorisation.");
+    }
   };
 
   // ── Remove coin ────────────────────────────────────────────────────────────
@@ -750,6 +775,9 @@ export default function PoolConfigPage() {
                 <th>Symbol</th>
                 <th>Market</th>
                 <th>Status</th>
+                <th title="Trading authorisation (Task #232) — separate from ingestion. Disabled by default; flip on to allow live execution for this symbol.">
+                  Tradable
+                </th>
                 <th>Origin</th>
                 <th style={{ width: 48 }} />
               </tr>
@@ -775,6 +803,26 @@ export default function PoolConfigPage() {
                     >
                       {coin.is_active ? "Active" : "Paused"}
                     </span>
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={coin.is_tradable}
+                      disabled={!coin.is_active}
+                      onClick={() => handleToggleTradable(coin, !coin.is_tradable)}
+                      className={`toggle ${coin.is_tradable ? "active" : ""}`}
+                      title={
+                        !coin.is_active
+                          ? "Activate the symbol first to authorise trading"
+                          : coin.is_tradable
+                            ? "Live trading authorised — click to revoke"
+                            : "Click to authorise live trading for this symbol"
+                      }
+                      style={!coin.is_active ? { opacity: 0.4, cursor: "not-allowed" } : undefined}
+                    >
+                      <span className="knob" />
+                    </button>
                   </td>
                   <td>
                     <span

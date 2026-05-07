@@ -1,0 +1,495 @@
+[
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 585, in trace_task\n    R = retval = fun(*args, **kwargs)\n                 ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 858, in __protected_call__\n    return self.run(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 272, in collect_all\n    count = _run_async(_collect_all_async())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 18, in _run_async\n    return loop.run_until_complete(coro)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 691, in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 40, in _collect_all_async\n    raise RuntimeError(\"[FATAL] No approved symbols\")\nRuntimeError: [FATAL] No approved symbols",
+    "insertId": "69fb6593000792a3c4584b3a",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "scalpyn-00427-749",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-06T16:00:19.496291Z",
+    "severity": "ERROR",
+    "labels": {
+      "gcb-build-id": "44a50163-8cb6-4378-8abf-cd074042a837",
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d9f40e4c91399a79c5170a0cd2c64ec3c58ff49e21d08a1a07034644fad87b226b80fb202c94416b227041bb12099b02827c840910d33bfaea72dadf8fcd030aa1da8f6ccfd1e5c81efe96",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "commit-sha": "94b22459483af4ea1f112013fcf1e217fc7b9a9b",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-06T16:00:19.645558044Z",
+    "errorGroups": [
+      {
+        "id": "CK2Lg5Pev_LQPw"
+      }
+    ]
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py\", line 373, in _close_connection\n    self._dialect.do_terminate(connection)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 1127, in do_terminate\n    dbapi_connection.terminate()\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py\", line 402, in terminate\n    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 912, in _terminate_graceful_close\n    await self._connection.close(timeout=2)\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 1513, in close\n    await self._protocol.close(timeout)\n  File \"asyncpg/protocol/protocol.pyx\", line 617, in close\n  File \"asyncpg/protocol/protocol.pyx\", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 1682, in _cancel_current_command\n    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 455, in create_task\n    self._check_closed()\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 545, in _check_closed\n    raise RuntimeError('Event loop is closed')\nRuntimeError: Event loop is closed",
+    "insertId": "69fb65a200064473fbb8d98f",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "scalpyn-00427-749",
+        "location": "us-central1",
+        "project_id": "clickrate-477217",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-06T16:00:34.410739Z",
+    "severity": "ERROR",
+    "labels": {
+      "gcb-build-id": "44a50163-8cb6-4378-8abf-cd074042a837",
+      "gcb-trigger-region": "global",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "commit-sha": "94b22459483af4ea1f112013fcf1e217fc7b9a9b",
+      "instanceId": "0007b734d9f40e4c91399a79c5170a0cd2c64ec3c58ff49e21d08a1a07034644fad87b226b80fb202c94416b227041bb12099b02827c840910d33bfaea72dadf8fcd030aa1da8f6ccfd1e5c81efe96",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-06T16:00:34.630168597Z",
+    "errorGroups": [
+      {
+        "id": "CIaUi4fY3-nCJw"
+      }
+    ]
+  },
+  {
+    "insertId": "69fb65c00000d81d6d60b629",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "667",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.74.2",
+      "latency": "0.008156s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "scalpyn-00427-749",
+        "project_id": "clickrate-477217",
+        "configuration_name": "scalpyn",
+        "service_name": "scalpyn",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-06T16:01:04.041660Z",
+    "severity": "WARNING",
+    "labels": {
+      "instanceId": "0007b734d9f40e4c91399a79c5170a0cd2c64ec3c58ff49e21d08a1a07034644fad87b226b80fb202c94416b227041bb12099b02827c840910d33bfaea72dadf8fcd030aa1da8f6ccfd1e5c81efe96",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "commit-sha": "94b22459483af4ea1f112013fcf1e217fc7b9a9b",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "44a50163-8cb6-4378-8abf-cd074042a837"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/0a97fd0915e943ac768f26067f451253",
+    "receiveTimestamp": "2026-05-06T16:01:04.217006524Z",
+    "spanId": "c06b96637d38cac1"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 585, in trace_task\n    R = retval = fun(*args, **kwargs)\n                 ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 858, in __protected_call__\n    return self.run(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 272, in collect_all\n    count = _run_async(_collect_all_async())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 18, in _run_async\n    return loop.run_until_complete(coro)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 691, in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 40, in _collect_all_async\n    raise RuntimeError(\"[FATAL] No approved symbols\")\nRuntimeError: [FATAL] No approved symbols",
+    "insertId": "69fb65c0000b546ab8261888",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "service_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "configuration_name": "scalpyn",
+        "revision_name": "scalpyn-00427-749"
+      }
+    },
+    "timestamp": "2026-05-06T16:01:04.742506Z",
+    "severity": "ERROR",
+    "labels": {
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "commit-sha": "94b22459483af4ea1f112013fcf1e217fc7b9a9b",
+      "instanceId": "0007b734d9f40e4c91399a79c5170a0cd2c64ec3c58ff49e21d08a1a07034644fad87b226b80fb202c94416b227041bb12099b02827c840910d33bfaea72dadf8fcd030aa1da8f6ccfd1e5c81efe96",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "44a50163-8cb6-4378-8abf-cd074042a837"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-06T16:01:04.975288459Z",
+    "errorGroups": [
+      {
+        "id": "CK2Lg5Pev_LQPw"
+      }
+    ]
+  },
+  {
+    "insertId": "69fb65c1000561f5e52ef112",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "666",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.74.2",
+      "latency": "0.005358s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "scalpyn-00427-749",
+        "configuration_name": "scalpyn",
+        "service_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-06T16:01:05.340524Z",
+    "severity": "WARNING",
+    "labels": {
+      "instanceId": "0007b734d9f40e4c91399a79c5170a0cd2c64ec3c58ff49e21d08a1a07034644fad87b226b80fb202c94416b227041bb12099b02827c840910d33bfaea72dadf8fcd030aa1da8f6ccfd1e5c81efe96",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "commit-sha": "94b22459483af4ea1f112013fcf1e217fc7b9a9b",
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "44a50163-8cb6-4378-8abf-cd074042a837"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/00c71b1d6d1b94b02794df85f29f1e14",
+    "receiveTimestamp": "2026-05-06T16:01:05.548260617Z",
+    "spanId": "7cbf51c981d1c26d"
+  },
+  {
+    "insertId": "69fb65c30009cf5f17861ef8",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "666",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.74.2",
+      "latency": "0.002221s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00427-749"
+      }
+    },
+    "timestamp": "2026-05-06T16:01:07.635920Z",
+    "severity": "WARNING",
+    "labels": {
+      "commit-sha": "94b22459483af4ea1f112013fcf1e217fc7b9a9b",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "instanceId": "0007b734d9f40e4c91399a79c5170a0cd2c64ec3c58ff49e21d08a1a07034644fad87b226b80fb202c94416b227041bb12099b02827c840910d33bfaea72dadf8fcd030aa1da8f6ccfd1e5c81efe96",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "44a50163-8cb6-4378-8abf-cd074042a837"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/b072259f587df8ea66ca021a1ddc15f6",
+    "receiveTimestamp": "2026-05-06T16:01:07.882861438Z",
+    "spanId": "0075307de13cef48"
+  },
+  {
+    "insertId": "69fb65c7000d83f19273a00a",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "667",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.74.2",
+      "latency": "0.002490s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "project_id": "clickrate-477217",
+        "configuration_name": "scalpyn",
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00427-749"
+      }
+    },
+    "timestamp": "2026-05-06T16:01:11.878638Z",
+    "severity": "WARNING",
+    "labels": {
+      "instanceId": "0007b734d9f40e4c91399a79c5170a0cd2c64ec3c58ff49e21d08a1a07034644fad87b226b80fb202c94416b227041bb12099b02827c840910d33bfaea72dadf8fcd030aa1da8f6ccfd1e5c81efe96",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "commit-sha": "94b22459483af4ea1f112013fcf1e217fc7b9a9b",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "44a50163-8cb6-4378-8abf-cd074042a837"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/f1ab3978790b95eb59f18c0e13b742b0",
+    "receiveTimestamp": "2026-05-06T16:01:12.210258Z",
+    "spanId": "76af81b9728ab388",
+    "traceSampled": true
+  },
+  {
+    "insertId": "69fb65d000023792ae7bd32b",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "667",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.74.2",
+      "latency": "0.002293s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "configuration_name": "scalpyn",
+        "location": "us-central1",
+        "revision_name": "scalpyn-00427-749"
+      }
+    },
+    "timestamp": "2026-05-06T16:01:20.137214Z",
+    "severity": "WARNING",
+    "labels": {
+      "instanceId": "0007b734d9f40e4c91399a79c5170a0cd2c64ec3c58ff49e21d08a1a07034644fad87b226b80fb202c94416b227041bb12099b02827c840910d33bfaea72dadf8fcd030aa1da8f6ccfd1e5c81efe96",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "commit-sha": "94b22459483af4ea1f112013fcf1e217fc7b9a9b",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "44a50163-8cb6-4378-8abf-cd074042a837",
+      "gcb-trigger-region": "global"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/ec1e833d471c37f62db7cdcc35cbc371",
+    "receiveTimestamp": "2026-05-06T16:01:20.205636729Z",
+    "spanId": "6c1679b08d075c5e"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 585, in trace_task\n    R = retval = fun(*args, **kwargs)\n                 ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 858, in __protected_call__\n    return self.run(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 272, in collect_all\n    count = _run_async(_collect_all_async())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 18, in _run_async\n    return loop.run_until_complete(coro)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 691, in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 40, in _collect_all_async\n    raise RuntimeError(\"[FATAL] No approved symbols\")\nRuntimeError: [FATAL] No approved symbols",
+    "insertId": "69fb65de000a55ac26e901e9",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "service_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00427-749"
+      }
+    },
+    "timestamp": "2026-05-06T16:01:34.677292Z",
+    "severity": "ERROR",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d9f40e4c91399a79c5170a0cd2c64ec3c58ff49e21d08a1a07034644fad87b226b80fb202c94416b227041bb12099b02827c840910d33bfaea72dadf8fcd030aa1da8f6ccfd1e5c81efe96",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "commit-sha": "94b22459483af4ea1f112013fcf1e217fc7b9a9b",
+      "gcb-build-id": "44a50163-8cb6-4378-8abf-cd074042a837",
+      "gcb-trigger-region": "global"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-06T16:01:34.915255728Z",
+    "errorGroups": [
+      {
+        "id": "CK2Lg5Pev_LQPw"
+      }
+    ]
+  },
+  {
+    "textPayload": "The request failed because either the HTTP response was malformed or connection to the instance had an error. Additional troubleshooting documentation can be found at: https://cloud.google.com/run/docs/troubleshooting#malformed-response-or-connection-error",
+    "insertId": "69fb65e000060cb972cd91c4",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/decisions",
+      "requestSize": "699",
+      "status": 503,
+      "responseSize": "162",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.76.2",
+      "latency": "0.501148s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "project_id": "clickrate-477217",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn",
+        "revision_name": "scalpyn-00427-749"
+      }
+    },
+    "timestamp": "2026-05-06T16:01:35.886741Z",
+    "severity": "ERROR",
+    "labels": {
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "commit-sha": "94b22459483af4ea1f112013fcf1e217fc7b9a9b",
+      "instanceId": "0007b734d9f40e4c91399a79c5170a0cd2c64ec3c58ff49e21d08a1a07034644fad87b226b80fb202c94416b227041bb12099b02827c840910d33bfaea72dadf8fcd030aa1da8f6ccfd1e5c81efe96",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-build-id": "44a50163-8cb6-4378-8abf-cd074042a837",
+      "gcb-trigger-region": "global"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/83e45eb9232f88bcddd39965e2c21e55",
+    "receiveTimestamp": "2026-05-06T16:01:36.523067730Z",
+    "spanId": "450f8f56d650b16f"
+  },
+  {
+    "textPayload": "The request failed because either the HTTP response was malformed or connection to the instance had an error. Additional troubleshooting documentation can be found at: https://cloud.google.com/run/docs/troubleshooting#malformed-response-or-connection-error",
+    "insertId": "69fb65e000060cb305397b1f",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "666",
+      "status": 503,
+      "responseSize": "162",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.74.2",
+      "latency": "0.012135s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn",
+        "location": "us-central1",
+        "revision_name": "scalpyn-00427-749"
+      }
+    },
+    "timestamp": "2026-05-06T16:01:36.375229Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "0007b734d9f40e4c91399a79c5170a0cd2c64ec3c58ff49e21d08a1a07034644fad87b226b80fb202c94416b227041bb12099b02827c840910d33bfaea72dadf8fcd030aa1da8f6ccfd1e5c81efe96",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "commit-sha": "94b22459483af4ea1f112013fcf1e217fc7b9a9b",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "44a50163-8cb6-4378-8abf-cd074042a837",
+      "gcb-trigger-region": "global"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/7ff4dc6fdb16477ea5163c29bc4852f4",
+    "receiveTimestamp": "2026-05-06T16:01:36.523067730Z",
+    "spanId": "68f3a8e705a1b11f"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 585, in trace_task\n    R = retval = fun(*args, **kwargs)\n                 ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 858, in __protected_call__\n    return self.run(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 272, in collect_all\n    count = _run_async(_collect_all_async())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 18, in _run_async\n    return loop.run_until_complete(coro)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 691, in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 40, in _collect_all_async\n    raise RuntimeError(\"[FATAL] No approved symbols\")\nRuntimeError: [FATAL] No approved symbols",
+    "insertId": "69fb65ea0000606fea7e07b3",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00427-749"
+      }
+    },
+    "timestamp": "2026-05-06T16:01:46.024687Z",
+    "severity": "ERROR",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d952598fe7a8996369d99714306bcc5ceeb376f99894bb706d4c6f524f397f46c0eca5d46205e29006c508c1b596f0bbfb0691f692fefdc4e8e77841b32c7d5d3a0ee012c781925886b113",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "commit-sha": "94b22459483af4ea1f112013fcf1e217fc7b9a9b",
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "44a50163-8cb6-4378-8abf-cd074042a837"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-06T16:01:46.247316783Z",
+    "errorGroups": [
+      {
+        "id": "CK2Lg5Pev_LQPw"
+      }
+    ]
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/app/tasks/simulation.py\", line 120, in _run\n    result = await run_db_task(_inner, celery=True)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/database.py\", line 282, in run_db_task\n    return await fn(session)\n           ^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/simulation.py\", line 111, in _inner\n    return await service.run_simulation_batch(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/services/simulation_service.py\", line 328, in run_simulation_batch\n    raise RuntimeError(error_msg)\nRuntimeError: OHLCV validation FAILED: No recent candle data found for exchange=gate",
+    "insertId": "69fb66060004f3fc0bcc7e21",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "service_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00427-749"
+      }
+    },
+    "timestamp": "2026-05-06T16:02:14.324604Z",
+    "severity": "ERROR",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d952598fe7a8996369d99714306bcc5ceeb376f99894bb706d4c6f524f397f46c0eca5d46205e29006c508c1b596f0bbfb0691f692fefdc4e8e77841b32c7d5d3a0ee012c781925886b113",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "commit-sha": "94b22459483af4ea1f112013fcf1e217fc7b9a9b",
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "44a50163-8cb6-4378-8abf-cd074042a837"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-06T16:02:14.545413565Z",
+    "errorGroups": [
+      {
+        "id": "CLuonuO69pz0ywE"
+      }
+    ]
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 585, in trace_task\n    R = retval = fun(*args, **kwargs)\n                 ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 858, in __protected_call__\n    return self.run(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 272, in collect_all\n    count = _run_async(_collect_all_async())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 18, in _run_async\n    return loop.run_until_complete(coro)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 691, in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 40, in _collect_all_async\n    raise RuntimeError(\"[FATAL] No approved symbols\")\nRuntimeError: [FATAL] No approved symbols",
+    "insertId": "69fb6615000636982a1adae2",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "scalpyn-00427-749",
+        "service_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "configuration_name": "scalpyn",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-06T16:02:29.407192Z",
+    "severity": "ERROR",
+    "labels": {
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "commit-sha": "94b22459483af4ea1f112013fcf1e217fc7b9a9b",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d952598fe7a8996369d99714306bcc5ceeb376f99894bb706d4c6f524f397f46c0eca5d46205e29006c508c1b596f0bbfb0691f692fefdc4e8e77841b32c7d5d3a0ee012c781925886b113",
+      "gcb-build-id": "44a50163-8cb6-4378-8abf-cd074042a837",
+      "gcb-trigger-region": "global"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-06T16:02:29.531893872Z",
+    "errorGroups": [
+      {
+        "id": "CK2Lg5Pev_LQPw"
+      }
+    ]
+  }
+]

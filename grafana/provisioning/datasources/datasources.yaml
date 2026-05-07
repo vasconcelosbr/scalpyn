@@ -1,0 +1,67 @@
+# Grafana datasource provisioning for the Scalpyn monitoring stack.
+#
+# Drop into /etc/grafana/provisioning/datasources/ via the Dockerfile in
+# this directory. Both UIDs are pinned (`prometheus-prod`, `postgres-prod`)
+# so they match the placeholders in docs/grafana/alert-rules.yaml without
+# any per-environment rewriting.
+#
+# Connection limits per docs/grafana/README.md:
+#   max open = 4, max idle = 1, max lifetime = 1h
+# This keeps the Cloud SQL connection budget (docs/db-pool-budget.md)
+# within the 22-connection ceiling.
+
+apiVersion: 1
+
+datasources:
+  # ── Prometheus (scraped metrics from backend /metrics) ──────────────
+  - name: Prometheus
+    uid: prometheus-prod
+    type: prometheus
+    access: proxy
+    # Override at deploy time via $GF_DATASOURCE_PROMETHEUS_URL so the same
+    # image works in staging / production without a rebuild.
+    url: ${GF_DATASOURCE_PROMETHEUS_URL}
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      timeInterval: "30s"
+      # Bearer-token gate on /metrics (Task #167). The token itself is
+      # injected via the secureJsonData block below from a Cloud Run
+      # secret mount.
+      httpHeaderName1: "Authorization"
+    secureJsonData:
+      httpHeaderValue1: "Bearer ${GF_PROMETHEUS_BEARER_TOKEN}"
+
+  # ── PostgreSQL (read-only role on Cloud SQL) ────────────────────────
+  #
+  # Two valid transport options — cloudbuild-grafana.yaml deploys with
+  # the first one, but the YAML keeps both sslmode and url env-driven so
+  # the operator can swap without an image rebuild:
+  #
+  #   1. Private IP over TCP (preferred, what the deploy uses):
+  #        GF_DATASOURCE_POSTGRES_URL=<cloud-sql-private-ip>:5432
+  #        GF_DATASOURCE_POSTGRES_SSLMODE=require
+  #
+  #   2. Cloud SQL Unix socket via --add-cloudsql-instances:
+  #        GF_DATASOURCE_POSTGRES_URL=/cloudsql/<project>:<region>:<inst>
+  #        GF_DATASOURCE_POSTGRES_SSLMODE=disable
+  #      (TLS is meaningless inside the local socket, and Grafana rejects
+  #      `sslmode=require` against a socket path.)
+  - name: PostgreSQL
+    uid: postgres-prod
+    type: postgres
+    access: proxy
+    url: ${GF_DATASOURCE_POSTGRES_URL}
+    user: grafana_ro
+    database: scalpyn
+    editable: false
+    jsonData:
+      sslmode: ${GF_DATASOURCE_POSTGRES_SSLMODE}
+      postgresVersion: 1500
+      timescaledb: false
+      maxOpenConns: 4
+      maxIdleConns: 1
+      connMaxLifetime: 3600
+    secureJsonData:
+      password: ${GF_DATASOURCE_POSTGRES_PASSWORD}

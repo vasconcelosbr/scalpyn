@@ -35,6 +35,10 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
+    # lock_timeout and statement_timeout are applied at connection level via
+    # asyncpg server_settings in run_async_migrations — more reliable than
+    # SET LOCAL here (which depends on alembic's internal transaction state
+    # and was silently inert in production with asyncpg + run_sync).
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
         context.run_migrations()
@@ -69,7 +73,20 @@ async def run_async_migrations() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
-        connect_args={**connect_args, "timeout": 20},  # fail fast — don't block Cloud Run startup
+        connect_args={
+            **connect_args,
+            "timeout": 20,        # connection-establishment timeout (asyncpg)
+            # server_settings are applied by PostgreSQL at session start —
+            # guaranteed to be in effect before any transaction or DDL.
+            # This is more reliable than SET LOCAL inside do_run_migrations,
+            # which was silently inert in production (asyncpg + run_sync +
+            # SQLAlchemy 2.0 transaction lifecycle).
+            # Values are in milliseconds.
+            "server_settings": {
+                "lock_timeout": "10000",     # 10s: fail fast on lock contention
+                "statement_timeout": "60000", # 60s: cap runaway DDL
+            },
+        },
     )
 
     async with connectable.connect() as connection:

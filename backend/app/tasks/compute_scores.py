@@ -1,15 +1,57 @@
-"""Celery Task — compute Alpha Scores using Score Engine."""
+"""Celery Task — compute Alpha Scores via the robust engine.
+
+Phase 4 cleanup: this task no longer runs the legacy ``ScoreEngine`` math.
+For every fresh row in ``indicators`` it asks the robust engine to wrap the
+indicator dict, validate, and emit a deterministic score, and then
+persists the result in ``alpha_scores`` (always ``scoring_version='v1'`` —
+the legacy dual-write columns are written as ``NULL``). The same robust
+score is reused by the level-transition detector so a single computation
+drives both downstream consumers.
+"""
 
 import asyncio
 import json
 import logging
 from datetime import datetime, timezone
 
+from asyncpg.exceptions import UndefinedColumnError as _AsyncpgUndefinedColumn
 from sqlalchemy import text
 
 from ..tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _is_scoring_version_drift(exc: BaseException) -> bool:
+    """Detect alpha_scores.scoring_version missing-column drift.
+
+    Mirrors the structural-scheduler `_is_scheduler_group_drift` guard
+    (Task #178 / migration 032) and the same anti-false-positive rule:
+    we only match against the asyncpg exception's OWN message (which is
+    "column ... of relation alpha_scores does not exist"), never against
+    str(SQLAlchemy.ProgrammingError) — that wrapper includes the SQL
+    statement text and our INSERT always contains the literal column
+    name, so matching on the wrapper would silently swallow unrelated
+    asyncpg errors (FK violations, lock timeouts, deadlocks, ...).
+
+    Migration 028 adds the column, but Task #233's audit observed
+    drift in the production schema where the migration succeeded but
+    the column ended up missing (suspected hand-rolled rollback).
+    Until the prod schema is repaired this guard prevents one bad
+    INSERT per symbol per cycle from poisoning every subsequent
+    `_persist` callback inside the structural scheduler.
+    """
+    orig = getattr(exc, "orig", None)
+    if isinstance(orig, _AsyncpgUndefinedColumn) and "scoring_version" in str(orig):
+        return True
+    if isinstance(exc, _AsyncpgUndefinedColumn) and "scoring_version" in str(exc):
+        return True
+    return False
+
+
+# Boot-once flag: log the drift error a single time per process so we don't
+# flood the logs with one error per symbol per cycle.
+_scoring_version_drift_logged: bool = False
 
 
 def _run_async(coro):
@@ -20,20 +62,37 @@ def _run_async(coro):
         loop.close()
 
 
+def _robust_score_for(symbol: str, indicators: dict, rules: list) -> dict | None:
+    """Return ``{score, score_confidence, global_confidence, matched_rules}``
+    or ``None`` when the robust engine rejects the indicators.
+
+    Thin wrapper around ``compute_asset_score`` so callers don't have to
+    construct envelopes themselves.
+    """
+    from ..services.robust_indicators import compute_asset_score
+
+    return compute_asset_score(symbol, indicators or {}, rules, is_futures=False)
+
+
 async def _score_async():
-    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
-    from ..services.score_engine import ScoreEngine
+    from ..database import run_db_task
     from ..services.seed_service import DEFAULT_SCORE
 
-    logger.info("Starting Alpha Score computation...")
+    logger.info("Starting Alpha Score computation (robust engine)...")
 
-    async with AsyncSessionLocal() as db:
-        # Load score config from the first user who has it configured
-        score_config = DEFAULT_SCORE
+    rows: list = []
+    scored: int = 0
+    rules: list = []
+    cached_scores: dict[str, float] = {}
+
+    async def _phase1(db):
+        nonlocal rows, scored, rules
+
+        # Score config — only the ``scoring_rules`` list matters to the
+        # robust engine. Prefer a user override when one exists.
+        score_config: dict = DEFAULT_SCORE
         try:
             from ..services.config_service import config_service
-            from ..models.pipeline_watchlist import PipelineWatchlist
-            from sqlalchemy import select as sa_select
             user_row = (await db.execute(
                 text("SELECT DISTINCT user_id FROM pipeline_watchlists LIMIT 1")
             )).fetchone()
@@ -44,104 +103,172 @@ async def _score_async():
         except Exception as _e:
             logger.debug("compute_scores: could not load user score config: %s", _e)
 
-        engine = ScoreEngine(score_config)
-        scored = 0
+        rules = (
+            score_config.get("scoring_rules")
+            or score_config.get("rules")
+            or DEFAULT_SCORE.get("scoring_rules")
+            or []
+        )
 
-        # Get latest indicators for all symbols
-        result = await db.execute(text("""
-            SELECT DISTINCT ON (symbol) symbol, indicators_json, time
-            FROM indicators
-            WHERE time > now() - interval '2 hours'
-            ORDER BY symbol, time DESC
+        # Task #215: route through the unified provider so the partial-row
+        # ``DISTINCT ON`` anti-pattern is gone here too. compute_scores
+        # writes ``alpha_scores``, which is consumed downstream — feeding
+        # it micro-only-latest payloads would write incomplete scores
+        # for the same ~67% of cycles.
+        # Task #232: scoring is INGESTION-DOMAIN — every active symbol
+        # must be scored so the L2/L3 funnel sees its full candidate
+        # universe. Trading authorisation (``is_tradable``) is enforced
+        # later in evaluate_signals/execute_buy and never here.
+        from ..services.indicators_provider import (
+            get_merged_indicators,
+            is_complete,
+        )
+        from types import SimpleNamespace
+
+        pool_res = await db.execute(text("""
+            SELECT DISTINCT symbol FROM pool_coins
+            WHERE is_active = true
         """))
-        rows = result.fetchall()
+        pool_symbols = [r.symbol for r in pool_res.fetchall()]
+
+        merged_by_sym = (
+            await get_merged_indicators(db, pool_symbols)
+            if pool_symbols else {}
+        )
+
+        # Build row-shaped objects so the loop body and Phase 2 keep
+        # operating on the same shape (.symbol / .indicators_json / .time).
+        rows = []
+        for symbol, mi in merged_by_sym.items():
+            flat = mi.as_flat_dict()
+            ok, missing = is_complete(flat)
+            if not ok:
+                logger.warning(
+                    "[compute_scores] QUARANTINED %s — missing core: %s",
+                    symbol, missing,
+                )
+                continue
+            rows.append(SimpleNamespace(
+                symbol=symbol,
+                indicators_json=flat,
+                time=datetime.now(timezone.utc),
+            ))
 
         now = datetime.now(timezone.utc)
+        _scored = 0
 
         for row in rows:
             try:
                 indicators = row.indicators_json or {}
-                score_result = engine.compute_alpha_score(indicators)
+                scored_payload = _robust_score_for(row.symbol, indicators, rules)
+                if scored_payload is None:
+                    continue
 
-                components = score_result.get("components", {})
+                # Each insert is isolated in its own SAVEPOINT so a failure
+                # for one symbol does not abort the whole transaction.
+                try:
+                    async with db.begin_nested():
+                        await db.execute(text("""
+                            INSERT INTO alpha_scores
+                                (time, symbol, score, liquidity_score, market_structure_score,
+                                 momentum_score, signal_score, components_json,
+                                 alpha_score_v2, confidence_metrics, scoring_version)
+                            VALUES
+                                (:time, :symbol, :score, NULL, NULL, NULL, NULL, :components,
+                                 NULL, NULL, 'v1')
+                        """), {
+                            "time": now,
+                            "symbol": row.symbol,
+                            "score": scored_payload["score"],
+                            "components": json.dumps({
+                                "engine": "robust",
+                                "score_confidence": scored_payload["score_confidence"],
+                                "global_confidence": scored_payload["global_confidence"],
+                                "matched_rules": scored_payload["matched_rules"],
+                            }),
+                        })
+                except Exception as exc:
+                    # Task #234 — schema drift fallback: if alpha_scores.scoring_version
+                    # is missing in production we retry once WITHOUT the column so the
+                    # cycle keeps producing scores. Logged once per process.
+                    if not _is_scoring_version_drift(exc):
+                        raise
+                    global _scoring_version_drift_logged
+                    if not _scoring_version_drift_logged:
+                        logger.error(
+                            "[compute_scores] SCHEMA DRIFT: alpha_scores.scoring_version "
+                            "column missing — migration 028 not applied or rolled back. "
+                            "Falling back to legacy INSERT (no scoring_version) until the "
+                            "column is repaired. See docs/runbooks/critical-schema-drift.md."
+                        )
+                        _scoring_version_drift_logged = True
+                    async with db.begin_nested():
+                        await db.execute(text("""
+                            INSERT INTO alpha_scores
+                                (time, symbol, score, liquidity_score, market_structure_score,
+                                 momentum_score, signal_score, components_json,
+                                 alpha_score_v2, confidence_metrics)
+                            VALUES
+                                (:time, :symbol, :score, NULL, NULL, NULL, NULL, :components,
+                                 NULL, NULL)
+                        """), {
+                            "time": now,
+                            "symbol": row.symbol,
+                            "score": scored_payload["score"],
+                            "components": json.dumps({
+                                "engine": "robust",
+                                "score_confidence": scored_payload["score_confidence"],
+                                "global_confidence": scored_payload["global_confidence"],
+                                "matched_rules": scored_payload["matched_rules"],
+                            }),
+                        })
 
-                await db.execute(text("""
-                    INSERT INTO alpha_scores
-                        (time, symbol, score, liquidity_score, market_structure_score,
-                         momentum_score, signal_score, components_json)
-                    VALUES
-                        (:time, :symbol, :score, :liq, :ms, :mom, :sig, :components)
-                """), {
-                    "time": now,
-                    "symbol": row.symbol,
-                    "score": score_result["total_score"],
-                    "liq": components.get("liquidity_score", 0),
-                    "ms": components.get("market_structure_score", 0),
-                    "mom": components.get("momentum_score", 0),
-                    "sig": components.get("signal_score", 0),
-                    "components": json.dumps({
-                        "classification": score_result.get("classification"),
-                        "matched_rules": score_result.get("matched_rules", []),
-                    }),
-                })
-
-                scored += 1
+                # Cache the score so _detect_level_transitions doesn't need
+                # to re-run the robust engine for the same row. SQLAlchemy
+                # ``Row`` objects are immutable, so use an external dict.
+                cached_scores[row.symbol] = scored_payload["score"]
+                _scored += 1
 
             except Exception as e:
                 logger.warning(f"Failed to compute score for {row.symbol}: {e}")
                 continue
 
-        await db.commit()
+        scored = _scored
+        return scored
 
-        logger.info(f"Alpha Score computation complete: {scored} symbols")
+    await run_db_task(_phase1, celery=True)
+    logger.info(f"Alpha Score computation complete: {scored} symbols")
 
-        # ── Level transition detection ────────────────────────────────────────
-        # Compare fresh scores against pipeline_watchlist_assets to detect
-        # assets entering / leaving criteria (min_score from profile config).
-        # Must run inside the same session so the DB connection is still open.
-        try:
-            await _detect_level_transitions(db, rows, score_config)
-        except Exception as e:
-            logger.warning(f"Level transition detection failed: {e}")
+    # ── Phase 2: level transition detection (separate transaction) ─────────────
+    async def _phase2(db):
+        await _detect_level_transitions(db, rows, rules, cached_scores)
+
+    try:
+        await run_db_task(_phase2, celery=True)
+    except Exception as e:
+        logger.warning(f"Level transition detection failed: {e}")
 
     return scored
 
 
-async def _detect_level_transitions(db, scored_rows, score_config=None) -> None:
+async def _detect_level_transitions(db, scored_rows, rules, cached_scores: dict) -> None:
+    """For each symbol that just got a new score, check whether the asset's
+    qualifying status (against the profile's ``min_score`` filter) changed
+    and broadcast a ``level_change`` event when it did.
     """
-    For each symbol that just got a new score, check if its position in the
-    pipeline has changed.  We look at pipeline_watchlist_assets rows and compare
-    the new score against the PROFILE's min_score filter (not the watchlist's
-    filters_json, which is no longer used for filtering).
-
-    When a transition is detected:
-      - Update level_direction + level_change_at in pipeline_watchlist_assets
-      - Broadcast a WebSocket 'level_change' event via the alerts channel
-    """
-    from ..models.pipeline_watchlist import PipelineWatchlistAsset, PipelineWatchlist
-
     now = datetime.now(timezone.utc)
 
-    # Build a quick symbol → new_score map from the rows we just scored
-    # Use the same score config that was used to compute and store the scores,
-    # so transition detection is consistent with the stored alpha_scores.
-    new_scores: dict = {}
-    from ..services.score_engine import ScoreEngine
-    from ..services.seed_service import DEFAULT_SCORE
-    _engine = ScoreEngine(score_config or DEFAULT_SCORE)
+    new_scores: dict = dict(cached_scores)
     for row in scored_rows:
-        try:
-            indicators = row.indicators_json or {}
-            result = _engine.compute_alpha_score(indicators)
-            new_scores[row.symbol] = result.get("total_score", 0)
-        except Exception:
+        if row.symbol in new_scores:
             continue
+        scored_payload = _robust_score_for(row.symbol, row.indicators_json or {}, rules)
+        if scored_payload is not None:
+            new_scores[row.symbol] = scored_payload["score"]
 
     if not new_scores:
         return
 
-    # Fetch all pipeline_watchlist_assets for symbols with new scores,
-    # including the profile config to get the min_score threshold.
     result = await db.execute(
         text("""
             SELECT pwa.id, pwa.watchlist_id, pwa.symbol,
@@ -164,20 +291,17 @@ async def _detect_level_transitions(db, scored_rows, score_config=None) -> None:
         new_score = new_scores.get(symbol, 0)
         old_score = float(ar.alpha_score or 0)
 
-        # Get min_score from the PROFILE (single source of truth)
         profile_cfg = ar.profile_config or {}
         min_score = float((profile_cfg.get("filters") or {}).get("min_score", 0))
 
-        # Determine if asset currently meets profile criteria
         was_qualifying = old_score >= min_score if min_score > 0 else True
         now_qualifying = new_score >= min_score if min_score > 0 else True
 
         if was_qualifying == now_qualifying:
-            continue  # No change
+            continue
 
         direction = "up" if now_qualifying else "down"
 
-        # Update the asset row
         await db.execute(
             text("""
                 UPDATE pipeline_watchlist_assets
@@ -196,10 +320,6 @@ async def _detect_level_transitions(db, scored_rows, score_config=None) -> None:
             "level": ar.level,
         })
 
-    if changed:
-        await db.commit()
-
-    # Broadcast WebSocket events
     for ch in changed:
         try:
             from ..websocket.scalpyn_ws_server import broadcast_alert
@@ -213,11 +333,18 @@ async def _detect_level_transitions(db, scored_rows, score_config=None) -> None:
                 },
             )
         except Exception:
-            pass  # WS not critical path
+            pass
 
 
 @celery_app.task(name="app.tasks.compute_scores.score")
 def score():
     count = _run_async(_score_async())
-    celery_app.send_task("app.tasks.evaluate_signals.evaluate")
+    # Chain: scoring → signal evaluation (execution queue, isolated workers).
+    # TTL = evaluate time_limit (120s) + 30s margin.
+    from . import task_dispatch
+    task_dispatch.enqueue(
+        "app.tasks.evaluate_signals.evaluate",
+        dedup_key="evaluate",
+        ttl_seconds=150,
+    )
     return f"Scored {count} symbols"

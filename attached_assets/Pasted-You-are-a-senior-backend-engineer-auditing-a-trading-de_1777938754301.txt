@@ -1,0 +1,179 @@
+You are a senior backend engineer auditing a trading decision pipeline.
+
+Your goal is to perform a **full diagnostic investigation** of why indicators (RSI, MACD) appear as "missing" during decision time, even though they exist in the database later.
+
+Do NOT fix anything yet. Only investigate and report with evidence.
+
+---
+
+# CONTEXT
+
+System characteristics:
+
+* Indicators stored in table: indicators (JSON field: indicators_json)
+* Decision logs stored in: decision_logs
+* Indicators include envelope format: { value, status, confidence }
+* Decision pipeline uses:
+
+  * fetch_merged_indicators(...)
+  * build_asset(...)
+  * rule_engine / block_engine / score_engine
+* Indicators are computed asynchronously (OHLCV pipeline)
+* Order flow indicators (e.g. taker_ratio) arrive earlier than candle indicators (RSI/MACD)
+
+---
+
+# OBJECTIVE
+
+Identify **where and why the decision pipeline uses incomplete indicator data**.
+
+---
+
+# INVESTIGATION TASKS
+
+## 1. TIMELINE ANALYSIS
+
+For a given symbol (e.g. ADA_USDT):
+
+* Get latest decision timestamp from decision_logs
+* Get latest indicators timestamp from indicators
+
+Output:
+
+* decision_time
+* indicators_time
+* delta_seconds
+
+Conclusion:
+
+* Was the decision executed BEFORE indicators were ready?
+
+---
+
+## 2. SNAPSHOT USED IN DECISION
+
+Trace exactly which indicators payload is used at decision time:
+
+* Inspect fetch_merged_indicators(...)
+* Log or print the returned structure
+* Verify presence of:
+
+  * rsi
+  * macd_histogram
+
+Output:
+
+* full indicators payload used in evaluation
+* list of missing keys at decision time
+
+---
+
+## 3. MERGE BEHAVIOR
+
+Analyze how indicators are merged:
+
+* Identify if multiple sources exist (order flow vs candle)
+* Verify if merge is:
+
+  * deep merge
+  * overwrite
+  * partial update
+
+Check if any path returns only partial indicators.
+
+---
+
+## 4. DATA COMPLETENESS CHECK
+
+Evaluate if system enforces required indicators before decision:
+
+* Search for any guard like:
+  IF rsi is None → skip decision
+
+If not present, mark as issue.
+
+---
+
+## 5. STALENESS / LATENCY
+
+Measure delay between:
+
+* OHLCV ingestion
+* indicator computation
+* decision execution
+
+Output:
+
+* avg delay
+* max delay
+* problematic cases
+
+---
+
+## 6. RACE CONDITION ANALYSIS
+
+Check if pipeline allows:
+
+* decision triggered BEFORE compute_indicators finishes
+* async tasks running out of order
+
+---
+
+## 7. FRONTEND VS BACKEND CONSISTENCY
+
+Compare:
+
+* what UI displays (Decision Trace)
+* what backend used during evaluation
+
+Detect mismatches.
+
+---
+
+# OUTPUT FORMAT
+
+Provide structured report:
+
+## ROOT CAUSE
+
+(clear, single primary cause)
+
+## CONTRIBUTING FACTORS
+
+(list secondary issues)
+
+## EVIDENCE
+
+(SQL queries, logs, timestamps)
+
+## FAILURE SCENARIOS
+
+(real examples)
+
+## RISK LEVEL
+
+(low / medium / high)
+
+## RECOMMENDED FIX DIRECTIONS
+
+(high-level only, no code yet)
+
+---
+
+# RULES
+
+* Do NOT assume — verify everything with data
+* Always include timestamps
+* Prefer SQL evidence over theory
+* Highlight any inconsistency between layers
+* Focus on reproducibility
+
+---
+
+# EXTRA
+
+If multiple root causes exist, rank them by impact.
+
+---
+
+Start investigation.

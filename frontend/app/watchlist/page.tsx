@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import { WatchlistTable } from '@/components/watchlist/WatchlistTable';
 import {
   WatchlistDecisionTable,
@@ -43,6 +43,7 @@ interface PipelineWatchlist {
   id: string;
   name: string;
   level: string;
+  market_mode?: string;  // 'spot' | 'futures'
   source_pool_id: string | null;
   source_watchlist_id: string | null;
   profile_id: string | null;
@@ -69,6 +70,7 @@ interface Pool {
 
 const LEVEL_COLORS: Record<string, string> = {
   POOL: 'bg-[#3A3117] text-[#FBBF24] border border-[#D97706]/35',
+  'POOL FUTURO': 'bg-[#2D1A3A] text-[#E879F9] border border-[#A855F7]/35',
   L1: 'bg-[#1A2744] text-[#60A5FA] border border-[#2563EB]/40',
   L2: 'bg-[#1A3A2A] text-[#34D399] border border-[#059669]/40',
   L3: 'bg-[#3A1A2A] text-[#F472B6] border border-[#DB2777]/40',
@@ -84,11 +86,17 @@ const WATCHLIST_LEVEL_OPTIONS = [
 ] as const;
 
 function resolveWatchlistLevel(
-  wl: Partial<Pick<PipelineWatchlist, 'level' | 'source_pool_id' | 'profile_id'>> | undefined,
+  wl: Partial<Pick<PipelineWatchlist, 'level' | 'source_pool_id' | 'profile_id' | 'market_mode'>> | undefined,
   profiles: Profile[],
 ) {
   const normalized = (wl?.level || '').toUpperCase();
-  if (['POOL', 'L1', 'L2', 'L3'].includes(normalized)) return normalized;
+  if (['POOL', 'L1', 'L2', 'L3'].includes(normalized)) {
+    // POOL-level futures watchlists use a distinct label so operators can
+    // immediately distinguish the spot universe (POOL) from the futures
+    // universe (POOL FUTURO) without relying on the secondary FUTURES badge.
+    if (normalized === 'POOL' && wl?.market_mode === 'futures') return 'POOL FUTURO';
+    return normalized;
+  }
   const profile = profiles.find((item) => item.id === wl?.profile_id);
   const filterConditions = profile?.config?.filters?.conditions ?? [];
   return wl?.source_pool_id && filterConditions.length > 0 ? 'POOL' : 'custom';
@@ -287,6 +295,9 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
   const existingFilters = wl?.filters_json || {};
   const [name, setName] = useState(wl?.name ?? '');
   const [level, setLevel] = useState(isNew ? 'custom' : resolveWatchlistLevel(wl, profiles));
+  const [marketMode, setMarketMode] = useState<'spot' | 'futures'>(
+    wl?.market_mode === 'futures' ? 'futures' : 'spot',
+  );
   const [sourcePoolId, setSourcePoolId] = useState(wl?.source_pool_id ?? '');
   const [sourceWatchlistId, setSourceWatchlistId] = useState(wl?.source_watchlist_id ?? '');
   const [profileId, setProfileId] = useState(wl?.profile_id ?? '');
@@ -357,6 +368,7 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
       await onSave({
         name,
         level,
+        market_mode: marketMode,
         source_pool_id: sourcePoolId || null,
         source_watchlist_id: sourceWatchlistId || null,
         profile_id: profileId || null,
@@ -415,9 +427,10 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
           <div>
             <label className="block text-xs text-[#64748B] mb-1">Source Pool <span className="text-[#4B5563]">(para POOL)</span></label>
             <select
-              className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
+              className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6] disabled:opacity-40 disabled:cursor-not-allowed"
               value={sourcePoolId}
               onChange={(e) => { setSourcePoolId(e.target.value); if (e.target.value) setSourceWatchlistId(''); }}
+              disabled={level === 'L1' || level === 'L2' || level === 'L3'}
               data-testid="watchlist-pool-select"
             >
               <option value="">— None —</option>
@@ -425,16 +438,19 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
+            {(level === 'L1' || level === 'L2' || level === 'L3') && (
+              <p className="text-xs text-[#4B5563] mt-1">Source Pool não se aplica para nível L1/L2/L3. Use Source Watchlist abaixo.</p>
+            )}
           </div>
 
           {/* Source Watchlist */}
           <div>
             <label className="block text-xs text-[#64748B] mb-1">Source Watchlist <span className="text-[#4B5563]">(para L1 / L2 / L3)</span></label>
             <select
-              className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6]"
+              className="w-full bg-[#0A0B10] border border-[#1E2433] rounded-lg px-3 py-2 text-sm text-[#E2E8F0] focus:outline-none focus:border-[#3B82F6] disabled:opacity-40 disabled:cursor-not-allowed"
               value={sourceWatchlistId}
               onChange={(e) => { setSourceWatchlistId(e.target.value); if (e.target.value) setSourcePoolId(''); }}
-              disabled={!!sourcePoolId}
+              disabled={level === 'POOL'}
               data-testid="watchlist-source-select"
             >
               <option value="">— None —</option>
@@ -442,8 +458,8 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
                 <option key={w.id} value={w.id}>[{resolveWatchlistLevel(w, profiles)}] {w.name}</option>
               ))}
             </select>
-            {sourcePoolId && (
-              <p className="text-xs text-[#4B5563] mt-1">Limpe o Source Pool acima para usar uma watchlist como fonte.</p>
+            {level === 'POOL' && (
+              <p className="text-xs text-[#4B5563] mt-1">Source Watchlist não se aplica para nível POOL. Use Source Pool acima.</p>
             )}
           </div>
 
@@ -507,6 +523,42 @@ function WatchlistModal({ wl, pools, watchlists, profiles, onClose, onSave }: Mo
             </p>
           </div>
 
+          {/* ── Futures Mode toggle ── */}
+          <div className="border-t border-[#1E2433] pt-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <ArrowLeftRight size={12} className="text-[#F472B6]" />
+                  <span className="text-xs font-semibold text-[#94A3B8]">Futures Mode</span>
+                  {marketMode === 'futures' && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#F472B6]/10 text-[#F472B6] border border-[#F472B6]/25">
+                      FUTURES
+                    </span>
+                  )}
+                </div>
+                <p className="text-[10px] text-[#4B5563] mt-0.5">
+                  {marketMode === 'futures'
+                    ? 'Score duplo LONG/SHORT independente. Direção restrita ao L3.'
+                    : 'Score Alpha padrão (spot). Ative para dual LONG/SHORT scoring.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMarketMode((m) => m === 'futures' ? 'spot' : 'futures')}
+                className={`relative w-10 h-5 rounded-full transition-colors ${
+                  marketMode === 'futures' ? 'bg-[#F472B6]' : 'bg-[#1E2433]'
+                }`}
+                aria-label="Toggle Futures Mode"
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
+                    marketMode === 'futures' ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
@@ -566,12 +618,309 @@ interface WatchlistRowProps {
   liveDirections?: Record<string, string>;
 }
 
+// ── Futures Asset Table ──────────────────────────────────────────────────────
+interface FuturesComponents {
+  liquidity?: number;
+  structure_long?: number;
+  structure_short?: number;
+  momentum_long?: number;
+  momentum_short?: number;
+  volatility?: number;
+  order_flow_long?: number;
+  order_flow_short?: number;
+}
+
+interface FuturesAsset {
+  symbol: string;
+  score_long: number | null;
+  score_short: number | null;
+  confidence_score: number | null;
+  // 'LONG' | 'SHORT' | 'NEUTRAL' at L3; null for non-L3 (pre-rating stages)
+  futures_direction: 'LONG' | 'SHORT' | 'NEUTRAL' | null;
+  entry_long_blocked: boolean;
+  entry_short_blocked: boolean;
+  // Standard alpha score (base spot score — always present)
+  alpha_score?: number | null;
+  // Backend returns current_price / price_change_24h (matching _asset_to_dict)
+  current_price?: number | null;
+  price_change_24h?: number | null;
+  // Drilldown data
+  futures_components?: FuturesComponents;
+  block_reasons_long?: string[];
+  block_reasons_short?: string[];
+}
+
+function ScorePill({ value, color }: { value: number | null; color: string }) {
+  if (value == null) return <span className="text-[#334155] text-[10px]">—</span>;
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="w-16 h-1.5 rounded-full bg-[#1A2035] overflow-hidden">
+        <div
+          className={`h-full rounded-full ${color}`}
+          style={{ width: `${Math.min(100, value)}%` }}
+        />
+      </div>
+      <span className="text-[10px] text-[#94A3B8] tabular-nums w-7 text-right">{value.toFixed(0)}</span>
+    </div>
+  );
+}
+
+const FUTURES_LAYERS = [
+  { key: 'L1 Liquidez',    long: 'liquidity',       short: 'liquidity',        max: 20, shared: true  },
+  { key: 'L2 Estrutura',   long: 'structure_long',  short: 'structure_short',  max: 25, shared: false },
+  { key: 'L3 Momentum',    long: 'momentum_long',   short: 'momentum_short',   max: 30, shared: false },
+  { key: 'L4 Volatilidade',long: 'volatility',      short: 'volatility',       max: 10, shared: true  },
+  { key: 'L5 Order Flow',  long: 'order_flow_long', short: 'order_flow_short', max: 15, shared: false },
+] as const;
+
+function LayerBar({ value, max, color }: { value: number | undefined; max: number; color: string }) {
+  if (value == null) return <span className="text-[#334155] text-[10px]">—</span>;
+  const pct = Math.min(100, (value / max) * 100);
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="w-20 h-1.5 rounded-full bg-[#1A2035] overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-[10px] text-[#94A3B8] tabular-nums w-8 text-right">{value.toFixed(1)}/{max}</span>
+    </div>
+  );
+}
+
+function FuturesDrilldown({ asset }: { asset: FuturesAsset }) {
+  const comp = asset.futures_components ?? {};
+  const bLong  = asset.block_reasons_long  ?? [];
+  const bShort = asset.block_reasons_short ?? [];
+  return (
+    <div className="bg-[#060810] border-t border-[#1A2035] px-4 py-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Layer breakdown table */}
+        <div>
+          <p className="text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-2">Score por Layer</p>
+          <table className="w-full text-[10px]">
+            <thead>
+              <tr className="border-b border-[#1A2035]">
+                <th className="text-left py-1 pr-2 text-[#334155] font-medium">Layer</th>
+                <th className="text-left py-1 pr-2 text-emerald-500/70 font-medium">LONG</th>
+                <th className="text-left py-1 text-red-500/70 font-medium">SHORT</th>
+              </tr>
+            </thead>
+            <tbody>
+              {FUTURES_LAYERS.map((layer) => {
+                const longVal  = comp[layer.long  as keyof FuturesComponents] as number | undefined;
+                const shortVal = comp[layer.short as keyof FuturesComponents] as number | undefined;
+                return (
+                  <tr key={layer.key} className="border-b border-[#0D1118]">
+                    <td className="py-1.5 pr-2 text-[#6B7280] whitespace-nowrap">{layer.key}</td>
+                    <td className="py-1.5 pr-2">
+                      <LayerBar value={longVal}  max={layer.max} color="bg-emerald-500" />
+                    </td>
+                    <td className="py-1.5">
+                      <LayerBar value={shortVal} max={layer.max} color="bg-red-500" />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Block reasons */}
+        <div className="flex flex-col gap-3">
+          <div>
+            <p className="text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1.5">Bloqueios de Entrada</p>
+            <div className="space-y-2">
+              <div>
+                <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border mr-1.5 ${
+                  asset.entry_long_blocked
+                    ? 'bg-red-500/10 text-red-400 border-red-500/25'
+                    : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
+                }`}>
+                  {asset.entry_long_blocked ? '🔒 LONG Bloqueado' : '✓ LONG Aberto'}
+                </span>
+                {bLong.length > 0 && (
+                  <ul className="mt-1 space-y-0.5">
+                    {bLong.map((r) => (
+                      <li key={r} className="text-[9px] text-red-400/80 pl-2 border-l border-red-500/20">
+                        {r}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div>
+                <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border mr-1.5 ${
+                  asset.entry_short_blocked
+                    ? 'bg-red-500/10 text-red-400 border-red-500/25'
+                    : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
+                }`}>
+                  {asset.entry_short_blocked ? '🔒 SHORT Bloqueado' : '✓ SHORT Aberto'}
+                </span>
+                {bShort.length > 0 && (
+                  <ul className="mt-1 space-y-0.5">
+                    {bShort.map((r) => (
+                      <li key={r} className="text-[9px] text-red-400/80 pl-2 border-l border-red-500/20">
+                        {r}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FuturesAssetTable({
+  assets,
+  loading,
+  hideNeutral,
+  onToggleHideNeutral,
+}: {
+  assets: FuturesAsset[];
+  loading: boolean;
+  hideNeutral: boolean;
+  onToggleHideNeutral: () => void;
+}) {
+  const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
+  // Server already filters when hide_neutral=true; no client-side filtering needed.
+  const displayed = assets;
+
+  if (loading) {
+    return (
+      <div className="px-4 py-6 text-center text-sm text-[#4B5563] flex items-center justify-center gap-2">
+        <RefreshCw size={13} className="animate-spin" />
+        Carregando scores futures…
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* controls bar */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-[#1A2035]">
+        <span className="text-[10px] text-[#4B5563]">{displayed.length} asset{displayed.length !== 1 ? 's' : ''}</span>
+        <button
+          type="button"
+          onClick={onToggleHideNeutral}
+          className={`flex items-center gap-1.5 text-[10px] px-2 py-1 rounded transition-colors ${
+            hideNeutral
+              ? 'bg-[#F472B6]/10 text-[#F472B6] border border-[#F472B6]/25'
+              : 'text-[#4B5563] hover:text-[#94A3B8] border border-[#1E2433]'
+          }`}
+        >
+          <ArrowLeftRight size={9} />
+          {hideNeutral ? 'Mostrar Neutros' : 'Ocultar Neutros'}
+        </button>
+      </div>
+
+      {displayed.length === 0 ? (
+        <div className="px-4 py-8 text-center text-sm text-[#4B5563]">
+          {hideNeutral ? 'Nenhum asset com direção definida.' : 'Nenhum asset disponível.'}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs min-w-[700px]">
+            <thead>
+              <tr className="border-b border-[#1A2035] bg-[#060810]">
+                <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium w-6"></th>
+                <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium">Symbol</th>
+                <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium">Direção</th>
+                <th className="px-3 py-2.5 text-right text-[#4B5563] font-medium">Base α</th>
+                <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Score LONG</th>
+                <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Score SHORT</th>
+                <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Confidence</th>
+                <th className="px-3 py-2.5 text-center text-[#4B5563] font-medium">Entry Long</th>
+                <th className="px-3 py-2.5 text-center text-[#4B5563] font-medium">Entry Short</th>
+                <th className="px-3 py-2.5 text-right text-[#4B5563] font-medium">Preço</th>
+                <th className="px-3 py-2.5 text-right text-[#4B5563] font-medium">24h %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {displayed.map((asset) => {
+                const dir = asset.futures_direction;
+                const isOpen = expandedSymbol === asset.symbol;
+                const dirCls = dir === 'LONG'    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
+                             : dir === 'SHORT'   ? 'bg-red-500/10 text-red-400 border-red-500/25'
+                             : dir === 'NEUTRAL' ? 'bg-[#1E2433] text-[#6B7280] border-[#374151]'
+                             : 'bg-[#1E2433] text-[#4B5563] border-[#334155]';
+                const dirLabel = dir === 'LONG' ? 'LONG'
+                               : dir === 'SHORT' ? 'SHORT'
+                               : dir === 'NEUTRAL' ? 'NEUTRO'
+                               : '—';
+                const chg = asset.price_change_24h;
+                const chgCls = chg == null ? 'text-[#4B5563]' : chg >= 0 ? 'text-emerald-400' : 'text-red-400';
+                return (
+                  <Fragment key={asset.symbol}>
+                    <tr
+                      className="border-b border-[#1A2035]/60 hover:bg-[#0D1118] transition-colors cursor-pointer"
+                      onClick={() => setExpandedSymbol(isOpen ? null : asset.symbol)}
+                    >
+                      <td className="px-3 py-2.5 text-[#334155]">
+                        <ChevronDown
+                          size={12}
+                          className="transition-transform"
+                          style={{ transform: isOpen ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+                        />
+                      </td>
+                      <td className="px-3 py-2.5 font-semibold text-[#E2E8F0] tracking-wide">{asset.symbol}</td>
+                      <td className="px-3 py-2.5">
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded border font-semibold ${dirCls}`}>
+                          {dirLabel}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-[#94A3B8]">
+                        {asset.alpha_score != null ? asset.alpha_score.toFixed(1) : '—'}
+                      </td>
+                      <td className="px-3 py-2.5"><ScorePill value={asset.score_long}       color="bg-emerald-500" /></td>
+                      <td className="px-3 py-2.5"><ScorePill value={asset.score_short}      color="bg-red-500"     /></td>
+                      <td className="px-3 py-2.5"><ScorePill value={asset.confidence_score} color="bg-[#F472B6]"   /></td>
+                      <td className="px-3 py-2.5 text-center">
+                        <span className={`text-[9px] font-medium ${asset.entry_long_blocked ? 'text-red-400' : 'text-emerald-400'}`}>
+                          {asset.entry_long_blocked ? '🔒 Bloq.' : '✓ Open'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-center">
+                        <span className={`text-[9px] font-medium ${asset.entry_short_blocked ? 'text-red-400' : 'text-emerald-400'}`}>
+                          {asset.entry_short_blocked ? '🔒 Bloq.' : '✓ Open'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-[#94A3B8]">
+                        {asset.current_price != null ? `$${asset.current_price.toLocaleString(undefined, { maximumFractionDigits: 4 })}` : '—'}
+                      </td>
+                      <td className={`px-3 py-2.5 text-right tabular-nums ${chgCls}`}>
+                        {chg != null ? `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%` : '—'}
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr key={`${asset.symbol}-drilldown`} className="border-b border-[#1A2035]/60">
+                        <td colSpan={11} className="p-0">
+                          <FuturesDrilldown asset={asset} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, onRefreshed, refreshTick, liveDirections = {} }: WatchlistRowProps) {
   const displayLevel = resolveWatchlistLevel(wl, profiles);
+  const isFutures = wl.market_mode === 'futures';
   const [expanded, setExpanded] = useState(false);
   const [detailTab, setDetailTab] = useState<WatchlistDetailTab>('approved');
   const [approvedItems, setApprovedItems] = useState<RejectedAssetItem[]>([]);
   const [rejectedItems, setRejectedItems] = useState<RejectedAssetItem[]>([]);
+  const [futuresAssets, setFuturesAssets] = useState<FuturesAsset[]>([]);
+  const [hideNeutral, setHideNeutral] = useState(false);
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [loadingRejected, setLoadingRejected] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -590,7 +939,11 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     : null;
 
   const loadAssets = useCallback(async (
-    { triggerParentRefresh = false, silent = false }: { triggerParentRefresh?: boolean; silent?: boolean } = {}
+    { triggerParentRefresh = false, silent = false, hn = hideNeutral }: {
+      triggerParentRefresh?: boolean;
+      silent?: boolean;
+      hn?: boolean;
+    } = {}
   ) => {
     // Drop overlapping refreshes for the same expanded board so polling,
     // manual refresh, and parent-triggered reloads do not race each other.
@@ -599,13 +952,23 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     if (!silent) setLoadingAssets(true);
     if (!silent) setLoadingRejected(true);
     try {
+      const assetsUrl = isFutures && hn
+        ? `/watchlists/${wl.id}/assets?hide_neutral=true`
+        : `/watchlists/${wl.id}/assets`;
       const [data, rejected] = await Promise.all([
-        apiFetch<{ approved_items: RejectedAssetItem[]; total: number }>(`/watchlists/${wl.id}/assets`),
+        apiFetch<{
+          approved_items: RejectedAssetItem[];
+          assets: FuturesAsset[];
+          total: number;
+          market_mode?: string;
+          is_futures?: boolean;
+        }>(assetsUrl),
         apiFetch<{ items: RejectedAssetItem[] }>(`/pipeline/rejected?watchlist_id=${wl.id}`),
       ]);
       setApprovedItems(data.approved_items ?? []);
+      setFuturesAssets(data.assets ?? []);
       setRejectedItems(rejected.items ?? []);
-      if (triggerParentRefresh && (data.approved_items?.length ?? 0) > 0) {
+      if (triggerParentRefresh && ((data.approved_items?.length ?? 0) > 0 || (data.assets?.length ?? 0) > 0)) {
         onRefreshed();
       }
     } catch {
@@ -615,7 +978,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
       if (!silent) setLoadingAssets(false);
       if (!silent) setLoadingRejected(false);
     }
-  }, [wl.id, onRefreshed]);
+  }, [wl.id, isFutures, hideNeutral, onRefreshed]);
 
   useEffect(() => {
     if (expanded) {
@@ -628,6 +991,13 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
       void loadAssets({ silent: true });
     }
   }, [expanded, wl.auto_refresh, refreshTick, loadAssets]);
+
+  // Re-fetch when hide_neutral toggle changes (server-side filter)
+  useEffect(() => {
+    if (expanded && isFutures) {
+      void loadAssets({ silent: true, hn: hideNeutral });
+    }
+  }, [hideNeutral]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -666,6 +1036,12 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
         </span>
         <LevelBadge level={displayLevel} />
         <span className="text-sm font-medium text-[#E2E8F0] flex-1">{wl.name}</span>
+        {isFutures && (
+          <span className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-[#F472B6]/10 text-[#F472B6] border border-[#F472B6]/25 font-semibold">
+            <ArrowLeftRight size={8} />
+            FUTURES
+          </span>
+        )}
         <span className="text-xs text-[#4B5563]">from {sourceName}</span>
         {/* Freshness indicator */}
         {wl.auto_refresh && (
@@ -745,8 +1121,10 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
                   : 'text-[#64748B] hover:text-[#94A3B8]'
               }`}
               >
-                Approved
-              <span className="ml-1 text-[#4B5563]">{approvedItems.length}</span>
+                {isFutures ? 'Assets Futures' : 'Approved'}
+              <span className="ml-1 text-[#4B5563]">
+                {isFutures ? futuresAssets.length : approvedItems.length}
+              </span>
             </button>
             <button
               type="button"
@@ -766,7 +1144,14 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
               Refresh error: {refreshError}
             </div>
           )}
-          {detailTab === 'approved' && loadingAssets ? (
+          {detailTab === 'approved' && isFutures ? (
+            <FuturesAssetTable
+              assets={futuresAssets}
+              loading={loadingAssets}
+              hideNeutral={hideNeutral}
+              onToggleHideNeutral={() => setHideNeutral((h) => !h)}
+            />
+          ) : detailTab === 'approved' && loadingAssets ? (
             <div className="px-4 py-6 text-center text-sm text-[#4B5563] flex items-center justify-center gap-2">
               <RefreshCw size={13} className="animate-spin" />
               Loading approved decisions…
@@ -797,6 +1182,7 @@ function PipelineTab() {
   const [pools, setPools] = useState<Pool[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [modalWl, setModalWl] = useState<Partial<PipelineWatchlist> | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
@@ -837,16 +1223,46 @@ function PipelineTab() {
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const [wlData, poolData, profData] = await Promise.all([
+      // Load each endpoint independently so a single failure (e.g. backend
+      // schema drift on /watchlists) does not blank out pools and profiles.
+      // The previous Promise.all + empty catch hid the original bug.
+      const results = await Promise.allSettled([
         apiFetch<{ watchlists: PipelineWatchlist[] }>('/watchlists'),
         apiFetch<{ pools: Pool[] }>('/pools'),
         apiFetch<{ profiles: Profile[] }>('/profiles'),
       ]);
-      setWatchlists(wlData.watchlists);
-      setPools(poolData.pools ?? []);
-      setProfiles(profData.profiles ?? []);
-    } catch {
-      // ignore
+
+      const failures: string[] = [];
+
+      const wlRes = results[0];
+      if (wlRes.status === 'fulfilled') {
+        setWatchlists(wlRes.value.watchlists ?? []);
+      } else {
+        console.error('Failed to load watchlists:', wlRes.reason);
+        failures.push('watchlists');
+      }
+
+      const poolRes = results[1];
+      if (poolRes.status === 'fulfilled') {
+        setPools(poolRes.value.pools ?? []);
+      } else {
+        console.error('Failed to load pools:', poolRes.reason);
+        failures.push('pools');
+      }
+
+      const profRes = results[2];
+      if (profRes.status === 'fulfilled') {
+        setProfiles(profRes.value.profiles ?? []);
+      } else {
+        console.error('Failed to load profiles:', profRes.reason);
+        failures.push('profiles');
+      }
+
+      setLoadError(
+        failures.length > 0
+          ? `Falha ao carregar: ${failures.join(', ')}. Verifique o backend e recarregue a página.`
+          : null,
+      );
     } finally {
       if (!silent) setLoading(false);
     }
@@ -895,6 +1311,13 @@ function PipelineTab() {
 
   return (
     <div className="space-y-6">
+      {/* Error banner — surface load failures instead of hiding them */}
+      {loadError && (
+        <div className="rounded-lg border border-[#7F1D1D] bg-[#1F0A0A] px-4 py-3 text-sm text-[#FCA5A5]">
+          {loadError}
+        </div>
+      )}
+
       {/* Toolbar */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-[#64748B]">

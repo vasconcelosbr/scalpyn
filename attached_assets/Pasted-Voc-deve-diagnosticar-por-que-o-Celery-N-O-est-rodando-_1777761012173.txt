@@ -1,0 +1,121 @@
+Você deve diagnosticar por que o Celery NÃO está rodando em produção.
+
+Contexto confirmado:
+
+* Redis URL já corrigida com /0
+* pool_coins tem 141 símbolos
+* 0 inserts em ohlcv → tasks não executam
+* entrypoint correto (start.sh inicia worker + beat)
+* API responde normalmente
+
+---
+
+# 🎯 OBJETIVO
+
+Descobrir POR QUE o processo Celery morre ou não inicia corretamente.
+
+---
+
+# 🔴 TAREFA 1 — PROVAR SE CELERY SOBE
+
+Adicionar no start.sh:
+
+echo "STARTING CELERY WORKER..."
+celery -A app.tasks.celery_app worker --loglevel=info &
+
+sleep 5
+
+ps aux | grep celery
+
+Se não existir processo:
+→ Celery não iniciou
+
+---
+
+# 🔴 TAREFA 2 — VALIDAR REDIS NA INICIALIZAÇÃO
+
+ANTES de iniciar Celery:
+
+```python
+import redis
+import os
+
+r = redis.from_url(os.environ["REDIS_URL"])
+print("PING REDIS:", r.ping())
+```
+
+Se falhar:
+→ logar erro e abortar (exit 1)
+
+---
+
+# 🔴 TAREFA 3 — LOGAR ERRO DE START DO CELERY
+
+Rodar Celery sem silenciar erro:
+
+celery -A app.tasks.celery_app worker --loglevel=debug
+
+Capturar qualquer erro de:
+
+* conexão Redis
+* import
+* configuração
+
+---
+
+# 🔴 TAREFA 4 — VERIFICAR SE BEAT ESTÁ VIVO
+
+Adicionar log explícito:
+
+echo "STARTING CELERY BEAT..."
+celery -A app.tasks.celery_app beat --loglevel=info &
+
+sleep 5
+
+ps aux | grep beat
+
+---
+
+# 🔴 TAREFA 5 — FAIL FAST (OBRIGATÓRIO)
+
+Se worker OU beat não estiverem vivos:
+
+echo "CELERY FAILED TO START"
+exit 1
+
+---
+
+# 🔴 TAREFA 6 — TESTE MANUAL DE TASK
+
+Após subir:
+
+Executar:
+
+collect_market_data.collect_all.delay()
+
+Se não executar:
+→ worker não está consumindo fila
+
+---
+
+# 🎯 RESULTADO ESPERADO
+
+Você deve retornar:
+
+1. Celery iniciou? (SIM/NÃO)
+2. Redis conectou? (SIM/NÃO)
+3. Worker está vivo após 5s? (SIM/NÃO)
+4. Beat está vivo? (SIM/NÃO)
+5. Existe erro explícito no startup?
+
+---
+
+# ❌ PROIBIDO
+
+* assumir que Celery está rodando
+* ignorar falhas silenciosas
+* não logar erro de Redis
+
+---
+
+Seu objetivo é expor exatamente onde o Celery morre.

@@ -1,4 +1,50 @@
 steps:
+  # ── Task #243: Pre-flight diagnostic (does NOT fail the build) ──────
+  # Logs the Cloud Build identity, project, region, and Cloud Run quota
+  # so that when a worker/beat deploy step fails silently in a future
+  # build, the build log already contains the data needed to diagnose
+  # IAM / quota / SA-existence root causes without re-running.
+  #
+  # Deliberately wrapped in `|| true` everywhere — this step must never
+  # be the reason a build goes red. Its job is observability only.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'preflight-diagnostic'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        echo "==> [preflight] Cloud Build identity:"
+        gcloud auth list --format='value(account,status)' 2>&1 || true
+        echo "==> [preflight] Active project / region:"
+        echo "    PROJECT_ID=${PROJECT_ID}  _REGION=${_REGION}"
+        echo "==> [preflight] Cloud Run services in region (BEFORE deploy):"
+        gcloud run services list --region="${_REGION}" \
+          --filter="metadata.name~scalpyn" \
+          --format='table(metadata.name,status.conditions[0].type,status.conditions[0].status)' 2>&1 || true
+        echo "==> [preflight] Cloud Run API enabled?"
+        gcloud services list --enabled --project="${PROJECT_ID}" \
+          --filter='config.name=run.googleapis.com' \
+          --format='value(config.name,state)' 2>&1 || true
+        echo "==> [preflight] Cloud Run service quota usage in region:"
+        # Conta quantos serviços já existem no projeto/região vs limite
+        # default (1000 por região). Útil para descartar quota como causa
+        # raiz quando worker/beat deploys falham silenciosamente.
+        EXISTING=$(gcloud run services list --region="${_REGION}" \
+          --project="${PROJECT_ID}" --format='value(metadata.name)' 2>/dev/null | wc -l)
+        echo "    services_in_region=$EXISTING (default Cloud Run limit: 1000)"
+        echo "==> [preflight] Cloud Build SA roles on project (top-level only):"
+        BUILD_SA="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -1)"
+        echo "    BUILD_SA=$BUILD_SA"
+        gcloud projects get-iam-policy "${PROJECT_ID}" \
+          --flatten='bindings[].members' \
+          --filter="bindings.members:${BUILD_SA}" \
+          --format='value(bindings.role)' 2>&1 || true
+        echo "==> [preflight] Service-account scalpyn-service-account@${PROJECT_ID}.iam exists?"
+        gcloud iam service-accounts describe \
+          "scalpyn-service-account@${PROJECT_ID}.iam.gserviceaccount.com" \
+          --project="${PROJECT_ID}" 2>&1 | head -5 || true
+        echo "==> [preflight] Done (diagnostic only, never fails the build)."
+
   # Build the Docker image
   - name: 'gcr.io/cloud-builders/docker'
     args:
@@ -22,6 +68,7 @@ steps:
     args:
       - 'run'
       - 'deploy'
+      - '--quiet'
       - '${_SERVICE}'
       - '--image'
       - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
@@ -30,10 +77,29 @@ steps:
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
+      # Network-level perimeter (Task #167). Only requests entering through
+      # an HTTPS Cloud Load Balancer or originating inside the VPC reach the
+      # service; the raw *.run.app URL returns 403 from the public internet,
+      # so /metrics (and every other route) is no longer leak-scrapable.
+      # Frontend traffic continues to flow because the Vercel proxy
+      # (frontend/app/api/[...path]/route.ts) targets BACKEND_URL — point it
+      # at the Cloud LB hostname (or a custom domain mapped to the LB) once
+      # the LB is provisioned. Prometheus is scraped from inside the same
+      # VPC connector / via the LB allow-list documented in
+      # docs/grafana/README.md.
+      - '--ingress'
+      - 'internal-and-cloud-load-balancing'
       - '--port'
       - '8080'
       - '--timeout'
       - '300'
+      # Startup probe deadline. 540s is the Cloud Run max for startup probes.
+      # Bumped from 240s on 2026-05-02 after migrations 033/034 (indicators +
+      # ohlcv market_type) repeatedly tripped the previous budget — even after
+      # the DDL was pre-applied manually, the lifespan + scheduler bootstrap
+      # combined with `--min-instances=1` lock contention made cold starts
+      # flaky. See `.agents/skills/alembic-migration-guardrails/SKILL.md`
+      # "Cold-start budget on Cloud Run" for the per-step breakdown.
       # Cloud Run normally throttles CPU / scales to zero between requests.
       # This service embeds Celery worker + beat, so one warm instance with
       # always-on CPU is required for recurring pipeline scans to keep running.
@@ -45,8 +111,294 @@ steps:
       - '2Gi'
       - '--add-cloudsql-instances'
       - 'clickrate-477217:us-central1:scalpyn'
-      - '--startup-probe'
-      - 'http-get=:8080/api/health,initial-delay-seconds=5,period-seconds=10,failure-threshold=30,timeout-seconds=5'
+      # Bearer-token gate for /metrics (Task #167). The endpoint returns 404
+      # until this env var is present, and 401 unless the request carries the
+      # matching `Authorization: Bearer …` header. Prometheus scrapes with
+      # `bearer_token_file` (see docs/grafana/README.md). The Secret Manager
+      # secret must exist before this deploy step; one-time setup:
+      #   echo -n "<random-32-byte-hex>" | gcloud secrets create \
+      #     prometheus-bearer-token --data-file=- --project clickrate-477217
+      #   gcloud secrets add-iam-policy-binding prometheus-bearer-token \
+      #     --member=serviceAccount:scalpyn-service-account@clickrate-477217.iam.gserviceaccount.com \
+      #     --role=roles/secretmanager.secretAccessor --project clickrate-477217
+      - '--update-secrets'
+      - 'PROMETHEUS_BEARER_TOKEN=prometheus-bearer-token:latest'
+      # Bearer-token gate for /api/system/celery-diagnostics (Task #186).
+      # Same access model as PROMETHEUS_BEARER_TOKEN: endpoint returns 404
+      # until the env var is set, 401 unless the request carries the
+      # matching `Authorization: Bearer …` header. One-time setup:
+      #   python -c "import secrets; print(secrets.token_hex(32))" \
+      #     | gcloud secrets create diagnostics-bearer-token \
+      #         --data-file=- --project clickrate-477217
+      #   gcloud secrets add-iam-policy-binding diagnostics-bearer-token \
+      #     --member=serviceAccount:scalpyn-service-account@clickrate-477217.iam.gserviceaccount.com \
+      #     --role=roles/secretmanager.secretAccessor --project clickrate-477217
+      - '--update-secrets'
+      - 'DIAGNOSTICS_BEARER_TOKEN=diagnostics-bearer-token:latest'
+      # Redis broker URL (Redis Labs external).
+      # IMPORTANT: this URL carries the broker password inline. The credential
+      # was supplied by the user on 2026-05-02 to recover the collector stall;
+      # rotate it after pipeline is healthy and migrate to Secret Manager:
+      #   echo -n "<new-url>" | gcloud secrets create redis-url \
+      #     --data-file=- --project clickrate-477217
+      #   gcloud secrets add-iam-policy-binding redis-url \
+      #     --member=serviceAccount:scalpyn-service-account@clickrate-477217.iam.gserviceaccount.com \
+      #     --role=roles/secretmanager.secretAccessor --project clickrate-477217
+      # then replace the line below with:
+      #   - '--update-secrets'
+      #   - 'REDIS_URL=redis-url:latest'
+      # The `/0` db suffix is REQUIRED -- without it Celery cannot select a
+      # logical Redis database and the broker connection silently fails after
+      # broker_connection_max_retries (10) attempts.
+      # All plain env-vars are merged in a single --update-env-vars block to
+      # prevent Cloud Run from performing a partial substitution (each separate
+      # --update-env-vars call replaces the *entire* set of plain env-vars in
+      # some gcloud SDK versions, which can silently drop variables set in a
+      # previous call within the same deploy step).
+      #
+      # REDIS_URL: Redis Labs external broker (password inline — rotate after
+      #   pipeline is healthy and migrate to Secret Manager; see comment above).
+      # FORCE_RESTART: bumped on every recovery deploy to force a new revision
+      #   even when the image SHA is unchanged (kills poisoned Celery workers).
+      #   Bumped 2026-05-02 to recover from the collector stall documented in
+      #   `.local/tasks/diagnose-collector-stalled-prod.md`.
+      # ENABLE_GATE_WS: gates the Gate.io WebSocket leader (Task #171).  Must
+      #   be exactly "1" — any other value disables WS ingestion and the system
+      #   falls back to REST polling for order flow (taker_ratio = null).
+      # Task #216: this `scalpyn` service is API-only — the embedded
+      # Celery worker is disabled here (`WORKER_QUEUES=`, `RUN_BEAT=0`)
+      # so HTTP latency is never co-tenant with task execution. The
+      # three worker queues run as independent Cloud Run services
+      # (deploy steps below); the dedicated beat-only service owns the
+      # periodic schedule so it cannot double-fire.
+      #
+      #   Service                    | WORKER_QUEUES                            | RUN_BEAT | min/max
+      #   ---------------------------+------------------------------------------+----------+--------
+      #   scalpyn (this file)        | (empty — API only)                       | 0        | 1 / 4
+      #   scalpyn-worker-micro       | microstructure                           | 0        | 1 / 5
+      #   scalpyn-worker-structural  | structural                               | 0        | 1 / 3
+      #   scalpyn-worker-execution   | execution                                | 0        | 1 / 2
+      #   scalpyn-beat               | (none — `RUN_BEAT=1` only, no worker)    | 1        | 1 / 1
+      #
+      # See `docs/runbooks/celery-queue-topology.md` for the full topology.
+      - '--update-env-vars'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-07T17:30:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=0,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
+
+  # ── Task #216: Celery worker — microstructure queue ─────────────────
+  # Bursty 5-minute cadence (collect_5m → compute_5m). Sized to absorb
+  # a tick of fan-out without blocking the slower structural queue.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - '--quiet'
+      - 'scalpyn-worker-micro'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--no-allow-unauthenticated'
+      - '--ingress'
+      - 'internal'
+      - '--port'
+      - '8080'
+      - '--timeout'
+      - '300'
+      - '--min-instances'
+      - '1'
+      - '--max-instances'
+      - '5'
+      - '--no-cpu-throttling'
+      - '--cpu-boost'
+      - '--memory'
+      - '2Gi'
+      - '--add-cloudsql-instances'
+      - 'clickrate-477217:us-central1:scalpyn'
+      - '--update-env-vars'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=microstructure,RUN_BEAT=0,CELERY_CONCURRENCY=4,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
+
+  # ── Task #216: Celery worker — structural queue ─────────────────────
+  # Hourly+ heavy TA (collect_all → compute → score, pipeline_scan,
+  # symbol_health, etc.). Cadence-locked; one warm instance keeps the
+  # 60s collect cycle from cold-starting on every tick.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - '--quiet'
+      - 'scalpyn-worker-structural'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--no-allow-unauthenticated'
+      - '--ingress'
+      - 'internal'
+      - '--port'
+      - '8080'
+      - '--timeout'
+      - '300'
+      - '--min-instances'
+      - '1'
+      - '--max-instances'
+      - '3'
+      - '--no-cpu-throttling'
+      - '--cpu-boost'
+      - '--memory'
+      - '2Gi'
+      - '--add-cloudsql-instances'
+      - 'clickrate-477217:us-central1:scalpyn'
+      - '--update-env-vars'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=structural,RUN_BEAT=0,CELERY_CONCURRENCY=2,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
+
+  # ── Task #216: Celery worker — execution queue ──────────────────────
+  # Latency-sensitive trading critical path (evaluate, execute_buy,
+  # anti_liq). Isolated so a slow indicator compute can never starve a
+  # force-close decision. Low instance ceiling — tasks are short.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - '--quiet'
+      - 'scalpyn-worker-execution'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--no-allow-unauthenticated'
+      - '--ingress'
+      - 'internal'
+      - '--port'
+      - '8080'
+      - '--timeout'
+      - '300'
+      - '--min-instances'
+      - '1'
+      - '--max-instances'
+      - '2'
+      - '--no-cpu-throttling'
+      - '--cpu-boost'
+      - '--memory'
+      - '1Gi'
+      - '--add-cloudsql-instances'
+      - 'clickrate-477217:us-central1:scalpyn'
+      - '--update-env-vars'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=execution,RUN_BEAT=0,CELERY_CONCURRENCY=2,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
+
+  # ── Task #216: Celery beat — sole owner of the periodic schedule ────
+  # MUST be a single revision (max-instances=1) so periodic schedules
+  # cannot double-fire. No worker (`WORKER_QUEUES=`) — beat only.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - '--quiet'
+      - 'scalpyn-beat'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--no-allow-unauthenticated'
+      - '--ingress'
+      - 'internal'
+      - '--port'
+      - '8080'
+      - '--timeout'
+      - '300'
+      - '--min-instances'
+      - '1'
+      - '--max-instances'
+      - '1'
+      - '--no-cpu-throttling'
+      - '--cpu-boost'
+      - '--memory'
+      - '1Gi'
+      - '--add-cloudsql-instances'
+      - 'clickrate-477217:us-central1:scalpyn'
+      - '--update-env-vars'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=1,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
+
+  # ── Task #239: Topology validation — fail loudly if any of the 5
+  # ── expected Cloud Run services is missing after the deploy steps.
+  #
+  # Why this exists: in May-2026 the deploy of `scalpyn` (API) succeeded
+  # while `scalpyn-worker-micro`, `scalpyn-worker-structural`,
+  # `scalpyn-worker-execution` and `scalpyn-beat` were absent from prod
+  # (deleted manually OR deploy steps silently skipped). Result: no Celery
+  # worker consumed `microstructure`/`structural`/`execution` queues and no
+  # beat scheduled `collect_5m`/`collect_all` — pipeline went silent for 2
+  # days while the API kept serving HTTP normally.
+  #
+  # This step queries Cloud Run for all 5 services by name. Any missing
+  # service exits 1, marking the build red so the operator sees the gap
+  # immediately rather than discovering it days later via stale OHLCV.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'topology-check'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        EXPECTED="scalpyn scalpyn-worker-micro scalpyn-worker-structural scalpyn-worker-execution scalpyn-beat"
+        echo "==> [topology-check] Verifying all 5 Cloud Run services exist in ${_REGION}..."
+        # Task #244: no server-side --filter here. The previous filter
+        # `metadata.name=(A OR B OR ...)` was a known foot-gun: depending
+        # on gcloud SDK version it could silently return success with an
+        # empty result set (false-positive), which let 6 builds in a row
+        # go green while prod was missing all 4 worker/beat services.
+        # We list every service in the region and grep locally — robust
+        # against filter syntax drift across gcloud versions.
+        ALL=$(gcloud run services list \
+          --region="${_REGION}" \
+          --format="value(metadata.name)")
+        echo " [topology-check] All services in region:"
+        echo "$ALL" | sed 's/^/   - /'
+        MISSING=""
+        for svc in $EXPECTED; do
+          if ! echo "$ALL" | grep -qx "$svc"; then
+            MISSING="$MISSING $svc"
+          fi
+        done
+        if [ -n "$MISSING" ]; then
+          echo "==> [topology-check] FAIL: missing Cloud Run services:$MISSING" >&2
+          echo "==> See backend/docs/runbooks/cloud-run-celery-topology.md" >&2
+          exit 1
+        fi
+        # Belt-and-suspenders: verify each expected service is also Ready=True.
+        # A service that exists but has Ready=False (failed revision, no live
+        # instance) means workers won't actually consume tasks even though
+        # the bare existence check passed.
+        NOT_READY=""
+        for svc in $EXPECTED; do
+          # Filter by condition type=Ready instead of index [0] — Cloud Run
+          # does not guarantee ordering of status.conditions across SDK
+          # versions, and a non-Ready condition (e.g. ConfigurationsReady)
+          # at index 0 would otherwise misreport the service.
+          READY=$(gcloud run services describe "$svc" \
+            --region="${_REGION}" \
+            --format='value(status.conditions.filter("type:Ready").extract(status))' 2>/dev/null || echo "MISSING")
+          if [ "$READY" != "True" ]; then
+            NOT_READY="$NOT_READY $svc(ready=$READY)"
+          fi
+        done
+        if [ -n "$NOT_READY" ]; then
+          echo "==> [topology-check] FAIL: services not Ready:$NOT_READY" >&2
+          echo "==> See backend/docs/runbooks/cloud-run-celery-topology.md" >&2
+          exit 1
+        fi
+        echo "==> [topology-check] OK: all 5 Cloud Run services present and Ready."
 
 substitutions:
   _REGION: us-central1

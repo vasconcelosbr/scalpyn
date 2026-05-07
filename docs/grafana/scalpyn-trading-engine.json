@@ -1,0 +1,1845 @@
+{
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "postgres",
+      "name": "PostgreSQL",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "stat",
+      "name": "Stat",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "gauge",
+      "name": "Gauge",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "timeseries",
+      "name": "Time series",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "table",
+      "name": "Table",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "piechart",
+      "name": "Pie chart",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "bargauge",
+      "name": "Bar gauge",
+      "version": ""
+    }
+  ],
+  "title": "Scalpyn Trading Engine - Monitoramento",
+  "uid": "scalpyn-trading-engine",
+  "tags": [
+    "scalpyn",
+    "trading",
+    "production"
+  ],
+  "timezone": "browser",
+  "style": "dark",
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h"
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "prometheus",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "regex": ""
+      },
+      {
+        "name": "postgres",
+        "label": "PostgreSQL",
+        "type": "datasource",
+        "query": "postgres",
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "regex": ""
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "Annotations & Alerts",
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 100,
+      "type": "row",
+      "title": "1. Status Geral",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "System Status",
+      "description": "3-input composite per spec verbatim. A = avg(indicator_confidence) (Prometheus), B = % NO_DATA (Postgres), C = exchange error rate (Prometheus). OK (2) iff A>0.6 AND B<20 AND C<0.05. WARN (1) if any threshold is breached by <=25% (A in [0.45, 0.6), B in [20, 25], C in [0.05, 0.0625]). CRIT (0) if any threshold breached by >25% (A<0.45 OR B>25 OR C>0.0625).",
+      "datasource": {
+        "type": "datasource",
+        "uid": "-- Mixed --"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "expr": "avg(indicator_confidence)",
+          "instant": true,
+          "legendFormat": "confidence"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${postgres}"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'NO_DATA') / NULLIF(COUNT(*),0) AS pct FROM indicator_snapshots, LATERAL jsonb_each(indicators_json) WHERE timestamp > NOW() - INTERVAL '15 minutes';"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "expr": "sum(rate(exchange_request_errors_total[5m])) / sum(rate(exchange_request_latency_seconds_count[5m]))",
+          "instant": true,
+          "legendFormat": "err_rate"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "type": "reduce",
+          "expression": "A",
+          "reducer": "last"
+        },
+        {
+          "refId": "E",
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "type": "reduce",
+          "expression": "B",
+          "reducer": "last"
+        },
+        {
+          "refId": "F",
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "type": "reduce",
+          "expression": "C",
+          "reducer": "last"
+        },
+        {
+          "refId": "G",
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "type": "math",
+          "expression": "2 - min((($D < 0.6) + ($E >= 20) + ($F >= 0.05)), 1) - min((($D < 0.45) + ($E > 25) + ($F > 0.0625)), 1)"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^G$/",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "CRIT",
+                  "color": "red",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "WARN",
+                  "color": "orange",
+                  "index": 1
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "2": {
+                  "text": "OK",
+                  "color": "green",
+                  "index": 2
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Score Médio (1h)",
+      "description": "AVG(indicator_snapshots.score) over the last hour. Excludes rows where score IS NULL.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${postgres}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT AVG(score) AS \"Score médio\" FROM indicator_snapshots WHERE timestamp > NOW() - INTERVAL '1 hour' AND score IS NOT NULL;"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 40
+              },
+              {
+                "color": "green",
+                "value": 60
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Confidence Média",
+      "description": "avg(indicator_confidence) across all symbols and uvicorn workers. Embedded alert A1 (unified-alerting) fires when this falls below 0.6 for 5m.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg(indicator_confidence)",
+          "instant": true,
+          "legendFormat": "confidence"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "min": 0,
+          "max": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.5
+              },
+              {
+                "color": "green",
+                "value": 0.6
+              }
+            ]
+          }
+        }
+      },
+      "alert": {
+        "uid": "scalpyn-confidence-low",
+        "title": "[Scalpyn] Confidence baixo (<0.6)",
+        "for": "5m",
+        "condition": "C",
+        "noDataState": "NoData",
+        "execErrState": "Alerting",
+        "data": [
+          {
+            "refId": "A",
+            "queryType": "",
+            "relativeTimeRange": {
+              "from": 300,
+              "to": 0
+            },
+            "datasourceUid": "${prometheus}",
+            "model": {
+              "refId": "A",
+              "expr": "avg(indicator_confidence)",
+              "instant": true
+            }
+          },
+          {
+            "refId": "B",
+            "queryType": "",
+            "relativeTimeRange": {
+              "from": 0,
+              "to": 0
+            },
+            "datasourceUid": "__expr__",
+            "model": {
+              "refId": "B",
+              "type": "reduce",
+              "expression": "A",
+              "reducer": "last"
+            }
+          },
+          {
+            "refId": "C",
+            "queryType": "",
+            "relativeTimeRange": {
+              "from": 0,
+              "to": 0
+            },
+            "datasourceUid": "__expr__",
+            "model": {
+              "refId": "C",
+              "type": "threshold",
+              "expression": "B",
+              "conditions": [
+                {
+                  "evaluator": {
+                    "type": "lt",
+                    "params": [
+                      0.6
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "labels": {
+          "severity": "critical",
+          "service": "trading-engine"
+        },
+        "annotations": {
+          "summary": "Confidence média < 0.6 por 5m",
+          "description": "Average indicator_confidence has been below 0.6 for 5 minutes. Investigate the robust-indicator pipeline (compute.py, scheduler), Gate.io connectivity, and recent indicator NO_DATA / STALE rates.",
+          "runbook_url": "https://github.com/<org>/scalpyn/runbooks/grafana#confidence-baixo"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Data Quality % (VALID, 1h)",
+      "description": "Percentage of indicator entries with status=VALID across all symbols in the last hour. Reads indicator_snapshots.indicators_json via jsonb_each.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${postgres}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'VALID') / NULLIF(COUNT(*),0) AS pct_valid FROM indicator_snapshots, LATERAL jsonb_each(indicators_json) WHERE timestamp > NOW() - INTERVAL '1 hour';"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 70
+              },
+              {
+                "color": "green",
+                "value": 90
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Rejection Rate (1h)",
+      "description": "Percentage of decisions_log.decision = 'REJECT' over the last hour. Embedded alert A3 (unified-alerting) fires when > 50 for 5m.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${postgres}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT 100.0 * COUNT(*) FILTER (WHERE decision = 'REJECT') / NULLIF(COUNT(*),0) AS pct_reject FROM decisions_log WHERE created_at > NOW() - INTERVAL '1 hour';"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 30
+              },
+              {
+                "color": "red",
+                "value": 50
+              }
+            ]
+          }
+        }
+      },
+      "alert": {
+        "uid": "scalpyn-rejection-rate-high",
+        "title": "[Scalpyn] Rejection rate alto (>50%)",
+        "for": "5m",
+        "condition": "C",
+        "noDataState": "NoData",
+        "execErrState": "Alerting",
+        "data": [
+          {
+            "refId": "A",
+            "queryType": "",
+            "relativeTimeRange": {
+              "from": 3600,
+              "to": 0
+            },
+            "datasourceUid": "${postgres}",
+            "model": {
+              "refId": "A",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT 100.0 * COUNT(*) FILTER (WHERE decision = 'REJECT') / NULLIF(COUNT(*),0) AS pct FROM decisions_log WHERE created_at > NOW() - INTERVAL '1 hour';"
+            }
+          },
+          {
+            "refId": "B",
+            "queryType": "",
+            "relativeTimeRange": {
+              "from": 0,
+              "to": 0
+            },
+            "datasourceUid": "__expr__",
+            "model": {
+              "refId": "B",
+              "type": "reduce",
+              "expression": "A",
+              "reducer": "last"
+            }
+          },
+          {
+            "refId": "C",
+            "queryType": "",
+            "relativeTimeRange": {
+              "from": 0,
+              "to": 0
+            },
+            "datasourceUid": "__expr__",
+            "model": {
+              "refId": "C",
+              "type": "threshold",
+              "expression": "B",
+              "conditions": [
+                {
+                  "evaluator": {
+                    "type": "gt",
+                    "params": [
+                      50
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "labels": {
+          "severity": "warning",
+          "service": "trading-engine"
+        },
+        "annotations": {
+          "summary": "Mais de 50% das decisões viraram REJECT na última hora",
+          "description": "decisions_log shows >50% REJECT over the last hour. Inspect the score-engine rejection donut and recent changes to backend/app/tasks/pipeline_scan.py.",
+          "runbook_url": "https://github.com/<org>/scalpyn/runbooks/grafana#rejection-rate-alto"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "bargauge",
+      "title": "Trades 1h (approved vs rejected)",
+      "description": "decisions_log row count grouped by decision over the last hour.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${postgres}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT decision AS metric, COUNT(*) AS value FROM decisions_log WHERE created_at > NOW() - INTERVAL '1 hour' GROUP BY decision ORDER BY decision;"
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 101,
+      "type": "row",
+      "title": "2. Data Quality Gauges (15m)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      }
+    },
+    {
+      "id": 7,
+      "type": "gauge",
+      "title": "Data Quality (15m) — VALID · NO_DATA · STALE · ERROR",
+      "description": "Single SQL query returning four percentage columns; Grafana renders one gauge per numeric field. Embedded alert A2 (unified-alerting, see attached `alert` block) fires when % NO_DATA exceeds 25 for 5m.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${postgres}"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'VALID')   / NULLIF(COUNT(*),0) AS pct_valid, 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'NO_DATA') / NULLIF(COUNT(*),0) AS pct_no_data, 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'STALE')   / NULLIF(COUNT(*),0) AS pct_stale, 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'ERROR')   / NULLIF(COUNT(*),0) AS pct_error FROM indicator_snapshots, LATERAL jsonb_each(indicators_json) WHERE timestamp > NOW() - INTERVAL '15 minutes';"
+        }
+      ],
+      "options": {
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pct_valid"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "% VALID"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 70
+                    },
+                    {
+                      "color": "green",
+                      "value": 90
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pct_no_data"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "% NO_DATA"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 10
+                    },
+                    {
+                      "color": "red",
+                      "value": 25
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pct_stale"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "% STALE"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 10
+                    },
+                    {
+                      "color": "red",
+                      "value": 25
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pct_error"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "% ERROR"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 2
+                    },
+                    {
+                      "color": "red",
+                      "value": 10
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "alert": {
+        "uid": "scalpyn-no-data-high",
+        "title": "[Scalpyn] NO_DATA alto (>25%)",
+        "for": "5m",
+        "condition": "C",
+        "noDataState": "NoData",
+        "execErrState": "Alerting",
+        "data": [
+          {
+            "refId": "A",
+            "queryType": "",
+            "relativeTimeRange": {
+              "from": 900,
+              "to": 0
+            },
+            "datasourceUid": "${postgres}",
+            "model": {
+              "refId": "A",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT 100.0 * COUNT(*) FILTER (WHERE value->>'status' = 'NO_DATA') / NULLIF(COUNT(*),0) AS pct FROM indicator_snapshots, LATERAL jsonb_each(indicators_json) WHERE timestamp > NOW() - INTERVAL '15 minutes';"
+            }
+          },
+          {
+            "refId": "B",
+            "queryType": "",
+            "relativeTimeRange": {
+              "from": 0,
+              "to": 0
+            },
+            "datasourceUid": "__expr__",
+            "model": {
+              "refId": "B",
+              "type": "reduce",
+              "expression": "A",
+              "reducer": "last"
+            }
+          },
+          {
+            "refId": "C",
+            "queryType": "",
+            "relativeTimeRange": {
+              "from": 0,
+              "to": 0
+            },
+            "datasourceUid": "__expr__",
+            "model": {
+              "refId": "C",
+              "type": "threshold",
+              "expression": "B",
+              "conditions": [
+                {
+                  "evaluator": {
+                    "type": "gt",
+                    "params": [
+                      25
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "labels": {
+          "severity": "critical",
+          "service": "trading-engine"
+        },
+        "annotations": {
+          "summary": "Mais de 25% dos indicadores em NO_DATA",
+          "description": "Indicator pipeline reports >25% NO_DATA over the last 15 minutes. Check Gate.io connectivity, the structural scheduler logs, and recent failures in backend/app/services/scheduler_service.py.",
+          "runbook_url": "https://github.com/<org>/scalpyn/runbooks/grafana#no-data-alto"
+        }
+      }
+    },
+    {
+      "id": 102,
+      "type": "row",
+      "title": "3. Confidence ao longo do tempo",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "indicator_confidence por símbolo (avg 5m)",
+      "description": "Per-symbol moving average of robust indicator confidence. Horizontal reference at 0.60.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg by (symbol) (avg_over_time(indicator_confidence[5m]))",
+          "legendFormat": "{{symbol}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "thresholdsStyle": {
+              "mode": "line+area"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "transparent",
+                "value": 0.6
+              }
+            ]
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        }
+      }
+    },
+    {
+      "id": 103,
+      "type": "row",
+      "title": "4. Exchange Status (Gate / Binance)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      }
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Exchanges — p95 latency · error rate · last update · status",
+      "description": "One row per exchange (joined on the 'exchange' label). Spec-mandated columns: p95 latency (s), error rate (ratio 0-1), last-update timestamp (dateTimeAsLocal), status pill (range-mapped from staleness). Embedded alert A4 (unified-alerting) fires when the error rate exceeds 10% for 5m.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, exchange) (rate(exchange_request_latency_seconds_bucket[5m])))",
+          "instant": true,
+          "format": "table",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (exchange) (rate(exchange_request_errors_total[5m])) / sum by (exchange) (rate(exchange_request_latency_seconds_count[5m]))",
+          "instant": true,
+          "format": "table",
+          "legendFormat": "err_rate"
+        },
+        {
+          "refId": "C",
+          "expr": "max by (exchange) (timestamp(exchange_request_latency_seconds_count))",
+          "instant": true,
+          "format": "table",
+          "legendFormat": "last_update_ts"
+        },
+        {
+          "refId": "D",
+          "expr": "time() - max by (exchange) (timestamp(exchange_request_latency_seconds_count))",
+          "instant": true,
+          "format": "table",
+          "legendFormat": "staleness_s"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "instance": true
+            },
+            "indexByName": {
+              "exchange": 0,
+              "Value #A": 1,
+              "Value #B": 2,
+              "Value #C": 3,
+              "Value #D": 4
+            },
+            "renameByName": {
+              "exchange": "Exchange",
+              "Value #A": "p95 latency",
+              "Value #B": "Error rate",
+              "Value #C": "Last update",
+              "Value #D": "Status"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95 latency"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 0.5
+                    },
+                    {
+                      "color": "red",
+                      "value": 1.5
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Error rate"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 0.05
+                    },
+                    {
+                      "color": "red",
+                      "value": 0.1
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "gradient"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last update"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Status"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "range",
+                    "options": {
+                      "from": -1000000000,
+                      "to": 60,
+                      "result": {
+                        "text": "OK",
+                        "color": "green",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "range",
+                    "options": {
+                      "from": 60.000001,
+                      "to": 300,
+                      "result": {
+                        "text": "DEGRADED",
+                        "color": "orange",
+                        "index": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "range",
+                    "options": {
+                      "from": 300.000001,
+                      "to": 1000000000000,
+                      "result": {
+                        "text": "DOWN",
+                        "color": "red",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "custom.align",
+                "value": "center"
+              }
+            ]
+          }
+        ]
+      },
+      "alert": {
+        "uid": "scalpyn-exchange-error-rate-high",
+        "title": "[Scalpyn] Exchange error rate alto (>10%)",
+        "for": "5m",
+        "condition": "C",
+        "noDataState": "NoData",
+        "execErrState": "Alerting",
+        "data": [
+          {
+            "refId": "A",
+            "queryType": "",
+            "relativeTimeRange": {
+              "from": 300,
+              "to": 0
+            },
+            "datasourceUid": "${prometheus}",
+            "model": {
+              "refId": "A",
+              "expr": "100 * sum(rate(exchange_request_errors_total[5m])) / sum(rate(exchange_request_latency_seconds_count[5m]))",
+              "instant": true
+            }
+          },
+          {
+            "refId": "B",
+            "queryType": "",
+            "relativeTimeRange": {
+              "from": 0,
+              "to": 0
+            },
+            "datasourceUid": "__expr__",
+            "model": {
+              "refId": "B",
+              "type": "reduce",
+              "expression": "A",
+              "reducer": "last"
+            }
+          },
+          {
+            "refId": "C",
+            "queryType": "",
+            "relativeTimeRange": {
+              "from": 0,
+              "to": 0
+            },
+            "datasourceUid": "__expr__",
+            "model": {
+              "refId": "C",
+              "type": "threshold",
+              "expression": "B",
+              "conditions": [
+                {
+                  "evaluator": {
+                    "type": "gt",
+                    "params": [
+                      10
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "labels": {
+          "severity": "critical",
+          "service": "trading-engine"
+        },
+        "annotations": {
+          "summary": "Erro de exchange (Gate / Binance) > 10% por 5m",
+          "description": "More than 10% of REST requests to Gate.io / Binance failed over the last 5 minutes. Check the public status pages, gate_adapter._request transport errors in Cloud Logging, and Cloud Run egress.",
+          "runbook_url": "https://github.com/<org>/scalpyn/runbooks/grafana#exchange-error-rate"
+        }
+      }
+    },
+    {
+      "id": 104,
+      "type": "row",
+      "title": "5. Score por símbolo",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "indicator_snapshots.score por símbolo",
+      "description": "One series per symbol. Skips snapshots where score IS NULL.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${postgres}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT timestamp AS time, symbol AS metric, score AS value FROM indicator_snapshots WHERE $__timeFilter(timestamp) AND score IS NOT NULL ORDER BY 1;"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "fillOpacity": 6,
+            "showPoints": "auto"
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        }
+      }
+    },
+    {
+      "id": 105,
+      "type": "row",
+      "title": "6. Critical Indicators (NO_DATA / STALE / ERROR — 5m)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      }
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "Indicadores em estado crítico",
+      "description": "Per-indicator drill-down filtered to NO_DATA, STALE, ERROR within the last 5 minutes. Hard limit 200 rows.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${postgres}"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT s.symbol, ind.key AS indicator, ind.value->>'timeframe' AS timeframe, ind.value->>'value' AS value, ind.value->>'status' AS status, ind.value->>'source' AS source, (ind.value->>'confidence')::numeric AS confidence FROM indicator_snapshots s, LATERAL jsonb_each(s.indicators_json) AS ind WHERE s.timestamp > NOW() - INTERVAL '5 minutes' AND ind.value->>'status' IN ('NO_DATA', 'STALE', 'ERROR') ORDER BY s.timestamp DESC, s.symbol, indicator LIMIT 200;"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "footer": {
+          "show": true,
+          "reducer": [
+            "count"
+          ],
+          "fields": ""
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "NO_DATA": {
+                        "color": "red",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "STALE": {
+                        "color": "orange",
+                        "index": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "ERROR": {
+                        "color": "red",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "confidence"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 0.5
+                    },
+                    {
+                      "color": "green",
+                      "value": 0.7
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 106,
+      "type": "row",
+      "title": "7. Rejection Reasons",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 49
+      }
+    },
+    {
+      "id": 12,
+      "type": "piechart",
+      "title": "score_rejection_total por motivo (5m)",
+      "description": "Reason label is whatever pipeline_scan.py passes to increment_rejection(reason_key) — currently the colon-prefix of result.rejection_reason. No enum is hard-coded.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 50
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(score_rejection_total[5m]))",
+          "instant": true,
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "options": {
+        "displayLabels": [
+          "name",
+          "percent"
+        ],
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value",
+            "percent"
+          ],
+          "showLegend": true
+        },
+        "pieType": "donut",
+        "tooltip": {
+          "mode": "single"
+        },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "Total rejeições (5m)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 50
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(score_rejection_total[5m])) * 300",
+          "instant": true,
+          "legendFormat": "total"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 200
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "Top motivo (5m)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 54
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(1, sum by (reason) (rate(score_rejection_total[5m])))",
+          "instant": true,
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          }
+        }
+      }
+    },
+    {
+      "id": 107,
+      "type": "row",
+      "title": "8. Alertas (A1 – A4 embedded)",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 58
+      },
+      "panels": [
+        {
+          "id": 200,
+          "type": "text",
+          "title": "Alertas embutidos no dashboard (Grafana 10 unified-alerting)",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 59
+          },
+          "options": {
+            "mode": "markdown",
+            "content": "Quatro regras de alerta embutidas neste dashboard (Grafana 10 unified-alerting). Mesmas regras vivem em `docs/grafana/alert-rules.yaml` com `uid` idênticos para deploys via provisioning.\n\n| ID | Painel | Datasource | Condição | `for` | Severity |\n|----|--------|------------|----------|-------|----------|\n| **A1** Confidence baixo | Painel 3 — Confidence Média | `${prometheus}` | `avg(indicator_confidence) < 0.6` | 5m | critical |\n| **A2** NO_DATA alto | Painel 7 — Data Quality | `${postgres}` | `% NO_DATA (15m) > 25` | 5m | critical |\n| **A3** Rejection rate alto | Painel 5 — Rejection Rate (1h) | `${postgres}` | `rejection_rate (1h) > 50%` | 5m | warning |\n| **A4** Exchange error rate alto | Painel 9 — Exchanges | `${prometheus}` | `error_rate (5m) > 10%` | 5m | critical |"
+          }
+        }
+      ]
+    }
+  ]
+}

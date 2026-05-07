@@ -1,0 +1,152 @@
+✔️ Backend — pontos críticos
+1) Separar claramente três acumuladores
+
+Hoje o bug nasce da mistura entre “máximo possível” e “penalidade”.
+
+Use:
+
+positive_possible = 0.0   # soma apenas de regras com points > 0
+earned_positive = 0.0     # pontos ganhos (regras positivas que passaram)
+penalties = 0.0           # soma negativa (regras negativas que passaram)
+2) Regra de cálculo correta
+for rule in rules:
+    pts = rule.points
+
+    if pts > 0:
+        positive_possible += pts
+        if rule.passed:
+            earned_positive += pts
+    else:
+        if rule.passed:
+            penalties += pts  # já é negativo
+3) Score da categoria
+raw_score = (earned_positive + penalties) / positive_possible if positive_possible > 0 else 0
+category_score = max(0.0, min(1.0, raw_score))
+
+👉 Isso resolve:
+
+divisão por zero
+cancelamento indevido
+penalização real
+4) Comportamento desejado (importante validar)
+Cenário	Resultado esperado
+Só regras positivas	Score normal
+Positiva + penalidade leve	Score reduz
+Penalidade > positivos	Score = 0
+Só regras negativas	Score = 0
+⚠️ Edge case que você não citou
+Categoria sem regras positivas
+if positive_possible == 0:
+    return 0.0
+
+👉 Senão você abre espaço para score negativo ou NaN.
+
+✔️ Breakdown (backend)
+
+Você está certo em manter:
+
+points_possible = pts (inclui negativos)
+points_awarded = pts ou 0
+
+Mas recomendo adicionar um campo explícito:
+
+{
+  "type": "positive" | "penalty"
+}
+
+👉 Evita ambiguidade no frontend e facilita debug.
+
+✔️ Frontend — ajuste correto
+
+Remover + hardcoded é necessário, mas incompleto.
+
+Faça assim:
+const formatPoints = (value: number) => {
+  if (value > 0) return `+${value}`;
+  if (value < 0) return `${value}`;
+  return '0';
+};
+Tooltip (corrigir também)
+
+Hoje:
+
+'+' + rule.points_awarded.toFixed(0)
+
+Corrigir para:
+
+formatPoints(rule.points_awarded)
+⚠️ Problema de UX que ainda existe
+
+Mesmo corrigindo o sinal, ainda pode confundir:
+
+Exemplo:
+
+-15 / -15
+
+Isso não é intuitivo.
+
+Melhor abordagem visual
+
+Separar:
+
+positivos: +10 / 30
+negativos: -15
+
+Ou:
+
+Score: 15 / 30
+Penalty: -15
+
+👉 Muito mais claro operacionalmente
+
+✔️ Consideração estratégica (importante)
+
+Seu plano corrige o bug, mas também muda o comportamento do sistema:
+
+Antes: penalidades eram neutras
+Agora: penalidades afetam score
+
+Impacto esperado
+Queda no score médio
+Menos ativos “falsamente bons”
+Block Rules menos acionadas
+
+👉 Isso é desejado, mas precisa ser acompanhado
+
+✔️ Recomendação adicional (forte)
+
+Adicionar peso mínimo para penalidade crítica:
+
+if volume_delta <= -200:
+    penalties = min(penalties, -20)  # floor mínimo
+
+👉 Evita casos onde múltiplas positivas “mascaram” fluxo ruim
+
+✔️ Testes que você deveria rodar
+Caso 1 — somente positivo
+
+→ score normal
+
+Caso 2 — positivo + penalidade leve
+
+→ score reduzido proporcional
+
+Caso 3 — penalidade forte
+
+→ score próximo de 0
+
+Caso 4 — só penalidade
+
+→ score = 0
+
+Caso 5 — cancelamento (ex: +10 e -10)
+
+→ score = 0 (não neutro)
+
+✔️ Conclusão
+Diagnóstico: correto
+Fix proposto: correto
+Falta apenas:
+separar acumuladores
+tratar edge cases
+melhorar leitura no frontend

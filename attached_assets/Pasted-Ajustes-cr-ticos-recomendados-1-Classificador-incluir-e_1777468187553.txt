@@ -1,0 +1,114 @@
+Ajustes críticos (recomendados)
+1. Classificador — incluir estado “hybrid” (opcional, mas valioso)
+
+Hoje você força apenas structural ou microstructure. Isso funciona, mas perde nuance em indicadores intermediários.
+
+A Exponential Moving Average entre 21–50 e indicadores como Bollinger Bands e Volume Weighted Average Price podem oscilar entre contexto e timing.
+
+Sugestão (sem mudar arquitetura):
+
+Manter apenas 2 schedulers
+Mas permitir flag interna:
+group = "structural" | "microstructure"
+subtype = "pure" | "hybrid"
+
+Isso permite ajuste futuro de peso sem refatorar.
+
+2. Regra de classificação — formalizar prioridade
+
+Hoje há sobreposição de critérios. Defina ordem fixa:
+
+1. Se indicador for explicitamente mapeado → usar mapping
+2. Se for média móvel → regra de período
+3. Se data_source == order_flow → microstructure
+4. Se data_source == ohlcv → structural
+5. Se reacts_fast == True → microstructure
+6. fallback → structural
+
+Evita conflitos silenciosos.
+
+3. VWAP está mal classificado (importante)
+
+Você colocou Volume Weighted Average Price como microestrutura. Isso depende:
+
+VWAP intraday → microstructure ✅
+VWAP diário/ancorado → estrutural ❗
+
+Correção:
+
+IF indicator == "VWAP":
+    IF mode == "intraday":
+        group = "microstructure"
+    ELSE:
+        group = "structural"
+4. Merge no pipeline — definir regra determinística
+
+Esse é o ponto mais sensível do sistema.
+
+Hoje você diz “preferência pelo mais recente por chave”. Isso pode gerar inconsistência temporal.
+
+Corrija para:
+
+final_value = latest_by_timestamp_per_group(key)
+priority = microstructure > structural (apenas se timestamps próximos)
+
+E adicione limite:
+
+MAX_DRIFT_SECONDS = 900  # 15 min
+
+Se exceder:
+
+marcar como stale
+ou ignorar valor
+5. Problema silencioso: desalinhamento de timestamps
+
+Você já separou ciclos — agora precisa controlar isso.
+
+Adicionar no payload:
+
+{
+  "value": ...,
+  "timestamp": ...,
+  "source_group": "structural" | "microstructure"
+}
+
+Sem isso, debugging fica impossível.
+
+6. Pipeline readiness (ajuste fino)
+
+Hoje você espera ambos schedulers — correto.
+
+Mas falta fallback inteligente:
+
+IF microstructure_ready AND structural_stale < 30min:
+    allow_pipeline_run
+
+Evita travar o sistema em caso de falha parcial.
+
+7. Score breakdown (impacto direto)
+
+Garantir que o breakdown mostre:
+
+valor
+grupo (structural / micro)
+idade do dado
+
+Exemplo:
+
+RSI: 62.1 (structural, 12m)
+Taker Ratio: 1.18 (micro, 3m)
+Pontos fortes do seu plano
+Separação de scheduler → correta
+Backward compatibility (combined) → excelente
+Merge no pipeline → abordagem certa
+Hardcode controlado → adequado para fase atual
+Conclusão direta
+
+Seu plano está pronto para produção com esses ajustes:
+
+Refinar classificação (ordem + VWAP)
+Tornar merge determinístico
+Controlar timestamps
+Preparar base para híbridos (mesmo sem usar agora)
+
+Sem isso, o sistema funciona — mas com inconsistências difíceis de rastrear.

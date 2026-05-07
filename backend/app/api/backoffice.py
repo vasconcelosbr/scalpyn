@@ -253,7 +253,21 @@ async def get_asset_trace_by_symbol(
 # 3. Decision Log
 # ---------------------------------------------------------------------------
 
+def _parse_utc_datetime(value: str) -> "datetime":
+    """Parse an ISO 8601 date/datetime string as a UTC-aware datetime.
+
+    Handles both bare dates (``"2025-01-01"``) and timezone-aware strings
+    (``"2025-01-01T00:00:00Z"`` / ``"+05:30"``).  Naive datetimes are assumed
+    to be UTC — matching the ``TIMESTAMPTZ`` convention used throughout the DB.
+    """
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _build_decision_conditions(
+    user_id: UUID,
     symbol: Optional[str],
     strategy: Optional[str],
     score_min: Optional[float],
@@ -262,7 +276,13 @@ def _build_decision_conditions(
     end_date: Optional[str],
     decision: Optional[str],
 ):
-    conditions = []
+    """Build filter conditions for the backoffice decisions queries.
+
+    Always scopes to the requesting user's decisions (multi-tenant isolation).
+    Dates are parsed as UTC-aware datetimes to avoid tz-naive comparison
+    errors against the TIMESTAMPTZ ``created_at`` column.
+    """
+    conditions = [DecisionLog.user_id == user_id]
     if symbol:
         conditions.append(DecisionLog.symbol == symbol.upper())
     if strategy:
@@ -272,12 +292,15 @@ def _build_decision_conditions(
     if score_max is not None:
         conditions.append(DecisionLog.score <= score_max)
     if start_date:
-        conditions.append(DecisionLog.created_at >= datetime.fromisoformat(start_date))
+        conditions.append(DecisionLog.created_at >= _parse_utc_datetime(start_date))
     if end_date:
-        conditions.append(DecisionLog.created_at <= datetime.fromisoformat(end_date))
+        conditions.append(DecisionLog.created_at <= _parse_utc_datetime(end_date))
     if decision:
         conditions.append(DecisionLog.decision == decision)
     return conditions
+
+
+_BO_MAX_EXPORT_ROWS = 10_000
 
 
 @router.get("/decisions")
@@ -296,18 +319,20 @@ async def get_decisions(
 ):
     try:
         conditions = _build_decision_conditions(
-            symbol, strategy, score_min, score_max, start_date, end_date, decision
+            user_id, symbol, strategy, score_min, score_max, start_date, end_date, decision
         )
 
         offset = (page - 1) * per_page
-        count_q = select(func.count(DecisionLog.id))
-        if conditions:
-            count_q = count_q.where(and_(*conditions))
+        count_q = select(func.count(DecisionLog.id)).where(and_(*conditions))
         total = (await db.execute(count_q)).scalar() or 0
 
-        q = select(DecisionLog).order_by(desc(DecisionLog.created_at)).offset(offset).limit(per_page)
-        if conditions:
-            q = q.where(and_(*conditions))
+        q = (
+            select(DecisionLog)
+            .where(and_(*conditions))
+            .order_by(desc(DecisionLog.created_at))
+            .offset(offset)
+            .limit(per_page)
+        )
         result = await db.execute(q)
         rows = result.scalars().all()
 
@@ -355,12 +380,33 @@ async def export_decisions(
 ):
     try:
         conditions = _build_decision_conditions(
-            symbol, strategy, score_min, score_max, start_date, end_date, decision
+            user_id, symbol, strategy, score_min, score_max, start_date, end_date, decision
         )
 
-        q = select(DecisionLog).order_by(desc(DecisionLog.created_at))
-        if conditions:
-            q = q.where(and_(*conditions))
+        # Safety gate: refuse exports that exceed the row limit to prevent OOM.
+        count_result = await db.execute(
+            select(func.count(DecisionLog.id)).where(and_(*conditions))
+        )
+        total_count = count_result.scalar() or 0
+        if total_count > _BO_MAX_EXPORT_ROWS:
+            logger.warning(
+                "[Backoffice] export_aborted | user=%s | matched=%d | limit=%d",
+                user_id, total_count, _BO_MAX_EXPORT_ROWS,
+            )
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Export exceeds safe operational limit: {total_count} rows matched, "
+                    f"maximum is {_BO_MAX_EXPORT_ROWS}. Add filters to narrow the result."
+                ),
+            )
+
+        q = (
+            select(DecisionLog)
+            .where(and_(*conditions))
+            .order_by(desc(DecisionLog.created_at))
+            .limit(_BO_MAX_EXPORT_ROWS)
+        )
         result = await db.execute(q)
         rows = result.scalars().all()
 

@@ -45,19 +45,23 @@ async def start_engine(
     Idempotent: if already running, returns current status.
     """
     uid = str(user_id)
+    logger.info("[spot-engine] /start invoked for user=%s", uid)
     existing = get_engine(uid)
     if existing and existing._running and not existing._paused:
+        logger.info("[spot-engine] /start short-circuit: already_running for user=%s", uid)
         return {"status": "already_running", "engine": existing.status()}
 
     try:
         scanner = await build_scanner_from_db(uid)
     except ValueError as e:
+        logger.warning("[spot-engine] /start config error for user=%s: %s", uid, e)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.exception("Failed to build scanner for user %s: %s", uid, e)
+        logger.exception("[spot-engine] /start failed to build scanner for user=%s: %s", uid, e)
         raise HTTPException(status_code=500, detail=f"Failed to initialize engine: {e}")
 
     scanner.start()
+    logger.info("[spot-engine] /start scanner running for user=%s", uid)
     return {"status": "started", "engine": scanner.status()}
 
 

@@ -1,0 +1,192 @@
+Implement Futures Mode support in Watchlist and Score Engine.
+
+### 1) Watchlist Configuration Toggle
+
+In `/watchlist/[Watchlist] Edit Watchlist`, add a new option:
+
+* field: `market_mode`
+* type: enum
+* values: ["spot", "futures"]
+* default: "spot"
+
+UI requirement:
+
+* Add a toggle switch labeled: "Futures Mode"
+* ON → market_mode = "futures"
+* OFF → market_mode = "spot"
+
+---
+
+### 2) Dynamic Behavior Based on market_mode
+
+When `market_mode = "futures"`:
+
+* Use `/settings/score/futures`
+* Enable directional scoring
+* Enable direction column
+* Enable long/short scores
+
+When `market_mode = "spot"`:
+
+* Keep existing behavior
+* Ignore directional logic
+
+---
+
+### 3) Score Engine Routing
+
+Refactor score loader:
+
+if market_mode == "futures":
+load score config from `/settings/score/futures`
+else:
+load from `/settings/score/spot`
+
+Ensure no shared state between them.
+
+---
+
+### 4) Futures Scoring Execution
+
+For each asset:
+
+compute:
+base_score
+long_score
+short_score
+
+confidence = abs(long_score - short_score)
+
+---
+
+### 5) ENTRY Integration (L3 only)
+
+ENTRY must be evaluated separately:
+
+entry_long = evaluate(entry.long conditions)
+entry_short = evaluate(entry.short conditions)
+
+BLOCK must be evaluated once (shared):
+
+blocked = evaluate(block conditions)
+
+---
+
+### 6) Direction Decision Logic
+
+Apply ONLY when market_mode = futures AND watchlist = L3:
+
+if base_score < min_quality:
+direction = "NEUTRAL"
+
+elif blocked:
+direction = "NEUTRAL"
+
+elif entry_long AND long_score > short_score AND long_score >= threshold:
+direction = "LONG"
+
+elif entry_short AND short_score > long_score AND short_score >= threshold:
+direction = "SHORT"
+
+else:
+direction = "NEUTRAL"
+
+---
+
+### 7) Watchlist Columns (Futures Mode)
+
+When futures mode is ON, dynamically add columns:
+
+* long_score
+* short_score
+* confidence
+* direction
+
+Keep base_score visible.
+
+---
+
+### 8) Sorting Logic
+
+If futures mode ON:
+
+default sorting:
+1. confidence DESC
+2. max(long_score, short_score) DESC
+
+If OFF:
+keep existing sorting
+
+---
+
+### 9) Filtering
+
+Add optional filter:
+
+* "Hide Neutral"
+  → hide rows where direction == "NEUTRAL"
+
+---
+
+### 10) Rendering Rules
+
+* LONG → green label
+
+* SHORT → red label
+
+* NEUTRAL → gray label
+
+* confidence:
+
+  * high → highlight (bold)
+  * low → normal
+
+---
+
+### 11) Backward Compatibility
+
+* Do NOT break existing watchlists
+* If futures config is missing:
+  fallback to spot behavior silently
+* If indicators missing:
+  skip condition (do NOT block execution)
+
+---
+
+### 12) Performance
+
+* Reuse indicator calculations across long/short
+* Avoid duplicate computations
+* Cache per symbol/timeframe
+
+---
+
+### 13) Data Contract (Frontend)
+
+Each row must return:
+
+{
+symbol: string,
+base_score: number,
+long_score?: number,
+short_score?: number,
+confidence?: number,
+direction?: "LONG" | "SHORT" | "NEUTRAL"
+}
+
+Fields with "?" appear only in futures mode.
+
+---
+
+### 14) Validation Rules
+
+* direction must be mutually exclusive
+* ENTRY must gate direction
+* BLOCK overrides everything
+* long_score and short_score must be independent
+
+---
+
+Goal:
+
+Enable seamless switching between Spot and Futures within the same Watchlist, while activating a dual-direction scoring system (long vs short) and preserving full backward compatibility.

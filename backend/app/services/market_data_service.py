@@ -13,6 +13,7 @@ import pandas as pd
 from ..exchange_adapters.binance_adapter import BinanceAdapter
 from ..utils.gate_market_data import parse_gate_spot_candle
 from ..utils.symbol_filters import is_excluded_asset, is_leveraged_base
+from .resilient_data_service import fetch_with_resilience
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,19 @@ class MarketDataService:
         if raw.endswith("USDT"):
             return f"{raw[:-4]}/USDT"
         return raw
+
+    @classmethod
+    def normalize_symbol_for_exchange(cls, symbol: str, exchange: str) -> str:
+        """Return symbol in the format expected by the given exchange.
+
+        gate  → BTC_USDT  (underscore-separated)
+        binance → BTCUSDT  (no separator)
+        """
+        if exchange == "gate":
+            return cls.to_gate_symbol(symbol)
+        if exchange == "binance":
+            return cls.to_binance_symbol(symbol)
+        return cls.normalize_symbol(symbol)
 
     @classmethod
     def to_gate_symbol(cls, symbol: str) -> str:
@@ -203,7 +217,8 @@ class MarketDataService:
 
     async def _fetch_gate_ticker(self, symbol: str) -> Optional[Dict[str, Any]]:
         pair = self.to_gate_symbol(symbol)
-        try:
+
+        async def _primary() -> Optional[Dict[str, Any]]:
             async with httpx.AsyncClient(timeout=8) as client:
                 resp = await client.get(GATE_TICKERS_URL, params={"currency_pair": pair})
                 resp.raise_for_status()
@@ -211,13 +226,18 @@ class MarketDataService:
                 if isinstance(payload, list):
                     return payload[0] if payload else None
                 return payload
-        except Exception as exc:
-            logger.debug("Failed to fetch Gate ticker for %s: %s", symbol, exc)
-            return None
+
+        result, _source = await fetch_with_resilience(
+            f"ticker:gate:{symbol}",
+            _primary,
+            cache_ttl=15,
+        )
+        return result
 
     async def _fetch_gate_orderbook(self, symbol: str, depth: int) -> Optional[Dict[str, Any]]:
         pair = self.to_gate_symbol(symbol)
-        try:
+
+        async def _primary() -> Optional[Dict[str, Any]]:
             async with httpx.AsyncClient(timeout=8) as client:
                 resp = await client.get(
                     GATE_ORDERBOOK_URL,
@@ -225,9 +245,13 @@ class MarketDataService:
                 )
                 resp.raise_for_status()
                 return resp.json()
-        except Exception as exc:
-            logger.debug("Failed to fetch Gate orderbook for %s: %s", symbol, exc)
-            return None
+
+        result, _source = await fetch_with_resilience(
+            f"depth:gate:{symbol}:{depth}",
+            _primary,
+            cache_ttl=30,
+        )
+        return result
 
     async def _fetch_binance_ticker(self, symbol: str) -> Optional[Dict[str, Any]]:
         cache_key = f"binance:ticker:{self.to_binance_symbol(symbol)}"
@@ -241,7 +265,7 @@ class MarketDataService:
             payload = await self._binance.get_tickers(symbols=[self.to_binance_symbol(symbol)])
             return self._set_cache(cache_key, payload[0] if payload else None)
         except Exception as exc:
-            logger.debug("Failed to fetch Binance ticker for %s: %s", symbol, exc)
+            logger.warning("[DATA_PRIMARY_FAIL] key=ticker:binance:%s error=%s", symbol, exc)
             return None
 
     async def _fetch_binance_orderbook(self, symbol: str, depth: int) -> Optional[Dict[str, Any]]:
@@ -256,7 +280,7 @@ class MarketDataService:
             payload = await self._binance.get_orderbook(self.to_binance_symbol(symbol), depth=depth)
             return self._set_cache(cache_key, payload)
         except Exception as exc:
-            logger.debug("Failed to fetch Binance orderbook for %s: %s", symbol, exc)
+            logger.warning("[DATA_PRIMARY_FAIL] key=depth:binance:%s:%d error=%s", symbol, depth, exc)
             return None
 
     async def _fetch_binance_trades(self, symbol: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -272,7 +296,7 @@ class MarketDataService:
             payload = await self._binance.get_recent_trades(self.to_binance_symbol(symbol), limit=limit)
             return self._set_cache(cache_key, payload)
         except Exception as exc:
-            logger.debug("Failed to fetch Binance trades for %s: %s", symbol, exc)
+            logger.warning("[DATA_PRIMARY_FAIL] key=trades:binance:%s error=%s", symbol, exc)
             return []
 
     def _extract_gate_ticker_metrics(self, ticker: Optional[Dict[str, Any]]) -> Dict[str, Optional[float]]:
@@ -318,7 +342,8 @@ class MarketDataService:
                 "spread_pct": round((best_ask - best_bid) / best_ask * 100, 4),
                 "orderbook_depth_usdt": round(bid_depth + ask_depth, 8),
             }
-        except Exception:
+        except Exception as exc:
+            logger.warning("[DATA_FAIL] _extract_orderbook_metrics parse error: %s", exc)
             return {}
 
     def _extract_taker_metrics(self, trades: List[Dict[str, Any]]) -> Dict[str, Optional[float]]:
@@ -343,18 +368,42 @@ class MarketDataService:
             "volume_delta": taker_buy_volume - taker_sell_volume if total_volume > 0 else 0.0,
         }
 
+    # Minimum candle count required for the heaviest indicators in the
+    # default config (ADX(14) needs two chained 14-period rollings = 28,
+    # Bollinger/Volume Spike rolling(20), Stochastic warmup ~18).  Below
+    # this threshold the Binance fallback is *also* tried and merged with
+    # whatever Gate returned, instead of trusting Gate alone.
+    MIN_OHLCV_CANDLES = 50
+
     async def fetch_ohlcv(
         self, symbol: str, timeframe: str = "1h", limit: int = 200,
     ) -> Optional[pd.DataFrame]:
-        """Fetch OHLCV candles from Gate.io.
+        """Fetch OHLCV candles — Gate.io primary, Binance fallback, merge on shortage.
+
+        If Gate returns ≥ MIN_OHLCV_CANDLES rows, it is used as-is.  When Gate
+        returns fewer than that (or fails entirely), Binance is queried and the
+        two responses are merged on the ``time`` column (deduplicating).  This
+        prevents the silent-data-shortage failure mode where Gate returns 14-20
+        candles, RSI/MACD compute but ADX/Bollinger/Volume Spike all come back
+        as None.
 
         Returns DataFrame with columns:
         [time, open, high, low, close, volume, quote_volume].
+        df.attrs['exchange'] is set to "gate.io", "binance", or
+        "merged (Ngate+Mbinance)" depending on which source(s) contributed.
         """
         tf_map = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d"}
         gate_tf = tf_map.get(timeframe, "1h")
         pair = self.to_gate_symbol(symbol)
+        binance_sym = self.to_binance_symbol(symbol)
+        logger.info(
+            f"[SYMBOL MAP] input={symbol} gate={pair} binance={binance_sym} timeframe={timeframe} limit={limit}"
+        )
 
+        gate_df: Optional[pd.DataFrame] = None
+        binance_df: Optional[pd.DataFrame] = None
+
+        # ── Primary: Gate.io ─────────────────────────────────────────────────
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(GATE_SPOT_URL, params={
@@ -365,18 +414,105 @@ class MarketDataService:
                 resp.raise_for_status()
                 data = resp.json()
 
-            if not data:
-                return None
+            logger.info(
+                f"[API RAW] symbol={symbol} source=gate status={resp.status_code} "
+                f"response={str(data)[:300]}"
+            )
+            logger.info(f"[FETCH] RAW_LEN symbol={symbol} source=gate size={len(data) if data else 0}")
 
-            rows = [parse_gate_spot_candle(candle) for candle in data]
+            if data:
+                rows = [parse_gate_spot_candle(candle) for candle in data]
+                gate_df = pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
+                logger.info(f"[FETCH] PARSED_ROWS symbol={symbol} source=gate rows={len(gate_df)}")
 
-            df = pd.DataFrame(rows)
-            df = df.sort_values("time").reset_index(drop=True)
-            return df
+                # Gate covered the request fully — no need to call Binance.
+                if len(gate_df) >= self.MIN_OHLCV_CANDLES:
+                    gate_df.attrs["exchange"] = "gate.io"
+                    return gate_df
 
+                logger.info(
+                    "[OHLCV] Gate.io returned only %d candles for %s/%s "
+                    "(< %d) — also fetching Binance to merge",
+                    len(gate_df), symbol, timeframe, self.MIN_OHLCV_CANDLES,
+                )
+            else:
+                logger.error(
+                    f"[DATA EMPTY] symbol={symbol} source=gate pair={pair} "
+                    f"response={str(data)[:300]}"
+                )
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                "[OHLCV] Gate.io HTTP error for %s/%s — status=%d body=%s — trying Binance fallback",
+                symbol, timeframe, e.response.status_code, e.response.text[:300],
+                exc_info=True,
+            )
         except Exception as e:
-            logger.error(f"Failed to fetch OHLCV for {symbol}: {e}")
-            return None
+            logger.error(
+                "[OHLCV] Gate.io failed for %s/%s (%s) — trying Binance fallback",
+                symbol, timeframe, e,
+                exc_info=True,
+            )
+
+        # ── Fallback / Merge source: Binance ──────────────────────────────────
+        try:
+            logger.info(f"[FETCH] REQUEST symbol={symbol} source=binance binance_sym={binance_sym}")
+            rows = await self._binance.get_klines(
+                binance_sym, interval=timeframe, limit=limit, market="spot"
+            )
+            logger.info(f"[FETCH] RAW_LEN symbol={symbol} source=binance size={len(rows) if rows else 0}")
+            if rows:
+                binance_df = pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
+                logger.info(f"[FETCH] PARSED_ROWS symbol={symbol} source=binance rows={len(binance_df)}")
+            else:
+                logger.error(
+                    f"[DATA EMPTY] symbol={symbol} source=binance binance_sym={binance_sym} rows=0"
+                )
+        except Exception as exc:
+            logger.error(
+                "[OHLCV] Binance fallback failed for %s/%s: %s",
+                symbol, timeframe, exc,
+                exc_info=True,
+            )
+
+        # ── Decide what to return ─────────────────────────────────────────────
+        if gate_df is not None and binance_df is not None:
+            merged = (
+                pd.concat([gate_df, binance_df], ignore_index=True)
+                .drop_duplicates(subset="time", keep="first")
+                .sort_values("time")
+                .reset_index(drop=True)
+            )
+            merged.attrs["exchange"] = (
+                f"merged ({len(gate_df)}gate+{len(binance_df)}binance="
+                f"{len(merged)})"
+            )
+            logger.info(
+                "[OHLCV] Merged Gate(%d) + Binance(%d) → %d rows for %s/%s",
+                len(gate_df), len(binance_df), len(merged), symbol, timeframe,
+            )
+            return merged
+
+        if binance_df is not None:
+            binance_df.attrs["exchange"] = "binance"
+            logger.info(
+                "[OHLCV] Binance fallback succeeded for %s/%s (%d candles)",
+                symbol, timeframe, len(binance_df),
+            )
+            return binance_df
+
+        if gate_df is not None:
+            # Gate-only short response — return what we have, caller decides
+            # whether it's enough for their indicators.
+            gate_df.attrs["exchange"] = "gate.io"
+            logger.warning(
+                "[OHLCV] Returning short Gate-only df for %s/%s (%d candles, "
+                "Binance also failed)",
+                symbol, timeframe, len(gate_df),
+            )
+            return gate_df
+
+        logger.error(f"[FETCH] RETURN_NONE symbol={symbol} timeframe={timeframe} gate=None binance=None")
+        return None
 
     async def fetch_all_tickers(self) -> List[Dict[str, Any]]:
         """Fetch all USDT spot tickers from Gate.io (excluding leveraged tokens + stablecoins)."""
@@ -401,6 +537,12 @@ class MarketDataService:
     async def fetch_orderbook_metrics(self, symbol: str, depth: int = 10) -> Dict[str, Any]:
         """Fetch orderbook for a symbol and compute spread_pct and orderbook_depth_usdt.
 
+        Gate.io is tried first via fetch_normalized_market_data (which already has an
+        internal Binance fallback when Gate depth is missing).  An *additional* explicit
+        Binance safety-net is applied after that main path so that the edge case where
+        Gate has valid depth but no spread (e.g. bid/ask = 0 on a thin Gate listing)
+        is also covered.
+
         Returns:
             {
               "spread_pct": float (% difference between best ask and best bid),
@@ -415,13 +557,39 @@ class MarketDataService:
             depth=depth,
             include_taker=False,
         )
-        payload = {}
+        payload: Dict[str, Any] = {}
         if normalized.spread_pct is not None:
             payload["spread_pct"] = round(float(normalized.spread_pct), 4)
         if normalized.orderbook_depth is not None:
             payload["orderbook_depth_usdt"] = round(float(normalized.orderbook_depth), 8)
-        if payload:
+
+        # ── Explicit Binance safety net for spread ────────────────────────────
+        # fetch_normalized_market_data triggers Binance when Gate *depth* is
+        # missing.  Edge case: Gate returns valid depth (bids/asks exist) but
+        # spread ends up None due to bid/ask == 0 on a thin Gate listing.
+        # In that case the internal Binance path is skipped (depth is valid),
+        # so we retry Binance here specifically for spread.
+        if payload.get("spread_pct") is None:
+            try:
+                normalized_sym = symbol.replace("/", "_").replace("-", "_")
+                binance_book_metrics = self._extract_orderbook_metrics(
+                    await self._fetch_binance_orderbook(normalized_sym, depth),
+                    depth,
+                )
+                if binance_book_metrics.get("spread_pct") is not None:
+                    payload["spread_pct"] = round(float(binance_book_metrics["spread_pct"]), 4)
+                    if not payload.get("orderbook_depth_usdt") and binance_book_metrics.get("orderbook_depth_usdt") is not None:
+                        payload["orderbook_depth_usdt"] = round(float(binance_book_metrics["orderbook_depth_usdt"]), 8)
+                    payload["market_data_source"] = "binance"
+                    payload["market_data_confidence"] = normalized.confidence_score
+                    logger.info("[SPREAD] Binance safety-net spread for %s: %.4f%%", symbol, payload["spread_pct"])
+            except Exception as exc:
+                logger.warning("[SPREAD] Binance safety-net failed for %s: %s", symbol, exc)
+
+        if payload and not payload.get("market_data_source"):
             payload["market_data_source"] = normalized.source_map.get("orderbook_depth_usdt", normalized.source)
+            payload["market_data_confidence"] = normalized.confidence_score
+        elif payload and "market_data_confidence" not in payload:
             payload["market_data_confidence"] = normalized.confidence_score
         return payload
 

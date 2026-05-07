@@ -3,6 +3,7 @@
 import useSWR from 'swr';
 import { useCallback } from 'react';
 import { apiGet, apiPost } from '@/lib/api';
+import { extractPositions, extractPositionsSummary } from '@/lib/engineStatus';
 
 export type TradingProfile = 'spot' | 'futures';
 
@@ -27,7 +28,8 @@ export interface CapitalInfo {
 
 export interface EngineStatusResponse {
   engine?: EngineInfo;
-  positions?: Record<string, any>[];
+  /** Raw payload — read via `extractPositions` / `extractPositionsSummary`. */
+  positions?: unknown;
   capital?: CapitalInfo;
   balance?: Record<string, any>;
   [key: string]: any;
@@ -40,8 +42,10 @@ export interface UseEngineStatusReturn {
   isRunning: boolean;
   /** True if the engine is paused. */
   isPaused: boolean;
-  /** Current open positions array. */
+  /** Always an array — normalised from the raw payload. */
   positions: Record<string, any>[];
+  /** Original dict payload (spot/futures summary) or null when it was an array/missing. */
+  positionsSummary: Record<string, any> | null;
   /** Capital summary from the status response. */
   capital: CapitalInfo | null;
   /** Balance information from the status response. */
@@ -100,7 +104,9 @@ export function useEngineStatus(profile: TradingProfile): UseEngineStatusReturn 
   const status = data ?? null;
   const isRunning = status?.engine?.running ?? false;
   const isPaused = status?.engine?.paused ?? false;
-  const positions = status?.positions ?? [];
+  const rawPositions = status?.positions;
+  const positions = extractPositions(rawPositions);
+  const positionsSummary = extractPositionsSummary(rawPositions);
   const capital = status?.capital ?? null;
   const balance = status?.balance ?? null;
 
@@ -109,8 +115,14 @@ export function useEngineStatus(profile: TradingProfile): UseEngineStatusReturn 
   const postControl = useCallback(
     async (action: 'start' | 'pause' | 'resume' | 'stop') => {
       await apiPost(`${baseUrl}/${action}`);
-      // Immediately re-fetch status to reflect the new state.
-      await mutate();
+      // Action succeeded — refresh status best-effort; SWR will reconcile
+      // on the next poll if this throws.
+      try {
+        await mutate();
+      } catch (refreshErr) {
+        // eslint-disable-next-line no-console
+        console.warn(`[engine] post-${action} status refresh failed:`, refreshErr);
+      }
     },
     [baseUrl, mutate]
   );
@@ -134,6 +146,7 @@ export function useEngineStatus(profile: TradingProfile): UseEngineStatusReturn 
     isRunning,
     isPaused,
     positions,
+    positionsSummary,
     capital,
     balance,
     isLoading,

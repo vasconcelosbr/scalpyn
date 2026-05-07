@@ -76,15 +76,27 @@ class AnalyticsService:
         }
 
     async def get_capital_evolution(
-        self, db: AsyncSession, user_id: UUID, days: int = 30, initial_capital: float = 100000,
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+        days: int = 30,
+        initial_capital: float = 100000,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
     ) -> List[Dict[str, Any]]:
-        """Get cumulative P&L over time for chart."""
-        start = datetime.now(timezone.utc) - timedelta(days=days)
+        """Get cumulative P&L over time for chart.
+
+        Explicit start_date/end_date take priority over days.
+        """
+        start = start_date if start_date else datetime.now(timezone.utc) - timedelta(days=days)
         query = (
             select(Trade)
             .where(Trade.user_id == user_id, Trade.status == "closed", Trade.exit_at >= start)
             .order_by(Trade.exit_at.asc())
         )
+        if end_date:
+            query = query.where(Trade.exit_at <= end_date)
+
         result = await db.execute(query)
         trades = result.scalars().all()
 

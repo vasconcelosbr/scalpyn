@@ -9,7 +9,10 @@ and never propagate errors back to the dispatch loop.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
@@ -19,6 +22,12 @@ from sqlalchemy import select, update
 from ..database import AsyncSessionLocal
 from ..models.trade import Trade
 from ..api.websocket import broadcast_trade_event
+from ..exchange_adapters.gate_adapter import GateAdapter
+from ..services.redis_client import get_async_redis
+from ..services.robust_indicators.metrics import (
+    incr_trades_received,
+    set_last_trade_timestamp,
+)
 
 if TYPE_CHECKING:
     from .gate_ws_client import GateWSClient
@@ -48,6 +57,52 @@ def _is_our_order(text: str | None) -> bool:
     return bool(text and _SCALPYN_TAG in text)
 
 
+async def _process_batch(
+    label: str,
+    items: list[dict],
+    process_one,
+    item_id,
+) -> None:
+    """Run *process_one(session, item)* for each item, isolating per-item
+    failures with PostgreSQL SAVEPOINTs (``session.begin_nested()``).
+
+    Guarantees demanded by Task #122:
+
+    1. Items that succeed are committed even if a later item fails — the
+       outer ``session.begin()`` commits at the end, and savepoints isolate
+       the rollback to a single bad item.
+    2. asyncpg's "current transaction is aborted" cascade cannot occur,
+       because the savepoint rollback runs synchronously before the next
+       item is attempted.
+    3. If the savepoint rollback itself fails (a real connection-level
+       problem), the session's outer transaction is no longer active and
+       we abort the whole batch instead of silently reusing a poisoned
+       session — the connection is then discarded by the pool when the
+       AsyncSessionLocal context manager closes.
+    """
+    try:
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                for item in items:
+                    try:
+                        async with session.begin_nested():
+                            await process_one(session, item)
+                    except Exception as exc:
+                        logger.warning(
+                            "%s: per-item failure for %s: %s",
+                            label, item_id(item), exc, exc_info=True,
+                        )
+                        if not session.is_active:
+                            logger.error(
+                                "%s: session deactivated after savepoint "
+                                "rollback — aborting batch",
+                                label,
+                            )
+                            raise
+    except Exception as exc:
+        logger.warning("%s: session error: %s", label, exc, exc_info=True)
+
+
 # ── Handler: futures.positions ────────────────────────────────────────────────
 
 async def handle_futures_positions(result: list[dict]) -> None:
@@ -59,19 +114,12 @@ async def handle_futures_positions(result: list[dict]) -> None:
     - Broadcast a position_update event when unrealised_pnl changes >1 %.
     - Broadcast a liq_alert event when the mark price is within 8 % of liq_price.
     """
-    try:
-        async with AsyncSessionLocal() as session:
-            for pos in result:
-                try:
-                    await _process_futures_position(session, pos)
-                except Exception as exc:
-                    logger.warning(
-                        "handle_futures_positions: error processing position %s: %s",
-                        pos.get("contract"), exc, exc_info=True,
-                    )
-            await session.commit()
-    except Exception as exc:
-        logger.warning("handle_futures_positions: session error: %s", exc, exc_info=True)
+    await _process_batch(
+        "handle_futures_positions",
+        result,
+        _process_futures_position,
+        lambda p: p.get("contract"),
+    )
 
 
 async def _process_futures_position(session, pos: dict) -> None:
@@ -192,19 +240,12 @@ async def handle_futures_orders(result: list[dict]) -> None:
     Identifies orders tagged with 't-scalpyn', determines their role
     (TP1/TP2/SL), updates the DB, and broadcasts the appropriate event.
     """
-    try:
-        async with AsyncSessionLocal() as session:
-            for order in result:
-                try:
-                    await _process_futures_order(session, order)
-                except Exception as exc:
-                    logger.warning(
-                        "handle_futures_orders: error processing order %s: %s",
-                        order.get("id"), exc, exc_info=True,
-                    )
-            await session.commit()
-    except Exception as exc:
-        logger.warning("handle_futures_orders: session error: %s", exc, exc_info=True)
+    await _process_batch(
+        "handle_futures_orders",
+        result,
+        _process_futures_order,
+        lambda o: o.get("id"),
+    )
 
 
 async def _process_futures_order(session, order: dict) -> None:
@@ -358,19 +399,12 @@ async def handle_futures_liquidates(result: list[dict]) -> None:
     - Logs at CRITICAL level.
     - Broadcasts an emergency_alert event to all connected clients.
     """
-    try:
-        async with AsyncSessionLocal() as session:
-            for liq in result:
-                try:
-                    await _process_futures_liquidate(session, liq)
-                except Exception as exc:
-                    logger.warning(
-                        "handle_futures_liquidates: error processing liquidation %s: %s",
-                        liq.get("contract"), exc, exc_info=True,
-                    )
-            await session.commit()
-    except Exception as exc:
-        logger.warning("handle_futures_liquidates: session error: %s", exc, exc_info=True)
+    await _process_batch(
+        "handle_futures_liquidates",
+        result,
+        _process_futures_liquidate,
+        lambda l: l.get("contract"),
+    )
 
 
 async def _process_futures_liquidate(session, liq: dict) -> None:
@@ -444,19 +478,12 @@ async def handle_spot_orders(result: list[dict]) -> None:
     - On closed buy → confirms trade ACTIVE.
     - Broadcasts appropriate events to connected clients.
     """
-    try:
-        async with AsyncSessionLocal() as session:
-            for order in result:
-                try:
-                    await _process_spot_order(session, order)
-                except Exception as exc:
-                    logger.warning(
-                        "handle_spot_orders: error processing order %s: %s",
-                        order.get("id"), exc, exc_info=True,
-                    )
-            await session.commit()
-    except Exception as exc:
-        logger.warning("handle_spot_orders: session error: %s", exc, exc_info=True)
+    await _process_batch(
+        "handle_spot_orders",
+        result,
+        _process_spot_order,
+        lambda o: o.get("id"),
+    )
 
 
 async def _process_spot_order(session, order: dict) -> None:
@@ -583,6 +610,282 @@ async def _process_spot_order(session, order: dict) -> None:
         })
 
 
+# ── Handler: spot.trades / futures.trades ────────────────────────────────────
+#
+# Persists every trade received over the WS into a per-symbol Redis sorted
+# set so ``order_flow_service.get_order_flow_data`` can read recent taker
+# flow without hammering REST endpoints once per symbol.
+#
+# Buffer contract:
+#   key   = ``trades_buffer:{market_type}:{GateAdapter._normalize_symbol(pair)}``
+#           e.g. ``trades_buffer:spot:BTC_USDT``
+#                ``trades_buffer:futures:BTC_USDT``
+#   score = trade ``create_time_ms``
+#   member = JSON {"s": side, "a": amount_str, "t": create_time_ms}
+#   TTL   = TRADE_BUFFER_TTL_SECONDS (default 360 s, ≥ max consumed window)
+#   cap   = TRADES_BUFFER_MAX_PER_SYMBOL (default 5000) via ZREMRANGEBYRANK
+#   age   = same TTL via ZREMRANGEBYSCORE on score < cutoff_ms
+#
+# All Redis ops for one WS message are issued through a single
+# ``redis.pipeline(transaction=False)`` so we make one round-trip per
+# Gate frame regardless of the number of trades in it.
+
+TRADE_BUFFER_TTL_SECONDS: int = 360
+"""Sorted-set TTL (s). Must stay ≥ the largest ``window_seconds`` that any
+caller passes to ``get_order_flow_data`` so the buffer always covers the
+entire lookback (Task #171, alert 🟡 #7)."""
+
+
+def _trades_buffer_max_per_symbol() -> int:
+    """Per-symbol cap for the sorted set (env ``TRADES_BUFFER_MAX_PER_SYMBOL``)."""
+    raw = os.environ.get("TRADES_BUFFER_MAX_PER_SYMBOL")
+    if not raw:
+        return 5000
+    try:
+        return max(int(raw), 100)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid TRADES_BUFFER_MAX_PER_SYMBOL=%r — falling back to 5000",
+            raw,
+        )
+        return 5000
+
+
+def _trades_buffer_key(symbol: str, market_type: str = "spot") -> str:
+    """Build the Redis key for the per-symbol trade buffer.
+
+    Always normalises the symbol via ``GateAdapter._normalize_symbol`` so
+    that callers passing ``BTCUSDT`` and the WS handler receiving
+    ``BTC_USDT`` resolve to the same key (review risk #1).
+
+    The ``market_type`` prefix (``spot`` or ``futures``) segregates the
+    buffers so that spot and futures trades for the same symbol (e.g.
+    ``BTC_USDT``) never mix in Redis.
+    """
+    return f"trades_buffer:{market_type}:{GateAdapter._normalize_symbol(symbol)}"
+
+
+async def handle_spot_trades(result: list[dict]) -> None:
+    """Persist spot trades from the Gate WS into the Redis order-flow buffer.
+
+    Failure modes are logged and swallowed: a Redis outage must not
+    propagate back into ``GateWSClient._dispatch`` and tear down the
+    WebSocket — the system stays correct (callers fall back to the REST
+    path) but the buffer goes empty until Redis returns.
+    """
+    if not result:
+        return
+
+    redis = await get_async_redis()
+    if redis is None:
+        logger.error(
+            "CRITICAL: Redis unavailable — dropping spot.trades event (data loss); "
+            "taker_ratio will be null until Redis is reachable"
+        )
+        return
+
+    cap = _trades_buffer_max_per_symbol()
+    cutoff_ms = (datetime.now(timezone.utc).timestamp() - TRADE_BUFFER_TTL_SECONDS) * 1000.0
+
+    # Group trades by their normalised symbol so we issue one ZADD per
+    # (key, member-batch) pair instead of N separate ZADDs.  The Gate
+    # ``spot.trades`` channel emits one frame per symbol in practice, but
+    # the protocol does not forbid mixed-symbol batches and we want this
+    # handler to be safe against a future change.
+    by_key: dict[str, dict[bytes, float]] = defaultdict(dict)
+    last_ts_by_symbol: dict[str, float] = {}
+    counts_by_symbol: dict[str, int] = defaultdict(int)
+
+    for trade in result:
+        try:
+            currency_pair = trade.get("currency_pair") or trade.get("s")
+            if not currency_pair:
+                continue
+            side = trade.get("side")
+            if side not in ("buy", "sell"):
+                continue
+            amount = trade.get("amount")
+            if amount is None:
+                continue
+            ts_ms_raw = trade.get("create_time_ms")
+            if ts_ms_raw is None:
+                # Some Gate frames only ship ``create_time`` (seconds);
+                # promote to ms so the score still sorts correctly.
+                ts_s = trade.get("create_time")
+                if ts_s is None:
+                    continue
+                ts_ms = float(ts_s) * 1000.0
+            else:
+                ts_ms = float(ts_ms_raw)
+        except (TypeError, ValueError) as exc:
+            logger.debug("spot.trades: skipping malformed trade %r: %s", trade, exc)
+            continue
+
+        symbol = GateAdapter._normalize_symbol(currency_pair)
+        key = _trades_buffer_key(symbol, market_type="spot")
+        # Compact payload — ``order_flow_service`` only consumes side,
+        # amount, and the timestamp (which is also the score).
+        payload = json.dumps({
+            "s": side,
+            "a": str(amount),
+            "t": ts_ms,
+        }, separators=(",", ":")).encode("utf-8")
+        # Same (key, member) pair would be deduplicated by ZADD, so make
+        # the member unique by prefixing a monotonic suffix per batch.
+        # Using the trade ``id`` when present keeps the buffer stable
+        # across reconnects; otherwise fall back to the timestamp + a
+        # per-batch counter.
+        trade_id = trade.get("id")
+        if trade_id is not None:
+            member_key = f"|{trade_id}".encode("utf-8")
+        else:
+            member_key = f"|{ts_ms}|{counts_by_symbol[symbol]}".encode("utf-8")
+        by_key[key][payload + member_key] = ts_ms
+
+        counts_by_symbol[symbol] += 1
+        prev_ts = last_ts_by_symbol.get(symbol)
+        if prev_ts is None or ts_ms > prev_ts:
+            last_ts_by_symbol[symbol] = ts_ms
+
+    if not by_key:
+        return
+
+    try:
+        async with redis.pipeline(transaction=False) as pipe:
+            for key, members in by_key.items():
+                # ZADD all trades for this symbol in one call.
+                pipe.zadd(key, members)
+                # Drop entries older than the TTL window — bounds memory
+                # even if a single symbol streams hot for hours.
+                pipe.zremrangebyscore(key, 0, cutoff_ms)
+                # Hard cap on entries per symbol.  ZREMRANGEBYRANK with
+                # ``0, -(cap+1)`` keeps the newest ``cap`` members.
+                pipe.zremrangebyrank(key, 0, -(cap + 1))
+                pipe.expire(key, TRADE_BUFFER_TTL_SECONDS)
+            await pipe.execute()
+    except Exception as exc:
+        # Any Redis error is logged but never propagated — _dispatch in
+        # ``gate_ws_client`` already catches handler exceptions, but
+        # being defensive here also keeps the metric updates below from
+        # being skipped on a transient redis blip.
+        logger.warning("spot.trades: Redis pipeline failed: %s", exc)
+        return
+
+    # Metrics last so they only reflect successful buffer writes.
+    for symbol, n in counts_by_symbol.items():
+        incr_trades_received(symbol, n=n)
+    for symbol, ts_ms in last_ts_by_symbol.items():
+        set_last_trade_timestamp(symbol, ts_ms / 1000.0)
+
+
+async def handle_futures_trades(result: list[dict]) -> None:
+    """Persist futures trades from the Gate WS into the Redis order-flow buffer.
+
+    Mirrors ``handle_spot_trades`` but writes to the ``futures`` market
+    namespace (``trades_buffer:futures:{symbol}``).  Failure modes are
+    swallowed so a Redis outage cannot tear down the WebSocket.
+
+    Gate.io futures trade frames differ from spot in that the contract
+    name arrives in the ``contract`` field (instead of
+    ``currency_pair``).  The ``size`` field carries the number of
+    contracts; for USDT-margined perps each contract is 1 USDT of
+    notional so ``size`` is used as the amount proxy.
+    """
+    if not result:
+        return
+
+    redis = await get_async_redis()
+    if redis is None:
+        logger.debug("futures.trades: Redis unavailable — buffer write skipped")
+        return
+
+    cap = _trades_buffer_max_per_symbol()
+    cutoff_ms = (datetime.now(timezone.utc).timestamp() - TRADE_BUFFER_TTL_SECONDS) * 1000.0
+
+    by_key: dict[str, dict[bytes, float]] = defaultdict(dict)
+    last_ts_by_symbol: dict[str, float] = {}
+    counts_by_symbol: dict[str, int] = defaultdict(int)
+
+    for trade in result:
+        try:
+            # Gate futures trade payload uses ``contract`` for the pair name.
+            contract = trade.get("contract") or trade.get("currency_pair") or trade.get("s")
+            if not contract:
+                continue
+            # Gate futures: positive size = taker buy, negative = taker sell.
+            size_raw = trade.get("size")
+            if size_raw is None:
+                amount_raw = trade.get("amount")
+                if amount_raw is None:
+                    continue
+                amount = float(amount_raw)
+                side = trade.get("side")
+                if side not in ("buy", "sell"):
+                    continue
+            else:
+                size = float(size_raw)
+                if size > 0:
+                    side = "buy"
+                    amount = size
+                elif size < 0:
+                    side = "sell"
+                    amount = abs(size)
+                else:
+                    continue
+            ts_ms_raw = trade.get("create_time_ms")
+            if ts_ms_raw is None:
+                ts_s = trade.get("create_time")
+                if ts_s is None:
+                    continue
+                ts_ms = float(ts_s) * 1000.0
+            else:
+                ts_ms = float(ts_ms_raw)
+        except (TypeError, ValueError) as exc:
+            logger.debug("futures.trades: skipping malformed trade %r: %s", trade, exc)
+            continue
+
+        symbol = GateAdapter._normalize_symbol(contract)
+        key = _trades_buffer_key(symbol, market_type="futures")
+        payload = json.dumps({
+            "s": side,
+            "a": str(amount),
+            "t": ts_ms,
+        }, separators=(",", ":")).encode("utf-8")
+        trade_id = trade.get("id")
+        if trade_id is not None:
+            member_key = f"|{trade_id}".encode("utf-8")
+        else:
+            member_key = f"|{ts_ms}|{counts_by_symbol[symbol]}".encode("utf-8")
+        by_key[key][payload + member_key] = ts_ms
+
+        counts_by_symbol[symbol] += 1
+        prev_ts = last_ts_by_symbol.get(symbol)
+        if prev_ts is None or ts_ms > prev_ts:
+            last_ts_by_symbol[symbol] = ts_ms
+
+    if not by_key:
+        return
+
+    try:
+        async with redis.pipeline(transaction=False) as pipe:
+            for key, members in by_key.items():
+                pipe.zadd(key, members)
+                pipe.zremrangebyscore(key, 0, cutoff_ms)
+                pipe.zremrangebyrank(key, 0, -(cap + 1))
+                pipe.expire(key, TRADE_BUFFER_TTL_SECONDS)
+            await pipe.execute()
+    except Exception as exc:
+        logger.warning("futures.trades: Redis pipeline failed: %s", exc)
+        return
+
+    # Metrics: reuse the same per-symbol counters/gauges as spot since
+    # the label already includes the symbol name for disambiguation.
+    for symbol, n in counts_by_symbol.items():
+        incr_trades_received(symbol, n=n)
+    for symbol, ts_ms in last_ts_by_symbol.items():
+        set_last_trade_timestamp(symbol, ts_ms / 1000.0)
+
+
 # ── Registration ──────────────────────────────────────────────────────────────
 
 def register_all_handlers(ws_client: "GateWSClient") -> None:
@@ -591,6 +894,8 @@ def register_all_handlers(ws_client: "GateWSClient") -> None:
     ws_client.register_handler("futures.orders", handle_futures_orders)
     ws_client.register_handler("futures.autoorders", handle_futures_autoorders)
     ws_client.register_handler("futures.liquidates", handle_futures_liquidates)
+    ws_client.register_handler("futures.trades", handle_futures_trades)
     ws_client.register_handler("spot.orders", handle_spot_orders)
+    ws_client.register_handler("spot.trades", handle_spot_trades)
 
     logger.info("All Gate.io WS event handlers registered")

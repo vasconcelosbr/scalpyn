@@ -103,7 +103,8 @@ async def _execute_buy_cycle_async() -> dict:
             if field == "market_cap":
                 actual = market_cap
             else:
-                raw = indicators.get(field)
+                from ..services.indicator_validity import unwrap_envelope_value
+                raw = unwrap_envelope_value(indicators.get(field))
                 actual = float(raw) if raw is not None else None
 
             if actual is None:
@@ -224,32 +225,110 @@ async def _execute_buy_cycle_async() -> dict:
 
                 trade_size_usdt = capital_mgr.calc_trade_size(state)
 
-                # 5. Top-scoring candidates (last 2 min) — includes market_cap from metadata
-                ranked_res = await db.execute(text("""
-                    SELECT DISTINCT ON (a.symbol)
-                        a.symbol,
-                        a.score,
-                        i.indicators_json,
-                        mm.market_cap
-                    FROM alpha_scores a
-                    JOIN indicators i ON a.symbol = i.symbol
-                    LEFT JOIN market_metadata mm ON mm.symbol = a.symbol
-                    WHERE a.time > now() - interval '2 minutes'
-                      AND i.time > now() - interval '2 minutes'
-                      AND a.score >= :threshold
-                    ORDER BY a.symbol, a.time DESC, a.score DESC
-                    LIMIT :limit
-                """), {"threshold": threshold, "limit": max_opps * 5})
-                candidates = ranked_res.fetchall()
+                # 5. Top-scoring candidates (Task #215):
+                #
+                # ARCHITECTURAL RULE: the candidate symbol universe MUST come
+                # from a sanctioned source (pool_coins — the operator-curated
+                # tradable set), never from a raw ``SELECT DISTINCT symbol
+                # FROM indicators`` (which is the same partial-row anti-pattern
+                # at the symbol-list level). The full indicator payload is
+                # then resolved via the unified provider, which merges
+                # structural RSI/MACD/ADX with microstructure taker/spread.
+                # Freshness is enforced by the merge utility's per-group
+                # stale limits (structural 1800 s, microstructure 600 s) —
+                # symbols whose data is too old simply won't carry the
+                # required-core keys and will be quarantined by ``is_complete``.
+                # ``market_metadata.market_cap`` is fetched separately so we
+                # never depend on a single ``indicators`` row to carry the
+                # full envelope. The robust selector below is the
+                # authoritative score; the legacy ``alpha_scores.score``
+                # column is no longer joined here.
+                from ..services.indicators_provider import (
+                    get_merged_indicators,
+                    is_complete,
+                )
+
+                # Per-cycle pre-cap on the candidate universe so per-symbol
+                # evaluation stays bounded even when the operator-curated
+                # pool grows large. ``max_opps * 20`` keeps a wide enough
+                # margin that quarantine + threshold filtering downstream
+                # still has plenty of candidates to choose from before the
+                # ``max_opps`` placement cap is hit.
+                # Task #232 — candidate universe = INGESTION set
+                # (is_active=true, per-tenant via JOIN pools p ON
+                # p.user_id = :uid). is_tradable is projected here but
+                # enforced only at the buy decision point below.
+                from ..services.execution_gate_metrics import record_not_tradable
+
+                cap = max(max_opps * 20, 50)
+                # Task #232 — ORDER BY tradable DESC BEFORE LIMIT so a
+                # large pool of non-tradable rows can never starve the
+                # tradable subset out of the cap window. Without this
+                # ordering the unbounded SQL ``LIMIT`` could return
+                # only ``is_tradable=false`` rows and drop every
+                # tradable symbol from this user's evaluation cycle.
+                pool_rows_res = await db.execute(text("""
+                    SELECT pc.symbol,
+                           bool_or(pc.is_tradable) AS is_tradable
+                      FROM pool_coins pc
+                      JOIN pools p ON p.id = pc.pool_id
+                     WHERE pc.is_active = true
+                       AND p.user_id    = :uid
+                  GROUP BY pc.symbol
+                  ORDER BY bool_or(pc.is_tradable) DESC, pc.symbol ASC
+                     LIMIT :cap
+                """), {"uid": user_id, "cap": cap})
+                pool_rows = pool_rows_res.fetchall()
+                tradable_by_symbol = {r.symbol: bool(r.is_tradable) for r in pool_rows}
+                pool_symbols = list(tradable_by_symbol.keys())
+
+                if not pool_symbols:
+                    logger.debug(
+                        "No active pool_coins for user %s (threshold=%.1f)",
+                        user_id, threshold,
+                    )
+                    continue
+
+                merged_by_sym = await get_merged_indicators(db, pool_symbols)
+
+                meta_res = await db.execute(text("""
+                    SELECT symbol, market_cap
+                    FROM   market_metadata
+                    WHERE  symbol = ANY(:syms)
+                """), {"syms": pool_symbols})
+                market_cap_by_sym = {
+                    r.symbol: float(r.market_cap) if r.market_cap is not None else None
+                    for r in meta_res.fetchall()
+                }
+
+                # Build candidate rows mirroring the previous shape so the
+                # downstream loop is mechanical (.symbol / .indicators_json
+                # / .market_cap). Apply the shared completeness guard
+                # (Task #215) at this stage so quarantined symbols never
+                # reach the per-row evaluation.
+                _Candidate = type("_Candidate", (), {})
+                candidates: list = []
+                for _sym, _mi in merged_by_sym.items():
+                    _flat = _mi.as_flat_dict()
+                    _ok, _missing = is_complete(_flat)
+                    if not _ok:
+                        logger.warning(
+                            "[execute_buy] QUARANTINED %s — missing core: %s",
+                            _sym, _missing,
+                        )
+                        stats["skipped"] += 1
+                        continue
+                    _row = _Candidate()
+                    _row.symbol = _sym
+                    _row.indicators_json = _flat
+                    _row.market_cap = market_cap_by_sym.get(_sym)
+                    candidates.append(_row)
 
                 if not candidates:
                     logger.debug(
                         "No qualifying candidates for user %s (threshold=%.1f)", user_id, threshold
                     )
                     continue
-
-                # Sort best score first
-                candidates = sorted(candidates, key=lambda r: float(r.score), reverse=True)
 
                 # 6. Load entry-trigger + block config from the L3 pipeline watchlist profile
                 # Chain: Pool → L1 pipeline watchlist (source_pool_id) → L2 → L3
@@ -260,11 +339,21 @@ async def _execute_buy_cycle_async() -> dict:
                 block_engine:  Optional[BlockEngine]  = None
                 l3_symbols: Optional[set] = None  # restrict candidates to L3 assets
 
+                # Task #232 round 19 — explicit ``level=`` constraints +
+                # deterministic ordering by ``created_at ASC, id ASC``
+                # so multi-watchlist tenants don't see ambiguous chain
+                # selection (and never spurious NO_L3_CHAIN). The model
+                # carries a ``level`` column ("POOL"/"L1"/"L2"/"L3");
+                # we anchor each hop to its expected level.
                 try:
                     l1_res = await db.execute(
                         select(PipelineWatchlist).where(
                             PipelineWatchlist.source_pool_id == pool.id,
                             PipelineWatchlist.user_id == user_id,
+                            PipelineWatchlist.level == "L1",
+                        ).order_by(
+                            PipelineWatchlist.created_at.asc(),
+                            PipelineWatchlist.id.asc(),
                         ).limit(1)
                     )
                     l1_wl = l1_res.scalars().first()
@@ -274,6 +363,10 @@ async def _execute_buy_cycle_async() -> dict:
                             select(PipelineWatchlist).where(
                                 PipelineWatchlist.source_watchlist_id == l1_wl.id,
                                 PipelineWatchlist.user_id == user_id,
+                                PipelineWatchlist.level == "L2",
+                            ).order_by(
+                                PipelineWatchlist.created_at.asc(),
+                                PipelineWatchlist.id.asc(),
                             ).limit(1)
                         )
                         l2_wl = l2_res.scalars().first()
@@ -283,6 +376,10 @@ async def _execute_buy_cycle_async() -> dict:
                                 select(PipelineWatchlist).where(
                                     PipelineWatchlist.source_watchlist_id == l2_wl.id,
                                     PipelineWatchlist.user_id == user_id,
+                                    PipelineWatchlist.level == "L3",
+                                ).order_by(
+                                    PipelineWatchlist.created_at.asc(),
+                                    PipelineWatchlist.id.asc(),
                                 ).limit(1)
                             )
                             l3_wl = l3_res.scalars().first()
@@ -325,27 +422,59 @@ async def _execute_buy_cycle_async() -> dict:
 
                 buys_this_cycle = 0
 
-                # Restrict candidates to L3 pipeline watchlist symbols (if pipeline is configured)
-                if l3_symbols is not None:
-                    before_l3 = len(candidates)
-                    candidates = [r for r in candidates if r.symbol in l3_symbols]
-                    logger.info(
-                        "L3 pipeline filter for user %s: %d → %d candidates (%d removed)",
-                        user_id, before_l3, len(candidates), before_l3 - len(candidates),
+                # Task #232 round 17 — STRICT L3 enforcement (no fallback).
+                # If the L3 chain is missing/unresolved, the execution
+                # contract requires we drop ALL candidates for this user
+                # rather than silently degrading to active+tradable only.
+                if l3_symbols is None:
+                    logger.warning(
+                        "[execute_buy] SKIPPED user=%s reason=NO_L3_CHAIN — "
+                        "%d candidates dropped: operator must build the "
+                        "Pool→L1→L2→L3 pipeline before trades execute.",
+                        user_id, len(candidates),
                     )
+                    continue
+                before_l3 = len(candidates)
+                candidates = [r for r in candidates if r.symbol in l3_symbols]
+                logger.info(
+                    "L3 pipeline filter for user %s: %d → %d candidates (%d removed)",
+                    user_id, before_l3, len(candidates), before_l3 - len(candidates),
+                )
+
+                # Robust authoritative selector. Imported once per cycle
+                # so the per-row loop just dispatches.
+                from ..tasks.evaluate_signals import _compute_robust_score
 
                 for row in candidates:
                     if buys_this_cycle >= max_opps:
                         break
 
-                    symbol      = row.symbol
-                    alpha_score = float(row.score)
-                    indicators  = row.indicators_json or {}
+                    from ..services.indicator_validity import unwrap_envelope_value
+                    symbol         = row.symbol
+                    indicators     = row.indicators_json or {}
                     candidate_market_cap = float(row.market_cap) if row.market_cap else None
-                    current_price = float(indicators.get("close", 0))
+                    # ``close`` is stored as an envelope (``{"value": v, ...}``);
+                    # unwrap before float() so we don't crash on dict.
+                    _close_raw     = unwrap_envelope_value(indicators.get("close"))
+                    current_price  = float(_close_raw) if _close_raw is not None else 0.0
 
                     if current_price <= 0:
                         logger.debug("Skipping %s — missing close price", symbol)
+                        stats["skipped"] += 1
+                        continue
+
+                    # Authoritative robust score; ``None`` when the engine
+                    # cannot produce a value, in which case the candidate
+                    # is skipped rather than back-filled from legacy.
+                    resolved = _compute_robust_score(symbol, indicators)
+                    if resolved is None:
+                        stats["skipped"] += 1
+                        continue
+                    alpha_score = resolved
+
+                    # Apply the operator-configured threshold against the
+                    # authoritative robust score.
+                    if alpha_score < threshold:
                         stats["skipped"] += 1
                         continue
 
@@ -415,6 +544,20 @@ async def _execute_buy_cycle_async() -> dict:
                         "take_profit_price": tp_price,
                         "stop_loss_price":   None,  # sell engine manages exits
                     }
+
+                    # Task #232 — execution gate. Candidate passed
+                    # scoring+signal+block+risk+capital; would buy if
+                    # tradable. Per-symbol skip log + counter.
+                    if not tradable_by_symbol.get(symbol, False):
+                        record_not_tradable("execute_buy", symbol)
+                        logger.info(
+                            "[execute_buy] SKIPPED %s reason=NOT_TRADABLE "
+                            "score=%.2f size_usdt=%.2f — qualified buy "
+                            "blocked by is_tradable=false",
+                            symbol, alpha_score, trade_size_usdt,
+                        )
+                        stats["skipped"] += 1
+                        continue
 
                     # 6f. Execute
                     trade_result = await execution_engine.execute_trade(

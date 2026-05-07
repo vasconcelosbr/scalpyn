@@ -33,3 +33,6 @@ class Trade(Base):
     entry_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     exit_at = Column(DateTime(timezone=True), nullable=True)
     holding_seconds = Column(Integer, nullable=True)
+
+    exchange_order_id = Column(String(100), nullable=True, unique=True)
+    source = Column(String(30), nullable=True, default="scalpyn")

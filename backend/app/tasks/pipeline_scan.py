@@ -16,6 +16,7 @@ import json
 import logging
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -226,8 +227,16 @@ def _build_pipeline_asset(
     volume_24h=None,
     spread_pct=None,
     orderbook_depth_usdt=None,
+    merged_indicators=None,
 ) -> dict:
-    """Build a normalized pipeline asset dict from metadata, indicators, and scores."""
+    """Build a normalized pipeline asset dict from metadata, indicators, and scores.
+
+    ``merged_indicators`` (Task #215) is the originating
+    :class:`MergedIndicators` object and is stashed under the private
+    key ``_merged_indicators`` so :func:`_decision_metrics` can build
+    the persisted ``indicators_snapshot``. The leading underscore
+    keeps it out of any client-facing serialisation.
+    """
     asset = {
         "symbol": symbol,
         "name": name or symbol,
@@ -239,6 +248,7 @@ def _build_pipeline_asset(
         "orderbook_depth_usdt": orderbook_depth_usdt,
         "indicators": indicators,
         "_has_market_metadata": has_market_metadata,
+        "_merged_indicators": merged_indicators,
         **{k: v for k, v in indicators.items() if isinstance(v, (int, float, bool, str))},
     }
 
@@ -299,6 +309,84 @@ def _save_signals(redis, watchlist_id: str, symbols: set, ttl: int = 300):
         pass
 
 
+def _prior_decision_states(redis, watchlist_id: str) -> dict:
+    """Load the map of {symbol: {state, score, direction, saved_at}} from the last scan."""
+    if not redis:
+        return {}
+    try:
+        raw = redis.get(f"{_REDIS_PREFIX}{watchlist_id}:decision_states")
+        return json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+
+
+def _save_decision_states(redis, watchlist_id: str, states: dict, ttl: int = 600):
+    """Persist current decision state map for next-cycle comparison (TTL 10 min)."""
+    if not redis:
+        return
+    try:
+        redis.setex(f"{_REDIS_PREFIX}{watchlist_id}:decision_states", ttl, json.dumps(states))
+    except Exception:
+        pass
+
+
+def _should_log_decision(
+    decision: dict,
+    prior: Optional[dict],
+    score_delta_threshold: float = 5.0,
+    direction_change_logs: bool = True,
+) -> tuple[bool, Optional[str]]:
+    """
+    Decide whether a decision dict should be written to the Decision Log and
+    return the event_type string.
+
+    Rules:
+    - None/absent → ALLOW   → log, NEW_SIGNAL
+    - ALLOW       → BLOCK   → log, SIGNAL_LOST
+    - BLOCK       → ALLOW   → log, SIGNAL_REGAINED
+    - ALLOW → ALLOW stable  → skip
+    - ALLOW → ALLOW score delta > threshold → log, SIGNAL_EVOLVED_SCORE
+    - ALLOW → ALLOW direction flip         → log, SIGNAL_EVOLVED_DIRECTION (if enabled)
+    - BLOCK → BLOCK         → skip
+    - None/absent → BLOCK   → skip
+
+    Recovery rule: if prior state is ALLOW but was never confirmed by a successful DB
+    write (db_confirmed_at is absent), treat prior as None so the symbol is re-logged.
+    This auto-recovers symbols stuck by the ordering bug where Redis advanced ahead of DB.
+    """
+    current_state = decision.get("decision")
+    current_score = float(decision.get("score") or 0)
+    current_direction = decision.get("direction")
+
+    # Recovery: unconfirmed ALLOW state means the DB write never happened — reset
+    if prior is not None and prior.get("state") == "ALLOW" and not prior.get("db_confirmed_at"):
+        prior = None
+
+    if prior is None:
+        if current_state == "ALLOW":
+            return True, "NEW_SIGNAL"
+        return False, None
+
+    prior_state = prior.get("state")
+    prior_score = float(prior.get("score") or 0)
+    prior_direction = prior.get("direction")
+
+    if prior_state != "ALLOW" and current_state == "ALLOW":
+        return True, "SIGNAL_REGAINED"
+
+    if prior_state == "ALLOW" and current_state == "BLOCK":
+        return True, "SIGNAL_LOST"
+
+    if prior_state == "ALLOW" and current_state == "ALLOW":
+        if abs(current_score - prior_score) > score_delta_threshold:
+            return True, "SIGNAL_EVOLVED_SCORE"
+        if direction_change_logs and current_direction and prior_direction and current_direction != prior_direction:
+            return True, "SIGNAL_EVOLVED_DIRECTION"
+        return False, None
+
+    return False, None
+
+
 async def _update_last_scanned(db, watchlist_id: str):
     """Update last_scanned_at on a PipelineWatchlist after each scan attempt."""
     from sqlalchemy import text
@@ -311,6 +399,12 @@ async def _update_last_scanned(db, watchlist_id: str):
         await db.commit()
     except Exception as exc:
         logger.debug("[PipelineScan] Failed to update last_scanned_at for %s: %s", watchlist_id, exc)
+        # Reset the session so the next watchlist in the scan loop does not
+        # inherit an aborted asyncpg transaction (InFailedSQLTransactionError).
+        try:
+            await db.rollback()
+        except Exception as rb_exc:
+            logger.debug("[PipelineScan] Rollback after last_scanned_at failure failed: %s", rb_exc)
 
 
 # ─── market data loader ───────────────────────────────────────────────────────
@@ -377,33 +471,16 @@ async def _fetch_market_data(db, symbols: list) -> list:
             {"symbols": syms_list},
         )).fetchall()
 
-    # Step 2: Fetch indicators — always runs regardless of which meta path was taken
+    # Step 2: Fetch indicators via dual-scheduler merge utility
+    # Merges structural (15m cadence) + microstructure (5m cadence) rows with
+    # per-key latest-timestamp-wins semantics. Falls back to legacy single-row
+    # query when scheduler_group column is absent.
     try:
-        # Prefer 5m indicators (fresh, 5-min cadence); fall back to any timeframe
-        ind_rows = (await db.execute(
-            text("""
-                SELECT DISTINCT ON (symbol) symbol, indicators_json
-                FROM indicators
-                WHERE symbol = ANY(:symbols)
-                  AND timeframe = '5m'
-                ORDER BY symbol, time DESC
-            """),
-            {"symbols": syms_list},
-        )).fetchall()
-
-        found_syms = {r.symbol for r in ind_rows}
-        missing = [s for s in symbols if s not in found_syms]
-        if missing:
-            fallback_rows = (await db.execute(
-                text("""
-                    SELECT DISTINCT ON (symbol) symbol, indicators_json
-                    FROM indicators
-                    WHERE symbol = ANY(:symbols)
-                    ORDER BY symbol, time DESC
-                """),
-                {"symbols": missing},
-            )).fetchall()
-            ind_rows = list(ind_rows) + list(fallback_rows)
+        # Task #215: route through the unified provider so the same merge
+        # path + telemetry + quarantine semantics apply across pipeline_scan,
+        # evaluate_signals, and execute_buy.
+        from ..services.indicators_provider import get_merged_indicators
+        _merged_by_sym = await get_merged_indicators(db, syms_list)
 
         score_rows = (await db.execute(
             text("""
@@ -423,7 +500,8 @@ async def _fetch_market_data(db, symbols: list) -> list:
         logger.warning("Pipeline scan: market data fetch failed: %s", exc)
         return None
 
-    ind_map   = {r.symbol: (r.indicators_json or {}) for r in ind_rows}
+    # Build flat ind_map from merged dual-scheduler results
+    ind_map = {sym: mi.as_flat_dict() for sym, mi in _merged_by_sym.items()}
     score_map = {r.symbol: r for r in score_rows}
 
     # ── Funnel stats: symbols requested vs. found in market_metadata ─────────
@@ -476,6 +554,7 @@ async def _fetch_market_data(db, symbols: list) -> list:
             volume_24h=float(row.volume_24h) if row.volume_24h is not None else None,
             spread_pct=float(row.spread_pct) if row.spread_pct is not None else None,
             orderbook_depth_usdt=float(row.orderbook_depth_usdt) if row.orderbook_depth_usdt is not None else None,
+            merged_indicators=_merged_by_sym.get(sym),
         ))
 
     for sym in sorted(missing_meta):
@@ -487,6 +566,7 @@ async def _fetch_market_data(db, symbols: list) -> list:
             indicators=indicators,
             score_row=score_row,
             has_market_metadata=False,
+            merged_indicators=_merged_by_sym.get(sym),
         ))
 
     return assets
@@ -494,78 +574,19 @@ async def _fetch_market_data(db, symbols: list) -> list:
 
 # ─── core indicator completeness guard ───────────────────────────────────────
 
-def _resolve_required_core_indicators() -> tuple[str, ...]:
-    """Return the set of core indicators that must be non-null for pipeline advancement.
-
-    Derived from DEFAULT_INDICATORS so the list automatically reflects the active
-    indicator config (ZERO HARDCODE: no magic strings here — the source of truth
-    is the seed config which is DB-backed via config_profiles).
-
-    Only indicators with both ``enabled=True`` *and* a numeric ``period``
-    (i.e. time-series indicators that can legitimately return null during warm-up)
-    are included in the mandatory check.
-    """
-    from ..services.seed_service import DEFAULT_INDICATORS
-
-    # Only the three fundamental indicators required by DEFAULT_SIGNAL are
-    # treated as mandatory core checks.  Additional indicators can be added to
-    # DEFAULT_INDICATORS without automatically becoming pipeline blockers.
-    _CORE_KEYS = ("adx", "rsi", "macd")
-    return tuple(
-        key for key in _CORE_KEYS
-        if DEFAULT_INDICATORS.get(key, {}).get("enabled", False)
-    )
-
-
-#: Resolved at module load time from DEFAULT_INDICATORS.  Re-computed on each
-#: import so changes to seed config are picked up without restarting workers.
-_REQUIRED_CORE_INDICATORS: tuple[str, ...] = _resolve_required_core_indicators()
-
-
 def _filter_incomplete_indicators(assets: list) -> tuple[list, list]:
-    """Separate assets into (complete, incomplete) based on core indicator presence.
+    """Backward-compatible delegate to the unified provider (Task #215).
 
-    An asset is *incomplete* if any of the required core indicators (ADX, RSI,
-    MACD) is ``None`` or absent from its indicator dict.  Incomplete assets are
-    excluded from the pipeline and logged so the issue is visible in production
-    logs without raising an exception.
-
-    Returns
-    -------
-    complete : list
-        Assets where all core indicators are non-null.
-    incomplete : list
-        Assets with at least one null core indicator (quarantined).
+    The shared completeness rule + helper now live in
+    :mod:`app.services.indicators_provider` so all three Celery tasks
+    (pipeline_scan / evaluate_signals / execute_buy) apply identical
+    quarantine semantics. The required-core key list is
+    ``("adx", "rsi", "macd_histogram")`` — see
+    ``indicators_provider.REQUIRED_CORE_INDICATORS`` for the canonical
+    rationale and rename procedure.
     """
-    complete: list = []
-    incomplete: list = []
-
-    for asset in assets:
-        indicators = asset.get("indicators", {})
-        missing = [
-            ind for ind in _REQUIRED_CORE_INDICATORS
-            if indicators.get(ind) is None
-        ]
-        if missing:
-            incomplete.append(asset)
-            logger.warning(
-                "[PipelineScan] QUARANTINED %s — core indicators null: %s "
-                "(asset will not advance until indicators are fully computed)",
-                asset.get("symbol", "?"),
-                missing,
-            )
-        else:
-            complete.append(asset)
-
-    if incomplete:
-        logger.info(
-            "[PipelineScan] Core indicator guard: %d/%d assets quarantined "
-            "(null ADX/RSI/MACD). Sample: %s",
-            len(incomplete), len(assets),
-            [a.get("symbol") for a in incomplete[:10]],
-        )
-
-    return complete, incomplete
+    from ..services.indicators_provider import filter_incomplete_assets
+    return filter_incomplete_assets(assets)
 
 
 # ─── level evaluators ─────────────────────────────────────────────────────────
@@ -590,6 +611,53 @@ def _check_condition_would_fail(cond: dict, actual_value) -> bool:
     except (TypeError, ValueError):
         return False
 
+class _RobustScoreShim:
+    """Stand-in for ``ScoreEngine`` used inside ``ProfileEngine`` after
+    the Phase 4 cleanup.
+
+    Returns the pre-computed robust score that ``_apply_robust_authoritative_scoring``
+    already wrote onto each asset (under ``_score`` / ``alpha_score`` /
+    ``score``). The legacy 4-bucket math is *not* executed — keeps the
+    robust engine the single source of truth for L2 / L3 gating and for
+    every score consumed by signal / entry evaluation.
+    """
+
+    def __init__(self, thresholds: Optional[dict] = None) -> None:
+        self.thresholds = thresholds or {
+            "strong_buy": 80,
+            "buy": 65,
+            "neutral": 40,
+        }
+
+    def _classify(self, score: float) -> str:
+        if score >= self.thresholds.get("strong_buy", 80):
+            return "strong_buy"
+        if score >= self.thresholds.get("buy", 65):
+            return "buy"
+        if score >= self.thresholds.get("neutral", 40):
+            return "neutral"
+        return "avoid"
+
+    def compute_score(self, eval_data: dict) -> dict:
+        raw = (
+            eval_data.get("_score")
+            if eval_data.get("_score") is not None
+            else eval_data.get("alpha_score")
+            if eval_data.get("alpha_score") is not None
+            else eval_data.get("score")
+        )
+        try:
+            score = float(raw) if raw is not None else 0.0
+        except (TypeError, ValueError):
+            score = 0.0
+        return {
+            "total_score": round(score, 2),
+            "components": {"engine": "robust"},
+            "matched_rules": [],
+            "classification": self._classify(score),
+        }
+
+
 def _apply_level_filter(
     assets: list,
     profile_config: Optional[dict],
@@ -601,19 +669,22 @@ def _apply_level_filter(
     Apply ProfileEngine filters for a given level.
     Returns (passed, all_scored).
 
-    score_config: when provided, overrides the ProfileEngine's internal score engine
-    with the user's global /settings/score configuration.  Profile-level
-    Alpha Score Weights are merged in so they are respected.
+    score_config: thresholds-only — used to drive the score classification
+    bands. The actual numeric score comes from the robust engine
+    (``asset["_score"]``) via ``_RobustScoreShim``; legacy ``ScoreEngine``
+    rule math is no longer invoked.
     """
     from ..services.profile_engine import ProfileEngine
-    from ..services.score_engine import ScoreEngine, merge_score_config
 
     engine = ProfileEngine(profile_config)
 
-    # Merge global scoring rules with profile weights so both are respected
-    if score_config:
-        merged = merge_score_config(score_config, profile_config)
-        engine.score_engine = ScoreEngine(merged)
+    # Replace the profile's internal ScoreEngine with a thin shim that
+    # returns the asset's pre-computed robust score. This guarantees L2 /
+    # L3 gating reads the robust value, not the legacy 4-bucket math.
+    engine.score_engine = _RobustScoreShim(
+        thresholds=(score_config or {}).get("thresholds")
+        or (profile_config or {}).get("scoring", {}).get("thresholds"),
+    )
 
     min_score = 0.0
 
@@ -642,6 +713,17 @@ def _apply_level_filter(
                 else:
                     if _check_condition_would_fail(cond, val):
                         rejection_counts[field] = rejection_counts.get(field, 0) + 1
+
+        # Task #232 — publish per-reason rejection_rate so dashboards
+        # can break down the profile_filter stage by which condition
+        # rejected the candidate (was previously only a log line).
+        try:
+            from ..services.execution_gate_metrics import record_pipeline_rejection_reason
+            entered = len(assets)
+            for reason, cnt in rejection_counts.items():
+                record_pipeline_rejection_reason("profile_filter", reason, cnt, entered)
+        except Exception as exc:
+            logger.debug("[PipelineScan] rejection-reason metrics failed: %s", exc)
 
         if rejection_counts or null_counts:
             logger.info(
@@ -704,19 +786,15 @@ def _evaluate_l3_signals(assets: list, profile_config: Optional[dict], score_con
     This prevents L3 from being permanently empty just because no signal conditions
     have been set up yet.
 
-    score_config: when provided, overrides the ProfileEngine's internal score engine
-    with the user's global /settings/score configuration.  Profile-level
-    Alpha Score Weights are merged in so they are respected.
+    Score values come from the robust engine via ``_RobustScoreShim``.
     """
     from ..services.profile_engine import ProfileEngine
-    from ..services.score_engine import ScoreEngine, merge_score_config
 
     engine = ProfileEngine(profile_config)
-
-    # Merge global scoring rules with profile weights so both are respected
-    if score_config:
-        merged = merge_score_config(score_config, profile_config)
-        engine.score_engine = ScoreEngine(merged)
+    engine.score_engine = _RobustScoreShim(
+        thresholds=(score_config or {}).get("thresholds")
+        or (profile_config or {}).get("scoring", {}).get("thresholds"),
+    )
 
     # Check if the profile has any signal conditions at all.
     # Signal conditions may be stored under 'entry_triggers' OR 'signals'.
@@ -838,6 +916,33 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
         "score_classification": score.get("classification"),
         "signal_direction": processed.get("signal", {}).get("direction"),
     }
+
+    # Task #215: persist the indicator snapshot used by THIS decision so a
+    # future "decision vs DB" investigation can compare the exact payload
+    # against table state at the same instant. Snapshot is scoped to the
+    # keys this decision actually consumed: required-core (always) +
+    # whatever keys appear in the score-components breakdown (i.e. the
+    # indicators that contributed to the L3 score). Keeps JSONB small.
+    merged = asset.get("_merged_indicators")
+    if merged is not None:
+        from ..services.indicators_provider import build_indicators_snapshot
+        consumed_keys: set[str] = set()
+        components = score.get("components") or {}
+        if isinstance(components, dict):
+            for comp_value in components.values():
+                if isinstance(comp_value, dict):
+                    # Component contributions can be either {"value": …,
+                    # "indicator": "rsi"} or nested {"rsi": …, "adx": …}
+                    if "indicator" in comp_value and isinstance(comp_value["indicator"], str):
+                        consumed_keys.add(comp_value["indicator"])
+                    consumed_keys.update(
+                        k for k in comp_value.keys()
+                        if isinstance(k, str) and k in (merged.values or {})
+                    )
+        metrics["indicators_snapshot"] = build_indicators_snapshot(
+            merged, keys=consumed_keys
+        )
+
     return _jsonable(metrics)
 
 
@@ -848,12 +953,12 @@ def _evaluate_l3_decisions(
     score_config: Optional[dict] = None,
 ) -> list[dict]:
     from ..services.profile_engine import ProfileEngine
-    from ..services.score_engine import ScoreEngine, merge_score_config
 
     engine = ProfileEngine(profile_config)
-    if score_config:
-        merged = merge_score_config(score_config, profile_config)
-        engine.score_engine = ScoreEngine(merged)
+    engine.score_engine = _RobustScoreShim(
+        thresholds=(score_config or {}).get("thresholds")
+        or (profile_config or {}).get("scoring", {}).get("thresholds"),
+    )
 
     sig_conditions = (
         (profile_config or {}).get("entry_triggers", {}).get("conditions")
@@ -892,6 +997,7 @@ def _evaluate_l3_decisions(
             "reasons": _decision_reason_map(processed, has_signal_conditions),
             "metrics": _decision_metrics(asset, processed),
             "latency_ms": latency_ms,
+            "direction": asset.get("futures_direction"),
             "created_at": datetime.now(timezone.utc),
             "_processed": processed,
             "_asset": asset,
@@ -902,50 +1008,81 @@ def _evaluate_l3_decisions(
 
 async def _persist_decision_logs(db, user_id, decisions: list[dict]):
     from ..models.backoffice import DecisionLog
-    from sqlalchemy import text
+    from sqlalchemy import or_, and_, select
 
     if not decisions:
         return []
 
-    # ── Deduplication guard ───────────────────────────────────────────────────
-    # decisions_log só deve registrar TRANSIÇÕES de estado.
-    # BLOCK repetido (sem mudança) é ruído — skip silencioso com DEBUG.
-    # ALLOW sempre persiste (aprovação real com l3_pass=True).
-    _symbols = list({d["symbol"] for d in decisions})
-    _strategies = list({d["strategy"] for d in decisions})
-    _last_state: dict[tuple[str, str], str] = {}
-    try:
-        _state_rows = (await db.execute(
-            text("""
-                SELECT DISTINCT ON (symbol, strategy)
-                    symbol, strategy, decision
-                FROM decisions_log
-                WHERE symbol = ANY(:symbols)
-                  AND strategy = ANY(:strategies)
-                ORDER BY symbol, strategy, created_at DESC
-            """),
-            {"symbols": _symbols, "strategies": _strategies},
-        )).fetchall()
-        for _r in _state_rows:
-            _last_state[(_r.symbol, _r.strategy)] = _r.decision
-    except Exception as _exc:
-        logger.debug("[Decision] Dedup state query failed — guard skipped: %s", _exc)
+    # DEDUPLICATION: Check for recent duplicate decisions (last 5 minutes).
+    # Previously used raw SQL ``(col1, col2) IN :checks`` which is not
+    # supported by asyncpg's parameter binding and could silently match nothing,
+    # allowing duplicate rows on Redis restarts. Replaced with ORM-native
+    # ``or_()`` conditions which are always correctly parameterised.
+    now = datetime.now(timezone.utc)
+    recent_window = now - timedelta(minutes=5)
 
-    _deduped: list[dict] = []
-    for _d in decisions:
-        _key = (_d["symbol"], _d["strategy"])
-        if _d["decision"] == "BLOCK" and _last_state.get(_key) == "BLOCK":
-            logger.debug(
-                "[Decision] SKIP repeated BLOCK %s/%s — no state change",
-                _d["symbol"], _d["strategy"],
+    dedup_checks = []
+    for decision in decisions:
+        dedup_checks.append((
+            decision["symbol"],
+            decision["strategy"],
+            decision.get("direction"),
+        ))
+
+    if dedup_checks:
+        unique_checks = list(set(dedup_checks))
+
+        # Build ORM-safe OR clause: each tuple becomes an AND condition.
+        row_conditions = []
+        for s, st, d in unique_checks:
+            dir_cond = (DecisionLog.direction == d) if d is not None else DecisionLog.direction.is_(None)
+            row_conditions.append(and_(
+                DecisionLog.symbol == s,
+                DecisionLog.strategy == st,
+                dir_cond,
+            ))
+
+        existing_result = await db.execute(
+            select(DecisionLog.symbol, DecisionLog.strategy, DecisionLog.direction)
+            .where(and_(
+                DecisionLog.created_at >= recent_window,
+                or_(*row_conditions),
+            ))
+            .distinct()
+        )
+
+        existing_decisions = {
+            (row.symbol, row.strategy, row.direction or None)
+            for row in existing_result.fetchall()
+        }
+
+        decisions_to_insert = []
+        skipped_count = 0
+        for decision in decisions:
+            key = (
+                decision["symbol"],
+                decision["strategy"],
+                decision.get("direction"),
             )
-            continue
-        _deduped.append(_d)
-    decisions = _deduped
+            if key in existing_decisions:
+                logger.debug(
+                    "[Decision] SKIP duplicate: %s | strategy=%s | direction=%s (logged in last 5 min)",
+                    key[0], key[1], key[2] or "—",
+                )
+                skipped_count += 1
+            else:
+                decisions_to_insert.append(decision)
+
+        if skipped_count > 0:
+            logger.info(
+                "[Decision] dedup_conflict: skipped %d duplicate(s), inserting %d new decision(s)",
+                skipped_count, len(decisions_to_insert),
+            )
+
+        decisions = decisions_to_insert
 
     if not decisions:
         return []
-    # ─────────────────────────────────────────────────────────────────────────
 
     rows = [
         DecisionLog(
@@ -960,6 +1097,8 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             reasons=decision.get("reasons"),
             metrics=decision.get("metrics"),
             latency_ms=decision.get("latency_ms"),
+            direction=decision.get("direction"),
+            event_type=decision.get("event_type"),
             user_id=user_id,
             created_at=decision.get("created_at"),
         )
@@ -983,10 +1122,22 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             "reasons": row.reasons or {},
             "metrics": row.metrics or {},
             "latency_ms": row.latency_ms,
+            "direction": row.direction,
+            "event_type": row.event_type,
             "created_at": row.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
-        logger.info("[Decision] %s | score=%s | %s", row.symbol, round(float(row.score or 0), 2), row.decision)
+        logger.info(
+            "[Decision] PERSISTED | id=%s | %s | score=%s | %s | event=%s",
+            row.id, row.symbol, round(float(row.score or 0), 2), row.decision, row.event_type or "—",
+        )
         payloads.append(payload)
+
+    # Log summary
+    logger.info(
+        "[Decision] Batch persisted: %d decision(s) successfully logged to decisions_log table",
+        len(payloads)
+    )
+
     return payloads
 
 
@@ -1038,6 +1189,194 @@ async def _run_staleness_only(
     await db.commit()
 
 
+# NOTE: ``_robust_futures_direction_bias`` was lifted into
+# ``app.services.robust_indicators.asset_score.robust_futures_direction_bias``
+# in Phase 4 so the API drilldown panels can import it without depending on
+# the Celery task module. This shim is kept only for historical references.
+from ..services.robust_indicators import (
+    robust_futures_direction_bias as _robust_futures_direction_bias,
+)
+
+
+async def _apply_robust_authoritative_scoring(
+    assets: list,
+    *,
+    score_config: dict | None,
+    is_futures: bool,
+    db=None,
+    user_id=None,
+    watchlist_id=None,
+) -> dict[str, int]:
+    """Apply the authoritative robust score to every asset.
+
+    Mutates each asset dict in place, persists the per-symbol envelope
+    snapshot to ``indicator_snapshots`` (best-effort), and emits the
+    standard robust-engine metrics.
+
+      * Always sets ``engine_tag = "robust"`` so the upsert path can
+        persist the column for the asset row.
+      * For robust-succeeded assets, overrides ``_score`` /
+        ``alpha_score`` (spot) and ``confidence_score`` /
+        ``score_long`` / ``score_short`` (futures) with the robust
+        score. For futures, the LONG / SHORT split is derived from
+        indicator envelopes via ``_robust_futures_direction_bias`` —
+        legacy score columns are never read.
+      * When the robust engine cannot produce a value (missing
+        indicators, validation failure, etc.) every score column is
+        zeroed so a pre-existing legacy numeric value is never
+        persisted and the symbol is naturally suppressed downstream.
+
+    Returns counters: ``{"bucketed", "robust_used", "fallbacks"}``
+    so the caller can log a single "rollout summary" line per scan.
+    """
+    from ..services.robust_indicators import (
+        calculate_score_with_confidence,
+        envelope_indicators,
+        persist_snapshot,
+        validate_indicator_integrity,
+    )
+    from ..services.robust_indicators.metrics import (
+        increment_rejection,
+        set_indicator_confidence,
+        set_indicator_staleness,
+    )
+    from ..services.seed_service import DEFAULT_SCORE
+
+    counters = {"bucketed": 0, "robust_used": 0, "fallbacks": 0}
+    if not assets:
+        return counters
+
+    rules = (
+        (score_config or {}).get("scoring_rules")
+        or (score_config or {}).get("rules")
+        or DEFAULT_SCORE.get("scoring_rules")
+        or []
+    )
+
+    for asset in assets:
+        symbol = asset.get("symbol")
+        if not symbol:
+            continue
+
+        indicators = asset.get("indicators") or {}
+        flow_hint = (
+            indicators.get("taker_source")
+            if isinstance(indicators, dict) else None
+        )
+        asset["engine_tag"] = "robust"
+        counters["bucketed"] += 1
+
+        envelopes = None
+        validation = None
+        result = None
+        new_score: float | None = None
+
+        try:
+            envelopes = envelope_indicators(
+                str(symbol), indicators, flow_source_hint=flow_hint,
+            )
+            validation = validate_indicator_integrity(envelopes)
+            result = calculate_score_with_confidence(envelopes, rules)
+            if not result.rejected and result.score is not None:
+                new_score = float(result.score)
+        except Exception as exc:
+            logger.debug(
+                "[PipelineScan] robust score failed for %s: %s",
+                symbol, exc,
+            )
+
+        # Emit retained Phase 1 metrics for every symbol with envelopes.
+        if envelopes:
+            try:
+                if result is not None:
+                    set_indicator_confidence(
+                        str(symbol), float(result.global_confidence)
+                    )
+                for name, env in envelopes.items():
+                    set_indicator_staleness(
+                        str(symbol), name, float(env.staleness_seconds or 0.0)
+                    )
+            except Exception:
+                pass
+
+        if result is not None and result.rejected and result.rejection_reason:
+            try:
+                reason_key = result.rejection_reason.split(":", 1)[0]
+                increment_rejection(reason_key)
+            except Exception:
+                pass
+
+        # Best-effort snapshot persistence for ops visibility. Skipped
+        # silently when the caller did not pass a session — keeps the
+        # function callable from places that lack a DB handle.
+        if (
+            db is not None
+            and envelopes is not None
+            and validation is not None
+            and result is not None
+        ):
+            try:
+                await persist_snapshot(
+                    db,
+                    symbol=str(symbol),
+                    envelopes=envelopes,
+                    validation=validation,
+                    score=result,
+                    user_id=user_id,
+                    watchlist_id=watchlist_id,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "[PipelineScan] snapshot persist failed for %s: %s",
+                    symbol, exc,
+                )
+
+        if new_score is None:
+            counters["fallbacks"] += 1
+            asset["_score"] = 0.0
+            asset["score"] = 0.0
+            asset["alpha_score"] = 0.0
+            if is_futures:
+                asset["confidence_score"] = 0.0
+                if asset.get("score_long") is not None:
+                    asset["score_long"] = 0.0
+                if asset.get("score_short") is not None:
+                    asset["score_short"] = 0.0
+            continue
+
+        counters["robust_used"] += 1
+
+        if is_futures:
+            asset["confidence_score"] = round(new_score, 2)
+            bias = _robust_futures_direction_bias(indicators)
+            long_mult = 1.0 - max(0.0, -bias)
+            short_mult = 1.0 - max(0.0, bias)
+            asset["score_long"] = round(
+                max(0.0, min(100.0, new_score * long_mult)), 2
+            )
+            asset["score_short"] = round(
+                max(0.0, min(100.0, new_score * short_mult)), 2
+            )
+            # Direction tag derived from the robust bias — replaces the
+            # legacy ``futures_direction`` field that used to come from
+            # ``score_futures``. Threshold mirrors the spirit of the old
+            # ``direction_gap_min`` (small bias → NEUTRAL).
+            if bias >= 0.1:
+                asset["futures_direction"] = "LONG"
+            elif bias <= -0.1:
+                asset["futures_direction"] = "SHORT"
+            else:
+                asset["futures_direction"] = "NEUTRAL"
+            asset.setdefault("block_both", False)
+            asset.setdefault("entry_long_blocked", False)
+            asset.setdefault("entry_short_blocked", False)
+        asset["_score"] = new_score
+        asset["score"] = new_score
+        asset["alpha_score"] = new_score
+
+    return counters
+
+
 async def _replace_rejection_snapshot(
     db,
     watchlist_id: str,
@@ -1058,13 +1397,14 @@ async def _replace_rejection_snapshot(
             INSERT INTO pipeline_watchlist_rejections (
                 id, watchlist_id, user_id, profile_id, symbol, stage,
                 failed_type, failed_indicator, condition_text, current_value,
-                expected_value, evaluation_trace, analysis_snapshot, recorded_at, execution_id
+                expected_value, evaluation_trace, analysis_snapshot, recorded_at, execution_id,
+                engine_tag
             )
             VALUES (
                 :id, :watchlist_id, :user_id, :profile_id, :symbol, :stage,
                 :failed_type, :failed_indicator, :condition_text, CAST(:current_value AS jsonb),
                 :expected_value, CAST(:evaluation_trace AS jsonb), CAST(:analysis_snapshot AS jsonb),
-                :recorded_at, :execution_id
+                :recorded_at, :execution_id, :engine_tag
             )
         """), {
             "id": str(uuid4()),
@@ -1082,7 +1422,16 @@ async def _replace_rejection_snapshot(
             "analysis_snapshot": json.dumps(_jsonable(row.get("analysis_snapshot") or {})),
             "recorded_at": now,
             "execution_id": execution_id,
+            "engine_tag": row.get("engine_tag"),
         })
+
+
+# ─── Futures scoring injection ────────────────────────────────────────────────
+
+# NOTE: The legacy ``_tag_futures_scores`` helper that wrapped
+# ``app.scoring.futures_pipeline_scorer.score_futures`` was removed in
+# Phase 4 — futures direction + score split are now derived directly
+# from the robust envelopes inside ``_apply_robust_authoritative_scoring``.
 
 
 # ─── DB upsert ────────────────────────────────────────────────────────────────
@@ -1113,32 +1462,52 @@ async def _upsert_assets(
                 INSERT INTO pipeline_watchlist_assets
                     (id, watchlist_id, symbol, current_price, price_change_24h,
                       volume_24h, market_cap, alpha_score, entered_at, refreshed_at,
-                      level_direction, analysis_snapshot, execution_id)
+                      level_direction, analysis_snapshot, execution_id,
+                      score_long, score_short, confidence_score,
+                      futures_direction, entry_long_blocked, entry_short_blocked,
+                      engine_tag)
                 VALUES
                     (gen_random_uuid(), :wid, :sym, :price, :chg,
-                     :vol, :mc, :score, :now, :now, NULL, CAST(:analysis_snapshot AS jsonb), :execution_id)
+                     :vol, :mc, :score, :now, :now, NULL, CAST(:analysis_snapshot AS jsonb), :execution_id,
+                     :score_long, :score_short, :confidence_score,
+                     :futures_direction, :entry_long_blocked, :entry_short_blocked,
+                     :engine_tag)
                 ON CONFLICT (watchlist_id, symbol)
                 DO UPDATE SET
-                    current_price    = EXCLUDED.current_price,
-                    price_change_24h = EXCLUDED.price_change_24h,
-                    volume_24h       = EXCLUDED.volume_24h,
-                    market_cap       = EXCLUDED.market_cap,
-                    alpha_score      = EXCLUDED.alpha_score,
-                    refreshed_at     = EXCLUDED.refreshed_at,
-                    level_direction  = NULL,
-                    analysis_snapshot = EXCLUDED.analysis_snapshot,
-                    execution_id     = EXCLUDED.execution_id
+                    current_price       = EXCLUDED.current_price,
+                    price_change_24h    = EXCLUDED.price_change_24h,
+                    volume_24h          = EXCLUDED.volume_24h,
+                    market_cap          = EXCLUDED.market_cap,
+                    alpha_score         = EXCLUDED.alpha_score,
+                    refreshed_at        = EXCLUDED.refreshed_at,
+                    level_direction     = NULL,
+                    analysis_snapshot   = EXCLUDED.analysis_snapshot,
+                    execution_id        = EXCLUDED.execution_id,
+                    score_long          = EXCLUDED.score_long,
+                    score_short         = EXCLUDED.score_short,
+                    confidence_score    = EXCLUDED.confidence_score,
+                    futures_direction   = EXCLUDED.futures_direction,
+                    entry_long_blocked  = EXCLUDED.entry_long_blocked,
+                    entry_short_blocked = EXCLUDED.entry_short_blocked,
+                    engine_tag          = EXCLUDED.engine_tag
             """), {
-                "wid":   watchlist_id,
-                "sym":   a["symbol"],
-                "price": a.get("price"),
-                "chg":   a.get("change_24h"),
-                "vol":   a.get("volume_24h"),
-                "mc":    a.get("market_cap"),
-                "score": a.get("_score", a.get("score")),
-                "analysis_snapshot": json.dumps(_jsonable(a.get("analysis_snapshot") or {})),
-                "now":   now,
-                "execution_id": execution_id,
+                "wid":                watchlist_id,
+                "sym":                a["symbol"],
+                "price":              a.get("price"),
+                "chg":                a.get("change_24h"),
+                "vol":                a.get("volume_24h"),
+                "mc":                 a.get("market_cap"),
+                "score":              a.get("_score", a.get("score")),
+                "analysis_snapshot":  json.dumps(_jsonable(a.get("analysis_snapshot") or {})),
+                "now":                now,
+                "execution_id":       execution_id,
+                "score_long":         a.get("score_long"),
+                "score_short":        a.get("score_short"),
+                "confidence_score":   a.get("confidence_score"),
+                "futures_direction":  a.get("futures_direction"),
+                "entry_long_blocked": bool(a.get("entry_long_blocked", False)),
+                "entry_short_blocked": bool(a.get("entry_short_blocked", False)),
+                "engine_tag":         a.get("engine_tag"),
             })
 
         # Mark symbols that are no longer passing as 'down'
@@ -1368,6 +1737,19 @@ async def _broadcast_scan_funnel(
     except Exception as exc:
         logger.debug("[PipelineScan] Funnel broadcast failed: %s", exc)
 
+    # Task #232 — publish funnel observations to Prometheus so the
+    # dashboards can chart universe → throughput → rejection rate
+    # per stage without scraping log lines.
+    try:
+        from ..services.execution_gate_metrics import record_pipeline_stage
+        record_pipeline_stage("pool", "metadata", pool_total, with_metadata)
+        record_pipeline_stage("metadata", "profile_filter",
+                              profile_candidates, after_profile_filter)
+        record_pipeline_stage("profile_filter", "blocking",
+                              after_profile_filter, after_blocking)
+    except Exception as exc:
+        logger.debug("[PipelineScan] funnel metrics failed: %s", exc)
+
 
 # ─── core async pipeline ──────────────────────────────────────────────────────
 
@@ -1393,6 +1775,48 @@ async def _run_pipeline_scan():
                     await db.commit()
                     _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY = True
 
+        # Task #232 — orphan cleanup. ``pipeline_watchlist_assets`` rows
+        # whose backing ``pool_coins`` entry was deleted between two
+        # scans would otherwise stay forever (the upsert path only
+        # touches symbols it sees in the current cycle). One bounded
+        # DELETE per scan keeps the watchlist faithful to the pool.
+        try:
+            # Task #232 — orphan = no row in the *ingestion-active*
+            # universe. A row that exists in pool_coins but has been
+            # toggled to is_active=false is no longer being ingested
+            # / scored, so its watchlist asset entry is just as stale
+            # as a fully deleted row.
+            orphan_res = await db.execute(text("""
+                DELETE FROM pipeline_watchlist_assets pwa
+                 WHERE NOT EXISTS (
+                       SELECT 1 FROM pool_coins pc
+                        WHERE pc.symbol    = pwa.symbol
+                          AND pc.is_active = true
+                 )
+                RETURNING pwa.symbol
+            """))
+            orphan_rows = orphan_res.fetchall()
+            if orphan_rows:
+                from ..services.execution_gate_metrics import record_orphans_cleaned
+                record_orphans_cleaned(len(orphan_rows))
+                await db.commit()
+                logger.info(
+                    "[PipelineScan] Cleaned %d orphan watchlist asset(s) "
+                    "(symbol no longer in pool_coins): %s",
+                    len(orphan_rows),
+                    sorted({r.symbol for r in orphan_rows})[:20],
+                )
+            else:
+                # Roll back the empty DELETE so we do not hold a
+                # write lock on the table while the scan loop runs.
+                await db.rollback()
+        except Exception as exc:
+            logger.warning("[PipelineScan] orphan cleanup failed: %s", exc)
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+
         # Load all pipeline watchlists with auto_refresh=true
         wl_rows = (await db.execute(
             select(PipelineWatchlist).where(PipelineWatchlist.auto_refresh == True)
@@ -1402,7 +1826,31 @@ async def _run_pipeline_scan():
             logger.debug("[PipelineScan] No pipeline watchlists with auto_refresh — skipping.")
             return stats
 
-        profile_ids = {wl.profile_id for wl in wl_rows if wl.profile_id}
+        # Materialise watchlists into primitive snapshots BEFORE any further
+        # work. The session is guaranteed healthy here (we just loaded the
+        # rows). After this point, the per-watchlist loop and integrity check
+        # operate exclusively on these snapshots and never touch ORM
+        # attributes — so a rollback in any iteration cannot expire fields
+        # that subsequent iterations need, which eliminates the
+        # MissingGreenlet lazy-load on aborted sessions and the resulting
+        # InFailedSQLTransactionError cascade (Task #114).
+        wl_snapshots = [
+            SimpleNamespace(
+                id=wl.id,
+                name=wl.name,
+                level=wl.level,
+                market_mode=wl.market_mode,
+                profile_id=wl.profile_id,
+                source_pool_id=wl.source_pool_id,
+                source_watchlist_id=wl.source_watchlist_id,
+                user_id=wl.user_id,
+                filters_json=wl.filters_json,
+                created_at=wl.created_at,
+            )
+            for wl in wl_rows
+        ]
+
+        profile_ids = {wl.profile_id for wl in wl_snapshots if wl.profile_id}
         profile_config_map = {}
         if profile_ids:
             profile_rows = (await db.execute(
@@ -1410,7 +1858,7 @@ async def _run_pipeline_scan():
             )).scalars().all()
             profile_config_map = {row.id: row.config for row in profile_rows}
 
-        wl_rows.sort(
+        wl_snapshots.sort(
             key=lambda wl: (
                 WATCHLIST_STAGE_ORDER.get(
                     effective_pipeline_level(
@@ -1426,14 +1874,14 @@ async def _run_pipeline_scan():
 
         logger.info(
             "[PipelineScan] Processing %d pipeline watchlists… execution_id=%s",
-            len(wl_rows),
+            len(wl_snapshots),
             execution_id,
         )
 
         stage_buckets: dict[str, list] = {stage: [] for stage in (*_PIPELINE_EXECUTION_ORDER, "custom")}
         effective_level_map: dict[str, str] = {}
         pool_gate_watchlist_map: dict[tuple[str, str], str] = {}
-        for _wl in wl_rows:
+        for _wl in wl_snapshots:
             _eff = effective_pipeline_level(
                 _wl.level,
                 source_pool_id=_wl.source_pool_id,
@@ -1446,9 +1894,12 @@ async def _run_pipeline_scan():
 
         for stage in (*_PIPELINE_EXECUTION_ORDER, "custom"):
             for wl in stage_buckets.get(stage, []):
+                # `wl` is a SimpleNamespace primitive snapshot — never an ORM
+                # object — so attribute access here cannot trigger lazy-load
+                # IO and cannot raise MissingGreenlet (Task #114).
+                wl_id = str(wl.id)
                 try:
                     stats["watchlists"] += 1
-                    wl_id = str(wl.id)
                     level = (wl.level or "L1").upper()
                     profile_config = profile_config_map.get(wl.profile_id) if wl.profile_id else None
                     effective_level = effective_pipeline_level(
@@ -1526,10 +1977,21 @@ async def _run_pipeline_scan():
                             wl.name, effective_level, source_watchlist_id, len(symbols),
                         )
                     elif source_pool_id:
+                        wl_market_mode = wl.market_mode or "spot"
+                        if not wl.market_mode:
+                            logger.warning(
+                                "[PipelineScan] %s: market_mode is unset — defaulting to 'spot'. "
+                                "Set market_mode explicitly on the watchlist to avoid this fallback.",
+                                wl.name,
+                            )
+                        # Task #232: pipeline funnel entry uses the
+                        # ingestion gate only. Execution authorisation
+                        # (``is_tradable``) is enforced downstream.
                         coin_rows = (await db.execute(
                             select(PoolCoin).where(
                                 PoolCoin.pool_id == source_pool_id,
                                 PoolCoin.is_active == True,
+                                PoolCoin.market_type == wl_market_mode,
                             )
                         )).scalars().all()
                         symbols = filter_real_assets([_normalize_sym(c.symbol) for c in coin_rows])
@@ -1593,15 +2055,75 @@ async def _run_pipeline_scan():
                     profile_candidate_count = len(assets)
 
                     score_config: Optional[dict] = None
+                    # Best-effort score config read.  Wrapped in a SAVEPOINT so a
+                    # DB-level failure (e.g. timeout, missing column) only rolls
+                    # back the savepoint and leaves the parent session healthy
+                    # for the rest of this watchlist's writes.  Without this,
+                    # asyncpg's poisoned-tx state cascades to _upsert_assets
+                    # below and ultimately to validate_pipeline_integrity at the
+                    # end of the cycle (Task #125).
+                    from ..services.seed_service import DEFAULT_SCORE
                     try:
                         from ..services.config_service import config_service
-                        from ..services.seed_service import DEFAULT_SCORE
-                        score_config = await config_service.get_config(db, "score", wl.user_id)
+                        async with db.begin_nested():
+                            score_config = await config_service.get_config(db, "score", wl.user_id)
                         if not score_config:
                             score_config = DEFAULT_SCORE
-                    except Exception:
-                        from ..services.seed_service import DEFAULT_SCORE
+                    except Exception as _sc_exc:
+                        logger.warning(
+                            "[PipelineScan] %s: score config read failed (%s) — falling back to DEFAULT_SCORE",
+                            wl.name, _sc_exc,
+                        )
                         score_config = DEFAULT_SCORE
+
+                    is_futures = getattr(wl, "market_mode", "spot") == "futures"
+
+                    # ── Robust authoritative scoring ─────────────────────
+                    # The robust deterministic score becomes the
+                    # authoritative value on the asset dict; downstream
+                    # rejection / upsert / UI all read from the mutated
+                    # dict. For futures the LONG / SHORT split + direction
+                    # tag are derived from the robust direction bias —
+                    # the legacy ``futures_pipeline_scorer`` is no longer
+                    # invoked. When the robust step itself raises we
+                    # fail-closed: every asset score is zeroed and the
+                    # row is tagged ``robust`` so a pre-existing legacy
+                    # number is never persisted under an audited tag.
+                    try:
+                        rollout_counters = await _apply_robust_authoritative_scoring(
+                            assets,
+                            score_config=score_config,
+                            is_futures=is_futures,
+                            db=db,
+                            user_id=getattr(wl, "user_id", None),
+                            watchlist_id=wl_id,
+                        )
+                        if rollout_counters["bucketed"] or rollout_counters["fallbacks"]:
+                            logger.info(
+                                "[PipelineScan] %s (%s): robust scoring — bucketed=%d "
+                                "robust_used=%d fallbacks=%d",
+                                wl.name, effective_level,
+                                rollout_counters["bucketed"],
+                                rollout_counters["robust_used"],
+                                rollout_counters["fallbacks"],
+                            )
+                    except Exception as _rollout_exc:
+                        logger.error(
+                            "[PipelineScan] %s (%s): robust scoring step failed "
+                            "(%s) — failing CLOSED (zeroing scores)",
+                            wl.name, effective_level, _rollout_exc,
+                        )
+                        for asset in assets:
+                            asset["engine_tag"] = "robust"
+                            asset["_score"] = 0.0
+                            asset["score"] = 0.0
+                            asset["alpha_score"] = 0.0
+                            if is_futures:
+                                asset["confidence_score"] = 0.0
+                                if asset.get("score_long") is not None:
+                                    asset["score_long"] = 0.0
+                                if asset.get("score_short") is not None:
+                                    asset["score_short"] = 0.0
 
                     if effective_level == "custom":
                         existing_symbols = {a.get("symbol") for a in assets}
@@ -1731,6 +2253,14 @@ async def _run_pipeline_scan():
                             "market_cap": decision["_asset"].get("market_cap"),
                             "analysis_snapshot": decision["_asset"].get("analysis_snapshot") or {},
                             "matched_conditions": decision["_processed"].get("signal", {}).get("matched_conditions", []),
+                            # Futures scores — non-None only when is_futures and the robust
+                            # scorer produced a score for the symbol.
+                            "score_long":          decision["_asset"].get("score_long"),
+                            "score_short":         decision["_asset"].get("score_short"),
+                            "confidence_score":    decision["_asset"].get("confidence_score"),
+                            "futures_direction":   decision["_asset"].get("futures_direction"),
+                            "entry_long_blocked":  decision["_asset"].get("entry_long_blocked", False),
+                            "entry_short_blocked": decision["_asset"].get("entry_short_blocked", False),
                         }
                         for decision in decisions
                         if decision["decision"] == "ALLOW"
@@ -1757,14 +2287,95 @@ async def _run_pipeline_scan():
                     new_syms = sorted(current_set - prior_set)
 
                     _save_signals(redis, wl_id, current_set)
-                    decision_payloads = await _persist_decision_logs(db, wl.user_id, decisions)
+
+                    # ── Decision Log deduplication ────────────────────────────
+                    from ..services.seed_service import DEFAULT_DECISION_LOG as _DL_DEFAULTS
+                    dl_score_delta = float(_DL_DEFAULTS.get("score_delta_threshold", 5.0))
+                    dl_direction_logs = bool(_DL_DEFAULTS.get("direction_change_logs", True))
+                    # Best-effort decision-log config read.  SAVEPOINT-wrapped
+                    # for the same reason as the score config above (Task #125):
+                    # a swallowed exception here used to poison the parent tx
+                    # and cascade into the next _upsert_assets call.
+                    try:
+                        from ..services.config_service import config_service
+                        async with db.begin_nested():
+                            _dl_cfg = await config_service.get_config(db, "decision_log", wl.user_id)
+                        if isinstance(_dl_cfg, dict):
+                            dl_score_delta = float(_dl_cfg.get("score_delta_threshold", dl_score_delta))
+                            dl_direction_logs = bool(_dl_cfg.get("direction_change_logs", dl_direction_logs))
+                    except Exception as _dl_cfg_exc:
+                        logger.warning(
+                            "[PipelineScan] %s: decision_log config read failed (%s) — using defaults",
+                            wl.name, _dl_cfg_exc,
+                        )
+
+                    prior_states = _prior_decision_states(redis, wl_id)
+                    new_states: dict = {}
+                    decisions_to_log: list = []
+                    for d in decisions:
+                        sym = d.get("symbol")
+                        prior = prior_states.get(sym)
+                        # Warn when recovering a symbol stuck due to ordering bug
+                        if prior and prior.get("state") == "ALLOW" and not prior.get("db_confirmed_at"):
+                            logger.warning(
+                                "[Decision] Recovering unconfirmed ALLOW state for %s in watchlist %s",
+                                sym, wl_id,
+                            )
+                        should_log, event_type = _should_log_decision(
+                            d, prior,
+                            score_delta_threshold=dl_score_delta,
+                            direction_change_logs=dl_direction_logs,
+                        )
+                        new_states[sym] = {
+                            "state": d.get("decision"),
+                            "score": d.get("score"),
+                            "direction": d.get("direction"),
+                            "saved_at": datetime.now(timezone.utc).isoformat(),
+                            # Preserve db_confirmed_at from prior for filtered symbols
+                            "db_confirmed_at": prior.get("db_confirmed_at") if prior else None,
+                        }
+                        if should_log:
+                            d["event_type"] = event_type
+                            decisions_to_log.append(d)
+                    # ─────────────────────────────────────────────────────────
+                    # IMPORTANT: persist to DB FIRST, then update Redis.
+                    # If DB fails, Redis must NOT advance — otherwise the symbol
+                    # gets stuck as ALLOW with no DB record and is silently
+                    # filtered forever (ordering bug, Task #109).
+                    #
+                    # The decision log INSERT is wrapped in a SAVEPOINT so that
+                    # a DB-level failure (e.g. missing columns from migration 026)
+                    # only rolls back the savepoint and leaves the parent session
+                    # healthy for _upsert_assets / _update_last_scanned below.
+                    decision_payloads = []
+                    try:
+                        async with db.begin_nested():
+                            decision_payloads = await _persist_decision_logs(db, wl.user_id, decisions_to_log)
+                            # Stamp db_confirmed_at on each successfully persisted symbol
+                            if decisions_to_log:
+                                _confirmed_at = datetime.now(timezone.utc).isoformat()
+                                for _d in decisions_to_log:
+                                    _sym = _d.get("symbol")
+                                    if _sym in new_states:
+                                        new_states[_sym]["db_confirmed_at"] = _confirmed_at
+                    except Exception as _dl_exc:
+                        logger.error(
+                            "FATAL: Decision persistence failed for watchlist %s: %s "
+                            "— verify migration 026 (direction/event_type columns) is applied",
+                            wl_id, _dl_exc, exc_info=True
+                        )
+                        # CRITICAL: Re-raise exception to prevent silent failure
+                        raise RuntimeError(
+                            f"Decision persistence failed for watchlist {wl_id}: {_dl_exc}"
+                        ) from _dl_exc
+                    _save_decision_states(redis, wl_id, new_states)
                     await _upsert_assets(db, wl_id, signals, filters_json, execution_id=execution_id)
                     await _update_last_scanned(db, wl_id)
 
                     if decision_payloads:
-                        from ..api.websocket import broadcast_decision_created
+                        from ..services.realtime_bridge import publish_decision_event
                         for payload in decision_payloads:
-                            await broadcast_decision_created(payload)
+                            publish_decision_event(payload)
 
                     if new_syms:
                         stats["new_signals"] += len(new_syms)
@@ -1779,14 +2390,33 @@ async def _run_pipeline_scan():
                 except Exception as exc:
                     logger.exception("[PipelineScan] Error processing watchlist %s: %s", wl.name, exc)
                     stats["errors"] += 1
+                    # Roll back any failed transaction so subsequent watchlists
+                    # are not affected by an InFailedSQLTransactionError cascade.
+                    # Surface rollback failures at WARNING — they used to be
+                    # silently swallowed and were the entry point for the
+                    # cascade tracked in Task #125.
+                    try:
+                        await db.rollback()
+                    except Exception as _rb_exc:
+                        logger.warning(
+                            "[PipelineScan] %s: rollback after watchlist failure raised %s: %s "
+                            "— session may be unusable for subsequent watchlists",
+                            wl.name, type(_rb_exc).__name__, _rb_exc,
+                        )
                     continue
 
-        stats["integrity"] = await validate_pipeline_integrity(
-            db,
-            wl_rows=wl_rows,
-            profile_config_map=profile_config_map,
-            execution_id=execution_id,
-        )
+        # Run the integrity check on a *fresh* session.  Defense-in-depth: even
+        # if the per-watchlist loop accidentally leaks an aborted-tx state into
+        # the loop session, a brand-new session for integrity guarantees the
+        # final SELECT/UPDATE pair won't see InFailedSQLTransactionError
+        # (Task #125).
+        async with AsyncSessionLocal() as integrity_db:
+            stats["integrity"] = await validate_pipeline_integrity(
+                integrity_db,
+                wl_rows=wl_snapshots,
+                profile_config_map=profile_config_map,
+                execution_id=execution_id,
+            )
 
     logger.info(
         "[PipelineScan] Done — watchlists=%d  new_signals=%d  errors=%d",

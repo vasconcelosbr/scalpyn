@@ -11,6 +11,7 @@ Endpoints:
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 from uuid import UUID
 
@@ -104,6 +105,7 @@ def _wl_to_dict(wl: PipelineWatchlist) -> Dict[str, Any]:
         "id":                   str(wl.id),
         "name":                 wl.name,
         "level":                wl.level,
+        "market_mode":          wl.market_mode or "spot",
         "source_pool_id":       str(wl.source_pool_id)       if wl.source_pool_id       else None,
         "source_watchlist_id":  str(wl.source_watchlist_id)  if wl.source_watchlist_id  else None,
         "profile_id":           str(wl.profile_id)           if wl.profile_id           else None,
@@ -177,10 +179,14 @@ async def create_pipeline_watchlist(
         source_watchlist_id=payload.get("source_watchlist_id"),
     )
 
+    raw_mode = payload.get("market_mode", "spot")
+    market_mode = "futures" if str(raw_mode).lower() == "futures" else "spot"
+
     wl = PipelineWatchlist(
         user_id=user_id,
         name=name,
         level=level,
+        market_mode=market_mode,
         source_pool_id=source_pool_id,
         source_watchlist_id=source_watchlist_id,
         profile_id=payload.get("profile_id"),
@@ -237,6 +243,9 @@ async def update_pipeline_watchlist(
     for field in ("name", "profile_id", "auto_refresh", "filters_json"):
         if field in payload:
             setattr(wl, field, payload[field])
+    if "market_mode" in payload:
+        raw_mode = payload["market_mode"]
+        wl.market_mode = "futures" if str(raw_mode).lower() == "futures" else "spot"
 
     await db.commit()
     await db.refresh(wl)
@@ -261,25 +270,50 @@ async def delete_pipeline_watchlist(
 async def get_pipeline_assets(
     wl_id: UUID,
     limit: int = 100,
+    hide_neutral: bool = False,
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
     """
     Return the current asset snapshot stored by the pipeline_scan task,
     enriched with live indicator values and profile-derived column definitions.
+
+    Query params:
+      hide_neutral  (bool, default false) — when true and market_mode=futures,
+                    exclude assets with futures_direction=NULL (neutral/undecided).
     """
     wl = await _get_own_wl(db, wl_id, user_id)
+    is_futures = (wl.market_mode or "spot") == "futures"
 
     # ── 1. Asset rows ──────────────────────────────────────────────────────────
-    rows = (await db.execute(text("""
-        SELECT symbol, current_price, price_change_24h,
-               volume_24h, market_cap, alpha_score, entered_at,
-               level_direction, previous_level, level_change_at
-        FROM   pipeline_watchlist_assets
-        WHERE  watchlist_id = :wid
-        ORDER  BY alpha_score DESC NULLS LAST
-        LIMIT  :limit
-    """), {"wid": str(wl_id), "limit": limit})).fetchall()
+    if is_futures:
+        rows = (await db.execute(text("""
+            SELECT symbol, current_price, price_change_24h,
+                   volume_24h, market_cap, alpha_score, entered_at,
+                   level_direction, previous_level, level_change_at,
+                   score_long, score_short, confidence_score,
+                   futures_direction, entry_long_blocked, entry_short_blocked,
+                   engine_tag
+            FROM   pipeline_watchlist_assets
+            WHERE  watchlist_id = :wid
+            ORDER  BY confidence_score DESC NULLS LAST,
+                      GREATEST(COALESCE(score_long, 0), COALESCE(score_short, 0)) DESC
+            LIMIT  :limit
+        """), {"wid": str(wl_id), "limit": limit})).fetchall()
+    else:
+        rows = (await db.execute(text("""
+            SELECT symbol, current_price, price_change_24h,
+                   volume_24h, market_cap, alpha_score, entered_at,
+                   level_direction, previous_level, level_change_at,
+                   NULL::numeric AS score_long, NULL::numeric AS score_short,
+                   NULL::numeric AS confidence_score, NULL::varchar AS futures_direction,
+                   FALSE AS entry_long_blocked, FALSE AS entry_short_blocked,
+                   engine_tag
+            FROM   pipeline_watchlist_assets
+            WHERE  watchlist_id = :wid
+            ORDER  BY alpha_score DESC NULLS LAST
+            LIMIT  :limit
+        """), {"wid": str(wl_id), "limit": limit})).fetchall()
 
     from ..utils.symbol_filters import is_leveraged_token
     rows = [r for r in rows if not is_leveraged_token(r.symbol)]
@@ -318,36 +352,37 @@ async def get_pipeline_assets(
     # POOL/custom (Stage 0) and L1 (Stage 1) are pure filter stages.
     show_score = (wl.level or "").upper() in {"L2", "L3"}
 
-    # ── 3. Fetch FULL indicator data from DB ──────────────────────────────────
+    # ── 3. Fetch FULL indicator data from DB (dual-scheduler merge) ──────────
     ind_map: Dict[str, Dict] = {}
+    ind_meta_map: Dict[str, Dict[str, Dict]] = {}  # symbol → {ind_key: {group, age_seconds}}
     all_ind_keys: set = set()
+
     if symbols:
         try:
-            ind_rows = (await db.execute(text("""
-                SELECT DISTINCT ON (symbol) symbol, indicators_json
-                FROM   indicators
-                WHERE  symbol = ANY(:syms)
-                  AND  timeframe = '5m'
-                ORDER  BY symbol, time DESC
-            """), {"syms": symbols})).fetchall()
+            from ..utils.indicator_merge import fetch_merged_indicators
+            merged_by_sym = await fetch_merged_indicators(db, symbols, include_stale=True)
+            for sym, mi in merged_by_sym.items():
+                flat = mi.as_flat_dict()
+                if flat:
+                    ind_map[sym] = flat
+                    # Convert MergedIndicators.meta to the expected shape,
+                    # including stale=True for keys from expired groups.
+                    ind_meta_map[sym] = {
+                        k: {
+                            "group": m.get("group"),
+                            "age_seconds": m.get("age_seconds"),
+                            "stale": m.get("stale", False),
+                            "timestamp": (
+                                m.get("timestamp").isoformat()
+                                if m.get("timestamp") is not None else None
+                            ),
+                        }
+                        for k, m in mi.meta.items()
+                    }
 
-            found = {r.symbol for r in ind_rows}
-            missing_syms = [s for s in symbols if s not in found]
-            if missing_syms:
-                fb = (await db.execute(text("""
-                    SELECT DISTINCT ON (symbol) symbol, indicators_json
-                    FROM   indicators
-                    WHERE  symbol = ANY(:syms)
-                    ORDER  BY symbol, time DESC
-                """), {"syms": missing_syms})).fetchall()
-                ind_rows = list(ind_rows) + list(fb)
-
-            for r in ind_rows:
-                j = r.indicators_json or {}
-                # Keep numeric AND boolean indicators (booleans needed for EMA trend display)
-                numeric = {k: v for k, v in j.items() if isinstance(v, (int, float, bool))}
-                ind_map[r.symbol] = numeric
+            for sym, numeric in ind_map.items():
                 all_ind_keys.update(k for k, v in numeric.items() if isinstance(v, (int, float)))
+
         except Exception as exc:
             logger.warning("pipeline assets: indicator fetch failed: %s", exc)
 
@@ -405,12 +440,20 @@ async def get_pipeline_assets(
             **ind_data,
         }
 
-        score_result = se.compute_alpha_score(eval_dict) if se else None
-        fresh_score = (
-            float(score_result.get("total_score"))
-            if score_result and score_result.get("total_score") is not None
-            else stored_score if stored_score is not None else 0.0
-        )
+        # Task #193: compute score + breakdown together so the robust
+        # engine runs exactly once per asset instead of twice.
+        has_live_indicators = bool(ind_data)
+        if has_live_indicators and se:
+            score_result, _pipeline_breakdown = se.compute_score_with_breakdown(eval_dict)
+        else:
+            score_result = None
+            _pipeline_breakdown = []
+        if has_live_indicators and score_result and score_result.get("total_score") is not None:
+            fresh_score = float(score_result.get("total_score"))
+        elif stored_score is not None:
+            fresh_score = stored_score
+        else:
+            fresh_score = 0.0
         eval_dict["score"] = fresh_score
 
         if (
@@ -445,6 +488,13 @@ async def get_pipeline_assets(
                 if not result["passed"]:
                     continue  # Filter violation — hide asset
 
+        # Futures mode: apply hide_neutral filter BEFORE building the asset dict.
+        # "NEUTRAL" = L3 asset with score gap < direction_gap_min (explicitly indecisive).
+        # None = non-L3 level (pre-rating stage) — NOT hidden by hide_neutral.
+        futures_direction = getattr(r, "futures_direction", None)
+        if is_futures and hide_neutral and futures_direction == "NEUTRAL":
+            continue  # neutral — skip when hide_neutral is requested
+
         # Flat indicators dict keyed by col.key (for dynamic table columns)
         indicators: Dict[str, Any] = {
             "_meta:market_cap":  eval_dict["market_cap"],
@@ -455,10 +505,53 @@ async def get_pipeline_assets(
         }
         indicators.update(ind_data)
 
-        # Compute per-rule scoring breakdown for drilldown / transparency
-        score_rules = se.get_full_breakdown(eval_dict) if se else []
+        # Per-rule scoring breakdown for drilldown / transparency.
+        # Reuses the breakdown produced by `compute_score_with_breakdown`
+        # above — no second robust call. Falls back to an empty list if
+        # the engine is unavailable.
+        score_rules = _pipeline_breakdown if se else []
 
-        assets.append({
+        # Enrich each rule with scheduler_group + indicator_age_seconds metadata
+        # so the UI can show e.g. "RSI 62.1 · structural · 12m"
+        sym_meta = ind_meta_map.get(sym, {})
+        for rule in score_rules:
+            ind_key = rule.get("indicator")
+            if ind_key and ind_key in sym_meta:
+                rule["scheduler_group"] = sym_meta[ind_key].get("group")
+                rule["indicator_age_seconds"] = sym_meta[ind_key].get("age_seconds")
+                rule["indicator_stale"] = sym_meta[ind_key].get("stale", False)
+            elif ind_key:
+                # Classify statically when no DB metadata available
+                try:
+                    from ..services.indicator_classifier import classify_indicator
+                    rule["scheduler_group"] = classify_indicator(ind_key)
+                except Exception:
+                    rule["scheduler_group"] = None
+                rule["indicator_age_seconds"] = None
+                rule["indicator_stale"] = False
+
+        # Build per-key inline metadata: {key: {value, source_group, age_seconds, stale}}
+        # This satisfies the inline metadata contract without changing the flat
+        # `indicators` format that the scoring engine and frontend depend on.
+        # Indicator payloads in `indicators` may already be unwrapped to
+        # scalars by upstream callers, but when they aren't (e.g. raw
+        # `indicators_json` from the DB), the envelope dict
+        # `{"value": v, "status": "VALID"}` would leak through here as
+        # the "value" — the frontend then renders an object instead of
+        # a number. Unwrap defensively to keep the metadata contract.
+        from ..services.indicator_validity import unwrap_envelope_value
+        indicators_meta: Dict[str, Dict[str, Any]] = {}
+        sym_meta_all = ind_meta_map.get(sym, {})
+        for ikey, imeta in sym_meta_all.items():
+            indicators_meta[ikey] = {
+                "value": unwrap_envelope_value(indicators.get(ikey)),  # None for stale-only keys
+                "source_group": imeta.get("group"),
+                "timestamp": imeta.get("timestamp"),
+                "age_seconds": imeta.get("age_seconds"),
+                "stale": imeta.get("stale", False),
+            }
+
+        asset_dict: Dict[str, Any] = {
             "id":               sym,
             "watchlist_id":     str(wl_id),
             "symbol":           sym,
@@ -475,20 +568,93 @@ async def get_pipeline_assets(
             "previous_level":   r.previous_level,
             "level_change_at":  r.level_change_at.isoformat() if r.level_change_at else None,
             "indicators":       indicators,
+            "indicators_meta":  indicators_meta,
             "score_rules":      score_rules,
-        })
+            # Robust Indicators Phase 2 — surfaces "robust" / "legacy" /
+            # null on every asset row so the UI can render the engine
+            # badge inside the score breakdown.
+            "engine_tag":       getattr(r, "engine_tag", None),
+        }
 
-    assets.sort(
-        key=lambda asset: (
-            asset["alpha_score"] is None,
-            -asset["alpha_score"] if asset["alpha_score"] is not None else 0,
+        # Futures mode fields — always included so the frontend can check market_mode
+        if is_futures:
+            score_long = float(r.score_long) if r.score_long is not None else None
+            score_short = float(r.score_short) if r.score_short is not None else None
+            confidence = float(r.confidence_score) if r.confidence_score is not None else None
+            entry_long_blocked = bool(r.entry_long_blocked) if r.entry_long_blocked is not None else False
+            entry_short_blocked = bool(r.entry_short_blocked) if r.entry_short_blocked is not None else False
+            asset_dict["score_long"] = score_long
+            asset_dict["score_short"] = score_short
+            asset_dict["confidence_score"] = confidence
+            asset_dict["futures_direction"] = futures_direction
+            asset_dict["entry_long_blocked"] = entry_long_blocked
+            asset_dict["entry_short_blocked"] = entry_short_blocked
+
+            # Layer breakdown from live indicator data (for drilldown panel)
+            futures_components: Dict[str, Any] = {}
+            block_reasons_long: List[str] = []
+            block_reasons_short: List[str] = []
+            try:
+                from ..services.robust_indicators import robust_futures_direction_bias
+                _profile_cfg = profile_config or {}
+                _scoring_futures = _profile_cfg.get("scoring_futures") or {}
+
+                # Drilldown components — derived from the robust direction bias
+                # over indicator envelopes, no dependency on the legacy
+                # ``futures_pipeline_scorer``.
+                _bias = robust_futures_direction_bias(ind_data)
+                futures_components = {
+                    "engine": "robust",
+                    "direction_bias": round(_bias, 4),
+                    "long_weight": round(1.0 - max(0.0, -_bias), 4),
+                    "short_weight": round(1.0 - max(0.0, _bias), 4),
+                }
+
+                # Compute human-readable block reasons
+                _adx_min   = float(_scoring_futures.get("entry_adx_min", 15.0))
+                _rsi_ob    = float(_scoring_futures.get("entry_rsi_overbought", 80.0))
+                _rsi_os    = float(_scoring_futures.get("entry_rsi_oversold", 20.0))
+                _tk_l_max  = float(_scoring_futures.get("entry_taker_long_max", 0.30))
+                _tk_s_min  = float(_scoring_futures.get("entry_taker_short_min", 0.70))
+                _adx_val   = ind_data.get("adx")
+                _rsi_val   = ind_data.get("rsi")
+                _tk_val    = ind_data.get("taker_ratio")
+
+                if _adx_val is not None and float(_adx_val) < _adx_min:
+                    block_reasons_long.append(f"ADX < {_adx_min:.0f} (sem tendência)")
+                    block_reasons_short.append(f"ADX < {_adx_min:.0f} (sem tendência)")
+                if _rsi_val is not None and float(_rsi_val) > _rsi_ob:
+                    block_reasons_long.append(f"RSI > {_rsi_ob:.0f} (overbought)")
+                if _rsi_val is not None and float(_rsi_val) < _rsi_os:
+                    block_reasons_short.append(f"RSI < {_rsi_os:.0f} (oversold)")
+                if _tk_val is not None and float(_tk_val) < _tk_l_max:
+                    block_reasons_long.append(f"Taker ratio < {_tk_l_max:.2f} (pressão vendedora)")
+                if _tk_val is not None and float(_tk_val) > _tk_s_min:
+                    block_reasons_short.append(f"Taker ratio > {_tk_s_min:.2f} (pressão compradora)")
+            except Exception as _fe:
+                logger.debug("futures drilldown components failed for %s: %s", sym, _fe)
+
+            asset_dict["futures_components"] = futures_components
+            asset_dict["block_reasons_long"] = block_reasons_long
+            asset_dict["block_reasons_short"] = block_reasons_short
+
+        assets.append(asset_dict)
+
+    # Python-side sort: futures mode sorted by SQL already; spot mode sorted by alpha_score
+    if not is_futures:
+        assets.sort(
+            key=lambda asset: (
+                asset["alpha_score"] is None,
+                -asset["alpha_score"] if asset["alpha_score"] is not None else 0,
+            )
         )
-    )
 
     return {
         "watchlist_id":      str(wl_id),
         "watchlist_name":    wl.name,
         "level":             wl.level,
+        "market_mode":       wl.market_mode or "spot",
+        "is_futures":        is_futures,
         "asset_count":       len(assets),
         "assets":            assets,
         "profile_indicators": profile_indicators,
@@ -520,7 +686,7 @@ async def refresh_pipeline_watchlist(
         # Run only for this specific watchlist by executing the full scan
         # (the scan itself is efficient — it queries all watchlists at once)
         stats = await _run_pipeline_scan()
-        assets_result = await get_pipeline_assets(wl_id, 100, db, user_id)
+        assets_result = await get_pipeline_assets(wl_id, 100, False, db, user_id)
         return {
             "status":   "refreshed",
             "stats":    stats,

@@ -1,0 +1,175 @@
+OBJETIVO
+Transformar a seção de Dashboard do Scalpyn em um painel de performance com visual moderno, sofisticado e de nível profissional, utilizando gráficos interativos, animações suaves e alto padrão de UX.
+
+---
+
+DIRETRIZ DE DESIGN
+
+Referências visuais:
+
+* TradingView
+* Binance Futures UI
+* Glassmorphism leve + Dark mode premium
+* Interfaces institucionais (hedge funds)
+
+---
+
+LAYOUT (dentro do /dashboard)
+
+Estrutura vertical:
+
+1. KPIs (topo)
+2. Equity Curve (principal)
+3. Lucro por período
+4. Distribuição e métricas
+5. Tabela de trades (colapsável)
+
+---
+
+1. CARDS KPI (ULTRA CLEAN)
+
+Componentes com:
+
+* fundo com leve blur (glass effect)
+* bordas suaves (rounded-xl / 2xl)
+* micro animação ao carregar
+
+Exibir:
+
+* Lucro Total (% + USDT)
+* Lucro Hoje
+* Capital Atual
+* ROI
+
+Extras visuais:
+
+* mini sparkline dentro do card
+* delta verde/vermelho animado
+
+---
+
+2. GRÁFICO PRINCIPAL (EQUITY CURVE)
+
+Biblioteca recomendada:
+→ Recharts ou Lightweight Charts (preferencial)
+
+Características:
+
+* linha suavizada (smooth curve)
+* gradiente dinâmico (verde lucro / vermelho drawdown)
+* animação progressiva (ease-in-out)
+* tooltip sofisticado (com múltiplos dados)
+
+Extras:
+
+* highlight de drawdown
+* linha de baseline (capital inicial)
+* zoom e pan
+
+---
+
+3. GRÁFICO DE LUCRO DIÁRIO
+
+Tipo:
+→ barras com gradient fill
+
+Características:
+
+* barras arredondadas
+* cor dinâmica (verde/vermelho)
+* animação de crescimento (staggered)
+
+---
+
+4. DISTRIBUIÇÃO DE RESULTADOS
+
+Adicionar:
+
+A) Pie Chart (win vs loss)
+B) Histograma de trades (% retorno)
+C) Drawdown chart (opcional)
+
+---
+
+5. TABELA DE TRADES (PRO)
+
+* linhas com hover highlight
+* cores por resultado
+* sorting por coluna
+* filtro dinâmico
+
+Colunas:
+
+* ativo
+* tipo
+* entrada
+* saída
+* pnl %
+* pnl USDT
+
+---
+
+INTERAÇÕES
+
+* Hover inteligente (sem poluir)
+* Tooltips ricos
+* Transições suaves (framer-motion)
+
+---
+
+ANIMAÇÕES
+
+Usar:
+→ framer-motion
+
+Aplicar:
+
+* fade + slide on load
+* número contando (count-up)
+* atualização suave (sem flicker)
+
+---
+
+PERFORMANCE
+
+* evitar re-render pesado
+* usar memoization
+* lazy load dos gráficos
+
+---
+
+CORES
+
+Base:
+
+* fundo: #0B0F14
+* cards: #11161C
+* verde: #00C896
+* vermelho: #FF4D4F
+* azul destaque: #3B82F6
+
+---
+
+TIPOGRAFIA
+
+* fonte moderna (Inter / Satoshi)
+* números com destaque (tabular-nums)
+
+---
+
+EXPERIÊNCIA FINAL
+
+O usuário deve:
+
+* entender performance em 3 segundos
+* visualizar crescimento claramente
+* identificar erros (drawdown, sequência negativa)
+* sentir qualidade premium
+
+---
+
+RESULTADO ESPERADO
+
+* dashboard comparável a plataformas profissionais
+* visual limpo, moderno e confiável
+* base sólida para tomada de decisão

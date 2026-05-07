@@ -1,0 +1,572 @@
+"""Shared utility for merging dual-scheduler indicator rows.
+
+ARCHITECTURAL NOTE (Task #215):
+    This module is the low-level merge primitive. Decision engines
+    (pipeline_scan, evaluate_signals, execute_buy, and any future
+    consumer) MUST NOT call ``fetch_merged_indicators`` directly —
+    they go through :mod:`app.services.indicators_provider`, which is
+    the single sanctioned read path. Direct ``SELECT … FROM indicators``
+    queries against ``indicators_json`` are a regression that
+    reintroduces the partial-row bug (microstructure-only "latest" row
+    silently hiding RSI/MACD/ADX from execution).
+
+Implements deterministic merge from structural + microstructure indicator groups.
+
+Merge contract (applied per indicator key):
+  1. Absolute staleness filter: rows older than group stale limit are absent.
+       structural   → STRUCTURAL_STALE_SECONDS (env STRUCTURAL_STALE_SECONDS,  default 1800)
+       microstructure → MICROSTRUCTURE_STALE_SECONDS (env MICRO_STALE_SECONDS, default 600)
+  2. Inter-group drift check: if |micro_ts - struct_ts| > INDICATOR_MAX_DRIFT_SECONDS,
+     the OLDER group is additionally treated as absent (dropped).
+  3. For keys present in only one remaining group — use that group's value.
+  4. For keys present in both remaining groups — microstructure is preferred
+     (its faster cadence means it is always at least as fresh as structural).
+  5. Hybrid indicators (ema9_gt_ema50, ema_full_alignment) are computed
+     post-merge if both contributing EMA values are present.
+
+Environment overrides:
+  INDICATOR_MAX_DRIFT_SECONDS           — inter-group drift cap
+                                          (default = STRUCTURAL_INTERVAL + 300 s = 1200 s)
+  STRUCTURAL_SCHEDULER_INTERVAL_SECONDS — structural cadence (default 900 = 15 min);
+                                          drift cap MUST be ≥ this + one micro cycle
+                                          (300 s) so a small scheduler skew does not
+                                          drop the structural group wholesale
+  STRUCTURAL_STALE_SECONDS              — structural stale limit  (default 1800)
+  MICRO_STALE_SECONDS                   — microstructure stale limit (default 600)
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+# Runtime-configurable limits.
+#
+# ``STRUCTURAL_INTERVAL_SECONDS`` mirrors the structural scheduler cadence
+# (see ``structural_scheduler_service.DEFAULT_INTERVAL_SECONDS``) so the
+# drift cap can be derived from it. The drift cap MUST be ≥ structural
+# cadence + one microstructure cycle (300 s) — otherwise a small scheduler
+# skew (e.g. structural ran 950 s ago, micro ran 50 s ago) collides with
+# the cap and the structural group is dropped wholesale, silently
+# erasing RSI / MACD / ADX from every consumer.
+STRUCTURAL_INTERVAL_SECONDS: float = _env_float("STRUCTURAL_SCHEDULER_INTERVAL_SECONDS", 900.0)
+INDICATOR_MAX_DRIFT_SECONDS: float = _env_float(
+    "INDICATOR_MAX_DRIFT_SECONDS", STRUCTURAL_INTERVAL_SECONDS + 300.0
+)
+STRUCTURAL_STALE_SECONDS: float = _env_float("STRUCTURAL_STALE_SECONDS", 1800.0)
+MICROSTRUCTURE_STALE_SECONDS: float = _env_float("MICRO_STALE_SECONDS", 600.0)
+
+# For legacy "combined" rows treat same as structural
+_GROUP_STALE: Dict[str, float] = {
+    "structural": STRUCTURAL_STALE_SECONDS,
+    "microstructure": MICROSTRUCTURE_STALE_SECONDS,
+    "combined": STRUCTURAL_STALE_SECONDS,
+}
+
+
+def _ensure_utc(ts: Optional[datetime]) -> Optional[datetime]:
+    if ts is None:
+        return None
+    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+
+
+# ── Source/confidence tags for known indicator families ───────────────────────
+# Used by write paths (schedulers, Celery tasks) to stamp provenance and by
+# callers that want to build a key_source_map for `envelop_results()`.
+#
+# Confidence defaults are aligned with CONFIDENCE_MAP in
+# ``app/services/robust_indicators/envelope.py``:
+#   GATE_TRADES = 1.00, GATE_ORDERBOOK = 0.90, GATE_CANDLES = 0.85
+# Keep these in sync with any changes to that mapping.
+_ORDER_FLOW_KEYS: frozenset = frozenset({
+    "taker_ratio", "buy_pressure", "volume_delta",
+    "taker_buy_volume", "taker_sell_volume",
+})
+_ORDERBOOK_KEYS: frozenset = frozenset({
+    "spread_pct", "orderbook_depth_usdt",
+    "market_data_source", "market_data_confidence",
+})
+
+
+def _make_meta(
+    grp: str,
+    age: float,
+    ts: Optional[datetime],
+    source: Optional[str] = None,
+    confidence: Optional[float] = None,
+    status: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build a per-key meta dict, optionally enriched with envelope fields."""
+    m: Dict[str, Any] = {"group": grp, "age_seconds": age, "timestamp": ts}
+    if source is not None:
+        m["source"] = source
+    if confidence is not None:
+        m["confidence"] = confidence
+    if status is not None:
+        m["indicator_status"] = status
+    return m
+
+
+def envelop_results(
+    results: Dict[str, Any],
+    default_source: str = "candle_computed",
+    default_confidence: float = 0.80,
+    key_source_map: Optional[Dict[str, tuple]] = None,
+) -> Dict[str, Any]:
+    """Wrap a flat indicator dict into the IndicatorEnvelope dict format.
+
+    Each value becomes::
+
+        {"value": v, "source": "gate_trades", "confidence": 0.9, "status": "VALID"}
+
+    This format matches :meth:`IndicatorEnvelope.to_dict` so that audit queries
+    such as ``indicators_json->'taker_ratio'->>'source'`` return real values.
+
+    Args:
+        results:            Flat {key: scalar} indicator dict.
+        default_source:     Source tag used for keys not in ``key_source_map``.
+        default_confidence: Confidence used for keys not in ``key_source_map``.
+        key_source_map:     Optional {key: (source, confidence)} overrides.
+
+    Already-enveloped values (dicts with a ``"value"`` key) are passed through
+    unchanged, so calling this function twice is safe (idempotent).
+    """
+    ksm = key_source_map or {}
+    out: Dict[str, Any] = {}
+    for k, v in results.items():
+        if isinstance(v, dict) and "value" in v:
+            out[k] = v  # already enveloped — pass through unchanged
+            continue
+        src, conf = ksm.get(k, (default_source, default_confidence))
+        if v is None:
+            out[k] = {"value": None, "source": "unknown", "confidence": 0.0, "status": "NO_DATA"}
+        else:
+            out[k] = {"value": v, "source": src, "confidence": conf, "status": "VALID"}
+    return out
+
+
+class MergedIndicators:
+    """Container for a symbol's merged indicator data with per-key metadata.
+
+    attributes:
+        values   — {key: scalar} usable for scoring (non-stale values only).
+        meta     — {key: {group, age_seconds, timestamp, stale, source?,
+                   confidence?, indicator_status?}} per key.
+                   Includes keys from stale groups (stale=True) so the API
+                   can show staleness signals without using stale values for
+                   scoring.  Envelope fields (source, confidence,
+                   indicator_status) are present only when the row was written
+                   in envelope format (Task #160+).
+    """
+
+    def __init__(self) -> None:
+        self.values: Dict[str, Any] = {}
+        self.meta: Dict[str, Dict[str, Any]] = {}
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.values.get(key, default)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self.values
+
+    def as_flat_dict(self) -> Dict[str, Any]:
+        """Flat {key: value} dict — non-stale values only, safe for scoring."""
+        return dict(self.values)
+
+    def as_enriched_dict(self) -> Dict[str, Dict[str, Any]]:
+        """Enriched {key: {value, source_group, source, confidence, …}} for API responses.
+
+        Includes stale keys with value=None and stale=True so that the UI can
+        show debugging metadata while the score engine uses as_flat_dict() for
+        actual filter evaluation.
+
+        When rows were written in envelope format (Task #160+), ``source``,
+        ``confidence``, and ``indicator_status`` are populated.  Older flat
+        rows leave those fields as None.
+        """
+        enriched: Dict[str, Dict[str, Any]] = {}
+        for k, m in self.meta.items():
+            enriched[k] = {
+                "value": self.values.get(k),  # None for stale keys
+                "source_group": m.get("group"),
+                "source": m.get("source"),
+                "confidence": m.get("confidence"),
+                "indicator_status": m.get("indicator_status"),
+                "timestamp": m.get("timestamp").isoformat()
+                if m.get("timestamp") is not None else None,
+                "stale": m.get("stale", False),
+                "age_seconds": m.get("age_seconds"),
+            }
+        return enriched
+
+
+def merge_indicator_rows(
+    rows: List[Tuple[str, Optional[datetime], Dict[str, Any]]],
+    now: Optional[datetime] = None,
+    *,
+    include_stale: bool = False,
+) -> MergedIndicators:
+    """Merge a list of (group, timestamp, indicators_dict) tuples for ONE symbol.
+
+    Args:
+        rows:          Each entry is (scheduler_group, row_timestamp, indicators_dict).
+        now:           Current UTC time used to compute ages.  Defaults to utcnow().
+        include_stale: When True, stale rows are still included in ``values``
+                       (merged normally) so callers like the drilldown endpoint
+                       can score against outdated-but-still-useful data.
+                       Per-key metadata still carries ``stale=True`` so
+                       consumers can render staleness warnings.
+
+    Returns:
+        MergedIndicators with merged values + per-key metadata.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    else:
+        now = _ensure_utc(now)
+    assert now is not None
+
+    # ── Step 1: Absolute staleness filter ────────────────────────────────────
+    # Stale rows are excluded from scoring values but tracked in `stale_rows`
+    # so their metadata can be added to result.meta with stale=True.
+    # When ``include_stale`` is True, stale rows are kept in ``live`` (so
+    # their values participate in the merge) AND recorded in ``stale_rows``
+    # (so per-key metadata still carries ``stale=True``).
+    live: List[Tuple[str, Optional[datetime], Dict[str, Any], float, bool]] = []
+    stale_rows: List[Tuple[str, Optional[datetime], Dict[str, Any], float]] = []
+    for grp, ts, ind_json in rows:
+        ts_utc = _ensure_utc(ts)
+        stale_limit = _GROUP_STALE.get(grp, STRUCTURAL_STALE_SECONDS)
+        if ts_utc is not None:
+            age = (now - ts_utc).total_seconds()
+            if age > stale_limit:
+                logger.debug(
+                    "[merge] group=%s ts=%s age=%.0fs > stale_limit=%.0fs — stale%s",
+                    grp, ts_utc.isoformat(), age, stale_limit,
+                    " (included)" if include_stale else "",
+                )
+                stale_rows.append((grp, ts_utc, ind_json or {}, age))
+                if include_stale:
+                    live.append((grp, ts_utc, ind_json or {}, age, True))
+                continue
+            live.append((grp, ts_utc, ind_json or {}, age, False))
+        else:
+            live.append((grp, None, ind_json or {}, float("inf"), False))
+
+    # ── Step 2: Inter-group drift cap ─────────────────────────────────────────
+    # Pick latest timestamp per group from live rows.
+    ts_by_group: Dict[str, Optional[datetime]] = {}
+    for grp, ts_utc, _, _age, _stale in live:
+        existing = ts_by_group.get(grp)
+        if existing is None or (ts_utc is not None and ts_utc > existing):
+            ts_by_group[grp] = ts_utc
+
+    struct_ts = ts_by_group.get("structural") or ts_by_group.get("combined")
+    micro_ts = ts_by_group.get("microstructure")
+
+    max_drift = _env_float("INDICATOR_MAX_DRIFT_SECONDS", INDICATOR_MAX_DRIFT_SECONDS)
+
+    # If drift > max_drift, drop the OLDER group from live
+    if struct_ts is not None and micro_ts is not None:
+        drift = abs((micro_ts - struct_ts).total_seconds())
+        if drift > max_drift:
+            if struct_ts < micro_ts:
+                # Structural is older — treat as absent for shared keys
+                stale_groups = {"structural", "combined"}
+                logger.debug(
+                    "[merge] drift=%.0fs > %.0fs — structural group absent",
+                    drift, max_drift,
+                )
+            else:
+                # Microstructure is older — treat as absent
+                stale_groups = {"microstructure"}
+                logger.debug(
+                    "[merge] drift=%.0fs > %.0fs — microstructure group absent",
+                    drift, max_drift,
+                )
+            for entry in live:
+                if entry[0] in stale_groups:
+                    stale_rows.append((entry[0], entry[1], entry[2], entry[3]))
+            live = [(g, t, d, a, s) for g, t, d, a, s in live if g not in stale_groups]
+
+    # ── Step 3: Per-key latest-timestamp-wins merge ───────────────────────────
+    # For each indicator key:
+    #   - If present in only one group: use that group's value.
+    #   - If present in multiple groups: use the value from the group with the
+    #     newest timestamp.  Microstructure is the tiebreak if timestamps are
+    #     equal (its faster cadence means it is at least as fresh as structural).
+    result = MergedIndicators()
+
+    for grp, ts_utc, ind_json, age, is_stale in live:
+        for k, raw in ind_json.items():
+            if isinstance(raw, dict) and "value" in raw:
+                v = raw["value"]
+                env_source = raw.get("source")
+                env_confidence = raw.get("confidence")
+                env_status = raw.get("status")
+                if v is None:
+                    continue
+            elif isinstance(raw, (int, float, bool, str)):
+                v = raw
+                env_source = None
+                env_confidence = None
+                env_status = None
+            else:
+                continue
+
+            existing_meta = result.meta.get(k)
+            if existing_meta is None:
+                result.values[k] = v
+                m = _make_meta(grp, age, ts_utc, env_source, env_confidence, env_status)
+                m["stale"] = is_stale
+                result.meta[k] = m
+                continue
+
+            existing_ts: Optional[datetime] = existing_meta.get("timestamp")
+
+            # Determine whether this entry should overwrite the existing one
+            should_overwrite = False
+            if ts_utc is None and existing_ts is None:
+                # Neither has a timestamp — prefer microstructure (tiebreak)
+                should_overwrite = grp == "microstructure"
+            elif ts_utc is None:
+                # Existing has a timestamp, this one doesn't — keep existing
+                should_overwrite = False
+            elif existing_ts is None:
+                # This entry has a timestamp, existing doesn't — use this
+                should_overwrite = True
+            elif ts_utc > existing_ts:
+                # This entry is newer — use it
+                should_overwrite = True
+            elif ts_utc == existing_ts:
+                # Equal timestamps — prefer higher confidence (envelope rows only);
+                # fall back to microstructure tiebreak for legacy flat rows or ties.
+                existing_confidence = existing_meta.get("confidence")
+                if env_confidence is not None and existing_confidence is not None:
+                    if env_confidence > existing_confidence:
+                        should_overwrite = True
+                    elif env_confidence < existing_confidence:
+                        should_overwrite = False
+                    else:
+                        should_overwrite = grp == "microstructure"
+                else:
+                    should_overwrite = grp == "microstructure"
+            # else: existing is newer — keep existing (should_overwrite stays False)
+
+            if should_overwrite:
+                result.values[k] = v
+                m = _make_meta(grp, age, ts_utc, env_source, env_confidence, env_status)
+                m["stale"] = is_stale
+                result.meta[k] = m
+
+    # ── Step 4: Post-merge hybrid indicators ──────────────────────────────────
+    # ema9_gt_ema50: EMA9 (microstructure) vs EMA50 (structural)
+    if "ema9" in result.values and "ema50" in result.values:
+        result.values["ema9_gt_ema50"] = result.values["ema9"] > result.values["ema50"]
+        ema9_meta = result.meta.get("ema9") or {}
+        ema50_meta = result.meta.get("ema50") or {}
+        ema9_age = ema9_meta.get("age_seconds")
+        ema50_age = ema50_meta.get("age_seconds")
+        ages = [a for a in (ema9_age, ema50_age) if a is not None]
+        any_stale = ema9_meta.get("stale", False) or ema50_meta.get("stale", False)
+        result.meta["ema9_gt_ema50"] = {
+            "group": "structural",
+            "age_seconds": max(ages) if ages else None,
+            "timestamp": None,
+            "stale": any_stale,
+        }
+
+    # ema_full_alignment: EMA9 > EMA50 > EMA200
+    if "ema9" in result.values and "ema50" in result.values and "ema200" in result.values:
+        result.values["ema_full_alignment"] = (
+            result.values["ema9"] > result.values["ema50"] > result.values["ema200"]
+        )
+        ema9_meta = result.meta.get("ema9") or {}
+        ema50_meta = result.meta.get("ema50") or {}
+        ema200_meta = result.meta.get("ema200") or {}
+        ema9_age = ema9_meta.get("age_seconds")
+        ema50_age = ema50_meta.get("age_seconds")
+        ema200_age = ema200_meta.get("age_seconds")
+        ages = [a for a in (ema9_age, ema50_age, ema200_age) if a is not None]
+        any_stale = (
+            ema9_meta.get("stale", False)
+            or ema50_meta.get("stale", False)
+            or ema200_meta.get("stale", False)
+        )
+        result.meta["ema_full_alignment"] = {
+            "group": "structural",
+            "age_seconds": max(ages) if ages else None,
+            "timestamp": None,
+            "stale": any_stale,
+        }
+
+    # ── Step 5: Add stale metadata (debugging/observability) ─────────────────
+    # Stale rows are excluded from `values` (not used for scoring), but their
+    # keys are registered in `meta` with stale=True so that API responses can
+    # surface staleness information to the UI without using stale values in
+    # filter/scoring logic.  Non-stale keys that already exist in meta are not
+    # overwritten (a fresh value always wins the metadata slot).
+    for grp, ts_utc, ind_json, age in stale_rows:
+        for k, raw in ind_json.items():
+            if isinstance(raw, dict) and "value" in raw:
+                env_source = raw.get("source")
+                env_confidence = raw.get("confidence")
+                env_status = raw.get("status")
+            elif isinstance(raw, (int, float, bool, str)):
+                env_source = None
+                env_confidence = None
+                env_status = None
+            else:
+                continue
+            if k not in result.meta:
+                # Key has no live entry — record as stale (value omitted)
+                m = _make_meta(grp, age, ts_utc, env_source, env_confidence, env_status)
+                m["stale"] = True
+                result.meta[k] = m
+            # If a live entry exists for this key, don't overwrite with stale meta.
+
+    # Ensure stale=False on all live meta entries (default for non-stale keys)
+    for k, m in result.meta.items():
+        if "stale" not in m:
+            m["stale"] = False
+
+    return result
+
+
+async def fetch_merged_indicators(
+    db,
+    symbols: List[str],
+    now: Optional[datetime] = None,
+    *,
+    include_stale: bool = False,
+) -> Dict[str, MergedIndicators]:
+    """Fetch and merge indicator rows for all given symbols from the DB.
+
+    Args:
+        include_stale: When True, stale indicator values are included in
+                       ``MergedIndicators.values`` (not filtered out) so
+                       callers like the drilldown endpoint can score against
+                       outdated data.  Per-key metadata still carries
+                       ``stale=True``.
+
+    Returns:
+        Dict mapping symbol → MergedIndicators.
+        Symbols with no indicator rows are absent from the dict.
+    """
+    from sqlalchemy import text
+
+    if not symbols:
+        return {}
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    merged: Dict[str, MergedIndicators] = {}
+
+    # ── Try dual-scheduler query (requires scheduler_group column) ────────────
+    try:
+        dual_rows = (await db.execute(text("""
+            SELECT DISTINCT ON (symbol, scheduler_group)
+                symbol, scheduler_group, time, indicators_json
+            FROM   indicators
+            WHERE  symbol = ANY(:syms)
+            ORDER  BY symbol, scheduler_group, time DESC
+        """), {"syms": symbols})).fetchall()
+
+        from collections import defaultdict
+        by_sym: Dict[str, List] = defaultdict(list)
+        for r in dual_rows:
+            by_sym[r.symbol].append((
+                r.scheduler_group or "combined",
+                r.time,
+                r.indicators_json or {},
+            ))
+
+        for sym, row_list in by_sym.items():
+            # combined rows are legacy fallback — discard them when the symbol
+            # already has at least one structural or microstructure row so we
+            # do not mix sources when the new dual schedulers are active.
+            has_separated = any(
+                g in ("structural", "microstructure")
+                for g, _t, _d in row_list
+            )
+            if has_separated:
+                row_list = [(g, t, d) for g, t, d in row_list if g != "combined"]
+            merged[sym] = merge_indicator_rows(row_list, now=now, include_stale=include_stale)
+
+        # Legacy fallback for symbols still missing
+        missing = [s for s in symbols if s not in merged]
+        if missing:
+            _add_legacy_rows(merged, await _fetch_legacy(db, missing), now, include_stale=include_stale)
+
+        return merged
+
+    except Exception:
+        # scheduler_group column does not exist — fall back to legacy
+        pass
+
+    legacy = await _fetch_legacy(db, symbols)
+    _add_legacy_rows(merged, legacy, now, include_stale=include_stale)
+    return merged
+
+
+async def _fetch_legacy(db, symbols: List[str]) -> List:
+    """Fetch multiple recent indicator rows per symbol for legacy merge.
+
+    When the scheduler_group column is absent, each scheduler may have
+    inserted separate rows (structural vs microstructure) that lack the
+    group tag.  Fetching the last N rows (up to 3, within 2 h) and merging
+    them by timestamp gives a more complete combined indicator set than
+    taking only the single latest row.
+    """
+    from sqlalchemy import text
+    if not symbols:
+        return []
+    try:
+        rows = (await db.execute(text("""
+            SELECT symbol, time, indicators_json
+            FROM   indicators
+            WHERE  symbol = ANY(:syms)
+              AND  time > now() - interval '2 hours'
+            ORDER  BY symbol, time DESC
+        """), {"syms": symbols})).fetchall()
+        return list(rows)
+    except Exception as exc:
+        logger.warning("[merge] legacy indicator fetch failed: %s", exc)
+        return []
+
+
+def _add_legacy_rows(
+    merged: Dict[str, MergedIndicators],
+    legacy_rows: List,
+    now: datetime,
+    *,
+    include_stale: bool = False,
+) -> None:
+    """Merge multiple legacy rows per symbol into MergedIndicators.
+
+    Groups rows by symbol and merges them as "combined" rows (all get the
+    same group tag so they compete on timestamp alone — newest per key wins).
+    """
+    from collections import defaultdict
+    by_sym: Dict[str, List] = defaultdict(list)
+    for r in legacy_rows:
+        if r.symbol not in merged:
+            ts = _ensure_utc(r.time)
+            by_sym[r.symbol].append(("combined", ts, r.indicators_json or {}))
+
+    for sym, row_list in by_sym.items():
+        if sym not in merged:
+            merged[sym] = merge_indicator_rows(row_list, now=now, include_stale=include_stale)

@@ -33,7 +33,7 @@ const DEFAULT_RULE_CATEGORIES: Record<string, string> = {
   buy_pressure: "liquidity",        // buy/(buy+sell), [0, 1]
   taker_buy_volume: "liquidity",
   taker_sell_volume: "liquidity",
-  taker_ratio: "signal",            // buy/sell, [0, ∞) — threshold > 1 meaningful
+  taker_ratio: "liquidity",         // buy/(buy+sell), [0, 1] — threshold around 0.5 (#82)
   adx: "market_structure",
   ema_trend: "market_structure",
   atr: "market_structure",
@@ -276,9 +276,9 @@ export default function ScoreEngineSettings() {
       {/* Order flow indicator reference */}
       <div className="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-hover)] px-4 py-3 text-[12px] text-[var(--text-secondary)] space-y-1">
         <span className="font-semibold text-[var(--text-primary)]">Order flow indicator reference:&nbsp;</span>
-        <span><code className="font-mono text-[var(--color-profit)]">taker_ratio</code> = buy_vol / sell_vol &nbsp;→&nbsp; range 0–∞, equilibrium&nbsp;≈&nbsp;1.0 &nbsp;(example threshold: taker_ratio &gt; 1.2)</span>
+        <span><code className="font-mono text-[var(--color-profit)]">taker_ratio</code> = buy_vol / (buy+sell) &nbsp;→&nbsp; range 0–1, equilibrium = 0.5 &nbsp;(example threshold: taker_ratio &gt; 0.55)</span>
         <span className="px-2 text-[var(--border-subtle)]">|</span>
-        <span><code className="font-mono text-blue-400">buy_pressure</code> = buy_vol / (buy+sell) &nbsp;→&nbsp; range 0–1, equilibrium = 0.5 &nbsp;(example threshold: buy_pressure &gt; 0.6)</span>
+        <span><code className="font-mono text-blue-400">buy_pressure</code> = buy_vol / (buy+sell) &nbsp;→&nbsp; range 0–1, equilibrium = 0.5 &nbsp;(same value as taker_ratio)</span>
       </div>
 
       {/* Thresholds */}
