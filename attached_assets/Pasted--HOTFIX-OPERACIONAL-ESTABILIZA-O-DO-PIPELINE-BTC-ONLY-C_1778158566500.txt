@@ -1,0 +1,197 @@
+# HOTFIX OPERACIONAL — ESTABILIZAÇÃO DO PIPELINE BTC ONLY
+
+## CONTEXTO REAL
+
+O sistema atualmente opera com carga mínima:
+
+- 1 ativo spot: BTC_USDT
+- 1 ativo futures: BTC_USDT
+
+Portanto:
+o colapso atual NÃO é causado por excesso de símbolos.
+
+Os problemas observados são estruturais/concorrrentes.
+
+---
+
+# ERROS CONFIRMADOS NOS LOGS
+
+## 1. OHLCV STALE
+
+Erro recorrente:
+
+RuntimeError:
+OHLCV validation FAILED:
+No recent candle data found for exchange=gate
+
+Isso ocorre mesmo com apenas BTC_USDT.
+
+Conclusão:
+não é saturação de ingestão.
+
+Investigar:
+- websocket gate
+- persistência OHLCV
+- candle timestamp
+- staleness validation
+- timezone mismatch
+- ingestion commit failure
+
+---
+
+## 2. DEADLOCKS POSTGRES
+
+Erro recorrente:
+
+ERROR: deadlock detected
+
+Com apenas um símbolo,
+isso indica bug lógico/concorrente.
+
+Investigar:
+- múltiplos schedulers atualizando mesmas tabelas
+- lock ordering inconsistente
+- transações longas
+- await dentro de transaction
+- retries concorrentes
+
+Principal suspeito:
+structural_scheduler_service.py
+
+---
+
+## 3. SCHEMA DRIFT
+
+Erro crítico:
+
+column "scoring_version"
+does not exist
+
+A migration não foi aplicada corretamente.
+
+Isso pode:
+- invalidar transações
+- gerar rollback pendente
+- quebrar sessões SQLAlchemy
+- provocar cascata operacional
+
+Aplicar migration imediatamente.
+
+---
+
+# AÇÕES IMEDIATAS
+
+## 1. APLICAR MIGRATION PENDENTE
+
+Executar migration oficial ou:
+
+ALTER TABLE alpha_scores
+ADD COLUMN IF NOT EXISTS scoring_version TEXT;
+
+Validar:
+- alembic current
+- alembic heads
+- schema drift
+
+---
+
+## 2. SERIALIZAR SCHEDULERS TEMPORARIAMENTE
+
+Configuração emergencial:
+
+CELERY_CONCURRENCY=1
+STRUCTURAL_CONCURRENCY=1
+MICROSTRUCTURE_CONCURRENCY=1
+
+Objetivo:
+eliminar lock contention.
+
+Com apenas BTC isso NÃO impactará throughput.
+
+---
+
+## 3. DESABILITAR RETRY STORM DA SIMULATION
+
+Hoje ausência de candles gera RuntimeError.
+
+Transformar em SKIP controlado:
+
+ANTES:
+raise RuntimeError(...)
+
+DEPOIS:
+return {
+  "status": "skipped",
+  "reason": "no_recent_candles"
+}
+
+Sem retries infinitos.
+
+---
+
+## 4. INVESTIGAR INGESTÃO OHLCV
+
+Confirmar:
+- websocket conecta?
+- candles chegam?
+- candles persistem?
+- timestamps estão corretos?
+- staleness validator usa UTC correto?
+- commit realmente ocorre?
+
+Adicionar logs:
+
+- candle received
+- candle persisted
+- latest timestamp
+- staleness delta
+- commit success/failure
+
+---
+
+## 5. REVISAR structural_scheduler_service.py
+
+Objetivo:
+identificar deadlocks.
+
+Verificar:
+- updates concorrentes
+- select for update
+- transactions longas
+- commits tardios
+- await dentro de transaction
+
+Garantir:
+- commits pequenos
+- lock ordering fixo
+- zero paralelismo sobre mesma linha
+
+---
+
+## 6. PROTEGER WEBSOCKET /ws/decisions
+
+Hoje backend retorna 503.
+
+Implementar degrade mode:
+
+try:
+   ...
+except Exception:
+   send degraded payload
+
+Sem derrubar websocket.
+
+---
+
+# IMPORTANTE
+
+NÃO focar mais em:
+- universo grande
+- excesso de símbolos
+- saturação de ingestão
+
+Os prints confirmam:
+o sistema está quebrando mesmo em carga mínima.
+
+Logo:
+o problema é estrutural/concorrente.
