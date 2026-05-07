@@ -1,6 +1,27 @@
 # Cloud Run Celery Topology — Runbook
 
-**Owner:** Plataforma · **Última revisão:** 2026-05-07 (Task #239)
+**Owner:** Plataforma · **Última revisão:** 2026-05-07 (Task #244 — recuperação dos 5 serviços)
+
+## Recovery 2026-05-07 (Task #244)
+
+**Snapshot final** (`gcloud run services list`, 19:13Z):
+
+| Serviço                       | Status | Última implantação |
+|-------------------------------|--------|--------------------|
+| `scalpyn`                     | ✔ True | 18:54:30Z (build) |
+| `scalpyn-beat`                | ✔ True | 19:13:15Z (script) |
+| `scalpyn-worker-execution`    | ✔ True | 19:12:43Z (script) |
+| `scalpyn-worker-micro`        | ✔ True | 19:11:20Z (script) |
+| `scalpyn-worker-structural`   | ✔ True | 19:11:52Z (script) |
+
+**Causa raiz**: o `cloudbuild.yaml` em main usa `--timeout-startup=540` (flag inexistente em `gcloud run deploy`) — todos os 4 deploy steps de worker/beat falhavam silenciosamente, mas o build seguia verde porque cada step roda isolado e o `topology-check` final tinha bug no filter `--filter="metadata.name=(scalpyn OR ...)"` que retornava falso-positivo.
+
+**Fixes aplicados durante o recovery:**
+1. Removido `--timeout-startup=540` das 5 ocorrências em `cloudbuild.yaml` (commit `f00ec46`).
+2. Reescrito `scripts/promote-cloud-run-topology.sh` para usar `gcloud run services describe scalpyn --format=export` + `gcloud run services replace`. Workers eram **services novos** — `gcloud run deploy --update-env-vars` só passava REDIS_URL, faltavam `DATABASE_URL`/`JWT_SECRET`/`ENCRYPTION_KEY`/`AI_KEYS_ENCRYPTION_KEY` (containers exitam em `start.sh:39-45` antes de abrir porta 8080). Clonando o spec inteiro do `scalpyn` herdamos secrets + env (commit `8d651f3`).
+3. Habilitada API `cloudresourcemanager.googleapis.com` no projeto (`gcloud services enable cloudresourcemanager.googleapis.com`) — pré-requisito do `services replace`.
+
+**Follow-up pendente** (não bloqueia a recuperação atual): corrigir o filter do step `topology-check` em `cloudbuild.yaml:362` para que builds futuros falhem vermelho de verdade quando algum serviço some.
 
 ## TL;DR
 
