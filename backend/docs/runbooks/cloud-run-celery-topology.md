@@ -90,11 +90,23 @@ Snapshot novo de `/api/system/celery-status` às 17:36 e logs Cloud SQL/Cloud Ru
 
 **Reinterpretação:** a revisão `00436-gp5` está em **connection storm** — pool reciclando conexões mais rápido que o Cloud SQL consegue autenticar (default `authentication_timeout=60s`), o que reabre o ciclo. O 504-storm das 17:15-17:20 era outra fase (instância travada); a partir de 17:30+ o sintoma virou storm de auth/deadlock. **`commit-sha` da `00436-gp5` é `da680b3`** (housekeeping de sessão, sem código relevante) — ou seja, o fix da Task #241 (`8351ba6`) ainda não tinha chegado a essa revisão quando os logs foram capturados.
 
-**Próximo passo executado:** `suggest_deploy` do `8351ba6` para promover uma revisão limpa que rompa o ciclo da `00436-gp5`. Aguardando o usuário confirmar:
+**Próximo passo executado:** `suggest_deploy` do `8351ba6` para promover uma revisão limpa que rompa o ciclo da `00436-gp5`.
 
-- **Revisão final que ficou de pé:** `_____` (preencher após deploy)
-- **`/api/system/celery-status` pós-deploy + purge:** `execution.depth=____` (esperado: < 50)
-- **Comando de purge usado:** `_____` (`celery -A app.tasks.celery_app purge -Q execution -f` ou `redis-cli -u $REDIS_URL DEL execution`)
-- **Timestamp de recuperação:** `_____ UTC`
+**Validação manual (Cloud Shell, 2026-05-07 ~17:50 UTC):**
 
-Se o connection storm persistir mesmo na revisão nova, **abrir Task #243** focada em (a) tirar `start_gate_ws_with_leader_election` do critical path do lifespan e (b) reduzir `pool_recycle` ou aumentar `authentication_timeout` no Cloud SQL para evitar realimentação do storm.
+- `gcloud run services list --region=us-central1 --filter="metadata.name~scalpyn"` retornou **um único serviço**: `scalpyn` (LAST DEPLOYED AT 2026-05-07T17:43:50Z, conta `330575088921-compute@developer.gserviceaccount.com`). Os 4 serviços previstos pela Task #239 (`scalpyn-worker-{micro,structural,execution}` + `scalpyn-beat`) **não existem em prod** — a tentativa do operador de rodar `gcloud run services proxy scalpyn-worker-execution` falhou com `Service [scalpyn-worker-execution] could not be found in project [clickrate-477217] region [us-central1]`. Conclusão: o build da Task #239 que criou o `topology-check` aparentemente nunca promoveu os 4 workers/beat com sucesso, ou foi rolled back, e ninguém percebeu porque o `scalpyn` API continuou respondendo HTTP normalmente. **Sintoma idêntico ao incidente original do Task #239 (2026-05-05).**
+- **Quem estava drenando `microstructure`/`structural` no snapshot 17:36:** o `Celery Worker` rodando no workflow do Replit local, conectado ao mesmo `REDIS_URL` de prod. Mascarou a ausência da topologia Cloud Run. **`execution` não drenava** porque o worker do Replit roda só `--queues=microstructure,structural,execution`, mas com concurrency=2 e prioridade configurada no celery_app, a execução de fato ficava enviesada para as duas filas mais ativas.
+- **Purge da fila `execution`:** `redis-cli -u 'redis://default:***@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0' DEL execution` — antes: `LLEN=11838`; depois: `LLEN=0`. Comando `celery -A app.tasks.celery_app purge` falhou no Cloud Shell (não tem o pacote Python instalado), por isso o caminho via `redis-cli` direto.
+- **Revisão final que ficou de pé:** `scalpyn-00436-gp5` (commit `da680b3` ou superior — a revisão promovida pelo `suggest_deploy` do `8351ba6` ainda não tinha aparecido como "Last deployed" no momento da consulta; preencher na próxima passagem).
+- **Timestamp de recuperação:** ~17:50 UTC após o purge da fila.
+
+**Estado pós-recuperação parcial:** o sintoma agudo (backlog `execution` crescendo + connection storm derivado dele) está mitigado. **Mas a causa raiz estrutural permanece**: prod tem topologia mono-serviço, não a topologia 5-serviços da Task #239. Beat schedulando tasks que ninguém em Cloud Run consome, e o broker prod sendo "salvo" por um worker rodando no laptop de dev é uma situação inaceitável.
+
+**Task #243 a ser aberta** com escopo:
+
+1. Investigar por que o `cloudbuild.yaml` da Task #239 não criou (ou rolou de volta) os 4 serviços `scalpyn-worker-{micro,structural,execution}` + `scalpyn-beat` em prod. O step `topology-check` do `cloudbuild.yaml` deveria ter falhado vermelho — verificar histórico do Cloud Build.
+2. Promover a topologia 5-serviços de fato. Confirmar via `gcloud run services list` que os 5 serviços ficam `Serving`.
+3. **Antes** de promover, garantir que o `Celery Worker` do workflow do Replit deixa de apontar para o `REDIS_URL` de prod — caso contrário continuamos com workers fantasmas drenando filas e qualquer deploy quebrado fica invisível por dias.
+4. Hardening pós-#243: alerta no Centro Operacional quando `gcloud run services list | wc -l < 5` (já era a Task #240, mas claramente nunca foi implementada — confirmar).
+
+Se o connection storm voltar mesmo após a topologia correta estar em prod, abrir Task #244 focada em (a) tirar `start_gate_ws_with_leader_election` do critical path do lifespan e (b) reduzir `pool_recycle` ou aumentar `authentication_timeout` no Cloud SQL para evitar realimentação do storm.
