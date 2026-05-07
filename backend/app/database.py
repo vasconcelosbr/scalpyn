@@ -278,8 +278,21 @@ async def run_db_task(fn: Callable, *, celery: bool = False) -> Any:
     """
     factory = CeleryAsyncSessionLocal if celery else AsyncSessionLocal
     async with factory() as session:
-        async with session.begin():
-            return await fn(session)
+        try:
+            async with session.begin():
+                return await fn(session)
+        except BaseException:
+            # Task #237 — defense in depth. ``async with session.begin()``
+            # already auto-rolls-back on exception, but if the rollback
+            # itself fails (or if the connection is in a pending-rollback
+            # state from a half-committed savepoint), the connection
+            # could return to the pool poisoned and raise
+            # ``PendingRollbackError`` / ``InFailedSQLTransactionError``
+            # on the very next task that picks it up. Force a best-effort
+            # rollback before the outer ``async with factory()`` returns
+            # the connection to the pool.
+            await _safe_rollback(session)
+            raise
 
 
 async def _safe_rollback(session) -> None:

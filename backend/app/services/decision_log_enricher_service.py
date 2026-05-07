@@ -59,8 +59,22 @@ class DecisionLogEnricherService:
 
         processed = skipped = errors = 0
         for decision in decisions:
+            # Task #237 — each decision runs inside its own SAVEPOINT so a
+            # failure (e.g. ON CONFLICT planner mismatch on a partial index,
+            # bad data, FK violation) rolls back ONLY this decision's work
+            # without poisoning the outer ``run_db_task`` transaction. A
+            # poisoned outer tx used to cascade ``PendingRollbackError``
+            # into the next Celery task that picked up the same pooled
+            # connection (decision_log_enricher → collect_5m → compute_5m
+            # all share the ``microstructure`` queue in production).
+            #
+            # Golden rule: NEVER ``await session.rollback()`` inside
+            # ``begin_nested()`` — the context manager already rolls back
+            # the SAVEPOINT on exception; calling ``rollback()`` would
+            # close the OUTER transaction opened by ``run_db_task``.
             try:
-                created = await self._process_decision(decision, config)
+                async with self.session.begin_nested():
+                    created = await self._process_decision(decision, config)
                 if created:
                     processed += 1
                 else:
@@ -74,8 +88,20 @@ class DecisionLogEnricherService:
                     exc,
                     exc_info=True,
                 )
-                # Mark as processed to avoid infinite retry on permanently bad rows.
-                await self._mark_processed(decision)
+                # Mark as processed inside a FRESH savepoint so we never
+                # write on top of an aborted transaction (which would
+                # raise ``InFailedSQLTransactionError`` and re-poison the
+                # outer tx — the original Task #237 cascade).
+                try:
+                    async with self.session.begin_nested():
+                        await self._mark_processed(decision)
+                except Exception as mark_exc:
+                    logger.error(
+                        "[Enricher] Failed to mark decision id=%s processed: %s",
+                        decision.id,
+                        mark_exc,
+                        exc_info=True,
+                    )
 
         logger.info(
             "[Enricher] Complete: processed=%d skipped=%d errors=%d",
@@ -147,6 +173,14 @@ class DecisionLogEnricherService:
         # The unique index ux_trade_tracking_decision guarantees at-most-once
         # even if a crash occurred between a previous INSERT and its
         # processed=TRUE update.
+        # Task #237 — ``ux_trade_tracking_decision`` is a PARTIAL unique
+        # index (migration 038): ``ON trade_tracking (decision_id) WHERE
+        # decision_id IS NOT NULL``. Postgres requires the same predicate
+        # in ``ON CONFLICT`` so the planner can match the index, otherwise
+        # it raises ``InvalidColumnReferenceError`` and aborts the tx.
+        # Without this predicate the enricher poisoned its own
+        # transaction every cycle and cascaded into every other task on
+        # the ``microstructure`` Celery queue (collect_5m, compute_5m).
         stmt = (
             pg_insert(TradeTracking)
             .values(
@@ -161,7 +195,10 @@ class DecisionLogEnricherService:
                 stop_price=stop_price,
                 status="open",
             )
-            .on_conflict_do_nothing(index_elements=["decision_id"])
+            .on_conflict_do_nothing(
+                index_elements=["decision_id"],
+                index_where=TradeTracking.decision_id.is_not(None),
+            )
         )
         await self.session.execute(stmt)
 
