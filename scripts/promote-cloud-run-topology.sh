@@ -99,7 +99,6 @@ deploy_service() {
     --ingress=internal \
     --port=8080 \
     --timeout=300 \
-    --timeout-startup=540 \
     --min-instances=1 \
     --max-instances="$max_inst" \
     --no-cpu-throttling \

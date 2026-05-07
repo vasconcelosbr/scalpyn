@@ -100,8 +100,6 @@ steps:
       # combined with `--min-instances=1` lock contention made cold starts
       # flaky. See `.agents/skills/alembic-migration-guardrails/SKILL.md`
       # "Cold-start budget on Cloud Run" for the per-step breakdown.
-      - '--timeout-startup'
-      - '540'
       # Cloud Run normally throttles CPU / scales to zero between requests.
       # This service embeds Celery worker + beat, so one warm instance with
       # always-on CPU is required for recurring pipeline scans to keep running.
@@ -209,8 +207,6 @@ steps:
       - '8080'
       - '--timeout'
       - '300'
-      - '--timeout-startup'
-      - '540'
       - '--min-instances'
       - '1'
       - '--max-instances'
@@ -248,8 +244,6 @@ steps:
       - '8080'
       - '--timeout'
       - '300'
-      - '--timeout-startup'
-      - '540'
       - '--min-instances'
       - '1'
       - '--max-instances'
@@ -287,8 +281,6 @@ steps:
       - '8080'
       - '--timeout'
       - '300'
-      - '--timeout-startup'
-      - '540'
       - '--min-instances'
       - '1'
       - '--max-instances'
@@ -325,8 +317,6 @@ steps:
       - '8080'
       - '--timeout'
       - '300'
-      - '--timeout-startup'
-      - '540'
       - '--min-instances'
       - '1'
       - '--max-instances'
