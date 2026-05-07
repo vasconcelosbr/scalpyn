@@ -137,6 +137,7 @@ async def ws_decisions(websocket: WebSocket):
                 if degraded:
                     try:
                         await websocket.send_json({
+                            "event": "degraded",
                             "type": "status",
                             "status": "degraded",
                             "ts": datetime.now(timezone.utc).isoformat(),
@@ -158,6 +159,7 @@ async def ws_decisions(websocket: WebSocket):
                     _ws_metrics.set_degraded_active(endpoint_label, +1)
                     try:
                         await websocket.send_json({
+                            "event": "degraded",
                             "type": "status",
                             "status": "degraded",
                             "reason": type(exc).__name__,
@@ -177,18 +179,54 @@ async def ws_decisions(websocket: WebSocket):
             type(exc).__name__, exc,
         )
         if not accepted:
+            # Best-effort: accept the socket, send the degraded frame,
+            # then run a controlled keepalive loop driven by the client's
+            # own ping/disconnect — NEVER an unbounded `sleep(30)` loop
+            # (review #1: that path leaked one orphan coroutine per
+            # failed connect on every reconnect attempt).
             try:
                 await websocket.accept()
-                await websocket.send_json({
-                    "type": "status",
-                    "status": "degraded",
-                    "reason": type(exc).__name__,
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                })
-                # Hold the socket idle so the client sees the degraded
-                # frame instead of an immediate close.
+                accepted = True
+                _ws_metrics.set_degraded_active(endpoint_label, +1)
+                degraded = True
+                degraded_started_at = _time.monotonic()
+                try:
+                    await websocket.send_json({
+                        "event": "degraded",
+                        "type": "status",
+                        "status": "degraded",
+                        "reason": type(exc).__name__,
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                    })
+                except Exception:
+                    pass
                 while True:
-                    await asyncio.sleep(30.0)
+                    try:
+                        msg = await asyncio.wait_for(
+                            websocket.receive_text(), timeout=15.0,
+                        )
+                        if msg == "ping":
+                            await websocket.send_json({
+                                "type": "pong", "status": "degraded",
+                            })
+                    except asyncio.TimeoutError:
+                        # Heartbeat tick — re-broadcast degraded so the
+                        # client sees a fresh status frame and we detect
+                        # broken pipes (send raises → loop exits).
+                        try:
+                            await websocket.send_json({
+                                "event": "degraded",
+                                "type": "status",
+                                "status": "degraded",
+                                "ts": datetime.now(timezone.utc).isoformat(),
+                            })
+                        except Exception:
+                            break
+                    except WebSocketDisconnect:
+                        break
+                    except Exception:
+                        # Any other failure: bail so the coroutine ends.
+                        break
             except Exception:
                 pass
     finally:

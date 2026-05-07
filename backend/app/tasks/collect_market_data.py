@@ -91,6 +91,8 @@ async def _collect_all_async():
     symbols = valid_symbols
 
     async def _inner(db) -> int:
+        import time as _time
+        _cycle_t0 = _time.monotonic()
         collected = 0
         failures = 0
 
@@ -310,6 +312,17 @@ async def _collect_all_async():
         # run_db_task auto-commits all successful writes on exit
 
         logger.info(f"[COLLECT] success={collected} fail={failures} total={len(symbols)}")
+        # Task #234 — symmetric COMMIT marker on the 1h path. Logged with
+        # outcome (ok|fail) and cycle duration so operators can correlate
+        # ingest health against the [OHLCV-RX|PERSIST|LATEST|STALE]
+        # markers above.
+        _cycle_dt = _time.monotonic() - _cycle_t0
+        _outcome = "ok" if collected > 0 else "fail"
+        logger.info(
+            "[OHLCV-COMMIT] cycle_done flow=1h outcome=%s success=%d fail=%d "
+            "total=%d duration_s=%.2f",
+            _outcome, collected, failures, len(symbols), _cycle_dt,
+        )
         if collected == 0:
             raise RuntimeError("zero success — all symbols failed")
         return collected
