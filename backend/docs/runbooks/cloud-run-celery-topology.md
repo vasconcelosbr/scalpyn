@@ -78,3 +78,23 @@ Sem os logs de aplicação da revisão `00434-459`, qualquer atribuição defini
 - `gcloud logging read … severity>=ERROR` na revisão `00434-459` para confirmar onde a instância travou.
 
 **Se o incidente repetir após este deploy**, executar manualmente os dois comandos acima e abrir follow-up para reduzir o trabalho de boot do API service (mover Gate WS leader election para depois do `yield` no lifespan, ou movê-la para um serviço dedicado).
+
+### Update 17:36-17:44 UTC — diagnóstico mudou de natureza (Task #242)
+
+Snapshot novo de `/api/system/celery-status` às 17:36 e logs Cloud SQL/Cloud Run anexados às 17:41-17:44 mostraram que o quadro **não é mais** "instância única travada com latência 300s":
+
+- `microstructure.depth=0` (drenando), `structural.depth=563` `oldest_age=5s` (drenando), `execution.depth=11738` (cresceu de 11547 → confirma worker `execution` atolado, mas vivo).
+- Latência caiu para ~2s com **HTTP 503** "malformed response or connection error" — app passou a crashar rápido em vez de pendurar.
+- Cloud SQL: `ERROR: deadlock detected at character 34` (17:41), seguido às 17:44 de `FATAL: canceling authentication due to timeout` em duas conexões consecutivas.
+- Stack trace no `scalpyn-00436-gp5`: `sqlalchemy/pool/base.py:_close_connection → asyncpg.terminate()` — pool queimando conexões e forçando reconexão em loop.
+
+**Reinterpretação:** a revisão `00436-gp5` está em **connection storm** — pool reciclando conexões mais rápido que o Cloud SQL consegue autenticar (default `authentication_timeout=60s`), o que reabre o ciclo. O 504-storm das 17:15-17:20 era outra fase (instância travada); a partir de 17:30+ o sintoma virou storm de auth/deadlock. **`commit-sha` da `00436-gp5` é `da680b3`** (housekeeping de sessão, sem código relevante) — ou seja, o fix da Task #241 (`8351ba6`) ainda não tinha chegado a essa revisão quando os logs foram capturados.
+
+**Próximo passo executado:** `suggest_deploy` do `8351ba6` para promover uma revisão limpa que rompa o ciclo da `00436-gp5`. Aguardando o usuário confirmar:
+
+- **Revisão final que ficou de pé:** `_____` (preencher após deploy)
+- **`/api/system/celery-status` pós-deploy + purge:** `execution.depth=____` (esperado: < 50)
+- **Comando de purge usado:** `_____` (`celery -A app.tasks.celery_app purge -Q execution -f` ou `redis-cli -u $REDIS_URL DEL execution`)
+- **Timestamp de recuperação:** `_____ UTC`
+
+Se o connection storm persistir mesmo na revisão nova, **abrir Task #243** focada em (a) tirar `start_gate_ws_with_leader_election` do critical path do lifespan e (b) reduzir `pool_recycle` ou aumentar `authentication_timeout` no Cloud SQL para evitar realimentação do storm.
