@@ -289,6 +289,47 @@ steps:
       - '--update-env-vars'
       - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=1,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
 
+  # ── Task #239: Topology validation — fail loudly if any of the 5
+  # ── expected Cloud Run services is missing after the deploy steps.
+  #
+  # Why this exists: in May-2026 the deploy of `scalpyn` (API) succeeded
+  # while `scalpyn-worker-micro`, `scalpyn-worker-structural`,
+  # `scalpyn-worker-execution` and `scalpyn-beat` were absent from prod
+  # (deleted manually OR deploy steps silently skipped). Result: no Celery
+  # worker consumed `microstructure`/`structural`/`execution` queues and no
+  # beat scheduled `collect_5m`/`collect_all` — pipeline went silent for 2
+  # days while the API kept serving HTTP normally.
+  #
+  # This step queries Cloud Run for all 5 services by name. Any missing
+  # service exits 1, marking the build red so the operator sees the gap
+  # immediately rather than discovering it days later via stale OHLCV.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        EXPECTED="scalpyn scalpyn-worker-micro scalpyn-worker-structural scalpyn-worker-execution scalpyn-beat"
+        echo "==> [topology-check] Verifying all 5 Cloud Run services exist in ${_REGION}..."
+        FOUND=$(gcloud run services list \
+          --region="${_REGION}" \
+          --format="value(metadata.name)" \
+          --filter="metadata.name=(scalpyn OR scalpyn-worker-micro OR scalpyn-worker-structural OR scalpyn-worker-execution OR scalpyn-beat)")
+        echo " [topology-check] Found:"
+        echo "$FOUND" | sed 's/^/   - /'
+        MISSING=""
+        for svc in $EXPECTED; do
+          if ! echo "$FOUND" | grep -qx "$svc"; then
+            MISSING="$MISSING $svc"
+          fi
+        done
+        if [ -n "$MISSING" ]; then
+          echo "==> [topology-check] FAIL: missing Cloud Run services:$MISSING" >&2
+          echo "==> See backend/docs/runbooks/cloud-run-celery-topology.md" >&2
+          exit 1
+        fi
+        echo "==> [topology-check] OK: all 5 Cloud Run services present."
+
 substitutions:
   _REGION: us-central1
   _REPO: scalpyn
