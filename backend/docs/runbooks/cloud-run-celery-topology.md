@@ -41,6 +41,21 @@ O mesmo check roda como último step do `cloudbuild.yaml` (`topology-check`); bu
 
 ## Recuperação
 
+### Caminho A — recovery rápido sem Cloud Build (recomendado quando o trigger está quebrado)
+
+Quando os builds do Cloud Build estão verdes mas a topologia continua incompleta (sintoma observado 2026-05-07: 6 builds verdes, `gcloud run services list` retorna só `scalpyn`), use o script de recovery commitado no repo. Ele lê a imagem que `scalpyn` está rodando e cria/reconcilia os 4 workers/beat com os flags exatos do `cloudbuild.yaml`. Idempotente.
+
+```bash
+# No Cloud Shell (não precisa clonar o repo — copie o conteúdo do script):
+bash scripts/promote-cloud-run-topology.sh
+# OU, se já tiver o repo clonado:
+cd ~/scalpyn && bash scripts/promote-cloud-run-topology.sh
+```
+
+Esperado ao final: tabela com 5 linhas, todas `status=True`. Tempo total ~5 minutos.
+
+### Caminho B — re-rodar o Cloud Build inteiro
+
 1. Confirmar quais serviços existem com o comando acima.
 2. Re-rodar o pipeline completo:
 
