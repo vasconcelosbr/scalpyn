@@ -137,7 +137,7 @@ steps:
       #
       # See `docs/runbooks/celery-queue-topology.md` for the full topology.
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=0,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-07T17:30:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=0,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
 
   # ── Task #216: Celery worker — microstructure queue ─────────────────
   # Bursty 5-minute cadence (collect_5m → compute_5m). Sized to absorb

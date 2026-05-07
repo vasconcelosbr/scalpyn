@@ -58,3 +58,17 @@ O mesmo check roda como último step do `cloudbuild.yaml` (`topology-check`); bu
 - **Não deletar** nenhum dos 5 manualmente. Se um serviço precisa pausar, escalar `--min-instances=0 --max-instances=0` em vez de deletar — assim o `topology-check` não quebra builds futuros.
 - **Não mover** `RUN_BEAT=1` para outro serviço (`scalpyn-beat` é o único agendador por design — Task #216, evita double-fire).
 - **Não fundir** workers em um só (`WORKER_QUEUES=microstructure,structural,execution` num único serviço viola o isolamento de latência da fila `execution`).
+
+## Incidente 2026-05-07 — instância `scalpyn` patológica pós-deploy (Task #241)
+
+**Sintoma:** após o deploy do commit `2735bdef` (revisão `scalpyn-00434-459`, build `e3f71977…`), 100% dos endpoints (`/api/auth/login`, `/api/dashboard/overview`, `/api/custom-watchlists/`, `/api/watchlists/`, `/api/profiles/`, `/api/pools/`, `/ws/alerts`, `/api/system/celery-status`) começaram a retornar **504 com latência exatamente `300.000s`** (timeout default do Cloud Run). Todos os logs apontavam para o **mesmo `instanceId` `0007b734…`** — ou seja, uma única instância travada servindo tudo.
+
+**Causa provável:** cold start sincronizado dos 5 serviços (API + 4 workers) drenando o backlog de 11.547 tasks acumulado em `execution` (Task #232/239) saturou Redis Labs durante a janela de boot. A instância única do `scalpyn` ficou pendurada no `start_gate_ws_with_leader_election` ou no warmup do pool DB, e nunca passou a aceitar requests. Como `min-instances=1, max-instances=4` mas Cloud Run só promove novas instâncias com base em concurrency observada (e não havia respostas saindo), a única instância continuou recebendo 100% do tráfego.
+
+**Mitigação executada:** bumpei `FORCE_RESTART` no env do `scalpyn` de `2026-05-04T00:00:00Z` para `2026-05-07T17:30:00Z`. Isso força o Cloud Run a criar uma nova revisão (env diff detectado) e mata a instância patológica. Como Redis já está saudável (backlog drenado pelos workers que sobreviveram), o cold start da nova revisão é leve.
+
+**Não foi feito** (exige `gcloud`, não disponível no agente de dev):
+- `gcloud run services update-traffic scalpyn --to-revisions=scalpyn-00433-p7c=100` (rollback explícito).
+- `gcloud logging read … severity>=ERROR` na revisão `00434-459` para confirmar onde a instância travou.
+
+**Se o incidente repetir após este deploy**, executar manualmente os dois comandos acima e abrir follow-up para reduzir o trabalho de boot do API service (mover Gate WS leader election para depois do `yield` no lifespan, ou movê-la para um serviço dedicado).
