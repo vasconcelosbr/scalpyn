@@ -13,10 +13,10 @@ Task #234 and the operator playbook that pairs with each.
 | Symptom | Hotfix | Verification |
 |---|---|---|
 | `compute_scores` errors with `column "scoring_version" of relation "alpha_scores" does not exist` | Per-INSERT schema-drift guard `_is_scoring_version_drift` + legacy-INSERT fallback in `backend/app/tasks/compute_scores.py` | Logs show `[compute_scores] SCHEMA DRIFT` exactly once; `SELECT COUNT(*) FROM alpha_scores WHERE time > NOW()-INTERVAL '15min'` returns rows |
-| Celery worker burns retries when sim batch finds zero recent candles | `simulation_service.run_simulation_batch` returns `{"status":"skipped","reason":"no_recent_candles"\|"insufficient_candles"}` instead of raising | Logs show `[Simulation] SKIPPED reason=...`; metric `scalpyn_simulation_skipped_total{reason="..."}` increases |
+| Celery worker burns retries when sim batch finds zero recent candles | `simulation_service.run_simulation_batch` returns `{"status":"skipped","reason":"no_recent_candles"\|"insufficient_candles"}` instead of raising | Logs show `[SIM-SKIP] reason=...`; metric `simulation_skipped_total{reason="..."}` increases |
 | Three schedulers contend for the same `BACKGROUND_SCHEDULER_CONCURRENCY` budget | Dedicated env vars `STRUCTURAL_SCHEDULER_CONCURRENCY`, `MICROSTRUCTURE_SCHEDULER_CONCURRENCY`, `PIPELINE_SCHEDULER_CONCURRENCY` (each falls back to the legacy global) | Boot logs show the resolved value per scheduler; `lsof -p $(pidof uvicorn)` shows DB connection count below pool budget |
-| `/ws/decisions` returned 503 on broker hiccup, killed the front-end panel for the session | Try/except wrapper sends a single `{"type":"status","status":"degraded"}` frame and closes with code 1011 | UI shows yellow "degraded" badge instead of blank panel; backend logs `[WS /ws/decisions] degraded` |
-| OHLCV feed silence not visible until the `ingestion_stale` alert fired ~10 min later | Five structured logs `[OHLCV-RX\|PERSIST\|LATEST\|STALE\|COMMIT]` and three Prometheus metrics in `tasks/collect_market_data.py` | `grep '\[OHLCV-' celery-worker.log` shows one block per symbol per cycle; metric `scalpyn_ohlcv_latest_age_seconds{symbol="BTC_USDT"}` < 1800 |
+| `/ws/decisions` returned 503 on broker hiccup, killed the front-end panel for the session | Try/except wrapper sends a `{"event":"degraded","status":"degraded"}` frame and KEEPS the socket open with a 10-15 s heartbeat loop; cumulative time tracked in `ws_degraded_seconds{endpoint="/ws/decisions"}` | UI shows yellow "degraded" badge instead of blank panel; backend logs `[WS /ws/decisions] entering degraded mode`; `ws_degraded_active{endpoint="/ws/decisions"} > 0` while degraded |
+| OHLCV feed silence not visible until the `ingestion_stale` alert fired ~10 min later | Five structured logs `[OHLCV-RX\|PERSIST\|LATEST\|STALE\|COMMIT]` and three Prometheus metrics in `tasks/collect_market_data.py` | `grep '\[OHLCV-' celery-worker.log` shows one block per symbol per cycle; metric `ohlcv_staleness_seconds{symbol="BTC_USDT"}` < 1800 |
 | Structural scheduler suspected to deadlock under BTC-only contention | Audit findings documented in `structural-scheduler-locking.md`; `SET LOCAL lock_timeout='3s'` already in place | See companion runbook |
 
 ## Production schema repair (the `scoring_version` drift)
@@ -46,7 +46,7 @@ DB connections for API handlers:
 
 ```bash
 STRUCTURAL_SCHEDULER_CONCURRENCY=1
-MICROSTRUCTURA_SCHEDULER_CONCURRENCY=1   # microstructure scheduler
+MICROSTRUCTURE_SCHEDULER_CONCURRENCY=1   # microstructure scheduler
 PIPELINE_SCHEDULER_CONCURRENCY=1
 ```
 
@@ -57,8 +57,8 @@ cascades — see the gotchas section in `replit.md`.
 
 Add the following panels to the `Centro Operacional` dashboard:
 
-* **OHLCV freshness** — `scalpyn_ohlcv_latest_age_seconds`, threshold 1800s.
-* **Simulation skips** — `rate(scalpyn_simulation_skipped_total[15m])`, alert
+* **OHLCV freshness** — `ohlcv_staleness_seconds`, threshold 1800s.
+* **Simulation skips** — `rate(simulation_skipped_total[15m])`, alert
   if any reason is non-zero for >30 minutes.
 * **Decision WS degrades** — `count_over_time({log_pattern="[WS /ws/decisions]
   degraded"}[10m])`, alert on > 5.
