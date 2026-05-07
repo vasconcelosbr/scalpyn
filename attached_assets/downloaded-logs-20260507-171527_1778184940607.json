@@ -1,0 +1,409 @@
+[
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py\", line 373, in _close_connection\n    self._dialect.do_terminate(connection)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 1127, in do_terminate\n    dbapi_connection.terminate()\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py\", line 402, in terminate\n    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 912, in _terminate_graceful_close\n    await self._connection.close(timeout=2)\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 1513, in close\n    await self._protocol.close(timeout)\n  File \"asyncpg/protocol/protocol.pyx\", line 617, in close\n  File \"asyncpg/protocol/protocol.pyx\", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 1682, in _cancel_current_command\n    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 455, in create_task\n    self._check_closed()\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 545, in _check_closed\n    raise RuntimeError('Event loop is closed')\nRuntimeError: Event loop is closed",
+    "insertId": "69fcf291000582f338d1ab51",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00446-p5k",
+        "configuration_name": "scalpyn",
+        "location": "us-central1",
+        "service_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-07T20:14:09.361203Z",
+    "severity": "ERROR",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d9b85e943f003d01a932206a29a0603d823e1a90609357c60cd7b445b6740c7cbceaa44e7293e02fc9d0912549cef1a380db2405a6331f40bfb8f2935c5ea8bcabdf89d57fadc37cb9",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "05f9019e-0e89-4201-8d02-3a55a39d616d",
+      "commit-sha": "3c4b3c63f67efce0cd161af5cc882ce2610a045f",
+      "gcb-trigger-region": "global"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-07T20:14:09.392526718Z",
+    "errorGroups": [
+      {
+        "id": "CIaUi4fY3-nCJw"
+      }
+    ]
+  },
+  {
+    "textPayload": "2026-05-07 20:14:15.144 UTC [299036]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=151146;b=611034922472440d996701ab4475db58;m=3bd6129031;t=6513feca2d012;x=c864949533f8c049-0@a1",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "database_id": "clickrate-477217:scalpyn",
+        "project_id": "clickrate-477217",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-07T20:14:15.146514Z",
+    "severity": "ERROR",
+    "labels": {
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "LOG_BUCKET_NUM": "55",
+      "PROJECT_NUMBER": "330575088921"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-07T20:14:16.930073914Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/app/tasks/collect_market_data.py\", line 260, in _inner\n    await db.execute(text(\"\"\"\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py\", line 449, in execute\n    result = await greenlet_spawn(\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 203, in greenlet_spawn\n    result = context.switch(value)\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2351, in execute\n    return self._execute_internal(\n           ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2258, in _execute_internal\n    result = conn.execute(\n             ^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1419, in execute\n    return meth(\n           ^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/elements.py\", line 527, in _execute_on_connection\n    return connection._execute_clauseelement(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1641, in _execute_clauseelement\n    ret = self._execute_context(\n          ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1846, in _execute_context\n    return self._exec_single_context(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1986, in _exec_single_context\n    self._handle_dbapi_exception(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 2366, in _handle_dbapi_exception\n    raise exc_info[1].with_traceback(exc_info[2])\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1967, in _exec_single_context\n    self.dialect.do_execute(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py\", line 952, in do_execute\n    cursor.execute(statement, parameters)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 585, in execute\n    self._adapt_connection.await_(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 563, in _prepare_and_execute\n    self._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 513, in _handle_exception\n    self._adapt_connection._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 799, in _handle_exception\n    raise error\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 550, in _prepare_and_execute\n    self._rows = deque(await prepared_stmt.fetch(*parameters))\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 177, in fetch\n    data = await self.__bind_execute(args, 0, timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 268, in __bind_execute\n    data, status, _ = await self.__do_execute(\n                      ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 257, in __do_execute\n    return await executor(protocol)\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"asyncpg/protocol/protocol.pyx\", line 205, in bind_execute",
+    "insertId": "69fcf297000261f1f49ee388",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00446-p5k",
+        "project_id": "clickrate-477217",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-07T20:14:15.156145Z",
+    "severity": "ERROR",
+    "labels": {
+      "commit-sha": "3c4b3c63f67efce0cd161af5cc882ce2610a045f",
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d92580e1a62b427c8f190df25aa2974cb2ceeb05bd7893366627bd570b7abbe6ba915570ee127ed1f8fd77167ec858b03785ba18f87e87e6acd0eebf967e2af4e12b4d713c81a76305",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "05f9019e-0e89-4201-8d02-3a55a39d616d"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-07T20:14:15.388071272Z",
+    "errorGroups": [
+      {
+        "id": "CPWDqLSKh4CnuAE"
+      }
+    ]
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 585, in trace_task\n    R = retval = fun(*args, **kwargs)\n                 ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 858, in __protected_call__\n    return self.run(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 448, in collect_all\n    count = _run_async(_collect_all_async())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 19, in _run_async\n    return loop.run_until_complete(coro)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 691, in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 407, in _collect_all_async\n    return await run_db_task(_inner, celery=True)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/database.py\", line 283, in run_db_task\n    return await fn(session)\n           ^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 395, in _inner\n    raise RuntimeError(\"zero success — all symbols failed\")\nRuntimeError: zero success — all symbols failed",
+    "insertId": "69fcf298000f281adc14713f",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00446-p5k",
+        "service_name": "scalpyn",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-07T20:14:16.993306Z",
+    "severity": "ERROR",
+    "labels": {
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "05f9019e-0e89-4201-8d02-3a55a39d616d",
+      "instanceId": "0007b734d92580e1a62b427c8f190df25aa2974cb2ceeb05bd7893366627bd570b7abbe6ba915570ee127ed1f8fd77167ec858b03785ba18f87e87e6acd0eebf967e2af4e12b4d713c81a76305",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-region": "global",
+      "commit-sha": "3c4b3c63f67efce0cd161af5cc882ce2610a045f"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-07T20:14:17.054875842Z",
+    "errorGroups": [
+      {
+        "id": "CNe1ycX4wsSewgE"
+      }
+    ]
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py\", line 373, in _close_connection\n    self._dialect.do_terminate(connection)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 1127, in do_terminate\n    dbapi_connection.terminate()\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py\", line 402, in terminate\n    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 912, in _terminate_graceful_close\n    await self._connection.close(timeout=2)\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 1513, in close\n    await self._protocol.close(timeout)\n  File \"asyncpg/protocol/protocol.pyx\", line 617, in close\n  File \"asyncpg/protocol/protocol.pyx\", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 1682, in _cancel_current_command\n    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 455, in create_task\n    self._check_closed()\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 545, in _check_closed\n    raise RuntimeError('Event loop is closed')\nRuntimeError: Event loop is closed",
+    "insertId": "69fcf2a60001feb1a6d921a5",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-worker-structural-00003-wzv",
+        "configuration_name": "scalpyn-worker-structural",
+        "service_name": "scalpyn-worker-structural",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-07T20:14:30.130737Z",
+    "severity": "ERROR",
+    "labels": {
+      "commit-sha": "3c4b3c63f67efce0cd161af5cc882ce2610a045f",
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d9644ee73b228fa98bff8b0e235910d79c78037ad002547afbe5062d54c859d5c795a7aacdf78fb501d380abf3f6a8249b2a9f08b5e7258072caea06322eb2285e732a87632035661b78",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "05f9019e-0e89-4201-8d02-3a55a39d616d"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-07T20:14:30.407437816Z",
+    "errorGroups": [
+      {
+        "id": "CIaUi4fY3-nCJw"
+      }
+    ]
+  },
+  {
+    "textPayload": "2026-05-07 20:14:36.062 UTC [299117]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=151148;b=611034922472440d996701ab4475db58;m=3bd6129198;t=6513feca2d179;x=17cc0c5cf5594a4-0@a5",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn",
+        "region": "us-central"
+      }
+    },
+    "timestamp": "2026-05-07T20:14:36.063205Z",
+    "severity": "ERROR",
+    "labels": {
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",
+      "PROJECT_NUMBER": "330575088921",
+      "LOG_BUCKET_NUM": "55"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-07T20:14:58.102477254Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/app/tasks/collect_market_data.py\", line 260, in _inner\n    await db.execute(text(\"\"\"\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py\", line 449, in execute\n    result = await greenlet_spawn(\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 203, in greenlet_spawn\n    result = context.switch(value)\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2351, in execute\n    return self._execute_internal(\n           ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2258, in _execute_internal\n    result = conn.execute(\n             ^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1419, in execute\n    return meth(\n           ^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/elements.py\", line 527, in _execute_on_connection\n    return connection._execute_clauseelement(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1641, in _execute_clauseelement\n    ret = self._execute_context(\n          ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1846, in _execute_context\n    return self._exec_single_context(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1986, in _exec_single_context\n    self._handle_dbapi_exception(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 2366, in _handle_dbapi_exception\n    raise exc_info[1].with_traceback(exc_info[2])\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1967, in _exec_single_context\n    self.dialect.do_execute(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py\", line 952, in do_execute\n    cursor.execute(statement, parameters)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 585, in execute\n    self._adapt_connection.await_(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 563, in _prepare_and_execute\n    self._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 513, in _handle_exception\n    self._adapt_connection._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 799, in _handle_exception\n    raise error\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 550, in _prepare_and_execute\n    self._rows = deque(await prepared_stmt.fetch(*parameters))\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 177, in fetch\n    data = await self.__bind_execute(args, 0, timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 268, in __bind_execute\n    data, status, _ = await self.__do_execute(\n                      ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 257, in __do_execute\n    return await executor(protocol)\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"asyncpg/protocol/protocol.pyx\", line 205, in bind_execute",
+    "insertId": "69fcf2ac0001200fbf5cdcd4",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00446-p5k",
+        "project_id": "clickrate-477217",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-07T20:14:36.073743Z",
+    "severity": "ERROR",
+    "labels": {
+      "gcb-trigger-region": "global",
+      "commit-sha": "3c4b3c63f67efce0cd161af5cc882ce2610a045f",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "05f9019e-0e89-4201-8d02-3a55a39d616d",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d961da441331be7bd01266ab883ada2591a5de1d2ab67d238c7b4719d9f3ed5bec05d948857bfba164bef375953317b6dc2e19a30298b4f4e2662c23285662b70d9e64ad278d7156"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-07T20:14:36.227327916Z",
+    "errorGroups": [
+      {
+        "id": "CPWDqLSKh4CnuAE"
+      }
+    ]
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 585, in trace_task\n    R = retval = fun(*args, **kwargs)\n                 ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 858, in __protected_call__\n    return self.run(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 448, in collect_all\n    count = _run_async(_collect_all_async())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 19, in _run_async\n    return loop.run_until_complete(coro)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 691, in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 407, in _collect_all_async\n    return await run_db_task(_inner, celery=True)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/database.py\", line 283, in run_db_task\n    return await fn(session)\n           ^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 395, in _inner\n    raise RuntimeError(\"zero success — all symbols failed\")\nRuntimeError: zero success — all symbols failed",
+    "insertId": "69fcf2ae00020b4636a5e35e",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00446-p5k",
+        "location": "us-central1",
+        "service_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-07T20:14:38.133958Z",
+    "severity": "ERROR",
+    "labels": {
+      "gcb-trigger-region": "global",
+      "commit-sha": "3c4b3c63f67efce0cd161af5cc882ce2610a045f",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "05f9019e-0e89-4201-8d02-3a55a39d616d",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d961da441331be7bd01266ab883ada2591a5de1d2ab67d238c7b4719d9f3ed5bec05d948857bfba164bef375953317b6dc2e19a30298b4f4e2662c23285662b70d9e64ad278d7156"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-07T20:14:38.224953216Z",
+    "errorGroups": [
+      {
+        "id": "CNe1ycX4wsSewgE"
+      }
+    ]
+  },
+  {
+    "textPayload": "2026-05-07 20:14:45.145 UTC [299152]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request",
+    "insertId": "s=8cc2e3eb994f443caf665154fcf6b2d8;i=151148;b=611034922472440d996701ab4475db58;m=3bd6129198;t=6513feca2d179;x=17cc0c5cf5594a4-0@a8",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "region": "us-central",
+        "project_id": "clickrate-477217",
+        "database_id": "clickrate-477217:scalpyn"
+      }
+    },
+    "timestamp": "2026-05-07T20:14:45.146289Z",
+    "severity": "ERROR",
+    "labels": {
+      "PROJECT_NUMBER": "330575088921",
+      "LOG_BUCKET_NUM": "55",
+      "SOURCE_ID": "37333130396234346565326662666435e3b0c442",
+      "INSTANCE_UID": "1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7"
+    },
+    "logName": "projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",
+    "receiveTimestamp": "2026-05-07T20:14:58.102477254Z"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/app/tasks/collect_market_data.py\", line 260, in _inner\n    await db.execute(text(\"\"\"\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py\", line 449, in execute\n    result = await greenlet_spawn(\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 203, in greenlet_spawn\n    result = context.switch(value)\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2351, in execute\n    return self._execute_internal(\n           ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2258, in _execute_internal\n    result = conn.execute(\n             ^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1419, in execute\n    return meth(\n           ^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/elements.py\", line 527, in _execute_on_connection\n    return connection._execute_clauseelement(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1641, in _execute_clauseelement\n    ret = self._execute_context(\n          ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1846, in _execute_context\n    return self._exec_single_context(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1986, in _exec_single_context\n    self._handle_dbapi_exception(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 2366, in _handle_dbapi_exception\n    raise exc_info[1].with_traceback(exc_info[2])\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1967, in _exec_single_context\n    self.dialect.do_execute(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py\", line 952, in do_execute\n    cursor.execute(statement, parameters)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 585, in execute\n    self._adapt_connection.await_(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 563, in _prepare_and_execute\n    self._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 513, in _handle_exception\n    self._adapt_connection._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 799, in _handle_exception\n    raise error\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 550, in _prepare_and_execute\n    self._rows = deque(await prepared_stmt.fetch(*parameters))\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 177, in fetch\n    data = await self.__bind_execute(args, 0, timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 268, in __bind_execute\n    data, status, _ = await self.__do_execute(\n                      ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 257, in __do_execute\n    return await executor(protocol)\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"asyncpg/protocol/protocol.pyx\", line 205, in bind_execute",
+    "insertId": "69fcf2b500025dcb8c47aad3",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "revision_name": "scalpyn-00446-p5k",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-07T20:14:45.155083Z",
+    "severity": "ERROR",
+    "labels": {
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "05f9019e-0e89-4201-8d02-3a55a39d616d",
+      "instanceId": "0007b734d92580e1a62b427c8f190df25aa2974cb2ceeb05bd7893366627bd570b7abbe6ba915570ee127ed1f8fd77167ec858b03785ba18f87e87e6acd0eebf967e2af4e12b4d713c81a76305",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-region": "global",
+      "commit-sha": "3c4b3c63f67efce0cd161af5cc882ce2610a045f"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-07T20:14:45.357203527Z",
+    "errorGroups": [
+      {
+        "id": "CPWDqLSKh4CnuAE"
+      }
+    ]
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 585, in trace_task\n    R = retval = fun(*args, **kwargs)\n                 ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 858, in __protected_call__\n    return self.run(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 448, in collect_all\n    count = _run_async(_collect_all_async())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 19, in _run_async\n    return loop.run_until_complete(coro)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 691, in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 407, in _collect_all_async\n    return await run_db_task(_inner, celery=True)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/database.py\", line 283, in run_db_task\n    return await fn(session)\n           ^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 395, in _inner\n    raise RuntimeError(\"zero success — all symbols failed\")\nRuntimeError: zero success — all symbols failed",
+    "insertId": "69fcf2b6000cd0615ea79bea",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "revision_name": "scalpyn-00446-p5k",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-07T20:14:46.839777Z",
+    "severity": "ERROR",
+    "labels": {
+      "instanceId": "0007b734d92580e1a62b427c8f190df25aa2974cb2ceeb05bd7893366627bd570b7abbe6ba915570ee127ed1f8fd77167ec858b03785ba18f87e87e6acd0eebf967e2af4e12b4d713c81a76305",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-build-id": "05f9019e-0e89-4201-8d02-3a55a39d616d",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "commit-sha": "3c4b3c63f67efce0cd161af5cc882ce2610a045f",
+      "gcb-trigger-region": "global"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-07T20:14:47.022925996Z",
+    "errorGroups": [
+      {
+        "id": "CNe1ycX4wsSewgE"
+      }
+    ]
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/app/tasks/collect_market_data.py\", line 260, in _inner\n    await db.execute(text(\"\"\"\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py\", line 449, in execute\n    result = await greenlet_spawn(\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 203, in greenlet_spawn\n    result = context.switch(value)\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2351, in execute\n    return self._execute_internal(\n           ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2258, in _execute_internal\n    result = conn.execute(\n             ^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1419, in execute\n    return meth(\n           ^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/elements.py\", line 527, in _execute_on_connection\n    return connection._execute_clauseelement(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1641, in _execute_clauseelement\n    ret = self._execute_context(\n          ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1846, in _execute_context\n    return self._exec_single_context(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1986, in _exec_single_context\n    self._handle_dbapi_exception(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 2366, in _handle_dbapi_exception\n    raise exc_info[1].with_traceback(exc_info[2])\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1967, in _exec_single_context\n    self.dialect.do_execute(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py\", line 952, in do_execute\n    cursor.execute(statement, parameters)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 585, in execute\n    self._adapt_connection.await_(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 563, in _prepare_and_execute\n    self._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 513, in _handle_exception\n    self._adapt_connection._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 799, in _handle_exception\n    raise error\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 550, in _prepare_and_execute\n    self._rows = deque(await prepared_stmt.fetch(*parameters))\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 177, in fetch\n    data = await self.__bind_execute(args, 0, timeout)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 268, in __bind_execute\n    data, status, _ = await self.__do_execute(\n                      ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py\", line 257, in __do_execute\n    return await executor(protocol)\n           ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"asyncpg/protocol/protocol.pyx\", line 205, in bind_execute",
+    "insertId": "69fcf2ca000271c1b39ab422",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00446-p5k"
+      }
+    },
+    "timestamp": "2026-05-07T20:15:06.160193Z",
+    "severity": "ERROR",
+    "labels": {
+      "commit-sha": "3c4b3c63f67efce0cd161af5cc882ce2610a045f",
+      "gcb-trigger-region": "global",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d961da441331be7bd01266ab883ada2591a5de1d2ab67d238c7b4719d9f3ed5bec05d948857bfba164bef375953317b6dc2e19a30298b4f4e2662c23285662b70d9e64ad278d7156",
+      "gcb-build-id": "05f9019e-0e89-4201-8d02-3a55a39d616d",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-07T20:15:06.198835475Z",
+    "errorGroups": [
+      {
+        "id": "CPWDqLSKh4CnuAE"
+      }
+    ]
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 585, in trace_task\n    R = retval = fun(*args, **kwargs)\n                 ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/celery/app/trace.py\", line 858, in __protected_call__\n    return self.run(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 448, in collect_all\n    count = _run_async(_collect_all_async())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 19, in _run_async\n    return loop.run_until_complete(coro)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 691, in run_until_complete\n    return future.result()\n           ^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 407, in _collect_all_async\n    return await run_db_task(_inner, celery=True)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/database.py\", line 283, in run_db_task\n    return await fn(session)\n           ^^^^^^^^^^^^^^^^^\n  File \"/app/app/tasks/collect_market_data.py\", line 395, in _inner\n    raise RuntimeError(\"zero success — all symbols failed\")\nRuntimeError: zero success — all symbols failed",
+    "insertId": "69fcf2cc0003a1a9f73ee83c",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn",
+        "revision_name": "scalpyn-00446-p5k",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-07T20:15:08.237993Z",
+    "severity": "ERROR",
+    "labels": {
+      "commit-sha": "3c4b3c63f67efce0cd161af5cc882ce2610a045f",
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "05f9019e-0e89-4201-8d02-3a55a39d616d",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d961da441331be7bd01266ab883ada2591a5de1d2ab67d238c7b4719d9f3ed5bec05d948857bfba164bef375953317b6dc2e19a30298b4f4e2662c23285662b70d9e64ad278d7156"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-07T20:15:08.530694942Z",
+    "errorGroups": [
+      {
+        "id": "CNe1ycX4wsSewgE"
+      }
+    ]
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py\", line 373, in _close_connection\n    self._dialect.do_terminate(connection)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 1127, in do_terminate\n    dbapi_connection.terminate()\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py\", line 402, in terminate\n    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 912, in _terminate_graceful_close\n    await self._connection.close(timeout=2)\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 1513, in close\n    await self._protocol.close(timeout)\n  File \"asyncpg/protocol/protocol.pyx\", line 617, in close\n  File \"asyncpg/protocol/protocol.pyx\", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 1682, in _cancel_current_command\n    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 455, in create_task\n    self._check_closed()\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 545, in _check_closed\n    raise RuntimeError('Event loop is closed')\nRuntimeError: Event loop is closed",
+    "insertId": "69fcf2cd000583e82428f968",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn",
+        "revision_name": "scalpyn-00446-p5k",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-07T20:15:09.361448Z",
+    "severity": "ERROR",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d9b85e943f003d01a932206a29a0603d823e1a90609357c60cd7b445b6740c7cbceaa44e7293e02fc9d0912549cef1a380db2405a6331f40bfb8f2935c5ea8bcabdf89d57fadc37cb9",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "05f9019e-0e89-4201-8d02-3a55a39d616d",
+      "gcb-trigger-region": "global",
+      "commit-sha": "3c4b3c63f67efce0cd161af5cc882ce2610a045f"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-07T20:15:09.671157642Z",
+    "errorGroups": [
+      {
+        "id": "CIaUi4fY3-nCJw"
+      }
+    ]
+  }
+]
