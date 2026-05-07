@@ -25,6 +25,13 @@ steps:
         gcloud services list --enabled --project="${PROJECT_ID}" \
           --filter='config.name=run.googleapis.com' \
           --format='value(config.name,state)' 2>&1 || true
+        echo "==> [preflight] Cloud Run service quota usage in region:"
+        # Conta quantos serviços já existem no projeto/região vs limite
+        # default (1000 por região). Útil para descartar quota como causa
+        # raiz quando worker/beat deploys falham silenciosamente.
+        EXISTING=$(gcloud run services list --region="${_REGION}" \
+          --project="${PROJECT_ID}" --format='value(metadata.name)' 2>/dev/null | wc -l)
+        echo "    services_in_region=$EXISTING (default Cloud Run limit: 1000)"
         echo "==> [preflight] Cloud Build SA roles on project (top-level only):"
         BUILD_SA="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -1)"
         echo "    BUILD_SA=$BUILD_SA"
