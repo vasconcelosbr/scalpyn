@@ -322,18 +322,48 @@ class SimulationService:
 
         ohlcv_row = ohlcv_check.fetchone()
 
+        # Task #234 hotfix — degrade gracefully instead of raising. The
+        # previous RuntimeError caused Celery to retry the simulation cycle
+        # repeatedly when the BTC-only pool happened to have <100 candles
+        # (e.g. fresh deploy, OHLCV ingestion catching up, REST throttling).
+        # Each retry burned a worker slot and left the operator dashboard
+        # showing red instead of "skipped". We now emit a structured skip
+        # so callers can record the reason and move on.
+        try:
+            from .simulation_metrics import record_simulation_skipped
+        except Exception:  # pragma: no cover — defensive
+            record_simulation_skipped = None  # type: ignore[assignment]
+
+        def _skipped(reason: str, message: str) -> Dict[str, Any]:
+            logger.warning("[Simulation] SKIPPED reason=%s | %s", reason, message)
+            if record_simulation_skipped is not None:
+                try:
+                    record_simulation_skipped(reason=reason, exchange=exchange)
+                except Exception:  # pragma: no cover — metric MUST NOT break callers
+                    pass
+            return {
+                "status": "skipped",
+                "reason": reason,
+                "message": message,
+                "exchange": exchange,
+                "processed": 0,
+                "simulated": 0,
+                "errors": 0,
+            }
+
         if not ohlcv_row or not ohlcv_row.total_candles:
-            error_msg = f"OHLCV validation FAILED: No recent candle data found for exchange={exchange}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
+            return _skipped(
+                "no_recent_candles",
+                f"No OHLCV in last 24h for exchange={exchange} — collector "
+                "may still be catching up; will retry next cycle.",
+            )
 
         if ohlcv_row.total_candles < 100:
-            error_msg = (
-                f"OHLCV validation FAILED: Insufficient candle data "
-                f"(found {ohlcv_row.total_candles} candles, need at least 100)"
+            return _skipped(
+                "insufficient_candles",
+                f"Found {ohlcv_row.total_candles} candles for exchange={exchange}, "
+                "need at least 100; will retry next cycle.",
             )
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
 
         logger.info(
             "[Simulation] OHLCV validation PASSED: %d symbols, %d candles, latest=%s",

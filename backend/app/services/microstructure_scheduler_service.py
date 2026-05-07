@@ -461,7 +461,11 @@ async def _run_one_cycle(concurrency: int, of_window: int) -> None:
 async def _scheduler_loop() -> None:
     interval = _env_int("MICROSTRUCTURE_SCHEDULER_INTERVAL_SECONDS",
                         DEFAULT_INTERVAL_SECONDS)
-    concurrency = _env_int("BACKGROUND_SCHEDULER_CONCURRENCY", DEFAULT_CONCURRENCY)
+    # Task #234 — dedicated env var with fallback to legacy global.
+    concurrency = _env_int(
+        "MICROSTRUCTURE_SCHEDULER_CONCURRENCY",
+        _env_int("BACKGROUND_SCHEDULER_CONCURRENCY", DEFAULT_CONCURRENCY),
+    )
     first_run_delay = _env_int("MICROSTRUCTURE_SCHEDULER_FIRST_RUN_DELAY_SECONDS",
                                DEFAULT_FIRST_RUN_DELAY_SECONDS)
     of_window = _env_int("MICROSTRUCTURE_ORDER_FLOW_WINDOW_SECONDS",

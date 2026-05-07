@@ -14,11 +14,44 @@ import json
 import logging
 from datetime import datetime, timezone
 
+from asyncpg.exceptions import UndefinedColumnError as _AsyncpgUndefinedColumn
 from sqlalchemy import text
 
 from ..tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _is_scoring_version_drift(exc: BaseException) -> bool:
+    """Detect alpha_scores.scoring_version missing-column drift.
+
+    Mirrors the structural-scheduler `_is_scheduler_group_drift` guard
+    (Task #178 / migration 032) and the same anti-false-positive rule:
+    we only match against the asyncpg exception's OWN message (which is
+    "column ... of relation alpha_scores does not exist"), never against
+    str(SQLAlchemy.ProgrammingError) — that wrapper includes the SQL
+    statement text and our INSERT always contains the literal column
+    name, so matching on the wrapper would silently swallow unrelated
+    asyncpg errors (FK violations, lock timeouts, deadlocks, ...).
+
+    Migration 028 adds the column, but Task #233's audit observed
+    drift in the production schema where the migration succeeded but
+    the column ended up missing (suspected hand-rolled rollback).
+    Until the prod schema is repaired this guard prevents one bad
+    INSERT per symbol per cycle from poisoning every subsequent
+    `_persist` callback inside the structural scheduler.
+    """
+    orig = getattr(exc, "orig", None)
+    if isinstance(orig, _AsyncpgUndefinedColumn) and "scoring_version" in str(orig):
+        return True
+    if isinstance(exc, _AsyncpgUndefinedColumn) and "scoring_version" in str(exc):
+        return True
+    return False
+
+
+# Boot-once flag: log the drift error a single time per process so we don't
+# flood the logs with one error per symbol per cycle.
+_scoring_version_drift_logged: bool = False
 
 
 def _run_async(coro):
@@ -133,26 +166,62 @@ async def _score_async():
 
                 # Each insert is isolated in its own SAVEPOINT so a failure
                 # for one symbol does not abort the whole transaction.
-                async with db.begin_nested():
-                    await db.execute(text("""
-                        INSERT INTO alpha_scores
-                            (time, symbol, score, liquidity_score, market_structure_score,
-                             momentum_score, signal_score, components_json,
-                             alpha_score_v2, confidence_metrics, scoring_version)
-                        VALUES
-                            (:time, :symbol, :score, NULL, NULL, NULL, NULL, :components,
-                             NULL, NULL, 'v1')
-                    """), {
-                        "time": now,
-                        "symbol": row.symbol,
-                        "score": scored_payload["score"],
-                        "components": json.dumps({
-                            "engine": "robust",
-                            "score_confidence": scored_payload["score_confidence"],
-                            "global_confidence": scored_payload["global_confidence"],
-                            "matched_rules": scored_payload["matched_rules"],
-                        }),
-                    })
+                try:
+                    async with db.begin_nested():
+                        await db.execute(text("""
+                            INSERT INTO alpha_scores
+                                (time, symbol, score, liquidity_score, market_structure_score,
+                                 momentum_score, signal_score, components_json,
+                                 alpha_score_v2, confidence_metrics, scoring_version)
+                            VALUES
+                                (:time, :symbol, :score, NULL, NULL, NULL, NULL, :components,
+                                 NULL, NULL, 'v1')
+                        """), {
+                            "time": now,
+                            "symbol": row.symbol,
+                            "score": scored_payload["score"],
+                            "components": json.dumps({
+                                "engine": "robust",
+                                "score_confidence": scored_payload["score_confidence"],
+                                "global_confidence": scored_payload["global_confidence"],
+                                "matched_rules": scored_payload["matched_rules"],
+                            }),
+                        })
+                except Exception as exc:
+                    # Task #234 — schema drift fallback: if alpha_scores.scoring_version
+                    # is missing in production we retry once WITHOUT the column so the
+                    # cycle keeps producing scores. Logged once per process.
+                    if not _is_scoring_version_drift(exc):
+                        raise
+                    global _scoring_version_drift_logged
+                    if not _scoring_version_drift_logged:
+                        logger.error(
+                            "[compute_scores] SCHEMA DRIFT: alpha_scores.scoring_version "
+                            "column missing — migration 028 not applied or rolled back. "
+                            "Falling back to legacy INSERT (no scoring_version) until the "
+                            "column is repaired. See docs/runbooks/critical-schema-drift.md."
+                        )
+                        _scoring_version_drift_logged = True
+                    async with db.begin_nested():
+                        await db.execute(text("""
+                            INSERT INTO alpha_scores
+                                (time, symbol, score, liquidity_score, market_structure_score,
+                                 momentum_score, signal_score, components_json,
+                                 alpha_score_v2, confidence_metrics)
+                            VALUES
+                                (:time, :symbol, :score, NULL, NULL, NULL, NULL, :components,
+                                 NULL, NULL)
+                        """), {
+                            "time": now,
+                            "symbol": row.symbol,
+                            "score": scored_payload["score"],
+                            "components": json.dumps({
+                                "engine": "robust",
+                                "score_confidence": scored_payload["score_confidence"],
+                                "global_confidence": scored_payload["global_confidence"],
+                                "matched_rules": scored_payload["matched_rules"],
+                            }),
+                        })
 
                 # Cache the score so _detect_level_transitions doesn't need
                 # to re-run the robust engine for the same row. SQLAlchemy

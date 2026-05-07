@@ -95,15 +95,61 @@ async def ws_trades(websocket: WebSocket):
 
 @router.websocket("/ws/decisions")
 async def ws_decisions(websocket: WebSocket):
-    """Stream real-time decision log updates."""
-    await manager.connect(websocket, "decisions")
+    """Stream real-time decision log updates.
+
+    Task #234 hotfix — degrade mode: when the connect/loop raises an
+    unexpected exception (broker unreachable, manager registry corrupted,
+    etc.) we send a single ``{"status":"degraded"}`` frame and close the
+    socket cleanly with code 1011. The previous implementation surfaced
+    a 503 to the client, which the frontend treated as a hard failure
+    and disabled the entire decision log panel for the session. Degraded
+    mode lets the UI show a yellow indicator instead of going dark.
+    """
+    accepted = False
     try:
+        await manager.connect(websocket, "decisions")
+        accepted = True
         while True:
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
-        manager.disconnect(websocket, "decisions")
+        pass
+    except Exception as exc:
+        logger.warning(
+            "[WS /ws/decisions] degraded — %s: %s",
+            type(exc).__name__, exc,
+        )
+        if accepted:
+            try:
+                await websocket.send_json({
+                    "type": "status",
+                    "status": "degraded",
+                    "reason": type(exc).__name__,
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception:
+                pass
+            try:
+                await websocket.close(code=1011)
+            except Exception:
+                pass
+        else:
+            # Could not even accept; let the client retry rather than 503.
+            try:
+                await websocket.accept()
+                await websocket.send_json({
+                    "type": "status",
+                    "status": "degraded",
+                    "reason": type(exc).__name__,
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                })
+                await websocket.close(code=1011)
+            except Exception:
+                pass
+    finally:
+        if accepted:
+            manager.disconnect(websocket, "decisions")
 
 
 async def broadcast_price_update(symbol: str, price: float, change_24h: float, score: float):

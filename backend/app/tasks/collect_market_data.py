@@ -94,11 +94,26 @@ async def _collect_all_async():
         collected = 0
         failures = 0
 
+        # Task #234 — OHLCV ingestion instrumentation. Five structured
+        # log lines per symbol/cycle ([OHLCV-RX|PERSIST|LATEST|STALE|COMMIT])
+        # plus three Prometheus metrics. Operators correlate against the
+        # `ingestion_stale` alert via `scalpyn_ohlcv_latest_age_seconds`.
+        try:
+            from ..services import ohlcv_metrics as _ohlcv_metrics
+        except Exception:  # pragma: no cover — defensive
+            _ohlcv_metrics = None  # type: ignore[assignment]
+
         for symbol in symbols:  # process only active symbols
             try:
                 logger.info(f"[COLLECT][START] symbol={symbol}")
                 df = await market_data_service.fetch_ohlcv(symbol, "1h", limit=100)
-                logger.info(f"[COLLECT][RESULT] symbol={symbol} result={type(df).__name__} rows={len(df) if df is not None else 'None'}")
+                rx_rows = len(df) if df is not None and not getattr(df, "empty", True) else 0
+                logger.info(
+                    "[OHLCV-RX] symbol=%s timeframe=1h rows=%d type=%s",
+                    symbol, rx_rows, type(df).__name__,
+                )
+                if _ohlcv_metrics is not None and rx_rows:
+                    _ohlcv_metrics.record_received(symbol, "1h", rx_rows)
 
                 if df is None:
                     logger.error(f"[COLLECT][EMPTY] symbol={symbol} reason=fetch_returned_none")
@@ -120,6 +135,10 @@ async def _collect_all_async():
 
                 ohlcv_exchange = df.attrs.get("exchange", "gate.io")
                 logger.info(f"[PIPELINE] INSERT_START symbol={symbol} rows={len(df)}")
+                logger.info(
+                    "[OHLCV-PERSIST] symbol=%s rows=%d exchange=%s",
+                    symbol, len(df), ohlcv_exchange,
+                )
                 # Each symbol's writes are isolated in a SAVEPOINT so that a
                 # single failure never aborts the whole collection transaction.
                 async with db.begin_nested():
@@ -141,6 +160,42 @@ async def _collect_all_async():
                             "volume": float(row["volume"]),
                             "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
                         })
+                if _ohlcv_metrics is not None:
+                    _ohlcv_metrics.record_persisted(symbol, "1h", len(df))
+
+                # Post-persist freshness probe — single round-trip, used by
+                # the `ingestion_stale` alert. Done inside the savepoint
+                # parent so any error is logged but never aborts the symbol.
+                try:
+                    latest_row = (await db.execute(text("""
+                        SELECT EXTRACT(EPOCH FROM (NOW() - MAX(time))) AS age_seconds,
+                               MAX(time) AS latest_time
+                        FROM ohlcv
+                        WHERE symbol = :symbol
+                          AND timeframe = '1h'
+                          AND exchange = :exchange
+                    """), {"symbol": symbol, "exchange": ohlcv_exchange})).first()
+                    age = float(latest_row.age_seconds) if latest_row and latest_row.age_seconds is not None else None
+                    latest_t = latest_row.latest_time if latest_row else None
+                    logger.info(
+                        "[OHLCV-LATEST] symbol=%s latest=%s age_s=%s",
+                        symbol, latest_t, f"{age:.0f}" if age is not None else "None",
+                    )
+                    if age is not None:
+                        if _ohlcv_metrics is not None:
+                            _ohlcv_metrics.record_latest_age(symbol, "1h", age)
+                        # 1h candles: anything > 30 min stale is operator-actionable.
+                        if age > 1800:
+                            logger.warning(
+                                "[OHLCV-STALE] symbol=%s age_s=%.0f threshold_s=1800 "
+                                "— check exchange feed / collector cadence",
+                                symbol, age,
+                            )
+                except Exception as probe_exc:
+                    logger.debug(
+                        "[OHLCV-LATEST] symbol=%s probe failed (non-blocking): %s",
+                        symbol, probe_exc,
+                    )
 
                     latest = df.iloc[-1]
 
@@ -632,6 +687,11 @@ async def _collect_5m_async():
         # run_db_task auto-commits all successful writes on exit
 
         logger.info(f"[COLLECT] success={collected} fail={failures} total={len(symbols)}")
+        # Task #234 — symmetric COMMIT marker on the 5m path.
+        logger.info(
+            "[OHLCV-COMMIT] cycle_done flow=5m success=%d fail=%d total=%d",
+            collected, failures, len(symbols),
+        )
         if collected == 0:
             raise RuntimeError("zero success — all symbols failed")
         return collected

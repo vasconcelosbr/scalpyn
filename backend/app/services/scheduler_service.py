@@ -367,8 +367,13 @@ async def _run_one_cycle(concurrency: int) -> None:
 async def _scheduler_loop() -> None:
     interval = _env_int("BACKGROUND_SCHEDULER_INTERVAL_SECONDS",
                         DEFAULT_INTERVAL_SECONDS)
-    concurrency = _env_int("BACKGROUND_SCHEDULER_CONCURRENCY",
-                           DEFAULT_CONCURRENCY)
+    # Task #234 — dedicated env var with fallback to legacy global so
+    # operators can tune the (legacy combined) scheduler independently of
+    # the structural / microstructure ones.
+    concurrency = _env_int(
+        "PIPELINE_SCHEDULER_CONCURRENCY",
+        _env_int("BACKGROUND_SCHEDULER_CONCURRENCY", DEFAULT_CONCURRENCY),
+    )
     first_run_delay = _env_int("BACKGROUND_SCHEDULER_FIRST_RUN_DELAY_SECONDS",
                                DEFAULT_FIRST_RUN_DELAY_SECONDS)
 
