@@ -4,6 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
+from ..services import persistence as _pq
 from ..tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ async def _collect_all_async():
 
     symbols = valid_symbols
 
-    async def _inner(db) -> int:
+    async def _inner(db, queue_mode: bool = False) -> int:
         import time as _time
         _cycle_t0 = _time.monotonic()
         collected = 0
@@ -141,27 +142,60 @@ async def _collect_all_async():
                     "[OHLCV-PERSIST] symbol=%s rows=%d exchange=%s",
                     symbol, len(df), ohlcv_exchange,
                 )
-                # Each symbol's writes are isolated in a SAVEPOINT so that a
-                # single failure never aborts the whole collection transaction.
-                async with db.begin_nested():
-                    for _, row in df.iterrows():
-                        await db.execute(text("""
-                            INSERT INTO ohlcv (time, symbol, exchange, timeframe, market_type, open, high, low, close, volume, quote_volume)
-                            VALUES (:time, :symbol, :exchange, :timeframe, :market_type, :open, :high, :low, :close, :volume, :quote_volume)
-                            ON CONFLICT DO NOTHING
-                        """), {
-                            "time": row["time"],
-                            "symbol": symbol,
-                            "exchange": ohlcv_exchange,
-                            "timeframe": "1h",
-                            "market_type": "spot",
-                            "open": float(row["open"]),
-                            "high": float(row["high"]),
-                            "low": float(row["low"]),
-                            "close": float(row["close"]),
-                            "volume": float(row["volume"]),
-                            "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
-                        })
+                # Task #236: persistence-queue path. One OhlcvBatch per
+                # symbol replaces N per-row INSERTs and removes the
+                # outer write-tx hold time that contended with the
+                # microstructure scheduler in May-2026 prod.
+                if queue_mode:
+                    rows_payload = tuple(
+                        {
+                            "time":         row["time"],
+                            "open":         float(row["open"]),
+                            "high":         float(row["high"]),
+                            "low":          float(row["low"]),
+                            "close":        float(row["close"]),
+                            "volume":       float(row["volume"]),
+                            "quote_volume": float(row.get(
+                                "quote_volume",
+                                float(row["close"]) * float(row["volume"]),
+                            )),
+                        }
+                        for _, row in df.iterrows()
+                    )
+                    await _pq.enqueue_or_log(
+                        producer="collect-1h",
+                        msg=_pq.OhlcvBatch(
+                            category="ingest",
+                            enqueued_at=_pq.now_monotonic(),
+                            symbol=symbol,
+                            exchange=ohlcv_exchange,
+                            timeframe="1h",
+                            market_type="spot",
+                            rows=rows_payload,
+                        ),
+                    )
+                else:
+                    # Each symbol's writes are isolated in a SAVEPOINT so that a
+                    # single failure never aborts the whole collection transaction.
+                    async with db.begin_nested():
+                        for _, row in df.iterrows():
+                            await db.execute(text("""
+                                INSERT INTO ohlcv (time, symbol, exchange, timeframe, market_type, open, high, low, close, volume, quote_volume)
+                                VALUES (:time, :symbol, :exchange, :timeframe, :market_type, :open, :high, :low, :close, :volume, :quote_volume)
+                                ON CONFLICT DO NOTHING
+                            """), {
+                                "time": row["time"],
+                                "symbol": symbol,
+                                "exchange": ohlcv_exchange,
+                                "timeframe": "1h",
+                                "market_type": "spot",
+                                "open": float(row["open"]),
+                                "high": float(row["high"]),
+                                "low": float(row["low"]),
+                                "close": float(row["close"]),
+                                "volume": float(row["volume"]),
+                                "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
+                            })
                 if _ohlcv_metrics is not None:
                     _ohlcv_metrics.record_persisted(symbol, "1h", len(df))
 
@@ -204,16 +238,35 @@ async def _collect_all_async():
                 # successful OHLCV ingest, regardless of the freshness
                 # probe outcome.
                 latest = df.iloc[-1]
-                await db.execute(text("""
-                    INSERT INTO market_metadata (symbol, price, price_change_24h, last_updated)
-                    VALUES (:symbol, :price, 0, :updated)
-                    ON CONFLICT (symbol) DO UPDATE SET
-                        price = :price, last_updated = :updated
-                """), {
-                    "symbol": symbol,
-                    "price": float(latest["close"]),
-                    "updated": datetime.now(timezone.utc),
-                })
+                _now_mm = datetime.now(timezone.utc)
+                if queue_mode:
+                    await _pq.enqueue_or_log(
+                        producer="collect-1h",
+                        msg=_pq.MarketMetadataUpsert(
+                            category="scheduler",
+                            enqueued_at=_pq.now_monotonic(),
+                            symbol=symbol,
+                            last_updated=_now_mm,
+                            price=float(latest["close"]),
+                            # NOTE: do NOT seed price_change_24h=0 here — the
+                            # tickers loop below carries the real value, and a
+                            # zero seed would clobber it under sparse-COALESCE
+                            # if its message arrives first. Legacy direct-write
+                            # path keeps the zero seed only because the same
+                            # transaction immediately overwrites it.
+                        ),
+                    )
+                else:
+                    await db.execute(text("""
+                        INSERT INTO market_metadata (symbol, price, price_change_24h, last_updated)
+                        VALUES (:symbol, :price, 0, :updated)
+                        ON CONFLICT (symbol) DO UPDATE SET
+                            price = :price, last_updated = :updated
+                    """), {
+                        "symbol": symbol,
+                        "price": float(latest["close"]),
+                        "updated": _now_mm,
+                    })
 
                 logger.info(f"[PERSIST] success symbol={symbol}")
                 logger.info(f"[COLLECT][OK] symbol={symbol}")
@@ -273,26 +326,41 @@ async def _collect_all_async():
                     spread = market_data_service.compute_spread_from_ticker(ticker)
 
                     if price > 0:
-                        async with db.begin_nested():
-                            await db.execute(text("""
-                                INSERT INTO market_metadata
-                                    (symbol, price, price_change_24h, volume_24h,
-                                     spread_pct, last_updated, volume_24h_updated_at)
-                                VALUES (:symbol, :price, :change, :volume, :spread,
-                                        :updated, :updated)
-                                ON CONFLICT (symbol) DO UPDATE SET
-                                    price = :price, price_change_24h = :change,
-                                    volume_24h = :volume, spread_pct = :spread,
-                                    last_updated = :updated,
-                                    volume_24h_updated_at = :updated
-                            """), {
-                                "symbol": sym,
-                                "price":  price,
-                                "change": change,
-                                "volume": volume,
-                                "spread": spread,
-                                "updated": now_ts,
-                            })
+                        if queue_mode:
+                            await _pq.enqueue_or_log(
+                                producer="collect-1h-tickers",
+                                msg=_pq.MarketMetadataUpsert(
+                                    category="ingest",
+                                    enqueued_at=_pq.now_monotonic(),
+                                    symbol=sym,
+                                    last_updated=now_ts,
+                                    price=price,
+                                    price_change_24h=change,
+                                    volume_24h=volume,
+                                    spread_pct=spread,
+                                ),
+                            )
+                        else:
+                            async with db.begin_nested():
+                                await db.execute(text("""
+                                    INSERT INTO market_metadata
+                                        (symbol, price, price_change_24h, volume_24h,
+                                         spread_pct, last_updated, volume_24h_updated_at)
+                                    VALUES (:symbol, :price, :change, :volume, :spread,
+                                            :updated, :updated)
+                                    ON CONFLICT (symbol) DO UPDATE SET
+                                        price = :price, price_change_24h = :change,
+                                        volume_24h = :volume, spread_pct = :spread,
+                                        last_updated = :updated,
+                                        volume_24h_updated_at = :updated
+                                """), {
+                                    "symbol": sym,
+                                    "price":  price,
+                                    "change": change,
+                                    "volume": volume,
+                                    "spread": spread,
+                                    "updated": now_ts,
+                                })
                         ticker_ok += 1
                 except Exception as te:
                     logger.debug("Ticker metadata upsert failed for %s: %s",
@@ -327,6 +395,15 @@ async def _collect_all_async():
             raise RuntimeError("zero success — all symbols failed")
         return collected
 
+    # Task #236: when the persistence queue is enabled, do not open a
+    # writer transaction (run_db_task wraps the callback in
+    # ``async with session.begin()``). The queue path only needs a
+    # read-only session for the freshness probe; all writes go through
+    # ``_pq.enqueue_or_log`` and are drained by the worker pool.
+    if _pq.is_enabled():
+        from ..database import CeleryAsyncSessionLocal
+        async with CeleryAsyncSessionLocal() as db:
+            return await _inner(db, queue_mode=True)
     return await run_db_task(_inner, celery=True)
 
 
@@ -473,7 +550,7 @@ async def _collect_5m_async():
 
     symbols = valid_symbols
 
-    async def _inner(db) -> int:
+    async def _inner(db, queue_mode: bool = False) -> int:
         from ..services.market_data_service import market_data_service
         collected = 0
         failures = 0
@@ -505,45 +582,87 @@ async def _collect_5m_async():
                 ohlcv_exchange = df.attrs.get("exchange", "gate.io")
                 logger.info(f"[PIPELINE] INSERT_START symbol={symbol} rows={len(df)} timeframe=5m")
 
-                # SAVEPOINT 1: OHLCV candles + price seed.
-                # Isolated so a single symbol failure never aborts the whole
-                # collection transaction.
-                async with db.begin_nested():
-                    # Bulk-insert all returned candles (ON CONFLICT DO NOTHING is idempotent)
-                    for _, row in df.iterrows():
-                        await db.execute(text("""
-                            INSERT INTO ohlcv (time, symbol, exchange, timeframe, market_type, open, high, low, close, volume, quote_volume)
-                            VALUES (:time, :symbol, :exchange, :timeframe, :market_type, :open, :high, :low, :close, :volume, :quote_volume)
-                            ON CONFLICT DO NOTHING
-                        """), {
-                            "time":        row["time"],
-                            "symbol":      symbol,
-                            "exchange":    ohlcv_exchange,
-                            "timeframe":   "5m",
-                            "market_type": sym_market_type,
-                            "open":        float(row["open"]),
-                            "high":        float(row["high"]),
-                            "low":         float(row["low"]),
-                            "close":       float(row["close"]),
-                            "volume":      float(row["volume"]),
-                            "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
-                        })
+                latest_5m = df.iloc[-1]
+                _now_5m = datetime.now(timezone.utc)
+                if queue_mode:
+                    # Task #236: one OhlcvBatch + one MarketMetadataUpsert per
+                    # symbol — no SAVEPOINTs, no per-row round-trips.
+                    rows_payload = tuple(
+                        {
+                            "time":         row["time"],
+                            "open":         float(row["open"]),
+                            "high":         float(row["high"]),
+                            "low":          float(row["low"]),
+                            "close":        float(row["close"]),
+                            "volume":       float(row["volume"]),
+                            "quote_volume": float(row.get(
+                                "quote_volume",
+                                float(row["close"]) * float(row["volume"]),
+                            )),
+                        }
+                        for _, row in df.iterrows()
+                    )
+                    await _pq.enqueue_or_log(
+                        producer="collect-5m",
+                        msg=_pq.OhlcvBatch(
+                            category="ingest",
+                            enqueued_at=_pq.now_monotonic(),
+                            symbol=symbol,
+                            exchange=ohlcv_exchange,
+                            timeframe="5m",
+                            market_type=sym_market_type,
+                            rows=rows_payload,
+                        ),
+                    )
+                    await _pq.enqueue_or_log(
+                        producer="collect-5m",
+                        msg=_pq.MarketMetadataUpsert(
+                            category="scheduler",
+                            enqueued_at=_pq.now_monotonic(),
+                            symbol=symbol,
+                            last_updated=_now_5m,
+                            price=float(latest_5m["close"]),
+                        ),
+                    )
+                else:
+                    # SAVEPOINT 1: OHLCV candles + price seed.
+                    # Isolated so a single symbol failure never aborts the whole
+                    # collection transaction.
+                    async with db.begin_nested():
+                        # Bulk-insert all returned candles (ON CONFLICT DO NOTHING is idempotent)
+                        for _, row in df.iterrows():
+                            await db.execute(text("""
+                                INSERT INTO ohlcv (time, symbol, exchange, timeframe, market_type, open, high, low, close, volume, quote_volume)
+                                VALUES (:time, :symbol, :exchange, :timeframe, :market_type, :open, :high, :low, :close, :volume, :quote_volume)
+                                ON CONFLICT DO NOTHING
+                            """), {
+                                "time":        row["time"],
+                                "symbol":      symbol,
+                                "exchange":    ohlcv_exchange,
+                                "timeframe":   "5m",
+                                "market_type": sym_market_type,
+                                "open":        float(row["open"]),
+                                "high":        float(row["high"]),
+                                "low":         float(row["low"]),
+                                "close":       float(row["close"]),
+                                "volume":      float(row["volume"]),
+                                "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
+                            })
 
-                    # Seed market_metadata with price from latest OHLCV close.
-                    # Ensures every pool coin has a metadata row even when the
-                    # tickers-based pathway in collect_all has failed.
-                    latest_5m = df.iloc[-1]
-                    await db.execute(text("""
-                        INSERT INTO market_metadata (symbol, price, last_updated)
-                        VALUES (:sym, :price, :ts)
-                        ON CONFLICT (symbol) DO UPDATE SET
-                            price = :price,
-                            last_updated = :ts
-                    """), {
-                        "sym":   symbol,
-                        "price": float(latest_5m["close"]),
-                        "ts":    datetime.now(timezone.utc),
-                    })
+                        # Seed market_metadata with price from latest OHLCV close.
+                        # Ensures every pool coin has a metadata row even when the
+                        # tickers-based pathway in collect_all has failed.
+                        await db.execute(text("""
+                            INSERT INTO market_metadata (symbol, price, last_updated)
+                            VALUES (:sym, :price, :ts)
+                            ON CONFLICT (symbol) DO UPDATE SET
+                                price = :price,
+                                last_updated = :ts
+                        """), {
+                            "sym":   symbol,
+                            "price": float(latest_5m["close"]),
+                            "ts":    _now_5m,
+                        })
 
                 # SAVEPOINT 2: orderbook metrics (separate SAVEPOINT so that a
                 # DB failure here never rolls back the OHLCV + price writes above).
@@ -554,20 +673,34 @@ async def _collect_5m_async():
                 try:
                     ob = await market_data_service.fetch_orderbook_metrics(symbol, depth=10)
                     if ob:
-                        async with db.begin_nested():
-                            await db.execute(text("""
-                                INSERT INTO market_metadata (symbol, spread_pct, orderbook_depth_usdt, last_updated)
-                                VALUES (:sym, :spread, :depth, :ts)
-                                ON CONFLICT (symbol) DO UPDATE SET
-                                    spread_pct = :spread,
-                                    orderbook_depth_usdt = :depth,
-                                    last_updated = :ts
-                            """), {
-                                "sym":    symbol,
-                                "spread": ob.get("spread_pct"),
-                                "depth":  ob.get("orderbook_depth_usdt"),
-                                "ts":     datetime.now(timezone.utc),
-                            })
+                        _ob_ts = datetime.now(timezone.utc)
+                        if queue_mode:
+                            await _pq.enqueue_or_log(
+                                producer="collect-5m-orderbook",
+                                msg=_pq.MarketMetadataUpsert(
+                                    category="scheduler",
+                                    enqueued_at=_pq.now_monotonic(),
+                                    symbol=symbol,
+                                    last_updated=_ob_ts,
+                                    spread_pct=ob.get("spread_pct"),
+                                    orderbook_depth_usdt=ob.get("orderbook_depth_usdt"),
+                                ),
+                            )
+                        else:
+                            async with db.begin_nested():
+                                await db.execute(text("""
+                                    INSERT INTO market_metadata (symbol, spread_pct, orderbook_depth_usdt, last_updated)
+                                    VALUES (:sym, :spread, :depth, :ts)
+                                    ON CONFLICT (symbol) DO UPDATE SET
+                                        spread_pct = :spread,
+                                        orderbook_depth_usdt = :depth,
+                                        last_updated = :ts
+                                """), {
+                                    "sym":    symbol,
+                                    "spread": ob.get("spread_pct"),
+                                    "depth":  ob.get("orderbook_depth_usdt"),
+                                    "ts":     _ob_ts,
+                                })
                     else:
                         logger.warning(
                             "[DATA_UNKNOWN] orderbook metrics unavailable for %s "
@@ -618,28 +751,43 @@ async def _collect_5m_async():
                         volume = float(ticker.get("quote_volume", 0) or 0)
                         change = float(ticker.get("change_percentage", 0) or 0)
                         spread = market_data_service.compute_spread_from_ticker(ticker)
-                        async with db.begin_nested():
-                            await db.execute(text("""
-                                INSERT INTO market_metadata
-                                    (symbol, price, price_change_24h, volume_24h,
-                                     spread_pct, last_updated, volume_24h_updated_at)
-                                VALUES (:symbol, :price, :change, :volume, :spread,
-                                        :updated, :updated)
-                                ON CONFLICT (symbol) DO UPDATE SET
-                                    price = :price,
-                                    price_change_24h = :change,
-                                    volume_24h = :volume,
-                                    spread_pct = :spread,
-                                    last_updated = :updated,
-                                    volume_24h_updated_at = :updated
-                            """), {
-                                "symbol": pair,
-                                "price":  price,
-                                "change": change,
-                                "volume": volume,
-                                "spread": spread,
-                                "updated": now_ts,
-                            })
+                        if queue_mode:
+                            await _pq.enqueue_or_log(
+                                producer="collect-5m-tickers",
+                                msg=_pq.MarketMetadataUpsert(
+                                    category="ingest",
+                                    enqueued_at=_pq.now_monotonic(),
+                                    symbol=pair,
+                                    last_updated=now_ts,
+                                    price=price,
+                                    price_change_24h=change,
+                                    volume_24h=volume,
+                                    spread_pct=spread,
+                                ),
+                            )
+                        else:
+                            async with db.begin_nested():
+                                await db.execute(text("""
+                                    INSERT INTO market_metadata
+                                        (symbol, price, price_change_24h, volume_24h,
+                                         spread_pct, last_updated, volume_24h_updated_at)
+                                    VALUES (:symbol, :price, :change, :volume, :spread,
+                                            :updated, :updated)
+                                    ON CONFLICT (symbol) DO UPDATE SET
+                                        price = :price,
+                                        price_change_24h = :change,
+                                        volume_24h = :volume,
+                                        spread_pct = :spread,
+                                        last_updated = :updated,
+                                        volume_24h_updated_at = :updated
+                                """), {
+                                    "symbol": pair,
+                                    "price":  price,
+                                    "change": change,
+                                    "volume": volume,
+                                    "spread": spread,
+                                    "updated": now_ts,
+                                })
                         ticker_ok += 1
                     except Exception as te:
                         logger.debug("5m: backup ticker upsert failed for %s: %s",
@@ -678,20 +826,34 @@ async def _collect_5m_async():
                         volume = float(ticker.get("quote_volume", 0) or 0)
                         if price <= 0 or volume <= 0:
                             continue
-                        async with db.begin_nested():
-                            await db.execute(text("""
-                                UPDATE market_metadata
-                                SET price = :price,
-                                    volume_24h = :volume,
-                                    last_updated = :ts,
-                                    volume_24h_updated_at = :ts
-                                WHERE symbol = :sym
-                            """), {
-                                "sym":    sym,
-                                "price":  price,
-                                "volume": volume,
-                                "ts":     datetime.now(timezone.utc),
-                            })
+                        _ts_fb = datetime.now(timezone.utc)
+                        if queue_mode:
+                            await _pq.enqueue_or_log(
+                                producer="collect-5m-fallback",
+                                msg=_pq.MarketMetadataUpsert(
+                                    category="ingest",
+                                    enqueued_at=_pq.now_monotonic(),
+                                    symbol=sym,
+                                    last_updated=_ts_fb,
+                                    price=price,
+                                    volume_24h=volume,
+                                ),
+                            )
+                        else:
+                            async with db.begin_nested():
+                                await db.execute(text("""
+                                    UPDATE market_metadata
+                                    SET price = :price,
+                                        volume_24h = :volume,
+                                        last_updated = :ts,
+                                        volume_24h_updated_at = :ts
+                                    WHERE symbol = :sym
+                                """), {
+                                    "sym":    sym,
+                                    "price":  price,
+                                    "volume": volume,
+                                    "ts":     _ts_fb,
+                                })
                         refreshed += 1
                     except Exception as se:
                         logger.debug("5m: per-symbol fallback failed for %s: %s", sym, se)
@@ -711,6 +873,11 @@ async def _collect_5m_async():
             raise RuntimeError("zero success — all symbols failed")
         return collected
 
+    # Task #236: persistence-queue path (see _collect_all_async for rationale).
+    if _pq.is_enabled():
+        from ..database import CeleryAsyncSessionLocal
+        async with CeleryAsyncSessionLocal() as db:
+            return await _inner(db, queue_mode=True)
     return await run_db_task(_inner, celery=True)
 
 

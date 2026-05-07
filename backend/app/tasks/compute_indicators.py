@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import pandas as pd
 from sqlalchemy import text
 
+from ..services import persistence as _pq
 from ..tasks.celery_app import celery_app
 from ..utils.indicator_merge import envelop_results, _ORDER_FLOW_KEYS
 
@@ -312,33 +313,76 @@ async def _compute_async():
 
                     now = datetime.now(timezone.utc)
 
-                    # SAVEPOINT: isolates this symbol's writes so that a
-                    # failure here does not roll back other symbols' data.
-                    async with db.begin_nested():
-                        await _upsert_market_metadata_snapshot(db, symbol, results, now)
+                    payload_json = json.dumps(envelop_results(
+                        results,
+                        default_source="candle_computed",
+                        default_confidence=0.80,
+                        key_source_map=_COMPUTE_KEY_SOURCE_MAP,
+                    ))
 
-                        # Store in TimescaleDB (envelope format — value + source + confidence + status).
-                        # Task #216: write ``scheduler_group`` explicitly so the read
-                        # path (indicators_provider) can merge structural + microstructure
-                        # rows by group rather than guessing from legacy NULL/'combined'.
-                        await db.execute(text("""
-                            INSERT INTO indicators
-                                (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
-                            VALUES
-                                (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
-                        """), {
-                            "time": now,
-                            "symbol": symbol,
-                            "timeframe": "1h",
-                            "market_type": "spot",  # 1h collector is spot-only (pool query above filters p.market_type='spot')
-                            "scheduler_group": "structural",
-                            "indicators": json.dumps(envelop_results(
-                                results,
-                                default_source="candle_computed",
-                                default_confidence=0.80,
-                                key_source_map=_COMPUTE_KEY_SOURCE_MAP,
-                            )),
-                        })
+                    # Task #236: persistence-queue path. When enabled, never
+                    # open a savepoint here — enqueue idempotent UPSERT messages
+                    # so the dedicated worker pool drains them in short
+                    # transactions. Removes the structural ↔ microstructure
+                    # ↔ collect_market_data lock contention on indicators /
+                    # market_metadata observed in May-2026 prod.
+                    if _pq.is_enabled():
+                        await _pq.enqueue_or_log(
+                            producer="compute-1h",
+                            msg=_pq.IndicatorsUpsert(
+                                category="scheduler",
+                                enqueued_at=_pq.now_monotonic(),
+                                symbol=symbol,
+                                timeframe="1h",
+                                market_type="spot",
+                                scheduler_group="structural",
+                                time=now,
+                                payload_json=payload_json,
+                                mode="upsert",
+                            ),
+                        )
+                        # market_metadata: only price/spread/depth here.
+                        # volume_24h is owned by collect_market_data (Gate ticker).
+                        if (
+                            results.get("price") is not None
+                            or results.get("spread_pct") is not None
+                            or results.get("orderbook_depth_usdt") is not None
+                        ):
+                            await _pq.enqueue_or_log(
+                                producer="compute-1h",
+                                msg=_pq.MarketMetadataUpsert(
+                                    category="scheduler",
+                                    enqueued_at=_pq.now_monotonic(),
+                                    symbol=symbol,
+                                    last_updated=now,
+                                    price=results.get("price"),
+                                    spread_pct=results.get("spread_pct"),
+                                    orderbook_depth_usdt=results.get("orderbook_depth_usdt"),
+                                ),
+                            )
+                    else:
+                        # SAVEPOINT: isolates this symbol's writes so that a
+                        # failure here does not roll back other symbols' data.
+                        async with db.begin_nested():
+                            await _upsert_market_metadata_snapshot(db, symbol, results, now)
+
+                            # Store in TimescaleDB (envelope format — value + source + confidence + status).
+                            # Task #216: write ``scheduler_group`` explicitly so the read
+                            # path (indicators_provider) can merge structural + microstructure
+                            # rows by group rather than guessing from legacy NULL/'combined'.
+                            await db.execute(text("""
+                                INSERT INTO indicators
+                                    (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
+                                VALUES
+                                    (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
+                            """), {
+                                "time": now,
+                                "symbol": symbol,
+                                "timeframe": "1h",
+                                "market_type": "spot",  # 1h collector is spot-only (pool query above filters p.market_type='spot')
+                                "scheduler_group": "structural",
+                                "indicators": payload_json,
+                            })
 
                     computed += 1
 
@@ -460,31 +504,67 @@ async def _compute_5m_async():
 
                     now = datetime.now(timezone.utc)
 
-                    # SAVEPOINT: isolates this symbol's writes so that a
-                    # failure here does not roll back other symbols' data.
-                    async with db.begin_nested():
-                        await _upsert_market_metadata_snapshot(db, symbol, results, now)
-                        # Store in TimescaleDB (envelope format — value + source + confidence + status).
-                        # Task #216: explicit ``scheduler_group='microstructure'`` so the
-                        # read path can identify which cadence wrote each row.
-                        await db.execute(text("""
-                            INSERT INTO indicators
-                                (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
-                            VALUES
-                                (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
-                        """), {
-                            "time":            now,
-                            "symbol":          symbol,
-                            "timeframe":       "5m",
-                            "market_type":     symbol_market_type.get(symbol, "spot"),
-                            "scheduler_group": "microstructure",
-                            "indicators":      json.dumps(envelop_results(
-                                results,
-                                default_source="candle_computed",
-                                default_confidence=0.80,
-                                key_source_map=_COMPUTE_KEY_SOURCE_MAP,
-                            )),
-                        })
+                    payload_json = json.dumps(envelop_results(
+                        results,
+                        default_source="candle_computed",
+                        default_confidence=0.80,
+                        key_source_map=_COMPUTE_KEY_SOURCE_MAP,
+                    ))
+
+                    # Task #236: persistence-queue path. See _compute_async for rationale.
+                    if _pq.is_enabled():
+                        await _pq.enqueue_or_log(
+                            producer="compute-5m",
+                            msg=_pq.IndicatorsUpsert(
+                                category="scheduler",
+                                enqueued_at=_pq.now_monotonic(),
+                                symbol=symbol,
+                                timeframe="5m",
+                                market_type=symbol_market_type.get(symbol, "spot"),
+                                scheduler_group="microstructure",
+                                time=now,
+                                payload_json=payload_json,
+                                mode="upsert",
+                            ),
+                        )
+                        if (
+                            results.get("price") is not None
+                            or results.get("spread_pct") is not None
+                            or results.get("orderbook_depth_usdt") is not None
+                        ):
+                            await _pq.enqueue_or_log(
+                                producer="compute-5m",
+                                msg=_pq.MarketMetadataUpsert(
+                                    category="scheduler",
+                                    enqueued_at=_pq.now_monotonic(),
+                                    symbol=symbol,
+                                    last_updated=now,
+                                    price=results.get("price"),
+                                    spread_pct=results.get("spread_pct"),
+                                    orderbook_depth_usdt=results.get("orderbook_depth_usdt"),
+                                ),
+                            )
+                    else:
+                        # SAVEPOINT: isolates this symbol's writes so that a
+                        # failure here does not roll back other symbols' data.
+                        async with db.begin_nested():
+                            await _upsert_market_metadata_snapshot(db, symbol, results, now)
+                            # Store in TimescaleDB (envelope format — value + source + confidence + status).
+                            # Task #216: explicit ``scheduler_group='microstructure'`` so the
+                            # read path can identify which cadence wrote each row.
+                            await db.execute(text("""
+                                INSERT INTO indicators
+                                    (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
+                                VALUES
+                                    (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
+                            """), {
+                                "time":            now,
+                                "symbol":          symbol,
+                                "timeframe":       "5m",
+                                "market_type":     symbol_market_type.get(symbol, "spot"),
+                                "scheduler_group": "microstructure",
+                                "indicators":      payload_json,
+                            })
 
                     computed += 1
 
