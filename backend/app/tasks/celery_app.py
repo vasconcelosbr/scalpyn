@@ -173,18 +173,37 @@ _EXECUTION_GUARDS = {
     "max_retries": 3,
 }
 
-TASK_ANNOTATIONS = {
-    # Microstructure
-    "app.tasks.collect_market_data.collect_5m":  dict(_MICRO_GUARDS),
-    "app.tasks.compute_indicators.compute_5m":   dict(_MICRO_GUARDS),
+# Task #245 — opt-out from the global ``task_acks_late=True`` for tasks that
+# are (a) driven by beat on a fixed cadence and (b) idempotent across runs.
+# With acks_late=True + task_reject_on_worker_lost=True, hitting ``time_limit``
+# (SIGKILL) causes the broker to RE-DELIVER the task — outside the
+# ``max_retries`` budget (which only counts explicit ``task.retry()`` calls).
+# That's how the structural / microstructure queues built up 1k+ msg backlogs
+# in May-2026: a single contended UPSERT past asyncpg's ``command_timeout``
+# poisoned the outer transaction, the task raised, the broker requeued it,
+# next worker picked it up, hit the same contention, repeat forever.
+#
+# Setting acks_late=False here means: the task is acknowledged on RECEIPT,
+# not on completion. If the worker crashes mid-execution the task is lost
+# — but beat re-schedules within seconds (collect_5m: 5 min, collect_all:
+# 60 s, compute_*: chained or beat-driven) so a missed cycle is recoverable
+# by the next tick. Critical-path execution tasks (evaluate_signals,
+# execute_buy_cycle) keep the global acks_late=True — losing a buy decision
+# without retry is unacceptable.
+_NO_REQUEUE_ON_WORKER_LOSS = {"acks_late": False}
 
-    # Structural — most tasks
-    "app.tasks.collect_market_data.collect_all":         dict(_STRUCTURAL_GUARDS),
-    "app.tasks.compute_indicators.compute":              dict(_STRUCTURAL_GUARDS),
-    "app.tasks.compute_scores.score":                    dict(_STRUCTURAL_GUARDS),
+TASK_ANNOTATIONS = {
+    # Microstructure (Task #245: idempotent + beat-driven → opt-out of acks_late)
+    "app.tasks.collect_market_data.collect_5m":  {**_MICRO_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.compute_indicators.compute_5m":   {**_MICRO_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
+
+    # Structural — most tasks (Task #245: idempotent + beat-driven → opt-out of acks_late)
+    "app.tasks.collect_market_data.collect_all":         {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.compute_indicators.compute":              {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.compute_scores.score":                    {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
     # pipeline_scan.scan: structural cadence (5-min safety-net scan,
     # but heavier than the 5m TA chain — uses structural cost guards).
-    "app.tasks.pipeline_scan.scan":                      dict(_STRUCTURAL_GUARDS),
+    "app.tasks.pipeline_scan.scan":                      {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.auto_discover_assets.discover":           {**_STRUCTURAL_GUARDS, "rate_limit": "2/h"},
     "app.tasks.fetch_market_caps.fetch_market_caps":     {**_STRUCTURAL_GUARDS, "rate_limit": "4/h"},
     "app.tasks.macro_regime_update.update":              {**_STRUCTURAL_GUARDS, "rate_limit": "4/h"},

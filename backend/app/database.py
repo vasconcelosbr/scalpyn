@@ -51,7 +51,8 @@ _db_url, _connect_args = _resolve_db_url(settings.DATABASE_URL)
 # Fail fast on unreachable DB — asyncpg default is 60 s which is too long
 # for Cloud Run startup.  15 s is enough for Cloud SQL proxy sockets.
 _connect_args.setdefault("timeout", 15)
-# Add command_timeout to prevent hung queries
+# Add command_timeout to prevent hung queries.
+# 60 s for the API engine: HTTP handlers must fail fast.
 _connect_args.setdefault("command_timeout", 60)
 
 # ── Pool sizing ──────────────────────────────────────────────────────────────
@@ -219,7 +220,21 @@ def start_pool_stats_logger() -> asyncio.Task | None:
 # NullPool disables connection reuse: each session opens/closes its own
 # connection within the task's event loop, fully avoiding this error.
 _celery_connect_args = dict(_connect_args)
-_celery_connect_args.setdefault("command_timeout", 60)
+# Task #245 — Celery sessions get a longer command_timeout (180 s) than the
+# API engine (60 s). Rationale: collect_market_data.collect_all / collect_5m
+# wrap the whole symbol loop in ONE outer transaction (run_db_task →
+# ``async with session.begin()``); SAVEPOINTs (``db.begin_nested``) do NOT
+# release row locks — only the outer COMMIT does. With 5 Cloud Run workers
+# UPSERTing concurrently into the same hot rows of ``market_metadata``,
+# transient row-lock contention regularly pushed individual INSERTs past
+# 60 s, asyncpg cancelled them ("canceling statement due to user request"),
+# the outer transaction got poisoned (``db.is_active=False``), the task
+# raised "zero success — all symbols failed", and ``task_reject_on_worker_lost``
+# requeued it → infinite loop visible as growing backlog on the structural
+# and microstructure queues. 180 s gives breathing room for normal contention
+# without exceeding the structural ``soft_time_limit`` of 540 s.
+# Override via env var ``CELERY_DB_COMMAND_TIMEOUT`` if needed.
+_celery_connect_args["command_timeout"] = _env_int("CELERY_DB_COMMAND_TIMEOUT", 180)
 _celery_engine = create_async_engine(
     _db_url,
     connect_args=_celery_connect_args,
