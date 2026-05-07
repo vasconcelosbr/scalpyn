@@ -61,9 +61,15 @@ O mesmo check roda como último step do `cloudbuild.yaml` (`topology-check`); bu
 
 ## Incidente 2026-05-07 — instância `scalpyn` patológica pós-deploy (Task #241)
 
-**Sintoma:** após o deploy do commit `2735bdef` (revisão `scalpyn-00434-459`, build `e3f71977…`), 100% dos endpoints (`/api/auth/login`, `/api/dashboard/overview`, `/api/custom-watchlists/`, `/api/watchlists/`, `/api/profiles/`, `/api/pools/`, `/ws/alerts`, `/api/system/celery-status`) começaram a retornar **504 com latência exatamente `300.000s`** (timeout default do Cloud Run). Todos os logs apontavam para o **mesmo `instanceId` `0007b734…`** — ou seja, uma única instância travada servindo tudo.
+**Sintoma:** após o deploy do commit `14592ac5` (Task #239, revisão `scalpyn-00434-459`, build `e3f71977-0626-49f0-b72c-cd320dd73835`), 100% dos endpoints (`/api/auth/login`, `/api/dashboard/overview`, `/api/custom-watchlists/`, `/api/watchlists/`, `/api/profiles/`, `/api/pools/`, `/ws/alerts`, `/api/system/celery-status`) começaram a retornar **504 com latência exatamente `300.000s`** (timeout default do Cloud Run). Todos os logs apontavam para o **mesmo `instanceId` `0007b734…`** — ou seja, uma única instância travada servindo tudo.
 
-**Causa provável:** cold start sincronizado dos 5 serviços (API + 4 workers) drenando o backlog de 11.547 tasks acumulado em `execution` (Task #232/239) saturou Redis Labs durante a janela de boot. A instância única do `scalpyn` ficou pendurada no `start_gate_ws_with_leader_election` ou no warmup do pool DB, e nunca passou a aceitar requests. Como `min-instances=1, max-instances=4` mas Cloud Run só promove novas instâncias com base em concurrency observada (e não havia respostas saindo), a única instância continuou recebendo 100% do tráfego.
+**Causa raiz: não confirmada** (sem `gcloud logging read` os logs de aplicação da revisão são opacos para o agente). Hipóteses, em ordem de plausibilidade:
+
+1. **Instância única patológica.** Cloud Run só promove novas instâncias quando observa concurrency > target — uma instância que aceita conexões mas nunca responde mantém o tráfego de 100% dos usuários numa única réplica travada. Compatível com o `instanceId` único nos logs de request.
+2. **Pool DB exausto.** Improvável neste serviço: `scalpyn` API roda com `SKIP_STRUCTURAL_SCHEDULER=1`, `SKIP_MICROSTRUCTURE_SCHEDULER=1`, `SKIP_PIPELINE_SCHEDULER=1` (ver `cloudbuild.yaml`), então os schedulers que dominariam o pool não rodam aqui.
+3. **Cold-start storm de boot.** Os 5 serviços re-deployaram juntos; algum probe síncrono no lifespan (Gate WS leader election, ops snapshot, warmup DB) pode ter ficado pendurado. Redis Labs estava **saudável** no momento da investigação (`evictions=0`, conn≈54), o que enfraquece a sub-hipótese "Redis saturado". Mas não dá para descartar uma janela de saturação que já tinha drenado quando olhei.
+
+Sem os logs de aplicação da revisão `00434-459`, qualquer atribuição definitiva é especulação. **Antes do próximo recovery, rodar o passo 3 abaixo primeiro.**
 
 **Mitigação executada:** bumpei `FORCE_RESTART` no env do `scalpyn` de `2026-05-04T00:00:00Z` para `2026-05-07T17:30:00Z`. Isso força o Cloud Run a criar uma nova revisão (env diff detectado) e mata a instância patológica. Como Redis já está saudável (backlog drenado pelos workers que sobreviveram), o cold start da nova revisão é leve.
 
