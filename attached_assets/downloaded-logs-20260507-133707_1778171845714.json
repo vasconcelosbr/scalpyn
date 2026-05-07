@@ -1,0 +1,130 @@
+[
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py\", line 373, in _close_connection\n    self._dialect.do_terminate(connection)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 1127, in do_terminate\n    dbapi_connection.terminate()\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py\", line 402, in terminate\n    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 912, in _terminate_graceful_close\n    await self._connection.close(timeout=2)\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 1513, in close\n    await self._protocol.close(timeout)\n  File \"asyncpg/protocol/protocol.pyx\", line 617, in close\n  File \"asyncpg/protocol/protocol.pyx\", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 1682, in _cancel_current_command\n    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 455, in create_task\n    self._check_closed()\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 545, in _check_closed\n    raise RuntimeError('Event loop is closed')\nRuntimeError: Event loop is closed",
+    "insertId": "69fcbf070005640c78beefb3",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "location": "us-central1",
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00433-p7c",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-07T16:34:15.353292Z",
+    "severity": "ERROR",
+    "labels": {
+      "commit-sha": "b37f8988cdd1c2e93ad78ab0acfd8fd089cd9f36",
+      "gcb-build-id": "39a98858-871c-4a3d-8b8d-57ec6cdcc856",
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d9f26a198a7c8c520227eb2cad50e37e54e2d8605808454813449e33cc1170fad065b76d9e20b30a60198d979eeb6cf8d8cce3468ab4906d6c4dabaf1acf83dc8ebed1e5476e1f87",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-07T16:34:15.459377379Z",
+    "errorGroups": [
+      {
+        "id": "CIaUi4fY3-nCJw"
+      }
+    ]
+  },
+  {
+    "textPayload": "Container called exit(0).",
+    "insertId": "69fcbf60000a2304b5dde123",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "scalpyn",
+        "revision_name": "scalpyn-00433-p7c",
+        "service_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-07T16:35:44.664194Z",
+    "severity": "WARNING",
+    "labels": {
+      "instanceId": "0007b734d9f26a198a7c8c520227eb2cad50e37e54e2d8605808454813449e33cc1170fad065b76d9e20b30a60198d979eeb6cf8d8cce3468ab4906d6c4dabaf1acf83dc8ebed1e5476e1f87",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "container_name": "placeholder-1",
+      "gcb-build-id": "39a98858-871c-4a3d-8b8d-57ec6cdcc856",
+      "commit-sha": "b37f8988cdd1c2e93ad78ab0acfd8fd089cd9f36",
+      "gcb-trigger-region": "global"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2026-05-07T16:35:44.672695921Z"
+  },
+  {
+    "protoPayload": {
+      "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
+      "status": {
+        "message": "OK"
+      },
+      "authenticationInfo": {
+        "principalEmail": "330575088921-compute@developer.gserviceaccount.com",
+        "serviceAccountDelegationInfo": [
+          {
+            "firstPartyPrincipal": {
+              "principalEmail": "service-330575088921@serverless-robot-prod.iam.gserviceaccount.com"
+            }
+          }
+        ],
+        "principalSubject": "serviceAccount:330575088921-compute@developer.gserviceaccount.com",
+        "oauthInfo": {
+          "oauthClientId": "110117291761305397817"
+        }
+      },
+      "requestMetadata": {
+        "callerIp": "2600:1900:0:2d0e::b01",
+        "requestAttributes": {
+          "time": "2026-05-07T16:35:49.044065Z",
+          "auth": {}
+        },
+        "destinationAttributes": {}
+      },
+      "serviceName": "cloudsql.googleapis.com",
+      "methodName": "cloudsql.instances.connect",
+      "authorizationInfo": [
+        {
+          "resource": "projects/clickrate-477217/instances/scalpyn",
+          "permission": "cloudsql.instances.connect",
+          "granted": true,
+          "resourceAttributes": {
+            "service": "sqladmin.googleapis.com",
+            "name": "projects/clickrate-477217/instances/scalpyn",
+            "type": "sqladmin.googleapis.com/Instance"
+          },
+          "permissionType": "ADMIN_WRITE"
+        }
+      ],
+      "resourceName": "projects/clickrate-477217/instances/scalpyn",
+      "request": {
+        "@type": "type.googleapis.com/google.cloud.sql.v1.GenerateEphemeralCertRequest",
+        "instance": "scalpyn",
+        "project": "clickrate-477217"
+      },
+      "response": {
+        "@type": "type.googleapis.com/google.cloud.sql.v1.GenerateEphemeralCertResponse",
+        "ephemeralCert": {
+          "kind": "sql#sslCert"
+        }
+      }
+    },
+    "insertId": "-z7ewhjecvcpu",
+    "resource": {
+      "type": "cloudsql_database",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "region": "us-central1",
+        "database_id": "clickrate-477217:scalpyn"
+      }
+    },
+    "timestamp": "2026-05-07T16:35:49.025439Z",
+    "severity": "NOTICE",
+    "logName": "projects/clickrate-477217/logs/cloudaudit.googleapis.com%2Factivity",
+    "receiveTimestamp": "2026-05-07T16:35:49.987517297Z"
+  }
+]
