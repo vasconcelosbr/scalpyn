@@ -23,6 +23,22 @@
 
 **Follow-up pendente** (não bloqueia a recuperação atual): corrigir o filter do step `topology-check` em `cloudbuild.yaml:362` para que builds futuros falhem vermelho de verdade quando algum serviço some.
 
+### Pós-recovery (~19:20Z): "Workers: 0" no dashboard com workers vivos
+
+Logo após a topologia ficar `Serving`, o dashboard "Centro Operacional" mostrou `worker_offline_60s [CRITICAL]` + `Celery inspect timeout after 2.0s` + filas `execution=507` e `structural=471` sem drenar. Investigação dos logs (`gcloud run services logs read scalpyn-worker-micro`) mostrou:
+
+```
+[WARNING/MainProcess] DuplicateNodenameWarning: Received multiple replies from node name: celery@localhost.
+```
+
+**Causa raiz**: `start.sh` invocava `celery worker` sem `--hostname`. No Cloud Run, `HOSTNAME=localhost` em todo container; sem `--hostname`, **todos os 4 workers anunciam-se ao broker como `celery@localhost`**. Quando o `scalpyn` (API) chama `celery_app.control.inspect()`, as respostas dos 4 workers colidem no mesmo nodename — o cliente Celery dedup, ignora as duplicatas e devolve `Workers: 0`. Os workers **estavam vivos e drenando filas normalmente**; o dashboard ficou cego.
+
+**Fix** (commit a aplicar via Cloud Build trigger):
+- `backend/start.sh`: gera `CELERY_NODENAME="${K_SERVICE:-celery}-<uuid8>"` e passa `--hostname="celery@${CELERY_NODENAME}"`. `K_SERVICE` é uma env automática do Cloud Run (nome do service); o sufixo UUID garante uniqueness mesmo com múltiplas instâncias da mesma revisão.
+- `backend/Dockerfile`: adicionado `procps` ao `apt-get install`. Sem isso, o watchdog em `start.sh:281` (`is_process_alive`) executa `ps -o stat= -p` que não existe → função retorna 0 (success por causa do `case` sem match) → **watchdog estava cego, nunca detectava worker morto/zumbi**.
+
+**Como verificar pós-deploy**: `gcloud run services logs read scalpyn-worker-micro --region=us-central1 --limit=20` deve mostrar `STARTING CELERY WORKER (... hostname=celery@scalpyn-worker-micro-XXXXXXXX)` no boot, e o dashboard "Centro Operacional" deve passar de `Workers: 0` para `Workers: 4`.
+
 ## TL;DR
 
 Produção precisa de **5 serviços Cloud Run** em `us-central1`. Se faltar **qualquer um** deles, o pipeline fica silenciosamente parado: o `scalpyn` (API) continua respondendo HTTP normalmente, mas nenhum candle é coletado, nenhum indicador é computado e nenhuma decisão de execução é avaliada.

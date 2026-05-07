@@ -189,12 +189,23 @@ CELERY_BEAT_PID=""
 # is sized per queue by the deploy config (4 for microstructure burst, 2
 # for structural/execution); the dev default of 2 keeps the single-container
 # Replit setup responsive without overloading the local broker.
+# ── Unique Celery nodename (Cloud Run hostname is always "localhost") ────────
+# Without --hostname, every Cloud Run instance announces itself to the broker
+# as `celery@localhost`. When the API calls `celery_app.control.inspect()`,
+# replies from different instances collide on the same nodename — the client
+# de-duplicates, returns 0 workers, and the dashboard alarms `worker_offline_60s`
+# even though workers are healthy and draining queues. Use K_SERVICE (Cloud Run
+# service name) + a random suffix so each instance is uniquely addressable.
+NODENAME_SUFFIX="$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' | head -c 8 || echo "$$")"
+CELERY_NODENAME="${K_SERVICE:-celery}-${NODENAME_SUFFIX}"
+
 if [ -n "$WORKER_QUEUES" ]; then
-    echo "==> STARTING CELERY WORKER (queues=${WORKER_QUEUES} concurrency=${CELERY_CONCURRENCY:-2} loglevel=${CELERY_LOGLEVEL})..."
+    echo "==> STARTING CELERY WORKER (queues=${WORKER_QUEUES} concurrency=${CELERY_CONCURRENCY:-2} loglevel=${CELERY_LOGLEVEL} hostname=celery@${CELERY_NODENAME})..."
     celery -A app.tasks.celery_app worker \
         --loglevel="${CELERY_LOGLEVEL}" \
         --concurrency="${CELERY_CONCURRENCY:-2}" \
         --queues="${WORKER_QUEUES}" \
+        --hostname="celery@${CELERY_NODENAME}" \
         &
     CELERY_WORKER_PID=$!
     echo " Celery worker PID: $CELERY_WORKER_PID"
