@@ -458,6 +458,14 @@ async def get_celery_status():
 
     from ..tasks.celery_app import celery_app, ALL_QUEUES
 
+    # Both Celery `inspect.*` and `redis-py` sync calls below are
+    # blocking I/O. Running them directly on the event loop pins the
+    # entire uvicorn worker for the duration (3 s timeout × 3 inspects
+    # = up to 9 s, plus Redis Labs RTT × N queues). Worse: while the
+    # loop is pinned, EVERY OTHER endpoint queues — that is what was
+    # making `/api/dashboard/overview`, `/api/auth/login`, etc. hang
+    # for minutes during the 17:15 incident. We isolate the whole sync
+    # block in a dedicated thread so the event loop stays responsive.
     result: Dict[str, Any] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "worker_alive": False,
@@ -480,70 +488,104 @@ async def get_celery_status():
         "error": None,
     }
 
-    try:
-        # Workers reply to ping in single-digit ms when alive; when dead,
-        # waiting 3 s yields no extra info. 1 s keeps the endpoint snappy
-        # and the cache TTL above absorbs any false negatives.
-        inspect = celery_app.control.inspect(timeout=1.0)
-        ping = inspect.ping()
-        if ping:
-            result["worker_alive"] = True
-            result["worker_count"] = len(ping)
+    def _probe_blocking() -> tuple[Dict[str, Any], list[tuple[str, int]]]:
+        """All blocking I/O — runs inside ``asyncio.to_thread``.
 
-            # Skip active/registered when no worker answered ping — both
-            # would just block until timeout and return None anyway.
-            active = inspect.active()
-            if active:
-                result["active_tasks"] = sum(len(v) for v in active.values())
+        Returns the partially-filled result dict plus the list of
+        rising-edge alerts to persist (BackofficeAlert insert is async,
+        so it stays in the caller).
+        """
+        fired: list[tuple[str, int]] = []
+        try:
+            # 1 s is plenty for live workers (single-digit ms reply); a
+            # missing worker contributes the full second once, then the
+            # cache absorbs subsequent polls for 10 s.
+            inspect = celery_app.control.inspect(timeout=1.0)
+            ping = inspect.ping()
+            if ping:
+                result["worker_alive"] = True
+                result["worker_count"] = len(ping)
+                # Skip active/registered when ping is empty — both would
+                # just stall until their own timeouts and return None.
+                active = inspect.active()
+                if active:
+                    result["active_tasks"] = sum(len(v) for v in active.values())
+                registered = inspect.registered()
+                if registered:
+                    result["registered_task_count"] = sum(
+                        len(v) for v in registered.values()
+                    )
+        except Exception as exc:
+            result["error"] = str(exc)
+            logger.warning("[celery-status] inspect failed: %s", exc)
 
-            registered = inspect.registered()
-            if registered:
-                result["registered_task_count"] = sum(len(v) for v in registered.values())
-
-    except Exception as exc:
-        result["error"] = str(exc)
-        logger.warning("[celery-status] inspect failed: %s", exc)
-
-    # Per-queue depth + age + hysteresis alert
-    fired_alerts: list[tuple[str, int]] = []
-    try:
-        import redis as _redis
-        from ..config import settings
-        r = _redis.from_url(settings.REDIS_URL, socket_connect_timeout=3)
-        total_depth = 0
-        any_depth_seen = False
-        for queue_name in ALL_QUEUES:
-            try:
-                depth = int(r.llen(queue_name))
-            except Exception as exc:
-                logger.warning(
-                    "[celery-status] LLEN failed for queue=%s: %s",
-                    queue_name, exc,
+        try:
+            import redis as _redis
+            from ..config import settings
+            # ``socket_timeout`` (operation) is what protects against a
+            # half-open TCP / lazy Redis Labs reply — without it, an
+            # ``LLEN``/``LRANGE`` can hang indefinitely. 2 s budget per
+            # call keeps the total bounded even when probing 3 queues.
+            r = _redis.from_url(
+                settings.REDIS_URL,
+                socket_connect_timeout=2,
+                socket_timeout=2,
+            )
+            total_depth = 0
+            any_depth_seen = False
+            for queue_name in ALL_QUEUES:
+                try:
+                    depth = int(r.llen(queue_name))
+                except Exception as exc:
+                    logger.warning(
+                        "[celery-status] LLEN failed for queue=%s: %s",
+                        queue_name, exc,
+                    )
+                    continue
+                oldest_age = (
+                    _peek_oldest_age_seconds(r, queue_name) if depth else None
                 )
-                continue
-            oldest_age = _peek_oldest_age_seconds(r, queue_name) if depth else None
-            alert_state, alert_fired = _evaluate_queue_alert(r, queue_name, depth)
-            result["queues"][queue_name] = {
-                "depth": depth,
-                "oldest_age_s": oldest_age,
-                "alert_state": alert_state,
-            }
-            result["queue_depth_by_queue"][queue_name] = depth
-            result["oldest_task_age_seconds_by_queue"][queue_name] = oldest_age
-            total_depth += depth
-            any_depth_seen = True
-            if alert_fired:
-                fired_alerts.append((queue_name, depth))
-        if any_depth_seen:
-            result["queue_depth"] = total_depth
-    except Exception as exc:
-        result["redis_error"] = f"{type(exc).__name__}: {exc}"
-        logger.warning("[celery-status] redis queue probe failed: %s", exc)
+                alert_state, alert_fired = _evaluate_queue_alert(
+                    r, queue_name, depth
+                )
+                result["queues"][queue_name] = {
+                    "depth": depth,
+                    "oldest_age_s": oldest_age,
+                    "alert_state": alert_state,
+                }
+                result["queue_depth_by_queue"][queue_name] = depth
+                result["oldest_task_age_seconds_by_queue"][queue_name] = oldest_age
+                total_depth += depth
+                any_depth_seen = True
+                if alert_fired:
+                    fired.append((queue_name, depth))
+            if any_depth_seen:
+                result["queue_depth"] = total_depth
+        except Exception as exc:
+            result["redis_error"] = f"{type(exc).__name__}: {exc}"
+            logger.warning("[celery-status] redis queue probe failed: %s", exc)
+        return result, fired
+
+    import asyncio as _asyncio
+    try:
+        # Hard upper bound on the whole sync block. If anything exceeds
+        # this, we serve a degraded payload (defaults already populated
+        # in ``result``) instead of dragging the request beyond the
+        # Cloud Run 300 s frontend timeout.
+        _, fired_alerts = await _asyncio.wait_for(
+            _asyncio.to_thread(_probe_blocking),
+            timeout=8.0,
+        )
+    except _asyncio.TimeoutError:
+        result["error"] = "probe_timeout_8s"
+        fired_alerts = []
+        logger.warning("[celery-status] probe exceeded 8 s — serving degraded payload")
 
     # Persist BackofficeAlert rows for any rising-edge crossings — once
-    # per crossing thanks to the hysteresis latch above. Done after the
-    # Redis loop so the response payload is complete even if the alert
-    # writer hits an error.
+    # per crossing thanks to the hysteresis latch. Done after the Redis
+    # loop so the response payload is complete even if the alert writer
+    # hits an error. Stays on the event loop because it uses the async
+    # SQLAlchemy session.
     for queue_name, depth in fired_alerts:
         await _emit_backoffice_alert(queue_name, depth)
 
