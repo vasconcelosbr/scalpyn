@@ -426,6 +426,10 @@ async def persistence_status(authorization: Optional[str] = Header(None)):
     return {"status": status, **snap}
 
 
+_CELERY_STATUS_CACHE: Dict[str, Any] = {"payload": None, "expires_at": 0.0}
+_CELERY_STATUS_TTL_SECONDS = 10.0
+
+
 @router.get("/celery-status")
 async def get_celery_status():
     """Per-queue Celery worker + queue health (Task #216, operator spec).
@@ -441,7 +445,17 @@ async def get_celery_status():
     HTTP 200 always; the dashboard renders ``alert_state`` red when any
     queue is ``alerted``. Intentionally unauthenticated so Cloud Run /
     Uptime Kuma / curl can probe without a JWT.
+
+    Result is cached in-process for ``_CELERY_STATUS_TTL_SECONDS`` (10 s)
+    to avoid hammering the broker with ``inspect.ping/active/registered``
+    on every dashboard poll — those calls block on broker RTT and stack
+    to ~3 s × 3 when no worker replies (e.g. degraded prod topology).
     """
+    now_ts = _time.time()
+    cached = _CELERY_STATUS_CACHE.get("payload")
+    if cached is not None and _CELERY_STATUS_CACHE.get("expires_at", 0.0) > now_ts:
+        return cached
+
     from ..tasks.celery_app import celery_app, ALL_QUEUES
 
     result: Dict[str, Any] = {
@@ -467,19 +481,24 @@ async def get_celery_status():
     }
 
     try:
-        inspect = celery_app.control.inspect(timeout=3)
+        # Workers reply to ping in single-digit ms when alive; when dead,
+        # waiting 3 s yields no extra info. 1 s keeps the endpoint snappy
+        # and the cache TTL above absorbs any false negatives.
+        inspect = celery_app.control.inspect(timeout=1.0)
         ping = inspect.ping()
         if ping:
             result["worker_alive"] = True
             result["worker_count"] = len(ping)
 
-        active = inspect.active()
-        if active:
-            result["active_tasks"] = sum(len(v) for v in active.values())
+            # Skip active/registered when no worker answered ping — both
+            # would just block until timeout and return None anyway.
+            active = inspect.active()
+            if active:
+                result["active_tasks"] = sum(len(v) for v in active.values())
 
-        registered = inspect.registered()
-        if registered:
-            result["registered_task_count"] = sum(len(v) for v in registered.values())
+            registered = inspect.registered()
+            if registered:
+                result["registered_task_count"] = sum(len(v) for v in registered.values())
 
     except Exception as exc:
         result["error"] = str(exc)
@@ -528,6 +547,8 @@ async def get_celery_status():
     for queue_name, depth in fired_alerts:
         await _emit_backoffice_alert(queue_name, depth)
 
+    _CELERY_STATUS_CACHE["payload"] = result
+    _CELERY_STATUS_CACHE["expires_at"] = _time.time() + _CELERY_STATUS_TTL_SECONDS
     return result
 
 
