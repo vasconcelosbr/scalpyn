@@ -97,45 +97,86 @@ async def ws_trades(websocket: WebSocket):
 async def ws_decisions(websocket: WebSocket):
     """Stream real-time decision log updates.
 
-    Task #234 hotfix — degrade mode: when the connect/loop raises an
-    unexpected exception (broker unreachable, manager registry corrupted,
-    etc.) we send a single ``{"status":"degraded"}`` frame and close the
-    socket cleanly with code 1011. The previous implementation surfaced
-    a 503 to the client, which the frontend treated as a hard failure
-    and disabled the entire decision log panel for the session. Degraded
-    mode lets the UI show a yellow indicator instead of going dark.
+    Task #234 hotfix — degrade mode that DOES NOT close the socket. When
+    the message loop raises an unexpected exception (broker unreachable,
+    manager registry corrupted, etc.) we send a ``{"status":"degraded"}``
+    frame and continue serving heartbeat pings on a 10 s interval until
+    the client disconnects. The previous implementation surfaced a 503
+    to the client, which the frontend treated as a hard failure and
+    disabled the entire decision log panel for the session. The closed
+    socket variant of the degraded mode (review #1) had the same effect
+    on the UI; keeping the connection alive lets the panel show a yellow
+    "degraded" badge while real broadcasts keep flowing as soon as the
+    backend recovers (broadcasts go through ``manager.broadcast``, which
+    iterates the same ``connections`` set this socket is registered in).
+
+    Time spent in the degraded loop is recorded in
+    ``ws_degraded_seconds{endpoint="/ws/decisions"}``.
     """
+    import time as _time
+    from ..services import ws_metrics as _ws_metrics
+
+    endpoint_label = "/ws/decisions"
     accepted = False
+    degraded = False
+    degraded_started_at: float | None = None
     try:
         await manager.connect(websocket, "decisions")
         accepted = True
         while True:
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_json({"type": "pong"})
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+                if data == "ping":
+                    payload: dict = {"type": "pong"}
+                    if degraded:
+                        payload["status"] = "degraded"
+                    await websocket.send_json(payload)
+            except asyncio.TimeoutError:
+                # Idle keepalive; in degraded mode also re-broadcast the
+                # status so reconnecting UIs see the badge promptly.
+                if degraded:
+                    try:
+                        await websocket.send_json({
+                            "type": "status",
+                            "status": "degraded",
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                        })
+                    except Exception:
+                        pass
+                continue
+            except WebSocketDisconnect:
+                raise
+            except Exception as exc:
+                # Loop-level error: degrade and keep the socket open.
+                if not degraded:
+                    logger.warning(
+                        "[WS /ws/decisions] entering degraded mode — %s: %s",
+                        type(exc).__name__, exc,
+                    )
+                    degraded = True
+                    degraded_started_at = _time.monotonic()
+                    _ws_metrics.set_degraded_active(endpoint_label, +1)
+                    try:
+                        await websocket.send_json({
+                            "type": "status",
+                            "status": "degraded",
+                            "reason": type(exc).__name__,
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                        })
+                    except Exception:
+                        pass
+                # Back off briefly so a tight error doesn't spin the loop.
+                await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         pass
     except Exception as exc:
+        # connect() itself failed (or some other unrecoverable path).
+        # Best-effort accept + degraded frame; do not raise 503.
         logger.warning(
-            "[WS /ws/decisions] degraded — %s: %s",
+            "[WS /ws/decisions] connect failed — %s: %s",
             type(exc).__name__, exc,
         )
-        if accepted:
-            try:
-                await websocket.send_json({
-                    "type": "status",
-                    "status": "degraded",
-                    "reason": type(exc).__name__,
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                })
-            except Exception:
-                pass
-            try:
-                await websocket.close(code=1011)
-            except Exception:
-                pass
-        else:
-            # Could not even accept; let the client retry rather than 503.
+        if not accepted:
             try:
                 await websocket.accept()
                 await websocket.send_json({
@@ -144,10 +185,18 @@ async def ws_decisions(websocket: WebSocket):
                     "reason": type(exc).__name__,
                     "ts": datetime.now(timezone.utc).isoformat(),
                 })
-                await websocket.close(code=1011)
+                # Hold the socket idle so the client sees the degraded
+                # frame instead of an immediate close.
+                while True:
+                    await asyncio.sleep(30.0)
             except Exception:
                 pass
     finally:
+        if degraded and degraded_started_at is not None:
+            _ws_metrics.record_degraded_seconds(
+                endpoint_label, _time.monotonic() - degraded_started_at,
+            )
+            _ws_metrics.set_degraded_active(endpoint_label, -1)
         if accepted:
             manager.disconnect(websocket, "decisions")
 

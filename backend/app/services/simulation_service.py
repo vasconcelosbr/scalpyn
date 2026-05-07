@@ -335,7 +335,8 @@ class SimulationService:
             record_simulation_skipped = None  # type: ignore[assignment]
 
         def _skipped(reason: str, message: str) -> Dict[str, Any]:
-            logger.warning("[Simulation] SKIPPED reason=%s | %s", reason, message)
+            logger.warning("[SIM-SKIP] reason=%s exchange=%s | %s",
+                           reason, exchange, message)
             if record_simulation_skipped is not None:
                 try:
                     record_simulation_skipped(reason=reason, exchange=exchange)

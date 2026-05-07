@@ -197,19 +197,21 @@ async def _collect_all_async():
                         symbol, probe_exc,
                     )
 
-                    latest = df.iloc[-1]
-
-                    # Update market_metadata
-                    await db.execute(text("""
-                        INSERT INTO market_metadata (symbol, price, price_change_24h, last_updated)
-                        VALUES (:symbol, :price, 0, :updated)
-                        ON CONFLICT (symbol) DO UPDATE SET
-                            price = :price, last_updated = :updated
-                    """), {
-                        "symbol": symbol,
-                        "price": float(latest["close"]),
-                        "updated": datetime.now(timezone.utc),
-                    })
+                # ── per-symbol market_metadata UPSERT (NOT inside the
+                # probe except — Task #234 review fix). Runs on every
+                # successful OHLCV ingest, regardless of the freshness
+                # probe outcome.
+                latest = df.iloc[-1]
+                await db.execute(text("""
+                    INSERT INTO market_metadata (symbol, price, price_change_24h, last_updated)
+                    VALUES (:symbol, :price, 0, :updated)
+                    ON CONFLICT (symbol) DO UPDATE SET
+                        price = :price, last_updated = :updated
+                """), {
+                    "symbol": symbol,
+                    "price": float(latest["close"]),
+                    "updated": datetime.now(timezone.utc),
+                })
 
                 logger.info(f"[PERSIST] success symbol={symbol}")
                 logger.info(f"[COLLECT][OK] symbol={symbol}")

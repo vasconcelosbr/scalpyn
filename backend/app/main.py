@@ -407,11 +407,32 @@ async def health_check_schema():
             media_type="application/json",
         )
 
+    # Task #234 hotfix — surface the alpha_scores.scoring_version drift
+    # in /api/health/schema for operator visibility WITHOUT promoting it
+    # to CRITICAL_COLUMNS yet (N+1 deploy rule). The runtime fallback in
+    # compute_scores already keeps scoring alive; this field lets the
+    # operator see whether the column has landed before opening Task #235
+    # to flip CRITICAL_COLUMNS in deploy N+1.
+    scoring_version_present = (
+        ("alpha_scores", "scoring_version") in present
+    )
+    if not scoring_version_present:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "[HEALTH/SCHEMA] alpha_scores.scoring_version absent — "
+            "compute_scores running on legacy fallback INSERT (Task #234). "
+            "After repair, ship Task #235 to add the column to CRITICAL_COLUMNS."
+        )
+
     payload = {
         "schema_ok": len(missing) == 0,
         "checked_count": len(critical_columns),
         "checked": [{"table": t, "column": c} for (t, c) in critical_columns],
         "missing": missing,
+        "advisory": {
+            # Non-blocking probes (do not flip schema_ok / status code).
+            "alpha_scores.scoring_version": scoring_version_present,
+        },
     }
     if missing:
         return Response(

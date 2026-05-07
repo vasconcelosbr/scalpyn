@@ -5,7 +5,7 @@ SimulationService dependencies (SQLAlchemy session, repository, engine)
 into request paths that just want to record a skip.
 
 Metric:
-  ``scalpyn_simulation_skipped_total{reason,exchange}`` — Counter incremented
+  ``simulation_skipped_total{reason,exchange}`` — Counter incremented
   every time ``run_simulation_batch`` returns ``{"status":"skipped"}``.
   Reasons currently emitted:
     * ``no_recent_candles``     — no OHLCV in last 24h for the target exchange.
@@ -25,7 +25,7 @@ try:
     from prometheus_client import Counter  # type: ignore[import-untyped]
 
     _SIMULATION_SKIPPED = Counter(
-        "scalpyn_simulation_skipped_total",
+        "simulation_skipped_total",
         "Number of simulation batches that returned status=skipped instead of "
         "raising RuntimeError. Labels: reason, exchange.",
         ["reason", "exchange"],
