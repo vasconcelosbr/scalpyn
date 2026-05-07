@@ -1,4 +1,35 @@
 steps:
+  # ── Task #243: Pre-flight diagnostic (does NOT fail the build) ──────
+  # Logs the Cloud Build identity, project, region, and Cloud Run quota
+  # so that when a worker/beat deploy step fails silently in a future
+  # build, the build log already contains the data needed to diagnose
+  # IAM / quota / SA-existence root causes without re-running.
+  #
+  # Deliberately wrapped in `|| true` everywhere — this step must never
+  # be the reason a build goes red. Its job is observability only.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'preflight-diagnostic'
+    entrypoint: bash
+    args:
+      - '-c'
+      - |
+        echo "==> [preflight] Cloud Build identity:"
+        gcloud auth list --format='value(account,status)' 2>&1 || true
+        echo "==> [preflight] Active project / region:"
+        echo "    PROJECT_ID=${PROJECT_ID}  _REGION=${_REGION}"
+        echo "==> [preflight] Cloud Run services in region (BEFORE deploy):"
+        gcloud run services list --region="${_REGION}" \
+          --filter="metadata.name~scalpyn" \
+          --format='table(metadata.name,status.conditions[0].type,status.conditions[0].status)' 2>&1 || true
+        echo "==> [preflight] Cloud Run quota (services per region — limit + usage):"
+        gcloud compute project-info describe --project="${PROJECT_ID}" \
+          --format='value(quotas)' 2>&1 | tr ',' '\n' | grep -i -E 'run|service' || true
+        echo "==> [preflight] Service-account scalpyn-service-account@${PROJECT_ID}.iam exists?"
+        gcloud iam service-accounts describe \
+          "scalpyn-service-account@${PROJECT_ID}.iam.gserviceaccount.com" \
+          --project="${PROJECT_ID}" 2>&1 | head -5 || true
+        echo "==> [preflight] Done (diagnostic only, never fails the build)."
+
   # Build the Docker image
   - name: 'gcr.io/cloud-builders/docker'
     args:
@@ -22,6 +53,7 @@ steps:
     args:
       - 'run'
       - 'deploy'
+      - '--quiet'
       - '${_SERVICE}'
       - '--image'
       - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
@@ -147,6 +179,7 @@ steps:
     args:
       - 'run'
       - 'deploy'
+      - '--quiet'
       - 'scalpyn-worker-micro'
       - '--image'
       - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
@@ -185,6 +218,7 @@ steps:
     args:
       - 'run'
       - 'deploy'
+      - '--quiet'
       - 'scalpyn-worker-structural'
       - '--image'
       - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
@@ -223,6 +257,7 @@ steps:
     args:
       - 'run'
       - 'deploy'
+      - '--quiet'
       - 'scalpyn-worker-execution'
       - '--image'
       - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
@@ -260,6 +295,7 @@ steps:
     args:
       - 'run'
       - 'deploy'
+      - '--quiet'
       - 'scalpyn-beat'
       - '--image'
       - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
