@@ -97,20 +97,9 @@ async def ws_trades(websocket: WebSocket):
 async def ws_decisions(websocket: WebSocket):
     """Stream real-time decision log updates.
 
-    Task #234 hotfix — degrade mode that DOES NOT close the socket. When
-    the message loop raises an unexpected exception (broker unreachable,
-    manager registry corrupted, etc.) we send a ``{"status":"degraded"}``
-    frame and continue serving heartbeat pings on a 10 s interval until
-    the client disconnects. The previous implementation surfaced a 503
-    to the client, which the frontend treated as a hard failure and
-    disabled the entire decision log panel for the session. The closed
-    socket variant of the degraded mode (review #1) had the same effect
-    on the UI; keeping the connection alive lets the panel show a yellow
-    "degraded" badge while real broadcasts keep flowing as soon as the
-    backend recovers (broadcasts go through ``manager.broadcast``, which
-    iterates the same ``connections`` set this socket is registered in).
-
-    Time spent in the degraded loop is recorded in
+    Degrade mode keeps the socket open and emits a periodic
+    ``{"event":"degraded","status":"degraded"}`` heartbeat instead of
+    returning a 503. Time spent degraded is recorded in
     ``ws_degraded_seconds{endpoint="/ws/decisions"}``.
     """
     import time as _time
@@ -132,8 +121,7 @@ async def ws_decisions(websocket: WebSocket):
                         payload["status"] = "degraded"
                     await websocket.send_json(payload)
             except asyncio.TimeoutError:
-                # Idle keepalive; in degraded mode also re-broadcast the
-                # status so reconnecting UIs see the badge promptly.
+                # Idle keepalive; in degraded mode re-broadcast the status.
                 if degraded:
                     try:
                         await websocket.send_json({
@@ -142,13 +130,17 @@ async def ws_decisions(websocket: WebSocket):
                             "status": "degraded",
                             "ts": datetime.now(timezone.utc).isoformat(),
                         })
-                    except Exception:
-                        pass
+                    except WebSocketDisconnect:
+                        raise
+                    except Exception as send_exc:
+                        logger.debug(
+                            "[WS /ws/decisions] keepalive send failed: %s",
+                            send_exc,
+                        )
                 continue
             except WebSocketDisconnect:
                 raise
             except Exception as exc:
-                # Loop-level error: degrade and keep the socket open.
                 if not degraded:
                     logger.warning(
                         "[WS /ws/decisions] entering degraded mode — %s: %s",
@@ -165,9 +157,18 @@ async def ws_decisions(websocket: WebSocket):
                             "reason": type(exc).__name__,
                             "ts": datetime.now(timezone.utc).isoformat(),
                         })
-                    except Exception:
-                        pass
-                # Back off briefly so a tight error doesn't spin the loop.
+                    except WebSocketDisconnect:
+                        raise
+                    except Exception as send_exc:
+                        logger.debug(
+                            "[WS /ws/decisions] degraded frame send failed: %s",
+                            send_exc,
+                        )
+                else:
+                    logger.debug(
+                        "[WS /ws/decisions] loop error while degraded — %s: %s",
+                        type(exc).__name__, exc,
+                    )
                 await asyncio.sleep(1.0)
     except WebSocketDisconnect:
         pass
@@ -179,11 +180,10 @@ async def ws_decisions(websocket: WebSocket):
             type(exc).__name__, exc,
         )
         if not accepted:
-            # Best-effort: accept the socket, send the degraded frame,
-            # then run a controlled keepalive loop driven by the client's
-            # own ping/disconnect — NEVER an unbounded `sleep(30)` loop
-            # (review #1: that path leaked one orphan coroutine per
-            # failed connect on every reconnect attempt).
+            # Accept the socket and serve a controlled heartbeat loop
+            # driven by the client's own ping / disconnect — never an
+            # unbounded sleep, which would leak one coroutine per
+            # failed connect across reconnect attempts.
             try:
                 await websocket.accept()
                 accepted = True
@@ -198,8 +198,13 @@ async def ws_decisions(websocket: WebSocket):
                         "reason": type(exc).__name__,
                         "ts": datetime.now(timezone.utc).isoformat(),
                     })
-                except Exception:
+                except WebSocketDisconnect:
                     pass
+                except Exception as send_exc:
+                    logger.debug(
+                        "[WS /ws/decisions] initial degraded send failed: %s",
+                        send_exc,
+                    )
                 while True:
                     try:
                         msg = await asyncio.wait_for(
@@ -210,9 +215,6 @@ async def ws_decisions(websocket: WebSocket):
                                 "type": "pong", "status": "degraded",
                             })
                     except asyncio.TimeoutError:
-                        # Heartbeat tick — re-broadcast degraded so the
-                        # client sees a fresh status frame and we detect
-                        # broken pipes (send raises → loop exits).
                         try:
                             await websocket.send_json({
                                 "event": "degraded",
@@ -220,15 +222,29 @@ async def ws_decisions(websocket: WebSocket):
                                 "status": "degraded",
                                 "ts": datetime.now(timezone.utc).isoformat(),
                             })
-                        except Exception:
+                        except WebSocketDisconnect:
+                            break
+                        except Exception as hb_exc:
+                            logger.debug(
+                                "[WS /ws/decisions] heartbeat send failed, "
+                                "exiting degraded loop: %s", hb_exc,
+                            )
                             break
                     except WebSocketDisconnect:
                         break
-                    except Exception:
-                        # Any other failure: bail so the coroutine ends.
+                    except Exception as loop_exc:
+                        logger.debug(
+                            "[WS /ws/decisions] degraded loop bailing: %s",
+                            loop_exc,
+                        )
                         break
-            except Exception:
+            except WebSocketDisconnect:
                 pass
+            except Exception as accept_exc:
+                logger.warning(
+                    "[WS /ws/decisions] could not establish degraded socket: %s",
+                    accept_exc,
+                )
     finally:
         if degraded and degraded_started_at is not None:
             _ws_metrics.record_degraded_seconds(

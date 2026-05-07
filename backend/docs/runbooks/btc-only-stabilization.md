@@ -21,6 +21,17 @@ Task #234 and the operator playbook that pairs with each.
 
 ## Production schema repair (the `scoring_version` drift)
 
+The structural fix is migration `028_alpha_scores_confidence_weighting.py`,
+which adds `alpha_scores.scoring_version` (NULLable, server_default `'v1'`)
+plus the supporting index. It is part of the Alembic head and is applied at
+Cloud Run startup by `start.sh` (`alembic upgrade head` with retry/timeout —
+see `replit.md > Architecture decisions > Schema Bootstrap Robustness`). The
+runtime fallback in `compute_scores` exists only as defense-in-depth for the
+window between detecting drift and the next deploy completing the upgrade —
+follow-up Task #235 closes the loop by promoting the column to
+`CRITICAL_COLUMNS` once production is verified at head.
+
+
 The drift handler in `compute_scores` is a band-aid. Permanent fix:
 
 ```sql
