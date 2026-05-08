@@ -1,0 +1,39 @@
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ read -rsp "Senha do postgres: " PG && echo
+URL="postgresql://postgres:${PG}@/scalpyn?host=/cloudsql/clickrate-477217:us-central1:scalpyn"
+
+for svc in scalpyn scalpyn-worker-micro scalpyn-worker-structural scalpyn-worker-execution scalpyn-beat; do
+  echo "==> $svc"
+  gcloud run services update "$svc" \
+    --region=us-central1 \
+    --update-env-vars="^@^DATABASE_URL=${URL}"
+done
+
+unset PG URL
+Senha do postgres: 
+==> scalpyn
+Deploying...                                                                                                                                                                                           
+  Creating Revision...failed                                                                                                                                                                           
+Deployment failed                                                                                                                                                                                      
+ERROR: (gcloud.run.services.update) Revision 'scalpyn-00465-ll2' is not ready and cannot serve traffic. The user-provided container failed to start and listen on the port defined provided by the PORT=8080 environment variable within the allocated timeout. This can happen when the container port is misconfigured or if the timeout is too short. The health check timeout can be extended. Logs for this revision might contain more information.
+
+Logs URL: https://console.cloud.google.com/logs/viewer?project=clickrate-477217&resource=cloud_run_revision/service_name/scalpyn/revision_name/scalpyn-00465-ll2&advancedFilter=resource.type%3D%22cloud_run_revision%22%0Aresource.labels.service_name%3D%22scalpyn%22%0Aresource.labels.revision_name%3D%22scalpyn-00465-ll2%22 
+For more troubleshooting guidance, see https://cloud.google.com/run/docs/troubleshooting#container-failed-to-start
+==> scalpyn-worker-micro
+Deploying...                                                                                                                                                                                           
+  Creating Revision...failed                                                                                                                                                                           
+Deployment failed                                                                                                                                                                                      
+ERROR: (gcloud.run.services.update) The user-provided container failed to start and listen on the port defined provided by the PORT=8080 environment variable within the allocated timeout. This can happen when the container port is misconfigured or if the timeout is too short. The health check timeout can be extended. Logs for this revision might contain more information.
+
+Logs URL: https://console.cloud.google.com/logs/viewer?project=clickrate-477217&resource=cloud_run_revision/service_name/scalpyn-worker-micro/revision_name/scalpyn-worker-micro-00010-h62&advancedFilter=resource.type%3D%22cloud_run_revision%22%0Aresource.labels.service_name%3D%22scalpyn-worker-micro%22%0Aresource.labels.revision_name%3D%22scalpyn-worker-micro-00010-h62%22 
+For more troubleshooting guidance, see https://cloud.google.com/run/docs/troubleshooting#container-failed-to-start
+==> scalpyn-worker-structural
+Deploying...                                                                                                                                                                                           
+  Creating Revision...failed                                                                                                                                                                           
+Deployment failed                                                                                                                                                                                      
+ERROR: (gcloud.run.services.update) The user-provided container failed to start and listen on the port defined provided by the PORT=8080 environment variable within the allocated timeout. This can happen when the container port is misconfigured or if the timeout is too short. The health check timeout can be extended. Logs for this revision might contain more information.
+
+Logs URL: https://console.cloud.google.com/logs/viewer?project=clickrate-477217&resource=cloud_run_revision/service_name/scalpyn-worker-structural/revision_name/scalpyn-worker-structural-00017-kkw&advancedFilter=resource.type%3D%22cloud_run_revision%22%0Aresource.labels.service_name%3D%22scalpyn-worker-structural%22%0Aresource.labels.revision_name%3D%22scalpyn-worker-structural-00017-kkw%22 
+For more troubleshooting guidance, see https://cloud.google.com/run/docs/troubleshooting#container-failed-to-start
+==> scalpyn-worker-execution
+Deploying...                                                                                                                                                                                           
+  Creating Revision...-                 
