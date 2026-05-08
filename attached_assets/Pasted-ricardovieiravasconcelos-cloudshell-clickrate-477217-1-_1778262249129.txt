@@ -1,0 +1,134 @@
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ # 1) Log da NOVA revision do scalpyn (causa atual da falha)
+echo "=== scalpyn-00466-9jp ==="
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.revision_name="scalpyn-00466-9jp"' \
+  --limit=40 --format='value(textPayload)' --freshness=10m
+
+echo "=== scalpyn-worker-structural-00018-9pf ==="
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.revision_name="scalpyn-worker-structural-00018-9pf"' \
+  --limit=40 --format='value(textPayload)' --freshness=10m
+
+# 2) Verifica Cloud SQL anexado nos 5 serviços
+for svc in scalpyn scalpyn-worker-micro scalpyn-worker-structural scalpyn-worker-execution scalpyn-beat; do
+  echo "=== $svc cloudsql ==="
+  gcloud run services describe "$svc" --region=us-central1 \
+    --format='value(spec.template.metadata.annotations."run.googleapis.com/cloudsql-instances")'
+done
+
+# 3) IDs dos últimos builds (vermelhos) — preciso pra atacar a causa do deploy quebrado
+gcloud builds list --region=us-central1 --limit=5 \
+  --format='table(id,createTime,status,substitutions.SHORT_SHA)'
+=== scalpyn-00466-9jp ===
+Default STARTUP TCP probe failed 1 time consecutively for container "placeholder-1" on port 8080. The instance was not started.
+Connection failed with status CANCELLED.
+Container called exit(1).
+==> Aborting startup: Redis connection failed
+ERROR: REDIS_URL is empty -- cannot connect to broker
+==> [redis] Verifying Redis connectivity...
+==> [schema] Critical schema OK.
+OK: all 29 critical columns present.
+==> [schema] Validating critical schema...
+==> [migrations] alembic upgrade head OK
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+ [migrations] attempt 1/3 (timeout 90s) ...
+==> [migrations] alembic upgrade head
+ [boot] env AI_KEYS_ENCRYPTION_KEY: PRESENT
+ [boot] env REDIS_URL: MISSING
+ [boot] env ENCRYPTION_KEY: PRESENT
+ [boot] env JWT_SECRET: PRESENT
+ [boot] env DATABASE_URL: PRESENT
+==> [boot] Scalpyn backend starting (PORT=8080, WEB_CONCURRENCY=1)
+[start.sh] CONTAINER ENTRY pid=1 k_service=scalpyn k_revision=scalpyn-00466-9jp
+[start.sh] CONTAINER ENTRY pid=1 k_service=scalpyn k_revision=scalpyn-00466-9jp
+Starting new instance. Reason: MANUAL_OR_CUSTOMER_MIN_INSTANCE - Instance started because of customer-configured min-instances or manual scaling.
+Default STARTUP TCP probe failed 1 time consecutively for container "placeholder-1" on port 8080. The instance was not started.
+Connection failed with status CANCELLED.
+Container called exit(1).
+==> Aborting startup: Redis connection failed
+ERROR: REDIS_URL is empty -- cannot connect to broker
+==> [redis] Verifying Redis connectivity...
+==> [schema] Critical schema OK.
+OK: all 29 critical columns present.
+Default STARTUP TCP probe failed 1 time consecutively for container "placeholder-1" on port 8080. The instance was not started.
+Connection failed with status CANCELLED.
+==> [schema] Validating critical schema...
+==> [migrations] alembic upgrade head OK
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+Container called exit(1).
+==> Aborting startup: Redis connection failed
+ERROR: REDIS_URL is empty -- cannot connect to broker
+Default STARTUP TCP probe failed 1 time consecutively for container "placeholder-1" on port 8080. The instance was not started.
+Connection failed with status CANCELLED.
+==> [redis] Verifying Redis connectivity...
+==> [schema] Critical schema OK.
+=== scalpyn-worker-structural-00018-9pf ===
+Default STARTUP TCP probe failed 1 time consecutively for container "placeholder-1" on port 8080. The instance was not started.
+Connection failed with status CANCELLED.
+Container called exit(1).
+==> Aborting startup: Redis connection failed
+ERROR: REDIS_URL is empty -- cannot connect to broker
+==> [redis] Verifying Redis connectivity...
+==> [schema] Critical schema OK.
+OK: all 29 critical columns present.
+==> [schema] Validating critical schema...
+==> [migrations] alembic upgrade head OK
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+ [migrations] attempt 1/3 (timeout 50s) ...
+==> [migrations] alembic upgrade head
+ [boot] env AI_KEYS_ENCRYPTION_KEY: PRESENT
+ [boot] env REDIS_URL: MISSING
+ [boot] env ENCRYPTION_KEY: PRESENT
+ [boot] env JWT_SECRET: PRESENT
+ [boot] env DATABASE_URL: PRESENT
+==> [boot] Scalpyn backend starting (PORT=8080, WEB_CONCURRENCY=2)
+Starting new instance. Reason: MANUAL_OR_CUSTOMER_MIN_INSTANCE - Instance started because of customer-configured min-instances or manual scaling.
+Default STARTUP TCP probe failed 1 time consecutively for container "placeholder-1" on port 8080. The instance was not started.
+Connection failed with status CANCELLED.
+Container called exit(1).
+==> Aborting startup: Redis connection failed
+ERROR: REDIS_URL is empty -- cannot connect to broker
+==> [redis] Verifying Redis connectivity...
+==> [schema] Critical schema OK.
+OK: all 29 critical columns present.
+==> [schema] Validating critical schema...
+==> [migrations] alembic upgrade head OK
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+ [migrations] attempt 1/3 (timeout 50s) ...
+==> [migrations] alembic upgrade head
+ [boot] env AI_KEYS_ENCRYPTION_KEY: PRESENT
+ [boot] env REDIS_URL: MISSING
+ [boot] env ENCRYPTION_KEY: PRESENT
+ [boot] env JWT_SECRET: PRESENT
+ [boot] env DATABASE_URL: PRESENT
+==> [boot] Scalpyn backend starting (PORT=8080, WEB_CONCURRENCY=2)
+Starting new instance. Reason: MANUAL_OR_CUSTOMER_MIN_INSTANCE - Instance started because of customer-configured min-instances or manual scaling.
+=== scalpyn cloudsql ===
+clickrate-477217:us-central1:scalpyn
+=== scalpyn-worker-micro cloudsql ===
+clickrate-477217:us-central1:scalpyn
+=== scalpyn-worker-structural cloudsql ===
+clickrate-477217:us-central1:scalpyn
+=== scalpyn-worker-execution cloudsql ===
+clickrate-477217:us-central1:scalpyn
+=== scalpyn-beat cloudsql ===
+clickrate-477217:us-central1:scalpyn
+ID: 0ac1c5b5-ed8a-4a73-ad95-a60e321f60cb
+CREATE_TIME: 2026-03-25T11:43:39+00:00
+STATUS: SUCCESS
+SHORT_SHA: 
+
+ID: a0af9cb3-d0cc-4089-9071-f6f6fc468d78
+CREATE_TIME: 2026-03-24T12:13:36+00:00
+STATUS: SUCCESS
+SHORT_SHA: 
+
+ID: c9e239fe-0785-4cde-b83a-f87cdad8b309
+CREATE_TIME: 2026-03-22T22:45:25+00:00
+STATUS: SUCCESS
+SHORT_SHA: 
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ 
