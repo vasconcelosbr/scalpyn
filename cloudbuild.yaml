@@ -29,12 +29,12 @@ steps:
         # Conta quantos serviços já existem no projeto/região vs limite
         # default (1000 por região). Útil para descartar quota como causa
         # raiz quando worker/beat deploys falham silenciosamente.
-        EXISTING=$(gcloud run services list --region="${_REGION}" \
+        EXISTING=$$(gcloud run services list --region="${_REGION}" \
           --project="${PROJECT_ID}" --format='value(metadata.name)' 2>/dev/null | wc -l)
-        echo "    services_in_region=$EXISTING (default Cloud Run limit: 1000)"
+        echo "    services_in_region=$$EXISTING (default Cloud Run limit: 1000)"
         echo "==> [preflight] Cloud Build SA roles on project (top-level only):"
-        BUILD_SA="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -1)"
-        echo "    BUILD_SA=$BUILD_SA"
+        BUILD_SA="$$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -1)"
+        echo "    BUILD_SA=$$BUILD_SA"
         gcloud projects get-iam-policy "${PROJECT_ID}" \
           --flatten='bindings[].members' \
           --filter="bindings.members:${BUILD_SA}" \
@@ -373,19 +373,19 @@ steps:
         # go green while prod was missing all 4 worker/beat services.
         # We list every service in the region and grep locally — robust
         # against filter syntax drift across gcloud versions.
-        ALL=$(gcloud run services list \
+        ALL=$$(gcloud run services list \
           --region="${_REGION}" \
           --format="value(metadata.name)")
         echo " [topology-check] All services in region:"
-        echo "$ALL" | sed 's/^/   - /'
+        echo "$$ALL" | sed 's/^/   - /'
         MISSING=""
-        for svc in $EXPECTED; do
-          if ! echo "$ALL" | grep -qx "$svc"; then
-            MISSING="$MISSING $svc"
+        for svc in $$EXPECTED; do
+          if ! echo "$$ALL" | grep -qx "$$svc"; then
+            MISSING="$$MISSING $$svc"
           fi
         done
-        if [ -n "$MISSING" ]; then
-          echo "==> [topology-check] FAIL: missing Cloud Run services:$MISSING" >&2
+        if [ -n "$$MISSING" ]; then
+          echo "==> [topology-check] FAIL: missing Cloud Run services:$$MISSING" >&2
           echo "==> See backend/docs/runbooks/cloud-run-celery-topology.md" >&2
           exit 1
         fi
@@ -394,20 +394,20 @@ steps:
         # instance) means workers won't actually consume tasks even though
         # the bare existence check passed.
         NOT_READY=""
-        for svc in $EXPECTED; do
+        for svc in $$EXPECTED; do
           # Filter by condition type=Ready instead of index [0] — Cloud Run
           # does not guarantee ordering of status.conditions across SDK
           # versions, and a non-Ready condition (e.g. ConfigurationsReady)
           # at index 0 would otherwise misreport the service.
-          READY=$(gcloud run services describe "$svc" \
+          READY=$$(gcloud run services describe "$$svc" \
             --region="${_REGION}" \
             --format='value(status.conditions.filter("type:Ready").extract(status))' 2>/dev/null || echo "MISSING")
-          if [ "$READY" != "True" ]; then
-            NOT_READY="$NOT_READY $svc(ready=$READY)"
+          if [ "$$READY" != "True" ]; then
+            NOT_READY="$$NOT_READY $$svc(ready=$$READY)"
           fi
         done
-        if [ -n "$NOT_READY" ]; then
-          echo "==> [topology-check] FAIL: services not Ready:$NOT_READY" >&2
+        if [ -n "$$NOT_READY" ]; then
+          echo "==> [topology-check] FAIL: services not Ready:$$NOT_READY" >&2
           echo "==> See backend/docs/runbooks/cloud-run-celery-topology.md" >&2
           exit 1
         fi
