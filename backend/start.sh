@@ -177,7 +177,19 @@ CELERY_LOGLEVEL="${CELERY_LOGLEVEL:-info}"
 # At least one of {worker, beat} must be enabled — an "all-off" container
 # would be the API-only role, which is the intended shape for the `scalpyn`
 # Cloud Run service that fronts HTTP traffic.
-WORKER_QUEUES="${WORKER_QUEUES-microstructure,structural,execution}"
+# Safety guard: if running in the Cloud Run beat service AND WORKER_QUEUES was
+# not explicitly set, default to empty so the beat container does NOT also run
+# a worker. Without this guard, an unset WORKER_QUEUES on scalpyn-beat causes
+# it to consume all three queues simultaneously with the dedicated workers —
+# confirmed root cause of 26 concurrent DB lock waits in May 2026.
+# K_SERVICE is injected automatically by Cloud Run; absent locally so the
+# dev single-container default ("all queues") is preserved unchanged.
+if [ "${K_SERVICE:-}" = "scalpyn-beat" ] && [ -z "${WORKER_QUEUES+x}" ]; then
+    echo "==> [queue] K_SERVICE=scalpyn-beat + WORKER_QUEUES unset — defaulting to empty (beat-only, no worker)"
+    WORKER_QUEUES=""
+else
+    WORKER_QUEUES="${WORKER_QUEUES-microstructure,structural,execution}"
+fi
 RUN_BEAT="${RUN_BEAT:-1}"
 
 CELERY_WORKER_PID=""
