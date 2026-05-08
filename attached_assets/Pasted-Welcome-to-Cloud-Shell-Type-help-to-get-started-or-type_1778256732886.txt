@@ -1,0 +1,66 @@
+Welcome to Cloud Shell! Type "help" to get started, or type "gemini" to try prompting with Gemini CLI.
+Your Cloud Platform project in this session is set to clickrate-477217.
+Use `gcloud config set project [PROJECT_ID]` to change to a different project.
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$   # 1. Listar os 10 builds mais recentes
+  gcloud builds list --limit=10 \
+    --format="table(id,status,substitutions.COMMIT_SHA,createTime)"
+
+  # 2. Se aparecer algum FAILURE, ver o log do build mais recente com falha:
+  gcloud builds log [BUILD_ID]
+
+  # 3. Se os commits não aparecerem, verificar o trigger:
+  gcloud builds triggers list --region=global \
+    --format="table(name,github.push.branch,filename)"
+ID: 695afa69-172f-4ac9-8749-4fa451aec461
+STATUS: FAILURE
+COMMIT_SHA: 8d9e5d9956e9f83a3f6fdb041bc880a929fe6c2e
+CREATE_TIME: 2026-05-08T16:01:51+00:00
+
+ID: 491fc0ff-0722-4627-820b-5993646431f9
+STATUS: FAILURE
+COMMIT_SHA: 037910e192051bb4a37cb7a49063bdb3203613a1
+CREATE_TIME: 2026-05-08T15:43:34+00:00
+
+ID: e1af3b87-0dd1-41ab-8fb1-a4f3aa4cdfb1
+STATUS: FAILURE
+COMMIT_SHA: d952bbcb96c4a634a70ad44ff38b5f5298a33b73
+CREATE_TIME: 2026-05-08T15:06:14+00:00
+
+ID: 4668a9fb-c596-4823-9e73-74ba2eef66f7
+STATUS: SUCCESS
+COMMIT_SHA: c2232bc530380375976b020f8b6053c25efed43a
+CREATE_TIME: 2026-05-08T13:50:56+00:00
+
+ID: d6861464-20c3-45d7-8bc7-493b960f59a8
+STATUS: SUCCESS
+COMMIT_SHA: 4901077240f22b5544f023d3992f5e69c31ccc38
+CREATE_TIME: 2026-05-08T12:57:01+00:00
+
+ID: cc1afc82-c389-4583-a645-940495d66189
+STATUS: SUCCESS
+COMMIT_SHA: 5540ab70b9b66027e6440cfc503ebcb80bfb8cfc
+CREATE_TIME: 2026-05-08T12:17:05+00:00
+
+ID: a4614fef-2191-4914-b2ee-5c7c0346e9a9
+STATUS: SUCCESS
+COMMIT_SHA: 84a2f00849ac42b287670a2db08959e669b20c42
+CREATE_TIME: 2026-05-08T12:05:09+00:00
+
+ID: 26eca00d-1cfb-445e-a8ac-1937408bb189
+STATUS: SUCCESS
+COMMIT_SHA: e5d7feab25b36a8f86a015b99bd936543f2354fc
+CREATE_TIME: 2026-05-07T22:25:45+00:00
+
+ID: 4a9e236e-daea-492f-ab0c-6ffe0339b9b8
+STATUS: SUCCESS
+COMMIT_SHA: 76dc45aa7379f5210bd2d859a2b1468a677fcec7
+CREATE_TIME: 2026-05-07T22:23:38+00:00
+
+ID: e72e0a42-9dad-4519-976c-796092a43330
+STATUS: SUCCESS
+COMMIT_SHA: 737f18792b96ee2df5f729f453b55ded855051e2
+CREATE_TIME: 2026-05-07T21:42:38+00:00
+ERROR: (gcloud.builds.log) NOT_FOUND: Requested entity was not found. This command is authenticated as ricardovieiravasconcelos@gmail.com which is the active account specified by the [core/account] property.
+NAME: rmgpgab-scalpyn-us-central1-vasconcelosbr-scalpyn--majye
+BRANCH: ^main$
+FILENAME: 
