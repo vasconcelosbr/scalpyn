@@ -1,0 +1,110 @@
+CONTEXTO: Sistema Scalpyn em produção no Google Cloud Run.
+Dois serviços com falha consistente de deploy:
+  - scalpyn (API FastAPI)
+  - scalpyn-worker-structural (Celery worker)
+
+ERRO EM AMBOS:
+"The user-provided container failed to start and listen on the port 
+defined provided by the PORT=8080 environment variable within the 
+allocated timeout"
+reason: HealthCheckContainerError
+
+ARQUITETURA DO START.SH (já analisado):
+O container roda um único start.sh que:
+1. Roda alembic upgrade head
+2. Valida schema crítico (scripts.check_critical_schema)
+3. Verifica conectividade Redis
+4. Fork do Celery worker (background)
+5. Fork do Celery beat (background)
+6. Sleep 5s + fail-fast check — exit 1 se worker/beat morreu
+7. exec uvicorn na porta 8080 ← health check só responde aqui
+
+PONTOS DE exit 1 ANTES DO HEALTH CHECK:
+- Linha 84-86: validate_critical_schema falha
+- Linha 108-110: alembic stamp head falha
+- Linha 152-153: Redis unreachable
+- Linha 265-269: Celery worker morre dentro de 5s do fork
+
+FATOS CONFIRMADOS:
+1. scalpyn-worker-micro subiu com a MESMA imagem sem problema
+2. scalpyn-worker-execution subiu com a MESMA imagem sem problema  
+3. scalpyn-beat subiu com a MESMA imagem sem problema
+4. APENAS scalpyn-worker-structural e scalpyn falham
+5. Os logs das revisões que falharam estão VAZIOS (via gcloud logging read)
+6. O banco tem lock contention ativo em INSERT INTO ohlcv e 
+   INSERT INTO market_metadata
+7. Redis está online e acessível (outros workers conectam)
+8. CELERY_CONCURRENCY não está setada como env var externa
+
+DIFERENÇAS entre os serviços que funcionam vs falham:
+- scalpyn-worker-structural: consome fila 'structural'
+  tasks: collect_market_data.collect_all, compute_indicators.compute
+- scalpyn-worker-micro: consome fila 'microstructure' ← FUNCIONA
+  tasks: collect_market_data.collect_5m, compute_indicators.compute_5m
+- scalpyn (API): roda uvicorn + microstructure_scheduler_service ← FALHA
+
+HISTÓRICO RELEVANTE:
+- Ontem foram feitos 4 commits em collect_market_data.py incluindo
+  commit 258b4d8 que introduziu sistema de persistence queue com
+  begin_nested() — este commit causou PendingRollbackError em loop
+- Commit 84a2f00 corrigiu o PendingRollbackError com rollback explícito
+- Commits subsequentes: 4901077 (microstructure fix), c2232bc (beat guard),
+  d952bbc (CELERY_CONCURRENCY guard no start.sh)
+- A imagem atual deployada é a do commit d952bbc
+
+TAREFAS:
+
+1. DIAGNÓSTICO IMEDIATO:
+Leia os arquivos:
+  - backend/app/tasks/compute_indicators.py
+  - backend/app/tasks/compute_scores.py  
+  - backend/app/tasks/collect_market_data.py (função collect_all)
+  - backend/scripts/check_critical_schema.py
+
+Execute:
+  python3 -c "
+  import sys
+  sys.path.insert(0, 'backend')
+  try:
+      import app.tasks.compute_indicators
+      print('compute_indicators: OK')
+  except Exception as e:
+      print(f'compute_indicators: ERRO — {e}')
+  try:
+      import app.tasks.compute_scores
+      print('compute_scores: OK')
+  except Exception as e:
+      print(f'compute_scores: ERRO — {e}')
+  try:
+      import app.tasks.collect_market_data
+      print('collect_market_data: OK')
+  except Exception as e:
+      print(f'collect_market_data: ERRO — {e}')
+  "
+
+2. VERIFICAR SCHEMA DRIFT:
+Execute:
+  cd backend && python3 -m scripts.check_critical_schema
+  
+Reporte o output completo — qualquer exit code != 0 aborta
+o container antes do health check.
+
+3. VERIFICAR ALEMBIC:
+Execute:
+  cd backend && alembic current
+  cd backend && alembic heads
+  
+Se current != heads, há migration pendente que pode estar
+falhando no startup.
+
+4. VERIFICAR DIFERENÇA DE TASK ROUTES:
+No celery_app.py, qual é exatamente a configuração da fila
+'structural' vs 'microstructure'? Há alguma diferença de
+configuração que poderia causar o worker structural morrer
+instantaneamente?
+
+5. APÓS DIAGNÓSTICO:
+Corrija qualquer import error, schema drift, ou migration
+pendente encontrada. ADDITIVE ONLY.
+Commit e push com mensagem descritiva.
+Reporte cada achado com arquivo e linha exata.

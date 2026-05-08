@@ -28,6 +28,23 @@
 
 set -e
 
+# ── Sentinel beacon (stderr, very first line) ────────────────────────────────
+# Cloud Run aggregates stdout AND stderr, but operators commonly filter the
+# log explorer by `severity>=ERROR` (which only shows stderr). When a deploy
+# fails and "logs are empty", the question is always: did start.sh even
+# execute? This single line answers it. K_REVISION/K_SERVICE are auto-
+# injected by Cloud Run; absent locally, so the tag still reads cleanly in
+# dev. Echo to BOTH streams so it shows up regardless of filter.
+_BOOT_TAG="[start.sh] CONTAINER ENTRY pid=$$ k_service=${K_SERVICE:-local} k_revision=${K_REVISION:-local}"
+echo "$_BOOT_TAG" >&2
+echo "$_BOOT_TAG"
+
+# ── ERR trap: surface implicit `set -e` exits with line + cmd context ────────
+# Without this, any failing command silently exits the script and Cloud Run
+# only sees "container exited 1" with nothing pointing to which line did it.
+# BASH_COMMAND is the command that triggered the trap; LINENO is its line.
+trap 'rc=$?; echo "==> [start.sh] FATAL exit rc=${rc} at line ${LINENO}: ${BASH_COMMAND}" >&2; exit $rc' ERR
+
 # Tell the FastAPI lifespan to skip its own init_db() call — start.sh owns
 # bootstrap now and double-running it just slows boot.
 export SKIP_LIFESPAN_INIT_DB=1
