@@ -37,7 +37,7 @@ steps:
         echo "    BUILD_SA=$$BUILD_SA"
         gcloud projects get-iam-policy "${PROJECT_ID}" \
           --flatten='bindings[].members' \
-          --filter="bindings.members:${BUILD_SA}" \
+          --filter="bindings.members:$${BUILD_SA}" \
           --format='value(bindings.role)' 2>&1 || true
         echo "==> [preflight] Service-account scalpyn-service-account@${PROJECT_ID}.iam exists?"
         gcloud iam service-accounts describe \
