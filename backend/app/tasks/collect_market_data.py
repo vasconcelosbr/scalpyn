@@ -706,20 +706,19 @@ async def _collect_5m_async():
                                     "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
                                 })
 
-                            # Seed market_metadata with price from latest OHLCV close.
-                            # Ensures every pool coin has a metadata row even when the
-                            # tickers-based pathway in collect_all has failed.
-                            await db.execute(text("""
-                                INSERT INTO market_metadata (symbol, price, last_updated)
-                                VALUES (:sym, :price, :ts)
-                                ON CONFLICT (symbol) DO UPDATE SET
-                                    price = :price,
-                                    last_updated = :ts
-                            """), {
-                                "sym":   symbol,
-                                "price": float(latest_5m["close"]),
-                                "ts":    _now_5m,
-                            })
+                            # 2026-05-08 — REMOVED redundant market_metadata UPSERT.
+                            # Three sources already keep market_metadata.price fresh
+                            # (collect_all every 1h, Gate.io WS tickers in real time,
+                            # the orderbook SAVEPOINT below for spread/depth). Doing
+                            # it again HERE created cross-task row-lock contention
+                            # between worker-micro (collect_5m) and worker-structural
+                            # (collect_all) on the same 95 hot rows, which surfaced
+                            # as ``canceling statement due to user request`` once
+                            # _MICRO_GUARDS was bumped to 480 s and tasks actually
+                            # held the outer transaction long enough to collide.
+                            # Keep this comment as the authoritative justification —
+                            # do NOT re-add the UPSERT without a new contention
+                            # mitigation strategy (e.g. SKIP LOCKED, separate session).
                     except Exception as _sp_ohlcv5m_exc:
                         # SAVEPOINT auto-rolled back by begin_nested.
                         # See "Nested-savepoint rollback rule" gotcha — do NOT

@@ -235,6 +235,24 @@ _celery_connect_args = dict(_connect_args)
 # without exceeding the structural ``soft_time_limit`` of 540 s.
 # Override via env var ``CELERY_DB_COMMAND_TIMEOUT`` if needed.
 _celery_connect_args["command_timeout"] = _env_int("CELERY_DB_COMMAND_TIMEOUT", 180)
+# 2026-05-08 — orphan-transaction defense in depth.
+# Symptom recovered: a worker container killed mid-transaction (SIGTERM/OOM/
+# network blip from Cloud Run) leaves an asyncpg connection without an explicit
+# ROLLBACK. The Postgres backend then sits ``idle in transaction`` forever (we
+# observed PID 601816 holding RELEASE SAVEPOINT for 11 min), pinning row-locks
+# on ``market_metadata``. Subsequent collect_5m / collect_all runs queue on
+# those locks and time out at command_timeout=180 s → bola de neve.
+#
+# Two server-side guards:
+#   * ``idle_in_transaction_session_timeout=300s`` — Postgres kills any session
+#     idle > 5 min mid-transaction. Eliminates orphan TXs from Cloud Run kills.
+#   * ``lock_timeout=30s`` — fail fast on row-lock waits instead of bleeding the
+#     full 180 s command_timeout. With ``acks_late=False`` (gotcha #245) on
+#     idempotent beat-driven tasks, beat re-fires in ≤5 min on a clean lock state.
+_celery_connect_args.setdefault("server_settings", {}).update({
+    "idle_in_transaction_session_timeout": "300000",  # 5 min, ms
+    "lock_timeout": "30000",                            # 30 s, ms
+})
 _celery_engine = create_async_engine(
     _db_url,
     connect_args=_celery_connect_args,
