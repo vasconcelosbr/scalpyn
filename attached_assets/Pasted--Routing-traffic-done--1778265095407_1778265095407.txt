@@ -1,0 +1,42 @@
+  Routing traffic...done                                                                                                                                               
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ for svc in scalpyn-worker-micro scalpyn-worker-execution scalpyn-beat; do
+  echo "==> $svc"
+  gcloud run services update "$svc" \
+    --region=us-central1 \
+    --remove-env-vars=DEBUG_COLLECT_TOKEN
+done
+
+# Verificação
+echo "=== verificação ==="
+for svc in scalpyn-worker-micro scalpyn-worker-execution scalpyn-beat; do
+  printf "%-32s " "$svc"
+  gcloud run services describe "$svc" --region=us-central1 \
+    --format='value(spec.template.spec.containers[0].env)' \
+    | tr ';' '\n' | grep -i debug_collect || echo "(removido ✓)"
+done
+==> scalpyn-worker-micro
+Deploying...                                                                                                                                                                                           
+  Creating Revision...done                                                                                                                                                                             
+  Routing traffic...done                                                                                                                                                                               
+Done.                                                                                                                                                                                                  
+Service [scalpyn-worker-micro] revision [scalpyn-worker-micro-00014-m8w] has been deployed and is serving 100 percent of traffic.
+Service URL: https://scalpyn-worker-micro-330575088921.us-central1.run.app
+==> scalpyn-worker-execution
+Deploying...                                                                                                                                                                                           
+  Creating Revision...done                                                                                                                                                                             
+  Routing traffic...done                                                                                                                                                                               
+Done.                                                                                                                                                                                                  
+Service [scalpyn-worker-execution] revision [scalpyn-worker-execution-00014-ttm] has been deployed and is serving 100 percent of traffic.
+Service URL: https://scalpyn-worker-execution-330575088921.us-central1.run.app
+==> scalpyn-beat
+Deploying...                                                                                                                                                                                           
+  Creating Revision...done                                                                                                                                                                             
+  Routing traffic...done                                                                                                                                                                               
+Done.                                                                                                                                                                                                  
+Service [scalpyn-beat] revision [scalpyn-beat-00014-w6q] has been deployed and is serving 100 percent of traffic.
+Service URL: https://scalpyn-beat-330575088921.us-central1.run.app
+=== verificação ===
+scalpyn-worker-micro             (removido ✓)
+scalpyn-worker-execution         (removido ✓)
+scalpyn-beat                     (removido ✓)
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ 
