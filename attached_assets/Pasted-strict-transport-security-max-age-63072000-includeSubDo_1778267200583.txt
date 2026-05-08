@@ -1,0 +1,342 @@
+strict-transport-security: max-age=63072000; includeSubDomains; preload
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ gcloud secrets versions destroy 1 --secret=redis-url --quiet
+
+# Confirma
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ # 1. Estado atual completo
+echo "--- celery-status ---"
+curl -s https://scalpyn-330575088921.us-central1.run.app/api/system/celery-status | python3 -m json.tool | head -30
+
+# 2. Logs dos 4 workers/beat nos últimos 5 min — procurando erros
+echo ""
+echo "--- erros workers/beat (5 min) ---"
+gcloud logging read \
+  'resource.type="cloud_run_revision"
+   AND resource.labels.service_name=~"scalpyn-(worker|beat)"
+   AND severity>=WARNING' \
+  --limit=30 --freshness=5m \
+  --format='value(timestamp,resource.labels.service_name,textPayload)' \
+  | head -50
+
+# 3. Logs procurando AUTH/connection errors específicos
+echo ""
+echo "--- redis/auth errors (5 min) ---"
+gcloud logging read \
+  'resource.type="cloud_run_revision"
+   AND (textPayload=~"AUTH" OR textPayload=~"WRONGPASS" OR textPayload=~"ConnectionError" OR textPayload=~"redis.exceptions")' \
+  --limit=10 --freshness=5m \
+  --format='value(timestamp,resource.labels.service_name,textPayload)'
+
+# 4. Ver se workers estão ativamente processando
+echo ""
+echo "--- worker activity (last 2 min) ---"
+gcloud logging read \
+  'resource.type="cloud_run_revision"
+  --format='value(timestamp,resource.labels.service_name,textPayload)' | head -20
+--- celery-status ---
+{
+    "timestamp": "2026-05-08T18:55:27.062981+00:00",
+    "worker_alive": false,
+    "worker_count": 0,
+    "active_tasks": 0,
+    "registered_task_count": 0,
+    "queues": {
+        "microstructure": {
+            "depth": null,
+            "oldest_age_s": null,
+            "alert_state": "unknown"
+        },
+        "structural": {
+            "depth": null,
+            "oldest_age_s": null,
+            "alert_state": "unknown"
+        },
+        "execution": {
+            "depth": null,
+            "oldest_age_s": null,
+            "alert_state": "unknown"
+        }
+    },
+    "queue_depth_by_queue": {
+        "microstructure": null,
+        "structural": null,
+        "execution": null
+    },
+    "oldest_task_age_seconds_by_queue": {
+        "microstructure": null,
+
+--- erros workers/beat (5 min) ---
+2026-05-08T18:55:14.145873Z     scalpyn-worker-structural       Traceback (most recent call last):
+  File "/app/app/services/structural_scheduler_service.py", line 198, in _refresh_market_metadata
+    await db.execute(text("""
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py", line 449, in execute
+    result = await greenlet_spawn(
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 203, in greenlet_spawn
+    result = context.switch(value)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2351, in execute
+    return self._execute_internal(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2258, in _execute_internal
+    result = conn.execute(
+             ^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1419, in execute
+    return meth(
+           ^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 527, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1641, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2366, in _handle_dbapi_exception
+    raise exc_info[1].with_traceback(exc_info[2])
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
+    cursor.execute(statement, parameters)
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 585, in execute
+    self._adapt_connection.await_(
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 563, in _prepare_and_execute
+    self._handle_exception(error)
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 513, in _handle_exception
+    self._adapt_connection._handle_exception(error)
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 799, in _handle_exception
+    raise error
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 550, in _prepare_and_execute
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ echo "--- task activity (último 1 min) — sinal real de vida ---"
+gcloud logging read \
+  'resource.type="cloud_run_revision"
+   AND resource.labels.service_name=~"scalpyn-(worker|beat)"
+   AND (textPayload=~"succeeded in" OR textPayload=~"received")' \
+  --limit=10 --freshness=1m \
+  --format='value(timestamp,resource.labels.service_name)' | head -15
+
+echo ""
+echo "--- exception raiz structural (texto completo, último erro) ---"
+gcloud logging read \
+  'resource.type="cloud_run_revision"
+   AND resource.labels.service_name="scalpyn-worker-structural"
+   AND severity>=ERROR' \
+  --limit=1 --freshness=5m \
+  --format='value(textPayload)' | tail -25
+
+echo ""
+echo "--- env var CELERY_INSPECT_BUDGET_S no scalpyn API ---"
+gcloud run services describe scalpyn --region=us-central1 \
+  --format='value(spec.template.spec.containers[0].env)' \
+  | tr ';' '\n' | grep -E "CELERY_INSPECT|REDIS" | head -5
+--- task activity (último 1 min) — sinal real de vida ---
+2026-05-08T19:00:17.489879Z     scalpyn-worker-micro
+2026-05-08T19:00:16.928954Z     scalpyn-worker-execution
+2026-05-08T19:00:16.918334Z     scalpyn-worker-execution
+2026-05-08T19:00:06.042012Z     scalpyn-worker-structural
+2026-05-08T19:00:06.031923Z     scalpyn-worker-structural
+2026-05-08T19:00:05.141880Z     scalpyn-worker-structural
+2026-05-08T19:00:05.128286Z     scalpyn-worker-structural
+2026-05-08T19:00:05.055349Z     scalpyn-worker-structural
+2026-05-08T19:00:05.047387Z     scalpyn-worker-structural
+2026-05-08T19:00:04.974411Z     scalpyn-worker-structural
+
+--- exception raiz structural (texto completo, último erro) ---
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/site-packages/celery/app/trace.py", line 585, in trace_task
+    R = retval = fun(*args, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/celery/app/trace.py", line 858, in __protected_call__
+    return self.run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/tasks/collect_market_data.py", line 498, in collect_all
+    count = _run_async(_collect_all_async())
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/tasks/collect_market_data.py", line 19, in _run_async
+    return loop.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/app/app/tasks/collect_market_data.py", line 457, in _collect_all_async
+    return await run_db_task(_inner, celery=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/app/database.py", line 298, in run_db_task
+    return await fn(session)
+           ^^^^^^^^^^^^^^^^^
+  File "/app/app/tasks/collect_market_data.py", line 445, in _inner
+    raise RuntimeError("zero success — all symbols failed")
+RuntimeError: zero success — all symbols failed
+
+--- env var CELERY_INSPECT_BUDGET_S no scalpyn API ---
+{'name': 'REDIS_URL', 'valueFrom': {'secretKeyRef': {'key': 'latest', 'name': 'redis-url'}}}
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ ^C
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ TRIGGER_ID="806f4336-706a-404f-82be-dd0d5c01ebfa"
+
+# Backup do estado atual antes de mexer
+gcloud builds triggers describe "$TRIGGER_ID" --region=global --format=yaml > /tmp/trigger-backup.yaml
+echo "=== backup salvo em /tmp/trigger-backup.yaml ==="
+
+# Mostra os campos relevantes
+echo ""
+echo "=== filename atual (vazio = usa build inline) ==="
+grep -E "^filename:|^build:|^github:|^name:" /tmp/trigger-backup.yaml | head -10
+
+echo ""
+echo "=== tem 'build:' inline? ==="
+grep -c "^build:" /tmp/trigger-backup.yaml || echo 0
+
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ TRIGGER_ID="806f4336-706a-404f-82be-dd0d5c01ebfa"
+
+# Backup do estado atual antes de mexer
+gcloud builds triggers describe "$TRIGGER_ID" --region=global --format=yaml > /tmp/trigger-backup.yaml
+echo "=== backup salvo em /tmp/trigger-backup.yaml ==="
+
+# Mostra os campos relevantes
+echo ""
+echo "=== filename atual (vazio = usa build inline) ==="
+grep -E "^filename:|^build:|^github:|^name:" /tmp/trigger-backup.yaml | head -10
+
+echo ""
+echo "=== tem 'build:' inline? ==="
+grep -c "^build:" /tmp/trigger-backup.yaml || echo 0
+
+echo ""
+echo "=== tem 'github:' integration? ==="
+grep -A 5 "^github:" /tmp/trigger-backup.yaml || echo "(sem github block — talvez sourceToBuild)"
+
+echo ""
+echo "=== sourceToBuild? ==="
+grep -A 5 "^sourceToBuild:" /tmp/trigger-backup.yaml || echo "(ausente)"
+=== backup salvo em /tmp/trigger-backup.yaml ===
+
+=== filename atual (vazio = usa build inline) ===
+build:
+github:
+name: rmgpgab-scalpyn-us-central1-vasconcelosbr-scalpyn--majye
+
+=== tem 'build:' inline? ===
+1
+
+=== tem 'github:' integration? ===
+github:
+  name: scalpyn
+  owner: vasconcelosbr
+  push:
+    branch: ^main$
+id: 806f4336-706a-404f-82be-dd0d5c01ebfa
+
+=== sourceToBuild? ===
+(ausente)
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ python3 <<'PY'
+import yaml
+
+with open('/tmp/trigger-backup.yaml') as f:
+    t = yaml.safe_load(f)
+
+# Remove build inline e troca por filename apontando para cloudbuild.yaml do repo
+t.pop('build', None)
+t['filename'] = 'cloudbuild.yaml'
+
+# Remove campos read-only que gcloud rejeita no import
+for ro in ('id', 'createTime', 'resourceName', 'etag'):
+    t.pop(ro, None)
+
+with open('/tmp/trigger-new.yaml', 'w') as f:
+    yaml.safe_dump(t, f, sort_keys=False)
+
+print("=== /tmp/trigger-new.yaml gerado ===")
+PY
+
+# Mostra o conteúdo final pra revisar antes de aplicar
+echo ""
+echo "=== preview /tmp/trigger-new.yaml ==="
+cat /tmp/trigger-new.yaml
+
+echo ""
+echo "=== confirmação dos pontos críticos ==="
+echo -n "filename: "; grep "^filename:" /tmp/trigger-new.yaml
+echo -n "tem build inline? "; grep -c "^build:" /tmp/trigger-new.yaml || echo 0
+echo -n "branch: "; grep "branch:" /tmp/trigger-new.yamlmp/trigger-new.yaml | head -4
+=== /tmp/trigger-new.yaml gerado ===
+
+=== preview /tmp/trigger-new.yaml ===
+description: Build and deploy to Cloud Run service scalpyn on push to "^main$"
+github:
+  name: scalpyn
+  owner: vasconcelosbr
+  push:
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ python3 <<'PY'
+import yaml
+
+with open('/tmp/trigger-backup.yaml') as f:
+    t = yaml.safe_load(f)
+
+# Remove build inline e troca por filename apontando para cloudbuild.yaml do repo
+t.pop('build', None)
+t['filename'] = 'cloudbuild.yaml'
+
+# Remove campos read-only que gcloud rejeita no import
+for ro in ('id', 'createTime', 'resourceName', 'etag'):
+    t.pop(ro, None)
+
+with open('/tmp/trigger-new.yaml', 'w') as f:
+    yaml.safe_dump(t, f, sort_keys=False)
+
+print("=== /tmp/trigger-new.yaml gerado ===")
+PY
+
+# Mostra o conteúdo final pra revisar antes de aplicar
+echo ""
+echo "=== preview /tmp/trigger-new.yaml ==="
+cat /tmp/trigger-new.yaml
+
+echo ""
+echo "=== confirmação dos pontos críticos ==="
+echo -n "filename: "; grep "^filename:" /tmp/trigger-new.yaml
+echo -n "tem build inline? "; grep -c "^build:" /tmp/trigger-new.yaml || echo 0
+echo -n "branch: "; grep "branch:" /tmp/trigger-new.yamlmp/trigger-new.yaml | head -4
+=== /tmp/trigger-new.yaml gerado ===
+
+=== preview /tmp/trigger-new.yaml ===
+description: Build and deploy to Cloud Run service scalpyn on push to "^main$"
+github:
+  name: scalpyn
+  owner: vasconcelosbr
+  push:
+    branch: ^main$
+includeBuildLogs: INCLUDE_BUILD_LOGS_WITH_STATUS
+name: rmgpgab-scalpyn-us-central1-vasconcelosbr-scalpyn--majye
+serviceAccount: projects/clickrate-477217/serviceAccounts/330575088921-compute@developer.gserviceaccount.com
+substitutions:
+  _AR_HOSTNAME: us-central1-docker.pkg.dev
+  _AR_PROJECT_ID: clickrate-477217
+  _AR_REPOSITORY: cloud-run-source-deploy
+  _DEPLOY_REGION: us-central1
+  _PLATFORM: managed
+  _SERVICE_NAME: scalpyn
+  _TRIGGER_ID: 806f4336-706a-404f-82be-dd0d5c01ebfa
+tags:
+- gcp-cloud-build-deploy-cloud-run
+- gcp-cloud-build-deploy-cloud-run-managed
+- scalpyn
+filename: cloudbuild.yaml
+
+=== confirmação dos pontos críticos ===
+filename: filename: cloudbuild.yaml
+tem build inline? 0
+0
+github owner/repo:   name: scalpyn
+  owner: vasconcelosbr
+name: rmgpgab-scalpyn-us-central1-vasconcelosbr-scalpyn--majye
+filename: cloudbuild.yaml
+branch:     branch: ^main$
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ 
