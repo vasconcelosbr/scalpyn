@@ -93,9 +93,17 @@ async def _collect_all_async():
 
     async def _inner(db, queue_mode: bool = False) -> int:
         import time as _time
+        import sqlalchemy.exc as _sqla_exc
         _cycle_t0 = _time.monotonic()
         collected = 0
         failures = 0
+
+        # Health guard: in queue-mode the session has no outer ``session.begin()``
+        # so any stale transaction must be cleared before touching the DB.
+        # In run_db_task mode (non-queue) the outer begin() is fresh — skip.
+        if queue_mode and db.in_transaction():
+            await db.rollback()
+            logger.warning("[CollectMarketData] Stale transaction on queue-mode session, rolled back")
 
         # Task #234 — OHLCV ingestion instrumentation. Five structured
         # log lines per symbol/cycle ([OHLCV-RX|PERSIST|LATEST|STALE|COMMIT])
@@ -177,25 +185,33 @@ async def _collect_all_async():
                 else:
                     # Each symbol's writes are isolated in a SAVEPOINT so that a
                     # single failure never aborts the whole collection transaction.
-                    async with db.begin_nested():
-                        for _, row in df.iterrows():
-                            await db.execute(text("""
-                                INSERT INTO ohlcv (time, symbol, exchange, timeframe, market_type, open, high, low, close, volume, quote_volume)
-                                VALUES (:time, :symbol, :exchange, :timeframe, :market_type, :open, :high, :low, :close, :volume, :quote_volume)
-                                ON CONFLICT DO NOTHING
-                            """), {
-                                "time": row["time"],
-                                "symbol": symbol,
-                                "exchange": ohlcv_exchange,
-                                "timeframe": "1h",
-                                "market_type": "spot",
-                                "open": float(row["open"]),
-                                "high": float(row["high"]),
-                                "low": float(row["low"]),
-                                "close": float(row["close"]),
-                                "volume": float(row["volume"]),
-                                "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
-                            })
+                    try:
+                        async with db.begin_nested():
+                            for _, row in df.iterrows():
+                                await db.execute(text("""
+                                    INSERT INTO ohlcv (time, symbol, exchange, timeframe, market_type, open, high, low, close, volume, quote_volume)
+                                    VALUES (:time, :symbol, :exchange, :timeframe, :market_type, :open, :high, :low, :close, :volume, :quote_volume)
+                                    ON CONFLICT DO NOTHING
+                                """), {
+                                    "time": row["time"],
+                                    "symbol": symbol,
+                                    "exchange": ohlcv_exchange,
+                                    "timeframe": "1h",
+                                    "market_type": "spot",
+                                    "open": float(row["open"]),
+                                    "high": float(row["high"]),
+                                    "low": float(row["low"]),
+                                    "close": float(row["close"]),
+                                    "volume": float(row["volume"]),
+                                    "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
+                                })
+                    except Exception as _sp_ohlcv_exc:
+                        await db.rollback()
+                        logger.error(
+                            "[CollectMarketData] SAVEPOINT (OHLCV 1h) failed for %s — session rolled back: %s",
+                            symbol, _sp_ohlcv_exc,
+                        )
+                        raise
                 if _ohlcv_metrics is not None:
                     _ohlcv_metrics.record_persisted(symbol, "1h", len(df))
 
@@ -272,6 +288,18 @@ async def _collect_all_async():
                 logger.info(f"[COLLECT][OK] symbol={symbol}")
                 collected += 1
             except Exception as e:
+                # PendingRollbackError means the asyncpg connection is in a
+                # failed-transaction state. The savepoint rollback is not
+                # enough — the outer transaction is poisoned and must be
+                # explicitly rolled back before any further DB operation.
+                if isinstance(e, _sqla_exc.PendingRollbackError):
+                    await db.rollback()
+                    logger.error(
+                        "[CollectMarketData] Session in invalid state after %s — rolled back, stopping collection. Error: %s",
+                        symbol, e,
+                    )
+                    failures += 1
+                    break
                 logger.error(
                     f"[FAILED symbol={symbol}] error={str(e)}",
                     exc_info=True,
@@ -341,28 +369,41 @@ async def _collect_all_async():
                                 ),
                             )
                         else:
-                            async with db.begin_nested():
-                                await db.execute(text("""
-                                    INSERT INTO market_metadata
-                                        (symbol, price, price_change_24h, volume_24h,
-                                         spread_pct, last_updated, volume_24h_updated_at)
-                                    VALUES (:symbol, :price, :change, :volume, :spread,
-                                            :updated, :updated)
-                                    ON CONFLICT (symbol) DO UPDATE SET
-                                        price = :price, price_change_24h = :change,
-                                        volume_24h = :volume, spread_pct = :spread,
-                                        last_updated = :updated,
-                                        volume_24h_updated_at = :updated
-                                """), {
-                                    "symbol": sym,
-                                    "price":  price,
-                                    "change": change,
-                                    "volume": volume,
-                                    "spread": spread,
-                                    "updated": now_ts,
-                                })
+                            try:
+                                async with db.begin_nested():
+                                    await db.execute(text("""
+                                        INSERT INTO market_metadata
+                                            (symbol, price, price_change_24h, volume_24h,
+                                             spread_pct, last_updated, volume_24h_updated_at)
+                                        VALUES (:symbol, :price, :change, :volume, :spread,
+                                                :updated, :updated)
+                                        ON CONFLICT (symbol) DO UPDATE SET
+                                            price = :price, price_change_24h = :change,
+                                            volume_24h = :volume, spread_pct = :spread,
+                                            last_updated = :updated,
+                                            volume_24h_updated_at = :updated
+                                    """), {
+                                        "symbol": sym,
+                                        "price":  price,
+                                        "change": change,
+                                        "volume": volume,
+                                        "spread": spread,
+                                        "updated": now_ts,
+                                    })
+                            except Exception as _tsp_exc:
+                                await db.rollback()
+                                logger.error(
+                                    "[CollectMarketData] SAVEPOINT (ticker 1h) failed for %s — session rolled back: %s",
+                                    ticker.get("currency_pair", "?"), _tsp_exc,
+                                )
+                                raise
                         ticker_ok += 1
                 except Exception as te:
+                    if not db.is_active:
+                        logger.error(
+                            "[CollectMarketData] Ticker 1h loop: session no longer active — stopping ticker updates"
+                        )
+                        break
                     logger.debug("Ticker metadata upsert failed for %s: %s",
                                  ticker.get("currency_pair", "?"), te)
                     continue
@@ -552,8 +593,14 @@ async def _collect_5m_async():
 
     async def _inner(db, queue_mode: bool = False) -> int:
         from ..services.market_data_service import market_data_service
+        import sqlalchemy.exc as _sqla_exc
         collected = 0
         failures = 0
+
+        # Health guard: queue-mode sessions have no outer ``session.begin()``.
+        if queue_mode and db.in_transaction():
+            await db.rollback()
+            logger.warning("[CollectMarketData] Stale transaction on queue-mode 5m session, rolled back")
 
         for symbol in symbols:  # no cap — active symbols only
             sym_market_type = symbol_market_type.get(symbol, "spot")
@@ -628,41 +675,49 @@ async def _collect_5m_async():
                     # SAVEPOINT 1: OHLCV candles + price seed.
                     # Isolated so a single symbol failure never aborts the whole
                     # collection transaction.
-                    async with db.begin_nested():
-                        # Bulk-insert all returned candles (ON CONFLICT DO NOTHING is idempotent)
-                        for _, row in df.iterrows():
-                            await db.execute(text("""
-                                INSERT INTO ohlcv (time, symbol, exchange, timeframe, market_type, open, high, low, close, volume, quote_volume)
-                                VALUES (:time, :symbol, :exchange, :timeframe, :market_type, :open, :high, :low, :close, :volume, :quote_volume)
-                                ON CONFLICT DO NOTHING
-                            """), {
-                                "time":        row["time"],
-                                "symbol":      symbol,
-                                "exchange":    ohlcv_exchange,
-                                "timeframe":   "5m",
-                                "market_type": sym_market_type,
-                                "open":        float(row["open"]),
-                                "high":        float(row["high"]),
-                                "low":         float(row["low"]),
-                                "close":       float(row["close"]),
-                                "volume":      float(row["volume"]),
-                                "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
-                            })
+                    try:
+                        async with db.begin_nested():
+                            # Bulk-insert all returned candles (ON CONFLICT DO NOTHING is idempotent)
+                            for _, row in df.iterrows():
+                                await db.execute(text("""
+                                    INSERT INTO ohlcv (time, symbol, exchange, timeframe, market_type, open, high, low, close, volume, quote_volume)
+                                    VALUES (:time, :symbol, :exchange, :timeframe, :market_type, :open, :high, :low, :close, :volume, :quote_volume)
+                                    ON CONFLICT DO NOTHING
+                                """), {
+                                    "time":        row["time"],
+                                    "symbol":      symbol,
+                                    "exchange":    ohlcv_exchange,
+                                    "timeframe":   "5m",
+                                    "market_type": sym_market_type,
+                                    "open":        float(row["open"]),
+                                    "high":        float(row["high"]),
+                                    "low":         float(row["low"]),
+                                    "close":       float(row["close"]),
+                                    "volume":      float(row["volume"]),
+                                    "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
+                                })
 
-                        # Seed market_metadata with price from latest OHLCV close.
-                        # Ensures every pool coin has a metadata row even when the
-                        # tickers-based pathway in collect_all has failed.
-                        await db.execute(text("""
-                            INSERT INTO market_metadata (symbol, price, last_updated)
-                            VALUES (:sym, :price, :ts)
-                            ON CONFLICT (symbol) DO UPDATE SET
-                                price = :price,
-                                last_updated = :ts
-                        """), {
-                            "sym":   symbol,
-                            "price": float(latest_5m["close"]),
-                            "ts":    _now_5m,
-                        })
+                            # Seed market_metadata with price from latest OHLCV close.
+                            # Ensures every pool coin has a metadata row even when the
+                            # tickers-based pathway in collect_all has failed.
+                            await db.execute(text("""
+                                INSERT INTO market_metadata (symbol, price, last_updated)
+                                VALUES (:sym, :price, :ts)
+                                ON CONFLICT (symbol) DO UPDATE SET
+                                    price = :price,
+                                    last_updated = :ts
+                            """), {
+                                "sym":   symbol,
+                                "price": float(latest_5m["close"]),
+                                "ts":    _now_5m,
+                            })
+                    except Exception as _sp_ohlcv5m_exc:
+                        await db.rollback()
+                        logger.error(
+                            "[CollectMarketData] SAVEPOINT (OHLCV 5m) failed for %s — session rolled back: %s",
+                            symbol, _sp_ohlcv5m_exc,
+                        )
+                        raise
 
                 # SAVEPOINT 2: orderbook metrics (separate SAVEPOINT so that a
                 # DB failure here never rolls back the OHLCV + price writes above).
@@ -687,20 +742,28 @@ async def _collect_5m_async():
                                 ),
                             )
                         else:
-                            async with db.begin_nested():
-                                await db.execute(text("""
-                                    INSERT INTO market_metadata (symbol, spread_pct, orderbook_depth_usdt, last_updated)
-                                    VALUES (:sym, :spread, :depth, :ts)
-                                    ON CONFLICT (symbol) DO UPDATE SET
-                                        spread_pct = :spread,
-                                        orderbook_depth_usdt = :depth,
-                                        last_updated = :ts
-                                """), {
-                                    "sym":    symbol,
-                                    "spread": ob.get("spread_pct"),
-                                    "depth":  ob.get("orderbook_depth_usdt"),
-                                    "ts":     _ob_ts,
-                                })
+                            try:
+                                async with db.begin_nested():
+                                    await db.execute(text("""
+                                        INSERT INTO market_metadata (symbol, spread_pct, orderbook_depth_usdt, last_updated)
+                                        VALUES (:sym, :spread, :depth, :ts)
+                                        ON CONFLICT (symbol) DO UPDATE SET
+                                            spread_pct = :spread,
+                                            orderbook_depth_usdt = :depth,
+                                            last_updated = :ts
+                                    """), {
+                                        "sym":    symbol,
+                                        "spread": ob.get("spread_pct"),
+                                        "depth":  ob.get("orderbook_depth_usdt"),
+                                        "ts":     _ob_ts,
+                                    })
+                            except Exception as _sp_ob_exc:
+                                await db.rollback()
+                                logger.error(
+                                    "[CollectMarketData] SAVEPOINT (orderbook 5m) failed for %s — session rolled back: %s",
+                                    symbol, _sp_ob_exc,
+                                )
+                                raise
                     else:
                         logger.warning(
                             "[DATA_UNKNOWN] orderbook metrics unavailable for %s "
@@ -717,6 +780,16 @@ async def _collect_5m_async():
                 logger.info(f"[PERSIST] success symbol={symbol}")
                 logger.info(f"[COLLECT][OK] symbol={symbol} timeframe=5m")
             except Exception as e:
+                # PendingRollbackError: asyncpg connection is in a failed-tx
+                # state. Must rollback explicitly before any further operation.
+                if isinstance(e, _sqla_exc.PendingRollbackError):
+                    await db.rollback()
+                    logger.error(
+                        "[CollectMarketData] Session in invalid state after %s (5m) — rolled back, stopping. Error: %s",
+                        symbol, e,
+                    )
+                    failures += 1
+                    break
                 logger.error(
                     f"[FAILED symbol={symbol}] timeframe=5m error={str(e)}",
                     exc_info=True,
@@ -729,6 +802,14 @@ async def _collect_5m_async():
                 # ``run_db_task`` (``async with session.begin()``) and
                 # poisons every subsequent symbol with
                 # "Can't operate on closed transaction inside context manager".
+                if not db.is_active:
+                    remaining = len(symbols) - symbols.index(symbol) - 1
+                    logger.error(
+                        "[COLLECT] outer transaction poisoned after %s (5m) — "
+                        "skipping remaining %d symbols; collected=%d",
+                        symbol, remaining, collected,
+                    )
+                    break
                 continue
 
         # ── Backup metadata pathway: fetch tickers for volume_24h + spread ───
@@ -766,30 +847,43 @@ async def _collect_5m_async():
                                 ),
                             )
                         else:
-                            async with db.begin_nested():
-                                await db.execute(text("""
-                                    INSERT INTO market_metadata
-                                        (symbol, price, price_change_24h, volume_24h,
-                                         spread_pct, last_updated, volume_24h_updated_at)
-                                    VALUES (:symbol, :price, :change, :volume, :spread,
-                                            :updated, :updated)
-                                    ON CONFLICT (symbol) DO UPDATE SET
-                                        price = :price,
-                                        price_change_24h = :change,
-                                        volume_24h = :volume,
-                                        spread_pct = :spread,
-                                        last_updated = :updated,
-                                        volume_24h_updated_at = :updated
-                                """), {
-                                    "symbol": pair,
-                                    "price":  price,
-                                    "change": change,
-                                    "volume": volume,
-                                    "spread": spread,
-                                    "updated": now_ts,
-                                })
+                            try:
+                                async with db.begin_nested():
+                                    await db.execute(text("""
+                                        INSERT INTO market_metadata
+                                            (symbol, price, price_change_24h, volume_24h,
+                                             spread_pct, last_updated, volume_24h_updated_at)
+                                        VALUES (:symbol, :price, :change, :volume, :spread,
+                                                :updated, :updated)
+                                        ON CONFLICT (symbol) DO UPDATE SET
+                                            price = :price,
+                                            price_change_24h = :change,
+                                            volume_24h = :volume,
+                                            spread_pct = :spread,
+                                            last_updated = :updated,
+                                            volume_24h_updated_at = :updated
+                                    """), {
+                                        "symbol": pair,
+                                        "price":  price,
+                                        "change": change,
+                                        "volume": volume,
+                                        "spread": spread,
+                                        "updated": now_ts,
+                                    })
+                            except Exception as _btsp_exc:
+                                await db.rollback()
+                                logger.error(
+                                    "[CollectMarketData] SAVEPOINT (backup ticker 5m) failed for %s — session rolled back: %s",
+                                    ticker.get("currency_pair", "?"), _btsp_exc,
+                                )
+                                raise
                         ticker_ok += 1
                     except Exception as te:
+                        if not db.is_active:
+                            logger.error(
+                                "[CollectMarketData] 5m backup ticker loop: session no longer active — stopping"
+                            )
+                            break
                         logger.debug("5m: backup ticker upsert failed for %s: %s",
                                      ticker.get("currency_pair", "?"), te)
                         continue
@@ -840,22 +934,35 @@ async def _collect_5m_async():
                                 ),
                             )
                         else:
-                            async with db.begin_nested():
-                                await db.execute(text("""
-                                    UPDATE market_metadata
-                                    SET price = :price,
-                                        volume_24h = :volume,
-                                        last_updated = :ts,
-                                        volume_24h_updated_at = :ts
-                                    WHERE symbol = :sym
-                                """), {
-                                    "sym":    sym,
-                                    "price":  price,
-                                    "volume": volume,
-                                    "ts":     _ts_fb,
-                                })
+                            try:
+                                async with db.begin_nested():
+                                    await db.execute(text("""
+                                        UPDATE market_metadata
+                                        SET price = :price,
+                                            volume_24h = :volume,
+                                            last_updated = :ts,
+                                            volume_24h_updated_at = :ts
+                                        WHERE symbol = :sym
+                                    """), {
+                                        "sym":    sym,
+                                        "price":  price,
+                                        "volume": volume,
+                                        "ts":     _ts_fb,
+                                    })
+                            except Exception as _fbsp_exc:
+                                await db.rollback()
+                                logger.error(
+                                    "[CollectMarketData] SAVEPOINT (fallback 5m) failed for %s — session rolled back: %s",
+                                    sym, _fbsp_exc,
+                                )
+                                raise
                         refreshed += 1
                     except Exception as se:
+                        if not db.is_active:
+                            logger.error(
+                                "[CollectMarketData] 5m fallback loop: session no longer active — stopping"
+                            )
+                            break
                         logger.debug("5m: per-symbol fallback failed for %s: %s", sym, se)
                         continue
                 logger.info("5m: per-symbol Gate ticker fallback refreshed %d symbols", refreshed)
