@@ -230,6 +230,7 @@ async def _compute_async():
     from ..services.seed_service import DEFAULT_INDICATORS
     from ..services.order_flow_service import get_order_flow_data
 
+    import sqlalchemy.exc as _sqla_exc
     logger.info("Starting indicator computation...")
 
     indicators_config = DEFAULT_INDICATORS  # System defaults for centralized computation
@@ -363,33 +364,49 @@ async def _compute_async():
                     else:
                         # SAVEPOINT: isolates this symbol's writes so that a
                         # failure here does not roll back other symbols' data.
-                        async with db.begin_nested():
-                            await _upsert_market_metadata_snapshot(db, symbol, results, now)
+                        try:
+                            async with db.begin_nested():
+                                await _upsert_market_metadata_snapshot(db, symbol, results, now)
 
-                            # Store in TimescaleDB (envelope format — value + source + confidence + status).
-                            # Task #216: write ``scheduler_group`` explicitly so the read
-                            # path (indicators_provider) can merge structural + microstructure
-                            # rows by group rather than guessing from legacy NULL/'combined'.
-                            await db.execute(text("""
-                                INSERT INTO indicators
-                                    (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
-                                VALUES
-                                    (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
-                            """), {
-                                "time": now,
-                                "symbol": symbol,
-                                "timeframe": "1h",
-                                "market_type": "spot",  # 1h collector is spot-only (pool query above filters p.market_type='spot')
-                                "scheduler_group": "structural",
-                                "indicators": payload_json,
-                            })
+                                # Store in TimescaleDB (envelope format — value + source + confidence + status).
+                                # Task #216: write ``scheduler_group`` explicitly so the read
+                                # path (indicators_provider) can merge structural + microstructure
+                                # rows by group rather than guessing from legacy NULL/'combined'.
+                                await db.execute(text("""
+                                    INSERT INTO indicators
+                                        (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
+                                    VALUES
+                                        (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
+                                """), {
+                                    "time": now,
+                                    "symbol": symbol,
+                                    "timeframe": "1h",
+                                    "market_type": "spot",  # 1h collector is spot-only (pool query above filters p.market_type='spot')
+                                    "scheduler_group": "structural",
+                                    "indicators": payload_json,
+                                })
+                        except Exception as _sp_exc:
+                            await db.rollback()
+                            logger.error(
+                                "[ComputeIndicators] SAVEPOINT (1h) failed for %s — session rolled back: %s",
+                                symbol, _sp_exc,
+                            )
+                            raise
 
                     computed += 1
 
                 except Exception as e:
+                    if isinstance(e, _sqla_exc.PendingRollbackError):
+                        await db.rollback()
+                        logger.error(
+                            "[ComputeIndicators] PendingRollbackError on 1h loop for %s — session rolled back, stopping symbol loop: %s",
+                            symbol, e,
+                        )
+                        break
                     logger.warning(f"Failed to compute indicators for {symbol}: {e}")
-                    # begin_nested() savepoint auto-rolled back on exception;
-                    # outer transaction remains healthy — no db.rollback() needed.
+                    if not db.is_active:
+                        logger.error("[ComputeIndicators] Session inactive after 1h error for %s — stopping symbol loop", symbol)
+                        break
                     continue
 
             await db.commit()
@@ -423,6 +440,7 @@ async def _compute_5m_async():
     from ..services.seed_service import DEFAULT_INDICATORS
     from ..services.order_flow_service import get_order_flow_data
 
+    import sqlalchemy.exc as _sqla_exc
     logger.info("Starting 5m indicator computation...")
 
     indicators_config = DEFAULT_INDICATORS
@@ -547,31 +565,47 @@ async def _compute_5m_async():
                     else:
                         # SAVEPOINT: isolates this symbol's writes so that a
                         # failure here does not roll back other symbols' data.
-                        async with db.begin_nested():
-                            await _upsert_market_metadata_snapshot(db, symbol, results, now)
-                            # Store in TimescaleDB (envelope format — value + source + confidence + status).
-                            # Task #216: explicit ``scheduler_group='microstructure'`` so the
-                            # read path can identify which cadence wrote each row.
-                            await db.execute(text("""
-                                INSERT INTO indicators
-                                    (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
-                                VALUES
-                                    (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
-                            """), {
-                                "time":            now,
-                                "symbol":          symbol,
-                                "timeframe":       "5m",
-                                "market_type":     symbol_market_type.get(symbol, "spot"),
-                                "scheduler_group": "microstructure",
-                                "indicators":      payload_json,
-                            })
+                        try:
+                            async with db.begin_nested():
+                                await _upsert_market_metadata_snapshot(db, symbol, results, now)
+                                # Store in TimescaleDB (envelope format — value + source + confidence + status).
+                                # Task #216: explicit ``scheduler_group='microstructure'`` so the
+                                # read path can identify which cadence wrote each row.
+                                await db.execute(text("""
+                                    INSERT INTO indicators
+                                        (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
+                                    VALUES
+                                        (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
+                                """), {
+                                    "time":            now,
+                                    "symbol":          symbol,
+                                    "timeframe":       "5m",
+                                    "market_type":     symbol_market_type.get(symbol, "spot"),
+                                    "scheduler_group": "microstructure",
+                                    "indicators":      payload_json,
+                                })
+                        except Exception as _sp_exc:
+                            await db.rollback()
+                            logger.error(
+                                "[ComputeIndicators] SAVEPOINT (5m) failed for %s — session rolled back: %s",
+                                symbol, _sp_exc,
+                            )
+                            raise
 
                     computed += 1
 
                 except Exception as e:
+                    if isinstance(e, _sqla_exc.PendingRollbackError):
+                        await db.rollback()
+                        logger.error(
+                            "[ComputeIndicators] PendingRollbackError on 5m loop for %s — session rolled back, stopping symbol loop: %s",
+                            symbol, e,
+                        )
+                        break
                     logger.warning(f"Failed to compute 5m indicators for {symbol}: {e}")
-                    # begin_nested() savepoint auto-rolled back on exception;
-                    # outer transaction remains healthy — no db.rollback() needed.
+                    if not db.is_active:
+                        logger.error("[ComputeIndicators] Session inactive after 5m error for %s — stopping symbol loop", symbol)
+                        break
                     continue
 
             await db.commit()

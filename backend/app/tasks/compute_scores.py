@@ -138,6 +138,7 @@ async def _score_async():
 
         # Build row-shaped objects so the loop body and Phase 2 keep
         # operating on the same shape (.symbol / .indicators_json / .time).
+        import sqlalchemy.exc as _sqla_exc
         rows = []
         for symbol, mi in merged_by_sym.items():
             flat = mi.as_flat_dict()
@@ -202,26 +203,33 @@ async def _score_async():
                             "column is repaired. See docs/runbooks/critical-schema-drift.md."
                         )
                         _scoring_version_drift_logged = True
-                    async with db.begin_nested():
-                        await db.execute(text("""
-                            INSERT INTO alpha_scores
-                                (time, symbol, score, liquidity_score, market_structure_score,
-                                 momentum_score, signal_score, components_json,
-                                 alpha_score_v2, confidence_metrics)
-                            VALUES
-                                (:time, :symbol, :score, NULL, NULL, NULL, NULL, :components,
-                                 NULL, NULL)
-                        """), {
-                            "time": now,
-                            "symbol": row.symbol,
-                            "score": scored_payload["score"],
-                            "components": json.dumps({
-                                "engine": "robust",
-                                "score_confidence": scored_payload["score_confidence"],
-                                "global_confidence": scored_payload["global_confidence"],
-                                "matched_rules": scored_payload["matched_rules"],
-                            }),
-                        })
+                    try:
+                        async with db.begin_nested():
+                            await db.execute(text("""
+                                INSERT INTO alpha_scores
+                                    (time, symbol, score, liquidity_score, market_structure_score,
+                                     momentum_score, signal_score, components_json,
+                                     alpha_score_v2, confidence_metrics)
+                                VALUES
+                                    (:time, :symbol, :score, NULL, NULL, NULL, NULL, :components,
+                                     NULL, NULL)
+                            """), {
+                                "time": now,
+                                "symbol": row.symbol,
+                                "score": scored_payload["score"],
+                                "components": json.dumps({
+                                    "engine": "robust",
+                                    "score_confidence": scored_payload["score_confidence"],
+                                    "global_confidence": scored_payload["global_confidence"],
+                                    "matched_rules": scored_payload["matched_rules"],
+                                }),
+                            })
+                    except Exception as _sp_exc:
+                        logger.error(
+                            "[compute_scores] SAVEPOINT (drift-fallback) failed for %s — rolling back via run_db_task: %s",
+                            row.symbol, _sp_exc,
+                        )
+                        raise
 
                 # Cache the score so _detect_level_transitions doesn't need
                 # to re-run the robust engine for the same row. SQLAlchemy
@@ -230,6 +238,12 @@ async def _score_async():
                 _scored += 1
 
             except Exception as e:
+                if isinstance(e, _sqla_exc.PendingRollbackError):
+                    logger.error(
+                        "[compute_scores] PendingRollbackError for %s — aborting scoring loop, run_db_task will rollback: %s",
+                        row.symbol, e,
+                    )
+                    raise
                 logger.warning(f"Failed to compute score for {row.symbol}: {e}")
                 continue
 
