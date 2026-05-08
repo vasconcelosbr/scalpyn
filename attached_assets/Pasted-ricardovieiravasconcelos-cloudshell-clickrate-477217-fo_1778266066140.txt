@@ -1,0 +1,63 @@
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ for svc in scalpyn scalpyn-worker-micro scalpyn-worker-structural scalpyn-worker-execution scalpyn-beat; do
+  echo "==> $svc"
+  gcloud run services update "$svc" \
+    --region=us-central1 \
+    --update-secrets=REDIS_URL=redis-url:latest
+done
+
+# Validação: aguarda 30s, depois confere que workers estão respondendo
+sleep 30
+echo "=== celery health ==="
+curl -sf https://scalpyn.vercel.app/api/dashboard/overview \
+  | python3 -c "import sys,json;d=json.load(sys.stdin);c=d.get('celery',{});print('worker_count:',c.get('worker_count'));print('status:',c.get('status'))"
+==> scalpyn
+Deploying...                                                                                                                                                           
+  Creating Revision...done                                                                                                                                             
+  Routing traffic...done                                                                                                                                               
+Done.                                                                                                                                                                  
+Service [scalpyn] revision [scalpyn-00470-nfl] has been deployed and is serving 100 percent of traffic.
+Service URL: https://scalpyn-330575088921.us-central1.run.app
+==> scalpyn-worker-micro
+Deploying...                                                                                                                                                           
+  Creating Revision...done                                                                                                                                             
+  Routing traffic...done                                                                                                                                               
+Done.                                                                                                                                                                  
+Service [scalpyn-worker-micro] revision [scalpyn-worker-micro-00015-2jb] has been deployed and is serving 100 percent of traffic.
+Service URL: https://scalpyn-worker-micro-330575088921.us-central1.run.app
+==> scalpyn-worker-structural
+Deploying...                                                                                                                                                           
+  Creating Revision...done                                                                                                                                             
+  Routing traffic...done                                                                                                                                               
+Done.                                                                                                                                                                  
+Service [scalpyn-worker-structural] revision [scalpyn-worker-structural-00021-m5m] has been deployed and is serving 100 percent of traffic.
+Service URL: https://scalpyn-worker-structural-330575088921.us-central1.run.app
+==> scalpyn-worker-execution
+Deploying...                                                                                                                                                           
+  Creating Revision...done                                                                                                                                             
+  Routing traffic...done                                                                                                                                               
+Done.                                                                                                                                                                  
+Service [scalpyn-worker-execution] revision [scalpyn-worker-execution-00015-5k2] has been deployed and is serving 100 percent of traffic.
+Service URL: https://scalpyn-worker-execution-330575088921.us-central1.run.app
+==> scalpyn-beat
+Deploying...                                                                                                                                                           
+  Creating Revision...done                                                                                                                                             
+  Routing traffic...done                                                                                                                                               
+Done.                                                                                                                                                                  
+Service [scalpyn-beat] revision [scalpyn-beat-00015-jsh] has been deployed and is serving 100 percent of traffic.
+Service URL: https://scalpyn-beat-330575088921.us-central1.run.app
+=== celery health ===
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "/usr/lib/python3.12/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ 
