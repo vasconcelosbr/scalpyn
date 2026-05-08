@@ -181,8 +181,16 @@ steps:
       #   scalpyn-beat               | (none — `RUN_BEAT=1` only, no worker)    | 1        | 1 / 1
       #
       # See `docs/runbooks/celery-queue-topology.md` for the full topology.
+      # ASYNC_MIGRATIONS=1: API service only. Runs `alembic upgrade head` +
+      # critical-schema validation in a background subshell so uvicorn binds
+      # :8080 immediately and clears Cloud Run's startup probe (TCP-on-PORT,
+      # default 240s) even when Cloud SQL is under contention from concurrent
+      # collect_market_data writers. A subshell watchdog (`start.sh`) tears
+      # the container down on `/tmp/.migrations_failed` so the rollback
+      # contract is preserved. /api/health/schema is the public signal while
+      # the gate is in flight. Workers/beat keep the synchronous gate.
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-07T17:30:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=0,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
+      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-08T12:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=0,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1,ASYNC_MIGRATIONS=1'
 
   # ── Task #216: Celery worker — microstructure queue ─────────────────
   # Bursty 5-minute cadence (collect_5m → compute_5m). Sized to absorb

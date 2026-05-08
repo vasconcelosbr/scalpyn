@@ -286,6 +286,62 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# ── Schema-readiness gate (ASYNC_MIGRATIONS=1 only) ─────────────────────────
+# When start.sh runs the schema gate (alembic + validate_critical_schema) in a
+# background subshell, uvicorn binds :8080 immediately to clear Cloud Run's
+# startup probe. While that gate is in flight there is a real window where
+# request handlers could touch columns that have not been created yet.
+#
+# This middleware closes the window: until /tmp/.migrations_done exists, every
+# non-allowlisted route returns 503 with a Retry-After hint. The allowlist is
+# intentionally narrow — only health and metrics endpoints, which are safe to
+# serve before the schema is fully converged. Once the sentinel is created the
+# middleware short-circuits and adds zero overhead per request.
+#
+# Failure path: if the gate fails, start.sh's watchdog SIGTERMs the container
+# (Cloud Run rolls back to the previous revision). This middleware does not
+# need to handle that — it only protects the *in-flight* window.
+import os as _os
+from starlette.middleware.base import BaseHTTPMiddleware as _BaseHTTPMiddleware
+from starlette.responses import JSONResponse as _JSONResponse
+
+_SCHEMA_READY_PATHS = (
+    "/api/health",          # covers /api/health and /api/health/schema
+    "/metrics",
+    "/api/system/persistence",
+)
+_SCHEMA_DONE_FILE = "/tmp/.migrations_done"
+_ASYNC_MIGRATIONS = _os.environ.get("ASYNC_MIGRATIONS") == "1"
+_schema_ready_cached = False  # one-way latch; once True we never check again
+
+
+class _SchemaReadinessGate(_BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        global _schema_ready_cached
+        if _schema_ready_cached or not _ASYNC_MIGRATIONS:
+            return await call_next(request)
+        if _os.path.exists(_SCHEMA_DONE_FILE):
+            _schema_ready_cached = True
+            return await call_next(request)
+        path = request.url.path
+        if any(path.startswith(p) for p in _SCHEMA_READY_PATHS):
+            return await call_next(request)
+        return _JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "10"},
+            content={
+                "status": "warming_up",
+                "detail": (
+                    "Schema migrations are still running. "
+                    "Probe /api/health/schema for full readiness state."
+                ),
+            },
+        )
+
+
+app.add_middleware(_SchemaReadinessGate)
+
 # Auth & Config
 app.include_router(auth.router)
 app.include_router(config_api.router)

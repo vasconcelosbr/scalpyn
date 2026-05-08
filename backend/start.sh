@@ -62,7 +62,33 @@ for var in DATABASE_URL JWT_SECRET ENCRYPTION_KEY REDIS_URL AI_KEYS_ENCRYPTION_K
 done
 
 # ── Schema gate: Alembic migrations (authoritative, time-boxed) ──────────────
-ALEMBIC_TIMEOUT_PER_ATTEMPT=${ALEMBIC_TIMEOUT_PER_ATTEMPT:-50}
+# Default raised 50→90s (May 2026). With Cloud SQL under lock contention from
+# the parallel collect_market_data workers, the previous 50s × 3 attempts +
+# backoffs (~165s) was leaving <75s of the 240s startup-probe budget for the
+# rest of boot (validate_critical_schema + redis ping + uvicorn workers cold-
+# importing app.main). Result: scalpyn revisions intermittently failing with
+# "Startup probe timed out after 4m" (revisions 00148-00163, 00450+).
+# 90s × 3 + backoffs (~280s) is wider than the probe — but combined with the
+# ASYNC_MIGRATIONS opt-in below, alembic no longer sits in the boot critical
+# path for the API service.
+ALEMBIC_TIMEOUT_PER_ATTEMPT=${ALEMBIC_TIMEOUT_PER_ATTEMPT:-90}
+
+# ── Async migrations (opt-in, K_SERVICE=scalpyn only) ────────────────────────
+# When ASYNC_MIGRATIONS=1, run alembic + critical-schema validation in a
+# background subprocess, allowing uvicorn to bind :8080 immediately and
+# satisfy the Cloud Run startup probe (TCP probe on PORT). The background
+# process writes its result to /tmp/.migrations_done (success) or
+# /tmp/.migrations_failed (failure). The watchdog below tears the container
+# down on failure — Cloud Run then rolls back to the previous revision,
+# preserving the existing safety contract. /api/health/schema independently
+# probes information_schema and returns 503 while the file is missing, so
+# clients have a clear "warming up" signal.
+#
+# This is an OPT-IN behavior keyed on env var, default OFF. The current
+# Cloud Build wiring sets ASYNC_MIGRATIONS=1 only on the `scalpyn` API
+# service; workers and beat keep the synchronous gate (their boot is not
+# user-facing, and parallelizing there would just multiply the lock waits).
+ASYNC_MIGRATIONS="${ASYNC_MIGRATIONS:-0}"
 
 run_alembic_upgrade() {
     local max_attempts=3
@@ -104,35 +130,90 @@ validate_critical_schema() {
     echo "==> [schema] Critical schema OK."
 }
 
-if ! run_alembic_upgrade; then
-    # ── Stamp fallback ────────────────────────────────────────────────────
-    # If alembic upgrade head fails (typically lock contention from the old
-    # Celery beat kept alive by Cloud Run --min-instances=1 during rolling
-    # deploy), stamp head as a last resort so uvicorn can start.
-    #
-    # "alembic stamp head" only writes to the alembic_version table — no DDL
-    # locks on data tables needed.  /api/health/schema will detect any real
-    # schema drift post-boot and return 503 if critical columns are missing,
-    # providing a clear signal for follow-up action.
-    echo "==> [migrations] All attempts failed (lock contention from old revision)." >&2
-    echo "==> [migrations] Attempting alembic stamp head fallback..." >&2
-    echo "==> [migrations] Rationale: DDL may already exist from a previous init_db.py run." >&2
-    if timeout 30s alembic stamp head 2>&1; then
-        echo "==> [migrations] Stamped at head."
-        # Stamp head only writes to alembic_version — it never runs DDL.
-        validate_critical_schema
-    else
-        echo "==> Aborting startup: cannot upgrade or stamp schema." >&2
+# run_schema_gate: runs the full alembic + critical-schema validation flow.
+# Factored out so it can be invoked synchronously (workers/beat) or
+# asynchronously in a background subshell (API service when
+# ASYNC_MIGRATIONS=1). Returns 0 on success, exits non-zero on failure when
+# called inline.
+run_schema_gate() {
+    if ! run_alembic_upgrade; then
+        # ── Stamp fallback ────────────────────────────────────────────────────
+        # If alembic upgrade head fails (typically lock contention from the old
+        # Celery beat kept alive by Cloud Run --min-instances=1 during rolling
+        # deploy), stamp head as a last resort so uvicorn can start.
+        #
+        # "alembic stamp head" only writes to the alembic_version table — no DDL
+        # locks on data tables needed.  /api/health/schema will detect any real
+        # schema drift post-boot and return 503 if critical columns are missing,
+        # providing a clear signal for follow-up action.
+        echo "==> [migrations] All attempts failed (lock contention from old revision)." >&2
+        echo "==> [migrations] Attempting alembic stamp head fallback..." >&2
+        echo "==> [migrations] Rationale: DDL may already exist from a previous init_db.py run." >&2
+        if timeout 30s alembic stamp head 2>&1; then
+            echo "==> [migrations] Stamped at head."
+            # Stamp head only writes to alembic_version — it never runs DDL.
+            validate_critical_schema
+        else
+            echo "==> Aborting startup: cannot upgrade or stamp schema." >&2
+            return 1
+        fi
+    fi
+
+    # Even when `alembic upgrade head` succeeds, the database may already be
+    # drifted from a previous `stamp head` incident (e.g. version table advanced
+    # to 032 while indicators.scheduler_group never existed). In that case Alembic
+    # will happily apply only newer revisions and the app would boot broken unless
+    # we probe information_schema here as well.
+    validate_critical_schema
+    return 0
+}
+
+MIGRATIONS_DONE_FILE="/tmp/.migrations_done"
+MIGRATIONS_FAILED_FILE="/tmp/.migrations_failed"
+rm -f "$MIGRATIONS_DONE_FILE" "$MIGRATIONS_FAILED_FILE"
+
+if [ "$ASYNC_MIGRATIONS" = "1" ]; then
+    # Background path: spawn a subshell that runs the full gate and signals
+    # the result via a sentinel file. The watchdog (declared after uvicorn
+    # background pieces below) polls the failure file and kills the container
+    # if the gate fails — preserving the same "Cloud Run rolls back to
+    # previous revision on failure" contract as the sync path. The success
+    # case lets uvicorn keep serving as soon as the schema is valid.
+    echo "==> [migrations] ASYNC_MIGRATIONS=1 — running schema gate in background (uvicorn will bind :8080 immediately)"
+    (
+        set +e
+        # Safety net: validate_critical_schema() and other helpers use `exit 1`
+        # which, inside this subshell, terminate ONLY the subshell. Without
+        # this trap the watchdog would never see /tmp/.migrations_failed and
+        # the container would happily serve traffic against a broken schema —
+        # exactly the rollback contract we are protecting. Trap on EXIT writes
+        # the failed sentinel if neither sentinel was created by the normal
+        # branches below (and the FastAPI middleware in app/main.py keeps
+        # returning 503 for non-health routes until /tmp/.migrations_done
+        # appears, so no traffic touches an intermediate schema).
+        trap '
+            if [ ! -f "$MIGRATIONS_DONE_FILE" ] && [ ! -f "$MIGRATIONS_FAILED_FILE" ]; then
+                touch "$MIGRATIONS_FAILED_FILE"
+                echo "==> [migrations] Async subshell exited unexpectedly — marking FAILED" >&2
+            fi
+        ' EXIT
+        if run_schema_gate; then
+            touch "$MIGRATIONS_DONE_FILE"
+            echo "==> [migrations] Async gate completed OK"
+        else
+            touch "$MIGRATIONS_FAILED_FILE"
+            echo "==> [migrations] Async gate FAILED — watchdog will tear down the container" >&2
+        fi
+    ) &
+    SCHEMA_GATE_PID=$!
+    echo " [migrations] Background gate PID: $SCHEMA_GATE_PID"
+else
+    # Synchronous path: original behavior. Boot blocks here until the
+    # schema is up-to-date. On failure exit 1 so Cloud Run rolls back.
+    if ! run_schema_gate; then
         exit 1
     fi
 fi
-
-# Even when `alembic upgrade head` succeeds, the database may already be
-# drifted from a previous `stamp head` incident (e.g. version table advanced
-# to 032 while indicators.scheduler_group never existed). In that case Alembic
-# will happily apply only newer revisions and the app would boot broken unless
-# we probe information_schema here as well.
-validate_critical_schema
 
 # ── Pre-flight: Redis connectivity (Tarefas 3+7) ─────────────────────────────
 # Hard fail-safe: if the broker is unreachable, abort startup with exit 1
@@ -377,12 +458,39 @@ if [ -n "$CELERY_WORKER_PID" ] || [ -n "$CELERY_BEAT_PID" ]; then
     ) &
 fi
 
+# ── Async-migrations watchdog (ASYNC_MIGRATIONS=1 only) ──────────────────────
+# Tears down the container if the background schema gate writes the failure
+# sentinel. Runs every 5s for up to 15 minutes (enough headroom for a
+# contended Cloud SQL: alembic 90s × 3 + backoffs + stamp fallback ≈ 5 min,
+# leaving 10 min safety margin). After 15 minutes without either sentinel,
+# logs a warning and stops polling — at that point /api/health/schema is the
+# remaining signal.
+if [ "$ASYNC_MIGRATIONS" = "1" ]; then
+    (
+        deadline=$(($(date +%s) + 900))
+        while [ "$(date +%s)" -lt "$deadline" ]; do
+            if [ -f "$MIGRATIONS_FAILED_FILE" ]; then
+                echo "==> [migrations-watchdog] Schema gate FAILED — tearing down container so Cloud Run rolls back" >&2
+                kill -TERM "$MAIN_PID" 2>/dev/null
+                exit 0
+            fi
+            if [ -f "$MIGRATIONS_DONE_FILE" ]; then
+                echo "==> [migrations-watchdog] Schema gate completed — uvicorn is now backed by an up-to-date schema."
+                exit 0
+            fi
+            sleep 5
+        done
+        echo " [migrations-watchdog] No sentinel after 15min — gate may be hung. /api/health/schema is the remaining signal." >&2
+    ) &
+fi
+
 # Graceful cleanup: when uvicorn/container receives SIGTERM, stop children first
 cleanup() {
     echo "==> SIGTERM received -- stopping background processes..."
     PIDS_TO_KILL=""
     [ -n "$CELERY_WORKER_PID" ] && PIDS_TO_KILL="$PIDS_TO_KILL $CELERY_WORKER_PID"
     [ -n "$CELERY_BEAT_PID" ]   && PIDS_TO_KILL="$PIDS_TO_KILL $CELERY_BEAT_PID"
+    [ -n "${SCHEMA_GATE_PID:-}" ] && PIDS_TO_KILL="$PIDS_TO_KILL $SCHEMA_GATE_PID"
     if [ -n "$PIDS_TO_KILL" ]; then
         kill -TERM $PIDS_TO_KILL 2>/dev/null
         wait $PIDS_TO_KILL 2>/dev/null
@@ -390,9 +498,9 @@ cleanup() {
 }
 trap cleanup TERM INT
 
-# ── Start uvicorn (schema is already up-to-date) ────────────────────────────
+# ── Start uvicorn (schema is already up-to-date, OR coming up async) ────────
 echo "==> Starting uvicorn..."
 exec uvicorn app.main:app \
     --host 0.0.0.0 \
     --port "${PORT:-8080}" \
-    --workers "${WEB_CONCURRENCY:-2}"
+    --workers "${WEB_CONCURRENCY:-1}"
