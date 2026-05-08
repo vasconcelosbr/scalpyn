@@ -1,0 +1,98 @@
+dcafdbe: digest: sha256:9f3cd765c5dc2d5db0e9c6bc696f971d94a7feed13254bad44a835e918291ad0 size: 2210
+Pushing us-central1-docker.pkg.dev/clickrate-477217/cloud-run-source-deploy/scalpyn:latest
+The push refers to repository [us-central1-docker.pkg.dev/clickrate-477217/cloud-run-source-deploy/scalpyn]
+d3039c27d01d: Preparing
+444c562d0aab: Preparing
+68989a574290: Preparing
+3cab602fda3d: Preparing
+603d551faddd: Preparing
+82f7b847f709: Preparing
+3a9714186f75: Preparing
+e1ed8e09cf5d: Preparing
+6d7c150df58d: Preparing
+6d7c150df58d: Layer already exists
+d3039c27d01d: Layer already exists
+68989a574290: Layer already exists
+603d551faddd: Layer already exists
+3cab602fda3d: Layer already exists
+e1ed8e09cf5d: Layer already exists
+3a9714186f75: Layer already exists
+444c562d0aab: Layer already exists
+82f7b847f709: Layer already exists
+latest: digest: sha256:9f3cd765c5dc2d5db0e9c6bc696f971d94a7feed13254bad44a835e918291ad0 size: 2210
+DONE
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ ^C
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ # 1) URL canônica do service
+gcloud run services describe scalpyn --region=us-central1 \
+  --format='value(status.url)'
+
+# 2) Logs dos últimos 5 min do scalpyn (foca em ERROR/FATAL/Exception)
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="scalpyn" AND timestamp>="'"$(date -u -d '5 min ago' +%Y-%m-%dT%H:%M:%SZ)"'"' \
+  --limit=50 --format='value(timestamp,severity,textPayload)' \
+  --project=clickrate-477217 2>&1 | head -80
+
+# 3) Hit a URL canônica e ver se /api/health responde
+URL=$(gcloud run services describe scalpyn --region=us-central1 --format='value(status.url)')
+echo "==> URL=$URL"
+curl -s -o /dev/null -w "HTTP %{http_code}\n" "$URL/api/health"
+curl -s -o /dev/null -w "HTTP %{http_code}\n" "$URL/health"
+curl -s -o /dev/null -w "HTTP %{http_code}\n" "$URL/openapi.json"
+
+# 4) Revisão atual + se tá serving
+gcloud run services describe scalpyn --region=us-central1 \
+  --format='table(status.latestReadyRevisionName,status.latestCreatedRevisionName,spec.template.spec.containers[0].image.basename())'
+https://scalpyn-wm56dfqgta-uc.a.run.app
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ # 1) URL canônica do service
+gcloud run services describe scalpyn --region=us-central1 \
+  --format='value(status.url)'
+
+# 2) Logs dos últimos 5 min do scalpyn (foca em ERROR/FATAL/Exception)
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="scalpyn" AND timestamp>="'"$(date -u -d '5 min ago' +%Y-%m-%dT%H:%M:%SZ)"'"' \
+  --limit=50 --format='value(timestamp,severity,textPayload)' \
+  --project=clickrate-477217 2>&1 | head -80
+
+# 3) Hit a URL canônica e ver se /api/health responde
+URL=$(gcloud run services describe scalpyn --region=us-central1 --format='value(status.url)')
+echo "==> URL=$URL"
+curl -s -o /dev/null -w "HTTP %{http_code}\n" "$URL/api/health"
+curl -s -o /dev/null -w "HTTP %{http_code}\n" "$URL/health"
+curl -s -o /dev/null -w "HTTP %{http_code}\n" "$URL/openapi.json"
+
+# 4) Revisão atual + se tá serving
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ echo "=== traffic split ==="
+gcloud run services describe scalpyn --region=us-central1 \
+  --format='value(status.traffic)'
+
+echo ""
+echo "=== mais detalhado ==="
+gcloud run services describe scalpyn --region=us-central1 \
+  --format='table(status.traffic.revisionName,status.traffic.percent,status.traffic.tag,status.traffic.url)'
+
+echo ""
+echo "=== ingress/auth ==="
+gcloud run services describe scalpyn --region=us-central1 \
+  --format='value(spec.template.metadata.annotations,spec.template.spec.containers[0].ports[0].containerPort,metadata.annotations.run.googleapis.com/ingress)'
+
+echo ""
+echo "=== teste com URL com tag explícita (se houver) ==="
+curl -s -o /dev/null -w "HTTP %{http_code}\n" \
+  -H "Host: scalpyn-wm56dfqgta-uc.a.run.app" \
+  https://scalpyn-wm56dfqgta-uc.a.run.app/api/health
+=== traffic split ===
+{'latestRevision': True, 'percent': 100, 'revisionName': 'scalpyn-00484-gs4'}
+
+=== mais detalhado ===
+REVISION_NAME: ['scalpyn-00484-gs4']
+PERCENT: [100]
+TAG: 
+URL: 
+
+=== ingress/auth ===
+ERROR: (gcloud.run.services.describe) Expected ) in projection expression [service value(spec.template.metadata.annotations,spec.template.spec.containers[0].ports[0].containerPort,metadata.annotations.run.googleapis.com *HERE* /ingress)].
+
+=== teste com URL com tag explícita (se houver) ===
+HTTP 404
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ 
