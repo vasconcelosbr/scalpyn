@@ -1,0 +1,17 @@
+Step #2: 2360d90b989c: Layer already exists
+Step #2: latest: digest: sha256:61f494c8c200e11c6a80a36302820c18f6a4d84bb694ca7dda06f1c4c5db0846 size: 2210
+Finished Step #2
+Starting Step #3
+Step #3: Already have image (with digest): gcr.io/google.com/cloudsdktool/cloud-sdk
+Step #3: Deploying container to Cloud Run service [scalpyn] in project [clickrate-477217] region [us-central1]
+Step #3: Deploying...
+Step #3: Setting IAM Policy.........done
+Step #3: Creating Revision.............................................................................................................................................................................................................................................................................................................................................................................................................failed
+Step #3: Deployment failed
+Step #3: ERROR: (gcloud.run.deploy) spec.template.spec.containers[0].env[13].value_from.secret_key_ref.name: Permission denied on secret: projects/330575088921/secrets/prometheus-bearer-token/versions/latest for Revision service account 330575088921-compute@developer.gserviceaccount.com. The service account used must be granted the 'Secret Manager Secret Accessor' role (roles/secretmanager.secretAccessor) at the secret, project or higher level.
+Step #3: spec.template.spec.containers[0].env[14].value_from.secret_key_ref.name: Permission denied on secret: projects/330575088921/secrets/diagnostics-bearer-token/versions/latest for Revision service account 330575088921-compute@developer.gserviceaccount.com. The service account used must be granted the 'Secret Manager Secret Accessor' role (roles/secretmanager.secretAccessor) at the secret, project or higher level.
+Finished Step #3
+ERROR
+ERROR: build step 3 "gcr.io/google.com/cloudsdktool/cloud-sdk" failed: step exited with non-zero status: 1
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ 
