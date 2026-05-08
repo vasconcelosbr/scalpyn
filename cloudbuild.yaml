@@ -414,8 +414,14 @@ steps:
         echo "==> [topology-check] OK: all 5 Cloud Run services present and Ready."
 
 substitutions:
+  # _REPO matches the Artifact Registry repository created by the
+  # auto-generated "Run on Cloud Run" trigger flow. Do NOT change to
+  # `scalpyn` — the existing image history (and the historical
+  # `${_AR_REPOSITORY}` substitution that older trigger configs pass)
+  # both target `cloud-run-source-deploy`. Renaming would orphan every
+  # previous build and require re-creating the AR repo + image promotion.
   _REGION: us-central1
-  _REPO: scalpyn
+  _REPO: cloud-run-source-deploy
   _SERVICE: scalpyn
 
 images:
@@ -424,3 +430,10 @@ images:
 
 options:
   logging: CLOUD_LOGGING_ONLY
+  # ALLOW_LOOSE: permite que o trigger passe substitutions extras
+  # (`_AR_HOSTNAME`, `_DEPLOY_REGION`, `_PLATFORM`, `_SERVICE_NAME`, etc.)
+  # herdadas do template auto-gerado "Run on Cloud Run" sem que o build
+  # falhe com "substitution provided but not used". Sem isso, qualquer sub
+  # adicionada futuramente ao trigger (ex.: feature flag temporária) quebra
+  # TODOS os builds até alguém limpar — defensivo contra arrastar config.
+  substitution_option: ALLOW_LOOSE
