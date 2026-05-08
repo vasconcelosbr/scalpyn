@@ -252,7 +252,15 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
                 )
                 _scheduler_group_drift_logged = True
             return
-        logger.error("[MICRO-SCHED] indicators insert failed for %s: %s", symbol, exc, exc_info=True)
+        # Non-drift failure: rollback the session so it doesn't stay
+        # "idle in transaction" and poison the pool. run_db_task will
+        # handle re-raising and _safe_rollback cleanup.
+        await db.rollback()
+        logger.error(
+            "[MicrostructureScheduler] SAVEPOINT (indicators) failed for %s — session rolled back: %s",
+            symbol, exc, exc_info=True,
+        )
+        raise
 
 
 async def _refresh_market_metadata(db, symbol: str,
@@ -262,6 +270,10 @@ async def _refresh_market_metadata(db, symbol: str,
     if spread_pct is None and depth is None:
         return
     try:
+        # Explicit statement timeout so Cloud SQL cannot cancel this query
+        # silently and leave the connection in "idle in transaction (aborted)".
+        # 30s is generous for a single-row upsert; tune via env var if needed.
+        await db.execute(text("SET LOCAL statement_timeout = '30s'"))
         # SAVEPOINT: isolates a market_metadata failure from the rest of the session.
         async with db.begin_nested():
             await db.execute(text("""
@@ -280,9 +292,14 @@ async def _refresh_market_metadata(db, symbol: str,
                 "updated": when,
             })
     except Exception as exc:
-        level = logging.WARNING if "lock timeout" in str(exc).lower() else logging.ERROR
-        logger.log(level, "[MICRO-SCHED] market_metadata upsert failed for %s: %s", symbol, exc,
-                   exc_info=(level == logging.ERROR))
+        is_timeout = "lock timeout" in str(exc).lower() or "statement timeout" in str(exc).lower()
+        level = logging.WARNING if is_timeout else logging.ERROR
+        logger.log(level, "[MICRO-SCHED] SAVEPOINT (market_metadata) failed for %s — session rolled back: %s",
+                   symbol, exc, exc_info=(level == logging.ERROR))
+        # Rollback the session so the connection doesn't stay idle in transaction.
+        # run_db_task owns the outer transaction and will handle _safe_rollback.
+        await db.rollback()
+        raise
 
 
 async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore,
