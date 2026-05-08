@@ -398,9 +398,18 @@ steps:
           # does not guarantee ordering of status.conditions across SDK
           # versions, and a non-Ready condition (e.g. ConfigurationsReady)
           # at index 0 would otherwise misreport the service.
+          # Use --flatten + --filter instead of inline projection .filter():
+          # gcloud's projection .filter() on a list does NOT scope subsequent
+          # .extract(), so it returned all 3 conditions concatenated (e.g.
+          # "True True True" or "Unknown True Unknown") and broke the equality
+          # check below. --flatten explodes the list, --filter scopes to the
+          # Ready row, --format pulls just its status. Confirmed canonical.
           READY=$$(gcloud run services describe "$$svc" \
             --region="${_REGION}" \
-            --format='value(status.conditions.filter("type:Ready").extract(status))' 2>/dev/null || echo "MISSING")
+            --flatten='status.conditions[]' \
+            --filter='status.conditions.type=Ready' \
+            --format='value(status.conditions.status)' 2>/dev/null || echo "MISSING")
+          [ -z "$$READY" ] && READY="MISSING"
           if [ "$$READY" != "True" ]; then
             NOT_READY="$$NOT_READY $$svc(ready=$$READY)"
           fi
