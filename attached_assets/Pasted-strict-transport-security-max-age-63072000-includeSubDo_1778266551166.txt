@@ -1,0 +1,137 @@
+strict-transport-security: max-age=63072000; includeSubDomains; preload
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ gcloud secrets versions destroy 1 --secret=redis-url --quiet
+
+# Confirma
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ # 1. Estado atual completo
+echo "--- celery-status ---"
+curl -s https://scalpyn-330575088921.us-central1.run.app/api/system/celery-status | python3 -m json.tool | head -30
+
+# 2. Logs dos 4 workers/beat nos últimos 5 min — procurando erros
+echo ""
+echo "--- erros workers/beat (5 min) ---"
+gcloud logging read \
+  'resource.type="cloud_run_revision"
+   AND resource.labels.service_name=~"scalpyn-(worker|beat)"
+   AND severity>=WARNING' \
+  --limit=30 --freshness=5m \
+  --format='value(timestamp,resource.labels.service_name,textPayload)' \
+  | head -50
+
+# 3. Logs procurando AUTH/connection errors específicos
+echo ""
+echo "--- redis/auth errors (5 min) ---"
+gcloud logging read \
+  'resource.type="cloud_run_revision"
+   AND (textPayload=~"AUTH" OR textPayload=~"WRONGPASS" OR textPayload=~"ConnectionError" OR textPayload=~"redis.exceptions")' \
+  --limit=10 --freshness=5m \
+  --format='value(timestamp,resource.labels.service_name,textPayload)'
+
+# 4. Ver se workers estão ativamente processando
+echo ""
+echo "--- worker activity (last 2 min) ---"
+gcloud logging read \
+  'resource.type="cloud_run_revision"
+  --format='value(timestamp,resource.labels.service_name,textPayload)' | head -20
+--- celery-status ---
+{
+    "timestamp": "2026-05-08T18:55:27.062981+00:00",
+    "worker_alive": false,
+    "worker_count": 0,
+    "active_tasks": 0,
+    "registered_task_count": 0,
+    "queues": {
+        "microstructure": {
+            "depth": null,
+            "oldest_age_s": null,
+            "alert_state": "unknown"
+        },
+        "structural": {
+            "depth": null,
+            "oldest_age_s": null,
+            "alert_state": "unknown"
+        },
+        "execution": {
+            "depth": null,
+            "oldest_age_s": null,
+            "alert_state": "unknown"
+        }
+    },
+    "queue_depth_by_queue": {
+        "microstructure": null,
+        "structural": null,
+        "execution": null
+    },
+    "oldest_task_age_seconds_by_queue": {
+        "microstructure": null,
+
+--- erros workers/beat (5 min) ---
+2026-05-08T18:55:14.145873Z     scalpyn-worker-structural       Traceback (most recent call last):
+  File "/app/app/services/structural_scheduler_service.py", line 198, in _refresh_market_metadata
+    await db.execute(text("""
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py", line 449, in execute
+    result = await greenlet_spawn(
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 203, in greenlet_spawn
+    result = context.switch(value)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2351, in execute
+    return self._execute_internal(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py", line 2258, in _execute_internal
+    result = conn.execute(
+             ^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1419, in execute
+    return meth(
+           ^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/elements.py", line 527, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1641, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1846, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 2366, in _handle_dbapi_exception
+    raise exc_info[1].with_traceback(exc_info[2])
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
+    cursor.execute(statement, parameters)
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 585, in execute
+    self._adapt_connection.await_(
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 563, in _prepare_and_execute
+    self._handle_exception(error)
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 513, in _handle_exception
+    self._adapt_connection._handle_exception(error)
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 799, in _handle_exception
+    raise error
+  File "/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 550, in _prepare_and_execute
+
+--- redis/auth errors (5 min) ---
+
+--- worker activity (last 2 min) ---
+2026-05-08T18:55:31.903785Z     scalpyn-worker-execution        [2026-05-08 18:55:31,903: INFO/MainProcess] Task app.tasks.trade_monitor.monitor[1737d5a4-cce2-4e72-abd7-2614c17e8a04] received
+2026-05-08T18:55:31.888678Z     scalpyn-worker-execution        [2026-05-08 18:55:31,888: INFO/ForkPoolWorker-2] Task app.tasks.trade_monitor.monitor[2855955c-03de-473b-ac2b-d61926ae52a6] succeeded in 1.1837516940004207s: 'TradeMonitor: 7 open, 0 closed, 0 errors'
+2026-05-08T18:55:17.486478Z     scalpyn-worker-micro    [2026-05-08 18:55:17,484: INFO/MainProcess] Task app.tasks.collect_market_data.collect_5m[d07e983f-c918-45f8-a9cd-1a0acd77364d] received
+2026-05-08T18:55:17.193052Z     scalpyn-worker-execution        [2026-05-08 18:55:17,193: INFO/MainProcess] Task app.tasks.trade_monitor.monitor[8dbdeb88-4d3f-41b1-bf38-3978024bc0d6] received
+2026-05-08T18:55:17.183919Z     scalpyn-worker-execution        [2026-05-08 18:55:17,183: INFO/ForkPoolWorker-2] Task app.tasks.trade_monitor.monitor[d9899ef9-50f2-4840-bba1-6ea92b86aeca] succeeded in 1.479998536000494s: 'TradeMonitor: 7 open, 0 closed, 0 errors'
+2026-05-08T18:55:03.035678Z     scalpyn-worker-execution        [2026-05-08 18:55:03,035: INFO/MainProcess] Task app.tasks.trade_monitor.monitor[2855955c-03de-473b-ac2b-d61926ae52a6] received
+2026-05-08T18:55:03.025294Z     scalpyn-worker-execution        [2026-05-08 18:55:03,025: INFO/ForkPoolWorker-2] Task app.tasks.execute_buy.execute_buy_cycle[0773d983-e969-4c6b-8018-f28230476604] succeeded in 1.0963539439999295s: {'users_processed': 1, 'trades_placed': 0, 'skipped': 7, 'errors': 0}
+2026-05-08T18:55:01.928544Z     scalpyn-worker-execution        [2026-05-08 18:55:01,928: INFO/MainProcess] Task app.tasks.execute_buy.execute_buy_cycle[0773d983-e969-4c6b-8018-f28230476604] received
+2026-05-08T18:55:01.919457Z     scalpyn-worker-execution        [2026-05-08 18:55:01,919: INFO/ForkPoolWorker-2] Task app.tasks.anti_liq_monitor.monitor[cabf4dc3-885b-4fda-941d-451b48e28bba] succeeded in 0.0641052259998105s: 'Anti-liq monitor: 0 positions checked'
+2026-05-08T18:55:01.854775Z     scalpyn-worker-execution        [2026-05-08 18:55:01,854: INFO/MainProcess] Task app.tasks.anti_liq_monitor.monitor[cabf4dc3-885b-4fda-941d-451b48e28bba] received
+2026-05-08T18:55:01.846303Z     scalpyn-worker-execution        [2026-05-08 18:55:01,846: INFO/ForkPoolWorker-2] Task app.tasks.trade_monitor.monitor[07c80a6d-9140-469d-bc4d-ed944de8ee1b] succeeded in 1.1440283950005323s: 'TradeMonitor: 7 open, 0 closed, 0 errors'
+2026-05-08T18:54:46.857660Z     scalpyn-worker-execution        [2026-05-08 18:54:46,857: INFO/MainProcess] Task app.tasks.trade_monitor.monitor[d9899ef9-50f2-4840-bba1-6ea92b86aeca] received
+2026-05-08T18:54:46.849492Z     scalpyn-worker-execution        [2026-05-08 18:54:46,849: INFO/ForkPoolWorker-2] Task app.tasks.trade_monitor.monitor[28d75790-deec-47af-b2b8-04c21ae3f4a8] succeeded in 1.1484569309996004s: 'TradeMonitor: 7 open, 0 closed, 0 errors'
+2026-05-08T18:54:31.850446Z     scalpyn-worker-execution        [2026-05-08 18:54:31,850: INFO/MainProcess] Task app.tasks.trade_monitor.monitor[07c80a6d-9140-469d-bc4d-ed944de8ee1b] received
+2026-05-08T18:54:31.842620Z     scalpyn-worker-execution        [2026-05-08 18:54:31,842: INFO/ForkPoolWorker-2] Task app.tasks.trade_monitor.monitor[3db423b2-54b6-4309-9d79-a4f51fe1985e] succeeded in 1.1426264219999211s: 'TradeMonitor: 7 open, 0 closed, 0 errors'
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ 
