@@ -121,20 +121,19 @@ steps:
       #   gcloud secrets add-iam-policy-binding prometheus-bearer-token \
       #     --member=serviceAccount:scalpyn-service-account@clickrate-477217.iam.gserviceaccount.com \
       #     --role=roles/secretmanager.secretAccessor --project clickrate-477217
-      - '--update-secrets'
-      - 'PROMETHEUS_BEARER_TOKEN=prometheus-bearer-token:latest'
-      # Bearer-token gate for /api/system/celery-diagnostics (Task #186).
-      # Same access model as PROMETHEUS_BEARER_TOKEN: endpoint returns 404
-      # until the env var is set, 401 unless the request carries the
-      # matching `Authorization: Bearer …` header. One-time setup:
-      #   python -c "import secrets; print(secrets.token_hex(32))" \
-      #     | gcloud secrets create diagnostics-bearer-token \
-      #         --data-file=- --project clickrate-477217
-      #   gcloud secrets add-iam-policy-binding diagnostics-bearer-token \
-      #     --member=serviceAccount:scalpyn-service-account@clickrate-477217.iam.gserviceaccount.com \
-      #     --role=roles/secretmanager.secretAccessor --project clickrate-477217
-      - '--update-secrets'
-      - 'DIAGNOSTICS_BEARER_TOKEN=diagnostics-bearer-token:latest'
+      # Disabled 2026-05-08: secret `prometheus-bearer-token` does not exist
+      # in Secret Manager. Endpoint /metrics returns 404 (fail-closed) while
+      # the env var is unset — see backend/app/api/metrics.py:55. To enable,
+      # create the secret per the steps above, grant accessor to the deploy
+      # SA (currently 330575088921-compute@), and uncomment the two lines
+      # below. Same pattern for the diagnostics secret further down.
+      # - '--update-secrets'
+      # - 'PROMETHEUS_BEARER_TOKEN=prometheus-bearer-token:latest'
+      # Disabled 2026-05-08: secret `diagnostics-bearer-token` does not exist.
+      # Endpoint /api/system/celery-diagnostics returns 404 while unset —
+      # see backend/app/api/system.py:42.
+      # - '--update-secrets'
+      # - 'DIAGNOSTICS_BEARER_TOKEN=diagnostics-bearer-token:latest'
       # Redis broker URL — Secret Manager backed (rotated 2026-05-08, v1
       # destroyed because the inline password had leaked to chat/build logs
       # during the 2026-05-08 deploy recovery). The full URL with the `/0`
