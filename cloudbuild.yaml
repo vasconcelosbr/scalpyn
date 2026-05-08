@@ -135,21 +135,18 @@ steps:
       #     --role=roles/secretmanager.secretAccessor --project clickrate-477217
       - '--update-secrets'
       - 'DIAGNOSTICS_BEARER_TOKEN=diagnostics-bearer-token:latest'
-      # Redis broker URL (Redis Labs external).
-      # IMPORTANT: this URL carries the broker password inline. The credential
-      # was supplied by the user on 2026-05-02 to recover the collector stall;
-      # rotate it after pipeline is healthy and migrate to Secret Manager:
-      #   echo -n "<new-url>" | gcloud secrets create redis-url \
-      #     --data-file=- --project clickrate-477217
+      # Redis broker URL — Secret Manager backed (rotated 2026-05-08, v1
+      # destroyed because the inline password had leaked to chat/build logs
+      # during the 2026-05-08 deploy recovery). The full URL with the `/0`
+      # db suffix is stored verbatim in secret `redis-url`. NEVER inline
+      # the URL in `--update-env-vars` again — the gcloud parser breaks on
+      # `@` / `=` / `?` and the password ends up world-readable in build
+      # logs (anyone with `roles/run.viewer` reads it). SA bindings:
       #   gcloud secrets add-iam-policy-binding redis-url \
-      #     --member=serviceAccount:scalpyn-service-account@clickrate-477217.iam.gserviceaccount.com \
+      #     --member=serviceAccount:330575088921-compute@developer.gserviceaccount.com \
       #     --role=roles/secretmanager.secretAccessor --project clickrate-477217
-      # then replace the line below with:
-      #   - '--update-secrets'
-      #   - 'REDIS_URL=redis-url:latest'
-      # The `/0` db suffix is REQUIRED -- without it Celery cannot select a
-      # logical Redis database and the broker connection silently fails after
-      # broker_connection_max_retries (10) attempts.
+      - '--update-secrets'
+      - 'REDIS_URL=redis-url:latest'
       # All plain env-vars are merged in a single --update-env-vars block to
       # prevent Cloud Run from performing a partial substitution (each separate
       # --update-env-vars call replaces the *entire* set of plain env-vars in
@@ -190,7 +187,7 @@ steps:
       # contract is preserved. /api/health/schema is the public signal while
       # the gate is in flight. Workers/beat keep the synchronous gate.
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-08T12:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=0,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1,ASYNC_MIGRATIONS=1'
+      - 'FORCE_RESTART=2026-05-08T12:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=0,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1,ASYNC_MIGRATIONS=1'
 
   # ── Task #216: Celery worker — microstructure queue ─────────────────
   # Bursty 5-minute cadence (collect_5m → compute_5m). Sized to absorb
@@ -225,8 +222,10 @@ steps:
       - '2Gi'
       - '--add-cloudsql-instances'
       - 'clickrate-477217:us-central1:scalpyn'
+      - '--update-secrets'
+      - 'REDIS_URL=redis-url:latest'
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=microstructure,RUN_BEAT=0,CELERY_CONCURRENCY=4,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
+      - 'FORCE_RESTART=2026-05-08T18:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=microstructure,RUN_BEAT=0,CELERY_CONCURRENCY=4,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
 
   # ── Task #216: Celery worker — structural queue ─────────────────────
   # Hourly+ heavy TA (collect_all → compute → score, pipeline_scan,
@@ -262,8 +261,10 @@ steps:
       - '2Gi'
       - '--add-cloudsql-instances'
       - 'clickrate-477217:us-central1:scalpyn'
+      - '--update-secrets'
+      - 'REDIS_URL=redis-url:latest'
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=structural,RUN_BEAT=0,CELERY_CONCURRENCY=2,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
+      - 'FORCE_RESTART=2026-05-08T18:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=structural,RUN_BEAT=0,CELERY_CONCURRENCY=2,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
 
   # ── Task #216: Celery worker — execution queue ──────────────────────
   # Latency-sensitive trading critical path (evaluate, execute_buy,
@@ -299,8 +300,10 @@ steps:
       - '1Gi'
       - '--add-cloudsql-instances'
       - 'clickrate-477217:us-central1:scalpyn'
+      - '--update-secrets'
+      - 'REDIS_URL=redis-url:latest'
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=execution,RUN_BEAT=0,CELERY_CONCURRENCY=2,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
+      - 'FORCE_RESTART=2026-05-08T18:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=execution,RUN_BEAT=0,CELERY_CONCURRENCY=2,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
 
   # ── Task #216: Celery beat — sole owner of the periodic schedule ────
   # MUST be a single revision (max-instances=1) so periodic schedules
@@ -335,8 +338,10 @@ steps:
       - '1Gi'
       - '--add-cloudsql-instances'
       - 'clickrate-477217:us-central1:scalpyn'
+      - '--update-secrets'
+      - 'REDIS_URL=redis-url:latest'
       - '--update-env-vars'
-      - 'REDIS_URL=redis://default:J5JGA0YkjrGvldQ7zOInNqjQBUALvFsl@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005/0,FORCE_RESTART=2026-05-04T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=1,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
+      - 'FORCE_RESTART=2026-05-08T18:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=1,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
 
   # ── Task #239: Topology validation — fail loudly if any of the 5
   # ── expected Cloud Run services is missing after the deploy steps.
