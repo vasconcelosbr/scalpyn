@@ -192,6 +192,29 @@ else
 fi
 RUN_BEAT="${RUN_BEAT:-1}"
 
+# ── Safe concurrency defaults per Cloud Run service (Task #216 follow-up) ────
+# If CELERY_CONCURRENCY is not explicitly set in Cloud Run env vars, apply
+# safe per-service defaults to prevent concurrent task execution from
+# causing DB lock contention during startup.
+# structural worker: collect_all acquires per-symbol locks; 2 concurrent
+# tasks = guaranteed lock contention when pool_coins has >1 symbol.
+# micro worker: similar pattern with 5m indicators.
+if [ -z "${CELERY_CONCURRENCY+x}" ]; then
+    case "${K_SERVICE:-}" in
+        scalpyn-worker-structural)
+            CELERY_CONCURRENCY=1
+            echo "==> [concurrency] K_SERVICE=scalpyn-worker-structural — defaulting CELERY_CONCURRENCY=1 (prevents concurrent collect_all lock contention)"
+            ;;
+        scalpyn-worker-micro)
+            CELERY_CONCURRENCY=1
+            echo "==> [concurrency] K_SERVICE=scalpyn-worker-micro — defaulting CELERY_CONCURRENCY=1"
+            ;;
+        *)
+            # Keep existing default of 2 for other services and local dev
+            ;;
+    esac
+fi
+
 CELERY_WORKER_PID=""
 CELERY_BEAT_PID=""
 
