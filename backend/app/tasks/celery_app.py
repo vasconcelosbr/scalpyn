@@ -155,8 +155,16 @@ TASK_QUEUES = tuple(
 # ``max_retries`` is the upper bound; tasks that should never retry
 # (e.g. anti_liq force-close) override locally.
 _MICRO_GUARDS = {
-    "time_limit": 180,
-    "soft_time_limit": 150,
+    # 2026-05-08 — bumped from 180/150 to 480/420 after collect_5m and
+    # compute_5m started timing out silently once the active pool grew to
+    # 95 symbols. Combined with ``acks_late=False`` (gotcha #245) the
+    # SoftTimeLimitExceeded was killing the task without re-queue, and beat
+    # only re-fires every 300 s — result: ohlcv 5m froze for 24h while
+    # collect_all (structural, 540s budget) kept persisting 1h candles
+    # normally. Kept under structural's 540s ceiling. Pile-up from a slow
+    # cycle is bounded by ``acks_late=False`` (orphan tasks are not redelivered).
+    "time_limit": 480,
+    "soft_time_limit": 420,
     "rate_limit": "12/m",
     "max_retries": 3,
 }
