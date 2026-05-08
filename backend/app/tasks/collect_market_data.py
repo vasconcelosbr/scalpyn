@@ -206,9 +206,16 @@ async def _collect_all_async():
                                     "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
                                 })
                     except Exception as _sp_ohlcv_exc:
-                        await db.rollback()
+                        # SAVEPOINT auto-rolled back by ``async with db.begin_nested()`` —
+                        # do NOT call ``db.rollback()`` here. Per the documented
+                        # "Nested-savepoint rollback rule" gotcha (Task #222), rolling
+                        # back the OUTER transaction proactively on EVERY savepoint
+                        # failure (not just true connection death) closes the outer
+                        # tx, poisons the next iteration with PendingRollbackError,
+                        # and triggers the recovery break — losing the rest of the
+                        # collection cycle for benign savepoint errors.
                         logger.error(
-                            "[CollectMarketData] SAVEPOINT (OHLCV 1h) failed for %s — session rolled back: %s",
+                            "[CollectMarketData] SAVEPOINT (OHLCV 1h) failed for %s — savepoint rolled back: %s",
                             symbol, _sp_ohlcv_exc,
                         )
                         raise
@@ -391,9 +398,11 @@ async def _collect_all_async():
                                         "updated": now_ts,
                                     })
                             except Exception as _tsp_exc:
-                                await db.rollback()
+                                # SAVEPOINT auto-rolled back by begin_nested.
+                                # See "Nested-savepoint rollback rule" gotcha — do NOT
+                                # call db.rollback() here (would close outer tx).
                                 logger.error(
-                                    "[CollectMarketData] SAVEPOINT (ticker 1h) failed for %s — session rolled back: %s",
+                                    "[CollectMarketData] SAVEPOINT (ticker 1h) failed for %s — savepoint rolled back: %s",
                                     ticker.get("currency_pair", "?"), _tsp_exc,
                                 )
                                 raise
@@ -712,9 +721,11 @@ async def _collect_5m_async():
                                 "ts":    _now_5m,
                             })
                     except Exception as _sp_ohlcv5m_exc:
-                        await db.rollback()
+                        # SAVEPOINT auto-rolled back by begin_nested.
+                        # See "Nested-savepoint rollback rule" gotcha — do NOT
+                        # call db.rollback() here (would close outer tx).
                         logger.error(
-                            "[CollectMarketData] SAVEPOINT (OHLCV 5m) failed for %s — session rolled back: %s",
+                            "[CollectMarketData] SAVEPOINT (OHLCV 5m) failed for %s — savepoint rolled back: %s",
                             symbol, _sp_ohlcv5m_exc,
                         )
                         raise
@@ -758,9 +769,11 @@ async def _collect_5m_async():
                                         "ts":     _ob_ts,
                                     })
                             except Exception as _sp_ob_exc:
-                                await db.rollback()
+                                # SAVEPOINT auto-rolled back by begin_nested.
+                                # See "Nested-savepoint rollback rule" gotcha — do NOT
+                                # call db.rollback() here (would close outer tx).
                                 logger.error(
-                                    "[CollectMarketData] SAVEPOINT (orderbook 5m) failed for %s — session rolled back: %s",
+                                    "[CollectMarketData] SAVEPOINT (orderbook 5m) failed for %s — savepoint rolled back: %s",
                                     symbol, _sp_ob_exc,
                                 )
                                 raise
@@ -871,9 +884,11 @@ async def _collect_5m_async():
                                         "updated": now_ts,
                                     })
                             except Exception as _btsp_exc:
-                                await db.rollback()
+                                # SAVEPOINT auto-rolled back by begin_nested.
+                                # See "Nested-savepoint rollback rule" gotcha — do NOT
+                                # call db.rollback() here (would close outer tx).
                                 logger.error(
-                                    "[CollectMarketData] SAVEPOINT (backup ticker 5m) failed for %s — session rolled back: %s",
+                                    "[CollectMarketData] SAVEPOINT (backup ticker 5m) failed for %s — savepoint rolled back: %s",
                                     ticker.get("currency_pair", "?"), _btsp_exc,
                                 )
                                 raise
@@ -950,9 +965,11 @@ async def _collect_5m_async():
                                         "ts":     _ts_fb,
                                     })
                             except Exception as _fbsp_exc:
-                                await db.rollback()
+                                # SAVEPOINT auto-rolled back by begin_nested.
+                                # See "Nested-savepoint rollback rule" gotcha — do NOT
+                                # call db.rollback() here (would close outer tx).
                                 logger.error(
-                                    "[CollectMarketData] SAVEPOINT (fallback 5m) failed for %s — session rolled back: %s",
+                                    "[CollectMarketData] SAVEPOINT (fallback 5m) failed for %s — savepoint rolled back: %s",
                                     sym, _fbsp_exc,
                                 )
                                 raise

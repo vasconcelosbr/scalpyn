@@ -386,9 +386,12 @@ async def _compute_async():
                                     "indicators": payload_json,
                                 })
                         except Exception as _sp_exc:
-                            await db.rollback()
+                            # SAVEPOINT auto-rolled back by begin_nested context manager.
+                            # See "Nested-savepoint rollback rule" gotcha — do NOT call
+                            # db.rollback() here. Re-raise; outer except handles
+                            # PendingRollbackError vs benign-failure paths.
                             logger.error(
-                                "[ComputeIndicators] SAVEPOINT (1h) failed for %s — session rolled back: %s",
+                                "[ComputeIndicators] SAVEPOINT (1h) failed for %s — savepoint rolled back: %s",
                                 symbol, _sp_exc,
                             )
                             raise
@@ -585,9 +588,11 @@ async def _compute_5m_async():
                                     "indicators":      payload_json,
                                 })
                         except Exception as _sp_exc:
-                            await db.rollback()
+                            # SAVEPOINT auto-rolled back by begin_nested context manager.
+                            # See "Nested-savepoint rollback rule" gotcha — do NOT call
+                            # db.rollback() here.
                             logger.error(
-                                "[ComputeIndicators] SAVEPOINT (5m) failed for %s — session rolled back: %s",
+                                "[ComputeIndicators] SAVEPOINT (5m) failed for %s — savepoint rolled back: %s",
                                 symbol, _sp_exc,
                             )
                             raise

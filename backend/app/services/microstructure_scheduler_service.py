@@ -252,12 +252,14 @@ async def _persist_indicators(db, symbol: str, results: dict, when: datetime) ->
                 )
                 _scheduler_group_drift_logged = True
             return
-        # Non-drift failure: rollback the session so it doesn't stay
-        # "idle in transaction" and poison the pool. run_db_task will
-        # handle re-raising and _safe_rollback cleanup.
-        await db.rollback()
+        # SAVEPOINT auto-rolled back by ``async with db.begin_nested()``.
+        # Per "Nested-savepoint rollback rule" gotcha (Task #222): do NOT
+        # call ``db.rollback()`` here — this function runs under run_db_task's
+        # outer ``session.begin()``, and rolling back closes the OUTER tx,
+        # poisoning every subsequent symbol with PendingRollbackError.
+        # run_db_task / _safe_rollback handles outer cleanup on the re-raise.
         logger.error(
-            "[MicrostructureScheduler] SAVEPOINT (indicators) failed for %s — session rolled back: %s",
+            "[MicrostructureScheduler] SAVEPOINT (indicators) failed for %s — savepoint rolled back: %s",
             symbol, exc, exc_info=True,
         )
         raise
@@ -294,11 +296,12 @@ async def _refresh_market_metadata(db, symbol: str,
     except Exception as exc:
         is_timeout = "lock timeout" in str(exc).lower() or "statement timeout" in str(exc).lower()
         level = logging.WARNING if is_timeout else logging.ERROR
-        logger.log(level, "[MICRO-SCHED] SAVEPOINT (market_metadata) failed for %s — session rolled back: %s",
+        logger.log(level, "[MICRO-SCHED] SAVEPOINT (market_metadata) failed for %s — savepoint rolled back: %s",
                    symbol, exc, exc_info=(level == logging.ERROR))
-        # Rollback the session so the connection doesn't stay idle in transaction.
-        # run_db_task owns the outer transaction and will handle _safe_rollback.
-        await db.rollback()
+        # SAVEPOINT auto-rolled back by ``async with db.begin_nested()``.
+        # Per "Nested-savepoint rollback rule" gotcha (Task #222): do NOT
+        # call ``db.rollback()`` here — would close the OUTER tx opened by
+        # run_db_task and poison every subsequent symbol.
         raise
 
 
