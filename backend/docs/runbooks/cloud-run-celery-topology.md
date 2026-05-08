@@ -63,8 +63,12 @@ Definição canônica em [`cloudbuild.yaml`](../../../cloudbuild.yaml) (Task #21
 ALL=$(gcloud run services list --region=us-central1 --format="value(metadata.name)")
 for svc in scalpyn scalpyn-worker-micro scalpyn-worker-structural scalpyn-worker-execution scalpyn-beat; do
   if echo "$ALL" | grep -qx "$svc"; then
-    READY=$(gcloud run services describe "$svc" --region=us-central1 \
-      --format="value(status.conditions.filter(\"type:Ready\").extract(status))" 2>/dev/null)
+    # JSON + python3 — pattern canônico (cloudbuild.yaml topology-check).
+    # NÃO usar `--format='value(status.conditions.filter("type:Ready").extract(status))'`:
+    # `gcloud run services describe` ignora `.filter(...)` em projeções de lista
+    # e retorna a concatenação de TODAS as conditions, mascarando `Ready=False`.
+    READY=$(gcloud run services describe "$svc" --region=us-central1 --format=json 2>/dev/null \
+      | python3 -c 'import sys,json;d=json.load(sys.stdin);print(next((c.get("status","?") for c in d.get("status",{}).get("conditions",[]) if c.get("type")=="Ready"),"MISSING"))')
     echo "OK  $svc ready=$READY"
   else
     echo "MISS $svc"
