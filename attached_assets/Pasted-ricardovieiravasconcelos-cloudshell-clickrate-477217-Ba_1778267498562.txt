@@ -1,0 +1,53 @@
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ # Backup adicional do trigger atual (caso precise rollback)
+cp /tmp/trigger-backup.yaml /tmp/trigger-backup-$(date +%s).yaml
+ls -la /tmp/trigger-backup*.yaml
+
+# Import (substitui a config do trigger 806f4336-... pela nova)
+gcloud builds triggers import --source=/tmp/trigger-new.yaml --region=global
+
+# Verifica que pegou
+echo ""
+echo "=== trigger pós-import ==="
+gcloud builds triggers describe rmgpgab-scalpyn-us-central1-vasconcelosbr-scalpyn--majye \
+  --region=global \
+  --format='value(filename,name)'
+
+echo ""
+echo "=== confirma que NÃO tem mais build inline ==="
+gcloud builds triggers describe rmgpgab-scalpyn-us-central1-vasconcelosbr-scalpyn--majye \
+  --region=global --format=yaml | grep -E "^filename:|^build:" || echo "(sem matches)"
+-rw------- 1 ricardovieiravasconcelos ricardovieiravasconcelos 2360 May  8 19:11 /tmp/trigger-backup-1778267475.yaml
+-rw------- 1 ricardovieiravasconcelos ricardovieiravasconcelos 2360 May  8 19:04 /tmp/trigger-backup.yaml
+---
+createTime: '2026-03-11T13:52:26.492578968Z'
+description: Build and deploy to Cloud Run service scalpyn on push to "^main$"
+filename: cloudbuild.yaml
+github:
+  name: scalpyn
+  owner: vasconcelosbr
+  push:
+    branch: ^main$
+id: 806f4336-706a-404f-82be-dd0d5c01ebfa
+includeBuildLogs: INCLUDE_BUILD_LOGS_WITH_STATUS
+name: rmgpgab-scalpyn-us-central1-vasconcelosbr-scalpyn--majye
+resourceName: projects/clickrate-477217/locations/global/triggers/806f4336-706a-404f-82be-dd0d5c01ebfa
+serviceAccount: projects/clickrate-477217/serviceAccounts/330575088921-compute@developer.gserviceaccount.com
+substitutions:
+  _AR_HOSTNAME: us-central1-docker.pkg.dev
+  _AR_PROJECT_ID: clickrate-477217
+  _AR_REPOSITORY: cloud-run-source-deploy
+  _DEPLOY_REGION: us-central1
+  _PLATFORM: managed
+  _SERVICE_NAME: scalpyn
+  _TRIGGER_ID: 806f4336-706a-404f-82be-dd0d5c01ebfa
+tags:
+- gcp-cloud-build-deploy-cloud-run
+- gcp-cloud-build-deploy-cloud-run-managed
+- scalpyn
+
+=== trigger pós-import ===
+cloudbuild.yaml rmgpgab-scalpyn-us-central1-vasconcelosbr-scalpyn--majye
+
+=== confirma que NÃO tem mais build inline ===
+filename: cloudbuild.yaml
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ 
