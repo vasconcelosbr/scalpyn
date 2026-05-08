@@ -1,0 +1,39 @@
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ # Cola isso no Cloud Shell em paralelo enquanto faz o push:
+SERVICES=(scalpyn scalpyn-worker-micro scalpyn-worker-structural scalpyn-worker-execution scalpyn-beat)
+echo "==> revisão atual + Ready de cada service"
+for svc in "${SERVICES[@]}"; do
+  REV=$(gcloud run services describe "$svc" --region=us-central1 --format='value(status.latestReadyRevisionName)')
+  IMG=$(gcloud run services describe "$svc" --region=us-central1 --format='value(spec.template.spec.containers[0].image)' | sed 's|.*/||')
+  READY=$(gcloud run services describe "$svc" --region=us-central1 \
+    --flatten='status.conditions[]' \
+    --filter='status.conditions.type=Ready' \
+    --format='value(status.conditions.status)')
+  printf "  %-30s rev=%-30s ready=%-8s img=%s\n" "$svc" "$REV" "$READY" "$IMG"
+done
+==> revisão atual + Ready de cada service
+ERROR: (gcloud.run.services.describe) unrecognized arguments: --filter=status.conditions.type=Ready (did you mean '--flatten'?) 
+
+To search the help text of gcloud commands, run:
+  gcloud help -- SEARCH_TERMS
+  scalpyn                        rev=scalpyn-00482-fxb              ready=         img=scalpyn:d5b09bf
+ERROR: (gcloud.run.services.describe) unrecognized arguments: --filter=status.conditions.type=Ready (did you mean '--flatten'?) 
+
+To search the help text of gcloud commands, run:
+  gcloud help -- SEARCH_TERMS
+  scalpyn-worker-micro           rev=scalpyn-worker-micro-00020-xsx ready=         img=scalpyn:d5b09bf
+ERROR: (gcloud.run.services.describe) unrecognized arguments: --filter=status.conditions.type=Ready (did you mean '--flatten'?) 
+
+To search the help text of gcloud commands, run:
+  gcloud help -- SEARCH_TERMS
+  scalpyn-worker-structural      rev=scalpyn-worker-structural-00026-5h6 ready=         img=scalpyn:d5b09bf
+ERROR: (gcloud.run.services.describe) unrecognized arguments: --filter=status.conditions.type=Ready (did you mean '--flatten'?) 
+
+To search the help text of gcloud commands, run:
+  gcloud help -- SEARCH_TERMS
+  scalpyn-worker-execution       rev=scalpyn-worker-execution-00020-zmf ready=         img=scalpyn:d5b09bf
+ERROR: (gcloud.run.services.describe) unrecognized arguments: --filter=status.conditions.type=Ready (did you mean '--flatten'?) 
+
+To search the help text of gcloud commands, run:
+  gcloud help -- SEARCH_TERMS
+  scalpyn-beat                   rev=scalpyn-beat-00020-jxq         ready=         img=scalpyn:d5b09bf
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ 

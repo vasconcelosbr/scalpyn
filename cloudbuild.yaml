@@ -398,17 +398,12 @@ steps:
           # does not guarantee ordering of status.conditions across SDK
           # versions, and a non-Ready condition (e.g. ConfigurationsReady)
           # at index 0 would otherwise misreport the service.
-          # Use --flatten + --filter instead of inline projection .filter():
-          # gcloud's projection .filter() on a list does NOT scope subsequent
-          # .extract(), so it returned all 3 conditions concatenated (e.g.
-          # "True True True" or "Unknown True Unknown") and broke the equality
-          # check below. --flatten explodes the list, --filter scopes to the
-          # Ready row, --format pulls just its status. Confirmed canonical.
-          READY=$$(gcloud run services describe "$$svc" \
-            --region="${_REGION}" \
-            --flatten='status.conditions[]' \
-            --filter='status.conditions.type=Ready' \
-            --format='value(status.conditions.status)' 2>/dev/null || echo "MISSING")
+          # Pull the Ready condition explicitly via python parsing — gcloud
+          # `run services describe` does NOT accept --filter (only list/etc),
+          # and projection .filter() on status.conditions silently returns
+          # the full list. JSON + python3 is the only reliable path; the
+          # cloud-sdk builder image ships python3 by default.
+          READY=$$(gcloud run services describe "$$svc" --region="${_REGION}" --format=json 2>/dev/null | python3 -c 'import sys,json;d=json.load(sys.stdin);print(next((c.get("status","?") for c in d.get("status",{}).get("conditions",[]) if c.get("type")=="Ready"),"MISSING"))' 2>/dev/null || echo "MISSING")
           [ -z "$$READY" ] && READY="MISSING"
           if [ "$$READY" != "True" ]; then
             NOT_READY="$$NOT_READY $$svc(ready=$$READY)"
