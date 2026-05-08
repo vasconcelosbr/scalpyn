@@ -1,0 +1,106 @@
+# 2026-05-08 — Pipeline Recovery (3 incidentes correlacionados)
+
+Três incidentes do mesmo dia compartilham timeline e código. Este runbook é o consolidado dos 3 gotchas removidos do `replit.md` (mantido apenas como pointer).
+
+## Timeline
+
+| Hora UTC | Evento |
+|---|---|
+| 2026-05-07 21:15 | Última candle 5m persistida — pipeline 5m congela |
+| 2026-05-08 ~17:00 | Operador percebe atraso no dashboard (`atraso ingest 23h+`) |
+| 2026-05-08 ~17:30 | Login Vercel falhando em massa (sem relação direta com pipeline, mesmo dia) |
+| 2026-05-08 ~18:30 | Diagnóstico: `_MICRO_GUARDS` calibrado pra pool pequeno + ingress `internal-and-cloud-load-balancing` em service sem LB |
+| 2026-05-08 ~21:00 | Deploy `_MICRO_GUARDS` 480/420s + ingress=all |
+| 2026-05-08 ~21:35 | Pipeline volta a rodar mas surge novo sintoma: TXs órfãs `idle in transaction` segurando row-locks |
+| 2026-05-08 ~22:00 | Deploy `idle_in_transaction_session_timeout=300s` + remoção de UPSERT redundante de `market_metadata` |
+| 2026-05-08 22:01 | Confirmado em prod: candles 5m fresh (`age 6min32s`, `rows_15m=171`) |
+
+---
+
+## Gotcha 1 — `_MICRO_GUARDS` time_limit 480s/soft 420s, NÃO 180/150
+
+`collect_5m` e `compute_5m` rodam o universo inteiro (95+ símbolos × ~1s/cada Gate.io). Limite original 150s foi calibrado pra pool pequeno e estourou silenciosamente quando pool cresceu pra 95 ativos.
+
+**Combinação fatal com `acks_late=False` (gotcha #245)**: `SoftTimeLimitExceeded` mata a task sem re-queue, beat só re-roda em 5min, mesmo timeout, mesma queda → loop silencioso por 24h enquanto `collect_all` (structural, 540s) continuava persistindo `timeframe=1h` normalmente.
+
+**Sintomas que confundem**:
+- Dashboard mostra "SÍMBOLOS 0 / CANDLES (15M) 0 / ATRASO INGEST 23h+"
+- MAS `pool_coins.is_active=true` retorna 95
+- `[COLLECT][OK]` aparece nos logs do worker-structural
+- `ohlcv` tem 1h fresca mas 5m parada
+
+Raiz só fica visível em:
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_revision" AND resource.labels.service_name="scalpyn-worker-micro" AND textPayload:"Soft time limit"' \
+  --limit=10 --project=clickrate-477217
+```
+
+Fix em `celery_app.py:160-173`. **NÃO baixar de volta** se o pool crescer mais — ajustar pra cima até o teto de 540s (structural). Acima disso: paralelizar/sharding do universo, não esticar timeout.
+
+---
+
+## Gotcha 2 — `idle_in_transaction_session_timeout=300s` + `lock_timeout=30s` no Celery engine
+
+Sequela do bump do gotcha 1. Subir `_MICRO_GUARDS` revelou um problema mais profundo que era mascarado pelo `SoftTimeLimitExceeded`: container Cloud Run morto mid-transaction (SIGTERM/OOM/network blip) deixa o backend Postgres `idle in transaction` indefinidamente segurando row-locks.
+
+**Observado em prod**: PID 601816 com `RELEASE SAVEPOINT sa_savepoint_38` por **11 min**. Próximas execuções de `collect_5m`/`collect_all` enfileiraram em `market_metadata` esperando o lock, estouraram `command_timeout=180s` → `canceling statement due to user request` → poison da TX → bola de neve infinita.
+
+**Fix em `database.py:_celery_connect_args.server_settings`**:
+- `idle_in_transaction_session_timeout=300000` (5min, ms): Postgres mata qualquer session idle > 5min mid-tx. Elimina órfãs de containers mortos.
+- `lock_timeout=30000` (30s, ms): falha rápido em wait de row-lock em vez de queimar os 180s do `command_timeout`.
+
+Combinado com `acks_late=False` (gotcha #245), beat re-roda em ≤5min com estado limpo.
+
+**Mudança paralela no mesmo deploy**: removido UPSERT redundante de `market_metadata` no `_collect_5m_async` (linha 712, agora só comentário) — `collect_all` (1h) + Gate.io WS tickers + SAVEPOINT do orderbook já mantêm `price` fresh. O UPSERT extra era a fonte mais hot da contenção entre worker-micro e worker-structural. **NÃO re-adicionar** sem nova estratégia de mitigação (SKIP LOCKED, session separada).
+
+**Recovery manual quando o problema reaparecer** (logs: `pg_stat_activity` mostrando TX `idle in transaction` > 2min):
+
+```sql
+-- Cloud Shell — destrava em segundos
+SELECT pid, NOW() - state_change AS idle_for, pg_terminate_backend(pid)
+FROM pg_stat_activity
+WHERE datname='scalpyn'
+  AND state IN ('idle in transaction','idle in transaction (aborted)')
+  AND NOW() - state_change > INTERVAL '2 minutes';
+```
+
+**Verificação pós-recovery**:
+
+```bash
+gcloud sql connect scalpyn --user="$PGUSER" --database=scalpyn --project=clickrate-477217 <<'SQL'
+SELECT timeframe, MAX(time), NOW() - MAX(time) AS age,
+       COUNT(*) FILTER (WHERE time > NOW() - INTERVAL '15 min') AS rows_15m
+FROM ohlcv WHERE timeframe IN ('5m','1h') GROUP BY timeframe;
+SQL
+```
+
+Esperado: `5m` com `age < 10min` e `rows_15m > 0`.
+
+> **Pitfall do `gcloud sql connect`**: `$PGDATABASE` extraído do DATABASE_URL pode vir como `postgres` (DB default do Cloud SQL) em vez de `scalpyn`. **Sempre passar `--database=scalpyn` explicitamente**. Se não, queries dão `relation "ohlcv" does not exist` mesmo com pipeline funcionando.
+
+---
+
+## Gotcha 3 — `scalpyn` API ingress = `all`, NÃO `internal-and-cloud-load-balancing`
+
+Task #167 originalmente setou ingress do service `scalpyn` (API) pra `internal-and-cloud-load-balancing` planejando provisionar Cloud LB depois. **O LB nunca foi provisionado.**
+
+Frontend Vercel (`scalpyn.vercel.app`) bate direto em `https://scalpyn-wm56dfqgta-uc.a.run.app` via `BACKEND_URL` no `frontend/app/api/[...path]/route.ts` — com ingress restrito, o GFE retorna **404 (não 403!)** em TUDO antes do request chegar no container.
+
+**Sintomas que confundem**:
+- Container `Ready=True`, traffic 100%
+- Logs mostram `DB pool stats` regulares (lifespan rodando)
+- MAS zero logs de HTTP access (porque request nem chega)
+- `curl -v` mostra `server: Google Frontend` no 404
+- Login falha em massa com mensagem genérica "Login failed" no front
+
+**Fix imediato**:
+```bash
+gcloud run services update scalpyn --region=us-central1 --ingress=all
+```
+
+**Fix permanente**: `cloudbuild.yaml:93-94` agora deploya com `--ingress=all`.
+
+Os 4 services não-API (`scalpyn-worker-{micro,structural,execution}` + `scalpyn-beat`) MANTÊM `--ingress=internal` — eles não recebem HTTP externo.
+
+**Se um dia provisionar Cloud LB de verdade**: trocar de volta pra `internal-and-cloud-load-balancing` E repointar `BACKEND_URL` na Vercel pro hostname do LB no MESMO deploy — nunca um sem o outro.
