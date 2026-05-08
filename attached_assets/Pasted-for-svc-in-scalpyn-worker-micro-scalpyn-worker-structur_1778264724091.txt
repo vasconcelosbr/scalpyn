@@ -1,0 +1,49 @@
+for svc in scalpyn-worker-micro scalpyn-worker-structural scalpyn-worker-execution scalpyn-beat; do
+  echo "==> $svc"
+  gcloud run services update "$svc" \
+    --region=us-central1 \
+    --image="$IMG"
+done
+
+# Validação: os 5 devem ter a mesma SHA na tag da imagem
+echo "=== verificação ==="
+for svc in scalpyn scalpyn-worker-micro scalpyn-worker-structural scalpyn-worker-execution scalpyn-beat; do
+  printf "%-32s " "$svc"
+  gcloud run services describe "$svc" --region=us-central1 \
+    --format='value(spec.template.spec.containers[0].image)' \
+    | awk -F: '{print $NF}' | cut -c1-12
+done
+==> scalpyn-worker-micro
+Deploying...                                                                                                                                                           
+  Creating Revision...done                                                                                                                                             
+  Routing traffic...done                                                                                                                                               
+Done.                                                                                                                                                                  
+Service [scalpyn-worker-micro] revision [scalpyn-worker-micro-00013-csr] has been deployed and is serving 100 percent of traffic.
+Service URL: https://scalpyn-worker-micro-330575088921.us-central1.run.app
+==> scalpyn-worker-structural
+Deploying...                                                                                                                                                           
+  Creating Revision...done                                                                                                                                             
+  Routing traffic...done                                                                                                                                               
+Done.                                                                                                                                                                  
+Service [scalpyn-worker-structural] revision [scalpyn-worker-structural-00020-gfw] has been deployed and is serving 100 percent of traffic.
+Service URL: https://scalpyn-worker-structural-330575088921.us-central1.run.app
+==> scalpyn-worker-execution
+Deploying...                                                                                                                                                           
+  Creating Revision...done                                                                                                                                             
+  Routing traffic...done                                                                                                                                               
+Done.                                                                                                                                                                  
+Service [scalpyn-worker-execution] revision [scalpyn-worker-execution-00013-xwh] has been deployed and is serving 100 percent of traffic.
+Service URL: https://scalpyn-worker-execution-330575088921.us-central1.run.app
+==> scalpyn-beat
+Deploying...                                                                                                                                                           
+  Creating Revision...done                                                                                                                                             
+  Routing traffic...done                                                                                                                                               
+Done.                                                                                                                                                                  
+Service [scalpyn-beat] revision [scalpyn-beat-00013-kt7] has been deployed and is serving 100 percent of traffic.
+Service URL: https://scalpyn-beat-330575088921.us-central1.run.app
+=== verificação ===
+scalpyn                          8d9e5d9956e9
+scalpyn-worker-micro             8d9e5d9956e9
+scalpyn-worker-structural        8d9e5d9956e9
+scalpyn-worker-execution         8d9e5d9956e9
+scalpyn-beat                     8d9e5d9956e9
