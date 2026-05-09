@@ -11,6 +11,125 @@ logger = logging.getLogger(__name__)
 
 _REQUIRED_OHLCV_COLUMNS = ["time", "open", "high", "low", "close", "volume"]
 
+# Task #251: chunk size for bulk UPSERT into market_metadata. Postgres
+# tolerates much larger batches, but 200 keeps the SAVEPOINT window short
+# (sub-second under contention) so a transient lock wait doesn't block the
+# rest of the cycle. ~500 USDT pairs/cycle → 3 chunks.
+_MARKET_METADATA_BULK_CHUNK = 200
+
+
+async def _bulk_upsert_market_metadata(db, rows: list[dict], origin: str) -> int:
+    """Task #251: single-statement multi-row UPSERT into ``market_metadata``.
+
+    Replaces the per-ticker SAVEPOINT+UPSERT loop in ``collect_all`` and
+    ``collect_5m`` (~500 round-trips/cycle → 3 statements). Postgres acquires
+    row-locks in the order rows appear in the VALUES tuple, so callers MUST
+    pre-sort ``rows`` by ``symbol`` ASC — that's the deadlock-prevention
+    invariant this whole task is built around.
+
+    Each row is a dict with keys: ``symbol``, ``price``, ``change``,
+    ``volume``, ``spread``, ``updated``. Caller must filter out invalid
+    rows (price <= 0, missing pair) BEFORE passing — bulk path does no
+    per-row validation.
+
+    Fault isolation: the bulk INSERT runs inside a SAVEPOINT per chunk. If
+    a chunk fails (e.g. transient lock, a bad row that escaped validation),
+    the SAVEPOINT auto-rolls back and the caller falls back to per-row
+    UPSERT for THAT chunk only — rest of the cycle keeps going. Outer
+    transaction is preserved per the "Nested-savepoint rollback rule"
+    gotcha (no ``db.rollback()`` here).
+
+    Returns the number of rows successfully upserted (best-effort).
+    """
+    from sqlalchemy import text
+
+    if not rows:
+        return 0
+
+    sql_template = """
+        INSERT INTO market_metadata
+            (symbol, price, price_change_24h, volume_24h,
+             spread_pct, last_updated, volume_24h_updated_at)
+        VALUES {placeholders}
+        ON CONFLICT (symbol) DO UPDATE SET
+            price = EXCLUDED.price,
+            price_change_24h = EXCLUDED.price_change_24h,
+            volume_24h = EXCLUDED.volume_24h,
+            spread_pct = EXCLUDED.spread_pct,
+            last_updated = EXCLUDED.last_updated,
+            volume_24h_updated_at = EXCLUDED.volume_24h_updated_at
+    """
+
+    upserted = 0
+    for chunk_start in range(0, len(rows), _MARKET_METADATA_BULK_CHUNK):
+        chunk = rows[chunk_start:chunk_start + _MARKET_METADATA_BULK_CHUNK]
+        placeholders = []
+        params: dict = {}
+        for i, r in enumerate(chunk):
+            placeholders.append(
+                f"(:s{i}, :p{i}, :c{i}, :v{i}, :sp{i}, :u{i}, :u{i})"
+            )
+            params[f"s{i}"] = r["symbol"]
+            params[f"p{i}"] = r["price"]
+            params[f"c{i}"] = r["change"]
+            params[f"v{i}"] = r["volume"]
+            params[f"sp{i}"] = r["spread"]
+            params[f"u{i}"] = r["updated"]
+        sql = sql_template.format(placeholders=", ".join(placeholders))
+
+        try:
+            async with db.begin_nested():
+                await db.execute(text(sql), params)
+            upserted += len(chunk)
+        except Exception as bulk_exc:
+            # SAVEPOINT auto-rolled back. Per "Nested-savepoint rollback
+            # rule" gotcha, do NOT call db.rollback().
+            if not db.is_active:
+                logger.error(
+                    "[BULK-UPSERT %s] outer tx poisoned mid-chunk %d/%d — stopping",
+                    origin, chunk_start, len(rows),
+                )
+                break
+            logger.warning(
+                "[BULK-UPSERT %s] chunk %d-%d failed (%s) — falling back to per-row",
+                origin, chunk_start, chunk_start + len(chunk), bulk_exc,
+            )
+            # Per-row fallback for THIS chunk only. Symbols still in sorted
+            # order, so deadlock invariant preserved across workers.
+            row_sql = text("""
+                INSERT INTO market_metadata
+                    (symbol, price, price_change_24h, volume_24h,
+                     spread_pct, last_updated, volume_24h_updated_at)
+                VALUES (:symbol, :price, :change, :volume, :spread,
+                        :updated, :updated)
+                ON CONFLICT (symbol) DO UPDATE SET
+                    price = EXCLUDED.price,
+                    price_change_24h = EXCLUDED.price_change_24h,
+                    volume_24h = EXCLUDED.volume_24h,
+                    spread_pct = EXCLUDED.spread_pct,
+                    last_updated = EXCLUDED.last_updated,
+                    volume_24h_updated_at = EXCLUDED.volume_24h_updated_at
+            """)
+            for r in chunk:
+                if not db.is_active:
+                    logger.error(
+                        "[BULK-UPSERT %s] outer tx poisoned during fallback — stopping",
+                        origin,
+                    )
+                    return upserted
+                try:
+                    async with db.begin_nested():
+                        await db.execute(row_sql, r)
+                    upserted += 1
+                except Exception as row_exc:
+                    logger.debug(
+                        "[BULK-UPSERT %s] per-row fallback failed for %s: %s",
+                        origin, r.get("symbol", "?"), row_exc,
+                    )
+                    continue
+
+    return upserted
+
 
 def _run_async(coro):
     """Run async code in sync Celery task."""
@@ -401,77 +520,65 @@ async def _collect_all_async():
 
             now_ts = datetime.now(timezone.utc)
             ticker_ok = 0
-            # Task #251: ordenar tickers por currency_pair garante que todos os
-            # workers UPSERTem em market_metadata na mesma ordem → elimina
-            # deadlock determinístico por aquisição cruzada de row-locks.
-            for ticker in sorted(tickers, key=lambda t: t.get("currency_pair", "")):
+            # Task #251: validate + sort BEFORE building the bulk batch.
+            # Sorting by symbol ASC is the deadlock-prevention invariant
+            # (Postgres acquires row-locks in tuple order; all workers must
+            # use the same order). Filter rejects bad rows so the bulk
+            # statement can run without per-row validation.
+            valid_rows: list[dict] = []
+            for ticker in tickers:
                 try:
                     pair = ticker.get("currency_pair", "")
                     if not pair.endswith("_USDT"):
                         continue
-                    sym = pair  # keep BTC_USDT format (with underscore)
                     price = float(ticker.get("last", 0) or 0)
+                    if price <= 0:
+                        continue
                     change = float(ticker.get("change_percentage", 0) or 0)
                     volume = float(ticker.get("quote_volume", 0) or 0)
-                    # Compute spread from tickers bid/ask (no extra API call needed)
                     spread = market_data_service.compute_spread_from_ticker(ticker)
-
-                    if price > 0:
-                        if queue_mode:
-                            await _pq.enqueue_or_log(
-                                producer="collect-1h-tickers",
-                                msg=_pq.MarketMetadataUpsert(
-                                    category="ingest",
-                                    enqueued_at=_pq.now_monotonic(),
-                                    symbol=sym,
-                                    last_updated=now_ts,
-                                    price=price,
-                                    price_change_24h=change,
-                                    volume_24h=volume,
-                                    spread_pct=spread,
-                                ),
-                            )
-                        else:
-                            try:
-                                async with db.begin_nested():
-                                    await db.execute(text("""
-                                        INSERT INTO market_metadata
-                                            (symbol, price, price_change_24h, volume_24h,
-                                             spread_pct, last_updated, volume_24h_updated_at)
-                                        VALUES (:symbol, :price, :change, :volume, :spread,
-                                                :updated, :updated)
-                                        ON CONFLICT (symbol) DO UPDATE SET
-                                            price = :price, price_change_24h = :change,
-                                            volume_24h = :volume, spread_pct = :spread,
-                                            last_updated = :updated,
-                                            volume_24h_updated_at = :updated
-                                    """), {
-                                        "symbol": sym,
-                                        "price":  price,
-                                        "change": change,
-                                        "volume": volume,
-                                        "spread": spread,
-                                        "updated": now_ts,
-                                    })
-                            except Exception as _tsp_exc:
-                                # SAVEPOINT auto-rolled back by begin_nested.
-                                # See "Nested-savepoint rollback rule" gotcha — do NOT
-                                # call db.rollback() here (would close outer tx).
-                                logger.error(
-                                    "[CollectMarketData] SAVEPOINT (ticker 1h) failed for %s — savepoint rolled back: %s",
-                                    ticker.get("currency_pair", "?"), _tsp_exc,
-                                )
-                                raise
-                        ticker_ok += 1
+                    valid_rows.append({
+                        "symbol": pair,
+                        "price": price,
+                        "change": change,
+                        "volume": volume,
+                        "spread": spread,
+                        "updated": now_ts,
+                    })
                 except Exception as te:
-                    if not db.is_active:
-                        logger.error(
-                            "[CollectMarketData] Ticker 1h loop: session no longer active — stopping ticker updates"
-                        )
-                        break
-                    logger.debug("Ticker metadata upsert failed for %s: %s",
+                    logger.debug("Ticker 1h: validation failed for %s: %s",
                                  ticker.get("currency_pair", "?"), te)
                     continue
+
+            valid_rows.sort(key=lambda r: r["symbol"])
+
+            if queue_mode:
+                # Persistence queue path: each enqueue is its own message,
+                # the queue worker handles ordering+batching. Loop must
+                # still iterate sorted to preserve the deadlock invariant
+                # downstream.
+                for r in valid_rows:
+                    await _pq.enqueue_or_log(
+                        producer="collect-1h-tickers",
+                        msg=_pq.MarketMetadataUpsert(
+                            category="ingest",
+                            enqueued_at=_pq.now_monotonic(),
+                            symbol=r["symbol"],
+                            last_updated=r["updated"],
+                            price=r["price"],
+                            price_change_24h=r["change"],
+                            volume_24h=r["volume"],
+                            spread_pct=r["spread"],
+                        ),
+                    )
+                ticker_ok = len(valid_rows)
+            else:
+                # Direct DB path: single bulk UPSERT (chunked at 200) instead
+                # of ~500 SAVEPOINT+INSERT round-trips. Helper handles
+                # SAVEPOINT-per-chunk + per-row fallback for fault isolation.
+                ticker_ok = await _bulk_upsert_market_metadata(
+                    db, valid_rows, origin="ticker-1h",
+                )
 
             if ticker_ok:
                 logger.info("market_metadata: upserted %d/%d tickers", ticker_ok, len(tickers))
@@ -905,11 +1012,10 @@ async def _collect_5m_async():
             tickers = await market_data_service.fetch_all_tickers()
             if tickers:
                 now_ts = datetime.now(timezone.utc)
-                ticker_ok = 0
-                # Task #251: ordenar por currency_pair (mesma motivação do
-                # collect_all 1h — evita deadlock entre worker-structural e
-                # worker-micro UPSERTando em market_metadata).
-                for ticker in sorted(tickers, key=lambda t: t.get("currency_pair", "")):
+                # Task #251: validate + sort, then bulk UPSERT (same pattern
+                # as collect_all 1h — see helper docstring for rationale).
+                valid_rows: list[dict] = []
+                for ticker in tickers:
                     try:
                         pair = ticker.get("currency_pair", "")
                         if not pair.endswith("_USDT"):
@@ -920,63 +1026,41 @@ async def _collect_5m_async():
                         volume = float(ticker.get("quote_volume", 0) or 0)
                         change = float(ticker.get("change_percentage", 0) or 0)
                         spread = market_data_service.compute_spread_from_ticker(ticker)
-                        if queue_mode:
-                            await _pq.enqueue_or_log(
-                                producer="collect-5m-tickers",
-                                msg=_pq.MarketMetadataUpsert(
-                                    category="ingest",
-                                    enqueued_at=_pq.now_monotonic(),
-                                    symbol=pair,
-                                    last_updated=now_ts,
-                                    price=price,
-                                    price_change_24h=change,
-                                    volume_24h=volume,
-                                    spread_pct=spread,
-                                ),
-                            )
-                        else:
-                            try:
-                                async with db.begin_nested():
-                                    await db.execute(text("""
-                                        INSERT INTO market_metadata
-                                            (symbol, price, price_change_24h, volume_24h,
-                                             spread_pct, last_updated, volume_24h_updated_at)
-                                        VALUES (:symbol, :price, :change, :volume, :spread,
-                                                :updated, :updated)
-                                        ON CONFLICT (symbol) DO UPDATE SET
-                                            price = :price,
-                                            price_change_24h = :change,
-                                            volume_24h = :volume,
-                                            spread_pct = :spread,
-                                            last_updated = :updated,
-                                            volume_24h_updated_at = :updated
-                                    """), {
-                                        "symbol": pair,
-                                        "price":  price,
-                                        "change": change,
-                                        "volume": volume,
-                                        "spread": spread,
-                                        "updated": now_ts,
-                                    })
-                            except Exception as _btsp_exc:
-                                # SAVEPOINT auto-rolled back by begin_nested.
-                                # See "Nested-savepoint rollback rule" gotcha — do NOT
-                                # call db.rollback() here (would close outer tx).
-                                logger.error(
-                                    "[CollectMarketData] SAVEPOINT (backup ticker 5m) failed for %s — savepoint rolled back: %s",
-                                    ticker.get("currency_pair", "?"), _btsp_exc,
-                                )
-                                raise
-                        ticker_ok += 1
+                        valid_rows.append({
+                            "symbol": pair,
+                            "price": price,
+                            "change": change,
+                            "volume": volume,
+                            "spread": spread,
+                            "updated": now_ts,
+                        })
                     except Exception as te:
-                        if not db.is_active:
-                            logger.error(
-                                "[CollectMarketData] 5m backup ticker loop: session no longer active — stopping"
-                            )
-                            break
-                        logger.debug("5m: backup ticker upsert failed for %s: %s",
+                        logger.debug("5m backup ticker: validation failed for %s: %s",
                                      ticker.get("currency_pair", "?"), te)
                         continue
+
+                valid_rows.sort(key=lambda r: r["symbol"])
+
+                if queue_mode:
+                    for r in valid_rows:
+                        await _pq.enqueue_or_log(
+                            producer="collect-5m-tickers",
+                            msg=_pq.MarketMetadataUpsert(
+                                category="ingest",
+                                enqueued_at=_pq.now_monotonic(),
+                                symbol=r["symbol"],
+                                last_updated=r["updated"],
+                                price=r["price"],
+                                price_change_24h=r["change"],
+                                volume_24h=r["volume"],
+                                spread_pct=r["spread"],
+                            ),
+                        )
+                    ticker_ok = len(valid_rows)
+                else:
+                    ticker_ok = await _bulk_upsert_market_metadata(
+                        db, valid_rows, origin="ticker-5m-backup",
+                    )
                 logger.info("5m: backup ticker metadata upserted for %d symbols", ticker_ok)
         except Exception as e:
             logger.debug("5m: backup ticker fetch failed (non-blocking): %s", e)

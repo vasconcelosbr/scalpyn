@@ -238,6 +238,13 @@ GROUP BY 1 ORDER BY 1 DESC;
 
 Esperado: zero deadlocks em `market_metadata`. Se reaparecerem: investigar novo callsite que escapou do sorting (provavelmente um callsite novo adicionado depois da Task #251 que não seguiu a convenção).
 
-### Follow-up adiado
+### Bulk UPSERT dos 2 ticker loops (entregue na mesma Task #251)
 
-**Bulk UPSERT dos 2 ticker loops** (~500 USDT pairs/cycle, atualmente 1 SAVEPOINT por ticker): substituir por 1 `INSERT ... VALUES (...), (...) ON CONFLICT` único reduz I/O e elimina contenção residual. Não feito agora porque perda em batch (1 ticker ruim aborta os 500) precisa de estratégia de retry per-row mais cuidadosa. Não bloqueante — sorting já elimina o deadlock determinístico.
+Além do sorting, os 2 ticker loops (1h e 5m backup) foram migrados pra bulk UPSERT via helper `_bulk_upsert_market_metadata` em `collect_market_data.py:24`. Cada ciclo agora faz **3 statements** (chunk de 200) em vez de **~500 SAVEPOINT+INSERT** round-trips. Características:
+
+- **Pre-validação**: rows inválidos (`price<=0`, pair não-USDT, parse error) são filtrados ANTES de entrar no batch — bulk path não precisa lidar com per-row errors.
+- **Fault isolation**: cada chunk roda dentro de SAVEPOINT próprio. Se um chunk falhar (transient lock, row corrupta que escapou da validação), o helper faz fallback per-row pra AQUELE chunk só — outros chunks e símbolos continuam.
+- **Invariante de sorting preservada**: chunks são fatias de uma lista `sort(key=lambda r: r["symbol"])`. Postgres adquire row-locks na ordem do tuple stream → todos os workers ainda travam na mesma ordem alfabética, dentro e entre chunks.
+- **Queue mode preservado**: quando `USE_PERSISTENCE_QUEUE=1`, o path original de enqueue per-row é mantido (queue worker é responsável por batching downstream).
+
+Validação operacional pós-deploy: o log `[BULK-UPSERT ticker-1h]` aparece se algum chunk cair pro fallback per-row — frequência > 0 indica rows ruins escapando da validação ou contenção residual digna de investigação.
