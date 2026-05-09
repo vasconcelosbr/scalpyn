@@ -1,0 +1,922 @@
+errorGroups.id,insertId,labels.INSTANCE_UID,labels.LOG_BUCKET_NUM,labels.PROJECT_NUMBER,labels.SOURCE_ID,"'labels.""commit-sha""","'labels.""gcb-build-id""","'labels.""gcb-trigger-id""","'labels.""gcb-trigger-region""",labels.instanceId,"'labels.""managed-by""",logName,receiveLocation,receiveTimestamp,resource.labels.configuration_name,resource.labels.database_id,resource.labels.location,resource.labels.project_id,resource.labels.region,resource.labels.revision_name,resource.labels.service_name,resource.type,severity,textPayload,timestamp
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52db2c;b=611034922472440d996701ab4475db58;m=5f48f44325;t=651635f848306;x=d40b57dcbdc1a13d-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:31:51.496554612Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:31:49.713 UTC [695392]: [26-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:31:49.713544Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52dac4;b=611034922472440d996701ab4475db58;m=5f48291b9f;t=651635eb95b80;x=5618a4a789e60c05-0@aj","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:31:50.574270461Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:31:46.394 UTC [695392]: [21-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:31:46.394651Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52dac4;b=611034922472440d996701ab4475db58;m=5f48291b9f;t=651635eb95b80;x=5618a4a789e60c05-0@a9","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:31:50.574270461Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:31:40.878 UTC [695392]: [16-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:31:40.878547Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52dac4;b=611034922472440d996701ab4475db58;m=5f48291b9f;t=651635eb95b80;x=5618a4a789e60c05-0@a4","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:31:50.574270461Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:31:38.887 UTC [695392]: [11-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:31:38.887240Z"
+"'[""CIaUi4fY3-nCJw""]",69ff454a000b31c60848c4ad,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92bb3cfe0edf34b58222079cb9e428d6f650d44a19074ded68c0901adb8e86aa12835328609a7c9392c74e399456ebae81296f7bbed3ecafc061548501ad6f0da69add894e434995f63,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:31:38.876846432Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00037-h7w","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py"", line 373, in _close_connection
+    self._dialect.do_terminate(connection)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 1127, in do_terminate
+    dbapi_connection.terminate()
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py"", line 402, in terminate
+    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 912, in _terminate_graceful_close
+    await self._connection.close(timeout=2)
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1513, in close
+    await self._protocol.close(timeout)
+  File ""asyncpg/protocol/protocol.pyx"", line 617, in close
+  File ""asyncpg/protocol/protocol.pyx"", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1682, in _cancel_current_command
+    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 455, in create_task
+    self._check_closed()
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 545, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed","'2026-05-09T14:31:38.733638Z"
+"'[""CIaUi4fY3-nCJw""]",69ff454a000b187c7b68b4b2,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92bb3cfe0edf34b58222079cb9e428d6f650d44a19074ded68c0901adb8e86aa12835328609a7c9392c74e399456ebae81296f7bbed3ecafc061548501ad6f0da69add894e434995f63,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:31:38.876846432Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00037-h7w","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py"", line 373, in _close_connection
+    self._dialect.do_terminate(connection)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 1127, in do_terminate
+    dbapi_connection.terminate()
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py"", line 402, in terminate
+    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 912, in _terminate_graceful_close
+    await self._connection.close(timeout=2)
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1513, in close
+    await self._protocol.close(timeout)
+  File ""asyncpg/protocol/protocol.pyx"", line 617, in close
+  File ""asyncpg/protocol/protocol.pyx"", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1682, in _cancel_current_command
+    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 455, in create_task
+    self._check_closed()
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 545, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed","'2026-05-09T14:31:38.727164Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52da9e;b=611034922472440d996701ab4475db58;m=5f47f7e86f;t=651635e882850;x=468b2bbae8e637a5-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:31:33.897423582Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:31:33.080 UTC [695392]: [6-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:31:33.081195Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52da74;b=611034922472440d996701ab4475db58;m=5f465b8c26;t=651635cebcc06;x=e3ac47fcae8445fb-0@a6","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:31:32.909402258Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:31:29.856 UTC [695392]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:31:29.856809Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52da74;b=611034922472440d996701ab4475db58;m=5f465b8c26;t=651635cebcc06;x=e3ac47fcae8445fb-0@a4","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:31:32.909402258Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ALERT,"'2026-05-09 14:31:19.188 UTC [695376]: [2-1] db=scalpyn,user=postgres,host=[local] FATAL:  connection to client lost","'2026-05-09T14:31:19.189569Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d9b1;b=611034922472440d996701ab4475db58;m=5f44353c43;t=651635ac57c24;x=c09903b1bb331ccf-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:31:02.921994141Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:30:45.831 UTC [694692]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request","'2026-05-09T14:30:45.831651Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d931;b=611034922472440d996701ab4475db58;m=5f41a7493b;t=651635837891c;x=50a2f954772a5efa-0@a7","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:30:27.672684816Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:29:53.060 UTC [694948]: [41-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:29:53.060957Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d8b9;b=611034922472440d996701ab4475db58;m=5f3ed70066;t=6516355674047;x=450c92be2beacda0-0@a7","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:29:42.623552090Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:29:39.768 UTC [694948]: [36-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:29:39.768715Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d8b9;b=611034922472440d996701ab4475db58;m=5f3ed70066;t=6516355674047;x=450c92be2beacda0-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:29:42.623552090Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:29:28.797 UTC [694948]: [31-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:29:28.798114Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d7ca;b=611034922472440d996701ab4475db58;m=5f3d3056d7;t=6516353c096b8;x=f2e358acdf38cf2f-0@ac","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:29:03.390516417Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:28:52.791 UTC [694948]: [26-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:28:52.792214Z"
+"'[""CIaUi4fY3-nCJw""]",69ff449800067993276b25bb,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:28:40.721293901Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py"", line 373, in _close_connection
+    self._dialect.do_terminate(connection)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 1127, in do_terminate
+    dbapi_connection.terminate()
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py"", line 402, in terminate
+    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 912, in _terminate_graceful_close
+    await self._connection.close(timeout=2)
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1513, in close
+    await self._protocol.close(timeout)
+  File ""asyncpg/protocol/protocol.pyx"", line 617, in close
+  File ""asyncpg/protocol/protocol.pyx"", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1682, in _cancel_current_command
+    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 455, in create_task
+    self._check_closed()
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 545, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed","'2026-05-09T14:28:40.424339Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d7ca;b=611034922472440d996701ab4475db58;m=5f3d3056d7;t=6516353c096b8;x=f2e358acdf38cf2f-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:29:03.390516417Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:28:38.233 UTC [694954]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request","'2026-05-09T14:28:38.233278Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d78d;b=611034922472440d996701ab4475db58;m=5f3c532455;t=6516352e36436;x=58ff3a5e13a28c1c-0@a8","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:28:32.775300928Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:28:29.005 UTC [694948]: [21-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:28:29.005541Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d78d;b=611034922472440d996701ab4475db58;m=5f3c532455;t=6516352e36436;x=58ff3a5e13a28c1c-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:28:32.775300928Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:28:23.150 UTC [694948]: [16-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:28:23.151Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d706;b=611034922472440d996701ab4475db58;m=5f3aa29149;t=651635132d12a;x=a663aa4ede5edfb5-0@ak","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:28:18.222735464Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:28:14.508 UTC [694948]: [11-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:28:14.509145Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d706;b=611034922472440d996701ab4475db58;m=5f3aa29149;t=651635132d12a;x=a663aa4ede5edfb5-0@a9","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:28:18.222735464Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:28:11.001 UTC [694948]: [6-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:28:11.001724Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d6e2;b=611034922472440d996701ab4475db58;m=5f3aa2627a;t=651635132a25b;x=2a421ff2780cc885-0@a3","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:27:48.237284920Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:27:46.159 UTC [694948]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:27:46.160141Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d657;b=611034922472440d996701ab4475db58;m=5f374464dc;t=651634dd4a4bc;x=92e6ce56130a5a6f-0@a8","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:27:47.096335956Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ALERT,"'2026-05-09 14:27:33.675 UTC [693691]: [11-1] db=scalpyn,user=postgres,host=[local] FATAL:  terminating connection due to idle-in-transaction timeout","'2026-05-09T14:27:33.675820Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d4eb;b=611034922472440d996701ab4475db58;m=5f2fe73ead;t=6516346777e8e;x=5085cab5c19b5d70-0@a3","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:25:37.957450453Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:25:34.811 UTC [694621]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request","'2026-05-09T14:25:34.812537Z"
+"'[""CNXwhc3D9bqBXg""]",69ff4369000eb60f32afbcde,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d9b73169ff604812053f87de95a221ace9c964b61015bd1b8f1152c5f229aad231df4c0821d7e7a97f88c43df546f666b27f2bd08616e52b10bf5bf56a5736e721ce5dbb734a8f14,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:23:38.117317642Z","'scalpyn-worker-micro",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-micro-00030-fmd","'scalpyn-worker-micro",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/celery/app/trace.py"", line 585, in trace_task
+    R = retval = fun(*args, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/celery/app/trace.py"", line 858, in __protected_call__
+    return self.run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 1072, in collect_5m
+    count = _run_async(_collect_5m_async())
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 19, in _run_async
+    return loop.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 1067, in _collect_5m_async
+    return await run_db_task(_inner, celery=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/app/app/database.py"", line 324, in run_db_task
+    return await fn(session)
+           ^^^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 1059, in _inner
+    raise RuntimeError(""zero success — all symbols failed"")
+RuntimeError: zero success — all symbols failed","'2026-05-09T14:23:37.964111Z"
+"'[""CPWDqLSKh4CnuAE""]",69ff4367000c0749fcbe232e,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d9b73169ff604812053f87de95a221ace9c964b61015bd1b8f1152c5f229aad231df4c0821d7e7a97f88c43df546f666b27f2bd08616e52b10bf5bf56a5736e721ce5dbb734a8f14,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:23:36.101491567Z","'scalpyn-worker-micro",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-micro-00030-fmd","'scalpyn-worker-micro",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/app/app/tasks/collect_market_data.py"", line 739, in _inner
+    await db.execute(text(""""""
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py"", line 449, in execute
+    result = await greenlet_spawn(
+             ^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 203, in greenlet_spawn
+    result = context.switch(value)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py"", line 2351, in execute
+    return self._execute_internal(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py"", line 2258, in _execute_internal
+    result = conn.execute(
+             ^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1419, in execute
+    return meth(
+           ^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/elements.py"", line 527, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1641, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1846, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 2366, in _handle_dbapi_exception
+    raise exc_info[1].with_traceback(exc_info[2])
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py"", line 952, in do_execute
+    cursor.execute(statement, parameters)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 585, in execute
+    self._adapt_connection.await_(
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 563, in _prepare_and_execute
+    self._handle_exception(error)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 513, in _handle_exception
+    self._adapt_connection._handle_exception(error)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 799, in _handle_exception
+    raise error
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 550, in _prepare_and_execute
+    self._rows = deque(await prepared_stmt.fetch(*parameters))
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py"", line 177, in fetch
+    data = await self.__bind_execute(args, 0, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py"", line 268, in __bind_execute
+    data, status, _ = await self.__do_execute(
+                      ^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py"", line 257, in __do_execute
+    return await executor(protocol)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""asyncpg/protocol/protocol.pyx"", line 205, in bind_execute","'2026-05-09T14:23:35.788297Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d3b7;b=611034922472440d996701ab4475db58;m=5f2b46e014;t=6516341d71ff4;x=70457f491de9debc-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:24:04.764250197Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:23:35.756 UTC [694370]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request","'2026-05-09T14:23:35.757115Z"
+"'[""CO_VkqfAtsnbSg""]",69ff432a0004c365e7a6fcbf,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d9b73169ff604812053f87de95a221ace9c964b61015bd1b8f1152c5f229aad231df4c0821d7e7a97f88c43df546f666b27f2bd08616e52b10bf5bf56a5736e721ce5dbb734a8f14,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:22:34.409900066Z","'scalpyn-worker-micro",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-micro-00030-fmd","'scalpyn-worker-micro",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/celery/app/trace.py"", line 585, in trace_task
+    R = retval = fun(*args, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/celery/app/trace.py"", line 858, in __protected_call__
+    return self.run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 1072, in collect_5m
+    count = _run_async(_collect_5m_async())
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 19, in _run_async
+    return loop.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 678, in run_until_complete
+    self.run_forever()
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 645, in run_forever
+    self._run_once()
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 1961, in _run_once
+    event_list = self._selector.select(timeout)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/selectors.py"", line 468, in select
+    fd_event_list = self._selector.poll(timeout, max_ev)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/billiard/pool.py"", line 228, in soft_timeout_sighandler
+    raise SoftTimeLimitExceeded()
+billiard.exceptions.SoftTimeLimitExceeded: SoftTimeLimitExceeded()","'2026-05-09T14:22:34.312165Z"
+"'[""CIaUi4fY3-nCJw""]",69ff43260004a6faf8e777d9,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:22:30.409418784Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py"", line 373, in _close_connection
+    self._dialect.do_terminate(connection)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 1127, in do_terminate
+    dbapi_connection.terminate()
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py"", line 402, in terminate
+    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 912, in _terminate_graceful_close
+    await self._connection.close(timeout=2)
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1513, in close
+    await self._protocol.close(timeout)
+  File ""asyncpg/protocol/protocol.pyx"", line 617, in close
+  File ""asyncpg/protocol/protocol.pyx"", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1682, in _cancel_current_command
+    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 455, in create_task
+    self._check_closed()
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 545, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed","'2026-05-09T14:22:30.304890Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d2fa;b=611034922472440d996701ab4475db58;m=5f27ab78d5;t=651633e3bb8b6;x=9ef5d50977f50170-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:22:31.606515716Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:22:29.224 UTC [693980]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request","'2026-05-09T14:22:29.224466Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d24d;b=611034922472440d996701ab4475db58;m=5f24046004;t=651633a949fe5;x=e870bd2eb94359af-0@a9","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:22:28.716086132Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:22:27.976 UTC [694221]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request","'2026-05-09T14:22:27.976996Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d141;b=611034922472440d996701ab4475db58;m=5f1e056a9e;t=651633495aa7f;x=5b6b1290039c8d15-0@ae","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:20:32.210643664Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:20:28.362 UTC [693691]: [6-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:20:28.362868Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d141;b=611034922472440d996701ab4475db58;m=5f1e056a9e;t=651633495aa7f;x=5b6b1290039c8d15-0@a9","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:20:32.210643664Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:20:04.812 UTC [693691]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:20:04.813086Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d078;b=611034922472440d996701ab4475db58;m=5f1b753a36;t=6516332057a17;x=98717819e1a4388e-0@a7","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:19:46.580378854Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:19:25.098 UTC [693893]: [36-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:19:25.098983Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d078;b=611034922472440d996701ab4475db58;m=5f1b753a36;t=6516332057a17;x=98717819e1a4388e-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:19:46.580378854Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:19:08.043 UTC [693893]: [31-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:19:08.043563Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52d045;b=611034922472440d996701ab4475db58;m=5f1aff2b6a;t=65163318f6b4a;x=7c5272c388209d3e-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:19:05.473161817Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:19:03.094 UTC [693893]: [26-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:19:03.094544Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cf73;b=611034922472440d996701ab4475db58;m=5f195ef005;t=651632fef2fe6;x=8969601ee2f2b902-0@ae","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:19:02.469579873Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:18:55.357 UTC [693893]: [21-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:18:55.357564Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cf73;b=611034922472440d996701ab4475db58;m=5f195ef005;t=651632fef2fe6;x=8969601ee2f2b902-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:19:02.469579873Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:18:34.725 UTC [693893]: [16-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:18:34.725533Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52ceb6;b=611034922472440d996701ab4475db58;m=5f1654bd5d;t=651632ce4fd3d;x=862ea0fc6f1b5961-0@aa","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:18:19.495091466Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:18:11.522 UTC [693893]: [11-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:18:11.522193Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52ce4b;b=611034922472440d996701ab4475db58;m=5f14632b0d;t=651632af36aee;x=d687f36a8adde3a2-0@af","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:17:43.042825026Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:17:37.079 UTC [693893]: [6-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:17:37.079579Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52ce4b;b=611034922472440d996701ab4475db58;m=5f14632b0d;t=651632af36aee;x=d687f36a8adde3a2-0@aa","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:17:43.042825026Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:17:31.228 UTC [693893]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:17:31.228726Z"
+"'[""CIaUi4fY3-nCJw""]",69ff41e1000df0499f1e9447,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:17:06.045626839Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py"", line 373, in _close_connection
+    self._dialect.do_terminate(connection)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 1127, in do_terminate
+    dbapi_connection.terminate()
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py"", line 402, in terminate
+    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 912, in _terminate_graceful_close
+    await self._connection.close(timeout=2)
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1513, in close
+    await self._protocol.close(timeout)
+  File ""asyncpg/protocol/protocol.pyx"", line 617, in close
+  File ""asyncpg/protocol/protocol.pyx"", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1682, in _cancel_current_command
+    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 455, in create_task
+    self._check_closed()
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 545, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed","'2026-05-09T14:17:05.913481Z"
+"'[""CIaUi4fY3-nCJw""]",69ff41e10009bb78fcb57fc9,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:17:05.714194858Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py"", line 373, in _close_connection
+    self._dialect.do_terminate(connection)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 1127, in do_terminate
+    dbapi_connection.terminate()
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py"", line 402, in terminate
+    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 912, in _terminate_graceful_close
+    await self._connection.close(timeout=2)
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1513, in close
+    await self._protocol.close(timeout)
+  File ""asyncpg/protocol/protocol.pyx"", line 617, in close
+  File ""asyncpg/protocol/protocol.pyx"", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1682, in _cancel_current_command
+    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 455, in create_task
+    self._check_closed()
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 545, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed","'2026-05-09T14:17:05.637816Z"
+"'[""CIaUi4fY3-nCJw""]",69ff41e10009b64714fa2222,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:17:05.714194858Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py"", line 373, in _close_connection
+    self._dialect.do_terminate(connection)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 1127, in do_terminate
+    dbapi_connection.terminate()
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py"", line 402, in terminate
+    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 912, in _terminate_graceful_close
+    await self._connection.close(timeout=2)
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1513, in close
+    await self._protocol.close(timeout)
+  File ""asyncpg/protocol/protocol.pyx"", line 617, in close
+  File ""asyncpg/protocol/protocol.pyx"", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1682, in _cancel_current_command
+    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 455, in create_task
+    self._check_closed()
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 545, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed","'2026-05-09T14:17:05.636487Z"
+"'[""CIaUi4fY3-nCJw""]",69ff41e0000c180aba98cc64,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:17:05.049924476Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py"", line 373, in _close_connection
+    self._dialect.do_terminate(connection)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 1127, in do_terminate
+    dbapi_connection.terminate()
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py"", line 402, in terminate
+    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 912, in _terminate_graceful_close
+    await self._connection.close(timeout=2)
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1513, in close
+    await self._protocol.close(timeout)
+  File ""asyncpg/protocol/protocol.pyx"", line 617, in close
+  File ""asyncpg/protocol/protocol.pyx"", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1682, in _cancel_current_command
+    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 455, in create_task
+    self._check_closed()
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 545, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed","'2026-05-09T14:17:04.792586Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52ce1d;b=611034922472440d996701ab4475db58;m=5f144cd894;t=651632add1875;x=8fe67a33a504124e-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:17:05.616346090Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:17:04.470 UTC [693296]: [316-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:17:04.470424Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cd2b;b=611034922472440d996701ab4475db58;m=5f13d50ac8;t=651632a654aa8;x=14c2b470c3de7f09-0@av","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:17:05.013890836Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:17:03.007 UTC [693296]: [311-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:17:03.007673Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cd2b;b=611034922472440d996701ab4475db58;m=5f13d50ac8;t=651632a654aa8;x=14c2b470c3de7f09-0@as","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:17:05.013890836Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:17:02.533 UTC [693488]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request","'2026-05-09T14:17:02.533644Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cd2b;b=611034922472440d996701ab4475db58;m=5f13d50ac8;t=651632a654aa8;x=14c2b470c3de7f09-0@an","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:17:05.013890836Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:17:01.661 UTC [693296]: [306-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:17:01.661436Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cd2b;b=611034922472440d996701ab4475db58;m=5f13d50ac8;t=651632a654aa8;x=14c2b470c3de7f09-0@ai","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:17:05.013890836Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:59.742 UTC [693296]: [301-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:59.742934Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cd2b;b=611034922472440d996701ab4475db58;m=5f13d50ac8;t=651632a654aa8;x=14c2b470c3de7f09-0@ad","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:17:05.013890836Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:58.694 UTC [693296]: [296-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:58.694397Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cd2b;b=611034922472440d996701ab4475db58;m=5f13d50ac8;t=651632a654aa8;x=14c2b470c3de7f09-0@a8","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:17:05.013890836Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:57.290 UTC [693296]: [291-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:57.290470Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cce7;b=611034922472440d996701ab4475db58;m=5f13c3d7b9;t=651632a541799;x=aac3c3038b9370dd-0@a6","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:55.910786568Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:55.155 UTC [693296]: [286-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:55.156304Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cce7;b=611034922472440d996701ab4475db58;m=5f13c3d7b9;t=651632a541799;x=aac3c3038b9370dd-0@a1","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:55.910786568Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:54.029 UTC [693296]: [281-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:54.030233Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cba7;b=611034922472440d996701ab4475db58;m=5f12f41e3e;t=6516329845e1f;x=f6f527ba31945bdf-0@ax","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:54.999051343Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:52.607 UTC [693296]: [276-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:52.607949Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cba7;b=611034922472440d996701ab4475db58;m=5f12f41e3e;t=6516329845e1f;x=f6f527ba31945bdf-0@as","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:54.999051343Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:50.146 UTC [693296]: [271-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:50.146785Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cba7;b=611034922472440d996701ab4475db58;m=5f12f41e3e;t=6516329845e1f;x=f6f527ba31945bdf-0@an","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:54.999051343Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:48.714 UTC [693296]: [266-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:48.714252Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cba7;b=611034922472440d996701ab4475db58;m=5f12f41e3e;t=6516329845e1f;x=f6f527ba31945bdf-0@ai","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:54.999051343Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:47.525 UTC [693296]: [261-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:47.525402Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cba7;b=611034922472440d996701ab4475db58;m=5f12f41e3e;t=6516329845e1f;x=f6f527ba31945bdf-0@a7","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:54.999051343Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:43.270 UTC [693296]: [256-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:43.271245Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cba7;b=611034922472440d996701ab4475db58;m=5f12f41e3e;t=6516329845e1f;x=f6f527ba31945bdf-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:54.999051343Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:41.702 UTC [693296]: [251-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:41.702865Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cb75;b=611034922472440d996701ab4475db58;m=5f12d5aa32;t=651632965ea13;x=67c4da2a8a3579bc-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:41.596993088Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:40.415 UTC [693296]: [246-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:40.415582Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52cb59;b=611034922472440d996701ab4475db58;m=5f12d5a584;t=651632965e564;x=8d09c9a254344fa5-0@a1","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:40.617719252Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:38.419 UTC [693296]: [241-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:38.419812Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52ca90;b=611034922472440d996701ab4475db58;m=5f11e74c0e;t=6516328778bef;x=42449fd8fe0fbd68-0@ah","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:39.178389074Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:36.246 UTC [693296]: [236-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:36.246723Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52ca90;b=611034922472440d996701ab4475db58;m=5f11e74c0e;t=6516328778bef;x=42449fd8fe0fbd68-0@ac","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:39.178389074Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:34.068 UTC [693296]: [231-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:34.068377Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52ca90;b=611034922472440d996701ab4475db58;m=5f11e74c0e;t=6516328778bef;x=42449fd8fe0fbd68-0@a7","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:39.178389074Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:31.435 UTC [693296]: [226-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:31.435540Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52ca90;b=611034922472440d996701ab4475db58;m=5f11e74c0e;t=6516328778bef;x=42449fd8fe0fbd68-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:39.178389074Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:29.885 UTC [693296]: [221-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:29.886227Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52ca52;b=611034922472440d996701ab4475db58;m=5f11d7d7da;t=65163286817bb;x=c191f0139912f284-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:24.461423427Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:22.798 UTC [693296]: [216-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:22.798432Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52ca2a;b=611034922472440d996701ab4475db58;m=5f11c69672;t=651632856d653;x=3ca03952936058b-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:23.987162310Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:21.785 UTC [693296]: [211-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:21.785581Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c8b3;b=611034922472440d996701ab4475db58;m=5f10eb93c6;t=65163277bd3a7;x=6c5aa3683848f2a5-0@b16","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:21.395451394Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:20.654 UTC [693296]: [206-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:20.654674Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c8b3;b=611034922472440d996701ab4475db58;m=5f10eb93c6;t=65163277bd3a7;x=6c5aa3683848f2a5-0@b11","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:21.395451394Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:19.401 UTC [693296]: [201-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:19.401487Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c8b3;b=611034922472440d996701ab4475db58;m=5f10eb93c6;t=65163277bd3a7;x=6c5aa3683848f2a5-0@aw","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:21.395451394Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:17.788 UTC [693296]: [196-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:17.789133Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c8b3;b=611034922472440d996701ab4475db58;m=5f10eb93c6;t=65163277bd3a7;x=6c5aa3683848f2a5-0@ar","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:21.395451394Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:16.489 UTC [693296]: [191-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:16.489503Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c8b3;b=611034922472440d996701ab4475db58;m=5f10eb93c6;t=65163277bd3a7;x=6c5aa3683848f2a5-0@am","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:21.395451394Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:15.167 UTC [693296]: [186-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:15.168047Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c8b3;b=611034922472440d996701ab4475db58;m=5f10eb93c6;t=65163277bd3a7;x=6c5aa3683848f2a5-0@ah","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:21.395451394Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:13.676 UTC [693296]: [181-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:13.677011Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c8b3;b=611034922472440d996701ab4475db58;m=5f10eb93c6;t=65163277bd3a7;x=6c5aa3683848f2a5-0@ac","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:21.395451394Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:11.858 UTC [693296]: [176-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:11.858564Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c8b3;b=611034922472440d996701ab4475db58;m=5f10eb93c6;t=65163277bd3a7;x=6c5aa3683848f2a5-0@a7","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:21.395451394Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:10.453 UTC [693296]: [171-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:10.454181Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c8b3;b=611034922472440d996701ab4475db58;m=5f10eb93c6;t=65163277bd3a7;x=6c5aa3683848f2a5-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:21.395451394Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:08.152 UTC [693296]: [166-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:08.153199Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c86c;b=611034922472440d996701ab4475db58;m=5f107c0627;t=65163270c4607;x=db10992e1fe61428-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:07.890704277Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:16:06.300 UTC [693296]: [161-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:16:06.301208Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c813;b=611034922472440d996701ab4475db58;m=5f10017af0;t=651632691bad1;x=f344566665cb047d-0@ad","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:05.228810938Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:58.990 UTC [693296]: [156-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:58.990915Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c813;b=611034922472440d996701ab4475db58;m=5f10017af0;t=651632691bad1;x=f344566665cb047d-0@a7","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:05.228810938Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:55.078 UTC [693296]: [151-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:55.078715Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c813;b=611034922472440d996701ab4475db58;m=5f10017af0;t=651632691bad1;x=f344566665cb047d-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:16:05.228810938Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:52.930 UTC [693296]: [146-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:52.930333Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c7f7;b=611034922472440d996701ab4475db58;m=5f0fe2b41e;t=651632672f3ff;x=df6120d65dc2851d-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:51.720663923Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:50.958 UTC [693296]: [141-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:50.959644Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c6f3;b=611034922472440d996701ab4475db58;m=5f0edd66c6;t=65163256da6a7;x=9afab99a5a9cc205-0@at","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:49.628308518Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:48.942 UTC [693296]: [136-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:48.942905Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c6f3;b=611034922472440d996701ab4475db58;m=5f0edd66c6;t=65163256da6a7;x=9afab99a5a9cc205-0@ah","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:49.628308518Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:41.797 UTC [693296]: [131-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:41.798154Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c6f3;b=611034922472440d996701ab4475db58;m=5f0edd66c6;t=65163256da6a7;x=9afab99a5a9cc205-0@ac","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:49.628308518Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:39.704 UTC [693296]: [126-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:39.705004Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c6f3;b=611034922472440d996701ab4475db58;m=5f0edd66c6;t=65163256da6a7;x=9afab99a5a9cc205-0@a7","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:49.628308518Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:37.704 UTC [693296]: [121-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:37.704715Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c6f3;b=611034922472440d996701ab4475db58;m=5f0edd66c6;t=65163256da6a7;x=9afab99a5a9cc205-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:49.628308518Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:34.757 UTC [693296]: [116-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:34.758294Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c629;b=611034922472440d996701ab4475db58;m=5f0d8e7bb2;t=65163241ebb93;x=50da3720a758c5f-0@ax","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:32.294442899Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:31.817 UTC [693296]: [111-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:31.817993Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c629;b=611034922472440d996701ab4475db58;m=5f0d8e7bb2;t=65163241ebb93;x=50da3720a758c5f-0@as","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:32.294442899Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:28.873 UTC [693296]: [106-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:28.873681Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c629;b=611034922472440d996701ab4475db58;m=5f0d8e7bb2;t=65163241ebb93;x=50da3720a758c5f-0@ah","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:32.294442899Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:21.890 UTC [693296]: [101-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:21.890457Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c629;b=611034922472440d996701ab4475db58;m=5f0d8e7bb2;t=65163241ebb93;x=50da3720a758c5f-0@ac","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:32.294442899Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:18.968 UTC [693296]: [96-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:18.968901Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c629;b=611034922472440d996701ab4475db58;m=5f0d8e7bb2;t=65163241ebb93;x=50da3720a758c5f-0@a7","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:32.294442899Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:16.992 UTC [693296]: [91-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:16.992860Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c629;b=611034922472440d996701ab4475db58;m=5f0d8e7bb2;t=65163241ebb93;x=50da3720a758c5f-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:32.294442899Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:12.002 UTC [693296]: [86-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:12.002244Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c58f;b=611034922472440d996701ab4475db58;m=5f0c9e8a14;t=65163232ec9f5;x=6aca76da8ff8f278-0@am","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:11.288588647Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:09.868 UTC [693296]: [81-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:09.868901Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c58f;b=611034922472440d996701ab4475db58;m=5f0c9e8a14;t=65163232ec9f5;x=6aca76da8ff8f278-0@aj","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:11.288588647Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:08.756 UTC [693037]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request","'2026-05-09T14:15:08.756566Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c58f;b=611034922472440d996701ab4475db58;m=5f0c9e8a14;t=65163232ec9f5;x=6aca76da8ff8f278-0@ae","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:11.288588647Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:07.842 UTC [693296]: [76-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:07.842356Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c58f;b=611034922472440d996701ab4475db58;m=5f0c9e8a14;t=65163232ec9f5;x=6aca76da8ff8f278-0@a9","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:11.288588647Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:15:03.805 UTC [693296]: [71-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:15:03.805344Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c58f;b=611034922472440d996701ab4475db58;m=5f0c9e8a14;t=65163232ec9f5;x=6aca76da8ff8f278-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:15:10.286937038Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:14:56.110 UTC [693296]: [66-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:14:56.110703Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c572;b=611034922472440d996701ab4475db58;m=5f0c7f6ef5;t=65163230faed6;x=9a2672557e6a8677-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:14:56.176770578Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:14:54.143 UTC [693296]: [61-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:14:54.143980Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c4a2;b=611034922472440d996701ab4475db58;m=5f0b51ec45;t=6516321e22c25;x=e961259a274ac520-0@ap","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:14:53.348705453Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:14:52.105 UTC [693296]: [56-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:14:52.105698Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c4a2;b=611034922472440d996701ab4475db58;m=5f0b51ec45;t=6516321e22c25;x=e961259a274ac520-0@ak","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:14:53.348705453Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:14:48.261 UTC [693296]: [51-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:14:48.261857Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c4a2;b=611034922472440d996701ab4475db58;m=5f0b51ec45;t=6516321e22c25;x=e961259a274ac520-0@a7","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:14:53.348705453Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:14:45.388 UTC [693296]: [46-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:14:45.388600Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c4a2;b=611034922472440d996701ab4475db58;m=5f0b51ec45;t=6516321e22c25;x=e961259a274ac520-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:14:53.348705453Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:14:39.513 UTC [693296]: [41-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:14:39.513606Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c47b;b=611034922472440d996701ab4475db58;m=5f0b31b5d9;t=6516321c1f5b9;x=da3b77954ec32d45-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:14:33.537986631Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:14:32.345 UTC [693296]: [36-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:14:32.345624Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c3aa;b=611034922472440d996701ab4475db58;m=5f09a36ac1;t=651632033aaa2;x=a6dbb740d13a75c3-0@aw","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:14:32.587313618Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:14:30.234 UTC [693296]: [31-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:14:30.234346Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c3aa;b=611034922472440d996701ab4475db58;m=5f09a36ac1;t=651632033aaa2;x=a6dbb740d13a75c3-0@ar","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:14:32.587313618Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:14:27.341 UTC [693296]: [26-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:14:27.341820Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c3aa;b=611034922472440d996701ab4475db58;m=5f09a36ac1;t=651632033aaa2;x=a6dbb740d13a75c3-0@am","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:14:32.587313618Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:14:24.450 UTC [693296]: [21-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:14:24.450615Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c3aa;b=611034922472440d996701ab4475db58;m=5f09a36ac1;t=651632033aaa2;x=a6dbb740d13a75c3-0@ah","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:14:32.587313618Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:14:22.475 UTC [693296]: [16-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:14:22.475333Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c3aa;b=611034922472440d996701ab4475db58;m=5f09a36ac1;t=651632033aaa2;x=a6dbb740d13a75c3-0@ac","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:14:32.587313618Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:14:17.690 UTC [693296]: [11-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:14:17.691151Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c3aa;b=611034922472440d996701ab4475db58;m=5f09a36ac1;t=651632033aaa2;x=a6dbb740d13a75c3-0@a7","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:14:32.587313618Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:14:15.511 UTC [693296]: [6-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:14:15.511363Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c3aa;b=611034922472440d996701ab4475db58;m=5f09a36ac1;t=651632033aaa2;x=a6dbb740d13a75c3-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:14:32.587313618Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:14:12.634 UTC [693296]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:14:12.634836Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c36f;b=611034922472440d996701ab4475db58;m=5f094c9f2c;t=651631fdcdf0d;x=98c6558863f83669-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:14:05.767324662Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:14:04.129 UTC [693231]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:14:04.131745Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c263;b=611034922472440d996701ab4475db58;m=5f077cc52a;t=651631e0d050b;x=2b138fba641d2f07-0@ak","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:14:03.122086765Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:13:58.443 UTC [692435]: [16-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:13:58.443649Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c263;b=611034922472440d996701ab4475db58;m=5f077cc52a;t=651631e0d050b;x=2b138fba641d2f07-0@a9","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:14:03.122086765Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:13:55.540 UTC [692435]: [11-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:13:55.540947Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c188;b=611034922472440d996701ab4475db58;m=5f04036d7d;t=651631a93ad5e;x=4df92ff9ad863dcd-0@ag","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:13:13.109497767Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:13:11.776 UTC [692435]: [6-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:13:11.777206Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c188;b=611034922472440d996701ab4475db58;m=5f04036d7d;t=651631a93ad5e;x=4df92ff9ad863dcd-0@aa","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:13:13.109497767Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:12:46.412 UTC [692435]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:12:46.412836Z"
+"'[""CNe1ycX4wsSewgE""]",69ff40cf000f3970f38731e4,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:12:32.287628849Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/celery/app/trace.py"", line 585, in trace_task
+    R = retval = fun(*args, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/celery/app/trace.py"", line 858, in __protected_call__
+    return self.run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 546, in collect_all
+    count = _run_async(_collect_all_async())
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 19, in _run_async
+    return loop.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 505, in _collect_all_async
+    return await run_db_task(_inner, celery=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/app/app/database.py"", line 324, in run_db_task
+    return await fn(session)
+           ^^^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 493, in _inner
+    raise RuntimeError(""zero success — all symbols failed"")
+RuntimeError: zero success — all symbols failed","'2026-05-09T14:12:31.997744Z"
+"'[""CPWDqLSKh4CnuAE""]",69ff40cd000bc21eaf9b07b0,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:12:29.957003593Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/app/app/tasks/collect_market_data.py"", line 191, in _inner
+    await db.execute(text(""""""
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py"", line 449, in execute
+    result = await greenlet_spawn(
+             ^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 203, in greenlet_spawn
+    result = context.switch(value)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py"", line 2351, in execute
+    return self._execute_internal(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py"", line 2258, in _execute_internal
+    result = conn.execute(
+             ^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1419, in execute
+    return meth(
+           ^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/elements.py"", line 527, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1641, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1846, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 2366, in _handle_dbapi_exception
+    raise exc_info[1].with_traceback(exc_info[2])
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py"", line 952, in do_execute
+    cursor.execute(statement, parameters)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 585, in execute
+    self._adapt_connection.await_(
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 563, in _prepare_and_execute
+    self._handle_exception(error)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 513, in _handle_exception
+    self._adapt_connection._handle_exception(error)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 799, in _handle_exception
+    raise error
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 550, in _prepare_and_execute
+    self._rows = deque(await prepared_stmt.fetch(*parameters))
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py"", line 177, in fetch
+    data = await self.__bind_execute(args, 0, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py"", line 268, in __bind_execute
+    data, status, _ = await self.__do_execute(
+                      ^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py"", line 257, in __do_execute
+    return await executor(protocol)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""asyncpg/protocol/protocol.pyx"", line 205, in bind_execute","'2026-05-09T14:12:29.770590Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c12d;b=611034922472440d996701ab4475db58;m=5f0260ce49;t=6516318f10e2a;x=30900e52c806c5a8-0@ad","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:12:39.319260491Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:12:29.761 UTC [692866]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request","'2026-05-09T14:12:29.761412Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c12d;b=611034922472440d996701ab4475db58;m=5f0260ce49;t=6516318f10e2a;x=30900e52c806c5a8-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:12:39.319260491Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:12:03.558 UTC [692404]: [156-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:12:03.559090Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52c0f9;b=611034922472440d996701ab4475db58;m=5f024e2ada;t=6516318de6abb;x=c6a1bc21e0ad1ce1-0@a3","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:12:02.995631918Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:12:02.325 UTC [692404]: [151-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:12:02.326097Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bfb3;b=611034922472440d996701ab4475db58;m=5f00f78b24;t=651631787cb04;x=17ff635ab481ea45-0@az","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:12:02.536634995Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:12:01.104 UTC [692404]: [146-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:12:01.104576Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bfb3;b=611034922472440d996701ab4475db58;m=5f00f78b24;t=651631787cb04;x=17ff635ab481ea45-0@au","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:12:01.550235694Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:11:58.430 UTC [692404]: [141-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:11:58.430545Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bfb3;b=611034922472440d996701ab4475db58;m=5f00f78b24;t=651631787cb04;x=17ff635ab481ea45-0@ap","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:12:01.550235694Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:11:56.130 UTC [692404]: [136-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:11:56.130395Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bfb3;b=611034922472440d996701ab4475db58;m=5f00f78b24;t=651631787cb04;x=17ff635ab481ea45-0@ak","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:12:01.550235694Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:11:54.247 UTC [692404]: [131-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:11:54.247778Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bfb3;b=611034922472440d996701ab4475db58;m=5f00f78b24;t=651631787cb04;x=17ff635ab481ea45-0@a7","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:12:01.550235694Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:11:43.578 UTC [692404]: [126-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:11:43.578535Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bfb3;b=611034922472440d996701ab4475db58;m=5f00f78b24;t=651631787cb04;x=17ff635ab481ea45-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:12:01.550235694Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:11:42.447 UTC [692404]: [121-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:11:42.447533Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bf01;b=611034922472440d996701ab4475db58;m=5f003ae6c1;t=6516316cb26a2;x=db5091fce28fe163-0@ah","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:11:39.331270978Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:11:38.649 UTC [692404]: [116-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:11:38.649854Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bf01;b=611034922472440d996701ab4475db58;m=5f003ae6c1;t=6516316cb26a2;x=db5091fce28fe163-0@ac","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:11:39.331270978Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:11:35.994 UTC [692404]: [111-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:11:35.994980Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bf01;b=611034922472440d996701ab4475db58;m=5f003ae6c1;t=6516316cb26a2;x=db5091fce28fe163-0@a7","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:11:39.331270978Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:11:34.229 UTC [692404]: [106-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:11:34.230037Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bf01;b=611034922472440d996701ab4475db58;m=5f003ae6c1;t=6516316cb26a2;x=db5091fce28fe163-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:11:39.331270978Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:11:33.011 UTC [692404]: [101-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:11:33.012283Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52be72;b=611034922472440d996701ab4475db58;m=5efdd3f592;t=6516314643573;x=b833d4c737a38a26-0@aj","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:11:27.776055039Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:11:26.287 UTC [692404]: [96-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:11:26.287508Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52be72;b=611034922472440d996701ab4475db58;m=5efdd3f592;t=6516314643573;x=b833d4c737a38a26-0@ae","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:11:27.776055039Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:11:22.528 UTC [692404]: [91-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:11:22.528821Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52be72;b=611034922472440d996701ab4475db58;m=5efdd3f592;t=6516314643573;x=b833d4c737a38a26-0@a9","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:11:27.776055039Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:11:10.931 UTC [692404]: [86-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:11:10.931377Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bddb;b=611034922472440d996701ab4475db58;m=5efb8715fd;t=65163121755dd;x=dc377b447190968e-0@a9","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:10:49.417718328Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:10:35.568 UTC [692404]: [81-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:10:35.569201Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bd67;b=611034922472440d996701ab4475db58;m=5efa7fa415;t=65163110fe3f6;x=1b7c681826420e76-0@ak","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:10:18.515371571Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:10:07.394 UTC [692566]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request","'2026-05-09T14:10:07.394936Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bd67;b=611034922472440d996701ab4475db58;m=5efa7fa415;t=65163110fe3f6;x=1b7c681826420e76-0@af","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:10:18.515371571Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:10:03.339 UTC [692404]: [76-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:10:03.339749Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bb88;b=611034922472440d996701ab4475db58;m=5ef7d4ca8d;t=651630e650a6d;x=f78b31c396742d8c-0@al","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:09:39.276469983Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:09:36.158 UTC [692404]: [71-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:09:36.158882Z"
+"'[""CNe1ycX4wsSewgE""]",69ff4018000814c438856d52,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:09:28.722443077Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/celery/app/trace.py"", line 585, in trace_task
+    R = retval = fun(*args, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/celery/app/trace.py"", line 858, in __protected_call__
+    return self.run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 546, in collect_all
+    count = _run_async(_collect_all_async())
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 19, in _run_async
+    return loop.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 505, in _collect_all_async
+    return await run_db_task(_inner, celery=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/app/app/database.py"", line 324, in run_db_task
+    return await fn(session)
+           ^^^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 493, in _inner
+    raise RuntimeError(""zero success — all symbols failed"")
+RuntimeError: zero success — all symbols failed","'2026-05-09T14:09:28.529604Z"
+"'[""CPWDqLSKh4CnuAE""]",69ff40160004680e9d235670,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:09:26.387190051Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/app/app/tasks/collect_market_data.py"", line 191, in _inner
+    await db.execute(text(""""""
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py"", line 449, in execute
+    result = await greenlet_spawn(
+             ^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 203, in greenlet_spawn
+    result = context.switch(value)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py"", line 2351, in execute
+    return self._execute_internal(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py"", line 2258, in _execute_internal
+    result = conn.execute(
+             ^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1419, in execute
+    return meth(
+           ^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/elements.py"", line 527, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1641, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1846, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 2366, in _handle_dbapi_exception
+    raise exc_info[1].with_traceback(exc_info[2])
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py"", line 952, in do_execute
+    cursor.execute(statement, parameters)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 585, in execute
+    self._adapt_connection.await_(
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 563, in _prepare_and_execute
+    self._handle_exception(error)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 513, in _handle_exception
+    self._adapt_connection._handle_exception(error)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 799, in _handle_exception
+    raise error
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 550, in _prepare_and_execute
+    self._rows = deque(await prepared_stmt.fetch(*parameters))
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py"", line 177, in fetch
+    data = await self.__bind_execute(args, 0, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py"", line 268, in __bind_execute
+    data, status, _ = await self.__do_execute(
+                      ^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py"", line 257, in __do_execute
+    return await executor(protocol)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""asyncpg/protocol/protocol.pyx"", line 205, in bind_execute","'2026-05-09T14:09:26.288782Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bb88;b=611034922472440d996701ab4475db58;m=5ef7d4ca8d;t=651630e650a6d;x=f78b31c396742d8c-0@ac","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:09:39.276469983Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:09:26.272 UTC [692509]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request","'2026-05-09T14:09:26.272727Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bb88;b=611034922472440d996701ab4475db58;m=5ef7d4ca8d;t=651630e650a6d;x=f78b31c396742d8c-0@a7","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:09:39.276469983Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:09:21.917 UTC [692404]: [66-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:09:21.917716Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52bb88;b=611034922472440d996701ab4475db58;m=5ef7d4ca8d;t=651630e650a6d;x=f78b31c396742d8c-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:09:39.276469983Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:09:13.104 UTC [692404]: [61-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:09:13.105072Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b90b;b=611034922472440d996701ab4475db58;m=5ef5bd035b;t=651630c4d433c;x=7cf04d9eb80def53-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:08:47.871402261Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:08:39.166 UTC [692404]: [56-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:08:39.167046Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b8e3;b=611034922472440d996701ab4475db58;m=5ef53924ff;t=651630bc964e0;x=4391feb1140b7186-0@a3","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:08:33.073687115Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:08:30.264 UTC [692404]: [51-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:08:30.264662Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b8bc;b=611034922472440d996701ab4475db58;m=5ef484b3f7;t=651630b14f3d8;x=af376c967ea78966-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:08:23.365140900Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:08:21.622 UTC [692404]: [46-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:08:21.622714Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b817;b=611034922472440d996701ab4475db58;m=5ef341730a;t=6516309d1b2eb;x=14f2710eec07c37f-0@aj","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:08:22.973476499Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:08:09.797 UTC [692404]: [41-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:08:09.797388Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b817;b=611034922472440d996701ab4475db58;m=5ef341730a;t=6516309d1b2eb;x=14f2710eec07c37f-0@ae","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:08:22.973476499Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:08:03.478 UTC [692404]: [36-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:08:03.479221Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b817;b=611034922472440d996701ab4475db58;m=5ef341730a;t=6516309d1b2eb;x=14f2710eec07c37f-0@a8","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:08:22.973476499Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:07:57.324 UTC [692404]: [31-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:07:57.324818Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b7e7;b=611034922472440d996701ab4475db58;m=5ef31916c5;t=6516309a956a6;x=d84f7100ba5fbb6b-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:07:50.114690418Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:07:48.612 UTC [692404]: [26-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:07:48.612384Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b739;b=611034922472440d996701ab4475db58;m=5ef181e304;t=65163081222e5;x=60431023fece9b4c-0@a8","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:07:47.320064110Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:07:44.945 UTC [692404]: [21-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:07:44.945650Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b739;b=611034922472440d996701ab4475db58;m=5ef181e304;t=65163081222e5;x=60431023fece9b4c-0@a3","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:07:47.320064110Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:07:36.017 UTC [692404]: [16-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:07:36.017622Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b70b;b=611034922472440d996701ab4475db58;m=5ef120aa5d;t=6516307b0ea3d;x=c0b7453f8ab1079-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:07:21.569352015Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:07:19.280 UTC [692404]: [11-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:07:19.280674Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b65b;b=611034922472440d996701ab4475db58;m=5eef9cbd9c;t=65163062cfd7c;x=9bc4761def1a5c3d-0@ah","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:07:17.675827808Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:07:12.909 UTC [692404]: [6-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:07:12.909430Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b65b;b=611034922472440d996701ab4475db58;m=5eef9cbd9c;t=65163062cfd7c;x=9bc4761def1a5c3d-0@ac","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:07:17.675827808Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:07:09.328 UTC [692404]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:07:09.329428Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b65b;b=611034922472440d996701ab4475db58;m=5eef9cbd9c;t=65163062cfd7c;x=9bc4761def1a5c3d-0@a7","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:07:17.675827808Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:06:59.158 UTC [691988]: [26-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:06:59.159090Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b65b;b=611034922472440d996701ab4475db58;m=5eef9cbd9c;t=65163062cfd7c;x=9bc4761def1a5c3d-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:07:17.675827808Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:06:52.126 UTC [691988]: [21-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:06:52.126636Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b5a1;b=611034922472440d996701ab4475db58;m=5eee6654a1;t=6516304f69482;x=a665b5566a9b742-0@af","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:06:48.527128793Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:06:47.486 UTC [691988]: [16-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:06:47.486546Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b5a1;b=611034922472440d996701ab4475db58;m=5eee6654a1;t=6516304f69482;x=a665b5566a9b742-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:06:48.527128793Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:06:36.336 UTC [691988]: [11-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:06:36.336975Z"
+"'[""CIaUi4fY3-nCJw""]",69ff3f44000afb6216d4b392,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:05:56.983737564Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py"", line 373, in _close_connection
+    self._dialect.do_terminate(connection)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 1127, in do_terminate
+    dbapi_connection.terminate()
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py"", line 402, in terminate
+    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 912, in _terminate_graceful_close
+    await self._connection.close(timeout=2)
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1513, in close
+    await self._protocol.close(timeout)
+  File ""asyncpg/protocol/protocol.pyx"", line 617, in close
+  File ""asyncpg/protocol/protocol.pyx"", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1682, in _cancel_current_command
+    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 455, in create_task
+    self._check_closed()
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 545, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed","'2026-05-09T14:05:56.719714Z"
+"'[""CIaUi4fY3-nCJw""]",69ff3f44000ae9a7f3c5533e,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:05:56.983737564Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py"", line 373, in _close_connection
+    self._dialect.do_terminate(connection)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 1127, in do_terminate
+    dbapi_connection.terminate()
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py"", line 402, in terminate
+    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 912, in _terminate_graceful_close
+    await self._connection.close(timeout=2)
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1513, in close
+    await self._protocol.close(timeout)
+  File ""asyncpg/protocol/protocol.pyx"", line 617, in close
+  File ""asyncpg/protocol/protocol.pyx"", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1682, in _cancel_current_command
+    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 455, in create_task
+    self._check_closed()
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 545, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed","'2026-05-09T14:05:56.715175Z"
+"'[""CIaUi4fY3-nCJw""]",69ff3f42000e971753bc82d3,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:05:54.995796207Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py"", line 373, in _close_connection
+    self._dialect.do_terminate(connection)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 1127, in do_terminate
+    dbapi_connection.terminate()
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py"", line 402, in terminate
+    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 912, in _terminate_graceful_close
+    await self._connection.close(timeout=2)
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1513, in close
+    await self._protocol.close(timeout)
+  File ""asyncpg/protocol/protocol.pyx"", line 617, in close
+  File ""asyncpg/protocol/protocol.pyx"", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1682, in _cancel_current_command
+    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 455, in create_task
+    self._check_closed()
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 545, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed","'2026-05-09T14:05:54.956183Z"
+"'[""CNe1ycX4wsSewgE""]",69ff3f42000e7c4cd52c1ba2,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:05:54.995796207Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/celery/app/trace.py"", line 585, in trace_task
+    R = retval = fun(*args, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/celery/app/trace.py"", line 858, in __protected_call__
+    return self.run(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 546, in collect_all
+    count = _run_async(_collect_all_async())
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 19, in _run_async
+    return loop.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 505, in _collect_all_async
+    return await run_db_task(_inner, celery=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/app/app/database.py"", line 324, in run_db_task
+    return await fn(session)
+           ^^^^^^^^^^^^^^^^^
+  File ""/app/app/tasks/collect_market_data.py"", line 493, in _inner
+    raise RuntimeError(""zero success — all symbols failed"")
+RuntimeError: zero success — all symbols failed","'2026-05-09T14:05:54.949324Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b4dd;b=611034922472440d996701ab4475db58;m=5eeb3e4278;t=6516301ce8259;x=7e376d451829689b-0@ac","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:06:02.644980425Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:05:53.971 UTC [692012]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request","'2026-05-09T14:05:53.972524Z"
+"'[""CPWDqLSKh4CnuAE""]",69ff3f40000a34b19a2f7ca5,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:05:52.983387050Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/app/app/tasks/collect_market_data.py"", line 191, in _inner
+    await db.execute(text(""""""
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py"", line 449, in execute
+    result = await greenlet_spawn(
+             ^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 203, in greenlet_spawn
+    result = context.switch(value)
+             ^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py"", line 2351, in execute
+    return self._execute_internal(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py"", line 2258, in _execute_internal
+    result = conn.execute(
+             ^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1419, in execute
+    return meth(
+           ^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/elements.py"", line 527, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1641, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1846, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 2366, in _handle_dbapi_exception
+    raise exc_info[1].with_traceback(exc_info[2])
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py"", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py"", line 952, in do_execute
+    cursor.execute(statement, parameters)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 585, in execute
+    self._adapt_connection.await_(
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 563, in _prepare_and_execute
+    self._handle_exception(error)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 513, in _handle_exception
+    self._adapt_connection._handle_exception(error)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 799, in _handle_exception
+    raise error
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 550, in _prepare_and_execute
+    self._rows = deque(await prepared_stmt.fetch(*parameters))
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py"", line 177, in fetch
+    data = await self.__bind_execute(args, 0, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py"", line 268, in __bind_execute
+    data, status, _ = await self.__do_execute(
+                      ^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/prepared_stmt.py"", line 257, in __do_execute
+    return await executor(protocol)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""asyncpg/protocol/protocol.pyx"", line 205, in bind_execute","'2026-05-09T14:05:52.668849Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b4dd;b=611034922472440d996701ab4475db58;m=5eeb3e4278;t=6516301ce8259;x=7e376d451829689b-0@a9","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:06:02.644980425Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:05:52.635 UTC [692178]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  canceling statement due to user request","'2026-05-09T14:05:52.635597Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b326;b=611034922472440d996701ab4475db58;m=5ee3d4c49e;t=65162fa65047e;x=c6b1c67f86815658-0@ab","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:04:02.387041587Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:03:53.422 UTC [691988]: [6-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:03:53.422862Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b2bb;b=611034922472440d996701ab4475db58;m=5ee2131e20;t=65162f8a35e01;x=ed719d43f45086a6-0@aa","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:03:32.576104404Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:03:29.831 UTC [691988]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:03:29.832090Z"
+"'[""CIaUi4fY3-nCJw""]",69ff3e8a000e49622b8827ee,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:02:50.977144817Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py"", line 373, in _close_connection
+    self._dialect.do_terminate(connection)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 1127, in do_terminate
+    dbapi_connection.terminate()
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py"", line 402, in terminate
+    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 912, in _terminate_graceful_close
+    await self._connection.close(timeout=2)
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1513, in close
+    await self._protocol.close(timeout)
+  File ""asyncpg/protocol/protocol.pyx"", line 617, in close
+  File ""asyncpg/protocol/protocol.pyx"", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1682, in _cancel_current_command
+    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 455, in create_task
+    self._check_closed()
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 545, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed","'2026-05-09T14:02:50.936290Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b239;b=611034922472440d996701ab4475db58;m=5ee0462f97;t=65162f6d66f78;x=c756ad30bee36123-0@a8","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:03:03.697816836Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:02:48.300 UTC [691837]: [36-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:02:48.300336Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b195;b=611034922472440d996701ab4475db58;m=5edea7f72d;t=65162f538370e;x=bef06c119907983a-0@ai","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:02:32.659619311Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:02:27.896 UTC [691837]: [31-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:02:27.898298Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b195;b=611034922472440d996701ab4475db58;m=5edea7f72d;t=65162f538370e;x=bef06c119907983a-0@a7","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:02:32.659619311Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:02:24.707 UTC [691837]: [26-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:02:24.709299Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b195;b=611034922472440d996701ab4475db58;m=5edea7f72d;t=65162f538370e;x=bef06c119907983a-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:02:32.659619311Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:02:21.708 UTC [691837]: [21-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:02:21.708871Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b169;b=611034922472440d996701ab4475db58;m=5ede460ffa;t=65162f4d64fdb;x=c0b522fa75f2e3d8-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:02:04.095714360Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:02:03.009 UTC [691837]: [16-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:02:03.009624Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b0d4;b=611034922472440d996701ab4475db58;m=5edd55d9eb;t=65162f3e619cb;x=43c4f9cd5f582afc-0@a1","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:02:03.284025083Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:01:40.851 UTC [691837]: [11-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:01:40.852171Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52b071;b=611034922472440d996701ab4475db58;m=5edae89e08;t=65162f178dde9;x=4eb9bad3d7b3e882-0@a2","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:01:39.684384910Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:01:05.884 UTC [691837]: [6-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:01:05.884755Z"
+,"'s=8cc2e3eb994f443caf665154fcf6b2d8;i=52aff7;b=611034922472440d996701ab4475db58;m=5ed8edcbdd;t=65162ef7e0bbe;x=9f406b0bc0c8f52a-0@ab","'1-e1be44ec-f7ea-4e99-b2e1-4845aa2b37a7",55,330575088921,37333130396234346565326662666435e3b0c442,,,,,,,"'projects/clickrate-477217/logs/cloudsql.googleapis.com%2Fpostgres.log",,"'2026-05-09T14:01:00.637974893Z",,"'clickrate-477217:scalpyn",,"'clickrate-477217","'us-central",,,cloudsql_database,ERROR,"'2026-05-09 14:01:00.137 UTC [691837]: [1-1] db=scalpyn,user=postgres,host=[local] ERROR:  deadlock detected","'2026-05-09T14:01:00.137937Z"
+"'[""CIaUi4fY3-nCJw""]",69ff3e0e0003664aa990bdbf,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:00:46.390042692Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py"", line 373, in _close_connection
+    self._dialect.do_terminate(connection)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 1127, in do_terminate
+    dbapi_connection.terminate()
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py"", line 402, in terminate
+    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 912, in _terminate_graceful_close
+    await self._connection.close(timeout=2)
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1513, in close
+    await self._protocol.close(timeout)
+  File ""asyncpg/protocol/protocol.pyx"", line 617, in close
+  File ""asyncpg/protocol/protocol.pyx"", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1682, in _cancel_current_command
+    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 455, in create_task
+    self._check_closed()
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 545, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed","'2026-05-09T14:00:46.222794Z"
+"'[""CIaUi4fY3-nCJw""]",69ff3e0e00035e7eb15d5a70,,,,,3c4b3c63f67efce0cd161af5cc882ce2610a045f,"'05f9019e-0e89-4201-8d02-3a55a39d616d","'806f4336-706a-404f-82be-dd0d5c01ebfa",global,0007b734d92363905c012875fa615ed930a6c45b16c44c1f49812b439dcdd54d64a6564fcb890e07250a770489e75bd7e46fcdfcc02948d90ae77e838f08b91a698ae991465593dd5f676b740a0f,"'gcp-cloud-build-deploy-cloud-run","'projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",,"'2026-05-09T14:00:46.390042692Z","'scalpyn-worker-structural",,"'us-central1","'clickrate-477217",,"'scalpyn-worker-structural-00036-849","'scalpyn-worker-structural",cloud_run_revision,ERROR,"'Traceback (most recent call last):
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py"", line 373, in _close_connection
+    self._dialect.do_terminate(connection)
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 1127, in do_terminate
+    dbapi_connection.terminate()
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py"", line 402, in terminate
+    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py"", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py"", line 912, in _terminate_graceful_close
+    await self._connection.close(timeout=2)
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1513, in close
+    await self._protocol.close(timeout)
+  File ""asyncpg/protocol/protocol.pyx"", line 617, in close
+  File ""asyncpg/protocol/protocol.pyx"", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel
+  File ""/usr/local/lib/python3.12/site-packages/asyncpg/connection.py"", line 1682, in _cancel_current_command
+    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 455, in create_task
+    self._check_closed()
+  File ""/usr/local/lib/python3.12/asyncio/base_events.py"", line 545, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed","'2026-05-09T14:00:46.220798Z"
