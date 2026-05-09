@@ -1,0 +1,81 @@
+Welcome to Cloud Shell! Type "help" to get started, or type "gemini" to try prompting with Gemini CLI.
+Your Cloud Platform project in this session is set to clickrate-477217.
+Use `gcloud config set project [PROJECT_ID]` to change to a different project.
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ # 1. Mata TXs órfãs (igual ontem)
+                                                          # 1. Mata TXs órfãs (igual ontem)
+gcloud sql connect scalpyn --user="$PGUSER" --database=scalpyn --project=clickrate-477217 <<'SQL'
+SELECT pid, NOW() - state_change AS idle_for, query
+FROM pg_stat_activity
+WHERE datname='scalpyn'
+  AND state IN ('idle in transaction','idle in transaction (aborted)')
+  AND NOW() - state_change > INTERVAL '1 minute'
+ORDER BY state_change;
+
+SELECT pg_terminate_backend(pid)
+FROM pg_stat_activity
+WHERE datname='scalpyn'
+  AND state IN ('idle in transaction','idle in transaction (aborted)')
+  AND NOW() - state_change > INTERVAL '1 minute';
+SQL
+
+# 2. Drena backlog execution (2446 tasks "envenenadas" reciclando — purgar é seguro,
+#    evaluate_signals é beat-driven, beat re-roda no próximo tick)
+gcloud run services update scalpyn-worker-execution --region=us-central1 --min-instances=0 --max-instances=0
+# espera 30s pros workers descerem
+sleep 30
+# purge fila execution no Redis (use o REDIS_URL do secret)
+# OU mais simples: deixa elas serem descartadas pelo TTL/restart abaixo
+gcloud run services update scalpyn-worker-execution --region=us-central1 --min-instances=1 --max-instances=2
+gcloud run services update scalpyn-worker-structural --region=us-central1 --min-instances=0 --max-instances=0
+sleep 15
+gcloud run services update scalpyn-worker-structural --region=us-central1 --min-instances=1 --max-instances=2
+gcloud run services update scalpyn-worker-micro --region=us-central1 --min-instances=0 --max-instances=0
+sleep 15
+gcloud run services update scalpyn-worker-micro --region=us-central1 --min-instances=1 --max-instances=2
+Starting Cloud SQL Proxy: [/usr/bin/cloud-sql-proxy clickrate-477217:us-central1:scalpyn --port 9470]
+2026/05/09 12:56:05 Authorizing with Application Default Credentials
+2026/05/09 12:56:05 [clickrate-477217:us-central1:scalpyn] Listening on 127.0.0.1:9470
+2026/05/09 12:56:05 The proxy has started successfully and is ready for new connections!
+Connecting to database with SQL user [postgres].Password: 
+  pid   |    idle_for     |                                                                        query                                                                         
+--------+-----------------+------------------------------------------------------------------------------------------------------------------------------------------------------
+ 685036 | 00:04:32.110837 |                                                                                                                                                     +
+        |                 |                                     INSERT INTO ohlcv (time, symbol, exchange, timeframe, market_type, open, high, low, close, volume, quote_volume)+
+        |                 |                                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)                                                           +
+        |                 |                                     ON CONFLICT DO NOTHING                                                                                          +
+        |                 |                                 
+(1 row)
+
+ pg_terminate_backend 
+----------------------
+ t
+(1 row)
+
+Deploying...failed                                                                                                                                                                                     
+Deployment failed                                                                                                                                                                                      
+ERROR: (gcloud.run.services.update) spec.template.metadata.annotations: Invalid value 0. autoscaling.knative.dev/maxScale annotation must be a positive integer.
+Deploying...                                                                                                                                                                                           
+  Creating Revision...done                                                                                                                                                                             
+  Routing traffic...done                                                                                                                                                                               
+Done.                                                                                                                                                                                                  
+Service [scalpyn-worker-execution] revision [scalpyn-worker-execution-00028-nvx] has been deployed and is serving 100 percent of traffic.
+Service URL: https://scalpyn-worker-execution-330575088921.us-central1.run.app
+Deploying...failed                                                                                                                                                                                     
+Deployment failed                                                                                                                                                                                      
+ERROR: (gcloud.run.services.update) spec.template.metadata.annotations: Invalid value 0. autoscaling.knative.dev/maxScale annotation must be a positive integer.
+Deploying...                                                                                                                                                                                           
+  Creating Revision...done                                                                                                                                                                             
+  Routing traffic...done                                                                                                                                                                               
+Done.                                                                                                                                                                                                  
+Service [scalpyn-worker-structural] revision [scalpyn-worker-structural-00034-czl] has been deployed and is serving 100 percent of traffic.
+Service URL: https://scalpyn-worker-structural-330575088921.us-central1.run.app
+Deploying...failed                                                                                                                                                                                     
+Deployment failed                                                                                                                                                                                      
+ERROR: (gcloud.run.services.update) spec.template.metadata.annotations: Invalid value 0. autoscaling.knative.dev/maxScale annotation must be a positive integer.
+Deploying...                                                                                                                                                                                           
+  Creating Revision...done                                                                                                                                                                             
+  Routing traffic...done                                                                                                                                                                               
+Done.                                                                                                                                                                                                  
+Service [scalpyn-worker-micro] revision [scalpyn-worker-micro-00028-824] has been deployed and is serving 100 percent of traffic.
+Service URL: https://scalpyn-worker-micro-330575088921.us-central1.run.app
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ 
