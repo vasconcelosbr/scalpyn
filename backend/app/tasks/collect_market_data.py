@@ -223,17 +223,28 @@ async def _collect_all_async():
                     _ohlcv_metrics.record_persisted(symbol, "1h", len(df))
 
                 # Post-persist freshness probe — single round-trip, used by
-                # the `ingestion_stale` alert. Done inside the savepoint
-                # parent so any error is logged but never aborts the symbol.
+                # the `ingestion_stale` alert.
+                #
+                # 2026-05-09 — wrapped in its own SAVEPOINT. The previous
+                # implementation only had a Python try/except, but a Postgres
+                # query error (LockNotAvailableError, deadlock, statement
+                # cancel, etc.) aborts the OUTER transaction server-side. The
+                # try/except silenced the Python exception but the next
+                # ``begin_nested()`` for the next symbol would then raise
+                # ``InFailedSQLTransactionError`` because asyncpg cannot run
+                # ``SAVEPOINT sa_X`` on an aborted outer tx — cascading the
+                # whole remaining cycle. SAVEPOINT here makes any probe
+                # failure self-contained.
                 try:
-                    latest_row = (await db.execute(text("""
-                        SELECT EXTRACT(EPOCH FROM (NOW() - MAX(time))) AS age_seconds,
-                               MAX(time) AS latest_time
-                        FROM ohlcv
-                        WHERE symbol = :symbol
-                          AND timeframe = '1h'
-                          AND exchange = :exchange
-                    """), {"symbol": symbol, "exchange": ohlcv_exchange})).first()
+                    async with db.begin_nested():
+                        latest_row = (await db.execute(text("""
+                            SELECT EXTRACT(EPOCH FROM (NOW() - MAX(time))) AS age_seconds,
+                                   MAX(time) AS latest_time
+                            FROM ohlcv
+                            WHERE symbol = :symbol
+                              AND timeframe = '1h'
+                              AND exchange = :exchange
+                        """), {"symbol": symbol, "exchange": ohlcv_exchange})).first()
                     age = float(latest_row.age_seconds) if latest_row and latest_row.age_seconds is not None else None
                     latest_t = latest_row.latest_time if latest_row else None
                     logger.info(
@@ -260,6 +271,13 @@ async def _collect_all_async():
                 # probe except — Task #234 review fix). Runs on every
                 # successful OHLCV ingest, regardless of the freshness
                 # probe outcome.
+                #
+                # 2026-05-09 — also wrapped in its own SAVEPOINT for the
+                # same reason as the freshness probe above. ``market_metadata``
+                # is the hottest contended row in the schema (WS Gate.io
+                # ticker + collect_5m + collect_all + tickers loop all UPSERT
+                # the same row). Any transient lock/timeout error here was
+                # poisoning the whole outer cycle.
                 latest = df.iloc[-1]
                 _now_mm = datetime.now(timezone.utc)
                 if queue_mode:
@@ -280,16 +298,27 @@ async def _collect_all_async():
                         ),
                     )
                 else:
-                    await db.execute(text("""
-                        INSERT INTO market_metadata (symbol, price, price_change_24h, last_updated)
-                        VALUES (:symbol, :price, 0, :updated)
-                        ON CONFLICT (symbol) DO UPDATE SET
-                            price = :price, last_updated = :updated
-                    """), {
-                        "symbol": symbol,
-                        "price": float(latest["close"]),
-                        "updated": _now_mm,
-                    })
+                    try:
+                        async with db.begin_nested():
+                            await db.execute(text("""
+                                INSERT INTO market_metadata (symbol, price, price_change_24h, last_updated)
+                                VALUES (:symbol, :price, 0, :updated)
+                                ON CONFLICT (symbol) DO UPDATE SET
+                                    price = :price, last_updated = :updated
+                            """), {
+                                "symbol": symbol,
+                                "price": float(latest["close"]),
+                                "updated": _now_mm,
+                            })
+                    except Exception as _sp_mm_exc:
+                        # SAVEPOINT auto-rolled back. Log + continue: the
+                        # OHLCV write above already succeeded, and the
+                        # tickers loop further down also UPSERTs price.
+                        logger.warning(
+                            "[CollectMarketData] market_metadata UPSERT failed for %s "
+                            "— savepoint rolled back, OHLCV preserved: %s",
+                            symbol, _sp_mm_exc,
+                        )
 
                 logger.info(f"[PERSIST] success symbol={symbol}")
                 logger.info(f"[COLLECT][OK] symbol={symbol}")
@@ -304,6 +333,25 @@ async def _collect_all_async():
                     logger.error(
                         "[CollectMarketData] Session in invalid state after %s — rolled back, stopping collection. Error: %s",
                         symbol, e,
+                    )
+                    failures += 1
+                    break
+                # 2026-05-09 — InFailedSQLTransactionError means the outer
+                # tx is aborted server-side (asyncpg refuses any further
+                # query, including SAVEPOINT) but ``db.is_active`` may
+                # still be True client-side. Force rollback + break so the
+                # next symbol does not cascade the same error 95 times.
+                _err_str = str(e)
+                if "InFailedSQLTransaction" in _err_str or "current transaction is aborted" in _err_str:
+                    try:
+                        await db.rollback()
+                    except Exception as _rb_exc:
+                        logger.warning("[COLLECT] rollback after aborted tx failed: %s", _rb_exc)
+                    remaining = len(symbols) - symbols.index(symbol) - 1
+                    logger.error(
+                        "[COLLECT] outer tx aborted server-side after %s — "
+                        "rolled back, skipping remaining %d symbols; collected=%d",
+                        symbol, remaining, collected,
                     )
                     failures += 1
                     break
@@ -799,6 +847,21 @@ async def _collect_5m_async():
                     logger.error(
                         "[CollectMarketData] Session in invalid state after %s (5m) — rolled back, stopping. Error: %s",
                         symbol, e,
+                    )
+                    failures += 1
+                    break
+                # 2026-05-09 — see collect_all loop for rationale.
+                _err_str = str(e)
+                if "InFailedSQLTransaction" in _err_str or "current transaction is aborted" in _err_str:
+                    try:
+                        await db.rollback()
+                    except Exception as _rb_exc:
+                        logger.warning("[COLLECT-5m] rollback after aborted tx failed: %s", _rb_exc)
+                    remaining = len(symbols) - symbols.index(symbol) - 1
+                    logger.error(
+                        "[COLLECT-5m] outer tx aborted server-side after %s — "
+                        "rolled back, skipping remaining %d symbols; collected=%d",
+                        symbol, remaining, collected,
                     )
                     failures += 1
                     break
