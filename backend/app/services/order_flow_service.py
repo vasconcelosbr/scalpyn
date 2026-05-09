@@ -156,18 +156,76 @@ def safe_taker_ratio(
     return round(raw, 6)
 
 
+# ── Handover tombstone (companion to gate_ws_leader.HANDOVER_TOMBSTONE_KEY)
+# Keep these constants in lock-step with backend/app/services/gate_ws_leader.py
+# Cross-ref: HANDOVER_TOMBSTONE_KEY there is set on graceful release and on
+# renew-loss; we read it here so any window that overlaps a recent handover
+# is flagged ``partial_window=True`` with ``recent_handover_age_s`` populated.
+_HANDOVER_TOMBSTONE_KEY: bytes = b"gate_ws:last_handover_ms"
+_HANDOVER_TAINT_WINDOW_SECONDS: int = 60
+
+
 def _aggregate_buy_sell(
     symbol: str,
     window_seconds: int,
     buy_vol: float,
     sell_vol: float,
     source: str,
+    *,
+    n_trades: Optional[int] = None,
+    oldest_trade_ms: Optional[float] = None,
+    newest_trade_ms: Optional[float] = None,
+    partial_window: bool = False,
+    recent_handover_age_s: Optional[float] = None,
 ) -> Dict[str, Optional[Any]]:
     """Build the public return dict from already-aggregated buy/sell volumes.
 
     Shared between the Redis-buffer path and the REST fallback so both
     apply the exact same plausibility guards and rounding.
+
+    Audit metadata (added Task post-#246, "Volume Delta auditability"):
+      n_trades:              Number of trades that contributed to the
+                             aggregation (post-cutoff, post-side-filter).
+      oldest_trade_ms:       Timestamp (ms) of the earliest contributing
+                             trade — lets the operator detect truncated
+                             windows from the REST fallback.
+      newest_trade_ms:       Timestamp (ms) of the latest contributing
+                             trade.
+      coverage_pct:          ``(newest - oldest) / window`` × 100, capped
+                             at 100%. Below 50% is suspect.
+      partial_window:        True when the source could not cover the
+                             full ``window_seconds`` (REST cap hit while
+                             oldest_trade_ms is still well above cutoff,
+                             or a leader handover happened mid-window).
+                             Consumers should treat ``volume_delta`` as
+                             advisory when this is True.
+      recent_handover_age_s: Age (s) of the last WS leader handover when
+                             it falls inside the taint window
+                             (``_HANDOVER_TAINT_WINDOW_SECONDS``); None
+                             otherwise. Independent of ``partial_window``
+                             so consumers can distinguish "REST truncated"
+                             from "WS just rotated".
     """
+    coverage_pct: Optional[float] = None
+    if (
+        oldest_trade_ms is not None
+        and newest_trade_ms is not None
+        and window_seconds > 0
+    ):
+        observed_span_s = max((newest_trade_ms - oldest_trade_ms) / 1000.0, 0.0)
+        coverage_pct = round(
+            min(observed_span_s / float(window_seconds), 1.0) * 100.0, 2,
+        )
+
+    audit_meta = {
+        "n_trades":              n_trades,
+        "oldest_trade_ms":       oldest_trade_ms,
+        "newest_trade_ms":       newest_trade_ms,
+        "coverage_pct":          coverage_pct,
+        "partial_window":        bool(partial_window),
+        "recent_handover_age_s": recent_handover_age_s,
+    }
+
     total_vol = buy_vol + sell_vol
     if total_vol < 0:
         logger.error("[OrderFlow] negative total volume for %s — skipping", symbol)
@@ -179,6 +237,7 @@ def _aggregate_buy_sell(
             "volume_delta":      None,
             "taker_source":      source,
             "taker_window":      f"{window_seconds}s",
+            **audit_meta,
         }
 
     taker_ratio = safe_taker_ratio(symbol, window_seconds, buy_vol, sell_vol)
@@ -197,6 +256,7 @@ def _aggregate_buy_sell(
             "volume_delta":      None,
             "taker_source":      source,
             "taker_window":      f"{window_seconds}s",
+            **audit_meta,
         }
 
     return {
@@ -207,7 +267,34 @@ def _aggregate_buy_sell(
         "volume_delta":      round(buy_vol - sell_vol, 8),
         "taker_source":      source,
         "taker_window":      f"{window_seconds}s",
+        **audit_meta,
     }
+
+
+async def _read_handover_age(redis) -> Optional[float]:
+    """Return the age (s) of the last leader handover, or None.
+
+    Returns None when:
+      * Redis read fails / key missing
+      * Tombstone is older than _HANDOVER_TAINT_WINDOW_SECONDS
+        (consumers don't need to know about ancient handovers)
+      * Tombstone is in the future (clock skew → conservative ignore)
+    """
+    try:
+        raw = await redis.get(_HANDOVER_TOMBSTONE_KEY)
+    except Exception as exc:
+        logger.debug("[OrderFlow] handover tombstone read failed: %s", exc)
+        return None
+    if raw is None:
+        return None
+    try:
+        ts_ms = float(raw)
+    except (TypeError, ValueError):
+        return None
+    age_s = time.time() - (ts_ms / 1000.0)
+    if age_s < 0 or age_s > _HANDOVER_TAINT_WINDOW_SECONDS:
+        return None
+    return round(age_s, 2)
 
 
 async def _read_buffer(
@@ -254,9 +341,15 @@ async def _read_buffer(
     if not members:
         return None
 
+    # Audit metadata (post-#246): track contributing trade count and the
+    # ms-timestamp envelope so callers can detect partial windows.
+    handover_age_s = await _read_handover_age(redis)
+
     buy_vol = 0.0
     sell_vol = 0.0
     included = 0
+    oldest_ms: Optional[float] = None
+    newest_ms: Optional[float] = None
 
     for raw in members:
         # Handler appends a trailing ``|<id>`` suffix so duplicate
@@ -286,9 +379,38 @@ async def _read_buffer(
         elif side == "sell":
             sell_vol += amount
             included += 1
+        else:
+            continue
+
+        try:
+            ts_ms = float(t.get("t", 0) or 0)
+        except (TypeError, ValueError):
+            ts_ms = 0.0
+        if ts_ms > 0:
+            if oldest_ms is None or ts_ms < oldest_ms:
+                oldest_ms = ts_ms
+            if newest_ms is None or ts_ms > newest_ms:
+                newest_ms = ts_ms
 
     if included == 0:
         return None
+
+    # Buffer "partial window" semantics: the WS handler caps the sorted
+    # set at TRADES_BUFFER_MAX_PER_SYMBOL (default 5000) — if we hit that
+    # cap AND the oldest member is meaningfully newer than the cutoff,
+    # the window is genuinely truncated and downstream consumers should
+    # know. A recent handover also taints the window even when count is
+    # below the cap (we may have lost up to ~35s of trades during the
+    # election).
+    partial = False
+    if (
+        oldest_ms is not None
+        and (oldest_ms - cutoff_ms) > 1_000.0  # >1s above cutoff = window not fully covered
+        and included >= 4500  # within 10% of default cap; assume cap-induced truncation
+    ):
+        partial = True
+    if handover_age_s is not None:
+        partial = True
 
     ws_source = f"gate_trades_ws_{market_type}"
     return _aggregate_buy_sell(
@@ -297,6 +419,11 @@ async def _read_buffer(
         buy_vol=buy_vol,
         sell_vol=sell_vol,
         source=ws_source,
+        n_trades=included,
+        oldest_trade_ms=oldest_ms,
+        newest_trade_ms=newest_ms,
+        partial_window=partial,
+        recent_handover_age_s=handover_age_s,
     )
 
 
@@ -320,14 +447,27 @@ async def get_order_flow_data(
 
     Returns:
         {
-            "taker_buy_volume":  float | None,   # base-asset buy volume in window
-            "taker_sell_volume": float | None,   # base-asset sell volume in window
-            "taker_ratio":       float | None,   # buy / (buy + sell)  (0 → 1)
-            "buy_pressure":      float | None,   # buy / (buy + sell)  (0 → 1)
-            "volume_delta":      float | None,   # buy_vol - sell_vol  (base asset)
-            "taker_source":      str,            # e.g. "gate_trades_ws_spot" | "gate_io_trades"
-            "taker_window":      str,
+            "taker_buy_volume":      float | None,  # base-asset buy volume in window
+            "taker_sell_volume":     float | None,  # base-asset sell volume in window
+            "taker_ratio":           float | None,  # buy / (buy + sell)  (0 → 1)
+            "buy_pressure":          float | None,  # buy / (buy + sell)  (0 → 1)
+            "volume_delta":          float | None,  # buy_vol - sell_vol  (base asset)
+            "taker_source":          str,           # "gate_trades_ws_spot" | "gate_io_trades" | ...
+            "taker_window":          str,           # e.g. "300s"
+
+            # Audit metadata (post-#246, "Volume Delta auditability"):
+            "n_trades":              int  | None,   # contributing trades after side+cutoff filter
+            "oldest_trade_ms":       float| None,   # earliest trade ts (ms) included
+            "newest_trade_ms":       float| None,   # latest trade ts (ms) included
+            "coverage_pct":          float| None,   # (newest-oldest)/window × 100, capped at 100
+            "partial_window":        bool,          # True if window is truncated (REST cap or recent handover)
+            "recent_handover_age_s": float| None,   # WS leader handover age if inside taint window
         }
+
+    When ``partial_window=True``, ``volume_delta`` is computed over a
+    shorter span than ``taker_window`` claims and should be treated as
+    advisory; ``taker_ratio``/``buy_pressure`` are still bounded to
+    [0, 1] but represent only the covered span.
     """
     # ── Buffer-first read ────────────────────────────────────────────────
     buffered = await _read_buffer(symbol, window_seconds, market_type=market_type)
@@ -374,6 +514,9 @@ async def get_order_flow_data(
         buy_vol  = 0.0
         sell_vol = 0.0
         included = 0
+        oldest_ms: Optional[float] = None
+        newest_ms: Optional[float] = None
+        rest_cap_reached = len(trades) >= 500  # post-#246: detect REST truncation
 
         for t in trades:
             ts_ms = float(t.get("create_time_ms", 0) or 0)
@@ -385,16 +528,48 @@ async def get_order_flow_data(
                 logger.warning("[OrderFlow] negative amount in trade for %s: %s", symbol, amount)
                 continue
 
-            if t.get("side") == "buy":
+            side = t.get("side")
+            if side == "buy":
                 buy_vol += amount
-            elif t.get("side") == "sell":
+            elif side == "sell":
                 sell_vol += amount
+            else:
+                continue
 
             included += 1
+            if ts_ms > 0:
+                if oldest_ms is None or ts_ms < oldest_ms:
+                    oldest_ms = ts_ms
+                if newest_ms is None or ts_ms > newest_ms:
+                    newest_ms = ts_ms
 
         if included == 0:
             logger.debug("[OrderFlow] no trades in %ds window for %s", window_seconds, symbol)
             return empty
+
+        # REST partial-window detection: Gate.io ``GET /spot/trades`` is
+        # capped at 500 entries by the upstream ``limit`` we pass. For
+        # high-volume pairs (BTC_USDT, hot meme coins) 500 trades easily
+        # cover only the last few seconds of the requested window. When
+        # the cap is hit AND the oldest trade returned is still > 1s
+        # above the cutoff, the "300s window" is fictitious — the caller
+        # gets a delta computed over a much shorter span. Flag it.
+        partial = (
+            rest_cap_reached
+            and oldest_ms is not None
+            and (oldest_ms - cutoff_ms) > 1_000.0
+        )
+        if partial:
+            covered_s = (
+                (newest_ms - oldest_ms) / 1000.0
+                if (newest_ms is not None and oldest_ms is not None)
+                else 0.0
+            )
+            logger.warning(
+                "[OrderFlow] REST partial-window for %s: requested=%ds "
+                "covered≈%.1fs n_trades=%d (Gate /spot/trades capped at 500)",
+                symbol, window_seconds, covered_s, included,
+            )
 
         return _aggregate_buy_sell(
             symbol=symbol,
@@ -402,6 +577,10 @@ async def get_order_flow_data(
             buy_vol=buy_vol,
             sell_vol=sell_vol,
             source="gate_io_trades",
+            n_trades=included,
+            oldest_trade_ms=oldest_ms,
+            newest_trade_ms=newest_ms,
+            partial_window=partial,
         )
 
     except Exception as exc:

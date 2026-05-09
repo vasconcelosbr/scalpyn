@@ -357,11 +357,28 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore,
         # (360 s) so the Redis buffer is guaranteed to cover the full lookback.
         try:
             from ..services.order_flow_service import get_order_flow_data
-            from ..utils.indicator_merge import _ORDER_FLOW_KEYS
+            from ..utils.indicator_merge import _ORDER_FLOW_KEYS, _ORDER_FLOW_AUDIT_KEYS
             of_data = await get_order_flow_data(
                 symbol, window_seconds=of_window, market_type="spot"
             )
+            # Surface partial-window / handover taint at WARNING so the
+            # operator sees diagnostic context for any volume_delta that
+            # might look anomalous downstream (post-#246).
+            if of_data.get("partial_window"):
+                logger.warning(
+                    "[MICRO-SCHED] PARTIAL WINDOW for %s: source=%s "
+                    "n_trades=%s coverage_pct=%s handover_age_s=%s — "
+                    "volume_delta is advisory only",
+                    symbol,
+                    of_data.get("taker_source"),
+                    of_data.get("n_trades"),
+                    of_data.get("coverage_pct"),
+                    of_data.get("recent_handover_age_s"),
+                )
             for key, value in of_data.items():
+                # Diagnostic-only fields — never persisted as indicators.
+                if key in _ORDER_FLOW_AUDIT_KEYS:
+                    continue
                 if key in _ORDER_FLOW_KEYS:
                     if value is not None or results.get(key) is None:
                         results[key] = value

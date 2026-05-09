@@ -138,7 +138,13 @@ def envelope_indicators(
             continue
         if name in ("market_data_source", "market_data_symbol",
                     "market_data_confidence", "taker_source", "taker_window",
-                    "taker_window_end"):
+                    "taker_window_end",
+                    # Audit metadata from order_flow_service (post-#246):
+                    # these are diagnostic, not indicators — they must
+                    # not be wrapped in IndicatorEnvelope or scored.
+                    "n_trades", "oldest_trade_ms", "newest_trade_ms",
+                    "coverage_pct", "partial_window",
+                    "recent_handover_age_s"):
             continue
         if name.endswith("_timestamp"):
             continue
@@ -215,6 +221,26 @@ async def compute_indicators_robust(
         if flow:
             market_data.update(flow)
             flow_source = flow.get("taker_source")
+            # Auditability (post-#246): surface partial windows and
+            # leader-handover overlaps so the operator sees them in the
+            # default log dashboard. Without this the audit metadata
+            # would be silently dropped by the envelope filter.
+            if flow.get("partial_window"):
+                logger.warning(
+                    "[robust_indicators] PARTIAL WINDOW for %s: source=%s "
+                    "n_trades=%s coverage_pct=%s handover_age_s=%s — "
+                    "volume_delta is advisory only",
+                    symbol, flow_source, flow.get("n_trades"),
+                    flow.get("coverage_pct"),
+                    flow.get("recent_handover_age_s"),
+                )
+            elif flow.get("recent_handover_age_s") is not None:
+                logger.info(
+                    "[robust_indicators] recent WS handover for %s: age=%.1fs "
+                    "n_trades=%s coverage_pct=%s",
+                    symbol, flow["recent_handover_age_s"],
+                    flow.get("n_trades"), flow.get("coverage_pct"),
+                )
     except Exception as exc:
         logger.debug("[robust_indicators] order flow fetch failed for %s: %s", symbol, exc)
 

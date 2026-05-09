@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from ..services import persistence as _pq
 from ..tasks.celery_app import celery_app
-from ..utils.indicator_merge import envelop_results, _ORDER_FLOW_KEYS
+from ..utils.indicator_merge import envelop_results, _ORDER_FLOW_KEYS, _ORDER_FLOW_AUDIT_KEYS
 
 logger = logging.getLogger(__name__)
 _STOCHASTIC_WARMUP_OVERLAP = 2
@@ -122,6 +122,10 @@ def _merge_order_flow_into_results(results: dict, of_data: dict) -> None:
       * Any other key in ``of_data`` is merged with normal ``update`` semantics.
     """
     for key, value in of_data.items():
+        # Diagnostic-only fields (post-#246) — surfaced via WARNING logs
+        # in robust_indicators.compute, never persisted as indicators.
+        if key in _ORDER_FLOW_AUDIT_KEYS:
+            continue
         if key in _ORDER_FLOW_KEYS:
             if value is not None or results.get(key) is None:
                 results[key] = value

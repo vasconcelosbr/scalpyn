@@ -98,6 +98,20 @@ _ORDERBOOK_KEYS: frozenset = frozenset({
     "spread_pct", "orderbook_depth_usdt",
     "market_data_source", "market_data_confidence",
 })
+# Diagnostic-only fields emitted by ``order_flow_service.get_order_flow_data``
+# (post-#246 audit metadata). They must NEVER be wrapped in IndicatorEnvelope
+# nor reach the scoring pipeline — they describe the *measurement*, not the
+# market. Centralised here so write paths (compute_indicators,
+# microstructure_scheduler_service) and the envelope wrapper itself can
+# strip them in one place. Add new diagnostic fields here only.
+_ORDER_FLOW_AUDIT_KEYS: frozenset = frozenset({
+    "n_trades",
+    "oldest_trade_ms",
+    "newest_trade_ms",
+    "coverage_pct",
+    "partial_window",
+    "recent_handover_age_s",
+})
 
 
 def _make_meta(
@@ -146,6 +160,13 @@ def envelop_results(
     ksm = key_source_map or {}
     out: Dict[str, Any] = {}
     for k, v in results.items():
+        # Defense-in-depth (post-#246): order-flow audit metadata
+        # (n_trades, partial_window, ...) describes the measurement,
+        # not the market. Strip it before envelope wrapping so it never
+        # lands in indicators_json nor reaches scoring rules. Callers
+        # should also strip upstream, but this is the single chokepoint.
+        if k in _ORDER_FLOW_AUDIT_KEYS:
+            continue
         if isinstance(v, dict) and "value" in v:
             out[k] = v  # already enveloped — pass through unchanged
             continue

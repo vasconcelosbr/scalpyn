@@ -53,6 +53,14 @@ logger = logging.getLogger(__name__)
 LEADER_KEY: bytes = b"gate_ws:leader"
 LEADER_TTL_SECONDS: int = 30
 LEADER_RENEW_INTERVAL_SECONDS: int = 10
+# Tombstone written when the WS goes down (graceful release or renew loss).
+# ``order_flow_service._read_handover_age`` reads it so any aggregation
+# whose window overlaps a recent handover is flagged ``partial_window=True``
+# (we may have missed up to ~LEADER_TTL_SECONDS + CANDIDATE_POLL_INTERVAL_SECONDS
+# of trades during the election). TTL kept generous so late readers can still
+# see the marker, but readers ignore tombstones older than their taint window.
+HANDOVER_TOMBSTONE_KEY: bytes = b"gate_ws:last_handover_ms"
+HANDOVER_TOMBSTONE_TTL_SECONDS: int = 600
 # Cross-instance trigger published by ``refresh_subscriptions()`` and
 # polled by the leader's renew loop on every tick. The value is a
 # millisecond Unix timestamp; if it exceeds the leader's ``serve_started_ms``
@@ -140,6 +148,27 @@ async def _release_leader(redis, instance_id: str) -> None:
         )
     except Exception as exc:
         logger.warning("[gate-ws-leader] release eval failed: %s", exc)
+    # Mark the handover regardless of release success — if the DEL
+    # failed we still stopped serving locally, and the next leader's
+    # window will overlap a gap.
+    await _mark_handover(redis)
+
+
+async def _mark_handover(redis) -> None:
+    """Write the handover tombstone so readers can taint partial windows.
+
+    Best-effort: never propagates errors — a missing tombstone just
+    means the aggregator won't flag ``recent_handover_age_s`` for the
+    next minute, which is strictly less informative but not incorrect.
+    """
+    try:
+        await redis.set(
+            HANDOVER_TOMBSTONE_KEY,
+            str(int(time.time() * 1000)).encode("utf-8"),
+            ex=HANDOVER_TOMBSTONE_TTL_SECONDS,
+        )
+    except Exception as exc:
+        logger.debug("[gate-ws-leader] handover tombstone write failed: %s", exc)
 
 
 async def _load_gate_credentials() -> tuple[str, str]:
@@ -322,6 +351,12 @@ class _LeaderRunner:
                 logger.warning(
                     "[gate-ws-leader] lost leadership (lock missing or owned by another instance) — stopping local WS"
                 )
+                # Tombstone here too — graceful release path is not
+                # guaranteed to run when leadership was *taken* (lock
+                # owned by another instance) rather than voluntarily
+                # released. Without this, readers in the next ~35s
+                # would not know the buffer has a gap.
+                await _mark_handover(self._redis)
                 try:
                     await self._on_lost()
                 except Exception as exc:
