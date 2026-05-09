@@ -821,3 +821,220 @@ def test_rejection_snapshot_alpha_score_comes_from_live_score_map():
 
     # The score_rules list must have at least one rule (rsi_1 or rsi_2 from DEFAULT_SCORE)
     assert len(_rsnap["score_rules"]) > 0, "score_rules must not be empty when indicators are present"
+
+
+# ── Task #253: Block rules expose OK/TRIPPED outcome ─────────────────────────
+
+
+def test_block_rule_outcome_matches_screenshot_scenario():
+    """Reproduce the screenshot from Task #253: 4 block rules, only one of
+    them describes a condition that actually held (Volume Delta < -20 with
+    current=-1003.6). The 3 others must surface outcome=OK; the firing one
+    must surface outcome=TRIPPED. The asset is rejected by the TRIPPED
+    block — that's the whole point of the negative-polarity vocabulary.
+    """
+    profile_config = {
+        "filters": {"logic": "AND", "conditions": []},
+        "block_rules": {
+            "blocks": [
+                {
+                    "id": "b1",
+                    "name": "Spread % > 0.3",
+                    "logic": "AND",
+                    "conditions": [{"indicator": "spread_pct", "operator": ">", "value": 0.3}],
+                },
+                {
+                    "id": "b2",
+                    "name": "Taker Ratio < 0.4",
+                    "logic": "AND",
+                    "conditions": [{"indicator": "taker_ratio", "operator": "<", "value": 0.4}],
+                },
+                {
+                    "id": "b3",
+                    "name": "Volume Delta < -20",
+                    "logic": "AND",
+                    "conditions": [{"indicator": "volume_delta", "operator": "<", "value": -20}],
+                },
+                {
+                    "id": "b4",
+                    "name": "RSI > 80",
+                    "logic": "AND",
+                    "conditions": [{"indicator": "rsi", "operator": ">", "value": 80}],
+                },
+            ]
+        },
+    }
+
+    # Only Volume Delta condition matches: -1003.6 < -20 ⇒ TRIPPED.
+    asset = {
+        "symbol": "DOG_USDT",
+        "spread_pct": 0.0557,
+        "taker_ratio": 0.65,
+        "volume_delta": -1003.6,
+        "rsi": 55,
+    }
+
+    _, rejected = evaluate_rejections(
+        [asset],
+        profile_config=profile_config,
+        stage="L3",
+        profile_id="profile-screenshot",
+    )
+
+    assert len(rejected) == 1
+    trace = rejected[0]["evaluation_trace"]
+    by_indicator = {item["indicator"]: item for item in trace if item["type"] == "block_rule"}
+
+    # Two blocks evaluated before the firing one did not match — they
+    # surface OK / condition_matched=False.
+    for name in ("Spread % > 0.3", "Taker Ratio < 0.4"):
+        item = by_indicator[name]
+        assert item["outcome"] == "OK", item
+        assert item["condition_matched"] is False, item
+        # Legacy field kept for compatibility — PASS means "block did not trip".
+        assert item["status"] == "PASS"
+
+    # The Volume Delta block tripped — outcome TRIPPED + condition_matched True.
+    fired = by_indicator["Volume Delta < -20"]
+    assert fired["outcome"] == "TRIPPED"
+    assert fired["condition_matched"] is True
+    assert fired["status"] == "FAIL"  # legacy inverted encoding
+
+    # Anything after the firing block is cascade-skipped (short-circuit).
+    cascaded = by_indicator["RSI > 80"]
+    assert cascaded["outcome"] == "SKIPPED"
+    assert cascaded["condition_matched"] is None
+    assert cascaded["reason"] == "cascade_short_circuit"
+
+
+def test_block_rule_condition_matched_mirrors_raw_math_for_or_logic():
+    """`condition_matched` must reflect the RAW boolean result of the
+    block's AND/OR aggregation, NOT the negative-polarity inversion. For
+    OR logic with one True condition the aggregation is True, regardless
+    of how status is encoded for downstream rejection.
+    """
+    from app.services.pipeline_rejections import _evaluate_block_rule
+    from app.services.rule_engine import RuleEngine
+
+    rule_engine = RuleEngine()
+    block = {
+        "id": "or_block",
+        "name": "Either danger",
+        "logic": "OR",
+        "conditions": [
+            {"indicator": "rsi", "operator": ">", "value": 90},        # False
+            {"indicator": "taker_ratio", "operator": "<", "value": 0.3},  # True
+        ],
+    }
+    payload = _evaluate_block_rule(rule_engine, {"rsi": 55, "taker_ratio": 0.1}, block)
+    assert payload["outcome"] == "TRIPPED"
+    assert payload["condition_matched"] is True
+    assert payload["status"] == "FAIL"
+
+    # Same block, both False ⇒ raw math is False, outcome OK.
+    payload = _evaluate_block_rule(rule_engine, {"rsi": 55, "taker_ratio": 0.6}, block)
+    assert payload["outcome"] == "OK"
+    assert payload["condition_matched"] is False
+    assert payload["status"] == "PASS"
+
+    # Missing data ⇒ SKIPPED with condition_matched None.
+    payload = _evaluate_block_rule(rule_engine, {}, block)
+    assert payload["outcome"] == "SKIPPED"
+    assert payload["condition_matched"] is None
+    assert payload["status"] == "SKIPPED"
+
+
+def test_block_rule_outcome_propagates_through_normalized_trace():
+    """The new fields must survive `_normalized_trace_item` so the
+    serialized payload exposed to the frontend carries them end-to-end.
+    """
+    from app.services.pipeline_rejections import (
+        _evaluate_block_rule,
+        _normalized_trace_item,
+    )
+    from app.services.rule_engine import RuleEngine
+
+    rule_engine = RuleEngine()
+    block = {
+        "id": "tr",
+        "name": "Weak Taker Ratio",
+        "logic": "AND",
+        "conditions": [{"indicator": "taker_ratio", "operator": "<", "value": 0.4}],
+    }
+    raw = _evaluate_block_rule(rule_engine, {"taker_ratio": 0.2}, block)
+    normalized = _normalized_trace_item(raw)
+    assert normalized["outcome"] == "TRIPPED"
+    assert normalized["condition_matched"] is True
+
+    raw = _evaluate_block_rule(rule_engine, {"taker_ratio": 0.7}, block)
+    normalized = _normalized_trace_item(raw)
+    assert normalized["outcome"] == "OK"
+    assert normalized["condition_matched"] is False
+
+
+def test_block_rule_outcome_emits_prometheus_counter():
+    """Each block evaluation must increment
+    ``scalpyn_block_rule_tripped_total{block, outcome}`` exactly once,
+    keyed by the resolved outcome (OK/TRIPPED/SKIPPED). We sample the
+    counter via ``Counter._value.get`` since prometheus-client doesn't
+    expose a public read API for label values.
+    """
+    try:
+        import prometheus_client  # noqa: F401
+    except ImportError:
+        import pytest as _pt
+        _pt.skip("prometheus_client not installed")
+    from app.services import block_rule_metrics
+    from app.services.pipeline_rejections import _evaluate_block_rule
+    from app.services.rule_engine import RuleEngine
+
+    block_rule_metrics._init()
+    counter = block_rule_metrics._BLOCK_OUTCOME
+    assert counter is not None  # prometheus_client is available
+
+    rule_engine = RuleEngine()
+    block = {
+        "id": "metric_test",
+        "name": "MetricBlock_TR_low",
+        "logic": "AND",
+        "conditions": [{"indicator": "taker_ratio", "operator": "<", "value": 0.4}],
+    }
+
+    def _read(label_outcome: str) -> float:
+        m = counter.labels(rule="MetricBlock_TR_low", outcome=label_outcome)
+        return m._value.get()
+
+    base_ok = _read("OK")
+    base_tripped = _read("TRIPPED")
+    base_skipped = _read("SKIPPED")
+
+    _evaluate_block_rule(rule_engine, {"taker_ratio": 0.7}, block)   # OK
+    _evaluate_block_rule(rule_engine, {"taker_ratio": 0.1}, block)   # TRIPPED
+    _evaluate_block_rule(rule_engine, {}, block)                      # SKIPPED
+
+    assert _read("OK") == base_ok + 1
+    assert _read("TRIPPED") == base_tripped + 1
+    assert _read("SKIPPED") == base_skipped + 1
+
+
+def test_filter_trace_items_do_not_carry_block_rule_fields():
+    """`outcome` and `condition_matched` are block-rule-only fields; they
+    must NEVER appear on filter / signal / entry-trigger trace items.
+    """
+    profile_config = {
+        "filters": {
+            "logic": "AND",
+            "conditions": [{"field": "rsi", "operator": "<", "value": 55}],
+        },
+        "block_rules": {"blocks": []},
+    }
+    approved, _ = evaluate_rejections(
+        [{"symbol": "ABC_USDT", "rsi": 30}],
+        profile_config=profile_config,
+        stage="L1",
+        profile_id="p",
+    )
+    item = approved[0]["evaluation_trace"][0]
+    assert item["type"] == "filter"
+    assert "outcome" not in item
+    assert "condition_matched" not in item

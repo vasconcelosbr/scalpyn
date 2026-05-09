@@ -8,6 +8,21 @@ export interface EvaluationTraceItem {
   current_value?: unknown;
   status: 'PASS' | 'FAIL' | 'SKIPPED';
   reason?: string | null;
+  // Block-rule-only authoritative fields (Task #253). `outcome` is the
+  // circuit-breaker label that replaces the misleading PASS/FAIL on
+  // block rules; `condition_matched` is the raw mathematical result.
+  outcome?: 'OK' | 'TRIPPED' | 'SKIPPED';
+  condition_matched?: boolean | null;
+}
+
+// Block rules use OK/TRIPPED instead of PASS/FAIL (Task #253). When the
+// backend hasn't been redeployed yet, derive the outcome from the legacy
+// status (FAIL ⇒ TRIPPED, PASS ⇒ OK) so historical snapshots keep working.
+export function blockRuleOutcome(item: EvaluationTraceItem): 'OK' | 'TRIPPED' | 'SKIPPED' {
+  if (item.outcome) return item.outcome;
+  if (item.status === 'FAIL') return 'TRIPPED';
+  if (item.status === 'PASS') return 'OK';
+  return 'SKIPPED';
 }
 
 type SkipDisplay = {
@@ -101,26 +116,55 @@ function TraceSection({
       <div className="space-y-2">
         {items.map((item, index) => {
           const skip = classifySkip(item);
-          const cls =
-            item.status === 'PASS'
+          const isBlockRule = item.type === 'block_rule';
+          const blockOutcome = isBlockRule ? blockRuleOutcome(item) : null;
+          // For block rules the green/purple palette tracks OK/TRIPPED
+          // rather than PASS/FAIL — the underlying status is inverted.
+          const cls = isBlockRule
+            ? skip
+              ? skip.cls
+              : blockOutcome === 'OK'
+                ? 'border-[#14532D]/40 bg-[#061E14] text-[#86EFAC]'
+                : blockOutcome === 'TRIPPED'
+                  ? 'border-[#6B21A8]/40 bg-[#1A0A2A] text-[#D8B4FE]'
+                  : 'border-[#1E2433] bg-[#06080E] text-[#64748B]'
+            : item.status === 'PASS'
               ? 'border-[#14532D]/40 bg-[#061E14] text-[#86EFAC]'
               : skip
                 ? skip.cls
                 : item.status === 'FAIL'
-                  ? item.type === 'block_rule'
-                    ? 'border-[#6B21A8]/40 bg-[#1A0A2A] text-[#D8B4FE]'
-                    : 'border-[#7F1D1D]/25 bg-[#150A0A] text-[#FCA5A5]'
+                  ? 'border-[#7F1D1D]/25 bg-[#150A0A] text-[#FCA5A5]'
                   : 'border-[#1E2433] bg-[#06080E] text-[#64748B]';
+
+          const badgeLabel = skip
+            ? skip.label
+            : isBlockRule
+              ? blockOutcome
+              : item.status;
+
+          const intentLine = isBlockRule && !skip
+            ? blockOutcome === 'TRIPPED'
+              ? 'condição disparou — ativo bloqueado'
+              : blockOutcome === 'OK'
+                ? 'condição não disparou — ativo livre'
+                : null
+            : null;
+
+          // "Expected" makes no sense for block rules — the operator does
+          // not *expect* the dangerous condition to trip. Use "Threshold"
+          // there instead.
+          const expectedLabel = isBlockRule ? 'Threshold' : 'Expected';
 
           return (
             <div key={index} className={`rounded-lg border px-3 py-2 text-xs ${cls}`}>
               <div className="flex items-center justify-between gap-3">
                 <span className="font-semibold">{item.indicator}</span>
-                <span className="font-mono text-[10px]">
-                  {skip ? skip.label : item.status}
-                </span>
+                <span className="font-mono text-[10px]">{badgeLabel}</span>
               </div>
               <div className="mt-1 text-[#CBD5E1]">{item.condition}</div>
+              {intentLine && (
+                <div className="mt-0.5 text-[10px] italic opacity-75">{intentLine}</div>
+              )}
               <div className="mt-1 flex flex-wrap gap-3 text-[11px]">
                 <span>
                   Current:{' '}
@@ -131,7 +175,7 @@ function TraceSection({
                   </span>
                 </span>
                 <span>
-                  Expected:{' '}
+                  {expectedLabel}:{' '}
                   <span className="font-mono">
                     {skip?.expectedOverride ?? (item.expected ?? '—')}
                   </span>

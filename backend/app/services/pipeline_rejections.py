@@ -329,6 +329,10 @@ def _evaluate_block_rule(
         )
 
     if not details:
+        # No conditions configured ⇒ block cannot trip. We expose the
+        # legacy `status="PASS"` (block did not trigger ⇒ asset free) AND
+        # the new authoritative `outcome="OK"` so callers can drop the
+        # implicit inversion documented below as soon as they've migrated.
         return {
             "type": "block_rule",
             "indicator": block.get("name") or "Unnamed Block",
@@ -336,6 +340,8 @@ def _evaluate_block_rule(
             "expected": block.get("reason") or None,
             "current_value": None,
             "status": RuleStatus.PASS.value,
+            "outcome": "OK",
+            "condition_matched": False,
             "triggered": False,
         }
 
@@ -382,15 +388,32 @@ def _evaluate_block_rule(
         format_condition_text(item["condition"], field_key="indicator")
         for item in details
     )
-    # External callers (build_asset_evaluation_trace) treat status=="FAIL"
-    # as "this block triggered → reject the asset". We keep that contract:
-    # a SKIPPED block is reported as SKIPPED so the asset is NOT rejected.
+    # Block rules have negative polarity: the configured condition
+    # describes a *bad* pattern, so when the underlying math says PASS
+    # (condition matched) the block has TRIPPED and the asset must be
+    # rejected. The legacy `status` field encoded this with an implicit
+    # inversion (math PASS → status="FAIL"); we keep that field for
+    # backwards compatibility but the new `outcome` field is now the
+    # authoritative read for block rules:
+    #
+    #   TRIPPED ⇔ condition_matched is True
+    #   OK      ⇔ condition_matched is False
+    #   SKIPPED ⇔ condition_matched is None  (data unavailable/invalid)
+    #
+    # `condition_matched` is the raw mathematical result of the block's
+    # AND/OR aggregation, independent of the negative-polarity inversion.
     if block_status == RuleStatus.PASS:
         external_status = "FAIL"  # block triggered, asset must be rejected
+        outcome = "TRIPPED"
+        condition_matched: Optional[bool] = True
     elif block_status == RuleStatus.FAIL:
         external_status = "PASS"  # block did not trigger, asset is fine
+        outcome = "OK"
+        condition_matched = False
     else:
         external_status = RuleStatus.SKIPPED.value
+        outcome = "SKIPPED"
+        condition_matched = None
     payload: Dict[str, Any] = {
         "type": "block_rule",
         "indicator": indicator,
@@ -398,10 +421,20 @@ def _evaluate_block_rule(
         "expected": block.get("reason") or condition_text,
         "current_value": actual_payload if len(actual_payload) > 1 else next(iter(actual_payload.values()), None),
         "status": external_status,
+        "outcome": outcome,
+        "condition_matched": condition_matched,
         "triggered": triggered,
     }
     if external_status == RuleStatus.SKIPPED.value and skip_reason:
         payload["reason"] = skip_reason
+    # Task #253 — emit a Prometheus counter per outcome so dashboards can
+    # alert on a block that suddenly trips on every symbol (tuning bug)
+    # vs one that's been silently SKIPPED for hours (data outage).
+    try:
+        from app.services.block_rule_metrics import record_block_outcome
+        record_block_outcome(indicator, outcome)
+    except Exception:  # pragma: no cover — metrics are best-effort
+        pass
     return payload
 
 
@@ -478,6 +511,15 @@ def _normalized_trace_item(item: Dict[str, Any]) -> Dict[str, Any]:
     reason = item.get("reason")
     if reason:
         normalized["reason"] = reason
+    # Block-rule-only fields: `outcome` (OK/TRIPPED/SKIPPED) is the
+    # authoritative read for the new circuit-breaker vocabulary, and
+    # `condition_matched` is the raw mathematical result independent of
+    # the negative-polarity inversion baked into `status`. Filters /
+    # signals / entry triggers don't carry these fields.
+    if "outcome" in item:
+        normalized["outcome"] = item["outcome"]
+    if "condition_matched" in item:
+        normalized["condition_matched"] = item["condition_matched"]
     return normalized
 
 
@@ -492,6 +534,8 @@ def _skipped_block_rule(
         "expected": block.get("reason"),
         "current_value": None,
         "status": "SKIPPED",
+        "outcome": "SKIPPED",
+        "condition_matched": None,
     }
     if reason:
         item["reason"] = reason

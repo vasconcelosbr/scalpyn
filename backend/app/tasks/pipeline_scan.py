@@ -892,7 +892,11 @@ def _decision_reason_map(processed: dict, has_signal_conditions: bool) -> dict:
         reasons[str(failed)] = "FAIL"
 
     if processed.get("blocked"):
-        reasons["block_rules"] = "FAIL"
+        # Block rules use circuit-breaker vocabulary (Task #253): TRIPPED
+        # means the block fired and the asset is rejected. Filters /
+        # signals / entry triggers keep PASS/FAIL — their polarity is
+        # positive so the legacy vocabulary still reads naturally.
+        reasons["block_rules"] = "TRIPPED"
     if processed.get("passed_filter") is False:
         for failed in processed.get("filter_failed", []):
             reasons[str(failed)] = "FAIL"
