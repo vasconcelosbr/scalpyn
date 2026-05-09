@@ -180,3 +180,64 @@ done
 1. **Nunca deployar timeouts agressivos sem medir p95 antes**. `lock_timeout=30s` foi escolhido por intuição ("30s é mais que tempo razoável de contenção"), não por dado. Deveria ter rodado `pg_locks` + `pg_stat_activity` snapshot por 24h pra ver p95 real de wait time em ETH_USDT antes do deploy.
 2. **Defesa em profundidade tem limites**: o code path defensivo do `collect_market_data` cobre outer poisoned, mas não cobre tarefas paralelas (`pipeline_scan`) que falham pelo mesmo motivo subjacente.
 3. **`acks_late=True` em tasks de execução é arma de dois gumes**: preserva ordens de compra (ótimo) mas também acumula backlog quando a falha é determinística (péssimo). Considerar dead-letter queue com max-retries pra tasks de execução em incidentes futuros.
+
+---
+
+## Apêndice B — Cascata de deadlocks `market_metadata` (2026-05-09 14:22-14:31 UTC, Task #251)
+
+### Timeline
+
+| Hora UTC | Evento |
+|---|---|
+| 2026-05-09 14:22 | Primeiro `deadlock detected` (40P01) em prod. Workers continuam UPSERTando. |
+| 2026-05-09 14:22-14:31 | **140 deadlocks em 9min**. PID 693296 com **64 consecutivos** (mesmo backend acumulando vítimas). |
+| 2026-05-09 14:25 | Snapshot reporta `ingestion_stale` + `no_decisions` + alerta `queue_backlog_500`. |
+| 2026-05-09 14:31 | Cessa naturalmente (cycle de beat termina, próximo cycle pega o universo já parcialmente atualizado). |
+| 2026-05-09 ~15:00 | Diagnóstico: NÃO é `LockNotAvailableError` (lock_timeout reverted). É deadlock determinístico por **ordem de aquisição cruzada**. |
+| 2026-05-09 ~16:00 | Patch Task #251 (sorting determinístico em 8 callsites). |
+
+### Causa raiz
+
+8 callsites independentes UPSERTam em `market_metadata` dentro de UMA outer transaction (`run_db_task` → `session.begin()`):
+
+- `collect_market_data.py`: linhas 92 (loop OHLCV), 410 (tickers 1h), 660 (loop OHLCV 5m), 915 (tickers 5m), 1009 (fallback per-symbol stale).
+- `microstructure_scheduler_service.py:478` (gather de `_refresh_one_symbol`).
+- `structural_scheduler_service.py:319` (idem).
+- `scheduler_service.py:347` (idem).
+
+SAVEPOINT por símbolo (`async with db.begin_nested()`) **NÃO libera row-locks** — só o COMMIT do outer libera (gotcha "Nested-savepoint rollback rule"). Quando 5 workers Cloud Run iteram `valid_symbols` ou `tickers` em ordens diferentes (por exemplo, dict insertion order varia entre processos por causa de hash randomization e ordem de seed do pool), Postgres detecta deadlock e mata uma das TXs com erro `40P01`. Worker re-roda na próxima beat tick → mesma ordem caótica → mesmo deadlock. Loop por 9min.
+
+**Por que não é o mesmo bug do `lock_timeout=30s` revertido**: aquele era contenção legítima (ETH_USDT hot, 5 workers, 30s insuficiente). Este é deadlock matemático — qualquer `lock_timeout` desencadeia o mesmo resultado, só varia a vítima. A solução é eliminar a ordem cruzada, não esticar timeouts.
+
+### Fix aplicado (Task #251)
+
+Adicionar `sorted()` em 8 callsites:
+
+```python
+# collect_market_data.py
+symbols = sorted(valid_symbols)  # 2 ocorrências (collect_all + collect_5m)
+for ticker in sorted(tickers, key=lambda t: t.get("currency_pair", "")):  # 2 ticker loops
+for sym in sorted(stale_syms):  # fallback
+
+# 3 schedulers
+*[_refresh_one_symbol(s, semaphore, ...) for s in sorted(symbols)]
+```
+
+Ordem alfabética é convenção compartilhada → todos os workers pegam locks na mesma ordem → deadlock por ordem cruzada vira matematicamente impossível.
+
+### Validação pós-deploy
+
+```sql
+-- Cloud Shell, janela de 24h pós-deploy
+SELECT date_trunc('hour', log_time) AS hora,
+       count(*) FILTER (WHERE message ~* 'deadlock detected') AS deadlocks
+FROM postgres_logs
+WHERE log_time > NOW() - INTERVAL '24 hours'
+GROUP BY 1 ORDER BY 1 DESC;
+```
+
+Esperado: zero deadlocks em `market_metadata`. Se reaparecerem: investigar novo callsite que escapou do sorting (provavelmente um callsite novo adicionado depois da Task #251 que não seguiu a convenção).
+
+### Follow-up adiado
+
+**Bulk UPSERT dos 2 ticker loops** (~500 USDT pairs/cycle, atualmente 1 SAVEPOINT por ticker): substituir por 1 `INSERT ... VALUES (...), (...) ON CONFLICT` único reduz I/O e elimina contenção residual. Não feito agora porque perda em batch (1 ticker ruim aborta os 500) precisa de estratégia de retry per-row mais cuidadosa. Não bloqueante — sorting já elimina o deadlock determinístico.

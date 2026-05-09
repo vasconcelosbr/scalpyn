@@ -89,7 +89,12 @@ async def _collect_all_async():
         )
         return 0
 
-    symbols = valid_symbols
+    # Task #251: ordenação determinística por símbolo elimina deadlocks
+    # entre workers concorrentes que UPSERTam em market_metadata. Postgres
+    # adquire row-locks na ordem do tuple stream — se todos os workers
+    # iterarem na mesma ordem, dois workers nunca pegam locks em ordens
+    # opostas (precondição do deadlock determinístico).
+    symbols = sorted(valid_symbols)
 
     async def _inner(db, queue_mode: bool = False) -> int:
         import time as _time
@@ -396,7 +401,10 @@ async def _collect_all_async():
 
             now_ts = datetime.now(timezone.utc)
             ticker_ok = 0
-            for ticker in tickers:
+            # Task #251: ordenar tickers por currency_pair garante que todos os
+            # workers UPSERTem em market_metadata na mesma ordem → elimina
+            # deadlock determinístico por aquisição cruzada de row-locks.
+            for ticker in sorted(tickers, key=lambda t: t.get("currency_pair", "")):
                 try:
                     pair = ticker.get("currency_pair", "")
                     if not pair.endswith("_USDT"):
@@ -646,7 +654,9 @@ async def _collect_5m_async():
         )
         return 0
 
-    symbols = valid_symbols
+    # Task #251: ordenação determinística por símbolo (ver gotcha em
+    # ``collect_all`` acima — mesmo motivo aplica ao path 5m).
+    symbols = sorted(valid_symbols)
 
     async def _inner(db, queue_mode: bool = False) -> int:
         from ..services.market_data_service import market_data_service
@@ -896,7 +906,10 @@ async def _collect_5m_async():
             if tickers:
                 now_ts = datetime.now(timezone.utc)
                 ticker_ok = 0
-                for ticker in tickers:
+                # Task #251: ordenar por currency_pair (mesma motivação do
+                # collect_all 1h — evita deadlock entre worker-structural e
+                # worker-micro UPSERTando em market_metadata).
+                for ticker in sorted(tickers, key=lambda t: t.get("currency_pair", "")):
                     try:
                         pair = ticker.get("currency_pair", "")
                         if not pair.endswith("_USDT"):
@@ -988,7 +1001,9 @@ async def _collect_5m_async():
             if stale_syms:
                 logger.info("5m: per-symbol Gate ticker fallback for %d stale symbols", len(stale_syms))
                 refreshed = 0
-                for sym in stale_syms:
+                # Task #251: ordenação determinística — UPSERT em market_metadata
+                # na mesma ordem em todos os workers concorrentes.
+                for sym in sorted(stale_syms):
                     try:
                         ticker = await market_data_service._fetch_gate_ticker(sym)
                         if not ticker:

@@ -475,7 +475,7 @@ async def _run_one_cycle(concurrency: int, of_window: int) -> None:
 
         semaphore = asyncio.Semaphore(concurrency)
         results = await asyncio.gather(
-            *[_refresh_one_symbol(s, semaphore, of_window) for s in symbols],
+            *[_refresh_one_symbol(s, semaphore, of_window) for s in sorted(symbols)],
             return_exceptions=True,
         )
 
