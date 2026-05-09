@@ -40,7 +40,10 @@ Fix em `celery_app.py:160-173`. **NÃO baixar de volta** se o pool crescer mais 
 
 ---
 
-## Gotcha 2 — `idle_in_transaction_session_timeout=300s` + `lock_timeout=30s` no Celery engine
+## Gotcha 2 — `idle_in_transaction_session_timeout=300s` no Celery engine (`lock_timeout=30s` REVERTIDO em 2026-05-09)
+
+> **Atualização 2026-05-09**: o `lock_timeout=30000` original deste gotcha foi **REMOVIDO** após gerar regressão em <12h em prod. Sintoma: hot symbols (ETH_USDT, GT_USDT, FLOKI_USDT, NEXO_USDT) falhando cronicamente com `LockNotAvailableError` a cada ciclo de `collect_5m`/`collect_all`, `pipeline_scan.scan` re-queueing, backlog `execution=2446` em 14h, `atraso ingest 14h13m`. Causa: 30s é insuficiente pra contenção legítima entre 5 workers Cloud Run + Gate.io WS UPSERTing nas mesmas hot rows. **`command_timeout=180s` é o teto correto** — absorve contenção transiente sem starvar os hot symbols. Detalhes do incidente de 2026-05-09 na seção **Apêndice A** abaixo. Manter o `idle_in_transaction_session_timeout=300s`, esse continua válido (defesa contra TX órfã de container morto, problema diferente).
+
 
 Sequela do bump do gotcha 1. Subir `_MICRO_GUARDS` revelou um problema mais profundo que era mascarado pelo `SoftTimeLimitExceeded`: container Cloud Run morto mid-transaction (SIGTERM/OOM/network blip) deixa o backend Postgres `idle in transaction` indefinidamente segurando row-locks.
 
@@ -48,7 +51,7 @@ Sequela do bump do gotcha 1. Subir `_MICRO_GUARDS` revelou um problema mais prof
 
 **Fix em `database.py:_celery_connect_args.server_settings`**:
 - `idle_in_transaction_session_timeout=300000` (5min, ms): Postgres mata qualquer session idle > 5min mid-tx. Elimina órfãs de containers mortos.
-- `lock_timeout=30000` (30s, ms): falha rápido em wait de row-lock em vez de queimar os 180s do `command_timeout`.
+- ~~`lock_timeout=30000` (30s, ms)~~: **REVERTIDO 2026-05-09** — gerou regressão em hot symbols. Ver Apêndice A.
 
 Combinado com `acks_late=False` (gotcha #245), beat re-roda em ≤5min com estado limpo.
 
@@ -104,3 +107,76 @@ gcloud run services update scalpyn --region=us-central1 --ingress=all
 Os 4 services não-API (`scalpyn-worker-{micro,structural,execution}` + `scalpyn-beat`) MANTÊM `--ingress=internal` — eles não recebem HTTP externo.
 
 **Se um dia provisionar Cloud LB de verdade**: trocar de volta pra `internal-and-cloud-load-balancing` E repointar `BACKEND_URL` na Vercel pro hostname do LB no MESMO deploy — nunca um sem o outro.
+
+---
+
+## Apêndice A — Regressão `lock_timeout=30s` (2026-05-09, ~12h após o deploy original)
+
+### Timeline
+
+| Hora UTC | Evento |
+|---|---|
+| 2026-05-08 ~22:00 | Deploy de Gotcha 2 com `lock_timeout=30s` ativo |
+| 2026-05-08 ~22:01 | Pipeline confirmado healthy (candles 5m fresh) |
+| 2026-05-08 ~19:35 | (NOTA: refere-se a ~9-10h depois — workers começam a ter falhas crescentes em ETH_USDT) |
+| 2026-05-09 ~03:24 | Workers Cloud Run auto-restart (provavelmente OOM ou max-instances scale-to-zero), saem online novamente, mas pipeline já está degradado |
+| 2026-05-09 ~09:48 BRT (12:48 UTC) | Operador percebe Centro Operacional CRITICAL: atraso 14h13m, símbolos=0, candles=0, backlog `execution=2446` + `structural=699` |
+| 2026-05-09 12:56 UTC | Recovery manual: `pg_terminate_backend(685036)` (TX órfã de 4min32s segurando INSERT em `ohlcv`) + rolling restart dos 3 workers |
+| 2026-05-09 13:04-13:19 UTC | Workers voltam a rodar mas `LockNotAvailableError` persiste em ETH_USDT (6x), GT_USDT, FLOKI_USDT, NEXO_USDT — confirmando que o problema NÃO é só TX órfã |
+| 2026-05-09 ~13:30 UTC | Patch de remoção do `lock_timeout=30s` deployado |
+
+### Diagnóstico definitivo
+
+Log de `scalpyn-worker-structural` filtrado por `LockNotAvailableError`:
+
+```
+13:07:47 [FAILED symbol=FLOKI_USDT] LockNotAvailableError: canceling statement due to lock timeout
+13:09:24 [FAILED symbol=GT_USDT]    LockNotAvailableError: canceling statement due to lock timeout
+13:11:04 [FAILED symbol=ETH_USDT]   LockNotAvailableError
+13:12:45 [FAILED symbol=ETH_USDT]   LockNotAvailableError
+13:14:27 [FAILED symbol=ETH_USDT]   LockNotAvailableError
+13:15:42 [PipelineScan] Fatal error: LockNotAvailableError
+13:15:42 Task pipeline_scan.scan raised unexpected: DBAPIError(LockNotAvailableError)
+13:16:07 [FAILED symbol=ETH_USDT]   LockNotAvailableError
+13:16:37 [FAILED symbol=ETH_USDT]   LockNotAvailableError
+13:17:49 [FAILED symbol=ETH_USDT]   LockNotAvailableError
+13:18:41 [FAILED symbol=NEXO_USDT]  LockNotAvailableError
+```
+
+Padrão: ETH_USDT falha em ~6 ciclos de beat em 7min — não é loop dentro do mesmo worker, são re-runs do beat batendo na mesma contenção. ETH é o mais hot (mais contenção entre WS Gate.io ticker + collect_5m UPSERT + collect_all INSERT). 30s não é suficiente.
+
+### Por que o code path defensivo não cobriu
+
+`collect_market_data.py:297-336` JÁ tem detecção de outer poisoned (`PendingRollbackError` + `not db.is_active` → break). Mas `LockNotAvailableError` dentro de SAVEPOINT NÃO marca `db.is_active=False` — o SAVEPOINT rolla limpo, outer continua válida. Então o loop continua tentando os outros símbolos sem problema.
+
+O verdadeiro estrago foi o `pipeline_scan.scan` (que NÃO usa SAVEPOINT por símbolo) explodindo com `Fatal error` e re-queueing — backlog `execution` cresce porque `evaluate_signals` mantém `acks_late=True` (preservação financeira de ordens de compra).
+
+### Fix aplicado (2026-05-09)
+
+Remover apenas `lock_timeout` do `server_settings`. Manter `idle_in_transaction_session_timeout=300000` — esse continua sendo defesa válida contra TX órfã de container morto (problema raiz original de 2026-05-08). Comentário inline em `database.py:252-263` documenta a regressão pra prevenir re-introdução cega.
+
+### Recovery manual (mesmo padrão de antes)
+
+```sql
+-- Cloud Shell — kill TXs órfãs
+SELECT pg_terminate_backend(pid)
+FROM pg_stat_activity
+WHERE datname='scalpyn'
+  AND state IN ('idle in transaction','idle in transaction (aborted)')
+  AND NOW() - state_change > INTERVAL '1 minute';
+```
+
+```bash
+# Rolling restart dos 3 workers (usa --max-instances=2, NÃO 0 — Cloud Run rejeita 0)
+for svc in scalpyn-worker-execution scalpyn-worker-structural scalpyn-worker-micro; do
+  gcloud run services update "$svc" --region=us-central1 --max-instances=1
+  sleep 10
+  gcloud run services update "$svc" --region=us-central1 --max-instances=2
+done
+```
+
+### Lições
+
+1. **Nunca deployar timeouts agressivos sem medir p95 antes**. `lock_timeout=30s` foi escolhido por intuição ("30s é mais que tempo razoável de contenção"), não por dado. Deveria ter rodado `pg_locks` + `pg_stat_activity` snapshot por 24h pra ver p95 real de wait time em ETH_USDT antes do deploy.
+2. **Defesa em profundidade tem limites**: o code path defensivo do `collect_market_data` cobre outer poisoned, mas não cobre tarefas paralelas (`pipeline_scan`) que falham pelo mesmo motivo subjacente.
+3. **`acks_late=True` em tasks de execução é arma de dois gumes**: preserva ordens de compra (ótimo) mas também acumula backlog quando a falha é determinística (péssimo). Considerar dead-letter queue com max-retries pra tasks de execução em incidentes futuros.
