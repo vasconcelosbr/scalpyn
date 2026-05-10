@@ -26,9 +26,10 @@ long-running maintenance never gets killed. Override via env var
 ``ORPHAN_TX_THRESHOLD_MINUTES``.
 
 The watchdog uses a dedicated admin engine (``OrphanWatchdogSessionLocal``,
-``pool_size=1``) so it never competes with task workers for connections
-and is trivially identifiable in ``pg_stat_activity`` by its
-``application_name='scalpyn-orphan-watchdog'``. The kill statement
+``NullPool`` — opens at most one connection per task invocation, mandatory
+for cross-event-loop safety in Celery) so it never competes with task
+workers for connections and is trivially identifiable in
+``pg_stat_activity`` by its ``application_name='scalpyn-orphan-watchdog'``. The kill statement
 requires either ``rds_superuser`` (Cloud SQL) or the ``pg_signal_backend``
 role; we surface permission failures via
 ``scalpyn_orphan_tx_scan_errors_total`` rather than crashing the task.

@@ -82,7 +82,7 @@ WHERE datname = 'scalpyn'
   AND pid <> pg_backend_pid();
 ```
 
-**Watchdog automático (Task #256)**: o mesmo filtro acima roda a cada 5 min via `app.tasks.orphan_tx_watchdog.kill_orphans` (queue `execution`, threshold default 15 min, ajustável por env `ORPHAN_TX_THRESHOLD_MINUTES`, allowlist via `ORPHAN_TX_APP_ALLOWLIST`). O watchdog usa engine dedicado `pool_size=1` (`scalpyn-orphan-watchdog`) que NÃO compete com workers por conexões. Métrica Prometheus `scalpyn_orphan_tx_killed_total{state,app}` permite alertar sobre repetição. Sessões fora do allowlist são logadas (`SKIP non-scalpyn`) e nunca terminadas. **Não desligar essa beat entry** sem antes confirmar que o problema raiz foi eliminado em prod por 30 dias.
+**Watchdog automático (Task #256)**: o mesmo filtro acima roda a cada 5 min via `app.tasks.orphan_tx_watchdog.kill_orphans` (queue `execution`, threshold default 15 min, ajustável por env `ORPHAN_TX_THRESHOLD_MINUTES`, allowlist via `ORPHAN_TX_APP_ALLOWLIST`). O watchdog usa engine dedicado `NullPool` (`scalpyn-orphan-watchdog`) — uma única conexão por invocação, fechada ao fim — que NÃO compete com workers por conexões. Métrica Prometheus `scalpyn_orphan_tx_killed_total{state,app}` permite alertar sobre repetição. Sessões fora do allowlist são logadas (`SKIP non-scalpyn`) e nunca terminadas. **Não desligar essa beat entry** sem antes confirmar que o problema raiz foi eliminado em prod por 30 dias.
 
 **Verificação pós-recovery**:
 

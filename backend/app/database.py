@@ -284,9 +284,11 @@ _celery_engine = create_async_engine(
 CeleryAsyncSessionLocal = async_sessionmaker(_celery_engine, expire_on_commit=False)
 
 # ── Task #256 — dedicated admin engine for the orphan-TX watchdog ────────────
-# Spec requirement: separate read/admin path with pool_size=1 so the watchdog
-# never competes with task workers for connections, and so the watchdog's own
-# session is trivially identifiable in pg_stat_activity by its application_name.
+# Spec requirement: separate read/admin path that opens at most ONE connection
+# at a time so the watchdog never competes with task workers for connections,
+# and so the watchdog's own session is trivially identifiable in
+# pg_stat_activity by its application_name. We use NullPool (not pool_size=1)
+# to satisfy this — see the rationale block below the engine creation.
 _watchdog_connect_args = dict(_connect_args)
 # Watchdog statements are tiny (SELECT pg_stat_activity, SELECT pg_terminate_backend);
 # keep command_timeout low so a hung roundtrip doesn't itself become an orphan.
