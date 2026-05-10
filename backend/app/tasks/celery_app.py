@@ -82,6 +82,7 @@ celery_app = Celery(
         "app.tasks.decision_log_enricher",
         "app.tasks.trade_reconciliation",
         "app.tasks.trade_monitor",
+        "app.tasks.orphan_tx_watchdog",
     ],
 )
 
@@ -122,6 +123,12 @@ TASK_ROUTES = {
 
     # Trade Monitor (Module 3)
     "app.tasks.trade_monitor.monitor":                   {"queue": QUEUE_EXECUTION},
+
+    # Orphan Transaction Watchdog (Task #256) — short, infrequent sweep.
+    # Lives on the execution queue because the structural worker is the
+    # one that historically holds the orphan TX (collect_all/compute), so
+    # we want a different worker process tearing it down.
+    "app.tasks.orphan_tx_watchdog.kill_orphans":         {"queue": QUEUE_EXECUTION},
 
     # Execution (latency-sensitive, must run on isolated workers)
     "app.tasks.evaluate_signals.evaluate":          {"queue": QUEUE_EXECUTION},
@@ -234,6 +241,17 @@ TASK_ANNOTATIONS = {
     # Trade Monitor (Module 3) — runs every 10 s, must be fast; never retry
     # (duplicate close attempts would re-close already-closed trades).
     "app.tasks.trade_monitor.monitor":                   {**_EXECUTION_GUARDS, "max_retries": 0},
+
+    # Orphan TX Watchdog (Task #256) — beat-driven idempotent sweep, opt-out
+    # of acks_late so a SIGKILL mid-scan never re-queues. Scans are cheap
+    # but the kill statement can wait on Cloud SQL roundtrip; cap at 60s.
+    "app.tasks.orphan_tx_watchdog.kill_orphans": {
+        "time_limit": 60,
+        "soft_time_limit": 50,
+        "rate_limit": "1/m",
+        "max_retries": 0,
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
 
     # Execution
     "app.tasks.evaluate_signals.evaluate":          {**_EXECUTION_GUARDS, "rate_limit": "2/m"},
@@ -373,6 +391,11 @@ celery_app.conf.beat_schedule = {
     "trade_monitor": {
         "task": "app.tasks.trade_monitor.monitor",
         "schedule": 10.0,
+    },
+    # Orphan TX Watchdog (Task #256): every 5 min, kills xact_age > 15min.
+    "orphan_tx_watchdog_every_5min": {
+        "task": "app.tasks.orphan_tx_watchdog.kill_orphans",
+        "schedule": 300.0,
     },
 }
 
