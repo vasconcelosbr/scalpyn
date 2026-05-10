@@ -326,11 +326,14 @@ function TraceSection({ title, items }: { title: string; items: DecisionTraceIte
           const skip = classifySkip(item);
           const isBlockRule = item.type === "block_rule";
           const blockOutcome = isBlockRule ? blockRuleOutcome(item) : null;
+          // Block rules: OK em laranja (não verde) — regra de bloqueio que
+          // não disparou ainda é um risk gate, verde daria impressão de
+          // "tudo liberado" (vocabulário de Filter/Signal). TRIPPED em roxo.
           const cls = isBlockRule
             ? skip
               ? skip.cls
               : blockOutcome === "OK"
-                ? "border-[#14532D]/40 bg-[#061E14] text-[#86EFAC]"
+                ? "border-[#7C2D12]/40 bg-[#1A0E08] text-[#FDBA74]"
                 : blockOutcome === "TRIPPED"
                   ? "border-[#6B21A8]/40 bg-[#1A0A2A] text-[#D8B4FE]"
                   : "border-[#1E2433] bg-[#06080E] text-[#64748B]"

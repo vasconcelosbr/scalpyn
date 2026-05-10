@@ -118,13 +118,15 @@ function TraceSection({
           const skip = classifySkip(item);
           const isBlockRule = item.type === 'block_rule';
           const blockOutcome = isBlockRule ? blockRuleOutcome(item) : null;
-          // For block rules the green/purple palette tracks OK/TRIPPED
-          // rather than PASS/FAIL — the underlying status is inverted.
+          // For block rules the orange/purple palette tracks OK/TRIPPED.
+          // OK uses orange (not green) because a "block rule that didn't
+          // trip" is still a risk gate the operator should notice — green
+          // would imply "all clear" which is a Filter/Signal vocabulary.
           const cls = isBlockRule
             ? skip
               ? skip.cls
               : blockOutcome === 'OK'
-                ? 'border-[#14532D]/40 bg-[#061E14] text-[#86EFAC]'
+                ? 'border-[#7C2D12]/40 bg-[#1A0E08] text-[#FDBA74]'
                 : blockOutcome === 'TRIPPED'
                   ? 'border-[#6B21A8]/40 bg-[#1A0A2A] text-[#D8B4FE]'
                   : 'border-[#1E2433] bg-[#06080E] text-[#64748B]'
