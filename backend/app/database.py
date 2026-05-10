@@ -297,14 +297,17 @@ _watchdog_connect_args["server_settings"] = {
     # Defense in depth — watchdog must never itself become an orphan.
     "idle_in_transaction_session_timeout": "60000",  # 1 min, ms
 }
+# NullPool is mandatory here for the same reason ``CeleryAsyncSessionLocal``
+# uses it: each Celery task invocation runs ``asyncio.run(...)`` which spins
+# up a fresh event loop, and asyncpg connections are not safe to reuse across
+# event loops (raises "Future attached to a different loop"). NullPool means
+# every kill_orphans run opens exactly one connection and closes it on exit
+# — which also satisfies the spec intent of "single admin connection at a
+# time", just with a different mechanism than pool_size=1.
 _orphan_watchdog_engine = create_async_engine(
     _db_url,
     connect_args=_watchdog_connect_args,
-    pool_size=1,
-    max_overflow=0,
-    pool_pre_ping=True,
-    pool_recycle=600,
-    pool_timeout=10,
+    poolclass=NullPool,
 )
 OrphanWatchdogSessionLocal = async_sessionmaker(
     _orphan_watchdog_engine, expire_on_commit=False
