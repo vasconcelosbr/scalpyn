@@ -57,12 +57,13 @@ Combinado com `acks_late=False` (gotcha #245), beat re-roda em ≤5min com estad
 
 **Mudança paralela no mesmo deploy**: removido UPSERT redundante de `market_metadata` no `_collect_5m_async` (linha 712, agora só comentário) — `collect_all` (1h) + Gate.io WS tickers + SAVEPOINT do orderbook já mantêm `price` fresh. O UPSERT extra era a fonte mais hot da contenção entre worker-micro e worker-structural. **NÃO re-adicionar** sem nova estratégia de mitigação (SKIP LOCKED, session separada).
 
-**Recovery manual quando o problema reaparecer** (logs: `pg_stat_activity` mostrando TX com `xact_age > 2min`):
+**Recovery manual quando o problema reaparecer** (logs: `pg_stat_activity` mostrando TX com `xact_age` acima do threshold):
 
-> **2026-05-10 — filtro corrigido (Task #256)**: o filtro original cobria apenas `state IN ('idle in transaction', ...)`. O incidente de 2026-05-10 (PID 795563, `SAVEPOINT sa_savepoint_148` por **7h31min**) provou que TXs órfãs também aparecem com `state='active'` quando o cliente está bloqueado num `await` de `pg_terminate_backend` ou num lock-wait que nunca destrava. Use **`xact_start`** (idade da transação inteira) em vez de `state_change` (idade desde a última mudança de state).
+> **2026-05-10 — filtro corrigido (Task #256)**: o filtro original cobria apenas `state IN ('idle in transaction', ...)`. O incidente de 2026-05-10 (PID 795563, `SAVEPOINT sa_savepoint_148` por **7h31min**) provou que TXs órfãs também aparecem com `state='active'` quando o cliente está bloqueado num `await` ou num lock-wait que nunca destrava. Use **`xact_start`** (idade da transação inteira) em vez de `state_change` (idade desde a última mudança de state). **Threshold = 15min** (alinhado com `ORPHAN_TX_THRESHOLD_MINUTES` do watchdog automático). Em recovery manual urgente onde já é evidente que TXs estão presas, baixe pra `2 minutes` PARA AQUELE ÚNICO COMANDO mas nunca persista isso na automação — viraria false positive em rotas legítimas (collect_5m soft_time_limit=420s).
 
 ```sql
 -- Cloud Shell — destrava em segundos. Cobre os 3 estados problemáticos.
+-- Restrito a sessões scalpyn (LIKE 'scalpyn%') pra nunca matar psql do operador.
 SELECT pid,
        state,
        application_name,
@@ -71,16 +72,17 @@ SELECT pid,
 FROM pg_stat_activity
 WHERE datname = 'scalpyn'
   AND xact_start IS NOT NULL
-  AND NOW() - xact_start > INTERVAL '2 minutes'
+  AND NOW() - xact_start > INTERVAL '15 minutes'
   AND state IN (
       'active',
       'idle in transaction',
       'idle in transaction (aborted)'
   )
+  AND COALESCE(application_name, '') LIKE 'scalpyn%'
   AND pid <> pg_backend_pid();
 ```
 
-**Watchdog automático (Task #256)**: o mesmo filtro acima roda a cada 5 min via `app.tasks.orphan_tx_watchdog.kill_orphans` (queue `execution`, threshold default 15 min, ajustável por env `ORPHAN_TX_THRESHOLD_MINUTES`). Métrica Prometheus `scalpyn_orphan_tx_killed_total{state,app}` permite alertar sobre repetição. **Não desligar essa beat entry** sem antes confirmar que o problema raiz foi eliminado em prod por 30 dias.
+**Watchdog automático (Task #256)**: o mesmo filtro acima roda a cada 5 min via `app.tasks.orphan_tx_watchdog.kill_orphans` (queue `execution`, threshold default 15 min, ajustável por env `ORPHAN_TX_THRESHOLD_MINUTES`, allowlist via `ORPHAN_TX_APP_ALLOWLIST`). O watchdog usa engine dedicado `pool_size=1` (`scalpyn-orphan-watchdog`) que NÃO compete com workers por conexões. Métrica Prometheus `scalpyn_orphan_tx_killed_total{state,app}` permite alertar sobre repetição. Sessões fora do allowlist são logadas (`SKIP non-scalpyn`) e nunca terminadas. **Não desligar essa beat entry** sem antes confirmar que o problema raiz foi eliminado em prod por 30 dias.
 
 **Verificação pós-recovery**:
 

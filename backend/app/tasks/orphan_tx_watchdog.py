@@ -14,14 +14,23 @@ Filter contract — covers BOTH classes of orphan TX:
   sa_savepoint_148`` held for 7h31min). The previous runbook filter
   missed this entirely.
 
+**Kill scoping (security)**: the candidate set is restricted to backends
+whose ``application_name LIKE 'scalpyn%'``. This guarantees the watchdog
+never terminates operator-initiated sessions (psql / Cloud SQL Studio /
+maintenance) even if they exceed the threshold. Backends without an
+application_name are reported as candidates (``code="unknown_app"``)
+but NOT killed — see the ``_NON_SCALPYN_SKIPPED`` log line.
+
 The threshold is intentionally generous (default 15 min) so legitimate
 long-running maintenance never gets killed. Override via env var
 ``ORPHAN_TX_THRESHOLD_MINUTES``.
 
-The watchdog runs on the ``execution`` queue (small, infrequent) and
-uses the standard Celery engine (NullPool — safe across event loops).
-The kill statement requires either ``rds_superuser`` (Cloud SQL) or the
-``pg_signal_backend`` role; we surface permission failures via
+The watchdog uses a dedicated admin engine (``OrphanWatchdogSessionLocal``,
+``pool_size=1``) so it never competes with task workers for connections
+and is trivially identifiable in ``pg_stat_activity`` by its
+``application_name='scalpyn-orphan-watchdog'``. The kill statement
+requires either ``rds_superuser`` (Cloud SQL) or the ``pg_signal_backend``
+role; we surface permission failures via
 ``scalpyn_orphan_tx_scan_errors_total`` rather than crashing the task.
 
 Registered as: ``app.tasks.orphan_tx_watchdog.kill_orphans``
@@ -36,7 +45,7 @@ import os
 from sqlalchemy import text
 
 from .celery_app import celery_app
-from ..database import run_db_task
+from ..database import OrphanWatchdogSessionLocal
 from ..services.orphan_tx_metrics import record_killed, record_scan
 
 logger = logging.getLogger(__name__)
@@ -51,13 +60,21 @@ def _threshold_minutes() -> int:
         return 15
 
 
+# Allowlist pattern. Anything not matching is REPORTED but NOT killed.
+# Set via env to widen / narrow without redeploy if needed.
+_APP_ALLOWLIST_PATTERN = os.environ.get(
+    "ORPHAN_TX_APP_ALLOWLIST", "scalpyn%"
+)
+
+
 _SCAN_SQL = text(
     """
     SELECT pid,
            COALESCE(application_name, '')      AS application_name,
            state,
            EXTRACT(EPOCH FROM (NOW() - xact_start))::int AS xact_age_seconds,
-           LEFT(COALESCE(query, ''), 200)      AS query_preview
+           LEFT(COALESCE(query, ''), 200)      AS query_preview,
+           (COALESCE(application_name, '') LIKE :app_pattern) AS is_scalpyn
     FROM pg_stat_activity
     WHERE datname = current_database()
       AND pid <> pg_backend_pid()
@@ -80,73 +97,92 @@ _SCAN_SQL = text(
     max_retries=0,
 )
 def kill_orphans(self) -> str:
-    """Beat-driven sweep — kill TXs older than the threshold."""
+    """Beat-driven sweep — kill scalpyn-owned TXs older than the threshold."""
     threshold = _threshold_minutes()
 
-    async def _inner(session):
-        rows = (await session.execute(
-            _SCAN_SQL, {"threshold_minutes": threshold}
-        )).all()
-        if not rows:
-            return {"scanned": True, "victims": 0, "killed": 0, "errors": 0}
+    async def _inner() -> dict:
+        async with OrphanWatchdogSessionLocal() as session:
+            rows = (await session.execute(
+                _SCAN_SQL,
+                {
+                    "threshold_minutes": threshold,
+                    "app_pattern": _APP_ALLOWLIST_PATTERN,
+                },
+            )).all()
+            if not rows:
+                return {"victims": 0, "killed": 0, "errors": 0, "skipped": 0}
 
-        killed = 0
-        errors = 0
-        for r in rows:
-            # Logged BEFORE the kill so we still have evidence if the
-            # terminate fails (e.g. permission denied on Cloud SQL).
-            logger.warning(
-                "[orphan-tx-watchdog] candidate pid=%s state=%r app=%r "
-                "xact_age=%ss query=%r",
-                r.pid, r.state, r.application_name,
-                r.xact_age_seconds, r.query_preview,
-            )
-            try:
-                ok_row = (await session.execute(
-                    text("SELECT pg_terminate_backend(:pid) AS ok"),
-                    {"pid": int(r.pid)},
-                )).one()
-                if bool(ok_row.ok):
-                    killed += 1
-                    record_killed(state=r.state, app=r.application_name)
+            killed = 0
+            errors = 0
+            skipped_non_scalpyn = 0
+            for r in rows:
+                if not r.is_scalpyn:
+                    skipped_non_scalpyn += 1
                     logger.warning(
-                        "[orphan-tx-watchdog] terminated pid=%s "
-                        "(state=%r, xact_age=%ss)",
-                        r.pid, r.state, r.xact_age_seconds,
+                        "[orphan-tx-watchdog] SKIP non-scalpyn pid=%s "
+                        "app=%r state=%r xact_age=%ss query=%r — kept alive "
+                        "(out of allowlist %r)",
+                        r.pid, r.application_name, r.state,
+                        r.xact_age_seconds, r.query_preview,
+                        _APP_ALLOWLIST_PATTERN,
                     )
-                else:
+                    continue
+
+                logger.warning(
+                    "[orphan-tx-watchdog] candidate pid=%s state=%r app=%r "
+                    "xact_age=%ss query=%r",
+                    r.pid, r.state, r.application_name,
+                    r.xact_age_seconds, r.query_preview,
+                )
+                try:
+                    ok_row = (await session.execute(
+                        text("SELECT pg_terminate_backend(:pid) AS ok"),
+                        {"pid": int(r.pid)},
+                    )).one()
+                    if bool(ok_row.ok):
+                        killed += 1
+                        record_killed(state=r.state, app=r.application_name)
+                        logger.warning(
+                            "[orphan-tx-watchdog] terminated pid=%s "
+                            "(state=%r, xact_age=%ss)",
+                            r.pid, r.state, r.xact_age_seconds,
+                        )
+                    else:
+                        errors += 1
+                        logger.warning(
+                            "[orphan-tx-watchdog] pg_terminate_backend(%s) "
+                            "returned false — permission denied or pid gone",
+                            r.pid,
+                        )
+                except Exception as exc:
                     errors += 1
                     logger.warning(
-                        "[orphan-tx-watchdog] pg_terminate_backend(%s) "
-                        "returned false — permission denied or pid gone",
-                        r.pid,
+                        "[orphan-tx-watchdog] terminate failed pid=%s: %s",
+                        r.pid, exc,
                     )
-            except Exception as exc:
-                errors += 1
-                logger.warning(
-                    "[orphan-tx-watchdog] terminate failed pid=%s: %s",
-                    r.pid, exc,
-                )
-        return {
-            "scanned": True,
-            "victims": len(rows),
-            "killed": killed,
-            "errors": errors,
-        }
+            # Read-only path — no commit needed; pg_terminate_backend is a
+            # function call that sends a signal, not a transactional write.
+            return {
+                "victims": len(rows),
+                "killed": killed,
+                "errors": errors,
+                "skipped": skipped_non_scalpyn,
+            }
 
     try:
-        result = asyncio.run(run_db_task(_inner, celery=True))
+        result = asyncio.run(_inner())
         record_scan(success=True)
-        if result.get("victims", 0) > 0:
+        if result["victims"] > 0:
             logger.warning(
-                "[orphan-tx-watchdog] threshold=%dmin victims=%d killed=%d errors=%d",
-                threshold, result["victims"], result["killed"], result["errors"],
+                "[orphan-tx-watchdog] threshold=%dmin victims=%d killed=%d "
+                "errors=%d skipped_non_scalpyn=%d",
+                threshold, result["victims"], result["killed"],
+                result["errors"], result["skipped"],
             )
         return (
             f"OrphanTxWatchdog: threshold={threshold}min "
-            f"victims={result.get('victims', 0)} "
-            f"killed={result.get('killed', 0)} "
-            f"errors={result.get('errors', 0)}"
+            f"victims={result['victims']} killed={result['killed']} "
+            f"errors={result['errors']} skipped={result['skipped']}"
         )
     except Exception as exc:
         record_scan(success=False)

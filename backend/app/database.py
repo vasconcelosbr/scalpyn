@@ -55,6 +55,16 @@ _connect_args.setdefault("timeout", 15)
 # 60 s for the API engine: HTTP handlers must fail fast.
 _connect_args.setdefault("command_timeout", 60)
 
+# Task #256 — tag every backend with application_name so the orphan-TX
+# watchdog can scope its kill candidate set to Scalpyn-owned sessions only.
+# K_SERVICE is set by Cloud Run (e.g. ``scalpyn``, ``scalpyn-worker-micro``,
+# ``scalpyn-beat``); fall back to a recognisable local prefix otherwise.
+# Anything starting with ``scalpyn`` is in-allowlist for the watchdog.
+_APP_NAME_API = f"scalpyn-{os.environ.get('K_SERVICE', 'local')}-api"
+_connect_args.setdefault("server_settings", {}).setdefault(
+    "application_name", _APP_NAME_API
+)
+
 # ── Pool sizing ──────────────────────────────────────────────────────────────
 # Each uvicorn worker process holds its own pool; Celery worker + beat run in
 # their own processes alongside.  The total upper bound on simultaneous
@@ -258,8 +268,13 @@ _celery_connect_args["command_timeout"] = _env_int("CELERY_DB_COMMAND_TIMEOUT", 
 # (above) is the correct ceiling — it absorbs transient contention without
 # starving the hot symbols. **Do NOT re-add lock_timeout under 120 s without
 # first measuring p95 lock-wait per symbol over a 24 h window.**
+_APP_NAME_CELERY = f"scalpyn-{os.environ.get('K_SERVICE', 'local')}-celery"
 _celery_connect_args.setdefault("server_settings", {}).update({
     "idle_in_transaction_session_timeout": "300000",  # 5 min, ms
+    # Task #256 — application_name allows the orphan-TX watchdog to
+    # restrict pg_terminate_backend to ``LIKE 'scalpyn%'`` only, never
+    # touching operator/maintenance sessions.
+    "application_name": _APP_NAME_CELERY,
 })
 _celery_engine = create_async_engine(
     _db_url,
@@ -267,6 +282,33 @@ _celery_engine = create_async_engine(
     poolclass=NullPool,
 )
 CeleryAsyncSessionLocal = async_sessionmaker(_celery_engine, expire_on_commit=False)
+
+# ── Task #256 — dedicated admin engine for the orphan-TX watchdog ────────────
+# Spec requirement: separate read/admin path with pool_size=1 so the watchdog
+# never competes with task workers for connections, and so the watchdog's own
+# session is trivially identifiable in pg_stat_activity by its application_name.
+_watchdog_connect_args = dict(_connect_args)
+# Watchdog statements are tiny (SELECT pg_stat_activity, SELECT pg_terminate_backend);
+# keep command_timeout low so a hung roundtrip doesn't itself become an orphan.
+_watchdog_connect_args["command_timeout"] = _env_int("ORPHAN_TX_WATCHDOG_TIMEOUT_S", 30)
+_watchdog_connect_args["server_settings"] = {
+    **(_watchdog_connect_args.get("server_settings") or {}),
+    "application_name": "scalpyn-orphan-watchdog",
+    # Defense in depth — watchdog must never itself become an orphan.
+    "idle_in_transaction_session_timeout": "60000",  # 1 min, ms
+}
+_orphan_watchdog_engine = create_async_engine(
+    _db_url,
+    connect_args=_watchdog_connect_args,
+    pool_size=1,
+    max_overflow=0,
+    pool_pre_ping=True,
+    pool_recycle=600,
+    pool_timeout=10,
+)
+OrphanWatchdogSessionLocal = async_sessionmaker(
+    _orphan_watchdog_engine, expire_on_commit=False
+)
 
 Base = declarative_base()
 
