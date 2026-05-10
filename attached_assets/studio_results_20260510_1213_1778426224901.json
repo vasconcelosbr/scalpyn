@@ -1,0 +1,44 @@
+[
+  {
+    "relname": "market_metadata",
+    "write_ops": "96400320",
+    "n_dead_tup": "1815",
+    "last_autovacuum": "2026-05-10T15:13:04.819866Z",
+    "last_vacuum": ""
+  },
+  {
+    "relname": "pipeline_watchlist_assets",
+    "write_ops": "26991929",
+    "n_dead_tup": "85192",
+    "last_autovacuum": "2026-05-10T15:13:05.098329Z",
+    "last_vacuum": ""
+  },
+  {
+    "relname": "indicator_snapshots",
+    "write_ops": "316369",
+    "n_dead_tup": "476",
+    "last_autovacuum": "2026-05-08T18:13:04.017845Z",
+    "last_vacuum": ""
+  },
+  {
+    "relname": "pipeline_watchlists",
+    "write_ops": "305245",
+    "n_dead_tup": "3626",
+    "last_autovacuum": "2026-05-10T15:13:04.798824Z",
+    "last_vacuum": ""
+  },
+  {
+    "relname": "pool_coins",
+    "write_ops": "84262",
+    "n_dead_tup": "16",
+    "last_autovacuum": "2026-05-07T21:25:46.964514Z",
+    "last_vacuum": ""
+  },
+  {
+    "relname": "decisions_log",
+    "write_ops": "6810",
+    "n_dead_tup": "412",
+    "last_autovacuum": "2026-05-08T04:28:52.132525Z",
+    "last_vacuum": ""
+  }
+]
