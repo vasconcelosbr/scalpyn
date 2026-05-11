@@ -385,6 +385,10 @@ app.include_router(system.router)
 from .api import admin_diagnostics  # noqa: E402
 app.include_router(admin_diagnostics.router)
 
+# Encryption health + admin rewrap (Task #275)
+from .api import encryption_admin  # noqa: E402
+app.include_router(encryption_admin.router)
+
 # Machine Learning
 app.include_router(ml.router)
 

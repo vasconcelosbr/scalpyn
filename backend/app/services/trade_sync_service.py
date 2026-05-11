@@ -12,7 +12,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..exchange_adapters.gate_adapter import GateAdapter
 from ..models.exchange_connection import ExchangeConnection
 from ..models.trade import Trade
-from ..utils.encryption import decrypt
+from ..utils.encryption import InvalidToken, decrypt
+
+
+class CredentialsUndecipherableError(RuntimeError):
+    """Raised when a user's stored API credentials cannot be decrypted.
+
+    Indicates the row was encrypted under a key no longer present in the
+    ``ENCRYPTION_KEY`` rotation (see Task #275 / runbook
+    ``encryption-key-rotation.md``). The HTTP layer translates this into
+    a 422 with a re-registration hint.
+    """
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +53,20 @@ class TradeSyncService:
             if isinstance(conn.api_secret_encrypted, memoryview)
             else conn.api_secret_encrypted
         )
-        api_key = decrypt(raw_key).strip()
-        api_secret = decrypt(raw_secret).strip()
+        try:
+            api_key = decrypt(raw_key).strip()
+            api_secret = decrypt(raw_secret).strip()
+        except InvalidToken as exc:
+            logger.warning(
+                "Fernet InvalidToken decrypting exchange_connections row "
+                "for user %s — key rotation needed (see runbook "
+                "encryption-key-rotation.md)",
+                user_id,
+            )
+            raise CredentialsUndecipherableError(
+                "Suas credenciais Gate.io não puderam ser decifradas — "
+                "re-cadastre em Settings → API Keys."
+            ) from exc
         if not api_key or not api_secret:
             return None
         return GateAdapter(api_key, api_secret)
@@ -236,10 +258,18 @@ class TradeSyncService:
 
         Returns a summary dict with counts.
         """
-        adapter = await self._get_gate_adapter(db, user_id)
+        try:
+            adapter = await self._get_gate_adapter(db, user_id)
+        except CredentialsUndecipherableError as exc:
+            return {
+                "success": False,
+                "error_code": "credentials_undecipherable",
+                "error": str(exc),
+            }
         if not adapter:
             return {
                 "success": False,
+                "error_code": "no_connection",
                 "error": "No active exchange connection found. Please connect your Gate.io account first.",
             }
 

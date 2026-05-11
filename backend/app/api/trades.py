@@ -138,6 +138,10 @@ async def sync_trades_from_exchange(
         db=db, user_id=user_id, days=days, all_history=all_history
     )
     if not result.get("success"):
+        # Task #275: surface Fernet decrypt failures as 422 with a
+        # re-registration hint instead of a generic 400/500.
+        if result.get("error_code") == "credentials_undecipherable":
+            raise HTTPException(status_code=422, detail=result.get("error"))
         raise HTTPException(status_code=400, detail=result.get("error", "Sync failed"))
     return result
 

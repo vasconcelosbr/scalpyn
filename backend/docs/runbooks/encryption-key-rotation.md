@@ -51,8 +51,36 @@ matches the key that was used to write the rows currently stored in
    with the CSV value, then point the Cloud Run env binding at the new
    version and roll out a new revision.
 
-5. **Smoke test.** With a real user that has Gate.io credentials
+5. **Probe the encryption health endpoint (Task #275).** Public,
+   read-only, no auth required:
+   ```
+   curl -s https://scalpyn-…run.app/api/health/encryption | jq
+   ```
+   Expected fields:
+   ```json
+   {
+     "ok": true,
+     "scanned": 7,
+     "decryptable": 7,
+     "indecryptable": 0,
+     "legacy_rows": 6,
+     "current_key_id": "ab12…",
+     "known_key_ids": ["ab12…", "cd34…"],
+     "by_key_id": {"ab12…": 1, "cd34…": 6},
+     "rotation_complete": false
+   }
+   ```
+   - `legacy_rows > 0` confirms there are rows still encrypted under
+     `OLD_KEY` (id `cd34…`) that can now be migrated.
+   - `indecryptable > 0` after step 4 means the rotation also missed
+     yet another historical key — investigate before proceeding.
+
+6. **Smoke test.** With a real user that has Gate.io credentials
    cadastradas, exercise:
+   - `POST /api/trades/sync?all_history=true` (was the original
+     failure mode — should now succeed end-to-end; if a row is still
+     bad, the API now returns **422** with a re-registration hint
+     instead of a generic 500).
    - `GET /api/trades/open`
    - `POST /api/performance/sync`
    - Spot engine start/stop
@@ -63,11 +91,39 @@ matches the key that was used to write the rows currently stored in
    Confirm no new `InvalidSignature` / `InvalidToken` entries appear
    in `scalpyn` logs after the rollout.
 
-6. **Decision point — keep CSV or re-encrypt.** The CSV configuration
-   is safe to leave in place indefinitely (it only adds fallback
-   decrypt attempts). To fully retire `OLD_KEY`, run the mass
-   re-encryption follow-up (Task #269) and then remove `OLD_KEY` from
-   the CSV in a subsequent rollout.
+7. **Mass rewrap (Task #275).** Migrate every legacy row to the
+   current key in one shot. The endpoint is bearer-token gated using
+   the same `ADMIN_DIAGNOSTICS_TOKEN` env var as
+   `/api/admin/symbol-health` (returns 404 when unset, 401 when the
+   token is wrong, 200 otherwise):
+   ```
+   curl -sX POST \
+     -H "Authorization: Bearer $ADMIN_DIAGNOSTICS_TOKEN" \
+     https://scalpyn-…run.app/api/admin/encryption/rewrap | jq
+   ```
+   Expected response:
+   ```json
+   {
+     "ok": true,
+     "scanned": 7,
+     "rewrapped": 6,
+     "already_current": 1,
+     "failed": 0,
+     "current_key_id": "ab12…"
+   }
+   ```
+   - `failed > 0` lists up to 50 row ids in `failed_row_ids`. Those
+     rows could not be decrypted under any configured key — instruct
+     the affected user(s) to re-cadastrar API keys via Settings → API
+     Keys.
+   - The endpoint is idempotent: re-running it after success reports
+     `rewrapped=0, already_current=N`.
+
+8. **Drop the legacy key.** Probe `/api/health/encryption` once more
+   and confirm `rotation_complete: true`. Then update Cloud Run
+   `ENCRYPTION_KEY` back to a single value (`CURRENT_KEY` only) and
+   roll out a new revision. The CSV form is safe to leave in place
+   indefinitely if you prefer to keep `OLD_KEY` as a safety net.
 
 ## Notes
 
