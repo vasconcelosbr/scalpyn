@@ -11,12 +11,14 @@ logger = logging.getLogger(__name__)
 
 
 def _run_async(coro):
-    """Run async code in sync Celery task.
+    """Run async coroutine in a sync Celery task.
 
-    Drains pending asyncpg callbacks (NullPool connection close, etc.)
-    before closing the loop. Without this, callbacks scheduled by asyncpg
-    during connection cleanup hit a closed loop, leaving sessions in
-    PendingRollbackError and poisoning the next task invocation.
+    Creates a dedicated event loop per task invocation. Drains all pending
+    asyncpg tasks and disposes the NullPool engine before closing the loop.
+
+    Without dispose + drain, asyncpg schedules _terminate_graceful_close
+    via loop.create_task() during GC of NullPool connections after loop.close(),
+    causing RuntimeError: Event loop is closed on the next invocation.
     """
     loop = asyncio.new_event_loop()
     try:
@@ -28,9 +30,15 @@ def _run_async(coro):
                 loop.run_until_complete(
                     asyncio.gather(*pending, return_exceptions=True)
                 )
-        except Exception:
+        except BaseException:
             pass
-        loop.close()
+        finally:
+            try:
+                from ..database import _celery_engine
+                loop.run_until_complete(_celery_engine.dispose())
+            except Exception:
+                pass
+            loop.close()
 
 
 async def _backfill_async(
