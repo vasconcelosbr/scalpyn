@@ -137,29 +137,110 @@ def _run_async(coro):
     Creates a dedicated event loop per task invocation. Drains all pending
     asyncpg tasks and disposes the NullPool engine before closing the loop.
 
-    Without dispose + drain, asyncpg schedules _terminate_graceful_close
-    via loop.create_task() during GC of NullPool connections after loop.close(),
-    causing RuntimeError: Event loop is closed on the next invocation.
+    Without dispose + drain, asyncpg schedules ``_terminate_graceful_close``
+    via ``loop.create_task()`` during GC of NullPool connections after
+    ``loop.close()``, causing ``RuntimeError: Event loop is closed`` on the
+    next invocation.
+
+    Task #274 — robust teardown.
+    Even when ``coro`` raises (``PendingRollbackError``, ``OperationalError``,
+    ``CancelledError``, deadlock cascades, etc.) the finally block must NEVER
+    let a teardown traceback escape to the root logger. The previous version
+    drained pending tasks + ``dispose()``-ed the engine, but a connection
+    whose asyncpg waiter was still pending (deadlock → poisoned outer tx)
+    could be GC'd AFTER ``loop.close()``; ``__del__`` fires
+    ``_cancel_current_command`` → ``loop.create_task(...)`` on the closed
+    loop → ``RuntimeError: Event loop is closed`` (23 in 30 min on
+    ``scalpyn-worker-structural``, May/2026).
+
+    Sequence now:
+      1. Cancel any still-pending asyncio tasks; await them with
+         ``return_exceptions=True``.
+      2. ``await _celery_engine.dispose()`` inside the loop (best-effort —
+         this is the graceful path that releases asyncpg sockets cleanly).
+      3. Hard-terminate any asyncpg ``Connection`` still attached to the
+         engine pool synchronously via ``Connection.terminate()`` (does NOT
+         schedule on the loop, unlike ``Connection.close()``). Belt-and-
+         suspenders for the rare case where ``dispose()`` couldn't clean up
+         a half-open connection from a poisoned transaction.
+      4. ``shutdown_asyncgens`` to drain any leftover async generators.
+      5. ``loop.close()`` inside its own try/except so a teardown failure
+         never propagates back into the Celery task result.
+
+    Each cleanup step is isolated by try/except + ``logger.debug`` so the
+    Celery task return value (or original exception) is preserved verbatim.
+
+    Runbook: ``backend/docs/runbooks/2026-05-08-pipeline-recovery.md``
     """
     loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
         return loop.run_until_complete(coro)
     finally:
+        # Step 1 — drain pending asyncio tasks.
         try:
-            pending = asyncio.all_tasks(loop)
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            for t in pending:
+                t.cancel()
             if pending:
                 loop.run_until_complete(
                     asyncio.gather(*pending, return_exceptions=True)
                 )
+        except BaseException as exc:  # pragma: no cover — defensive
+            logger.debug("[_run_async] pending-task drain failed: %s", exc)
+
+        # Step 2 — graceful engine dispose (closes asyncpg sockets in-loop).
+        try:
+            from ..database import _celery_engine
+            loop.run_until_complete(_celery_engine.dispose())
+        except BaseException as exc:  # pragma: no cover — defensive
+            logger.debug("[_run_async] _celery_engine.dispose failed: %s", exc)
+
+        # Step 3 — hard-terminate any asyncpg connection still cached on
+        # the pool. ``Connection.terminate()`` is synchronous and never
+        # schedules on the event loop, so it's safe even when dispose()
+        # left a half-open connection behind.
+        try:
+            from ..database import _celery_engine as _ce
+            sync_pool = _ce.sync_engine.pool
+            records = list(getattr(sync_pool, "_all_conns", None) or [])
+            for record in records:
+                raw = (
+                    getattr(record, "dbapi_connection", None)
+                    or getattr(record, "connection", None)
+                )
+                # SQLAlchemy's AsyncAdapt_asyncpg_connection wraps the real
+                # asyncpg.Connection under various attribute names depending
+                # on version — check the common ones.
+                asyncpg_conn = (
+                    getattr(raw, "_connection", None)
+                    or getattr(raw, "connection", None)
+                    or raw
+                )
+                terminate = getattr(asyncpg_conn, "terminate", None)
+                if callable(terminate):
+                    try:
+                        terminate()
+                    except BaseException:
+                        pass
+        except BaseException as exc:  # pragma: no cover — defensive
+            logger.debug("[_run_async] hard-terminate sweep failed: %s", exc)
+
+        # Step 4 — drain async generators registered on the loop.
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except BaseException as exc:  # pragma: no cover — defensive
+            logger.debug("[_run_async] shutdown_asyncgens failed: %s", exc)
+
+        # Step 5 — close the loop. Always last; never propagate.
+        try:
+            loop.close()
+        except BaseException as exc:  # pragma: no cover — defensive
+            logger.debug("[_run_async] loop.close failed: %s", exc)
+        try:
+            asyncio.set_event_loop(None)
         except BaseException:
             pass
-        finally:
-            try:
-                from ..database import _celery_engine
-                loop.run_until_complete(_celery_engine.dispose())
-            except Exception:
-                pass
-            loop.close()
 
 
 async def _collect_all_async():
