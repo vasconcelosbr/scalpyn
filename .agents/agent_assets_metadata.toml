@@ -24,3 +24,9 @@ id = "veajwYnoCqgQmSHTff1CB"
 uri = "file://.local/downloads/database.tar.gz"
 type = "unspecified"
 title = "database.py (run_db_task / _run_async) - tar.gz"
+
+[[outputs]]
+id = "hgjNaNMdxIJzgM0-hiBkr"
+uri = "file://exports/database_run_db_task_L346.txt"
+type = "text"
+title = "database.py L346+ — run_db_task & get_db"
