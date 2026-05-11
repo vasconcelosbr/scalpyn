@@ -1,0 +1,107 @@
+# LEVANTAMENTO — DECISION LOG & DATASET COMPLETO PARA ML
+
+Preciso entender a arquitetura atual do Scalpyn para construir o dataset de treinamento correto para o XGBoost. Responda cada item abaixo com o código/estrutura real que existe hoje.
+
+---
+
+## 1. TABELA DO DECISION LOG
+
+**1.1** Qual o nome exato da tabela no banco de dados que armazena o Decision Log?
+
+**1.2** Cole o schema completo da tabela (CREATE TABLE ou o modelo SQLAlchemy).
+
+**1.3** Quais são os valores possíveis da coluna `decision`? (ex: ALLOW, BLOCK, e outros?)
+
+**1.4** Quais são os valores possíveis da coluna `event`? (na tela aparece "New" — existem outros?)
+
+**1.5** A tabela armazena o `features_snapshot` (valores dos indicadores no momento da decisão)? Se sim, qual é a estrutura do JSONB?
+
+**1.6** A tabela armazena o `score` e os resultados de L1, L2, L3 separadamente? Cole um exemplo de registro real (pode mascarar symbol se necessário).
+
+---
+
+## 2. RELAÇÃO ENTRE DECISION LOG E TRADES EXECUTADOS
+
+**2.1** Como um registro do Decision Log se relaciona com um trade executado? Existe uma FK direta (`trade_id`), ou a relação é feita por `symbol` + `timestamp`?
+
+**2.2** Quando um ALLOW vira trade, o registro do Decision Log é atualizado? Ou o vínculo fica só na tabela de trades?
+
+**2.3** Na tabela `trades`, existe algum campo que aponta para o Decision Log? (ex: `decision_id`, `pipeline_decision_id`)
+
+**2.4** Como identificar hoje, olhando o banco, quais ALLOWs da L3 NÃO viraram trade? É possível fazer isso com um JOIN simples, ou há ambiguidade?
+
+---
+
+## 3. MOTIVO DE NÃO EXECUÇÃO
+
+**3.1** Quando um ALLOW não vira trade por falta de USDT, isso é registrado em algum lugar? Existe um campo `skip_reason` ou similar no Decision Log ou em outra tabela?
+
+**3.2** Existem outros motivos além de "falta de USDT" pelos quais um ALLOW pode não virar trade? (ex: exchange offline, position limit, cooldown, etc.) Liste todos os que você conhece.
+
+**3.3** Existe alguma tabela ou log de "oportunidades perdidas" já implementada?
+
+---
+
+## 4. SIMULATION ENGINE
+
+**4.1** O simulation engine atual (que popula `trade_simulations`) consegue simular retroativamente um ALLOW que não virou trade? Ou ele só simula trades que foram efetivamente executados?
+
+**4.2** Cole a assinatura da função principal do simulation engine (nome, parâmetros, o que recebe como input).
+
+**4.3** O simulation engine usa os dados de OHLCV histórico para calcular se o TP ou SL teria sido atingido? Ou usa outra fonte?
+
+**4.4** Para simular um ALLOW não executado, o engine precisaria de: entry_price, tp_price, sl_price, e timestamp. Esses dados estão disponíveis no Decision Log, ou precisariam ser reconstruídos?
+
+---
+
+## 5. DADOS HISTÓRICOS DE OHLCV
+
+**5.1** O OHLCV histórico está disponível na tabela `ohlcv` (TimescaleDB) para todos os symbols do Decision Log?
+
+**5.2** Qual é o período histórico disponível? (ex: desde quando tem dados?)
+
+**5.3** O OHLCV tem granularidade suficiente para simular TP/SL? (ex: candles de 1m ou tick data?)
+
+---
+
+## 6. CRUZAMENTO COM A CORRETORA
+
+**6.1** As ordens executadas na corretora estão na tabela `orders` ou `trades`? Cole o schema da tabela relevante.
+
+**6.2** Existe algum processo hoje que sincroniza as ordens da corretora com o banco local? (ex: Celery task que puxa o histórico de ordens via exchange adapter)
+
+**6.3** É possível identificar com certeza se um ALLOW virou ordem na corretora apenas com os dados do banco, ou é necessário consultar a API da corretora?
+
+---
+
+## 7. VOLUME E ESCALA
+
+**7.1** Quantos registros existem hoje no Decision Log (aproximado)?
+
+**7.2** Quantos são ALLOW vs BLOCK (aproximado)?
+
+**7.3** Dos ALLOWs, quantos viraram trades executados vs não executados por falta de capital (aproximado)?
+
+**7.4** Qual o período coberto pelo Decision Log atual?
+
+---
+
+## 8. CÓDIGO DO DATASET BUILDER ATUAL
+
+**8.1** Cole o método `load_simulations()` do `DatasetBuilder` atual — especificamente o filtro que decide quais registros entram no dataset de treinamento.
+
+**8.2** Existe alguma lógica hoje que tenta incluir ALLOWs não executados no treinamento? Ou o dataset é estritamente baseado em `trade_simulations`?
+
+---
+
+## 9. OBJETIVO FINAL (confirmar entendimento)
+
+Confirme se o objetivo é:
+
+[ ] A — Treinar o XGBoost com o universo COMPLETO de ALLOWs da L3 (executados + não executados simulados), eliminando o viés de seleção por capital disponível
+
+[ ] B — Manter o dataset atual (só executados), mas enriquecer com features do Decision Log que hoje não estão em `trade_simulations`
+
+[ ] C — Ambos: dataset completo (A) + features adicionais do Decision Log (B)
+
+[ ] D — Outro objetivo — descreva:

@@ -1,0 +1,92 @@
+Você é um engenheiro sênior trabalhando no Scalpyn — plataforma quant de trading crypto.
+Regras absolutas antes de qualquer código:
+  1. ADDITIVE ONLY — não remova, renomeie ou mova nenhum arquivo, rota, tabela ou função existente
+  2. ZERO HARDCODE — nenhum threshold, peso ou parâmetro de negócio fixo em código
+  3. Valide o codebase real antes de propor: leia o arquivo, confirme o que existe
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TAREFA 1 de 3 — app/core/trace_context.py (NOVO)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Crie o arquivo app/core/trace_context.py com:
+  - ContextVar _trace_ctx para propagar trace_id via asyncio
+  - Funções: new_trace() → str, get_trace() → str, bind_trace(trace_id) → None
+  - Dataclass TraceContext com campos:
+      trace_id: str
+      symbol: str | None
+      pool_id: str | None
+      user_id: str | None
+      market_type: Literal["spot", "futures"] | None
+      exchange: str | None
+  - ContextVar _ctx_data para carregar o TraceContext completo
+  - Funções: set_ctx(ctx: TraceContext), get_ctx() → TraceContext | None
+  - Helper get_log_extra() → dict que extrai campos do contexto atual para uso em extra={} do logging
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TAREFA 2 de 3 — Migração Alembic: tabela trade_decisions (NOVA)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Crie migration Alembic para nova tabela trade_decisions:
+
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid()
+  trace_id        VARCHAR(64) NOT NULL
+  user_id         UUID REFERENCES users(id)
+  pool_id         UUID REFERENCES pools(id)
+  symbol          VARCHAR(20) NOT NULL
+  market_type     VARCHAR(10) NOT NULL  -- spot | futures
+  exchange        VARCHAR(50)
+  decided_at      TIMESTAMPTZ DEFAULT now()
+  status          VARCHAR(20) NOT NULL  -- APPROVED | REJECTED | BLOCKED | SKIPPED
+  stage           VARCHAR(10) NOT NULL  -- L1 | L2 | L3 | EXECUTION
+  reason          TEXT                  -- texto humano da reprovação
+  blocking_rule   VARCHAR(255)          -- nome exato da regra que bloqueou
+  rule_details    JSONB                 -- {"rule": "rsi", "value": 74.2, "threshold": "< 68", "operator": "<", "approved": false}
+  rules_matched   JSONB                 -- lista de regras aprovadas
+  rules_failed    JSONB                 -- lista de regras reprovadas com detalhes
+  rules_skipped   JSONB                 -- lista de regras puladas
+  score_breakdown JSONB                 -- scores L1/L2/L3 individuais
+  indicators_snapshot JSONB            -- snapshot de todos os indicadores no momento da decisão
+  latency_ms      JSONB                 -- {"l1": 12, "l2": 8, "l3": 45, "total": 65}
+  trade_id        UUID REFERENCES trades(id) NULL  -- preenchido se APPROVED e trade criado
+
+Índices:
+  (user_id, decided_at DESC)
+  (symbol, decided_at DESC)
+  (status, decided_at DESC)
+  (trace_id)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TAREFA 3 de 3 — app/services/decision_audit_service.py (NOVO)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Crie o serviço com função assíncrona:
+
+  async def record_decision(
+      db: AsyncSession,
+      trace_id: str,
+      user_id: str,
+      pool_id: str,
+      symbol: str,
+      market_type: str,
+      exchange: str | None,
+      status: Literal["APPROVED", "REJECTED", "BLOCKED", "SKIPPED"],
+      stage: Literal["L1", "L2", "L3", "EXECUTION"],
+      reason: str | None = None,
+      blocking_rule: str | None = None,
+      rule_details: dict | None = None,
+      rules_matched: list | None = None,
+      rules_failed: list | None = None,
+      rules_skipped: list | None = None,
+      score_breakdown: dict | None = None,
+      indicators_snapshot: dict | None = None,
+      latency_ms: dict | None = None,
+      trade_id: str | None = None,
+  ) -> None
+
+  - INSERT na tabela trade_decisions
+  - Em caso de exceção: logger.exception com trace_id, nunca re-raise (não pode derrubar o pipeline principal)
+  - Não usar db.commit() — deixar o commit para o caller
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+APÓS as 3 tarefas, mostre APENAS:
+  - Os 3 arquivos completos criados
+  - O arquivo de migration Alembic completo
+  - Nenhuma alteração em arquivos existentes nesta fase
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
