@@ -55,6 +55,17 @@ class RiskLimitExceededError(GateAPIError):
     pass
 
 
+class GateHistoryWindowExceeded(GateAPIError):
+    """Raised when ``/spot/my_trades`` or ``/futures/usdt/my_trades`` is
+    queried for a window that falls outside Gate.io's max retention.
+
+    Gate returns ``HTTP 400 [INVALID_PARAM_VALUE] invalid time range`` for
+    such requests. We treat it as "end of available history" and stop the
+    pagination walk for older slices instead of propagating the 400.
+    """
+    pass
+
+
 # ── Gate error label → exception class ───────────────────────────────────────
 
 _GATE_ERROR_MAP: Dict[str, type] = {
@@ -207,6 +218,14 @@ class GateAdapter(BaseExchangeAdapter):
             label = "PARSE_ERROR"
             msg   = r.text
 
+        # Some Gate errors share a generic ``label`` but carry the real
+        # signal in ``message`` — e.g. ``INVALID_PARAM_VALUE`` is reused
+        # for many parameter problems, but ``invalid time range`` on the
+        # ``my_trades`` endpoints specifically means "this window falls
+        # outside the historical retention". Treat that as a dedicated
+        # exception so the paginators can stop cleanly.
+        if label == "INVALID_PARAM_VALUE" and "invalid time range" in (msg or "").lower():
+            raise GateHistoryWindowExceeded(r.status_code, label, msg)
         exc_cls = _GATE_ERROR_MAP.get(label, GateAPIError)
         raise exc_cls(r.status_code, label, msg)
 

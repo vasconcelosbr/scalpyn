@@ -19,7 +19,10 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..exchange_adapters.gate_adapter import GateAdapter
+from ..exchange_adapters.gate_adapter import GateAdapter, GateHistoryWindowExceeded
+from ..services.robust_indicators.metrics import (
+    increment_performance_sync_history_capped,
+)
 from ..utils.exchange_names import exchange_name_matches
 from ..models.exchange_connection import ExchangeConnection
 from ..models.exchange_execution import ExchangeExecution
@@ -217,6 +220,8 @@ class ExecutionsSyncService:
 
         remaining_days = max(1, days)
         slice_end = now
+        history_window_capped = False
+        effective_days = 0
         while remaining_days > 0:
             slice_days = min(WINDOW_DAYS, remaining_days)
             slice_start = slice_end - timedelta(days=slice_days)
@@ -225,27 +230,48 @@ class ExecutionsSyncService:
             slices_walked += 1
 
             slice_pages = 0
-            for page in range(1, max_pages + 1):
-                slice_pages = page
-                raw = await adapter.get_my_spot_trades(
-                    limit=page_size, page=page,
-                    from_ts=from_ts, to_ts=to_ts,
+            try:
+                for page in range(1, max_pages + 1):
+                    slice_pages = page
+                    raw = await adapter.get_my_spot_trades(
+                        limit=page_size, page=page,
+                        from_ts=from_ts, to_ts=to_ts,
+                    )
+                    if not raw:
+                        break
+                    raw_total += len(raw)
+                    for x in raw:
+                        n = self._normalize_spot(x, user_id)
+                        if not n or n["trade_id"] in seen_ids:
+                            continue
+                        seen_ids.add(n["trade_id"])
+                        all_norm.append(n)
+                    if len(raw) < page_size:
+                        break  # last page in this slice (proven exhaustion).
+            except GateHistoryWindowExceeded:
+                # Gate.io rejects this slice as outside its retention window
+                # — treat it as "end of available history" and stop walking
+                # older slices. This is a normal terminal condition for
+                # ``days > Gate's max retention`` (e.g. days=90 against the
+                # spot endpoint), NOT a failure.
+                history_window_capped = True
+                pages_walked_total += max(0, slice_pages - 1)
+                slices_walked -= 1
+                increment_performance_sync_history_capped("spot")
+                logger.info(
+                    "Spot history window capped at slice %s..%s — Gate.io "
+                    "returned 'invalid time range'. Effective coverage: "
+                    "%d day(s).",
+                    slice_start.date().isoformat(),
+                    slice_end.date().isoformat(),
+                    effective_days,
                 )
-                if not raw:
-                    break
-                raw_total += len(raw)
-                for x in raw:
-                    n = self._normalize_spot(x, user_id)
-                    if not n or n["trade_id"] in seen_ids:
-                        continue
-                    seen_ids.add(n["trade_id"])
-                    all_norm.append(n)
-                if len(raw) < page_size:
-                    break  # last page in this slice (proven exhaustion).
+                break
             pages_walked_total += slice_pages
             if slice_pages >= max_pages:
                 any_slice_capped = True
 
+            effective_days += slice_days
             slice_end = slice_start
             remaining_days -= slice_days
 
@@ -255,6 +281,9 @@ class ExecutionsSyncService:
             "normalized_rows": len(all_norm),
             "exhausted": not any_slice_capped,
             "slices": slices_walked,
+            "history_window_capped": history_window_capped,
+            "effective_days": effective_days,
+            "requested_days": max(1, days),
         }
         return all_norm, telemetry
 
@@ -290,6 +319,8 @@ class ExecutionsSyncService:
 
         remaining_days = max(1, days)
         slice_end = now
+        history_window_capped = False
+        effective_days = 0
         while remaining_days > 0:
             slice_days = min(WINDOW_DAYS, remaining_days)
             slice_start = slice_end - timedelta(days=slice_days)
@@ -299,40 +330,56 @@ class ExecutionsSyncService:
 
             last_id: Optional[str] = None
             slice_pages = 0
-            for page in range(1, max_pages + 1):
-                slice_pages = page
-                raw = await adapter.get_my_futures_trades(
-                    limit=page_size,
-                    from_ts=from_ts, to_ts=to_ts,
-                    last_id=last_id,
+            try:
+                for page in range(1, max_pages + 1):
+                    slice_pages = page
+                    raw = await adapter.get_my_futures_trades(
+                        limit=page_size,
+                        from_ts=from_ts, to_ts=to_ts,
+                        last_id=last_id,
+                    )
+                    if not raw:
+                        break
+                    raw_total += len(raw)
+                    min_id_in_page: Optional[str] = None
+                    for x in raw:
+                        n = self._normalize_futures(x, user_id)
+                        if not n:
+                            continue
+                        if n["trade_id"] not in seen_ids:
+                            seen_ids.add(n["trade_id"])
+                            all_norm.append(n)
+                        try:
+                            candidate = str(x.get("id"))
+                            if candidate and (min_id_in_page is None
+                                              or int(candidate) < int(min_id_in_page)):
+                                min_id_in_page = candidate
+                        except (ValueError, TypeError):
+                            continue
+                    if (len(raw) < page_size
+                            or not min_id_in_page
+                            or min_id_in_page == last_id):
+                        break
+                    last_id = min_id_in_page
+            except GateHistoryWindowExceeded:
+                history_window_capped = True
+                pages_walked_total += max(0, slice_pages - 1)
+                slices_walked -= 1
+                increment_performance_sync_history_capped("futures")
+                logger.info(
+                    "Futures history window capped at slice %s..%s — Gate.io "
+                    "returned 'invalid time range'. Effective coverage: "
+                    "%d day(s).",
+                    slice_start.date().isoformat(),
+                    slice_end.date().isoformat(),
+                    effective_days,
                 )
-                if not raw:
-                    break
-                raw_total += len(raw)
-                min_id_in_page: Optional[str] = None
-                for x in raw:
-                    n = self._normalize_futures(x, user_id)
-                    if not n:
-                        continue
-                    if n["trade_id"] not in seen_ids:
-                        seen_ids.add(n["trade_id"])
-                        all_norm.append(n)
-                    try:
-                        candidate = str(x.get("id"))
-                        if candidate and (min_id_in_page is None
-                                          or int(candidate) < int(min_id_in_page)):
-                            min_id_in_page = candidate
-                    except (ValueError, TypeError):
-                        continue
-                if (len(raw) < page_size
-                        or not min_id_in_page
-                        or min_id_in_page == last_id):
-                    break
-                last_id = min_id_in_page
+                break
             pages_walked_total += slice_pages
             if slice_pages >= max_pages:
                 any_slice_capped = True
 
+            effective_days += slice_days
             slice_end = slice_start
             remaining_days -= slice_days
 
@@ -342,6 +389,9 @@ class ExecutionsSyncService:
             "normalized_rows": len(all_norm),
             "exhausted": not any_slice_capped,
             "slices": slices_walked,
+            "history_window_capped": history_window_capped,
+            "effective_days": effective_days,
+            "requested_days": max(1, days),
         }
         return all_norm, telemetry
 
@@ -371,6 +421,10 @@ class ExecutionsSyncService:
 
         summary: Dict[str, Any] = {
             "success": True, "imported": {}, "fetched": {}, "telemetry": {},
+            "history_window_capped": False,
+            "effective_days": days,
+            "requested_days": days,
+            "message": None,
         }
         try:
             if "spot" in markets:
@@ -391,6 +445,11 @@ class ExecutionsSyncService:
                         "smaller days window or higher max_pages.",
                         tele["pages_walked"], page_size,
                     )
+                if tele.get("history_window_capped"):
+                    summary["history_window_capped"] = True
+                    summary["effective_days"] = min(
+                        summary["effective_days"], int(tele.get("effective_days") or 0)
+                    )
             if "futures" in markets:
                 rows, tele = await self._paginate_futures(
                     adapter=adapter, user_id=user_id, days=days,
@@ -408,6 +467,21 @@ class ExecutionsSyncService:
                         "Some historical fills may be missing.",
                         tele["pages_walked"], page_size,
                     )
+                if tele.get("history_window_capped"):
+                    summary["history_window_capped"] = True
+                    summary["effective_days"] = min(
+                        summary["effective_days"], int(tele.get("effective_days") or 0)
+                    )
+
+            if summary["history_window_capped"]:
+                imported_total = sum(int(v or 0) for v in summary["imported"].values())
+                summary["message"] = (
+                    f"Gate.io só permite consultar os últimos "
+                    f"{summary['effective_days']} dia(s) (você pediu {days}). "
+                    f"Sincronizados {imported_total} fills cobrindo "
+                    f"{summary['effective_days']} dia(s)."
+                )
+
             await db.commit()
         except Exception as exc:
             await db.rollback()

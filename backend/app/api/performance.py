@@ -143,7 +143,17 @@ async def sync_executions(
     if not rebuild.get("success"):
         raise HTTPException(status_code=500, detail=rebuild.get("error"))
 
-    return {"sync": sync_result, "rebuild": rebuild}
+    # When Gate.io's history retention capped the requested window, we
+    # still return 200 — the partial result is the correct answer, not
+    # a failure. The UI surfaces ``message`` as an inline notice.
+    return {
+        "sync": sync_result,
+        "rebuild": rebuild,
+        "history_window_capped": bool(sync_result.get("history_window_capped")),
+        "effective_days": sync_result.get("effective_days"),
+        "requested_days": sync_result.get("requested_days", days),
+        "message": sync_result.get("message"),
+    }
 
 
 @router.post("/rebuild")

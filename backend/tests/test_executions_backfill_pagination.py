@@ -16,6 +16,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.exchange_adapters.gate_adapter import GateHistoryWindowExceeded
 from app.services.executions_sync_service import ExecutionsSyncService
 
 
@@ -63,23 +64,47 @@ class _StubAdapter:
         self.spot_calls: List[Dict[str, Any]] = []
         self.fut_calls: List[Dict[str, Any]] = []
 
+    @staticmethod
+    def _row_in_window(row: Dict[str, Any], from_ts: Optional[int], to_ts: Optional[int]) -> bool:
+        # Honour Gate.io's ``from``/``to`` semantics so slice-based
+        # paginators (Task #257 30-day chunking) don't over-count by
+        # returning the same rows on every slice.
+        ts_ms_raw = row.get("create_time_ms")
+        try:
+            ts_s = float(ts_ms_raw) / 1000.0
+        except (TypeError, ValueError):
+            return True
+        if from_ts is not None and ts_s < from_ts:
+            return False
+        if to_ts is not None and ts_s > to_ts:
+            return False
+        return True
+
     async def get_my_spot_trades(self, **kwargs):
         self.spot_calls.append(kwargs)
         page = kwargs.get("page", 1)
         limit = kwargs.get("limit", self.page_size)
+        from_ts = kwargs.get("from_ts")
+        to_ts = kwargs.get("to_ts")
+        windowed = [r for r in self._spot_all
+                    if self._row_in_window(r, from_ts, to_ts)]
         start = (page - 1) * limit
-        return self._spot_all[start:start + limit]
+        return windowed[start:start + limit]
 
     async def get_my_futures_trades(self, **kwargs):
         self.fut_calls.append(kwargs)
         last_id = kwargs.get("last_id")
         limit = kwargs.get("limit", self.page_size)
+        from_ts = kwargs.get("from_ts")
+        to_ts = kwargs.get("to_ts")
+        windowed = [r for r in self._fut_all
+                    if self._row_in_window(r, from_ts, to_ts)]
         if last_id is None:
-            window = self._fut_all
+            window = windowed
         else:
             # Rows strictly older (smaller id) than last_id, preserving order.
             target = int(last_id)
-            window = [r for r in self._fut_all if int(r["id"]) < target]
+            window = [r for r in windowed if int(r["id"]) < target]
         return window[:limit]
 
 
@@ -93,8 +118,13 @@ async def test_spot_pagination_walks_all_pages_no_gap():
     )
     assert tele["raw_rows"] == 257
     assert tele["normalized_rows"] == 257
-    assert tele["pages_walked"] == 3  # 100 + 100 + 57 (short page)
+    # days=90 → 3 slices. Slice 1 (most recent 30d) walks 3 pages
+    # (100 + 100 + 57 short page). Slices 2 and 3 are older than the
+    # row timestamps, each walks 1 empty page and breaks. 3 + 1 + 1 = 5.
+    assert tele["pages_walked"] == 5
+    assert tele["slices"] == 3
     assert tele["exhausted"] is True
+    assert tele["history_window_capped"] is False
     assert len({r["trade_id"] for r in rows}) == 257  # all unique
 
 
@@ -137,7 +167,10 @@ async def test_spot_pagination_hits_max_pages_cap():
         adapter=stub, user_id=uuid4(),
         days=90, page_size=100, max_pages=3,
     )
-    assert tele["pages_walked"] == 3
+    # Slice 1 walks max_pages=3 (300 rows, capped). Slices 2 and 3 each
+    # walk 1 empty page and break (rows live in slice 1 only).
+    assert tele["pages_walked"] == 5
+    assert tele["slices"] == 3
     assert tele["exhausted"] is False
     assert len(rows) == 300
 
@@ -154,10 +187,87 @@ async def test_futures_pagination_uses_last_id_cursor():
     assert tele["normalized_rows"] == 257
     assert tele["exhausted"] is True
     assert len({r["trade_id"] for r in rows}) == 257
-    # First call must NOT have last_id; subsequent calls MUST.
+    # The cursor is per-slice: every slice's first call MUST start with
+    # last_id=None and at least one subsequent call within the slice that
+    # actually paginated MUST carry a last_id. Filter to the slice that
+    # produced data (slice 1 — the others returned empty pages).
+    productive_calls = [c for c in stub.fut_calls if c.get("last_id") is not None]
+    assert productive_calls, "expected at least one call with last_id set"
     assert stub.fut_calls[0].get("last_id") is None
-    for call in stub.fut_calls[1:]:
-        assert call.get("last_id") is not None
+
+
+@pytest.mark.asyncio
+async def test_spot_pagination_stops_on_gate_history_window_exceeded():
+    """Task #272: when Gate.io rejects a slice with ``invalid time range``
+    (out of historical retention), the paginator must stop walking older
+    slices, NOT propagate the 400 to the caller. Telemetry must record
+    the cap so the UI can show a friendly message."""
+    svc = ExecutionsSyncService()
+
+    class _CappedAdapter:
+        """Returns 100 fills for the most recent 30-day slice, then
+        Gate.io's ``invalid time range`` error for older slices."""
+        def __init__(self):
+            self.calls: List[Dict[str, Any]] = []
+            self._first_slice_from: Optional[int] = None
+
+        async def get_my_spot_trades(self, **kwargs):
+            self.calls.append(kwargs)
+            from_ts = kwargs.get("from_ts")
+            if self._first_slice_from is None:
+                self._first_slice_from = from_ts
+                base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+                page = kwargs.get("page", 1)
+                if page == 1:
+                    return [_spot_row(i, base) for i in range(50)]
+                return []
+            # Any older slice → Gate rejects with "invalid time range".
+            raise GateHistoryWindowExceeded(
+                400, "INVALID_PARAM_VALUE", "invalid time range"
+            )
+
+    stub = _CappedAdapter()
+    rows, tele = await svc._paginate_spot(
+        adapter=stub, user_id=uuid4(),
+        days=90, page_size=100, max_pages=10,
+    )
+    # First slice succeeded with 50 rows; older slices were capped.
+    assert len(rows) == 50
+    assert tele["history_window_capped"] is True
+    assert tele["effective_days"] == 30
+    assert tele["requested_days"] == 90
+    # Slices counter excludes the capped one; we walked exactly the
+    # first slice plus one rejected probe of the second.
+    assert tele["slices"] == 1
+    # Pages walked counts only the successfully-walked first slice.
+    assert tele["pages_walked"] == 1
+
+
+@pytest.mark.asyncio
+async def test_futures_pagination_stops_on_gate_history_window_exceeded():
+    svc = ExecutionsSyncService()
+
+    class _CappedFutAdapter:
+        def __init__(self):
+            self._first_call = True
+        async def get_my_futures_trades(self, **kwargs):
+            if self._first_call:
+                self._first_call = False
+                base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+                return [_fut_row(i, base) for i in range(20)]
+            raise GateHistoryWindowExceeded(
+                400, "INVALID_PARAM_VALUE", "invalid time range"
+            )
+
+    stub = _CappedFutAdapter()
+    rows, tele = await svc._paginate_futures(
+        adapter=stub, user_id=uuid4(),
+        days=90, page_size=100, max_pages=10,
+    )
+    assert len(rows) == 20
+    assert tele["history_window_capped"] is True
+    assert tele["effective_days"] == 30
+    assert tele["requested_days"] == 90
 
 
 @pytest.mark.asyncio

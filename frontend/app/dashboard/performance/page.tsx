@@ -669,19 +669,31 @@ export default function PerformanceDashboardPage() {
   const [filter, setFilter] = useState<PerformanceFilter>({ window: "30D", autoRefresh: false });
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [syncWarn, setSyncWarn] = useState<string | null>(null);
 
   const onSync = async () => {
-    setSyncing(true); setSyncMsg(null);
+    setSyncing(true); setSyncMsg(null); setSyncWarn(null);
     try {
       type SyncResp = {
         sync?: { imported?: { spot?: number; futures?: number } };
         rebuild?: { lifecycle_rows_closed?: number; open_positions?: number };
+        history_window_capped?: boolean;
+        effective_days?: number;
+        requested_days?: number;
+        message?: string | null;
       };
       const r = await apiPost<SyncResp>("/api/performance/sync?days=90&markets=spot,futures");
       setSyncMsg(
         `Importados spot=${r?.sync?.imported?.spot ?? 0} futures=${r?.sync?.imported?.futures ?? 0} · ` +
         `lifecycle rebuilt: ${r?.rebuild?.lifecycle_rows_closed ?? 0} fechados, ${r?.rebuild?.open_positions ?? 0} abertos.`
       );
+      if (r?.history_window_capped) {
+        setSyncWarn(
+          r.message ??
+          `Gate.io só permite consultar os últimos ${r.effective_days ?? "?"} dia(s) ` +
+          `(você pediu ${r.requested_days ?? 90}).`
+        );
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setSyncMsg(`Falhou: ${msg}`);
@@ -710,6 +722,16 @@ export default function PerformanceDashboardPage() {
         {syncMsg ? (
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, color: C.muted }}>
             {syncMsg}
+          </div>
+        ) : null}
+        {syncWarn ? (
+          <div style={{
+            background: "rgba(242,163,58,0.08)",
+            border: `1px solid ${C.amber}55`,
+            borderRadius: 8, padding: "8px 12px", fontSize: 12, color: C.amber,
+            display: "flex", alignItems: "center", gap: 8,
+          }}>
+            <AlertTriangle size={13} /> {syncWarn}
           </div>
         ) : null}
 

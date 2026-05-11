@@ -133,6 +133,15 @@ if _PROMETHEUS_AVAILABLE:
         labelnames=("symbol",),
         registry=REGISTRY,
     )
+    # Task #272: Performance Sync — Gate history limit
+    PERFORMANCE_SYNC_HISTORY_CAPPED = Counter(
+        "scalpyn_performance_sync_history_capped_total",
+        "Times the Performance Sync paginator stopped early because Gate.io "
+        "rejected an older slice with ``invalid time range`` (out of "
+        "historical retention), by market.",
+        labelnames=("market",),
+        registry=REGISTRY,
+    )
 else:  # pragma: no cover — exercised when extra is missing
     REGISTRY = None  # type: ignore[assignment]
     INDICATOR_COMPUTATION_DURATION = None
@@ -146,6 +155,7 @@ else:  # pragma: no cover — exercised when extra is missing
     GATE_WS_IS_LEADER = None
     GATE_TRADES_RECEIVED_TOTAL = None
     GATE_LAST_TRADE_TIMESTAMP_SECONDS = None
+    PERFORMANCE_SYNC_HISTORY_CAPPED = None
 
 
 def observe_compute_duration(
@@ -197,6 +207,19 @@ def observe_exchange_latency(exchange: str, seconds: float) -> None:
         EXCHANGE_REQUEST_LATENCY.labels(exchange=exchange).observe(float(seconds))
     except Exception as exc:  # pragma: no cover — defensive
         logger.debug("metrics: observe_exchange_latency failed: %s", exc)
+
+
+def increment_performance_sync_history_capped(market: str) -> None:
+    """Increment when the Performance Sync paginator stopped early because
+    Gate.io rejected a slice as outside its historical retention window
+    (Task #272). ``market`` should be ``"spot"`` or ``"futures"``.
+    """
+    if PERFORMANCE_SYNC_HISTORY_CAPPED is None:
+        return
+    try:
+        PERFORMANCE_SYNC_HISTORY_CAPPED.labels(market=market).inc()
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.debug("metrics: increment_performance_sync_history_capped failed: %s", exc)
 
 
 def increment_exchange_error(exchange: str, kind: str) -> None:
@@ -297,6 +320,7 @@ __all__ = [
     "REGISTRY",
     "incr_trades_received",
     "increment_exchange_error",
+    "increment_performance_sync_history_capped",
     "increment_rejection",
     "observe_compute_duration",
     "observe_exchange_latency",
