@@ -178,6 +178,15 @@ async def _score_async():
                 time=datetime.now(timezone.utc),
             ))
 
+        # Task #273: deterministic sort by symbol — every UPSERT into
+        # ``alpha_scores`` (and the downstream UPDATE on
+        # ``pipeline_watchlist_assets``) acquires row-locks in the order
+        # rows are iterated. ``merged_by_sym`` comes from a dict whose
+        # ordering depends on provider internals, so two concurrent
+        # ``score`` runs (or score + level-transition) could deadlock on
+        # cross order. Same root cause as #251.
+        rows.sort(key=lambda r: r.symbol)
+
         now = datetime.now(timezone.utc)
         _scored = 0
 
@@ -296,7 +305,9 @@ async def _detect_level_transitions(db, scored_rows, rules, cached_scores: dict)
     now = datetime.now(timezone.utc)
 
     new_scores: dict = dict(cached_scores)
-    for row in scored_rows:
+    # Task #273: iterate sorted so re-score path matches the ordering
+    # used by the main scoring loop above.
+    for row in sorted(scored_rows, key=lambda r: r.symbol):
         if row.symbol in new_scores:
             continue
         scored_payload = _robust_score_for(row.symbol, row.indicators_json or {}, rules)
@@ -316,10 +327,15 @@ async def _detect_level_transitions(db, scored_rows, rules, cached_scores: dict)
             JOIN pipeline_watchlists pw ON pw.id = pwa.watchlist_id
             LEFT JOIN profiles p ON p.id = pw.profile_id
             WHERE pwa.symbol = ANY(:symbols)
+            ORDER BY pwa.symbol, pwa.id
         """),
-        {"symbols": list(new_scores.keys())},
+        {"symbols": sorted(new_scores.keys())},
     )
-    asset_rows = result.fetchall()
+    # Task #273: SELECT is ORDER BY symbol/id, but defensively re-sort
+    # the materialized rows so the per-row UPDATE loop below acquires
+    # row-locks on ``pipeline_watchlist_assets`` in deterministic
+    # order even if the driver re-shuffles fetchall() output.
+    asset_rows = sorted(result.fetchall(), key=lambda ar: (ar.symbol, str(ar.id)))
 
     changed: list = []
 

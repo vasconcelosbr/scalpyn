@@ -279,7 +279,12 @@ async def _compute_async():
                   AND p.market_type = 'spot'
                   AND o.time > now() - interval '7 days'
             """))
-            symbols = [row.symbol for row in symbols_result.fetchall()]
+            # Task #273: deterministic sort — deadlock-prevention invariant.
+            # ``SELECT DISTINCT`` returns rows in non-deterministic order,
+            # so two concurrent workers iterating ``symbols`` would acquire
+            # row-locks on ``market_metadata`` / ``indicators`` in
+            # different orders and deadlock (same root cause as #251).
+            symbols = sorted(row.symbol for row in symbols_result.fetchall())
             metadata_map = await _load_market_metadata_map(db)
 
             for symbol in symbols:
@@ -503,7 +508,8 @@ async def _compute_30m_async():
                   AND o.timeframe = '30m'
                   AND o.time > now() - interval '7 days'
             """))
-            symbols = [row.symbol for row in symbols_result.fetchall()]
+            # Task #273: deterministic sort — see ``_compute_async`` above.
+            symbols = sorted(row.symbol for row in symbols_result.fetchall())
             metadata_map = await _load_market_metadata_map(db)
 
             for symbol in symbols:
@@ -681,7 +687,8 @@ async def _compute_5m_async():
                   AND o.time > now() - interval '2 hours'
             """))
             symbol_rows = symbols_result.fetchall()
-            symbols = [row.symbol for row in symbol_rows]
+            # Task #273: deterministic sort — see ``_compute_async`` above.
+            symbols = sorted(row.symbol for row in symbol_rows)
             symbol_market_type = {row.symbol: row.market_type for row in symbol_rows}
             metadata_map = await _load_market_metadata_map(db)
 

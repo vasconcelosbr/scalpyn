@@ -1419,6 +1419,10 @@ async def _replace_rejection_snapshot(
         {"wid": watchlist_id},
     )
     now = datetime.now(timezone.utc)
+    # Task #273: sort by symbol — defensive ordering so concurrent
+    # rejection-snapshot writes for overlapping watchlists never
+    # acquire FK locks (``user_id`` / ``profile_id``) in cross order.
+    rows = sorted(rows, key=lambda r: r.get("symbol", ""))
     for row in rows:
         await db.execute(text("""
             INSERT INTO pipeline_watchlist_rejections (
@@ -1483,8 +1487,14 @@ async def _upsert_assets(
     now = datetime.now(timezone.utc)
 
     if assets:
+        # Task #273: sort by symbol before per-row UPSERT — multiple
+        # watchlists may share symbols and run concurrent scans, so
+        # iterating in non-deterministic order would risk deadlocks
+        # on the ``(watchlist_id, symbol)`` unique index. Same root
+        # cause as #251.
+        assets_sorted = sorted(assets, key=lambda a: a.get("symbol", ""))
         # Upsert active symbols (preserve entered_at on conflict, update refreshed_at)
-        for a in assets:
+        for a in assets_sorted:
             await db.execute(text("""
                 INSERT INTO pipeline_watchlist_assets
                     (id, watchlist_id, symbol, current_price, price_change_24h,

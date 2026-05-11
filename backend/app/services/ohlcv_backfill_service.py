@@ -208,16 +208,24 @@ class OHLCVBackfillService:
             async with semaphore:
                 return await self.backfill_symbol(symbol, timeframe, days)
 
-        tasks = [backfill_with_semaphore(symbol) for symbol in symbols]
+        # Task #273: deterministic sort — every backfill UPSERTs ``ohlcv``
+        # rows; concurrent admin-triggered backfills could deadlock if
+        # iterating in cross order. Same root cause as #251.
+        # IMPORTANT: keep ``sorted_symbols`` and use it consistently for
+        # error mapping below — indexing back into the original ``symbols``
+        # list would misattribute failures to the wrong symbol because
+        # ``asyncio.gather`` preserves the order of the SCHEDULED tasks.
+        sorted_symbols = sorted(symbols)
+        tasks = [backfill_with_semaphore(symbol) for symbol in sorted_symbols]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Process results
         processed = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                logger.error(f"[BACKFILL] {symbols[i]} failed with exception: {result}")
+                logger.error(f"[BACKFILL] {sorted_symbols[i]} failed with exception: {result}")
                 processed.append({
-                    "symbol": symbols[i],
+                    "symbol": sorted_symbols[i],
                     "timeframe": timeframe,
                     "fetched": 0,
                     "inserted": 0,
@@ -376,7 +384,9 @@ class OHLCVBackfillService:
         target_start = datetime.now(timezone.utc) - timedelta(days=target_days)
         status = {}
 
-        for symbol in symbols:
+        # Task #273: deterministic sort — read-only here, but keeps the
+        # invariant uniform across every iteration over a symbol set.
+        for symbol in sorted(symbols):
             earliest = await self.repository.get_earliest_timestamp(symbol, self.exchange, timeframe)
             latest = await self.repository.get_latest_timestamp(symbol, self.exchange, timeframe)
             count = await self.repository.count_records(symbol, self.exchange, timeframe)

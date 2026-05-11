@@ -264,3 +264,45 @@ Além do sorting, os 2 ticker loops (1h e 5m backup) foram migrados pra bulk UPS
 - **Queue mode preservado**: quando `USE_PERSISTENCE_QUEUE=1`, o path original de enqueue per-row é mantido (queue worker é responsável por batching downstream).
 
 Validação operacional pós-deploy: o log `[BULK-UPSERT ticker-1h]` aparece se algum chunk cair pro fallback per-row — frequência > 0 indica rows ruins escapando da validação ou contenção residual digna de investigação.
+
+## Apêndice C — Regressão do mesmo deadlock-class fora de `market_metadata` (2026-05-11 19:21-19:27 UTC, Task #273)
+
+48h depois do fix da Task #251, deadlock voltou — agora em callsites OUTROS que `collect_market_data`. Cloud SQL logou **10 `deadlock detected` (40P01)** + **3 `canceling statement due to deadlock`** no `scalpyn-worker-structural`, cascatando em `PendingRollbackError` no outer transaction (`run_db_task` → `async with session.begin()`). Backlog `structural=287` em ~6min antes de drenar sozinho.
+
+### Diagnóstico
+
+O patch de #251 cobriu **apenas** `collect_market_data.py` + os 3 schedulers. Outros callsites do pipeline iteravam `SELECT DISTINCT o.symbol FROM ohlcv` (ordem indeterminada — Postgres pode reordenar entre execuções idênticas) e UPSERTavam tanto `market_metadata` quanto `indicators` per-row na mesma outer TX. Quando `compute_indicators_30m` rodou em paralelo com `compute_indicators_1h` no mesmo worker (beat dispara minuto 0,30 e minuto 0 sobrepõem em hora cheia), os dois pegaram o mesmo conjunto de símbolos em ordens diferentes → deadlock determinístico.
+
+Bisect via `pg_stat_activity` (com `application_name` setado) durante a janela mostrou os PIDs vítima travando em `waiting for ShareLock on transaction NNN` em `relation "market_metadata"` E `relation "indicators"` — confirmando que a classe de bug era a MESMA do #251, só em arquivos diferentes.
+
+### Callsites afetados (todos corrigidos)
+
+| Arquivo | Linha original | Loop | Tabelas atingidas |
+|---|---|---|---|
+| `app/tasks/compute_indicators.py` | ~285 (1h) | `for symbol in symbols` | `market_metadata`, `indicators` |
+| `app/tasks/compute_indicators.py` | ~514 (30m) | `for symbol in symbols` | `market_metadata`, `indicators` |
+| `app/tasks/compute_indicators.py` | ~693 (5m) | `for symbol in symbols` | `market_metadata`, `indicators` |
+| `app/tasks/compute_scores.py` | scoring loop | `for r in rows` | `alpha_scores` |
+| `app/tasks/compute_scores.py` | rescoring | `for row in scored_rows` | `alpha_scores` |
+| `app/tasks/pipeline_scan.py` | `_upsert_assets` | `for a in assets` | `pipeline_watchlist_assets` |
+| `app/tasks/pipeline_scan.py` | `_replace_rejection_snapshot` | `for row in rows` | `pipeline_watchlist_rejections` |
+| `app/services/ohlcv_backfill_service.py` | batch backfill + status | `for symbol in symbols` | `ohlcv` |
+
+### Fix (Task #273)
+
+Mesma forma do #251 — `sorted()` na fonte da iteração. Padrões aplicados:
+
+- `compute_indicators.py`: `symbols = sorted(row.symbol for row in symbols_result.fetchall())` nas três cadências (substituindo a lista-comprehension não-ordenada).
+- `compute_scores.py`: `rows.sort(key=lambda r: r.symbol)` antes do loop de UPSERT, e `sorted(scored_rows, key=lambda r: r.symbol)` no rescoring de level-transitions.
+- `pipeline_scan.py`: `assets_sorted = sorted(assets, key=lambda a: a.get("symbol", ""))` em `_upsert_assets` e `rows = sorted(rows, key=lambda r: r.get("symbol", ""))` em `_replace_rejection_snapshot`.
+- `ohlcv_backfill_service.py`: `for symbol in sorted(symbols)` no batch backfill (writes) e no status loop (read-only — invariante uniforme).
+
+### Lint test (defesa contra próxima regressão)
+
+`backend/tests/test_pipeline_symbol_ordering_invariants.py` foi adicionado nesta task. Marca cada um dos callsites acima com uma string-substring obrigatória (`sorted(...)`-shaped). CI falha vermelho se alguém remover/reverter um sort sem trocar o marker correspondente. **NÃO afrouxar os markers** sem antes provar que a classe de contenção mudou — o teste é a única defesa estática contra esta regressão se repetir uma terceira vez.
+
+Procedimento de bisect (caso retorne): `backend/docs/runbooks/postgres-deadlock-bisect.md`.
+
+### Validação pós-deploy
+
+Mesma query do Apêndice B (24h pós-deploy, esperado zero deadlocks em `market_metadata`, `indicators`, `alpha_scores`, `pipeline_watchlist_assets`, `pipeline_watchlist_rejections`, `ohlcv`). Se reaparecer: (1) rodar o lint test localmente — provavelmente passa porque é um callsite NOVO; (2) abrir bisect runbook e adicionar o novo arquivo a `_PIPELINE_FILES` no lint test.
