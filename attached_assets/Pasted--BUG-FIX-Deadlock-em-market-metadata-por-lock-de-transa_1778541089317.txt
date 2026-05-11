@@ -1,0 +1,91 @@
+# BUG FIX: Deadlock em market_metadata por lock de transactionid — Scalpyn
+
+## Evidência de produção (2026-05-11 23:09 UTC)
+
+pg_stat_activity capturado ao vivo mostra:
+
+pid 1038760 | worker-micro-celery     | idle in transaction | INSERT INTO ohlcv (segurando XID)
+pid 1039100 | worker-structural-celery| active, Lock: transactionid | INSERT INTO market_metadata (aguardando XID do micro)
+pid 1039151 | worker-structural-celery| active, Lock: transactionid | INSERT INTO market_metadata (aguardando XID do micro)
+
+Lock type: transactionid — NÃO é lock de linha. O sorted() das Tasks #251/#273
+cobre row-level deadlock, não resolve este caso.
+
+## Causa raiz
+
+worker-structural (collect_structural_30m) abre transação que depende do XID
+aberto pelo worker-micro (collect_market_data). Dois workers structural concorrentes
+aguardam o mesmo XID → PostgreSQL detecta ciclo → deadlock → cascata de erros.
+
+A dependência de XID indica uma de duas situações — verifique qual existe no código:
+
+1. collect_structural_30m lê de tabela que worker-micro ainda não commitou
+   (SELECT dentro de transação aberta, lendo dado não commitado do micro)
+
+2. Os dois workers compartilham conexão/sessão do pool SQLAlchemy em
+   momentos sobrepostos — o pool entrega a mesma conexão com transação
+   pendente para dois workers distintos
+
+## O que investigar antes de qualquer mudança
+
+Leia estes arquivos na ordem:
+
+1. app/tasks/collect_structural_30m.py — inteiro
+   Foco: existe SELECT em market_metadata ou ohlcv antes do INSERT em market_metadata?
+   Existe uso de FOR UPDATE ou dependência explícita de dado do worker-micro?
+
+2. app/tasks/collect_market_data.py — função collect_all e _collect_all_async
+   Foco: o engine/pool SQLAlchemy usado é o mesmo (_celery_engine) que o structural usa?
+   Existe alguma transação que fica idle (await de I/O de exchange dentro de session.begin())?
+
+3. app/database.py — definição de _celery_engine e run_db_task
+   Foco: pool_size, max_overflow, pool_timeout. O pool é compartilhado entre workers
+   de filas diferentes (micro e structural)?
+
+## Hipóteses a confirmar ou descartar
+
+### Hipótese A — await de I/O dentro de transação aberta (mais provável)
+collect_market_data faz chamada à API da exchange (I/O de rede, potencialmente lento)
+DENTRO de session.begin(). Isso mantém a transação aberta e o XID "segurando" enquanto
+aguarda resposta da exchange. O structural tenta escrever nesse intervalo e bloqueia.
+
+Fix se confirmado: mover toda coleta de dados da exchange para FORA da transação.
+Padrão correto:
+  1. Coletar dados da exchange (sem sessão aberta)
+  2. Processar/transformar os dados
+  3. Abrir session.begin() APENAS para o INSERT
+  4. Commit imediato
+
+### Hipótese B — dois workers structural disparados simultaneamente pelo Beat
+O Beat agenda collect_structural_30m e dois workers pegam a task ao mesmo tempo.
+Ambos fazem SELECT + INSERT em market_metadata para os mesmos símbolos.
+
+Fix se confirmado: adicionar sorted() no loop de símbolos em collect_structural_30m
+(verificar se já existe — grep "sorted" já feito, linha 123 tem sorted(valid_symbols)
+mas verificar se cobre o INSERT em market_metadata especificamente).
+Adicionar também: INSERT ... ON CONFLICT (symbol) DO UPDATE em vez de INSERT puro,
+para tornar a operação idempotente e eliminar o lock de contenção.
+
+### Hipótese C — pool compartilhado entrega conexão suja
+_celery_engine compartilhado entre filas diferentes. Conexão com transação
+pendente (idle in transaction) é devolvida ao pool e entregue a outro worker.
+
+Fix se confirmado: criar engine separado por fila de worker, ou garantir
+pool_pre_ping=True + connection_recycle para detectar conexões sujas.
+
+## Restrições obrigatórias
+
+- ZERO HARDCODE: nenhum timeout ou parâmetro novo hardcoded — ler de config/env
+- Estritamente aditivo: não remover rotas, tabelas, tasks existentes
+- O _run_async com new_event_loop() (Task #274) NÃO deve ser alterado — está correto
+- O _safe_rollback (Task #237, database.py:386) NÃO deve ser alterado
+- O sorted() existente NÃO deve ser removido — continua necessário para row locks
+
+## Entregáveis
+
+1. Qual hipótese (A, B ou C) o código confirma
+2. Diff mínimo e cirúrgico que resolve apenas o vetor identificado
+3. Query SQL para confirmar ausência do lock após o fix:
+   SELECT pid, wait_event_type, wait_event, state, left(query,100)
+   FROM pg_stat_activity
+   WHERE wait_event_type = 'Lock' AND datname = 'scalpyn';
