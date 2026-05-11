@@ -27,6 +27,13 @@ export function BalanceMetrics({ approvedCount, rejectedCount }: BalanceMetricsP
         label="Saldo USDT disponível"
         value={isLoading && !data ? null : fmtUsd(data?.available_usdt ?? 0)}
         accent="profit"
+        diagnostic={
+          data && data.source !== "exchange" ? (
+            <p style={{ fontSize: 11, color: "#F87171", fontFamily: "monospace" }}>
+              {data.source}: {data.error ?? "sem detalhe"}
+            </p>
+          ) : null
+        }
       />
       <MetricCard
         icon={<Briefcase size={16} />}
@@ -67,11 +74,13 @@ function MetricCard({
   label,
   value,
   accent,
+  diagnostic,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string | null;
   accent: AccentKey;
+  diagnostic?: React.ReactNode;
 }) {
   return (
     <div
@@ -109,6 +118,7 @@ function MetricCard({
           {value}
         </div>
       )}
+      {diagnostic ?? null}
     </div>
   );
 }
