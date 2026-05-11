@@ -20,6 +20,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..exchange_adapters.gate_adapter import GateAdapter
+from ..utils.exchange_names import exchange_name_matches
 from ..models.exchange_connection import ExchangeConnection
 from ..models.exchange_execution import ExchangeExecution
 from ..utils.encryption import decrypt
@@ -58,10 +59,17 @@ class ExecutionsSyncService:
         self, db: AsyncSession, user_id: UUID
     ) -> Optional[GateAdapter]:
         result = await db.execute(
-            select(ExchangeConnection).where(
+            select(ExchangeConnection)
+            .where(
                 ExchangeConnection.user_id == user_id,
                 ExchangeConnection.is_active == True,  # noqa: E712
+                exchange_name_matches(ExchangeConnection.exchange_name, "gate.io"),
             )
+            .order_by(
+                ExchangeConnection.execution_priority.asc(),
+                ExchangeConnection.created_at.asc(),
+            )
+            .limit(1)
         )
         conn = result.scalars().first()
         if not conn:
