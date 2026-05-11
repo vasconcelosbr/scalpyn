@@ -84,7 +84,7 @@ services:
       target: runtime
     container_name: scalpyn_celery_worker
     restart: unless-stopped
-    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2 -Q celery
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 -Q microstructure,structural,execution
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-scalpyn}:${POSTGRES_PASSWORD:-scalpyn}@db:5432/${POSTGRES_DB:-scalpyn}
       REDIS_URL: redis://redis:6379/0

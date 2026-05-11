@@ -216,315 +216,35 @@ async def _collect_all_async():
     symbols = sorted(valid_symbols)
 
     async def _inner(db, queue_mode: bool = False) -> int:
+        """Ticker bulk fetch + market_metadata UPSERT only.
+
+        Task #262 — OHLCV 1h foi migrado para ``collect_structural_30m``
+        (cadence 30m, crontab(0,30) UTC). Este path agora é responsável
+        EXCLUSIVAMENTE por:
+            * fetch_all_tickers() — 1 chamada bulk Gate.io.
+            * bulk UPSERT em ``market_metadata`` (price, change, volume,
+              spread) via ``_bulk_upsert_market_metadata``.
+
+        Sem loop por símbolo, sem fetch_ohlcv, sem savepoints por símbolo.
+        Retorna o número de tickers upsertados com sucesso (0 se falhar).
+        """
         import time as _time
-        import sqlalchemy.exc as _sqla_exc
         _cycle_t0 = _time.monotonic()
-        collected = 0
-        failures = 0
 
-        # Health guard: in queue-mode the session has no outer ``session.begin()``
-        # so any stale transaction must be cleared before touching the DB.
-        # In run_db_task mode (non-queue) the outer begin() is fresh — skip.
-        if queue_mode and db.in_transaction():
-            await db.rollback()
-            logger.warning("[CollectMarketData] Stale transaction on queue-mode session, rolled back")
-
-        # Task #234 — OHLCV ingestion instrumentation. Five structured
-        # log lines per symbol/cycle ([OHLCV-RX|PERSIST|LATEST|STALE|COMMIT])
-        # plus three Prometheus metrics. Operators correlate against the
-        # `ingestion_stale` alert via `scalpyn_ohlcv_latest_age_seconds`.
-        try:
-            from ..services import ohlcv_metrics as _ohlcv_metrics
-        except Exception:  # pragma: no cover — defensive
-            _ohlcv_metrics = None  # type: ignore[assignment]
-
-        for symbol in symbols:  # process only active symbols
-            try:
-                logger.info(f"[COLLECT][START] symbol={symbol}")
-                df = await market_data_service.fetch_ohlcv(symbol, "1h", limit=100)
-                rx_rows = len(df) if df is not None and not getattr(df, "empty", True) else 0
-                logger.info(
-                    "[OHLCV-RX] symbol=%s timeframe=1h rows=%d type=%s",
-                    symbol, rx_rows, type(df).__name__,
-                )
-                if _ohlcv_metrics is not None and rx_rows:
-                    _ohlcv_metrics.record_received(symbol, "1h", rx_rows)
-
-                if df is None:
-                    logger.error(f"[COLLECT][EMPTY] symbol={symbol} reason=fetch_returned_none")
-                    failures += 1
-                    continue
-
-                if df.empty:
-                    logger.error(f"[COLLECT][EMPTY] symbol={symbol} reason=df_empty")
-                    failures += 1
-                    continue
-
-                logger.info(f"[PIPELINE] DF_ROWS symbol={symbol} rows={len(df)}")
-                logger.debug(f"[PIPELINE] DF_HEAD symbol={symbol} data={df.head(2).to_dict()}")
-
-                missing = [c for c in _REQUIRED_OHLCV_COLUMNS if c not in df.columns]
-                if missing:
-                    logger.error(f"[PIPELINE] INVALID_COLUMNS symbol={symbol} missing={missing} columns={list(df.columns)}")
-                    continue
-
-                ohlcv_exchange = df.attrs.get("exchange", "gate.io")
-                logger.info(f"[PIPELINE] INSERT_START symbol={symbol} rows={len(df)}")
-                logger.info(
-                    "[OHLCV-PERSIST] symbol=%s rows=%d exchange=%s",
-                    symbol, len(df), ohlcv_exchange,
-                )
-                # Task #236: persistence-queue path. One OhlcvBatch per
-                # symbol replaces N per-row INSERTs and removes the
-                # outer write-tx hold time that contended with the
-                # microstructure scheduler in May-2026 prod.
-                if queue_mode:
-                    rows_payload = tuple(
-                        {
-                            "time":         row["time"],
-                            "open":         float(row["open"]),
-                            "high":         float(row["high"]),
-                            "low":          float(row["low"]),
-                            "close":        float(row["close"]),
-                            "volume":       float(row["volume"]),
-                            "quote_volume": float(row.get(
-                                "quote_volume",
-                                float(row["close"]) * float(row["volume"]),
-                            )),
-                        }
-                        for _, row in df.iterrows()
-                    )
-                    await _pq.enqueue_or_log(
-                        producer="collect-1h",
-                        msg=_pq.OhlcvBatch(
-                            category="ingest",
-                            enqueued_at=_pq.now_monotonic(),
-                            symbol=symbol,
-                            exchange=ohlcv_exchange,
-                            timeframe="1h",
-                            market_type="spot",
-                            rows=rows_payload,
-                        ),
-                    )
-                else:
-                    # Each symbol's writes are isolated in a SAVEPOINT so that a
-                    # single failure never aborts the whole collection transaction.
-                    try:
-                        async with db.begin_nested():
-                            for _, row in df.iterrows():
-                                await db.execute(text("""
-                                    INSERT INTO ohlcv (time, symbol, exchange, timeframe, market_type, open, high, low, close, volume, quote_volume)
-                                    VALUES (:time, :symbol, :exchange, :timeframe, :market_type, :open, :high, :low, :close, :volume, :quote_volume)
-                                    ON CONFLICT DO NOTHING
-                                """), {
-                                    "time": row["time"],
-                                    "symbol": symbol,
-                                    "exchange": ohlcv_exchange,
-                                    "timeframe": "1h",
-                                    "market_type": "spot",
-                                    "open": float(row["open"]),
-                                    "high": float(row["high"]),
-                                    "low": float(row["low"]),
-                                    "close": float(row["close"]),
-                                    "volume": float(row["volume"]),
-                                    "quote_volume": float(row.get("quote_volume", float(row["close"]) * float(row["volume"]))),
-                                })
-                    except Exception as _sp_ohlcv_exc:
-                        # SAVEPOINT auto-rolled back by ``async with db.begin_nested()`` —
-                        # do NOT call ``db.rollback()`` here. Per the documented
-                        # "Nested-savepoint rollback rule" gotcha (Task #222), rolling
-                        # back the OUTER transaction proactively on EVERY savepoint
-                        # failure (not just true connection death) closes the outer
-                        # tx, poisons the next iteration with PendingRollbackError,
-                        # and triggers the recovery break — losing the rest of the
-                        # collection cycle for benign savepoint errors.
-                        logger.error(
-                            "[CollectMarketData] SAVEPOINT (OHLCV 1h) failed for %s — savepoint rolled back: %s",
-                            symbol, _sp_ohlcv_exc,
-                        )
-                        raise
-                if _ohlcv_metrics is not None:
-                    _ohlcv_metrics.record_persisted(symbol, "1h", len(df))
-
-                # Post-persist freshness probe — single round-trip, used by
-                # the `ingestion_stale` alert.
-                #
-                # 2026-05-09 — wrapped in its own SAVEPOINT. The previous
-                # implementation only had a Python try/except, but a Postgres
-                # query error (LockNotAvailableError, deadlock, statement
-                # cancel, etc.) aborts the OUTER transaction server-side. The
-                # try/except silenced the Python exception but the next
-                # ``begin_nested()`` for the next symbol would then raise
-                # ``InFailedSQLTransactionError`` because asyncpg cannot run
-                # ``SAVEPOINT sa_X`` on an aborted outer tx — cascading the
-                # whole remaining cycle. SAVEPOINT here makes any probe
-                # failure self-contained.
-                try:
-                    async with db.begin_nested():
-                        latest_row = (await db.execute(text("""
-                            SELECT EXTRACT(EPOCH FROM (NOW() - MAX(time))) AS age_seconds,
-                                   MAX(time) AS latest_time
-                            FROM ohlcv
-                            WHERE symbol = :symbol
-                              AND timeframe = '1h'
-                              AND exchange = :exchange
-                        """), {"symbol": symbol, "exchange": ohlcv_exchange})).first()
-                    age = float(latest_row.age_seconds) if latest_row and latest_row.age_seconds is not None else None
-                    latest_t = latest_row.latest_time if latest_row else None
-                    logger.info(
-                        "[OHLCV-LATEST] symbol=%s latest=%s age_s=%s",
-                        symbol, latest_t, f"{age:.0f}" if age is not None else "None",
-                    )
-                    if age is not None:
-                        if _ohlcv_metrics is not None:
-                            _ohlcv_metrics.record_latest_age(symbol, "1h", age)
-                        # 1h candles: anything > 30 min stale is operator-actionable.
-                        if age > 1800:
-                            logger.warning(
-                                "[OHLCV-STALE] symbol=%s age_s=%.0f threshold_s=1800 "
-                                "— check exchange feed / collector cadence",
-                                symbol, age,
-                            )
-                except Exception as probe_exc:
-                    logger.debug(
-                        "[OHLCV-LATEST] symbol=%s probe failed (non-blocking): %s",
-                        symbol, probe_exc,
-                    )
-
-                # ── per-symbol market_metadata UPSERT (NOT inside the
-                # probe except — Task #234 review fix). Runs on every
-                # successful OHLCV ingest, regardless of the freshness
-                # probe outcome.
-                #
-                # 2026-05-09 — also wrapped in its own SAVEPOINT for the
-                # same reason as the freshness probe above. ``market_metadata``
-                # is the hottest contended row in the schema (WS Gate.io
-                # ticker + collect_5m + collect_all + tickers loop all UPSERT
-                # the same row). Any transient lock/timeout error here was
-                # poisoning the whole outer cycle.
-                latest = df.iloc[-1]
-                _now_mm = datetime.now(timezone.utc)
-                if queue_mode:
-                    await _pq.enqueue_or_log(
-                        producer="collect-1h",
-                        msg=_pq.MarketMetadataUpsert(
-                            category="scheduler",
-                            enqueued_at=_pq.now_monotonic(),
-                            symbol=symbol,
-                            last_updated=_now_mm,
-                            price=float(latest["close"]),
-                            # NOTE: do NOT seed price_change_24h=0 here — the
-                            # tickers loop below carries the real value, and a
-                            # zero seed would clobber it under sparse-COALESCE
-                            # if its message arrives first. Legacy direct-write
-                            # path keeps the zero seed only because the same
-                            # transaction immediately overwrites it.
-                        ),
-                    )
-                else:
-                    try:
-                        async with db.begin_nested():
-                            await db.execute(text("""
-                                INSERT INTO market_metadata (symbol, price, price_change_24h, last_updated)
-                                VALUES (:symbol, :price, 0, :updated)
-                                ON CONFLICT (symbol) DO UPDATE SET
-                                    price = :price, last_updated = :updated
-                            """), {
-                                "symbol": symbol,
-                                "price": float(latest["close"]),
-                                "updated": _now_mm,
-                            })
-                    except Exception as _sp_mm_exc:
-                        # SAVEPOINT auto-rolled back. Log + continue: the
-                        # OHLCV write above already succeeded, and the
-                        # tickers loop further down also UPSERTs price.
-                        logger.warning(
-                            "[CollectMarketData] market_metadata UPSERT failed for %s "
-                            "— savepoint rolled back, OHLCV preserved: %s",
-                            symbol, _sp_mm_exc,
-                        )
-
-                logger.info(f"[PERSIST] success symbol={symbol}")
-                logger.info(f"[COLLECT][OK] symbol={symbol}")
-                collected += 1
-            except Exception as e:
-                # PendingRollbackError means the asyncpg connection is in a
-                # failed-transaction state. The savepoint rollback is not
-                # enough — the outer transaction is poisoned and must be
-                # explicitly rolled back before any further DB operation.
-                if isinstance(e, _sqla_exc.PendingRollbackError):
-                    await db.rollback()
-                    logger.error(
-                        "[CollectMarketData] Session in invalid state after %s — rolled back, stopping collection. Error: %s",
-                        symbol, e,
-                    )
-                    failures += 1
-                    break
-                # 2026-05-09 — InFailedSQLTransactionError means the outer
-                # tx is aborted server-side (asyncpg refuses any further
-                # query, including SAVEPOINT) but ``db.is_active`` may
-                # still be True client-side. Force rollback + break so the
-                # next symbol does not cascade the same error 95 times.
-                _err_str = str(e)
-                if "InFailedSQLTransaction" in _err_str or "current transaction is aborted" in _err_str:
-                    try:
-                        await db.rollback()
-                    except Exception as _rb_exc:
-                        logger.warning("[COLLECT] rollback after aborted tx failed: %s", _rb_exc)
-                    remaining = len(symbols) - symbols.index(symbol) - 1
-                    logger.error(
-                        "[COLLECT] outer tx aborted server-side after %s — "
-                        "rolled back, skipping remaining %d symbols; collected=%d",
-                        symbol, remaining, collected,
-                    )
-                    failures += 1
-                    break
-                logger.error(
-                    f"[FAILED symbol={symbol}] error={str(e)}",
-                    exc_info=True,
-                )
-                failures += 1
-                # NOTE: do NOT call ``await db.rollback()`` here. The
-                # ``async with db.begin_nested()`` above already rolls back
-                # the SAVEPOINT on exception. Calling ``db.rollback()`` on
-                # top of that closes the OUTER transaction opened by
-                # ``run_db_task`` (``async with session.begin()``) and
-                # poisons every subsequent symbol with
-                # "Can't operate on closed transaction inside context manager".
-                #
-                # However, some transaction-aborting errors (e.g. deadlock)
-                # cause PostgreSQL to abort the *outer* transaction as well,
-                # leaving the asyncpg connection in a failed state that the
-                # savepoint rollback cannot recover from. Detect this so we
-                # stop early instead of cascading InFailedSQLTransaction
-                # errors through every remaining symbol.
-                if not db.is_active:
-                    remaining = len(symbols) - symbols.index(symbol) - 1
-                    logger.error(
-                        "[COLLECT] outer transaction poisoned after %s — "
-                        "skipping remaining %d symbols; collected=%d",
-                        symbol, remaining, collected,
-                    )
-                    break
-                continue
-
-        # Also fetch tickers for metadata (price, volume, change + spread_pct from bid/ask)
-        # Process ALL tickers (not capped) so every pool coin gets market data,
-        # even niche coins beyond the top-500.
         try:
             tickers = await market_data_service.fetch_all_tickers()
             if not tickers:
-                logger.warning("fetch_all_tickers returned empty — retrying once after 3 s…")
+                logger.warning(
+                    "[COLLECT-TICKERS] fetch_all_tickers returned empty — "
+                    "retrying once after 3s…"
+                )
                 await asyncio.sleep(3)
                 tickers = await market_data_service.fetch_all_tickers()
 
             now_ts = datetime.now(timezone.utc)
-            ticker_ok = 0
-            # Task #251: validate + sort BEFORE building the bulk batch.
-            # Sorting by symbol ASC is the deadlock-prevention invariant
-            # (Postgres acquires row-locks in tuple order; all workers must
-            # use the same order). Filter rejects bad rows so the bulk
-            # statement can run without per-row validation.
+            # Task #251: validar + ordenar ANTES do bulk batch.
+            # Sort por símbolo ASC é a invariante anti-deadlock (Postgres
+            # acquires row-locks na ordem do tuple stream).
             valid_rows: list[dict] = []
             for ticker in tickers:
                 try:
@@ -538,25 +258,25 @@ async def _collect_all_async():
                     volume = float(ticker.get("quote_volume", 0) or 0)
                     spread = market_data_service.compute_spread_from_ticker(ticker)
                     valid_rows.append({
-                        "symbol": pair,
-                        "price": price,
-                        "change": change,
-                        "volume": volume,
-                        "spread": spread,
+                        "symbol":  pair,
+                        "price":   price,
+                        "change":  change,
+                        "volume":  volume,
+                        "spread":  spread,
                         "updated": now_ts,
                     })
                 except Exception as te:
-                    logger.debug("Ticker 1h: validation failed for %s: %s",
-                                 ticker.get("currency_pair", "?"), te)
+                    logger.debug(
+                        "[COLLECT-TICKERS] validation failed for %s: %s",
+                        ticker.get("currency_pair", "?"), te,
+                    )
                     continue
 
             valid_rows.sort(key=lambda r: r["symbol"])
 
             if queue_mode:
-                # Persistence queue path: each enqueue is its own message,
-                # the queue worker handles ordering+batching. Loop must
-                # still iterate sorted to preserve the deadlock invariant
-                # downstream.
+                # Persistence queue path: cada enqueue é sua própria mensagem;
+                # iterar sorted preserva a invariante anti-deadlock downstream.
                 for r in valid_rows:
                     await _pq.enqueue_or_log(
                         producer="collect-1h-tickers",
@@ -573,40 +293,23 @@ async def _collect_all_async():
                     )
                 ticker_ok = len(valid_rows)
             else:
-                # Direct DB path: single bulk UPSERT (chunked at 200) instead
-                # of ~500 SAVEPOINT+INSERT round-trips. Helper handles
-                # SAVEPOINT-per-chunk + per-row fallback for fault isolation.
                 ticker_ok = await _bulk_upsert_market_metadata(
-                    db, valid_rows, origin="ticker-1h",
+                    db, valid_rows, origin="ticker-60s",
                 )
 
-            if ticker_ok:
-                logger.info("market_metadata: upserted %d/%d tickers", ticker_ok, len(tickers))
-            else:
-                logger.error(
-                    "market_metadata: 0 tickers upserted (fetched %d) — "
-                    "collect_5m backup pathway will provide fallback metadata.",
-                    len(tickers),
-                )
-        except Exception as e:
-            logger.error("Failed to fetch/update metadata from tickers: %s", e)
-        # run_db_task auto-commits all successful writes on exit
+            _cycle_dt = _time.monotonic() - _cycle_t0
+            logger.info(
+                "[COLLECT-TICKERS] upserted=%d fetched=%d duration_s=%.2f",
+                ticker_ok, len(tickers), _cycle_dt,
+            )
+            return ticker_ok
 
-        logger.info(f"[COLLECT] success={collected} fail={failures} total={len(symbols)}")
-        # Task #234 — symmetric COMMIT marker on the 1h path. Logged with
-        # outcome (ok|fail) and cycle duration so operators can correlate
-        # ingest health against the [OHLCV-RX|PERSIST|LATEST|STALE]
-        # markers above.
-        _cycle_dt = _time.monotonic() - _cycle_t0
-        _outcome = "ok" if collected > 0 else "fail"
-        logger.info(
-            "[OHLCV-COMMIT] cycle_done flow=1h outcome=%s success=%d fail=%d "
-            "total=%d duration_s=%.2f",
-            _outcome, collected, failures, len(symbols), _cycle_dt,
-        )
-        if collected == 0:
-            raise RuntimeError("zero success — all symbols failed")
-        return collected
+        except Exception as exc:
+            logger.error(
+                "[COLLECT-TICKERS] failed: %s", exc, exc_info=True,
+            )
+            return 0
+
 
     # Task #236: when the persistence queue is enabled, do not open a
     # writer transaction (run_db_task wraps the callback in
@@ -671,18 +374,11 @@ def collect_all():
             "scalpyn:last_collect_all_end",
             datetime.now(timezone.utc).isoformat(),
         )
-    # Chain to compute indicators (Task #216: dedup wrapper, structural queue).
-    # TTL = compute time_limit (600s) + 60s safety margin.
-    # Task #231: pular o chain quando o pool está sem aprovados — não há
-    # candles novos para computar indicadores e enfileirar só geraria ruído.
-    if count > 0:
-        from . import task_dispatch
-        task_dispatch.enqueue(
-            "app.tasks.compute_indicators.compute",
-            dedup_key="compute",
-            ttl_seconds=660,
-        )
-    return f"Collected {count} symbols"
+    # Task #262 — chain para ``compute_indicators.compute`` (1h) REMOVIDO.
+    # O pipeline estrutural agora é disparado por
+    # ``collect_structural_30m`` → ``compute_30m`` → ``score`` → ``evaluate``
+    # (cadence crontab(0,30) UTC). Este path ficou ticker/metadata-only.
+    return f"[COLLECT-TICKERS] Updated metadata for {count} tickers"
 
 
 async def _collect_5m_async():

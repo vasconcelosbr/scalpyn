@@ -65,6 +65,7 @@ celery_app = Celery(
     backend=settings.REDIS_URL,
     include=[
         "app.tasks.collect_market_data",
+        "app.tasks.collect_structural_30m",
         "app.tasks.compute_indicators",
         "app.tasks.compute_scores",
         "app.tasks.evaluate_signals",
@@ -97,6 +98,11 @@ TASK_ROUTES = {
 
     # Structural (hourly+ cadence, heavier work)
     "app.tasks.collect_market_data.collect_all":         {"queue": QUEUE_STRUCTURAL},
+    # Task #262 — structural 30m pipeline (replaces OHLCV 1h em collect_all + compute 1h).
+    "app.tasks.collect_structural_30m.run":              {"queue": QUEUE_STRUCTURAL},
+    "app.tasks.compute_indicators.compute_30m":          {"queue": QUEUE_STRUCTURAL},
+    # compute (1h) permanece como stub deprecated — invariant #4 exige
+    # rota para toda task registrada. Remover na limpeza pós-estabilização.
     "app.tasks.compute_indicators.compute":              {"queue": QUEUE_STRUCTURAL},
     "app.tasks.compute_scores.score":                    {"queue": QUEUE_STRUCTURAL},
     # pipeline_scan.scan: structural per operator spec (cadence-locked
@@ -214,6 +220,10 @@ TASK_ANNOTATIONS = {
 
     # Structural — most tasks (Task #245: idempotent + beat-driven → opt-out of acks_late)
     "app.tasks.collect_market_data.collect_all":         {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
+    # Task #262 — structural 30m pipeline. rate_limit="2/h" alinha com
+    # crontab(minute="0,30"); idempotente + beat-driven → opt-out acks_late.
+    "app.tasks.collect_structural_30m.run":              {**_STRUCTURAL_GUARDS, "rate_limit": "2/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.compute_indicators.compute_30m":          {**_STRUCTURAL_GUARDS, "rate_limit": "2/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.compute_indicators.compute":              {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.compute_scores.score":                    {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
     # pipeline_scan.scan: structural cadence (5-min safety-net scan,
@@ -396,6 +406,15 @@ celery_app.conf.beat_schedule = {
     "orphan_tx_watchdog_every_5min": {
         "task": "app.tasks.orphan_tx_watchdog.kill_orphans",
         "schedule": 300.0,
+    },
+    # Task #262 — Structural 30m collector. Dispara exatamente no
+    # fechamento da candle 30m (UTC 00:00, 00:30, …, 23:30) — sem drift
+    # de sleep(). Chain: collect_structural_30m → compute_30m → score → evaluate.
+    # compute_30m NÃO tem entrada beat — é sempre via chain (invariante:
+    # beat só agenda collectors).
+    "collect_structural_30m_candle_close": {
+        "task": "app.tasks.collect_structural_30m.run",
+        "schedule": crontab(minute="0,30"),
     },
 }
 
