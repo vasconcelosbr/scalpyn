@@ -1,0 +1,20 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "lvGBL7RNZyJUlJHctqWjb"
+uri = "file://downloads/celery_app.tar.gz"
+type = "unspecified"
+title = "celery_app.py (compactado)"
+
+[[outputs]]
+id = "yUVECo3nwSv6tfk3GIYVK"
+uri = "file://downloads/docker-compose.tar.gz"
+type = "unspecified"
+title = "docker-compose.yml + docker-compose.dev.yml (compactado)"
+
+[[outputs]]
+id = "eakknN94NNrx110aeFz2x"
+uri = "file://downloads/collect_market_data.tar.gz"
+type = "unspecified"
+title = "collect_market_data.py (compactado)"

@@ -1,0 +1,340 @@
+Você é um engenheiro sênior especialista em:
+
+* Trading Systems
+* Dashboards quantitativos
+* UX institucional para trading
+* HFT
+* Crypto Exchanges
+* Gate.io API
+* Order Flow
+* Portfolio Analytics
+* PnL Engines
+* Frontend React/Next.js
+* Data visualization
+* Sistemas financeiros de auditoria
+
+Preciso que reformule completamente o dashboard de histórico e performance operacional do sistema.
+
+# OBJETIVO
+
+Criar um dashboard institucional/profissional de:
+
+* histórico operacional
+* evolução patrimonial
+* PnL
+* auditoria de trades
+* análise de performance
+
+O dashboard deve consumir os trades REAIS executados diretamente na corretora Gate.io via API.
+
+# FONTES DE DADOS
+
+## SPOT
+
+Usar:
+
+* WebSocket/API
+* channel: spot.usertrades
+* Order History real da exchange
+
+## FUTURES
+
+Usar:
+
+* futures.usertrades
+* histórico real de execuções da exchange
+
+IMPORTANTE:
+Não usar apenas ordens locais do sistema.
+O dashboard deve refletir:
+
+* trades efetivamente executados na corretora.
+
+# OBJETIVO FUNCIONAL
+
+Desejo um dashboard completo contendo:
+
+---
+
+1. HISTÓRICO DE TRADES EXECUTADOS
+
+---
+
+Tabela profissional contendo:
+
+* Data/Hora da compra
+* Data/Hora da venda
+* Tempo em holding:
+
+  * dias
+  * horas
+  * minutos
+* Par
+* Tipo:
+
+  * Spot
+  * Futures
+* Lado:
+
+  * Long
+  * Short
+* Preço médio de compra
+* Preço médio de venda
+* Quantidade da cripto
+* Valor investido em USDT
+* Valor final em USDT
+* Taxas pagas
+* Taxas acumuladas
+* Lucro/prejuízo em USDT
+* Lucro/prejuízo em %
+* ROI do trade
+* Resultado líquido
+* Status:
+
+  * aberto
+  * fechado
+  * parcial
+* Número de fills
+* Slippage estimado
+* Maker/Taker
+* ID da ordem
+* ID do trade
+* Exchange timestamp
+* Tempo de execução da ordem
+
+Desejo:
+
+* paginação
+* busca
+* ordenação
+* filtros avançados
+
+---
+
+2. FLASH CARDS SUPERIORES
+
+---
+
+Cards institucionais contendo:
+
+* Saldo atual da corretora
+* Capital total
+* Capital spot
+* Capital futures
+* Lucro acumulado USDT
+* Lucro acumulado %
+* PnL diário
+* PnL semanal
+* PnL mensal
+* Quantidade total de trades
+* Trades vencedores
+* Trades perdedores
+* Taxa de acerto
+* Profit Factor
+* Win Rate
+* Sharpe simplificado
+* Média de lucro por trade
+* Média de perda
+* Maior gain
+* Maior loss
+* Taxas totais pagas
+* Volume negociado total
+* ROI acumulado
+* Drawdown atual
+* Drawdown máximo
+
+Os cards devem:
+
+* possuir visual institucional
+* responsivos
+* animados suavemente
+* cores profissionais
+* sem aparência “varejo/amador”
+
+---
+
+3. GRÁFICOS
+
+---
+
+Criar gráficos profissionais:
+
+## Evolução do capital
+
+Linha temporal mostrando:
+
+* crescimento do capital
+* saldo da corretora
+* patrimônio total
+
+## Evolução do lucro
+
+Mostrar:
+
+* lucro diário
+* lucro acumulado
+* lucro percentual
+
+## Curva de Equity
+
+Mostrar:
+
+* equity curve
+* drawdowns
+* recuperação
+
+## Distribuição de trades
+
+Mostrar:
+
+* gains vs losses
+* spot vs futures
+* longs vs shorts
+
+## Heatmap operacional
+
+Mostrar:
+
+* horários mais lucrativos
+* dias da semana
+* sessões mais performáticas
+
+## Performance por ativo
+
+Mostrar:
+
+* lucro por moeda
+* taxa de acerto por ativo
+* ROI por ativo
+
+---
+
+4. FILTROS TEMPORAIS
+
+---
+
+Adicionar filtros rápidos:
+
+* 1D
+* 7D
+* 30D
+* MTD
+* YTD
+* ALL
+
+Além disso:
+
+* seletor de data inicial/final
+* timezone configurável
+* atualização automática
+
+---
+
+5. UX / UI
+
+---
+
+Desejo um design:
+
+* institucional
+* premium
+* semelhante plataformas profissionais quantitativas
+* dark mode elegante
+* excelente legibilidade
+* foco operacional
+* alta densidade informacional
+* sem visual “dashboard genérico”
+
+Inspirar-se em:
+
+* Bloomberg
+* Quantower
+* Bookmap
+* Binance Institutional
+* Bybit Pro
+* TradingView premium
+* dashboards de prop desks
+
+---
+
+6. ARQUITETURA
+
+---
+
+Quero também:
+
+* proposta arquitetural
+* modelagem de banco
+* schema ideal
+* normalização de trades/fills
+* reconciliação spot/futures
+* cálculo correto de PnL
+* cálculo de holding
+* cálculo de ROI
+* cálculo de fees
+* sincronização com exchange
+* deduplicação
+* replay histórico
+* auditoria
+
+Explicar:
+
+* como unir múltiplos fills
+* como identificar fechamento de posição
+* como calcular posição média
+* FIFO/LIFO
+* partial fills
+* partial closes
+
+---
+
+7. PERFORMANCE
+
+---
+
+O sistema deve suportar:
+
+* milhares de trades
+* atualização em tempo real
+* websocket live
+* cache Redis
+* paginação eficiente
+* agregações rápidas
+
+---
+
+8. OUTPUT ESPERADO
+
+---
+
+Quero que você entregue:
+
+1. Arquitetura completa
+2. Wireframe/mockup detalhado
+3. Estrutura visual das telas
+4. Estrutura de componentes React
+5. Modelo de banco
+6. Queries principais
+7. Estratégia de sincronização com Gate.io
+8. Estratégia de reconciliação
+9. Estratégia de cálculo de PnL
+10. Sugestões de UX institucional
+11. Melhorias críticas
+12. Edge cases perigosos
+13. Riscos arquiteturais
+14. Fluxo de dados completo
+15. Design de nível profissional/HFT
+
+Seja extremamente crítico.
+Questione:
+
+* UX
+* arquitetura
+* consistência financeira
+* confiabilidade dos cálculos
+* auditoria
+* performance
+* escalabilidade
+* integridade dos dados
+
+Quero um dashboard de nível institucional/profissional.
