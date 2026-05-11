@@ -1,0 +1,17 @@
+Análise do que está acontecendo
+Problema 1 — Saldo $0.00: O endpoint GET /api/live/balance está retornando zero ou falhando silenciosamente. Causas mais prováveis: GateAdapter.get_spot_balance() não está sendo chamado com as credenciais do usuário logado, ou o método não existe ainda no adapter e retornou 0 como fallback.
+Problema 2 — L3 aprovados vazio: O endpoint GET /api/diagnostics/decisions?status=APPROVED está retornando lista vazia. Causa mais provável: a tabela trade_decisions existe mas ainda não tem dados — o ciclo de avaliação rodou antes da instrumentação do evaluate_signals.py ser deployada, ou o record_decision está falhando silenciosamente (lembra: ele nunca faz re-raise).
+Problema 3 — Stream OFFLINE: O SSE GET /api/live/log-stream não conectou. Causa mais provável: o endpoint não está registrado no main.py, ou há um problema de CORS com SSE (o browser bloqueia SSE cross-origin diferente de fetch normal).
+
+Gere este prompt no Claude Code para diagnosticar os três de uma vez:
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation-duration: 0.25s;
+    animation-timing-function: cubic-bezier(0.19, 1, 0.22, 1);
+  }
+VvisualizeVvisualize show_widgetMeu palpite na ordem de probabilidade:
+O problema 3 (SSE OFFLINE) é quase certamente o X-Accel-Buffering: no faltando — esse header é específico do Cloud Run e é a causa mais comum de SSE que nunca entrega eventos. O frontend mostra "tentando reconectar" em loop porque o EventSource abre, o Cloud Run faz buffer do response e nunca flush, e o browser interpreta como timeout.
+O problema 2 (L3 vazio) é provavelmente a instrumentação do evaluate_signals.py que ainda não rodou nenhum ciclo desde o deploy, ou o record_decision engolindo exceção de constraint de FK (se o pool_id passado não existir na tabela pools).
+O problema 1 (saldo) é provavelmente get_spot_balance() não implementado no gate_adapter.py — esse método foi especificado no prompt da Fase 3 mas o Gate.io v4 exige um GET /spot/accounts assinado com HMAC, e se não estava no adapter original, gerou um AttributeError que retornou 0 silenciosamente.
+Rode o curl do diagnóstico 3 primeiro — ele resolve mais rápido e confirma se o backend está vivo antes de depurar os outros dois.
