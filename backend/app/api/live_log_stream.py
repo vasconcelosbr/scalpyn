@@ -201,10 +201,10 @@ async def get_balance(
             SELECT COALESCE(SUM(invested_value), 0) AS total_in_positions
               FROM trades
              WHERE user_id = :uid
-               AND status IN :open_statuses
+               AND status = ANY(:open_statuses)
             """
         ).bindparams(),
-        {"uid": str(caller_id), "open_statuses": tuple(_OPEN_STATUSES)},
+        {"uid": str(caller_id), "open_statuses": list(_OPEN_STATUSES)},
     )
     in_positions = float(pos_q.scalar() or 0)
 
@@ -249,11 +249,11 @@ async def get_positions(
               FROM trades t
               LEFT JOIN market_metadata mm ON mm.symbol = t.symbol
              WHERE t.user_id = :uid
-               AND t.status IN :open_statuses
+               AND t.status = ANY(:open_statuses)
              ORDER BY t.id DESC
             """
         ).bindparams(),
-        {"uid": str(caller_id), "open_statuses": tuple(_OPEN_STATUSES)},
+        {"uid": str(caller_id), "open_statuses": list(_OPEN_STATUSES)},
     )
 
     items = []
