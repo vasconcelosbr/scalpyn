@@ -395,6 +395,11 @@ app.include_router(encryption_admin.router)
 from .api import trade_diagnostics  # noqa: E402
 app.include_router(trade_diagnostics.router)
 
+# Live operational endpoints — SSE decision log stream + balance/positions
+# polls. Tenancy is enforced server-side via ``get_current_user_id``.
+from .api import live_log_stream  # noqa: E402
+app.include_router(live_log_stream.router)
+
 # Machine Learning
 app.include_router(ml.router)
 

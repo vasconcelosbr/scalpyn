@@ -1,0 +1,116 @@
+Você é um engenheiro sênior trabalhando no Scalpyn.
+Regras absolutas: ADDITIVE ONLY · ZERO HARDCODE · leia o arquivo antes de editar.
+
+Pré-condições:
+  - app/core/trace_context.py existe (Fase 1)
+  - tabela trade_decisions existe (Fase 1)
+  - app/services/decision_audit_service.py existe (Fase 1)
+  - evaluate_signals.py e execution_engine.py já instrumentados (Fase 2)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TAREFA 1 — Instrumentar execute_buy.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Leia backend/app/tasks/execute_buy.py completo.
+Faça APENAS estas adições:
+
+  a) No início de cada iteração de símbolo dentro do ciclo principal,
+     chame new_trace() e set_ctx(TraceContext(
+         user_id=user_id, symbol=symbol,
+         pool_id=pool_id, market_type="spot", exchange="gate"
+     ))
+
+  b) Para cada gate de SKIP (NOT_TRADABLE, NOT_IN_L3, QUARANTINED,
+     COOLDOWN_ACTIVE), adicione:
+     await record_decision(db=db, trace_id=get_trace(), ...,
+         status="SKIPPED", stage="L3", reason=<motivo atual que só vai ao log>)
+
+  c) Após a decisão de compra aprovada pelo SpotCapitalManager,
+     antes de chamar execution_engine.execute_trade, adicione:
+     await record_decision(db=db, trace_id=get_trace(), ...,
+         status="APPROVED", stage="L3",
+         score_breakdown=score_dict,
+         indicators_snapshot=indicators,
+         latency_ms={"l3": latency_l3})
+
+  d) No bloco de captura de exceção ao redor de execute_trade,
+     adicione extra=get_log_extra() ao logger.exception existente
+     (não altere o comportamento de re-raise ou swallow atual)
+
+  e) Adicione extra=get_log_extra() em todos os logger.info/warning/error
+     dentro do loop de símbolos
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TAREFA 2 — Instrumentar FuturesScanner
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Leia backend/app/engines/futures_scanner.py completo.
+Faça APENAS estas adições:
+
+  a) No início de cada ciclo de avaliação por símbolo, chame:
+     new_trace() e set_ctx(TraceContext(
+         user_id=user_id, symbol=symbol,
+         pool_id=None, market_type="futures", exchange="gate"
+     ))
+
+  b) Após o 4-Gate passar (todos os gates aprovados), adicione:
+     await record_decision(db=db, trace_id=get_trace(), ...,
+         status="APPROVED", stage="L3", market_type="futures",
+         score_breakdown={"layer_liquidity": s1, "layer_structure": s2,
+                          "layer_momentum": s3, "layer_volatility": s4,
+                          "layer_order_flow": s5},
+         indicators_snapshot=indicators_dict)
+
+  c) Quando qualquer gate reprovar (FuturesMacroGate, FuturesAntiLiq,
+     FuturesRiskEngine, FuturesEmergency), adicione:
+     await record_decision(db=db, trace_id=get_trace(), ...,
+         status="REJECTED", stage="L3", market_type="futures",
+         reason=<motivo textual do gate>,
+         blocking_rule=<nome do gate>)
+
+  d) No bloco de envio de ordem futures (place_futures_order), adicione
+     ANTES do POST:
+     logger.debug("futures_order_payload", extra={
+         **get_log_extra(),
+         "endpoint": "/futures/usdt/orders",
+         "payload": {"symbol": symbol, "side": direction,
+                     "size": size, "leverage": leverage}
+     })
+
+  e) APÓS a resposta da exchange, adicione:
+     logger.debug("futures_order_response", extra={
+         **get_log_extra(),
+         "status_code": response.status_code,
+         "order_id": data.get("id"),
+         "fill_price": data.get("fill_price"),
+         "latency_ms": round((time.monotonic() - t_send) * 1000)
+     })
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TAREFA 3 — Novo endpoint SSE para streaming de logs
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Crie backend/app/api/live_log_stream.py com:
+
+  GET /api/live/log-stream  (SSE — Server-Sent Events)
+    - Usa asyncio.Queue publicada pelo decision_audit_service
+    - Publica cada record_decision como evento SSE com campos:
+        data: JSON com {trace_id, symbol, market_type, status,
+                        stage, reason, blocking_rule, decided_at,
+                        latency_ms, score_breakdown}
+    - Heartbeat a cada 15s para manter conexão viva
+    - Filtragem via query params: ?market_type=spot|futures&status=APPROVED|REJECTED|SKIPPED
+    - Requer autenticação JWT (mesmo middleware existente)
+    - Máximo 500 eventos no buffer da queue; eventos antigos descartados
+
+  GET /api/live/balance  (polling — não SSE)
+    - Lê saldo USDT disponível via GateAdapter.get_spot_balance()
+    - Lê capital em posições abertas da tabela trades (status=open)
+    - Retorna: {available_usdt, in_positions, total, updated_at}
+
+  GET /api/live/positions  (polling)
+    - Retorna posições abertas da tabela trades com:
+        symbol, entry_price, current_price (de market_metadata),
+        pnl_usdt, pnl_pct, margin_to_target_pct,
+        tp_price, status_label (holding|aguardando|underwater)
+    - margin_to_target_pct = (current - entry) / (tp - entry) * 100
+      clampado entre 0 e 100
+
+Registre os 3 routers em app/main.py (additive).

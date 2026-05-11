@@ -10,6 +10,7 @@ All thresholds from FuturesEngineConfig (zero hardcode).
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -19,7 +20,15 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..core.trace_context import (
+    TraceContext,
+    get_log_extra,
+    get_trace,
+    new_trace,
+    set_ctx,
+)
 from ..database import AsyncSessionLocal
+from ..services.decision_audit_service import safe_record_decision
 from ..models.trade import Trade
 from ..models.exchange_connection import ExchangeConnection
 from ..models.config_profile import ConfigProfile
@@ -173,7 +182,11 @@ class FuturesScanner:
             return
 
         # ── Score all contracts ───────────────────────────────────────────────
-        scored = await self._score_universe(tickers, prices)
+        # Pass ``db`` down so per-contract gate decisions can be audited
+        # via ``safe_record_decision`` (the call is additive — the
+        # method tolerates ``db=None`` for any future caller that does
+        # not want to record).
+        scored = await self._score_universe(tickers, prices, db)
 
         # ── Try to open new positions ─────────────────────────────────────────
         max_pos = self.cfg.risk.max_positions
@@ -211,14 +224,19 @@ class FuturesScanner:
 
     # ── Score universe ────────────────────────────────────────────────────────
 
-    async def _score_universe(self, tickers: list, prices: dict) -> list:
+    async def _score_universe(
+        self,
+        tickers: list,
+        prices: dict,
+        db: Optional[AsyncSession] = None,
+    ) -> list:
         results = []
         for ticker in tickers:
             contract = ticker.get("contract", "")
             if not contract.endswith("_USDT"):
                 continue
             try:
-                opp = await self._score_contract(contract, ticker, prices)
+                opp = await self._score_contract(contract, ticker, prices, db)
                 if opp:
                     results.append(opp)
             except Exception as e:
@@ -227,11 +245,26 @@ class FuturesScanner:
         results.sort(key=lambda x: x["total_score"], reverse=True)
         return results
 
-    async def _score_contract(self, contract: str, ticker: dict, prices: dict) -> Optional[dict]:
+    async def _score_contract(
+        self,
+        contract: str,
+        ticker: dict,
+        prices: dict,
+        db: Optional[AsyncSession] = None,
+    ) -> Optional[dict]:
         cfg    = self.cfg.scoring
         price  = prices.get(contract, 0)
         if price <= 0:
             return None
+
+        # Fresh trace per evaluated contract so this scoring pass + any
+        # downstream ``_try_enter`` audit rows share one correlation id.
+        new_trace()
+        set_ctx(TraceContext(
+            user_id=str(self.user_id), symbol=contract,
+            pool_id=None, market_type="futures", exchange="gate",
+        ))
+        _t_l3_start = time.monotonic()
 
         # ── L1 Liquidity ─────────────────────────────────────────────────────
         l1 = await score_l1(contract, self.adapter, cfg)
@@ -266,6 +299,16 @@ class FuturesScanner:
             direction = "short" if direction == "long" else "long"
             ok, reason = self._macro.can_trade(macro_state, direction, 0)
             if not ok:
+                if db is not None:
+                    await safe_record_decision(
+                        db=db, trace_id=get_trace(),
+                        user_id=str(self.user_id), pool_id=None,
+                        symbol=contract, market_type="futures",
+                        exchange="gate",
+                        status="REJECTED", stage="L3",
+                        reason=reason, blocking_rule="FuturesMacroGate",
+                        score_breakdown={"layer_liquidity": l1.score},
+                    )
                 return None
 
         l2 = score_structure(dfs, direction, cfg)
@@ -293,7 +336,7 @@ class FuturesScanner:
             )
             return None
 
-        return {
+        result = {
             "contract":    contract,
             "direction":   direction,
             "total_score": round(total_score, 2),
@@ -308,6 +351,36 @@ class FuturesScanner:
             "df_1h":       primary_df,
         }
 
+        # 4-Gate APPROVED (portfolio + macro + liquidity + score). The
+        # downstream ``_try_enter`` adds further gates (anti-liq,
+        # leverage, risk engine) that may still reject — those are
+        # audited separately at stage="L3" too.
+        if db is not None:
+            _latency_l3_ms = round((time.monotonic() - _t_l3_start) * 1000)
+            await safe_record_decision(
+                db=db, trace_id=get_trace(),
+                user_id=str(self.user_id), pool_id=None,
+                symbol=contract, market_type="futures", exchange="gate",
+                status="APPROVED", stage="L3",
+                score_breakdown={
+                    "layer_liquidity":  l1.score,
+                    "layer_structure":  l2.score,
+                    "layer_momentum":   l3.score,
+                    "layer_volatility": l4.score,
+                    "layer_order_flow": l5.score,
+                    "total_score":      round(total_score, 2),
+                },
+                indicators_snapshot={
+                    "price":         price,
+                    "macro_regime":  macro_state.regime,
+                    "vol_regime":    getattr(l4, "vol_regime", None),
+                    "funding_rate":  of_data.get("funding_rate"),
+                    "direction":     direction,
+                },
+                latency_ms={"l3": _latency_l3_ms},
+            )
+        return result
+
     # ── Entry execution ───────────────────────────────────────────────────────
 
     async def _try_enter(self, opp: dict, capital: float, macro_state, db: AsyncSession) -> None:
@@ -321,7 +394,18 @@ class FuturesScanner:
         # Macro gate check with actual score
         ok, reason = self._macro.can_trade(macro_state, direction, total_score)
         if not ok:
-            logger.info("Macro gate blocked %s: %s", contract, reason)
+            logger.info(
+                "Macro gate blocked %s: %s", contract, reason,
+                extra=get_log_extra(),
+            )
+            await safe_record_decision(
+                db=db, trace_id=get_trace(),
+                user_id=str(self.user_id), pool_id=None,
+                symbol=contract, market_type="futures", exchange="gate",
+                status="REJECTED", stage="L3",
+                reason=reason, blocking_rule="FuturesMacroGate",
+                score_breakdown=opp.get("layers"),
+            )
             return
 
         # Leverage-specific checks (funding guard, OI guard)
@@ -370,7 +454,19 @@ class FuturesScanner:
             vol_regime=l4.vol_regime,
         )
         if risk_params is None:
-            logger.info("Risk engine rejected trade for %s", contract)
+            logger.info(
+                "Risk engine rejected trade for %s", contract,
+                extra=get_log_extra(),
+            )
+            await safe_record_decision(
+                db=db, trace_id=get_trace(),
+                user_id=str(self.user_id), pool_id=None,
+                symbol=contract, market_type="futures", exchange="gate",
+                status="REJECTED", stage="L3",
+                reason="risk_engine_rejected_position_sizing",
+                blocking_rule="FuturesRiskEngine",
+                score_breakdown=opp.get("layers"),
+            )
             return
 
         # Set leverage on Gate.io
@@ -387,7 +483,23 @@ class FuturesScanner:
             if actual_liq > 0:
                 pretrade_ok, msg = self._anti_liq.validate_pretrade(price, actual_liq, direction)
                 if not pretrade_ok:
-                    logger.info("Pre-trade anti-liq rejected %s: %s", contract, msg)
+                    logger.info(
+                        "Pre-trade anti-liq rejected %s: %s",
+                        contract, msg, extra=get_log_extra(),
+                    )
+                    await safe_record_decision(
+                        db=db, trace_id=get_trace(),
+                        user_id=str(self.user_id), pool_id=None,
+                        symbol=contract, market_type="futures",
+                        exchange="gate",
+                        status="REJECTED", stage="L3",
+                        reason=msg, blocking_rule="FuturesAntiLiq",
+                        rule_details={
+                            "entry_price": price,
+                            "liq_price":   actual_liq,
+                            "direction":   direction,
+                        },
+                    )
                     return
         except Exception:
             pass  # Position not yet open, skip
@@ -395,6 +507,24 @@ class FuturesScanner:
         # Place entry order
         size = risk_params.position_size_contracts
         order_size = size if direction == "long" else -size
+        # Pre-POST debug: emit the payload we're about to send so the
+        # operator timeline (SSE log-stream) sees the moment the
+        # exchange call leaves our process. ``status_code`` is "n/a"
+        # because GateAdapter abstracts the underlying HTTP layer.
+        logger.debug(
+            "futures_order_payload",
+            extra={
+                **get_log_extra(),
+                "endpoint": "/futures/usdt/orders",
+                "payload": {
+                    "symbol":   contract,
+                    "side":     direction,
+                    "size":     size,
+                    "leverage": getattr(risk_params, "leverage", None),
+                },
+            },
+        )
+        _t_send = time.monotonic()
         try:
             order = await self.adapter.place_futures_order(
                 contract=contract,
@@ -403,8 +533,26 @@ class FuturesScanner:
                 tif="ioc",
                 text="t-scalpyn-futures",
             )
+            _order_dict = order if isinstance(order, dict) else {}
+            logger.debug(
+                "futures_order_response",
+                extra={
+                    **get_log_extra(),
+                    "status_code": "n/a",
+                    "order_id":    _order_dict.get("id"),
+                    "fill_price":  _order_dict.get("fill_price"),
+                    "latency_ms":  round((time.monotonic() - _t_send) * 1000),
+                },
+            )
         except Exception as e:
-            logger.error("Futures order failed for %s: %s", contract, e)
+            logger.error(
+                "Futures order failed for %s: %s", contract, e,
+                extra={
+                    **get_log_extra(),
+                    "latency_ms": round((time.monotonic() - _t_send) * 1000),
+                    "error_type": type(e).__name__,
+                },
+            )
             return
 
         # Place SL trigger

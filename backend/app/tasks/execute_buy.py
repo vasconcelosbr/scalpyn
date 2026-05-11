@@ -15,10 +15,19 @@ Runs every 60 seconds via Celery Beat.
 
 import asyncio
 import logging
+import time
 from typing import Optional
 
 from sqlalchemy import select, text
 
+from ..core.trace_context import (
+    TraceContext,
+    get_log_extra,
+    get_trace,
+    new_trace,
+    set_ctx,
+)
+from ..services.decision_audit_service import safe_record_decision
 from ..tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -335,9 +344,29 @@ async def _execute_buy_cycle_async() -> dict:
                     _flat = _mi.as_flat_dict()
                     _ok, _missing = is_complete(_flat)
                     if not _ok:
+                        # Bind a trace context for this quarantined
+                        # symbol so the audit row + structured log carry
+                        # the same trace_id (the main eval loop will
+                        # rebind a fresh trace per surviving candidate).
+                        new_trace()
+                        set_ctx(TraceContext(
+                            user_id=str(user_id), symbol=_sym,
+                            pool_id=str(pool.id) if pool else None,
+                            market_type="spot", exchange="gate",
+                        ))
                         logger.warning(
                             "[execute_buy] QUARANTINED %s — missing core: %s",
-                            _sym, _missing,
+                            _sym, _missing, extra=get_log_extra(),
+                        )
+                        await safe_record_decision(
+                            db=db, trace_id=get_trace(),
+                            user_id=str(user_id),
+                            pool_id=str(pool.id) if pool else None,
+                            symbol=_sym, market_type="spot", exchange="gate",
+                            status="SKIPPED", stage="L3",
+                            reason="QUARANTINED",
+                            blocking_rule="IndicatorCompleteness",
+                            rule_details={"missing": list(_missing)} if _missing else None,
                         )
                         stats["skipped"] += 1
                         continue
@@ -458,7 +487,31 @@ async def _execute_buy_cycle_async() -> dict:
                     )
                     continue
                 before_l3 = len(candidates)
-                candidates = [r for r in candidates if r.symbol in l3_symbols]
+                # Replace the bulk filter with an explicit per-symbol
+                # drop loop so every symbol the L3 chain rejects gets
+                # its own audit row (NOT_IN_L3). Behaviour for surviving
+                # candidates is identical to the previous comprehension.
+                _kept_candidates: list = []
+                for _r in candidates:
+                    if _r.symbol in l3_symbols:
+                        _kept_candidates.append(_r)
+                        continue
+                    new_trace()
+                    set_ctx(TraceContext(
+                        user_id=str(user_id), symbol=_r.symbol,
+                        pool_id=str(pool.id) if pool else None,
+                        market_type="spot", exchange="gate",
+                    ))
+                    await safe_record_decision(
+                        db=db, trace_id=get_trace(),
+                        user_id=str(user_id),
+                        pool_id=str(pool.id) if pool else None,
+                        symbol=_r.symbol, market_type="spot", exchange="gate",
+                        status="SKIPPED", stage="L3",
+                        reason="NOT_IN_L3",
+                        blocking_rule="L3PipelineFilter",
+                    )
+                candidates = _kept_candidates
                 logger.info(
                     "L3 pipeline filter for user %s: %d → %d candidates (%d removed)",
                     user_id, before_l3, len(candidates), before_l3 - len(candidates),
@@ -471,6 +524,17 @@ async def _execute_buy_cycle_async() -> dict:
                 for row in candidates:
                     if buys_this_cycle >= max_opps:
                         break
+
+                    # Fresh trace per evaluated symbol so the audit
+                    # rows + structured logs of this iteration share
+                    # the same correlation id end-to-end.
+                    new_trace()
+                    set_ctx(TraceContext(
+                        user_id=str(user_id), symbol=row.symbol,
+                        pool_id=str(pool.id) if pool else None,
+                        market_type="spot", exchange="gate",
+                    ))
+                    _t_l3_start = time.monotonic()
 
                     from ..services.indicator_validity import unwrap_envelope_value
                     symbol         = row.symbol
@@ -504,6 +568,16 @@ async def _execute_buy_cycle_async() -> dict:
                     # 6a. Symbol cooldown
                     if _is_on_cooldown(str(user_id), symbol, cooldown_s):
                         logger.debug("Skipping %s — on cooldown", symbol)
+                        await safe_record_decision(
+                            db=db, trace_id=get_trace(),
+                            user_id=str(user_id),
+                            pool_id=str(pool.id) if pool else None,
+                            symbol=symbol, market_type="spot", exchange="gate",
+                            status="SKIPPED", stage="L3",
+                            reason="COOLDOWN_ACTIVE",
+                            blocking_rule="SymbolCooldown",
+                            rule_details={"cooldown_seconds": cooldown_s},
+                        )
                         stats["skipped"] += 1
                         continue
 
@@ -540,6 +614,7 @@ async def _execute_buy_cycle_async() -> dict:
                             logger.info(
                                 "Buy for %s blocked (user %s): %s",
                                 symbol, user_id, block_result.get("triggered_blocks"),
+                                extra=get_log_extra(),
                             )
                             stats["skipped"] += 1
                             continue
@@ -578,9 +653,42 @@ async def _execute_buy_cycle_async() -> dict:
                             "score=%.2f size_usdt=%.2f — qualified buy "
                             "blocked by is_tradable=false",
                             symbol, alpha_score, trade_size_usdt,
+                            extra=get_log_extra(),
+                        )
+                        await safe_record_decision(
+                            db=db, trace_id=get_trace(),
+                            user_id=str(user_id),
+                            pool_id=str(pool.id) if pool else None,
+                            symbol=symbol, market_type="spot", exchange="gate",
+                            status="SKIPPED", stage="L3",
+                            reason="NOT_TRADABLE",
+                            blocking_rule="ExecutionGate",
+                            score_breakdown={
+                                "alpha_score": alpha_score,
+                                "threshold": threshold,
+                            },
                         )
                         stats["skipped"] += 1
                         continue
+
+                    # APPROVED at L3 — capital + entry triggers + block
+                    # rules + tradable gate all passed. Audit before
+                    # execute_trade so we capture the L3 decision even
+                    # if the exchange call later fails.
+                    _latency_l3_ms = round((time.monotonic() - _t_l3_start) * 1000)
+                    await safe_record_decision(
+                        db=db, trace_id=get_trace(),
+                        user_id=str(user_id),
+                        pool_id=str(pool.id) if pool else None,
+                        symbol=symbol, market_type="spot", exchange="gate",
+                        status="APPROVED", stage="L3",
+                        score_breakdown={
+                            "alpha_score": alpha_score,
+                            "threshold": threshold,
+                        },
+                        indicators_snapshot=indicators,
+                        latency_ms={"l3": _latency_l3_ms},
+                    )
 
                     # 6f. Execute
                     trade_result = await execution_engine.execute_trade(
@@ -603,6 +711,7 @@ async def _execute_buy_cycle_async() -> dict:
                             "PAPER" if paper_mode else "LIVE",
                             symbol, current_price, trade_size_usdt, alpha_score,
                             trade_result.get("trade_id", ""),
+                            extra=get_log_extra(),
                         )
                         _set_cooldown(str(user_id), symbol, cooldown_s)
                         buys_this_cycle += 1
@@ -616,13 +725,17 @@ async def _execute_buy_cycle_async() -> dict:
                         logger.warning(
                             "Trade failed %s (user %s): %s",
                             symbol, user_id, trade_result.get("error"),
+                            extra=get_log_extra(),
                         )
                         stats["errors"] += 1
 
                 stats["users_processed"] += 1
 
             except Exception as exc:
-                logger.exception("Error in buy cycle for user %s: %s", user_id, exc)
+                logger.exception(
+                    "Error in buy cycle for user %s: %s",
+                    user_id, exc, extra=get_log_extra(),
+                )
                 stats["errors"] += 1
                 continue
 

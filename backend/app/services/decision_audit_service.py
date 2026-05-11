@@ -113,6 +113,26 @@ def _build_params(
     }
 
 
+async def _publish_event_safely(payload: dict) -> None:
+    """Forward an audit row to the cross-process SSE event bus.
+
+    Awaits ``publish_decision_event_async`` which fans out via Redis
+    Pub/Sub (so worker-side decisions reach the API-side SSE endpoint)
+    AND also pushes to in-process subscribers (single-process / test
+    usage). Imported lazily so the audit service stays decoupled from
+    the bus module's import order and a bus import failure cannot break
+    the audit path. Never raises.
+    """
+    try:
+        from datetime import datetime, timezone
+        from ..core.decision_event_bus import publish_decision_event_async
+        evt = dict(payload)
+        evt.setdefault("decided_at", datetime.now(timezone.utc).isoformat())
+        await publish_decision_event_async(evt)
+    except Exception:
+        logger.debug("decision_audit: event bus publish failed", exc_info=True)
+
+
 async def _record_decision_raw(
     db: AsyncSession,
     *,
@@ -141,8 +161,13 @@ async def _record_decision_raw(
     (``async with db.begin_nested()``) so a failed audit write rolls
     back to the savepoint instead of poisoning the surrounding outer
     transaction. Most call sites should use ``record_decision`` (which
-    swallows) or the helpers in ``app/tasks`` / ``app/services`` that
+    swallows), :func:`safe_record_decision` (savepoint + commit
+    wrapper), or the helpers in ``app/tasks`` / ``app/services`` that
     wrap this in a savepoint.
+
+    On INSERT success the row is also published to the in-process
+    decision event bus so the SSE endpoint at ``/api/live/log-stream``
+    can stream it to any attached observers.
     """
     await db.execute(
         _INSERT_SQL,
@@ -157,6 +182,57 @@ async def _record_decision_raw(
             trade_id=trade_id,
         ),
     )
+    await _publish_event_safely({
+        "trace_id": trace_id,
+        "user_id": str(user_id) if user_id is not None else None,
+        "pool_id": str(pool_id) if pool_id is not None else None,
+        "symbol": symbol,
+        "market_type": market_type,
+        "exchange": exchange,
+        "status": status,
+        "stage": stage,
+        "reason": reason,
+        "blocking_rule": blocking_rule,
+        "score_breakdown": score_breakdown,
+        "latency_ms": latency_ms,
+        "trade_id": str(trade_id) if trade_id is not None else None,
+    })
+
+
+async def safe_record_decision(
+    db: Optional[AsyncSession] = None,
+    **kwargs: Any,
+) -> None:
+    """Isolated, never-raises wrapper around ``_record_decision_raw``.
+
+    Opens its own short-lived ``AsyncSessionLocal`` so the INSERT does
+    NOT touch the caller's transaction. This means:
+
+    * The caller's transactional boundary is preserved — no implicit
+      ``commit`` of accumulated outer-tx writes per audit row.
+    * A failed audit write cannot poison the caller's session
+      (``PendingRollbackError`` / "Can't operate on closed transaction"
+      cascades documented in the project's nested-savepoint gotcha).
+    * Audit volume costs at most one short DB round-trip + one pool
+      checkout per call. The pool budget (``docs/db-pool-budget.md``)
+      accommodates this — audit calls are sequential within a worker.
+
+    The ``db`` parameter is accepted for call-site readability and
+    backward compatibility but intentionally **ignored** so we never
+    accidentally mutate the caller's session boundary. Never raises.
+    """
+    from ..database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as own_db:
+            await _record_decision_raw(own_db, **kwargs)
+            await own_db.commit()
+    except Exception:
+        logger.exception(
+            "decision_audit: safe_record_decision failed "
+            "(trace_id=%s symbol=%s stage=%s status=%s)",
+            kwargs.get("trace_id"), kwargs.get("symbol"),
+            kwargs.get("stage"), kwargs.get("status"),
+        )
 
 
 async def record_decision(
