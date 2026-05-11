@@ -18,3 +18,9 @@ id = "eakknN94NNrx110aeFz2x"
 uri = "file://downloads/collect_market_data.tar.gz"
 type = "unspecified"
 title = "collect_market_data.py (compactado)"
+
+[[outputs]]
+id = "veajwYnoCqgQmSHTff1CB"
+uri = "file://.local/downloads/database.tar.gz"
+type = "unspecified"
+title = "database.py (run_db_task / _run_async) - tar.gz"
