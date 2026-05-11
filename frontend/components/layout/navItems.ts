@@ -47,6 +47,7 @@ export const TRADING_ITEMS: NavItem[] = [
   { name: "Spot", href: "/trading-desk/spot", icon: Activity },
   { name: "Futures", href: "/trading-desk/futures", icon: CandlestickChart },
   { name: "Trades & P&L", href: "/trades", icon: TrendingUp },
+  { name: "Diagnóstico ao vivo", href: "/trading-desk/diagnostics", icon: Activity },
   { name: "Reports", href: "/reports", icon: FileText },
   { name: "Pools", href: "/pools", icon: Layers },
   { name: "Profiles", href: "/profiles", icon: Sliders },
