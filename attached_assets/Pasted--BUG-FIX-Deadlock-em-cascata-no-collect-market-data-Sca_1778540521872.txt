@@ -1,0 +1,99 @@
+# BUG FIX: Deadlock em cascata no collect_market_data — Scalpyn
+
+## Contexto do projeto
+Scalpyn é uma plataforma SaaS de trading quantitativo de crypto. Backend: FastAPI + SQLAlchemy 2.0 async + asyncpg + Celery + PostgreSQL no Cloud SQL (Google Cloud Run). Os workers Celery coletam dados de mercado periodicamente via `collect_market_data.py`.
+
+## Problema diagnosticado (produção, 2026-05-11)
+Logs do Cloud SQL revelaram 402 entradas de erro com a seguinte cadeia de causa e efeito:
+
+### 1. Causa raiz — Deadlock repetitivo no PostgreSQL (100x)
+O mesmo processo (`[1024470]`) entra em deadlock a cada ~1 segundo, indefinidamente:
+ERROR: deadlock detected
+Origem: múltiplos workers Celery do `collect_all` concorrendo pelas mesmas linhas/tabelas sem ordenação consistente de locks.
+
+### 2. Erro derivado — PendingRollbackError no SQLAlchemy (42x)
+Traceback completo observado:
+File "/app/app/tasks/collect_market_data.py", line 467, in collect_all
+count = _run_async(_collect_all_async())
+File "/app/app/tasks/collect_market_data.py", line 178, in _run_async
+return loop.run_until_complete(coro)
+File "/app/app/tasks/collect_market_data.py", line 426, in _collect_all_async
+return await run_db_task(_inner, celery=True)
+File "/app/app/database.py", line 370, in run_db_task
+async with session.begin():
+sqlalchemy.exc.PendingRollbackError: Can't reconnect until invalid transaction is rolled back.
+
+### 3. Erro derivado — RuntimeError: Event loop is closed (96x)
+Quando o deadlock cancela a query, o SQLAlchemy tenta fechar a conexão asyncpg num event loop já encerrado:
+File "/app/app/tasks/collect_market_data.py", line 178, in _run_async
+return loop.run_until_complete(coro)
+RuntimeError: Event loop is closed
+Causa direta: uso de `loop.run_until_complete()` dentro de task Celery síncrona — padrão incorreto para asyncpg.
+
+### 4. Erro derivado — InterfaceError (6x)
+asyncpg.exceptions._base.InterfaceError: cannot call PreparedStatement.fetch(): the underlying connection is closed
+Query sendo executada em conexão zumbi após deadlock.
+
+---
+
+## Arquivos a analisar e corrigir
+
+Antes de propor qualquer solução, **leia o conteúdo real** destes arquivos:
+
+1. `/app/app/tasks/collect_market_data.py` — foco nas funções `collect_all` (linha ~467), `_run_async` (linha ~178), `_collect_all_async` (linha ~426)
+2. `/app/app/database.py` — foco na função `run_db_task` (linha ~370) e no gerenciamento de sessão async
+3. Qualquer outro arquivo de tasks Celery que escreva nas mesmas tabelas de market data
+
+---
+
+## O que corrigir (por prioridade)
+
+### Fix 1 — Eliminar o deadlock (causa raiz)
+Identificar quais tabelas e linhas sofrem lock concorrente entre workers. Implementar uma das estratégias:
+- `SELECT ... FOR UPDATE SKIP LOCKED` para filas de trabalho
+- Advisory locks do PostgreSQL para serializar writes por exchange/symbol
+- Ou: serializar a coleta num único worker com fila interna (sem concorrência nas mesmas linhas)
+
+### Fix 2 — Corrigir o padrão Celery + asyncio
+Substituir `loop.run_until_complete()` por `asyncio.run()`, que cria e fecha o event loop corretamente por invocação:
+```python
+# ANTES (errado — reutiliza loop que pode estar fechado)
+def _run_async(coro):
+    loop = asyncio.get_event_loop()
+    return loop.run_until_complete(coro)
+
+# DEPOIS (correto)
+def _run_async(coro):
+    return asyncio.run(coro)
+```
+Verificar se há outros lugares no projeto usando o padrão antigo.
+
+### Fix 3 — Tratar PendingRollbackError em run_db_task
+Em `database.py`, garantir que qualquer exceção dentro de `session.begin()` faça rollback explícito antes de propagar:
+```python
+async with session.begin():
+    ...
+# session.begin() como context manager já faz rollback no __aexit__ em caso de exceção,
+# MAS verificar se run_db_task tem try/except que suprime o rollback ou reutiliza sessão inválida
+```
+
+### Fix 4 — Evitar retry em loop sobre deadlock
+Se Celery está configurado com `autoretry_for` ou retry automático, garantir que deadlock (`psycopg2.errors.DeadlockDetected` / `asyncpg.exceptions.DeadlockDetectedError`) tenha um limite de retries com backoff exponencial, não retry infinito.
+
+---
+
+## Restrições obrigatórias (padrões Scalpyn)
+
+- **ZERO HARDCODE**: nenhum parâmetro de timeout, retry, ou intervalo de coleta deve ser hardcoded — deve vir de `config_service` ou variáveis de ambiente
+- **Estritamente aditivo**: não remover rotas, tabelas, colunas ou tasks existentes — apenas corrigir a lógica interna
+- **Migrations**: se qualquer mudança de schema for necessária, gerar migration Alembic (`alembic revision --autogenerate`)
+- **Sem quebrar a interface**: `collect_all` deve continuar sendo chamável da mesma forma pelo Celery Beat
+- **Testar**: após cada fix, mostrar como verificar que o problema foi resolvido (query SQL para confirmar ausência de deadlocks, ou log esperado)
+
+---
+
+## Entregáveis esperados
+
+1. Diff das correções em cada arquivo modificado
+2. Explicação de por que cada mudança resolve o problema específico
+3. Como verificar em produção que os erros cessaram
