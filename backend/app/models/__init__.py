@@ -14,6 +14,8 @@ from .backoffice import DecisionLog, AssetTrace, BackofficeAlert, PipelineMetric
 from .trade_simulation import TradeSimulation
 from .indicator_snapshot import IndicatorSnapshot
 from .trade_tracking import TradeTracking
+from .exchange_execution import ExchangeExecution
+from .position_lifecycle import PositionLifecycle
 
 __all__ = [
     "User",
@@ -40,4 +42,6 @@ __all__ = [
     "TradeSimulation",
     "IndicatorSnapshot",
     "TradeTracking",
+    "ExchangeExecution",
+    "PositionLifecycle",
 ]

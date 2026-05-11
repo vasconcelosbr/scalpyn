@@ -712,9 +712,15 @@ class GateAdapter(BaseExchangeAdapter):
         currency_pair: Optional[str] = None,
         days: int = 90,
         limit: int = 500,
+        page: int = 1,
+        from_ts: Optional[int] = None,
+        to_ts: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         GET /spot/my_trades — authenticated, returns user's personal trade fills.
+
+        Supports Gate.io's native ``page`` cursor (1-indexed) and explicit
+        ``from``/``to`` epoch-second bounds for deterministic pagination.
 
         Returns list of dicts with keys:
             id, create_time, create_time_ms, order_id, currency_pair,
@@ -722,11 +728,15 @@ class GateAdapter(BaseExchangeAdapter):
             fee, fee_currency, point_fee, gt_fee.
         """
         from datetime import datetime, timezone, timedelta
-        start_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+        if from_ts is None:
+            from_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
         params: Dict[str, str] = {
             "limit": str(limit),
-            "from": str(start_ts),
+            "from": str(from_ts),
+            "page": str(max(1, page)),
         }
+        if to_ts is not None:
+            params["to"] = str(to_ts)
         if currency_pair:
             params["currency_pair"] = self._normalize_symbol(currency_pair)
         return await self._request("GET", "/spot/my_trades", params=params)
@@ -754,9 +764,16 @@ class GateAdapter(BaseExchangeAdapter):
         contract: Optional[str] = None,
         days: int = 7,
         limit: int = 100,
+        last_id: Optional[str] = None,
+        from_ts: Optional[int] = None,
+        to_ts: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         GET /futures/usdt/my_trades — authenticated personal futures fill history.
+
+        Supports Gate.io's native ``last_id`` cursor (id of the last row
+        from the previous page) and explicit ``from``/``to`` epoch-second
+        bounds for deterministic pagination.
 
         Returns list of dicts with keys:
             id, contract, create_time, create_time_ms, order_id,
@@ -764,11 +781,16 @@ class GateAdapter(BaseExchangeAdapter):
             role ("maker"|"taker"), fee, text.
         """
         from datetime import datetime, timezone, timedelta
-        start_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
+        if from_ts is None:
+            from_ts = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp())
         params: Dict[str, str] = {
             "limit": str(limit),
-            "from": str(start_ts),
+            "from": str(from_ts),
         }
+        if to_ts is not None:
+            params["to"] = str(to_ts)
+        if last_id:
+            params["last_id"] = str(last_id)
         if contract:
             params["contract"] = self._normalize_symbol(contract)
         return await self._request(

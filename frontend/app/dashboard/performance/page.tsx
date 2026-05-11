@@ -1,1296 +1,733 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  Activity,
-  AlertTriangle,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  Database,
-  Download,
-  Gauge,
-  RefreshCw,
-  ShieldAlert,
-  Sigma,
-  TrendingUp,
-  Cpu,
-  Zap,
-  Clock,
-  History,
+  Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, ChevronDown, ChevronRight,
+  Download, Layers, RefreshCw, Settings2, TrendingUp, Wallet,
 } from "lucide-react";
 import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
+  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell,
+  Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
+import {
+  ExecutionFilters,
+  PerformanceFilter,
+  WindowKey,
+  usePerformanceByAsset,
+  usePerformanceDistribution,
+  usePerformanceEquity,
+  usePerformanceExecutions,
+  usePerformanceSummary,
+} from "@/hooks/usePerformance";
 
-// ─── Theme ───────────────────────────────────────────────────────────────────
+// ── theme ────────────────────────────────────────────────────────────────────
 const C = {
-  surface: "#0C0D12",
-  elevated: "#12131A",
-  elevated2: "#1A1C28",
-  border: "rgba(255,255,255,0.07)",
+  bg: "#0A0B10",
+  surface: "#10121A",
+  elevated: "#161824",
+  border: "rgba(255,255,255,0.06)",
   borderStrong: "rgba(255,255,255,0.12)",
-  textPrimary: "#E8ECF4",
-  textSecondary: "#8B92A5",
-  textTertiary: "#555B6E",
-  ok: "#22c55e",
-  warn: "#f59e0b",
-  critical: "#ef4444",
+  text: "#E6E8EE",
+  muted: "#8A91A4",
+  dim: "#5A6075",
+  green: "#22B97A",
+  red: "#E5484D",
   blue: "#4F7BF7",
-  purple: "#a78bfa",
+  purple: "#9D7CF7",
+  amber: "#F2A33A",
 } as const;
 
-const STATUS_STYLES: Record<string, { bg: string; border: string; text: string; icon: React.ReactNode }> = {
-  ok:       { bg: "rgba(34,197,94,0.12)",  border: "rgba(34,197,94,0.45)",  text: C.ok,            icon: <CheckCircle2 size={20} /> },
-  degraded: { bg: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.45)", text: C.warn,          icon: <AlertTriangle size={20} /> },
-  warn:     { bg: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.45)", text: C.warn,          icon: <AlertTriangle size={20} /> },
-  critical: { bg: "rgba(239,68,68,0.14)",  border: "rgba(239,68,68,0.55)",  text: C.critical,      icon: <ShieldAlert size={20} /> },
-  unknown:  { bg: "rgba(139,146,165,0.10)", border: "rgba(139,146,165,0.30)", text: C.textSecondary, icon: <Activity size={20} /> },
+const WINDOWS: WindowKey[] = ["1D", "7D", "30D", "MTD", "YTD", "ALL"];
+
+const fmtUsd = (n: number | null | undefined, dp = 2) =>
+  n === null || n === undefined || Number.isNaN(n)
+    ? "—"
+    : n.toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+const fmtPct = (n: number | null | undefined, dp = 2) =>
+  n === null || n === undefined || Number.isNaN(n) ? "—" : `${n.toFixed(dp)}%`;
+const fmtSec = (s: number | null | undefined) => {
+  if (!s || s < 0) return "—";
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  return `${d}d ${h}h`;
 };
+const num = (n: number | null | undefined, dp = 4) =>
+  n === null || n === undefined ? "—" : n.toLocaleString("en-US", { maximumFractionDigits: dp });
 
-const STATUS_LABEL_PT: Record<string, string> = {
-  ok: "Pipeline saudável",
-  degraded: "Degradado",
-  warn: "Atrasado",
-  critical: "Crítico",
-  unknown: "Sem dados",
-};
-
-// ─── Types ───────────────────────────────────────────────────────────────────
-interface SnapshotEnvelope<T = Record<string, unknown>> {
-  as_of: string | null;
-  status: "ok" | "degraded" | "critical" | "unknown";
-  data: T;
-  error: string | null;
-  failure_streak?: number;
-}
-
-interface OperationalAlert {
-  severity: "warning" | "critical";
-  category: string;
-  code: string;
-  impact: string;
-  since: string | null;
-  details: Record<string, unknown>;
-}
-
-interface QueueStats { active: number; reserved: number; scheduled: number }
-
-interface OverviewResp {
-  as_of: string;
-  overall_status: "ok" | "degraded" | "critical" | "unknown";
-  snapshots: {
-    ingestion: SnapshotEnvelope<{
-      rows_window?: number;
-      distinct_symbols?: number;
-      last_candle?: string | null;
-      delay_seconds?: number | null;
-    }>;
-    celery: SnapshotEnvelope<{
-      workers?: string[];
-      worker_count?: number;
-      active_tasks?: number;
-      reserved_tasks?: number;
-      scheduled_tasks?: number;
-      registered_tasks?: number;
-      per_queue?: Record<string, QueueStats>;
-      beat?: { status?: string; schedule_age_seconds?: number | null };
-    }>;
-    redis: SnapshotEnvelope<{
-      alive?: boolean;
-      ping_ms?: number;
-      connected_clients?: number;
-      used_memory_human?: string;
-      instantaneous_ops_per_sec?: number;
-      total_commands_processed?: number;
-      queue_lengths?: Record<string, number>;
-      backlog_total?: number;
-      unrouted_backlog?: number;
-    }>;
-    db: SnapshotEnvelope<{
-      select1_ms?: number;
-      pool_size?: number;
-      checked_out?: number;
-      checked_in?: number;
-      overflow?: number;
-      status?: string;
-    }>;
-    score: SnapshotEnvelope<{
-      throughput?: {
-        decisions_24h?: number;
-        allow_24h?: number;
-        block_24h?: number;
-        allow_rate_24h?: number;
-        decisions_per_min_avg_24h?: number;
-        decisions_per_min_now?: number;
-        scores_per_min_now?: number;
-        series_60m?: { ts: string; decisions_per_min: number; scores_per_min: number }[];
-        last_decision?: string | null;
-        last_decision_age_seconds?: number | null;
-      };
-      quality?: {
-        avg_score?: number | null;
-        min_score?: number | null;
-        max_score?: number | null;
-        stddev_score?: number | null;
-        avg_confidence?: number | null;
-        reject_ratio?: number;
-        missing_indicators_pct?: number;
-        stale_indicators_pct?: number;
-        l1_pass_rate?: number;
-        l2_pass_rate?: number;
-        l3_pass_rate?: number;
-      };
-      distribution?: {
-        buckets?: { bucket: string; count: number }[];
-        total_scored?: number;
-        p50_score?: number | null;
-        p95_score?: number | null;
-      };
-      // legacy mirrors (kept by backend for /system-status)
-      decisions_24h?: number;
-      allow_rate_24h?: number;
-      avg_score?: number | null;
-      last_decision_age_seconds?: number | null;
-    }>;
-    ingestion_latency: SnapshotEnvelope<{
-      delay_seconds?: number | null;
-      last_candle?: string | null;
-      rows_window?: number;
-    }>;
-    decision_latency: SnapshotEnvelope<{
-      p50_ms?: number | null;
-      p95_ms?: number | null;
-      max_ms?: number | null;
-      samples_24h?: number;
-      formula?: string;
-    }>;
-    processing_latency: SnapshotEnvelope<{
-      available?: boolean;
-      samples?: number;
-      p50_ms?: number | null;
-      p95_ms?: number | null;
-      avg_ms?: number | null;
-    }>;
-  };
-  alerts: OperationalAlert[];
-  alert_count: number;
-}
-
-interface EventItem {
-  ts: string;
-  code: string;
-  message: string;
-  extra: Record<string, unknown>;
-  category?: string;
-}
-interface EventsResp {
-  as_of: string;
-  alert_history?: EventItem[];
-  worker_events?: EventItem[];
-  redis_degradations?: EventItem[];
-}
-
-// Analytics types (lazy section)
-interface OhlcvRateResp {
-  window_minutes: number;
-  timeframe: string;
-  total_candles: number;
-  buckets: { bucket: string; candles: number }[];
-}
-interface DecisionsResp {
-  window_hours: number;
-  total: number;
-  allow: number;
-  block: number;
-  allow_rate: number;
-  avg_score: number | null;
-  score_distribution: { bucket: string; count: number }[];
-  top_block_reasons: { reason: string; count: number }[];
-}
-interface TradesResp {
-  window_days: number;
-  total: number;
-  win_rate: number | null;
-  avg_pnl_pct: number | null;
-  avg_holding_seconds: number | null;
-  cumulative_pnl: { time: string; cumulative_pnl_pct: number }[];
-}
-interface CompResp {
-  window_days: number;
-  items: { kind: string; total: number; win_rate: number | null; avg_pnl_pct: number | null }[];
-}
-interface MlResp {
-  total: number;
-  items: {
-    id: string;
-    symbol: string;
-    direction: string;
-    decision_type: string;
-    result: string;
-    time_to_result: number | null;
-    entry_price: number;
-    exit_price: number | null;
-    timestamp_entry: string;
-  }[];
-}
-
-// ─── Polling hook ────────────────────────────────────────────────────────────
-function usePoll<T>(endpoint: string | null, intervalMs: number) {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState<boolean>(endpoint != null);
-  const [tick, setTick] = useState(0);
-
-  const refresh = useCallback(() => setTick((t) => t + 1), []);
-
-  useEffect(() => {
-    if (endpoint == null) {
-      setData(null);
-      setError(null);
-      setLoading(false);
-      return;
-    }
-    let cancelled = false;
-    const run = async () => {
-      try {
-        const res = await apiGet<T>(endpoint);
-        if (!cancelled) {
-          setData(res);
-          setError(null);
-        }
-      } catch (e: unknown) {
-        if (!cancelled) {
-          const msg = e instanceof Error ? e.message : String(e);
-          setError(msg);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-    run();
-    const id = setInterval(run, intervalMs);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [endpoint, intervalMs, tick]);
-
-  return { data, error, loading, refresh };
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-function fmtAge(seconds: number | null | undefined): string {
-  if (seconds == null) return "—";
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds % 60);
-  if (m < 60) return s ? `${m}m ${s}s` : `${m}m`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
-}
-function fmtPct(v: number | null | undefined, digits = 1): string {
-  if (v == null || Number.isNaN(v)) return "—";
-  return `${(v * 100).toFixed(digits)}%`;
-}
-function fmtPctSigned(v: number | null | undefined, digits = 2): string {
-  if (v == null || Number.isNaN(v)) return "—";
-  const sign = v > 0 ? "+" : "";
-  return `${sign}${v.toFixed(digits)}%`;
-}
-function fmtTime(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
-function fmtMs(v: number | null | undefined, digits = 0): string {
-  if (v == null || Number.isNaN(v)) return "—";
-  return `${v.toFixed(digits)} ms`;
-}
-function statusColor(s: string | undefined | null): string {
-  if (s === "ok") return C.ok;
-  if (s === "degraded" || s === "warn") return C.warn;
-  if (s === "critical") return C.critical;
-  return C.textSecondary;
-}
-
-// ─── Shared UI ───────────────────────────────────────────────────────────────
-function Panel({
-  title,
-  icon,
-  children,
-  right,
-  className = "",
+// ── tiny UI helpers ──────────────────────────────────────────────────────────
+function StatCard({
+  label, value, hint, accent, sub,
 }: {
-  title: string;
-  icon?: React.ReactNode;
-  children: React.ReactNode;
-  right?: React.ReactNode;
-  className?: string;
+  label: string; value: string; hint?: string;
+  accent?: "green" | "red" | "blue" | "amber"; sub?: string;
+}) {
+  const accentColor = accent === "green" ? C.green : accent === "red" ? C.red : accent === "amber" ? C.amber : C.text;
+  return (
+    <div style={{ background: C.elevated, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px" }}>
+      <div style={{ fontSize: 11, color: C.muted, letterSpacing: 0.6, textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 600, fontVariantNumeric: "tabular-nums", color: accentColor, marginTop: 6 }}>
+        {value}
+      </div>
+      {sub ? <div style={{ fontSize: 11, color: C.muted, fontVariantNumeric: "tabular-nums", marginTop: 4 }}>{sub}</div> : null}
+      {hint ? <div style={{ fontSize: 10.5, color: C.dim, marginTop: 4 }}>{hint}</div> : null}
+    </div>
+  );
+}
+
+function SectionTitle({ icon, label, right }: { icon?: React.ReactNode; label: string; right?: React.ReactNode }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, fontSize: 12, letterSpacing: 0.6, textTransform: "uppercase" }}>
+        {icon}{label}
+      </div>
+      {right}
+    </div>
+  );
+}
+
+function ChartCard({ title, children, height = 240 }: { title: string; children: React.ReactNode; height?: number }) {
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14 }}>
+      <div style={{ fontSize: 12, color: C.muted, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 10 }}>{title}</div>
+      <div style={{ width: "100%", height }}>{children}</div>
+    </div>
+  );
+}
+
+// ── filter bar ───────────────────────────────────────────────────────────────
+function FilterBar({
+  filter, onChange, onSync, syncing,
+}: {
+  filter: PerformanceFilter;
+  onChange: (next: PerformanceFilter) => void;
+  onSync: () => void;
+  syncing: boolean;
 }) {
   return (
-    <div
-      className={`rounded-2xl p-5 flex flex-col gap-4 ${className}`}
-      style={{ background: C.elevated, border: `1px solid ${C.border}` }}
-    >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span style={{ color: C.textSecondary }}>{icon}</span>
-          <h3 className="text-[13px] font-semibold uppercase tracking-[0.06em]" style={{ color: C.textSecondary }}>
-            {title}
-          </h3>
-        </div>
-        {right}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function StatTile({ label, value, hint, color }: { label: string; value: string; hint?: string; color?: string }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>{label}</span>
-      <span className="text-[22px] font-bold tabular-nums" style={{ color: color ?? C.textPrimary }}>{value}</span>
-      {hint && <span className="text-[11px]" style={{ color: C.textTertiary }}>{hint}</span>}
-    </div>
-  );
-}
-
-function EmptyState({ message }: { message: string }) {
-  return (
-    <div className="flex items-center justify-center py-10">
-      <p className="text-sm" style={{ color: C.textTertiary }}>{message}</p>
-    </div>
-  );
-}
-
-// ─── Operational banner ────────────────────────────────────────────────────
-// Cor do banner é estritamente derivada do atraso de ingestão (10/20 min,
-// conforme contrato da Task #225). A severidade operacional dos demais
-// subsistemas (Celery/Redis/DB/score/latência) é exposta separadamente
-// como um badge — assim Redis degradado não mascara a saúde da ingestão.
-type StatusKey = "ok" | "degraded" | "critical" | "unknown";
-function ingestionStatusFromDelay(delay: number | null | undefined): StatusKey {
-  if (delay == null) return "unknown";
-  if (delay > 1200) return "critical"; // > 20 min
-  if (delay > 600)  return "degraded"; // 10–20 min
-  return "ok";
-}
-
-function OperationalBanner({ data }: { data: OverviewResp | null }) {
-  const ing = data?.snapshots?.ingestion?.data;
-  const delay = ing?.delay_seconds ?? null;
-  const ingestionStatus = ingestionStatusFromDelay(delay);
-  const style = STATUS_STYLES[ingestionStatus] ?? STATUS_STYLES.unknown;
-
-  const overall = data?.overall_status ?? "unknown";
-  const opsStyle = STATUS_STYLES[overall] ?? STATUS_STYLES.unknown;
-
-  const decisions24h =
-    data?.snapshots?.score?.data?.throughput?.decisions_24h ??
-    data?.snapshots?.score?.data?.decisions_24h ??
-    0;
-  return (
-    <div
-      className="rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4"
-      style={{ background: style.bg, border: `1px solid ${style.border}` }}
-    >
-      <div className="flex items-center gap-4">
-        <div style={{ color: style.text }}>{style.icon}</div>
-        <div className="flex flex-col">
-          <span className="text-[18px] font-bold" style={{ color: style.text }}>
-            {STATUS_LABEL_PT[ingestionStatus] ?? ingestionStatus}
-          </span>
-          <span className="text-[12px]" style={{ color: C.textSecondary }}>
-            Atraso de ingestão · verde &lt; 10 min · amarelo 10–20 min · vermelho &gt; 20 min
-          </span>
-        </div>
-      </div>
-      <div className="flex items-center gap-6 flex-wrap">
-        <StatTile label="Atraso ingest" value={fmtAge(delay)} color={style.text} />
-        <StatTile label="Símbolos" value={String(ing?.distinct_symbols ?? "—")} />
-        <StatTile label="Candles (15m)" value={String(ing?.rows_window ?? "—")} />
-        <StatTile label="Decisões 24h" value={String(decisions24h)} />
-        <StatTile
-          label="Alertas ativos"
-          value={String(data?.alert_count ?? 0)}
-          color={(data?.alert_count ?? 0) > 0 ? C.critical : C.ok}
-        />
-        <div className="flex flex-col items-start gap-0.5">
-          <span className="text-[10px] uppercase tracking-wider" style={{ color: C.textTertiary }}>
-            Severidade operacional
-          </span>
-          <span
-            className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
-            style={{ background: `${opsStyle.text}22`, color: opsStyle.text, border: `1px solid ${opsStyle.text}55` }}
-          >
-            {STATUS_LABEL_PT[overall] ?? overall}
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Alerts list ────────────────────────────────────────────────────────────
-function AlertsPanel({ data }: { data: OverviewResp | null }) {
-  const alerts = data?.alerts ?? [];
-  return (
-    <Panel title={`Alertas (${alerts.length})`} icon={<ShieldAlert size={16} />}>
-      {alerts.length === 0 ? (
-        <div className="flex items-center gap-2 py-2" style={{ color: C.ok }}>
-          <CheckCircle2 size={16} />
-          <span className="text-sm">Nenhum alerta ativo. Tudo operacional.</span>
-        </div>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {alerts.map((a) => {
-            const sev = a.severity === "critical" ? C.critical : C.warn;
-            return (
-              <li
-                key={a.code}
-                className="rounded-xl p-3 flex flex-col gap-1"
-                style={{
-                  background: a.severity === "critical" ? "rgba(239,68,68,0.06)" : "rgba(245,158,11,0.06)",
-                  border: `1px solid ${a.severity === "critical" ? "rgba(239,68,68,0.30)" : "rgba(245,158,11,0.30)"}`,
-                }}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide"
-                      style={{ background: sev, color: "white" }}
-                    >
-                      {a.severity}
-                    </span>
-                    <span className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>{a.category}</span>
-                    <span className="text-[12px] font-mono" style={{ color: C.textSecondary }}>{a.code}</span>
-                  </div>
-                  {a.since && (
-                    <span className="text-[11px]" style={{ color: C.textTertiary }}>desde {fmtTime(a.since)}</span>
-                  )}
-                </div>
-                <p className="text-[13px]" style={{ color: C.textPrimary }}>{a.impact}</p>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </Panel>
-  );
-}
-
-// ─── Snapshot card ──────────────────────────────────────────────────────────
-function SnapshotCard({
-  title,
-  icon,
-  envelope,
-  rows,
-  footer,
-}: {
-  title: string;
-  icon: React.ReactNode;
-  envelope: SnapshotEnvelope | undefined;
-  rows: { label: string; value: string }[];
-  footer?: React.ReactNode;
-}) {
-  const status = envelope?.status ?? "unknown";
-  const color = statusColor(status);
-  const streak = envelope?.failure_streak ?? 0;
-  return (
-    <div
-      className="rounded-2xl p-4 flex flex-col gap-3"
-      style={{ background: C.elevated, border: `1px solid ${C.border}` }}
-    >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span style={{ color: C.textSecondary }}>{icon}</span>
-          <h4 className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: C.textSecondary }}>{title}</h4>
-        </div>
-        <span
-          className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
-          style={{ background: `${color}22`, color, border: `1px solid ${color}55` }}
-        >
-          {status}{streak > 0 ? ` (${streak}/3)` : ""}
-        </span>
-      </div>
-      <div className="flex flex-col gap-1.5">
-        {rows.map((r) => (
-          <div key={r.label} className="flex justify-between text-[13px]">
-            <span style={{ color: C.textTertiary }}>{r.label}</span>
-            <span className="tabular-nums font-medium text-right" style={{ color: C.textPrimary }}>{r.value}</span>
-          </div>
-        ))}
-      </div>
-      {footer}
-      {envelope?.error && (
-        <p className="text-[11px] mt-1 truncate" title={envelope.error} style={{ color: C.critical }}>{envelope.error}</p>
-      )}
-      {envelope?.as_of && (
-        <p className="text-[10px]" style={{ color: C.textTertiary }}>atualizado {fmtTime(envelope.as_of)}</p>
-      )}
-    </div>
-  );
-}
-
-// ─── Per-queue mini-table (Celery + Redis backlog) ──────────────────────────
-function QueueBreakdown({
-  perQueue,
-  queueLengths,
-}: {
-  perQueue?: Record<string, QueueStats>;
-  queueLengths?: Record<string, number>;
-}) {
-  const queues = useMemo(() => {
-    const names = new Set<string>([
-      ...Object.keys(perQueue ?? {}),
-      ...Object.keys(queueLengths ?? {}),
-    ]);
-    return Array.from(names).sort();
-  }, [perQueue, queueLengths]);
-  if (queues.length === 0) return null;
-  return (
-    <div className="border-t pt-2" style={{ borderColor: C.border }}>
-      <p className="text-[10px] uppercase tracking-wide mb-1.5" style={{ color: C.textTertiary }}>
-        Por fila — backlog (LLEN) · A/R/S
-      </p>
-      <ul className="flex flex-col gap-1">
-        {queues.map((q) => {
-          const ll = queueLengths?.[q];
-          const stats = perQueue?.[q];
-          const isSentinel = q === "__no_default__";
-          const danger = isSentinel && (ll ?? 0) > 0;
+    <div style={{
+      background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10,
+      padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between",
+      gap: 12, flexWrap: "wrap",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        {WINDOWS.map(w => {
+          const active = filter.window === w;
           return (
-            <li key={q} className="flex justify-between text-[12px] tabular-nums">
-              <span style={{ color: danger ? C.critical : C.textPrimary }}>
-                {q}{isSentinel ? " ⚠" : ""}
-              </span>
-              <span style={{ color: danger ? C.critical : C.textSecondary }}>
-                {ll != null && ll >= 0 ? `LLEN ${ll}` : "LLEN —"}
-                {stats ? ` · ${stats.active}/${stats.reserved}/${stats.scheduled}` : ""}
-              </span>
-            </li>
+            <button key={w} onClick={() => onChange({ ...filter, window: w, from: undefined, to: undefined })}
+              style={{
+                background: active ? C.elevated : "transparent",
+                color: active ? C.text : C.muted,
+                border: `1px solid ${active ? C.borderStrong : C.border}`,
+                borderRadius: 6, padding: "5px 10px", fontSize: 11.5, cursor: "pointer",
+                letterSpacing: 0.4,
+              }}>
+              {w}
+            </button>
           );
         })}
-      </ul>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, fontSize: 11.5 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+          <input type="checkbox" checked={filter.autoRefresh}
+            onChange={e => onChange({ ...filter, autoRefresh: e.target.checked })} />
+          Auto-refresh 30s
+        </label>
+        <button onClick={onSync} disabled={syncing}
+          style={{
+            background: C.elevated, border: `1px solid ${C.borderStrong}`, color: C.text,
+            borderRadius: 6, padding: "6px 12px", fontSize: 11.5, cursor: "pointer",
+            display: "inline-flex", alignItems: "center", gap: 6, opacity: syncing ? 0.6 : 1,
+          }}>
+          <RefreshCw size={13} className={syncing ? "spin" : ""} />
+          {syncing ? "Sincronizando…" : "Sync Gate.io"}
+        </button>
+      </div>
+      <style jsx>{`
+        .spin { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg);} to { transform: rotate(360deg);} }
+      `}</style>
     </div>
   );
 }
 
-// ─── Score engine sub-panels (Throughput / Quality / Distribution, 24 h) ───
-function ScoreEnginePanels({ envelope }: { envelope: OverviewResp["snapshots"]["score"] | undefined }) {
-  const status = envelope?.status ?? "unknown";
-  const color = statusColor(status);
-  const streak = envelope?.failure_streak ?? 0;
-  const t = envelope?.data.throughput ?? {};
-  const q = envelope?.data.quality ?? {};
-  const d = envelope?.data.distribution ?? {};
-  const buckets = (d.buckets ?? []).map((b) => ({ ...b, label: b.bucket }));
-  const stageRows = [
-    { label: "L1 pass-rate", v: q.l1_pass_rate ?? null },
-    { label: "L2 pass-rate", v: q.l2_pass_rate ?? null },
-    { label: "L3 pass-rate", v: q.l3_pass_rate ?? null },
-  ];
+// ── flash cards cluster ──────────────────────────────────────────────────────
+function FlashCards({ filter }: { filter: PerformanceFilter }) {
+  const { data, isLoading, error } = usePerformanceSummary(filter);
+
+  if (error) return (
+    <div style={{ background: C.surface, border: `1px solid ${C.red}55`, borderRadius: 10, padding: 14, color: C.red, fontSize: 12 }}>
+      <AlertTriangle size={14} style={{ verticalAlign: "middle" }} /> Erro ao carregar resumo: {String(error.message ?? error)}
+    </div>
+  );
+
+  const s = data;
+  const placeholder = isLoading || !s;
+
+  const pnlColor = s && s.pnl.total_usdt >= 0 ? "green" : "red";
+  const deltaColor = s && s.pnl.delta_vs_previous >= 0 ? "green" : "red";
+
   return (
-    <Panel
-      title="Score engine — 24 h"
-      icon={<Sigma size={16} />}
-      right={
-        <span
-          className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
-          style={{ background: `${color}22`, color, border: `1px solid ${color}55` }}
-        >
-          {status}{streak > 0 ? ` (${streak}/3)` : ""}
-        </span>
-      }
-    >
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.elevated2, border: `1px solid ${C.border}` }}>
-          <p className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>Throughput</p>
-          <div className="grid grid-cols-2 gap-3">
-            <StatTile label="Decisões/min (now)" value={String(t.decisions_per_min_now ?? 0)} />
-            <StatTile label="Scores/min (now)" value={String(t.scores_per_min_now ?? 0)} />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <StatTile label="ALLOW 24h" value={String(t.allow_24h ?? 0)} color={C.ok} />
-            <StatTile label="BLOCK 24h" value={String(t.block_24h ?? 0)} color={C.critical} />
-          </div>
-          {(t.series_60m ?? []).length > 0 ? (
-            <ResponsiveContainer width="100%" height={70}>
-              <LineChart data={t.series_60m} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-                <XAxis dataKey="ts" hide />
-                <YAxis hide allowDecimals={false} />
-                <Tooltip
-                  contentStyle={{ background: C.elevated, border: `1px solid ${C.borderStrong}`, borderRadius: 12, fontSize: 11 }}
-                  labelFormatter={(v) => fmtTime(String(v))}
-                />
-                <Line type="monotone" dataKey="decisions_per_min" stroke={C.purple} strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="text-[11px]" style={{ color: C.textTertiary }}>Sem amostras nos últimos 60 min.</p>
-          )}
-          <div className="flex justify-between text-[12px]">
-            <span style={{ color: C.textTertiary }}>Média 24h/min</span>
-            <span className="tabular-nums" style={{ color: C.textPrimary }}>{(t.decisions_per_min_avg_24h ?? 0).toFixed(2)}</span>
-          </div>
-          <div className="flex justify-between text-[12px]">
-            <span style={{ color: C.textTertiary }}>Última decisão</span>
-            <span className="tabular-nums" style={{ color: C.textPrimary }}>{fmtAge(t.last_decision_age_seconds)}</span>
-          </div>
-        </div>
-        <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.elevated2, border: `1px solid ${C.border}` }}>
-          <p className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>Qualidade</p>
-          <div className="grid grid-cols-2 gap-3">
-            <StatTile label="Avg confidence" value={q.avg_confidence != null ? `${(q.avg_confidence * 100).toFixed(1)}%` : "—"} />
-            <StatTile label="Reject ratio" value={fmtPct(q.reject_ratio ?? null)} color={(q.reject_ratio ?? 0) > 0.5 ? C.warn : undefined} />
-            <StatTile label="% missing ind." value={fmtPct(q.missing_indicators_pct ?? null)} color={(q.missing_indicators_pct ?? 0) > 0.1 ? C.warn : undefined} />
-            <StatTile label="% stale ind." value={fmtPct(q.stale_indicators_pct ?? null)} color={(q.stale_indicators_pct ?? 0) > 0.1 ? C.warn : undefined} />
-          </div>
-          <div className="border-t pt-2 flex flex-col gap-1" style={{ borderColor: C.border }}>
-            <div className="flex justify-between text-[12px]">
-              <span style={{ color: C.textTertiary }}>Score médio (σ)</span>
-              <span className="tabular-nums" style={{ color: C.textPrimary }}>
-                {q.avg_score != null ? q.avg_score.toFixed(1) : "—"}
-                {q.stddev_score != null ? ` (±${q.stddev_score.toFixed(2)})` : ""}
-              </span>
-            </div>
-            {stageRows.map((r) => (
-              <div key={r.label} className="flex justify-between text-[12px]">
-                <span style={{ color: C.textTertiary }}>{r.label}</span>
-                <span className="tabular-nums" style={{ color: C.textPrimary }}>{fmtPct(r.v)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: C.elevated2, border: `1px solid ${C.border}` }}>
-          <p className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>Distribuição de score</p>
-          {buckets.length === 0 || (d.total_scored ?? 0) === 0 ? (
-            <EmptyState message="Sem scores na janela." />
-          ) : (
-            <ResponsiveContainer width="100%" height={140}>
-              <BarChart data={buckets} margin={{ top: 6, right: 6, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 4" stroke="rgba(255,255,255,0.04)" vertical={false} />
-                <XAxis dataKey="label" tick={{ fill: C.textTertiary, fontSize: 11 }} tickLine={false} axisLine={false} />
-                <YAxis tick={{ fill: C.textTertiary, fontSize: 11 }} tickLine={false} axisLine={false} width={28} allowDecimals={false} />
-                <Tooltip contentStyle={{ background: C.elevated, border: `1px solid ${C.borderStrong}`, borderRadius: 12 }} labelStyle={{ color: C.textSecondary }} itemStyle={{ color: C.textPrimary }} />
-                <Bar dataKey="count" fill={C.purple} radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-          <div className="grid grid-cols-2 gap-3">
-            <StatTile label="p50 score" value={d.p50_score != null ? d.p50_score.toFixed(1) : "—"} />
-            <StatTile label="p95 score" value={d.p95_score != null ? d.p95_score.toFixed(1) : "—"} />
-          </div>
-          <div className="flex justify-between text-[12px]">
-            <span style={{ color: C.textTertiary }}>Total scored</span>
-            <span className="tabular-nums" style={{ color: C.textPrimary }}>{d.total_scored ?? 0}</span>
-          </div>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+      {/* Capital cluster */}
+      <div>
+        <SectionTitle icon={<Wallet size={13} />} label="Capital" />
+        <div style={{ display: "grid", gap: 8 }}>
+          <StatCard label="Investido (período)" value={placeholder ? "—" : `$${fmtUsd(s.capital.invested_usdt)}`} sub={`Spot PnL $${fmtUsd(s?.capital.spot_pnl_usdt)} · Fut PnL $${fmtUsd(s?.capital.futures_pnl_usdt)}`} />
+          <StatCard label="Posições abertas" value={placeholder ? "—" : String(s.capital.open_positions)} hint="lots ainda não fechados" />
         </div>
       </div>
-      {envelope?.error && (
-        <p className="text-[11px]" style={{ color: C.critical }}>{envelope.error}</p>
-      )}
-    </Panel>
-  );
-}
 
-// ─── Snapshot grid ──────────────────────────────────────────────────────────
-function OpsSnapshotsGrid({ data }: { data: OverviewResp | null }) {
-  const s = data?.snapshots;
-  const beat = s?.celery.data.beat;
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      <SnapshotCard
-        title="Ingestão OHLCV"
-        icon={<Gauge size={14} />}
-        envelope={s?.ingestion}
-        rows={[
-          { label: "Atraso", value: fmtAge(s?.ingestion.data.delay_seconds) },
-          { label: "Símbolos (15m)", value: String(s?.ingestion.data.distinct_symbols ?? "—") },
-          { label: "Candles (15m)", value: String(s?.ingestion.data.rows_window ?? "—") },
-          { label: "Último candle", value: fmtTime(s?.ingestion.data.last_candle) },
-        ]}
-      />
-      <SnapshotCard
-        title="Celery"
-        icon={<Cpu size={14} />}
-        envelope={s?.celery}
-        rows={[
-          { label: "Workers", value: String(s?.celery.data.worker_count ?? 0) },
-          { label: "Active", value: String(s?.celery.data.active_tasks ?? 0) },
-          { label: "Reserved", value: String(s?.celery.data.reserved_tasks ?? 0) },
-          { label: "Scheduled", value: String(s?.celery.data.scheduled_tasks ?? 0) },
-          {
-            label: "Beat",
-            value: `${beat?.status ?? "—"} (${fmtAge(beat?.schedule_age_seconds)})`,
-          },
-        ]}
-        footer={<QueueBreakdown perQueue={s?.celery.data.per_queue} />}
-      />
-      <SnapshotCard
-        title="Redis"
-        icon={<Zap size={14} />}
-        envelope={s?.redis}
-        rows={[
-          { label: "Status", value: s?.redis.data.alive ? "online" : "offline" },
-          { label: "Ping", value: fmtMs(s?.redis.data.ping_ms, 1) },
-          { label: "Clientes", value: String(s?.redis.data.connected_clients ?? "—") },
-          { label: "Memória", value: s?.redis.data.used_memory_human ?? "—" },
-          { label: "Ops/s", value: String(s?.redis.data.instantaneous_ops_per_sec ?? "—") },
-        ]}
-        footer={<QueueBreakdown queueLengths={s?.redis.data.queue_lengths} />}
-      />
-      <SnapshotCard
-        title="Banco de dados"
-        icon={<Database size={14} />}
-        envelope={s?.db}
-        rows={[
-          { label: "SELECT 1", value: fmtMs(s?.db.data.select1_ms, 1) },
-          { label: "Pool", value: `${s?.db.data.checked_out ?? 0}/${s?.db.data.pool_size ?? 0}` },
-          { label: "Overflow", value: String(s?.db.data.overflow ?? 0) },
-        ]}
-      />
-      <LatencyCard
-        ingestion={s?.ingestion_latency}
-        decision={s?.decision_latency}
-        processing={s?.processing_latency}
-      />
+      {/* PnL cluster */}
+      <div>
+        <SectionTitle icon={<TrendingUp size={13} />} label="PnL" />
+        <div style={{ display: "grid", gap: 8 }}>
+          <StatCard label="Lucro acumulado USDT" value={placeholder ? "—" : `$${fmtUsd(s.pnl.total_usdt)}`} accent={pnlColor as "green" | "red"} sub={`ROI ${fmtPct(s?.pnl.roi_pct)}`} />
+          <StatCard label="Δ vs período anterior" value={placeholder ? "—" : `${s.pnl.delta_vs_previous >= 0 ? "+" : ""}$${fmtUsd(s.pnl.delta_vs_previous)}`} accent={deltaColor as "green" | "red"} hint={`Taxas pagas $${fmtUsd(s?.pnl.fees_usdt, 4)}`} />
+        </div>
+      </div>
+
+      {/* Stats cluster */}
+      <div>
+        <SectionTitle icon={<Layers size={13} />} label="Estatísticas" />
+        <div style={{ display: "grid", gap: 8 }}>
+          <StatCard
+            label="Trades · Win Rate"
+            value={placeholder ? "—" : `${s.stats.total_trades} · ${fmtPct(s.stats.win_rate_pct, 1)}`}
+            sub={`W ${s?.stats.wins ?? 0} · L ${s?.stats.losses ?? 0} · PF ${s?.stats.profit_factor ?? "—"}`}
+          />
+          <StatCard
+            label="Médias / Holding"
+            value={placeholder ? "—" : `+$${fmtUsd(s.stats.avg_win_usdt)} / -$${fmtUsd(Math.abs(s.stats.avg_loss_usdt))}`}
+            sub={`Hold médio ${fmtSec(s?.stats.avg_holding_seconds)} · Sharpe ${s?.stats.sharpe ?? "—"}`}
+          />
+        </div>
+      </div>
+
+      {/* Risk cluster */}
+      <div>
+        <SectionTitle icon={<AlertTriangle size={13} />} label="Risco" />
+        <div style={{ display: "grid", gap: 8 }}>
+          <StatCard
+            label="Drawdown máximo"
+            value={placeholder ? "—" : `$${fmtUsd(s.risk.max_drawdown_usdt)}`}
+            accent="amber"
+            sub={`Atual $${fmtUsd(s?.risk.current_drawdown_usdt)} · Recovery ${s?.risk.recovery_pct === null || s?.risk.recovery_pct === undefined ? "—" : fmtPct(s.risk.recovery_pct)}`}
+          />
+          <StatCard
+            label="Volume negociado"
+            value={placeholder ? "—" : `$${fmtUsd(s.stats.volume_usdt, 0)}`}
+            hint={`maior win $${fmtUsd(s?.stats.biggest_win_usdt)} · maior loss $${fmtUsd(s?.stats.biggest_loss_usdt)}`}
+          />
+        </div>
+      </div>
     </div>
   );
 }
 
-// ─── Latency triple-card ─────────────────────────────────────────────────────
-function LatencyCard({
-  ingestion,
-  decision,
-  processing,
-}: {
-  ingestion: SnapshotEnvelope<{ delay_seconds?: number | null }> | undefined;
-  decision: SnapshotEnvelope<{ p50_ms?: number | null; p95_ms?: number | null; samples_24h?: number; formula?: string }> | undefined;
-  processing: SnapshotEnvelope<{ p50_ms?: number | null; p95_ms?: number | null; samples?: number; available?: boolean }> | undefined;
-}) {
-  const ranks: Record<string, number> = { unknown: 0, ok: 1, degraded: 2, critical: 3 };
-  const worst = [ingestion?.status, decision?.status, processing?.status].reduce<string>(
-    (acc, s) => (ranks[s ?? "unknown"] > ranks[acc] ? (s ?? "unknown") : acc),
-    "unknown",
-  );
-  const color = statusColor(worst);
+// ── equity / drawdown chart ─────────────────────────────────────────────────
+function EquityChart({ filter }: { filter: PerformanceFilter }) {
+  const { data, isLoading } = usePerformanceEquity(filter);
+  const points = data?.points ?? [];
   return (
-    <div
-      className="rounded-2xl p-4 flex flex-col gap-3"
-      style={{ background: C.elevated, border: `1px solid ${C.border}` }}
-    >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Clock size={14} style={{ color: C.textSecondary }} />
-          <h4 className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: C.textSecondary }}>
-            Latência (3 famílias)
-          </h4>
-        </div>
-        <span
-          className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
-          style={{ background: `${color}22`, color, border: `1px solid ${color}55` }}
-        >
-          {worst}
-        </span>
-      </div>
-      <div className="flex flex-col gap-2 text-[12px]">
-        <LatencyRow
-          label="Ingestão (gap)"
-          value={fmtAge(ingestion?.data.delay_seconds ?? null)}
-          status={ingestion?.status}
-        />
-        <LatencyRow
-          label="Decisão p50/p95"
-          value={`${fmtMs(decision?.data.p50_ms)} / ${fmtMs(decision?.data.p95_ms)}`}
-          status={decision?.status}
-          hint={`${decision?.data.samples_24h ?? 0} amostras (24h, candle→decisão)`}
-        />
-        <LatencyRow
-          label="Compute p50/p95"
-          value={
-            processing?.data.available === false
-              ? "prom indisponível"
-              : `${fmtMs(processing?.data.p50_ms)} / ${fmtMs(processing?.data.p95_ms)}`
-          }
-          status={processing?.status}
-          hint={`${processing?.data.samples ?? 0} amostras`}
-        />
-      </div>
-    </div>
-  );
-}
-function LatencyRow({ label, value, status, hint }: { label: string; value: string; status?: string; hint?: string }) {
-  const dot = statusColor(status);
-  return (
-    <div className="flex items-center justify-between">
-      <div className="flex items-center gap-2">
-        <span className="w-1.5 h-1.5 rounded-full" style={{ background: dot }} />
-        <span style={{ color: C.textTertiary }}>{label}</span>
-      </div>
-      <span className="tabular-nums" style={{ color: C.textPrimary }}>
-        {value}
-        {hint && <span className="ml-2" style={{ color: C.textTertiary }}>· {hint}</span>}
-      </span>
-    </div>
-  );
-}
-
-// ─── Events history body (rendered inside an on-demand panel) ──────────────
-function EventsHistoryBody({ data }: { data: EventsResp }) {
-  const merged = useMemo(() => {
-    const all: (EventItem & { kind: string })[] = [
-      ...(data.alert_history ?? []).map((e) => ({ ...e, kind: e.category ?? "alert" })),
-      ...(data.worker_events ?? []).map((e) => ({ ...e, kind: e.category ?? "worker" })),
-      ...(data.redis_degradations ?? []).map((e) => ({ ...e, kind: e.category ?? "redis" })),
-    ];
-    return all.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime()).slice(0, 100);
-  }, [data]);
-  if (merged.length === 0) return <EmptyState message="Sem eventos registrados nesta sessão." />;
-  return (
-    <ul className="flex flex-col gap-1.5">
-      {merged.map((e, i) => {
-        const recovered = e.code.includes("recovered") || e.code === "worker_online";
-        const dotColor = recovered ? C.ok : e.kind === "redis" ? C.warn : C.critical;
-        return (
-          <li key={`${e.ts}-${e.code}-${i}`} className="flex items-center gap-3 text-[12px] py-1">
-            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: dotColor }} />
-            <span className="tabular-nums" style={{ color: C.textTertiary }}>{fmtTime(e.ts)}</span>
-            <span className="font-mono text-[11px] px-1.5 py-0.5 rounded" style={{ background: C.elevated2, color: C.textSecondary }}>
-              {e.code}
-            </span>
-            <span className="truncate" style={{ color: C.textPrimary }}>{e.message}</span>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-// ─── Analytics panels (lazy section) ────────────────────────────────────────
-function IngestRateChart({ data }: { data: OhlcvRateResp | null }) {
-  const chartData = useMemo(
-    () =>
-      (data?.buckets ?? []).map((b) => ({
-        label: new Date(b.bucket).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
-        candles: b.candles,
-      })),
-    [data],
-  );
-  return (
-    <Panel
-      title="Volume de ingestão (60 min)"
-      icon={<Gauge size={16} />}
-      right={
-        <span className="text-[12px]" style={{ color: C.textSecondary }}>
-          Total: <strong style={{ color: C.textPrimary }}>{data?.total_candles ?? 0}</strong>
-        </span>
-      }
-    >
-      {chartData.length === 0 ? (
-        <EmptyState message="Sem candles na janela." />
+    <ChartCard title="Equity Curve & Drawdown" height={260}>
+      {isLoading ? (
+        <div style={{ color: C.muted, fontSize: 12 }}>Carregando…</div>
+      ) : points.length === 0 ? (
+        <div style={{ color: C.muted, fontSize: 12 }}>Sem trades fechados no período.</div>
       ) : (
-        <ResponsiveContainer width="100%" height={200}>
-          <AreaChart data={chartData} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
+        <ResponsiveContainer>
+          <AreaChart data={points} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
             <defs>
-              <linearGradient id="ingestGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={C.blue} stopOpacity={0.35} />
-                <stop offset="95%" stopColor={C.blue} stopOpacity={0} />
+              <linearGradient id="eqArea" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={C.green} stopOpacity={0.35} />
+                <stop offset="100%" stopColor={C.green} stopOpacity={0} />
+              </linearGradient>
+              <linearGradient id="ddArea" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={C.red} stopOpacity={0.35} />
+                <stop offset="100%" stopColor={C.red} stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 4" stroke="rgba(255,255,255,0.04)" vertical={false} />
-            <XAxis dataKey="label" tick={{ fill: C.textTertiary, fontSize: 11 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-            <YAxis tick={{ fill: C.textTertiary, fontSize: 11 }} tickLine={false} axisLine={false} width={32} allowDecimals={false} />
-            <Tooltip contentStyle={{ background: C.elevated2, border: `1px solid ${C.borderStrong}`, borderRadius: 12 }} labelStyle={{ color: C.textSecondary }} itemStyle={{ color: C.textPrimary }} />
-            <Area type="monotone" dataKey="candles" stroke={C.blue} strokeWidth={2} fill="url(#ingestGrad)" dot={false} />
+            <CartesianGrid stroke={C.border} vertical={false} />
+            <XAxis dataKey="date" tick={{ fill: C.muted, fontSize: 10 }}
+              tickFormatter={(v: string) => v ? v.slice(5, 10) : ""} />
+            <YAxis tick={{ fill: C.muted, fontSize: 10 }} width={60}
+              tickFormatter={(v: number) => `$${v.toFixed(0)}`} />
+            <Tooltip
+              contentStyle={{ background: C.elevated, border: `1px solid ${C.borderStrong}`, fontSize: 12 }}
+              labelStyle={{ color: C.muted }}
+            />
+            <Area dataKey="cum_pnl" stroke={C.green} fill="url(#eqArea)" strokeWidth={2} name="Cumulative PnL" />
+            <Area dataKey="drawdown" stroke={C.red} fill="url(#ddArea)" strokeWidth={1.5} name="Drawdown" />
           </AreaChart>
         </ResponsiveContainer>
       )}
-    </Panel>
+    </ChartCard>
   );
 }
 
-function DecisionStatsPanel({ data }: { data: DecisionsResp | null }) {
-  const pieData = useMemo(
-    () => [
-      { name: "ALLOW", value: data?.allow ?? 0, color: C.ok },
-      { name: "BLOCK", value: data?.block ?? 0, color: C.critical },
-    ],
-    [data],
-  );
-  const dist = data?.score_distribution ?? [];
-  const reasons = data?.top_block_reasons ?? [];
-  const empty = (data?.total ?? 0) === 0;
+// ── daily PnL bars ──────────────────────────────────────────────────────────
+function DailyPnLChart({ filter }: { filter: PerformanceFilter }) {
+  const { data, isLoading } = usePerformanceEquity(filter);
+  const points = data?.points ?? [];
   return (
-    <Panel title="Decisões (24 h)" icon={<Sigma size={16} />}>
-      {empty ? (
-        <EmptyState message="Nenhuma decisão registrada na última janela." />
+    <ChartCard title="PnL Diário (USDT)" height={260}>
+      {isLoading ? (
+        <div style={{ color: C.muted, fontSize: 12 }}>Carregando…</div>
+      ) : points.length === 0 ? (
+        <div style={{ color: C.muted, fontSize: 12 }}>Sem dados.</div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="flex flex-col gap-3">
-            <StatTile label="Total" value={String(data?.total ?? 0)} />
-            <StatTile label="Taxa ALLOW" value={fmtPct(data?.allow_rate)} color={C.ok} />
-            <StatTile label="Score médio" value={data?.avg_score != null ? data.avg_score.toFixed(1) : "—"} />
-          </div>
-          <div style={{ height: 180 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={pieData} dataKey="value" nameKey="name" innerRadius={42} outerRadius={70} paddingAngle={2}>
-                  {pieData.map((d) => <Cell key={d.name} fill={d.color} stroke="none" />)}
-                </Pie>
-                <Tooltip contentStyle={{ background: C.elevated2, border: `1px solid ${C.borderStrong}`, borderRadius: 12 }} labelStyle={{ color: C.textSecondary }} itemStyle={{ color: C.textPrimary }} />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          <div style={{ height: 180 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={dist} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 4" stroke="rgba(255,255,255,0.04)" vertical={false} />
-                <XAxis dataKey="bucket" tick={{ fill: C.textTertiary, fontSize: 11 }} tickLine={false} axisLine={false} />
-                <YAxis tick={{ fill: C.textTertiary, fontSize: 11 }} tickLine={false} axisLine={false} width={28} allowDecimals={false} />
-                <Tooltip contentStyle={{ background: C.elevated2, border: `1px solid ${C.borderStrong}`, borderRadius: 12 }} labelStyle={{ color: C.textSecondary }} itemStyle={{ color: C.textPrimary }} />
-                <Bar dataKey="count" fill={C.purple} radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
+        <ResponsiveContainer>
+          <BarChart data={points} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+            <CartesianGrid stroke={C.border} vertical={false} />
+            <XAxis dataKey="date" tick={{ fill: C.muted, fontSize: 10 }}
+              tickFormatter={(v: string) => v ? v.slice(5, 10) : ""} />
+            <YAxis tick={{ fill: C.muted, fontSize: 10 }} width={60}
+              tickFormatter={(v: number) => `$${v.toFixed(0)}`} />
+            <Tooltip contentStyle={{ background: C.elevated, border: `1px solid ${C.borderStrong}`, fontSize: 12 }} />
+            <Bar dataKey="pnl_day" name="PnL Diário">
+              {points.map((p, i) => (
+                <Cell key={i} fill={p.pnl_day >= 0 ? C.green : C.red} fillOpacity={0.85} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
       )}
-      {!empty && reasons.length > 0 && (
-        <div className="border-t pt-3" style={{ borderColor: C.border }}>
-          <p className="text-[11px] uppercase tracking-wide mb-2" style={{ color: C.textTertiary }}>Top motivos de bloqueio</p>
-          <ul className="flex flex-wrap gap-2">
-            {reasons.map((r) => (
-              <li key={r.reason} className="text-[12px] px-2 py-1 rounded-md" style={{ background: C.elevated2, border: `1px solid ${C.border}`, color: C.textPrimary }}>
-                {r.reason} <span style={{ color: C.textTertiary }}>· {r.count}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </Panel>
+    </ChartCard>
   );
 }
 
-function TradePerformancePanel({ data }: { data: TradesResp | null }) {
-  const curve = useMemo(
-    () =>
-      (data?.cumulative_pnl ?? []).map((p) => ({
-        label: new Date(p.time).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }),
-        value: p.cumulative_pnl_pct,
-      })),
-    [data],
-  );
-  const empty = (data?.total ?? 0) === 0;
-  const lastVal = curve.length ? curve[curve.length - 1].value : 0;
-  const isUp = lastVal >= 0;
+// ── distribution + heatmap ──────────────────────────────────────────────────
+const DOWS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"];
+function DistributionPanel({ filter }: { filter: PerformanceFilter }) {
+  const { data } = usePerformanceDistribution(filter);
+  const counts = data?.counts;
+  const wlPie = useMemo(() => counts ? [
+    { name: "Wins", value: counts.wins, color: C.green },
+    { name: "Losses", value: counts.losses, color: C.red },
+  ] : [], [counts]);
+  const sfBars = useMemo(() => counts ? [
+    { type: "Spot", n: counts.spot }, { type: "Futures", n: counts.futures },
+    { type: "Long", n: counts.longs }, { type: "Short", n: counts.shorts },
+  ] : [], [counts]);
   return (
-    <Panel title="Performance — trades reais (30 d)" icon={<TrendingUp size={16} />}>
-      {empty ? (
-        <EmptyState message="Nenhum trade real fechado na janela." />
+    <ChartCard title="Distribuição de Trades" height={260}>
+      {!data ? (
+        <div style={{ color: C.muted, fontSize: 12 }}>Carregando…</div>
       ) : (
-        <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <StatTile label="Total" value={String(data?.total ?? 0)} />
-            <StatTile label="Win rate" value={fmtPct(data?.win_rate)} color={C.ok} />
-            <StatTile label="PnL médio" value={fmtPctSigned(data?.avg_pnl_pct)} color={(data?.avg_pnl_pct ?? 0) >= 0 ? C.ok : C.critical} />
-            <StatTile label="Holding médio" value={fmtAge(data?.avg_holding_seconds)} />
-          </div>
-          <ResponsiveContainer width="100%" height={180}>
-            <AreaChart data={curve} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="pnlUp" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.ok} stopOpacity={0.30} /><stop offset="95%" stopColor={C.ok} stopOpacity={0} /></linearGradient>
-                <linearGradient id="pnlDown" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.critical} stopOpacity={0.28} /><stop offset="95%" stopColor={C.critical} stopOpacity={0} /></linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 4" stroke="rgba(255,255,255,0.04)" vertical={false} />
-              <XAxis dataKey="label" tick={{ fill: C.textTertiary, fontSize: 11 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-              <YAxis tick={{ fill: C.textTertiary, fontSize: 11 }} tickFormatter={(v) => `${v.toFixed(1)}%`} tickLine={false} axisLine={false} width={48} />
-              <Tooltip
-                contentStyle={{ background: C.elevated2, border: `1px solid ${C.borderStrong}`, borderRadius: 12 }}
-                labelStyle={{ color: C.textSecondary }}
-                itemStyle={{ color: C.textPrimary }}
-                formatter={(v) => fmtPctSigned(typeof v === "number" ? v : Number(v))}
-              />
-              <Area type="monotone" dataKey="value" stroke={isUp ? C.ok : C.critical} strokeWidth={2} fill={isUp ? "url(#pnlUp)" : "url(#pnlDown)"} dot={false} />
-            </AreaChart>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", height: "100%" }}>
+          <ResponsiveContainer>
+            <PieChart>
+              <Pie data={wlPie} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={2}>
+                {wlPie.map((d, i) => <Cell key={i} fill={d.color} />)}
+              </Pie>
+              <Tooltip contentStyle={{ background: C.elevated, border: `1px solid ${C.borderStrong}`, fontSize: 12 }} />
+            </PieChart>
           </ResponsiveContainer>
-        </>
-      )}
-    </Panel>
-  );
-}
-
-function SimVsRealPanel({ data }: { data: CompResp | null }) {
-  const real = data?.items.find((i) => i.kind === "real");
-  const sim = data?.items.find((i) => i.kind === "simulated");
-  const Card = ({ title, item, accent }: { title: string; item?: { total: number; win_rate: number | null; avg_pnl_pct: number | null }; accent: string }) => (
-    <div className="rounded-xl p-4 flex flex-col gap-2" style={{ background: C.elevated2, border: `1px solid ${C.border}` }}>
-      <div className="flex items-center justify-between">
-        <span className="text-[12px] uppercase tracking-wide" style={{ color: C.textTertiary }}>{title}</span>
-        <span className="w-2 h-2 rounded-full" style={{ background: accent }} />
-      </div>
-      <div className="grid grid-cols-3 gap-3">
-        <StatTile label="N" value={String(item?.total ?? 0)} />
-        <StatTile label="Win" value={fmtPct(item?.win_rate ?? null)} />
-        <StatTile label="PnL" value={fmtPctSigned(item?.avg_pnl_pct ?? null)} />
-      </div>
-    </div>
-  );
-  return (
-    <Panel title="Simulado vs Real (30 d)" icon={<Activity size={16} />}>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <Card title="Reais" item={real} accent={C.ok} />
-        <Card title="Simulados" item={sim} accent={C.purple} />
-      </div>
-    </Panel>
-  );
-}
-
-function MLDatasetPanel({ data }: { data: MlResp | null }) {
-  const handleExport = useCallback(async () => {
-    try {
-      const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
-      const res = await fetch("/api/dashboard/ml-dataset/export?limit=1000", {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "scalpyn_ml_dataset.csv";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      console.error("Export failed", e);
-    }
-  }, []);
-  const items = data?.items ?? [];
-  return (
-    <Panel
-      title="ML Dataset — últimas 100 simulações"
-      icon={<Database size={16} />}
-      right={
-        <button
-          onClick={handleExport}
-          className="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg transition-colors"
-          style={{ background: C.elevated2, border: `1px solid ${C.border}`, color: C.textPrimary }}
-        >
-          <Download size={13} /> Exportar CSV
-        </button>
-      }
-    >
-      {items.length === 0 ? (
-        <EmptyState message="Sem simulações registradas." />
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-[12px]">
-            <thead>
-              <tr style={{ color: C.textTertiary }}>
-                {["Símbolo", "Direção", "Decisão", "Resultado", "Tempo (s)", "Entrada", "Saída", "Quando"].map((h) => (
-                  <th key={h} className="text-left font-medium uppercase tracking-wide py-2 px-2">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((r) => {
-                const resultColor = r.result === "WIN" ? C.ok : r.result === "LOSS" ? C.critical : C.warn;
-                return (
-                  <tr key={r.id} style={{ borderTop: `1px solid ${C.border}` }}>
-                    <td className="py-2 px-2 font-medium" style={{ color: C.textPrimary }}>{r.symbol}</td>
-                    <td className="py-2 px-2" style={{ color: C.textSecondary }}>{r.direction}</td>
-                    <td className="py-2 px-2" style={{ color: C.textSecondary }}>{r.decision_type}</td>
-                    <td className="py-2 px-2 font-semibold" style={{ color: resultColor }}>{r.result}</td>
-                    <td className="py-2 px-2 tabular-nums" style={{ color: C.textSecondary }}>{r.time_to_result ?? "—"}</td>
-                    <td className="py-2 px-2 tabular-nums" style={{ color: C.textSecondary }}>{r.entry_price.toFixed(4)}</td>
-                    <td className="py-2 px-2 tabular-nums" style={{ color: C.textSecondary }}>{r.exit_price?.toFixed(4) ?? "—"}</td>
-                    <td className="py-2 px-2" style={{ color: C.textTertiary }}>{new Date(r.timestamp_entry).toLocaleString("pt-BR")}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <ResponsiveContainer>
+            <BarChart data={sfBars} layout="vertical" margin={{ top: 8, right: 8, left: 24, bottom: 4 }}>
+              <CartesianGrid stroke={C.border} horizontal={false} />
+              <XAxis type="number" tick={{ fill: C.muted, fontSize: 10 }} />
+              <YAxis dataKey="type" type="category" tick={{ fill: C.muted, fontSize: 10 }} width={60} />
+              <Tooltip contentStyle={{ background: C.elevated, border: `1px solid ${C.borderStrong}`, fontSize: 12 }} />
+              <Bar dataKey="n" fill={C.blue} />
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       )}
-    </Panel>
+    </ChartCard>
   );
 }
 
-// ─── Lazy analytics section ──────────────────────────────────────────────────
-// Auxiliary KPI charts. Fetched once on-demand (no polling) so this page
-// only ever has ONE continuous polling loop (`/overview`) per Task #225.
-function AnalyticsSection() {
-  const [ingest, setIngest]       = useState<OhlcvRateResp | null>(null);
-  const [decisions, setDecisions] = useState<DecisionsResp | null>(null);
-  const [trades, setTrades]       = useState<TradesResp | null>(null);
-  const [comp, setComp]           = useState<CompResp | null>(null);
-  const [ml, setMl]               = useState<MlResp | null>(null);
-  const [loading, setLoading]     = useState(false);
-  const [err, setErr]             = useState<string | null>(null);
-
-  const loadAll = useCallback(async () => {
-    setLoading(true);
-    setErr(null);
-    try {
-      const [a, b, c, d, e] = await Promise.all([
-        apiGet<OhlcvRateResp>("/dashboard/ohlcv-rate?minutes=60"),
-        apiGet<DecisionsResp>("/dashboard/decisions?hours=24"),
-        apiGet<TradesResp>("/dashboard/trades?days=30"),
-        apiGet<CompResp>("/dashboard/trade-comparison?days=30"),
-        apiGet<MlResp>("/dashboard/ml-dataset?limit=100"),
-      ]);
-      setIngest(a); setDecisions(b); setTrades(c); setComp(d); setMl(e);
-    } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { loadAll(); }, [loadAll]);
-
+function HeatmapPanel({ filter }: { filter: PerformanceFilter }) {
+  const { data } = usePerformanceDistribution(filter);
+  const grid = useMemo(() => {
+    const m: Record<string, number> = {};
+    let max = 0;
+    let min = 0;
+    (data?.heatmap ?? []).forEach(c => {
+      m[`${c.dow}-${c.hour}`] = c.pnl;
+      if (c.pnl > max) max = c.pnl;
+      if (c.pnl < min) min = c.pnl;
+    });
+    return { m, max, min };
+  }, [data]);
+  const cellColor = (v: number | undefined) => {
+    if (v === undefined) return C.elevated;
+    const denom = v >= 0 ? grid.max || 1 : Math.abs(grid.min) || 1;
+    const intensity = Math.min(1, Math.abs(v) / denom);
+    return v >= 0
+      ? `rgba(34, 185, 122, ${0.15 + intensity * 0.7})`
+      : `rgba(229, 72, 77,  ${0.15 + intensity * 0.7})`;
+  };
   return (
-    <div className="flex flex-col gap-5">
-      <div className="flex justify-end">
-        <button
-          onClick={loadAll}
-          disabled={loading}
-          className="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
-          style={{ background: C.elevated2, border: `1px solid ${C.border}`, color: C.textPrimary }}
-        >
-          <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
-          Recarregar
-        </button>
+    <ChartCard title="Heatmap PnL — Dia da Semana × Hora (UTC)" height={260}>
+      <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 2 }}>
+        <div style={{ display: "grid", gridTemplateColumns: `30px repeat(24, 1fr)`, gap: 1, fontSize: 9, color: C.muted }}>
+          <div />
+          {Array.from({ length: 24 }).map((_, h) => (
+            <div key={h} style={{ textAlign: "center" }}>{h % 3 === 0 ? h : ""}</div>
+          ))}
+        </div>
+        {DOWS.map((label, dow) => (
+          <div key={dow} style={{ display: "grid", gridTemplateColumns: `30px repeat(24, 1fr)`, gap: 1, flex: 1 }}>
+            <div style={{ fontSize: 10, color: C.muted, alignSelf: "center" }}>{label}</div>
+            {Array.from({ length: 24 }).map((_, hr) => {
+              const v = grid.m[`${dow}-${hr}`];
+              return <div key={hr} title={v !== undefined ? `${label} ${hr}h · $${fmtUsd(v)}` : "Sem trades"}
+                style={{ background: cellColor(v), borderRadius: 2 }} />;
+            })}
+          </div>
+        ))}
       </div>
-      {err && <EmptyState message={`Erro ao carregar: ${err}`} />}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <IngestRateChart data={ingest} />
-        <DecisionStatsPanel data={decisions} />
+    </ChartCard>
+  );
+}
+
+// ── by-asset table ──────────────────────────────────────────────────────────
+function ByAssetTable({ filter }: { filter: PerformanceFilter }) {
+  const { data } = usePerformanceByAsset(filter);
+  const rows = data?.rows ?? [];
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14 }}>
+      <div style={{ fontSize: 12, color: C.muted, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 10 }}>
+        Performance por ativo
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        <div className="lg:col-span-2"><TradePerformancePanel data={trades} /></div>
-        <SimVsRealPanel data={comp} />
+      <div style={{ overflowX: "auto", maxHeight: 260 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontVariantNumeric: "tabular-nums" }}>
+          <thead style={{ position: "sticky", top: 0, background: C.surface, color: C.muted, fontWeight: 500 }}>
+            <tr>
+              <th style={cellHead}>Símbolo</th>
+              <th style={cellHead}>Mkt</th>
+              <th style={cellHead}>Trades</th>
+              <th style={cellHead}>Win %</th>
+              <th style={cellHead}>PnL USDT</th>
+              <th style={cellHead}>ROI %</th>
+              <th style={cellHead}>Fees</th>
+              <th style={cellHead}>Hold médio</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr><td colSpan={8} style={{ color: C.muted, padding: 16, textAlign: "center" }}>Sem dados.</td></tr>
+            ) : rows.map(r => (
+              <tr key={`${r.symbol}-${r.market_type}`} style={{ borderTop: `1px solid ${C.border}` }}>
+                <td style={cellTd}>{r.symbol}</td>
+                <td style={cellTd}>{r.market_type}</td>
+                <td style={cellTd}>{r.trades}</td>
+                <td style={cellTd}>{fmtPct(r.win_rate_pct, 1)}</td>
+                <td style={{ ...cellTd, color: r.pnl_usdt >= 0 ? C.green : C.red }}>{r.pnl_usdt >= 0 ? "+" : ""}${fmtUsd(r.pnl_usdt)}</td>
+                <td style={{ ...cellTd, color: r.roi_pct >= 0 ? C.green : C.red }}>{fmtPct(r.roi_pct, 2)}</td>
+                <td style={cellTd}>${fmtUsd(r.fees_usdt, 4)}</td>
+                <td style={cellTd}>{fmtSec(r.avg_holding_seconds)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-      <MLDatasetPanel data={ml} />
     </div>
   );
 }
 
-// ─── Page root ───────────────────────────────────────────────────────────────
-export default function PerformanceDashboardPage() {
-  // Only /overview polls continuously (Task #225). /events is on-demand.
-  const overview = usePoll<OverviewResp>("/dashboard/overview", 15_000);
-  const [eventsData, setEventsData] = useState<EventsResp | null>(null);
-  const [eventsLoading, setEventsLoading] = useState(false);
-  const [eventsError, setEventsError] = useState<string | null>(null);
+const cellHead: React.CSSProperties = { textAlign: "left", padding: "8px 6px", fontSize: 11, letterSpacing: 0.4 };
+const cellTd: React.CSSProperties = { padding: "7px 6px", color: C.text };
 
-  const fetchEvents = useCallback(async () => {
-    setEventsLoading(true);
-    try {
-      const res = await apiGet<EventsResp>("/dashboard/events?limit=100");
-      setEventsData(res);
-      setEventsError(null);
-    } catch (e: unknown) {
-      setEventsError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setEventsLoading(false);
-    }
-  }, []);
+// ── executions table ────────────────────────────────────────────────────────
+function ExecutionsTable({ filter }: { filter: PerformanceFilter }) {
+  const [ex, setEx] = useState<ExecutionFilters>({ page: 1, page_size: 25, sort: "closed_at_desc" });
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const { data, isLoading } = usePerformanceExecutions(filter, ex);
+  const rows = data?.rows ?? [];
+  const total = data?.total ?? 0;
+  const page = data?.page ?? 1;
+  const pageSize = data?.page_size ?? 25;
+  const lastPage = Math.max(1, Math.ceil(total / pageSize));
 
-  const [analyticsOpen, setAnalyticsOpen] = useState(false);
+  const onSort = (key: string) => {
+    setEx(prev => {
+      const isDesc = prev.sort === `${key}_desc`;
+      return { ...prev, sort: isDesc ? `${key}_asc` : `${key}_desc`, page: 1 };
+    });
+  };
 
-  const refreshOps = () => {
-    overview.refresh();
-    fetchEvents();
+  const exportCsv = () => {
+    if (!rows.length) return;
+    const headers = [
+      "id","symbol","market_type","direction","opened_at","closed_at","holding_s",
+      "qty","avg_entry","avg_exit","invested_usdt","final_usdt","fees_total",
+      "pnl_usdt","pnl_pct","roi","status","data_quality",
+    ];
+    const lines = [headers.join(",")];
+    rows.forEach(r => lines.push([
+      r.id, r.symbol, r.market_type, r.direction,
+      r.opened_at ?? "", r.closed_at ?? "", r.holding_seconds ?? "",
+      r.qty ?? "", r.avg_entry ?? "", r.avg_exit ?? "",
+      r.invested_usdt ?? "", r.final_usdt ?? "", r.fees_total ?? "",
+      r.pnl_usdt ?? "", r.pnl_pct ?? "", r.roi ?? "",
+      r.status, r.data_quality,
+    ].join(",")));
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url;
+    a.download = `executions_${filter.window}.csv`; a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
-    <div className="min-h-screen px-6 py-8 max-w-[1400px] mx-auto" style={{ background: C.surface }}>
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
-        <div>
-          <h1 className="text-2xl font-bold" style={{ color: C.textPrimary }}>Centro Operacional</h1>
-          <p className="text-[13px] mt-1" style={{ color: C.textSecondary }}>
-            Saúde do pipeline e alertas — atualização automática a cada 15 s.
-          </p>
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, fontSize: 12, letterSpacing: 0.6, textTransform: "uppercase" }}>
+          <Settings2 size={13} /> Histórico de Execuções
+          <span style={{ color: C.dim, fontSize: 11, textTransform: "none", letterSpacing: 0 }}>
+            · {total.toLocaleString("en-US")} resultados
+          </span>
         </div>
-        <button
-          onClick={refreshOps}
-          className="flex items-center gap-2 text-[13px] px-3 py-2 rounded-lg transition-colors"
-          style={{ background: C.elevated, border: `1px solid ${C.border}`, color: C.textPrimary }}
-        >
-          <RefreshCw size={14} /> Atualizar
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <input placeholder="Símbolo (ex: BTC_USDT)" value={ex.symbol ?? ""}
+            onChange={e => setEx({ ...ex, symbol: e.target.value || undefined, page: 1 })}
+            style={{ background: C.elevated, border: `1px solid ${C.border}`, color: C.text, fontSize: 12, padding: "5px 8px", borderRadius: 6, width: 160 }} />
+          <input placeholder="Trade ID" value={ex.search ?? ""}
+            onChange={e => setEx({ ...ex, search: e.target.value || undefined, page: 1 })}
+            style={{ background: C.elevated, border: `1px solid ${C.border}`, color: C.text, fontSize: 12, padding: "5px 8px", borderRadius: 6, width: 130 }} />
+          <select value={ex.market_type ?? ""} onChange={e => setEx({ ...ex, market_type: e.target.value || undefined, page: 1 })}
+            style={{ background: C.elevated, border: `1px solid ${C.border}`, color: C.text, fontSize: 12, padding: "5px 8px", borderRadius: 6 }}>
+            <option value="">Mkt</option><option value="spot">Spot</option><option value="futures">Futures</option>
+          </select>
+          <select value={ex.direction ?? ""} onChange={e => setEx({ ...ex, direction: e.target.value || undefined, page: 1 })}
+            style={{ background: C.elevated, border: `1px solid ${C.border}`, color: C.text, fontSize: 12, padding: "5px 8px", borderRadius: 6 }}>
+            <option value="">Lado</option><option value="long">Long</option><option value="short">Short</option>
+          </select>
+          <select value={ex.status ?? ""} onChange={e => setEx({ ...ex, status: e.target.value || undefined, page: 1 })}
+            style={{ background: C.elevated, border: `1px solid ${C.border}`, color: C.text, fontSize: 12, padding: "5px 8px", borderRadius: 6 }}>
+            <option value="">Status</option><option value="closed">Fechado</option><option value="open">Aberto</option>
+          </select>
+          <button onClick={exportCsv}
+            style={{ background: C.elevated, border: `1px solid ${C.borderStrong}`, color: C.text,
+              borderRadius: 6, padding: "6px 10px", fontSize: 12, cursor: "pointer",
+              display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <Download size={12} /> CSV
+          </button>
+        </div>
       </div>
 
-      <div className="flex flex-col gap-5">
-        <OperationalBanner data={overview.data} />
-        <AlertsPanel data={overview.data} />
-        <OpsSnapshotsGrid data={overview.data} />
-        <ScoreEnginePanels envelope={overview.data?.snapshots?.score} />
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5, fontVariantNumeric: "tabular-nums" }}>
+          <thead style={{ color: C.muted }}>
+            <tr>
+              <th style={cellHead}></th>
+              <th style={{ ...cellHead, cursor: "pointer" }} onClick={() => onSort("symbol")}>Par</th>
+              <th style={cellHead}>Mkt</th>
+              <th style={cellHead}>Lado</th>
+              <th style={cellHead}>Aberto</th>
+              <th style={cellHead}>Fechado</th>
+              <th style={{ ...cellHead, cursor: "pointer" }} onClick={() => onSort("holding")}>Hold</th>
+              <th style={cellHead}>Qty</th>
+              <th style={cellHead}>Entrada</th>
+              <th style={cellHead}>Saída</th>
+              <th style={cellHead}>Investido</th>
+              <th style={cellHead}>Final</th>
+              <th style={cellHead}>Fees</th>
+              <th style={{ ...cellHead, cursor: "pointer" }} onClick={() => onSort("pnl")}>PnL</th>
+              <th style={cellHead}>PnL %</th>
+              <th style={cellHead}>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading ? (
+              <tr><td colSpan={16} style={{ color: C.muted, padding: 16, textAlign: "center" }}>Carregando…</td></tr>
+            ) : rows.length === 0 ? (
+              <tr><td colSpan={16} style={{ color: C.muted, padding: 16, textAlign: "center" }}>
+                Sem execuções no período. Clique em <b>Sync Gate.io</b> para importar.</td></tr>
+            ) : rows.map(r => {
+              const isOpen = expanded === r.id;
+              const pnlColor = (r.pnl_usdt ?? 0) >= 0 ? C.green : C.red;
+              return (
+                <>
+                  <tr key={r.id} style={{ borderTop: `1px solid ${C.border}`, cursor: "pointer" }}
+                    onClick={() => setExpanded(isOpen ? null : r.id)}>
+                    <td style={{ ...cellTd, color: C.muted }}>{isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</td>
+                    <td style={cellTd}>{r.symbol}</td>
+                    <td style={cellTd}>{r.market_type}</td>
+                    <td style={{ ...cellTd, color: r.direction === "long" ? C.green : C.red }}>
+                      {r.direction === "long" ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />} {r.direction}
+                    </td>
+                    <td style={cellTd}>{r.opened_at?.slice(0, 16).replace("T", " ") ?? "—"}</td>
+                    <td style={cellTd}>{r.closed_at?.slice(0, 16).replace("T", " ") ?? "—"}</td>
+                    <td style={cellTd}>{fmtSec(r.holding_seconds)}</td>
+                    <td style={cellTd}>{num(r.qty, 6)}</td>
+                    <td style={cellTd}>{num(r.avg_entry, 6)}</td>
+                    <td style={cellTd}>{num(r.avg_exit, 6)}</td>
+                    <td style={cellTd}>${fmtUsd(r.invested_usdt)}</td>
+                    <td style={cellTd}>{r.final_usdt === null ? "—" : `$${fmtUsd(r.final_usdt)}`}</td>
+                    <td style={cellTd}>${fmtUsd(r.fees_total ?? 0, 4)}</td>
+                    <td style={{ ...cellTd, color: pnlColor, fontWeight: 600 }}>
+                      {r.pnl_usdt === null ? "—" : `${r.pnl_usdt >= 0 ? "+" : ""}$${fmtUsd(r.pnl_usdt)}`}
+                    </td>
+                    <td style={{ ...cellTd, color: pnlColor }}>{fmtPct(r.pnl_pct, 2)}</td>
+                    <td style={cellTd}>
+                      <span style={{
+                        background: r.data_quality === "OK" ? "rgba(34,185,122,0.12)" : "rgba(242,163,58,0.12)",
+                        color: r.data_quality === "OK" ? C.green : C.amber,
+                        padding: "2px 6px", borderRadius: 4, fontSize: 10, letterSpacing: 0.4,
+                      }}>{r.status}{r.data_quality !== "OK" ? ` · ${r.data_quality}` : ""}</span>
+                    </td>
+                  </tr>
+                  {isOpen ? (
+                    <tr key={`${r.id}-x`}>
+                      <td colSpan={16} style={{ background: C.bg, borderTop: `1px solid ${C.border}`, padding: "10px 16px" }}>
+                        <FillsBreakdown lifecycleId={r.id} />
+                      </td>
+                    </tr>
+                  ) : null}
+                </>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
 
-        <Panel
-          title="Histórico de eventos"
-          icon={<History size={16} />}
-          right={
-            <button
-              onClick={fetchEvents}
-              disabled={eventsLoading}
-              className="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
-              style={{ background: C.elevated2, border: `1px solid ${C.border}`, color: C.textPrimary }}
-            >
-              <RefreshCw size={12} className={eventsLoading ? "animate-spin" : ""} />
-              {eventsData ? "Recarregar" : "Carregar eventos"}
-            </button>
-          }
-        >
-          {eventsData ? (
-            <EventsHistoryBody data={eventsData} />
-          ) : (
-            <EmptyState message={eventsError ?? "Clique em Carregar eventos para buscar o histórico."} />
-          )}
-        </Panel>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, color: C.muted, fontSize: 11.5 }}>
+        <div>Página {page} de {lastPage}</div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button disabled={page <= 1} onClick={() => setEx({ ...ex, page: Math.max(1, page - 1) })}
+            style={pagerBtn(page <= 1)}>Anterior</button>
+          <button disabled={page >= lastPage} onClick={() => setEx({ ...ex, page: Math.min(lastPage, page + 1) })}
+            style={pagerBtn(page >= lastPage)}>Próxima</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
-        {/* Lazy analytics section — does not poll until the operator opens it. */}
-        <button
-          onClick={() => setAnalyticsOpen((v) => !v)}
-          className="flex items-center justify-between gap-2 rounded-2xl p-4 text-left transition-colors"
-          style={{ background: C.elevated, border: `1px solid ${C.border}`, color: C.textPrimary }}
-        >
-          <div className="flex items-center gap-2">
-            {analyticsOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-            <div>
-              <p className="text-[14px] font-semibold">Histórico & performance</p>
-              <p className="text-[12px]" style={{ color: C.textSecondary }}>
-                Gráficos auxiliares (ingestão, decisões, trades, ML dataset) — carregados sob demanda.
-              </p>
+const pagerBtn = (disabled: boolean): React.CSSProperties => ({
+  background: C.elevated, border: `1px solid ${C.border}`, color: disabled ? C.dim : C.text,
+  borderRadius: 6, padding: "5px 10px", fontSize: 12, cursor: disabled ? "default" : "pointer",
+  opacity: disabled ? 0.5 : 1,
+});
+
+interface FillRow {
+  trade_id: string;
+  order_id: string | null;
+  side: string;
+  role: string | null;
+  price: number | null;
+  quantity: number | null;
+  fee: number | null;
+  fee_currency: string | null;
+  executed_at: string | null;
+}
+
+function FillsBreakdown({ lifecycleId }: { lifecycleId: number }) {
+  // Fills are heavy/optional → fetched lazily once expanded.
+  const [rows, setRows] = useState<FillRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancel = false;
+    setLoading(true);
+    apiGet<{ rows: FillRow[] }>(`/api/performance/executions/${lifecycleId}/fills`)
+      .then(d => { if (!cancel) setRows(d.rows ?? []); })
+      .catch(() => { if (!cancel) setRows([]); })
+      .finally(() => { if (!cancel) setLoading(false); });
+    return () => { cancel = true; };
+  }, [lifecycleId]);
+
+  if (loading) return <div style={{ color: C.muted, fontSize: 11.5 }}>Carregando fills…</div>;
+  if (!rows.length) return <div style={{ color: C.muted, fontSize: 11.5 }}>Sem fills detalhados.</div>;
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
+      <thead style={{ color: C.muted }}>
+        <tr>
+          <th style={cellHead}>Hora</th><th style={cellHead}>Lado</th><th style={cellHead}>Role</th>
+          <th style={cellHead}>Preço</th><th style={cellHead}>Qty</th>
+          <th style={cellHead}>Fee</th><th style={cellHead}>Order ID</th><th style={cellHead}>Trade ID</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(f => (
+          <tr key={f.trade_id} style={{ borderTop: `1px solid ${C.border}` }}>
+            <td style={cellTd}>{f.executed_at?.slice(0, 19).replace("T", " ") ?? "—"}</td>
+            <td style={{ ...cellTd, color: f.side === "buy" ? C.green : C.red }}>{f.side}</td>
+            <td style={cellTd}>{f.role ?? "—"}</td>
+            <td style={cellTd}>{num(f.price, 8)}</td>
+            <td style={cellTd}>{num(f.quantity, 8)}</td>
+            <td style={cellTd}>{num(f.fee, 8)} {f.fee_currency ?? ""}</td>
+            <td style={cellTd}>{f.order_id ?? "—"}</td>
+            <td style={{ ...cellTd, color: C.muted }}>{f.trade_id}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// ── page ────────────────────────────────────────────────────────────────────
+export default function PerformanceDashboardPage() {
+  const [filter, setFilter] = useState<PerformanceFilter>({ window: "30D", autoRefresh: false });
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+
+  const onSync = async () => {
+    setSyncing(true); setSyncMsg(null);
+    try {
+      type SyncResp = {
+        sync?: { imported?: { spot?: number; futures?: number } };
+        rebuild?: { lifecycle_rows_closed?: number; open_positions?: number };
+      };
+      const r = await apiPost<SyncResp>("/api/performance/sync?days=90&markets=spot,futures");
+      setSyncMsg(
+        `Importados spot=${r?.sync?.imported?.spot ?? 0} futures=${r?.sync?.imported?.futures ?? 0} · ` +
+        `lifecycle rebuilt: ${r?.rebuild?.lifecycle_rows_closed ?? 0} fechados, ${r?.rebuild?.open_positions ?? 0} abertos.`
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setSyncMsg(`Falhou: ${msg}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  return (
+    <div style={{ background: C.bg, minHeight: "100vh", color: C.text, padding: "20px 24px" }}>
+      <div style={{ maxWidth: 1480, margin: "0 auto", display: "grid", gap: 14 }}>
+        <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <div>
+            <div style={{ fontSize: 19, fontWeight: 600, letterSpacing: 0.3 }}>Performance Institucional</div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+              Trades reais executados na Gate.io (Spot + Futures) · FIFO PnL determinístico · Centro Operacional movido para
+              <a href="/dashboard/operations" style={{ color: C.blue, marginLeft: 4 }}>/dashboard/operations</a>
             </div>
           </div>
-          <span className="text-[11px] uppercase tracking-wide" style={{ color: C.textTertiary }}>
-            {analyticsOpen ? "ocultar" : "expandir"}
-          </span>
-        </button>
-        {analyticsOpen && <AnalyticsSection />}
-
-        {(overview.error || eventsError) && (
-          <div className="text-[12px] px-3 py-2 rounded-lg" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", color: C.critical }}>
-            Falha ao buscar dados de observabilidade. Veja o console para detalhes.
+          <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, fontSize: 11 }}>
+            <Activity size={14} /> SSOT: <code style={{ color: C.text }}>position_lifecycle</code>
           </div>
-        )}
+        </header>
+
+        <FilterBar filter={filter} onChange={setFilter} onSync={onSync} syncing={syncing} />
+        {syncMsg ? (
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px", fontSize: 12, color: C.muted }}>
+            {syncMsg}
+          </div>
+        ) : null}
+
+        <FlashCards filter={filter} />
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <EquityChart filter={filter} />
+          <DailyPnLChart filter={filter} />
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <DistributionPanel filter={filter} />
+          <HeatmapPanel filter={filter} />
+        </div>
+
+        <ByAssetTable filter={filter} />
+
+        <ExecutionsTable filter={filter} />
       </div>
     </div>
   );

@@ -413,6 +413,11 @@ app.include_router(metrics_api.router)
 from .api import dashboard as dashboard_api  # noqa: E402
 app.include_router(dashboard_api.router)
 
+# Institutional performance dashboard (Task #257) — read-only aggregations
+# over `position_lifecycle` powering /dashboard/performance.
+from .api import performance as performance_api  # noqa: E402
+app.include_router(performance_api.router)
+
 # WebSocket
 app.include_router(websocket.router)
 
