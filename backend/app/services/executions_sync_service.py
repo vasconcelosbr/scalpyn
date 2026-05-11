@@ -192,44 +192,69 @@ class ExecutionsSyncService:
     ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
         """Walk /spot/my_trades using Gate.io's native ``page`` cursor.
 
-        Strategy:
-        1. Pin the ``from``/``to`` window once at the start so paging is
-           stable even if new fills land mid-loop.
-        2. Walk ``page=1, 2, ...`` until the API returns a short page
-           (< page_size rows), an empty page, or we hit ``max_pages``.
-        3. Dedup by ``trade_id`` (defence-in-depth — duplicates would
-           also be filtered by the ON CONFLICT DO NOTHING UPSERT).
+        Gate.io's ``/spot/my_trades`` enforces a 30-day max window per
+        request when ``from``/``to`` are supplied — passing days > 30
+        returns ``[INVALID_PARAM_VALUE] invalid time range`` (HTTP 400).
+        We chunk the requested ``days`` window into ≤30-day slices and
+        walk each slice's ``page`` cursor independently.
+
+        Strategy per slice:
+        1. Pin ``from``/``to`` so paging is stable mid-loop.
+        2. Walk ``page=1, 2, ...`` until short page, empty page, or
+           ``max_pages``.
+        3. Dedup by ``trade_id`` across slices (defence-in-depth — also
+           filtered by ON CONFLICT DO NOTHING UPSERT).
         """
-        from_ts = int((datetime.now(timezone.utc)
-                       - timedelta(days=days)).timestamp())
-        to_ts = int(datetime.now(timezone.utc).timestamp())
+        WINDOW_DAYS = 30
+        now = datetime.now(timezone.utc)
 
         all_norm: List[Dict[str, Any]] = []
         seen_ids: set[str] = set()
-        pages_walked = 0
+        pages_walked_total = 0
         raw_total = 0
-        for page in range(1, max_pages + 1):
-            pages_walked = page
-            raw = await adapter.get_my_spot_trades(
-                limit=page_size, page=page,
-                from_ts=from_ts, to_ts=to_ts,
-            )
-            if not raw:
-                break
-            raw_total += len(raw)
-            for x in raw:
-                n = self._normalize_spot(x, user_id)
-                if not n or n["trade_id"] in seen_ids:
-                    continue
-                seen_ids.add(n["trade_id"])
-                all_norm.append(n)
-            if len(raw) < page_size:
-                break  # last page (proven exhaustion).
+        slices_walked = 0
+        any_slice_capped = False
+
+        remaining_days = max(1, days)
+        slice_end = now
+        while remaining_days > 0:
+            slice_days = min(WINDOW_DAYS, remaining_days)
+            slice_start = slice_end - timedelta(days=slice_days)
+            from_ts = int(slice_start.timestamp())
+            to_ts = int(slice_end.timestamp())
+            slices_walked += 1
+
+            slice_pages = 0
+            for page in range(1, max_pages + 1):
+                slice_pages = page
+                raw = await adapter.get_my_spot_trades(
+                    limit=page_size, page=page,
+                    from_ts=from_ts, to_ts=to_ts,
+                )
+                if not raw:
+                    break
+                raw_total += len(raw)
+                for x in raw:
+                    n = self._normalize_spot(x, user_id)
+                    if not n or n["trade_id"] in seen_ids:
+                        continue
+                    seen_ids.add(n["trade_id"])
+                    all_norm.append(n)
+                if len(raw) < page_size:
+                    break  # last page in this slice (proven exhaustion).
+            pages_walked_total += slice_pages
+            if slice_pages >= max_pages:
+                any_slice_capped = True
+
+            slice_end = slice_start
+            remaining_days -= slice_days
+
         telemetry = {
-            "pages_walked": pages_walked,
+            "pages_walked": pages_walked_total,
             "raw_rows": raw_total,
             "normalized_rows": len(all_norm),
-            "exhausted": pages_walked < max_pages,
+            "exhausted": not any_slice_capped,
+            "slices": slices_walked,
         }
         return all_norm, telemetry
 
@@ -247,50 +272,76 @@ class ExecutionsSyncService:
         ``last_id=<smallest id from previous page>`` returns rows strictly
         older than that id. This is a true monotonic cursor — there is no
         risk of silent gap.
+
+        ``/futures/usdt/my_trades`` enforces the same ≤30-day window as
+        spot when ``from``/``to`` are supplied, so we chunk the requested
+        ``days`` into 30-day slices and reset the ``last_id`` cursor at
+        each slice boundary.
         """
-        from_ts = int((datetime.now(timezone.utc)
-                       - timedelta(days=days)).timestamp())
-        to_ts = int(datetime.now(timezone.utc).timestamp())
+        WINDOW_DAYS = 30
+        now = datetime.now(timezone.utc)
 
         all_norm: List[Dict[str, Any]] = []
         seen_ids: set[str] = set()
-        last_id: Optional[str] = None
-        pages_walked = 0
+        pages_walked_total = 0
         raw_total = 0
-        for page in range(1, max_pages + 1):
-            pages_walked = page
-            raw = await adapter.get_my_futures_trades(
-                limit=page_size,
-                from_ts=from_ts, to_ts=to_ts,
-                last_id=last_id,
-            )
-            if not raw:
-                break
-            raw_total += len(raw)
-            min_id_in_page: Optional[str] = None
-            for x in raw:
-                n = self._normalize_futures(x, user_id)
-                if not n:
-                    continue
-                if n["trade_id"] not in seen_ids:
-                    seen_ids.add(n["trade_id"])
-                    all_norm.append(n)
-                # Track smallest numeric id for cursor advancement.
-                try:
-                    candidate = str(x.get("id"))
-                    if candidate and (min_id_in_page is None
-                                      or int(candidate) < int(min_id_in_page)):
-                        min_id_in_page = candidate
-                except (ValueError, TypeError):
-                    continue
-            if len(raw) < page_size or not min_id_in_page or min_id_in_page == last_id:
-                break
-            last_id = min_id_in_page
+        slices_walked = 0
+        any_slice_capped = False
+
+        remaining_days = max(1, days)
+        slice_end = now
+        while remaining_days > 0:
+            slice_days = min(WINDOW_DAYS, remaining_days)
+            slice_start = slice_end - timedelta(days=slice_days)
+            from_ts = int(slice_start.timestamp())
+            to_ts = int(slice_end.timestamp())
+            slices_walked += 1
+
+            last_id: Optional[str] = None
+            slice_pages = 0
+            for page in range(1, max_pages + 1):
+                slice_pages = page
+                raw = await adapter.get_my_futures_trades(
+                    limit=page_size,
+                    from_ts=from_ts, to_ts=to_ts,
+                    last_id=last_id,
+                )
+                if not raw:
+                    break
+                raw_total += len(raw)
+                min_id_in_page: Optional[str] = None
+                for x in raw:
+                    n = self._normalize_futures(x, user_id)
+                    if not n:
+                        continue
+                    if n["trade_id"] not in seen_ids:
+                        seen_ids.add(n["trade_id"])
+                        all_norm.append(n)
+                    try:
+                        candidate = str(x.get("id"))
+                        if candidate and (min_id_in_page is None
+                                          or int(candidate) < int(min_id_in_page)):
+                            min_id_in_page = candidate
+                    except (ValueError, TypeError):
+                        continue
+                if (len(raw) < page_size
+                        or not min_id_in_page
+                        or min_id_in_page == last_id):
+                    break
+                last_id = min_id_in_page
+            pages_walked_total += slice_pages
+            if slice_pages >= max_pages:
+                any_slice_capped = True
+
+            slice_end = slice_start
+            remaining_days -= slice_days
+
         telemetry = {
-            "pages_walked": pages_walked,
+            "pages_walked": pages_walked_total,
             "raw_rows": raw_total,
             "normalized_rows": len(all_norm),
-            "exhausted": pages_walked < max_pages,
+            "exhausted": not any_slice_capped,
+            "slices": slices_walked,
         }
         return all_norm, telemetry
 

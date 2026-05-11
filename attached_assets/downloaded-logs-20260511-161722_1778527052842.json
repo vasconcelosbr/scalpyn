@@ -1,0 +1,318 @@
+[
+  {
+    "insertId": "6a022ae90003a1f7caa045f8",
+    "httpRequest": {
+      "requestMethod": "POST",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/api/performance/sync?days=90&markets=spot%2Cfutures",
+      "requestSize": "4213",
+      "status": 400,
+      "responseSize": "263",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "remoteIp": "32.194.86.20",
+      "referer": "https://scalpyn.vercel.app/dashboard/performance",
+      "serverIp": "34.143.75.2",
+      "latency": "0.855327554s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "revision_name": "scalpyn-00508-kdn",
+        "service_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-11T19:15:52.381314Z",
+    "severity": "WARNING",
+    "labels": {
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "instanceId": "0007b734d9162f31d163d0647ee474c0ad7296545b53906f3441c143b7dfc7b645610a802848029bc9616432a410a276e47923ab8e2f980e3f4df330fe5b4fa60e9577ab754d62dc1fb68078dca0",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/8931d563b956d7e29754732bba66c3b9",
+    "receiveTimestamp": "2026-05-11T19:15:53.512757863Z",
+    "spanId": "4edf998d6731978d"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/app/services/executions_sync_service.py\", line 326, in backfill_user\n    rows, tele = await self._paginate_spot(\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/services/executions_sync_service.py\", line 213, in _paginate_spot\n    raw = await adapter.get_my_spot_trades(\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/exchange_adapters/gate_adapter.py\", line 742, in get_my_spot_trades\n    return await self._request(\"GET\", \"/spot/my_trades\", params=params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/exchange_adapters/gate_adapter.py\", line 196, in _request\n    self._raise_gate_error(r)\n  File \"/app/app/exchange_adapters/gate_adapter.py\", line 211, in _raise_gate_error\n    raise exc_cls(r.status_code, label, msg)\napp.exchange_adapters.gate_adapter.GateAPIError: [INVALID_PARAM_VALUE] invalid time range (HTTP 400)",
+    "insertId": "6a022ae900039d2971b2228c",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00508-kdn",
+        "configuration_name": "scalpyn",
+        "location": "us-central1",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-11T19:15:53.236841Z",
+    "severity": "ERROR",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "instanceId": "0007b734d9162f31d163d0647ee474c0ad7296545b53906f3441c143b7dfc7b645610a802848029bc9616432a410a276e47923ab8e2f980e3f4df330fe5b4fa60e9577ab754d62dc1fb68078dca0",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-11T19:15:53.535746935Z",
+    "errorGroups": [
+      {
+        "id": "COOnorz8-PfBeA"
+      }
+    ]
+  },
+  {
+    "insertId": "6a022aeb000b3676c8eaa76d",
+    "httpRequest": {
+      "requestMethod": "POST",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/api/performance/sync?days=90&markets=spot%2Cfutures",
+      "requestSize": "4211",
+      "status": 400,
+      "responseSize": "263",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "remoteIp": "32.194.86.20",
+      "referer": "https://scalpyn.vercel.app/dashboard/performance",
+      "serverIp": "34.143.75.2",
+      "latency": "0.753820944s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "scalpyn-00508-kdn",
+        "service_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "location": "us-central1",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-11T19:15:54.979498Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "instanceId": "0007b734d9162f31d163d0647ee474c0ad7296545b53906f3441c143b7dfc7b645610a802848029bc9616432a410a276e47923ab8e2f980e3f4df330fe5b4fa60e9577ab754d62dc1fb68078dca0",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/591269d731e6acbb9754732bba66c59c",
+    "receiveTimestamp": "2026-05-11T19:15:55.841635219Z",
+    "spanId": "865b1324b1c1b18e"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/app/services/executions_sync_service.py\", line 326, in backfill_user\n    rows, tele = await self._paginate_spot(\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/services/executions_sync_service.py\", line 213, in _paginate_spot\n    raw = await adapter.get_my_spot_trades(\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/exchange_adapters/gate_adapter.py\", line 742, in get_my_spot_trades\n    return await self._request(\"GET\", \"/spot/my_trades\", params=params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/exchange_adapters/gate_adapter.py\", line 196, in _request\n    self._raise_gate_error(r)\n  File \"/app/app/exchange_adapters/gate_adapter.py\", line 211, in _raise_gate_error\n    raise exc_cls(r.status_code, label, msg)\napp.exchange_adapters.gate_adapter.GateAPIError: [INVALID_PARAM_VALUE] invalid time range (HTTP 400)",
+    "insertId": "6a022aeb000b3248adfabe2e",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "revision_name": "scalpyn-00508-kdn",
+        "service_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-11T19:15:55.733768Z",
+    "severity": "ERROR",
+    "labels": {
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "instanceId": "0007b734d9162f31d163d0647ee474c0ad7296545b53906f3441c143b7dfc7b645610a802848029bc9616432a410a276e47923ab8e2f980e3f4df330fe5b4fa60e9577ab754d62dc1fb68078dca0",
+      "gcb-trigger-region": "global",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-11T19:15:55.862660427Z",
+    "errorGroups": [
+      {
+        "id": "COOnorz8-PfBeA"
+      }
+    ]
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py\", line 373, in _close_connection\n    self._dialect.do_terminate(connection)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 1127, in do_terminate\n    dbapi_connection.terminate()\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py\", line 402, in terminate\n    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 912, in _terminate_graceful_close\n    await self._connection.close(timeout=2)\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 1513, in close\n    await self._protocol.close(timeout)\n  File \"asyncpg/protocol/protocol.pyx\", line 617, in close\n  File \"asyncpg/protocol/protocol.pyx\", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 1682, in _cancel_current_command\n    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 455, in create_task\n    self._check_closed()\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 545, in _check_closed\n    raise RuntimeError('Event loop is closed')\nRuntimeError: Event loop is closed",
+    "insertId": "6a022aec0008a15a24604784",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "project_id": "clickrate-477217",
+        "configuration_name": "scalpyn-worker-structural",
+        "revision_name": "scalpyn-worker-structural-00052-mfm",
+        "service_name": "scalpyn-worker-structural"
+      }
+    },
+    "timestamp": "2026-05-11T19:15:56.565594Z",
+    "severity": "ERROR",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "commit-sha": "3c4b3c63f67efce0cd161af5cc882ce2610a045f",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "instanceId": "0007b734d9f04cc6249bb870b71b85fd9cefe171c62ed1782358e6f00e6f9036b6a8c3729d2f668a4fe0e73b931394c7c11197049024b8ee8ecc1c60edb878b1258aae8324f4c424196b49dc75a8cf",
+      "gcb-build-id": "05f9019e-0e89-4201-8d02-3a55a39d616d",
+      "gcb-trigger-region": "global"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-11T19:15:56.571978880Z",
+    "errorGroups": [
+      {
+        "id": "CIaUi4fY3-nCJw"
+      }
+    ]
+  },
+  {
+    "insertId": "6a022b05000d0623060932eb",
+    "httpRequest": {
+      "requestMethod": "POST",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/api/performance/sync?days=90&markets=spot%2Cfutures",
+      "requestSize": "4212",
+      "status": 400,
+      "responseSize": "263",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "remoteIp": "54.224.137.100",
+      "referer": "https://scalpyn.vercel.app/dashboard/performance",
+      "serverIp": "34.143.76.2",
+      "latency": "0.634237096s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "location": "us-central1",
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00508-kdn"
+      }
+    },
+    "timestamp": "2026-05-11T19:16:21.218197Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "instanceId": "0007b734d9162f31d163d0647ee474c0ad7296545b53906f3441c143b7dfc7b645610a802848029bc9616432a410a276e47923ab8e2f980e3f4df330fe5b4fa60e9577ab754d62dc1fb68078dca0",
+      "gcb-trigger-region": "global",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/2c0dffd37560609ef1e9d2fda81dc51e",
+    "receiveTimestamp": "2026-05-11T19:16:22.056044941Z",
+    "spanId": "006472812aaef943"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/app/services/executions_sync_service.py\", line 326, in backfill_user\n    rows, tele = await self._paginate_spot(\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/services/executions_sync_service.py\", line 213, in _paginate_spot\n    raw = await adapter.get_my_spot_trades(\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/exchange_adapters/gate_adapter.py\", line 742, in get_my_spot_trades\n    return await self._request(\"GET\", \"/spot/my_trades\", params=params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/exchange_adapters/gate_adapter.py\", line 196, in _request\n    self._raise_gate_error(r)\n  File \"/app/app/exchange_adapters/gate_adapter.py\", line 211, in _raise_gate_error\n    raise exc_cls(r.status_code, label, msg)\napp.exchange_adapters.gate_adapter.GateAPIError: [INVALID_PARAM_VALUE] invalid time range (HTTP 400)",
+    "insertId": "6a022b05000d02ed0ca442c4",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "revision_name": "scalpyn-00508-kdn",
+        "service_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-11T19:16:21.852717Z",
+    "severity": "ERROR",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "instanceId": "0007b734d9162f31d163d0647ee474c0ad7296545b53906f3441c143b7dfc7b645610a802848029bc9616432a410a276e47923ab8e2f980e3f4df330fe5b4fa60e9577ab754d62dc1fb68078dca0",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-11T19:16:21.879875734Z",
+    "errorGroups": [
+      {
+        "id": "COOnorz8-PfBeA"
+      }
+    ]
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/pool/base.py\", line 373, in _close_connection\n    self._dialect.do_terminate(connection)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 1127, in do_terminate\n    dbapi_connection.terminate()\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/connectors/asyncio.py\", line 402, in terminate\n    self.await_(asyncio.shield(self._terminate_graceful_close()))  # type: ignore[attr-defined] # noqa: E501\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 912, in _terminate_graceful_close\n    await self._connection.close(timeout=2)\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 1513, in close\n    await self._protocol.close(timeout)\n  File \"asyncpg/protocol/protocol.pyx\", line 617, in close\n  File \"asyncpg/protocol/protocol.pyx\", line 650, in asyncpg.protocol.protocol.BaseProtocol._request_cancel\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 1682, in _cancel_current_command\n    self._cancellations.add(self._loop.create_task(self._cancel(waiter)))\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 455, in create_task\n    self._check_closed()\n  File \"/usr/local/lib/python3.12/asyncio/base_events.py\", line 545, in _check_closed\n    raise RuntimeError('Event loop is closed')\nRuntimeError: Event loop is closed",
+    "insertId": "6a022b280008a270f67f0369",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn-worker-structural",
+        "revision_name": "scalpyn-worker-structural-00052-mfm",
+        "configuration_name": "scalpyn-worker-structural",
+        "location": "us-central1",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-11T19:16:56.565872Z",
+    "severity": "ERROR",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "commit-sha": "3c4b3c63f67efce0cd161af5cc882ce2610a045f",
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d9f04cc6249bb870b71b85fd9cefe171c62ed1782358e6f00e6f9036b6a8c3729d2f668a4fe0e73b931394c7c11197049024b8ee8ecc1c60edb878b1258aae8324f4c424196b49dc75a8cf",
+      "gcb-build-id": "05f9019e-0e89-4201-8d02-3a55a39d616d"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-11T19:16:56.571834132Z",
+    "errorGroups": [
+      {
+        "id": "CIaUi4fY3-nCJw"
+      }
+    ]
+  },
+  {
+    "insertId": "6a022b380005b231fe652f3c",
+    "httpRequest": {
+      "requestMethod": "POST",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/api/performance/sync?days=90&markets=spot%2Cfutures",
+      "requestSize": "4212",
+      "status": 400,
+      "responseSize": "263",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "remoteIp": "54.224.137.100",
+      "referer": "https://scalpyn.vercel.app/dashboard/performance",
+      "serverIp": "34.143.77.2",
+      "latency": "0.674754245s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00508-kdn",
+        "configuration_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-11T19:17:11.697183Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "instanceId": "0007b734d9162f31d163d0647ee474c0ad7296545b53906f3441c143b7dfc7b645610a802848029bc9616432a410a276e47923ab8e2f980e3f4df330fe5b4fa60e9577ab754d62dc1fb68078dca0",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/e4378d08bd56d8d648835215ef2a0835",
+    "receiveTimestamp": "2026-05-11T19:17:12.379552467Z",
+    "spanId": "6178fd8472b60dff",
+    "traceSampled": true
+  }
+]
