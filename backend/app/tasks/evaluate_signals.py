@@ -25,10 +25,25 @@ logger = logging.getLogger(__name__)
 
 
 def _run_async(coro):
+    """Run async code in sync Celery task.
+
+    Drains pending asyncpg callbacks (NullPool connection close, etc.)
+    before closing the loop. Without this, callbacks scheduled by asyncpg
+    during connection cleanup hit a closed loop, leaving sessions in
+    PendingRollbackError and poisoning the next task invocation.
+    """
     loop = asyncio.new_event_loop()
     try:
         return loop.run_until_complete(coro)
     finally:
+        try:
+            pending = asyncio.all_tasks(loop)
+            if pending:
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+        except Exception:
+            pass
         loop.close()
 
 
