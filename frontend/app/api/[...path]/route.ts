@@ -83,6 +83,15 @@ async function proxyRequest(req: NextRequest, context: RouteContext): Promise<Ne
     }
   });
 
+  if (
+    backendRes.headers.get("content-type")?.includes("text/event-stream")
+  ) {
+    return new NextResponse(backendRes.body, {
+      status: backendRes.status,
+      headers: resHeaders,
+    });
+  }
+
   const responseBody = await backendRes.arrayBuffer();
 
   return new NextResponse(responseBody, {
