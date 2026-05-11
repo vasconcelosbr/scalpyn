@@ -269,13 +269,46 @@ _celery_connect_args["command_timeout"] = _env_int("CELERY_DB_COMMAND_TIMEOUT", 
 # starving the hot symbols. **Do NOT re-add lock_timeout under 120 s without
 # first measuring p95 lock-wait per symbol over a 24 h window.**
 _APP_NAME_CELERY = f"scalpyn-{os.environ.get('K_SERVICE', 'local')}-celery"
+# 2026-05-11 mitigation — micro-only short idle_in_transaction timeout.
+# Evidence (pg_stat_activity 23:09 UTC): worker-micro held XID for ~60 s while
+# ``_collect_5m_async`` did per-symbol ``await fetch_ohlcv`` + ``await
+# fetch_orderbook_metrics`` INSIDE ``run_db_task`` → ``session.begin()``.
+# Two concurrent worker-structural INSERTs into ``market_metadata`` queued on
+# ``Lock: transactionid`` waiting for that XID and PostgreSQL detected a
+# deadlock cycle (40P01) — a vector NOT covered by the row-level ``sorted()``
+# fix from Tasks #251/#273.
+#
+# This is a defensive ceiling, NOT the structural fix. The proper fix is to
+# move exchange I/O OUT of the outer transaction in ``_collect_5m_async``
+# (see ``.local/tasks/refactor-collect-5m-io-out-of-tx.md``). Until that lands,
+# Postgres kills any worker-micro session idle in TX > MICRO_IDLE_IN_TX_TIMEOUT_S
+# (default 90s — covers a normal ~60 s cycle with 30 s margin), releases the
+# XID, structural workers proceed.
+#
+# Other Cloud Run services (worker-structural / worker-execution / scalpyn API
+# / beat) keep the conservative 300 s ceiling — their tasks are short-lived
+# under run_db_task and the longer ceiling exists for orphan-TX defense
+# against Cloud Run mid-task SIGTERMs (Task #256 rationale, unchanged).
+_K_SERVICE = os.environ.get("K_SERVICE", "local")
+_IS_MICRO_WORKER = _K_SERVICE.startswith("scalpyn-worker-micro")
+_idle_in_tx_timeout_s = (
+    _env_int("MICRO_IDLE_IN_TX_TIMEOUT_S", 90)
+    if _IS_MICRO_WORKER
+    else _env_int("CELERY_IDLE_IN_TX_TIMEOUT_S", 300)
+)
 _celery_connect_args.setdefault("server_settings", {}).update({
-    "idle_in_transaction_session_timeout": "300000",  # 5 min, ms
+    "idle_in_transaction_session_timeout": f"{_idle_in_tx_timeout_s * 1000}",  # ms
     # Task #256 — application_name allows the orphan-TX watchdog to
     # restrict pg_terminate_backend to ``LIKE 'scalpyn%'`` only, never
     # touching operator/maintenance sessions.
     "application_name": _APP_NAME_CELERY,
 })
+logger.info(
+    "[DB] Celery engine configured: K_SERVICE=%s is_micro=%s "
+    "idle_in_transaction_session_timeout=%ds command_timeout=%ds",
+    _K_SERVICE, _IS_MICRO_WORKER, _idle_in_tx_timeout_s,
+    _celery_connect_args.get("command_timeout", -1),
+)
 _celery_engine = create_async_engine(
     _db_url,
     connect_args=_celery_connect_args,
