@@ -16,12 +16,52 @@ silent fallback to active+tradable.
 
 import asyncio
 import logging
+import time
 
 from sqlalchemy import text, select
 
 from ..tasks.celery_app import celery_app
+from ..core.trace_context import (
+    TraceContext,
+    get_log_extra,
+    get_trace,
+    new_trace,
+    set_ctx,
+)
+from ..services.decision_audit_service import _record_decision_raw
 
 logger = logging.getLogger(__name__)
+
+
+async def _safe_record_decision(*, db, **kwargs) -> None:
+    """Audit write isolated by SAVEPOINT.
+
+    ``evaluate_signals`` runs inside Celery's outer ``run_db_task``
+    transaction (``async with session.begin():``). A failed INSERT into
+    ``trade_decisions`` (FK violation, schema drift, transient driver
+    error) would mark that outer transaction as aborted — even if the
+    exception is swallowed downstream — poisoning every subsequent DB
+    operation in the cycle (``Cloud Run regression May-2026`` pattern).
+    Wrapping the raw INSERT in ``db.begin_nested()`` keeps the failure
+    inside a SAVEPOINT, which the CM rolls back cleanly on exception
+    (per the project's nested-savepoint rollback rule — DO NOT add an
+    explicit ``await db.rollback()`` here, the CM owns that).
+    """
+    try:
+        async with db.begin_nested():
+            await _record_decision_raw(db, **kwargs)
+        # Persistence is required for the audit feature to work — without
+        # an explicit commit, ``AsyncSessionLocal`` rolls back pending
+        # writes on context exit and REJECTED/SKIPPED rows from this loop
+        # would be lost (no other commit fires for those branches).
+        await db.commit()
+    except Exception:
+        logger.exception(
+            "decision_audit_call_failed trace_id=%s symbol=%s stage=%s",
+            kwargs.get("trace_id"),
+            kwargs.get("symbol"),
+            kwargs.get("stage"),
+        )
 
 
 def _run_async(coro):
@@ -75,6 +115,17 @@ async def _evaluate_async():
         users = users_result.scalars().all()
 
         for user in users:
+            # Trace context (Task: trace+audit instrumentation): one fresh
+            # trace_id per user-cycle so every downstream log/decision row
+            # for this user can be joined by trace_id. pool_id and symbol
+            # are bound later as they get resolved in the inner loop.
+            trace_id = new_trace()
+            set_ctx(TraceContext(
+                trace_id=trace_id,
+                user_id=str(user.id),
+                market_type="spot",
+                exchange="gate",
+            ))
             try:
                 signal_config = await config_service.get_config(db, "signal", user.id)
                 block_config = await config_service.get_config(db, "block", user.id)
@@ -197,12 +248,45 @@ async def _evaluate_async():
                         "[evaluate_signals] SKIPPED user=%s reason=NO_L3_CHAIN — "
                         "operator must build Pool→L1→L2→L3 before trades execute.",
                         user.id,
+                        extra=get_log_extra(),
+                    )
+                    # Audit: user-level skip — uses sentinel symbol "*" because
+                    # the gate fires before any candidate is selected.
+                    await _safe_record_decision(
+                        db=db,
+                        trace_id=get_trace(),
+                        user_id=str(user.id),
+                        pool_id=str(pool_for_l3.id) if pool_for_l3 is not None else None,
+                        symbol="*",
+                        market_type="spot",
+                        exchange="gate",
+                        status="SKIPPED",
+                        stage="L3",
+                        reason="NO_L3_CHAIN",
+                        blocking_rule="pipeline_chain_missing",
                     )
                     continue
+
+                # Bind the user-level pool_id to the trace context now that
+                # the L3 chain is known to exist; per-symbol re-bind below
+                # adds the symbol field.
+                pool_id_for_ctx = str(pool_for_l3.id) if pool_for_l3 is not None else None
 
                 merged_by_sym = await get_merged_indicators(db, pool_symbols)
 
                 for symbol, mi in merged_by_sym.items():
+                    # Re-bind the trace context with the current symbol +
+                    # the user's pool_id. set_ctx replaces the whole ctx,
+                    # so we re-emit the user-level fields too.
+                    set_ctx(TraceContext(
+                        trace_id=trace_id,
+                        user_id=str(user.id),
+                        pool_id=pool_id_for_ctx,
+                        symbol=symbol,
+                        market_type="spot",
+                        exchange="gate",
+                    ))
+
                     # ``MergedIndicators.values`` already carries scalars
                     # unwrapped from per-key envelopes; downstream engines
                     # accept either flat or envelope shape (they call
@@ -217,6 +301,21 @@ async def _evaluate_async():
                         logger.warning(
                             "[evaluate_signals] QUARANTINED %s — missing core: %s",
                             symbol, missing,
+                            extra=get_log_extra(),
+                        )
+                        await _safe_record_decision(
+                            db=db,
+                            trace_id=get_trace(),
+                            user_id=str(user.id),
+                            pool_id=pool_id_for_ctx,
+                            symbol=symbol,
+                            market_type="spot",
+                            exchange="gate",
+                            status="SKIPPED",
+                            stage="L3",
+                            reason="QUARANTINED",
+                            blocking_rule="indicators_incomplete",
+                            rule_details={"missing": list(missing) if missing else []},
                         )
                         continue
 
@@ -234,15 +333,59 @@ async def _evaluate_async():
                         continue
 
                     # 1. Evaluate signal
+                    t_eval = time.monotonic()
                     signal_result = signal_engine.evaluate(indicators, alpha_score)
-                    if not signal_result.get("signal"):
+                    eval_latency_ms = round((time.monotonic() - t_eval) * 1000)
+
+                    # Defensive: SignalEngine.evaluate may or may not
+                    # populate matched/failed_required/skipped — read
+                    # them with .get() so older config payloads still
+                    # produce a valid audit row.
+                    matched = signal_result.get("matched") or signal_result.get("rules_matched") or []
+                    failed_required = (
+                        signal_result.get("failed_required")
+                        or signal_result.get("rules_failed")
+                        or []
+                    )
+                    skipped = signal_result.get("skipped") or signal_result.get("rules_skipped") or []
+                    blocking_rule_name = (
+                        signal_result.get("blocking_rule")
+                        or (failed_required[0].get("rule") if failed_required and isinstance(failed_required[0], dict) else None)
+                    )
+                    has_signal = bool(signal_result.get("signal"))
+                    await _safe_record_decision(
+                        db=db,
+                        trace_id=get_trace(),
+                        user_id=str(user.id),
+                        pool_id=pool_id_for_ctx,
+                        symbol=symbol,
+                        market_type="spot",
+                        exchange="gate",
+                        status="APPROVED" if has_signal else "REJECTED",
+                        stage="L3",
+                        reason=None if has_signal else (
+                            signal_result.get("reason") or "signal_rules_failed"
+                        ),
+                        blocking_rule=None if has_signal else blocking_rule_name,
+                        rule_details=signal_result.get("rule_details"),
+                        rules_matched=matched,
+                        rules_failed=failed_required,
+                        rules_skipped=skipped,
+                        score_breakdown={"alpha_score": alpha_score},
+                        indicators_snapshot=indicators,
+                        latency_ms={"l3": eval_latency_ms},
+                    )
+                    if not has_signal:
                         continue
 
                     # 2. Check blocks
                     if block_engine:
                         block_result = block_engine.evaluate(indicators)
                         if block_result.get("blocked"):
-                            logger.info(f"Signal for {symbol} blocked: {block_result.get('triggered_blocks')}")
+                            logger.info(
+                                f"Signal for {symbol} blocked: {block_result.get('triggered_blocks')}",
+                                extra=get_log_extra(),
+                            )
                             continue
 
                     # 3. Risk evaluation
@@ -258,7 +401,10 @@ async def _evaluate_async():
                     )
 
                     if not risk_result.get("approved"):
-                        logger.info(f"Trade for {symbol} rejected by risk: {risk_result.get('rejection_reason')}")
+                        logger.info(
+                            f"Trade for {symbol} rejected by risk: {risk_result.get('rejection_reason')}",
+                            extra=get_log_extra(),
+                        )
                         continue
 
                     # Task #232 round 16 — unified execution gate.
@@ -272,6 +418,24 @@ async def _evaluate_async():
                             "score=%.2f direction=%s — qualified buy blocked by "
                             "is_tradable=false",
                             symbol, alpha_score, signal_result.get("direction"),
+                            extra=get_log_extra(),
+                        )
+                        await _safe_record_decision(
+                            db=db,
+                            trace_id=get_trace(),
+                            user_id=str(user.id),
+                            pool_id=pool_id_for_ctx,
+                            symbol=symbol,
+                            market_type="spot",
+                            exchange="gate",
+                            status="SKIPPED",
+                            stage="EXECUTION",
+                            reason="NOT_TRADABLE",
+                            blocking_rule="is_tradable_false",
+                            rule_details={
+                                "alpha_score": alpha_score,
+                                "direction": signal_result.get("direction"),
+                            },
                         )
                         continue
                     if symbol not in l3_symbols:
@@ -280,6 +444,24 @@ async def _evaluate_async():
                             "score=%.2f direction=%s — qualified buy blocked "
                             "by L3 watchlist membership.",
                             symbol, alpha_score, signal_result.get("direction"),
+                            extra=get_log_extra(),
+                        )
+                        await _safe_record_decision(
+                            db=db,
+                            trace_id=get_trace(),
+                            user_id=str(user.id),
+                            pool_id=pool_id_for_ctx,
+                            symbol=symbol,
+                            market_type="spot",
+                            exchange="gate",
+                            status="SKIPPED",
+                            stage="EXECUTION",
+                            reason="NOT_IN_L3",
+                            blocking_rule="l3_watchlist_membership",
+                            rule_details={
+                                "alpha_score": alpha_score,
+                                "direction": signal_result.get("direction"),
+                            },
                         )
                         continue
 
@@ -307,7 +489,10 @@ async def _evaluate_async():
                     )
 
                     if trade_result.get("success"):
-                        logger.info(f"Trade executed: {symbol} {signal_result['direction']} for user {user.id}")
+                        logger.info(
+                            f"Trade executed: {symbol} {signal_result['direction']} for user {user.id}",
+                            extra=get_log_extra(),
+                        )
 
                         await notification_service.send_trade_alert(
                             db, user.id, "buy",

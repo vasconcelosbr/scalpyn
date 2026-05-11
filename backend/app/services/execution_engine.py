@@ -1,6 +1,7 @@
 """Execution Engine — executes trades via exchange adapters and manages order lifecycle."""
 
 import logging
+import time
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 from uuid import UUID
@@ -12,8 +13,35 @@ from ..models.trade import Trade
 from ..models.order import Order
 from ..models.exchange_connection import ExchangeConnection
 from ..utils.encryption import decrypt
+from ..core.trace_context import get_log_extra, get_trace
+from .decision_audit_service import _record_decision_raw
 
 logger = logging.getLogger(__name__)
+
+
+async def _safe_record_decision(*, db, **kwargs) -> None:
+    """Audit write isolated by SAVEPOINT.
+
+    Mirrors the helper in ``app.tasks.evaluate_signals``: wraps the raw
+    INSERT in ``db.begin_nested()`` so a failed audit write cannot mark
+    the outer execution transaction as aborted. The CM owns rollback —
+    do NOT add an explicit ``await db.rollback()`` here.
+    """
+    try:
+        async with db.begin_nested():
+            await _record_decision_raw(db, **kwargs)
+        # Explicit commit: this helper is invoked AFTER the trade/order
+        # commit, so the SAVEPOINT runs in a fresh autobegin transaction.
+        # Without this commit the audit row stays uncommitted and is
+        # rolled back when the session closes.
+        await db.commit()
+    except Exception:
+        logger.exception(
+            "decision_audit_call_failed trace_id=%s symbol=%s stage=%s",
+            kwargs.get("trace_id"),
+            kwargs.get("symbol"),
+            kwargs.get("stage"),
+        )
 
 
 class ExecutionEngine:
@@ -83,7 +111,15 @@ class ExecutionEngine:
                     price=current_price,
                 )
             except Exception as e:
-                logger.exception(f"Failed to execute order on exchange: {e}")
+                logger.exception(
+                    "execute_trade_failed",
+                    extra={
+                        **get_log_extra(),
+                        "error_type": type(e).__name__,
+                        "symbol": symbol,
+                        "side": side,
+                    },
+                )
                 return {"success": False, "error": f"Exchange error: {str(e)}"}
         else:
             exchange_order_id = f"PAPER-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
@@ -131,7 +167,31 @@ class ExecutionEngine:
             logger.info(
                 f"{'PAPER' if paper_mode else 'LIVE'} trade executed: "
                 f"{side} {quantity} {symbol} @ {current_price} | "
-                f"TP={risk_params.get('take_profit_price')} SL={risk_params.get('stop_loss_price')}"
+                f"TP={risk_params.get('take_profit_price')} SL={risk_params.get('stop_loss_price')}",
+                extra=get_log_extra(),
+            )
+
+            # Audit: post-commit EXECUTION row joined to the trade just
+            # persisted. Wrapped via _safe_record_decision so a failure
+            # cannot retroactively roll back the trade.
+            await _safe_record_decision(
+                db=db,
+                trace_id=get_trace(),
+                user_id=str(user_id),
+                pool_id=str(pool_id) if pool_id is not None else None,
+                symbol=symbol,
+                market_type=market_type,
+                exchange=exchange_name,
+                status="APPROVED",
+                stage="EXECUTION",
+                trade_id=str(trade.id),
+                rule_details={
+                    "order_id": exchange_order_id,
+                    "side": side,
+                    "qty": quantity,
+                    "paper_mode": paper_mode,
+                },
+                score_breakdown={"alpha_score": alpha_score},
             )
 
             return {
@@ -143,7 +203,15 @@ class ExecutionEngine:
 
         except Exception as e:
             await db.rollback()
-            logger.exception(f"Failed to record trade: {e}")
+            logger.exception(
+                "execute_trade_failed",
+                extra={
+                    **get_log_extra(),
+                    "error_type": type(e).__name__,
+                    "symbol": symbol,
+                    "side": side,
+                },
+            )
             return {"success": False, "error": f"DB error: {str(e)}"}
 
     async def close_trade(
@@ -198,7 +266,6 @@ class ExecutionEngine:
     ) -> str:
         """Send order to exchange. Returns exchange order ID."""
         import httpx
-        import time
         import hashlib
         import hmac
 
@@ -240,11 +307,42 @@ class ExecutionEngine:
                 "SIGN": sign,
             }
 
+            logger.debug(
+                "order_payload",
+                extra={
+                    **get_log_extra(),
+                    "endpoint": "/spot/orders",
+                    "payload": {
+                        "symbol": symbol,
+                        "side": side,
+                        "order_type": order_type,
+                        "quantity": quantity,
+                        "price": price,
+                    },
+                },
+            )
             async with httpx.AsyncClient() as client:
+                t_send = time.monotonic()
                 r = await client.post(f"https://{host}{prefix}{endpoint}", headers=headers, content=body)
-                if r.status_code in (200, 201):
+                # Parse response defensively so debug log never fails.
+                try:
                     data = r.json()
-                    return data.get("id", f"GATE-{t}")
+                except Exception:
+                    data = {"raw": r.text}
+                logger.debug(
+                    "exchange_response",
+                    extra={
+                        **get_log_extra(),
+                        "status_code": r.status_code,
+                        "order_id": data.get("id") if isinstance(data, dict) else None,
+                        "response_body": data,
+                        "latency_ms": round((time.monotonic() - t_send) * 1000),
+                    },
+                )
+                if r.status_code in (200, 201):
+                    if isinstance(data, dict):
+                        return data.get("id", f"GATE-{t}")
+                    return f"GATE-{t}"
                 else:
                     raise Exception(f"Gate.io order failed: {r.status_code} {r.text}")
 

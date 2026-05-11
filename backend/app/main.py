@@ -389,6 +389,12 @@ app.include_router(admin_diagnostics.router)
 from .api import encryption_admin  # noqa: E402
 app.include_router(encryption_admin.router)
 
+# Trade decision diagnostics — read-only views over trade_decisions
+# (joined by trace_id) for debugging the L3 → execution gate → exchange
+# decision flow.
+from .api import trade_diagnostics  # noqa: E402
+app.include_router(trade_diagnostics.router)
+
 # Machine Learning
 app.include_router(ml.router)
 

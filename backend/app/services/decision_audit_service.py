@@ -70,11 +70,100 @@ def _to_jsonb(value: Any) -> Optional[str]:
         return None
 
 
+def _build_params(
+    *,
+    trace_id: str,
+    user_id: str,
+    pool_id: Optional[str],
+    symbol: str,
+    market_type: str,
+    exchange: Optional[str],
+    status: str,
+    stage: str,
+    reason: Optional[str],
+    blocking_rule: Optional[str],
+    rule_details: Optional[dict],
+    rules_matched: Optional[list],
+    rules_failed: Optional[list],
+    rules_skipped: Optional[list],
+    score_breakdown: Optional[dict],
+    indicators_snapshot: Optional[dict],
+    latency_ms: Optional[dict],
+    trade_id: Optional[str],
+) -> dict:
+    return {
+        "trace_id": trace_id,
+        "user_id": user_id,
+        "pool_id": pool_id,
+        "symbol": symbol,
+        "market_type": market_type,
+        "exchange": exchange,
+        "status": status,
+        "stage": stage,
+        "reason": reason,
+        "blocking_rule": blocking_rule,
+        "rule_details": _to_jsonb(rule_details),
+        "rules_matched": _to_jsonb(rules_matched),
+        "rules_failed": _to_jsonb(rules_failed),
+        "rules_skipped": _to_jsonb(rules_skipped),
+        "score_breakdown": _to_jsonb(score_breakdown),
+        "indicators_snapshot": _to_jsonb(indicators_snapshot),
+        "latency_ms": _to_jsonb(latency_ms),
+        "trade_id": trade_id,
+    }
+
+
+async def _record_decision_raw(
+    db: AsyncSession,
+    *,
+    trace_id: str,
+    user_id: str,
+    pool_id: Optional[str],
+    symbol: str,
+    market_type: str,
+    exchange: Optional[str],
+    status: Literal["APPROVED", "REJECTED", "BLOCKED", "SKIPPED"],
+    stage: Literal["L1", "L2", "L3", "EXECUTION"],
+    reason: Optional[str] = None,
+    blocking_rule: Optional[str] = None,
+    rule_details: Optional[dict] = None,
+    rules_matched: Optional[list] = None,
+    rules_failed: Optional[list] = None,
+    rules_skipped: Optional[list] = None,
+    score_breakdown: Optional[dict] = None,
+    indicators_snapshot: Optional[dict] = None,
+    latency_ms: Optional[dict] = None,
+    trade_id: Optional[str] = None,
+) -> None:
+    """Issue the INSERT and let exceptions propagate.
+
+    Reserved for callers that wrap the call in their own SAVEPOINT
+    (``async with db.begin_nested()``) so a failed audit write rolls
+    back to the savepoint instead of poisoning the surrounding outer
+    transaction. Most call sites should use ``record_decision`` (which
+    swallows) or the helpers in ``app/tasks`` / ``app/services`` that
+    wrap this in a savepoint.
+    """
+    await db.execute(
+        _INSERT_SQL,
+        _build_params(
+            trace_id=trace_id, user_id=user_id, pool_id=pool_id,
+            symbol=symbol, market_type=market_type, exchange=exchange,
+            status=status, stage=stage, reason=reason,
+            blocking_rule=blocking_rule, rule_details=rule_details,
+            rules_matched=rules_matched, rules_failed=rules_failed,
+            rules_skipped=rules_skipped, score_breakdown=score_breakdown,
+            indicators_snapshot=indicators_snapshot, latency_ms=latency_ms,
+            trade_id=trade_id,
+        ),
+    )
+
+
 async def record_decision(
     db: AsyncSession,
     trace_id: str,
     user_id: str,
-    pool_id: str,
+    pool_id: Optional[str],
     symbol: str,
     market_type: str,
     exchange: Optional[str],
@@ -95,30 +184,30 @@ async def record_decision(
 
     See module docstring for invariants. The function never raises and
     never commits — it issues a single INSERT and returns.
+
+    .. warning::
+       Calling this directly inside an open outer transaction WITHOUT a
+       SAVEPOINT can leave the outer transaction in an aborted state if
+       the INSERT fails (e.g., FK violation, schema drift), even though
+       the exception is swallowed here — Postgres marks the transaction
+       failed at the moment the error is raised, and the swallow hides
+       it from the caller. Prefer the ``_safe_record_decision`` helpers
+       defined in ``evaluate_signals`` / ``execution_engine`` which wrap
+       ``_record_decision_raw`` in ``begin_nested`` for full isolation.
     """
     try:
         await db.execute(
             _INSERT_SQL,
-            {
-                "trace_id": trace_id,
-                "user_id": user_id,
-                "pool_id": pool_id,
-                "symbol": symbol,
-                "market_type": market_type,
-                "exchange": exchange,
-                "status": status,
-                "stage": stage,
-                "reason": reason,
-                "blocking_rule": blocking_rule,
-                "rule_details": _to_jsonb(rule_details),
-                "rules_matched": _to_jsonb(rules_matched),
-                "rules_failed": _to_jsonb(rules_failed),
-                "rules_skipped": _to_jsonb(rules_skipped),
-                "score_breakdown": _to_jsonb(score_breakdown),
-                "indicators_snapshot": _to_jsonb(indicators_snapshot),
-                "latency_ms": _to_jsonb(latency_ms),
-                "trade_id": trade_id,
-            },
+            _build_params(
+                trace_id=trace_id, user_id=user_id, pool_id=pool_id,
+                symbol=symbol, market_type=market_type, exchange=exchange,
+                status=status, stage=stage, reason=reason,
+                blocking_rule=blocking_rule, rule_details=rule_details,
+                rules_matched=rules_matched, rules_failed=rules_failed,
+                rules_skipped=rules_skipped, score_breakdown=score_breakdown,
+                indicators_snapshot=indicators_snapshot, latency_ms=latency_ms,
+                trade_id=trade_id,
+            ),
         )
     except Exception:
         # Never propagate: the audit log is observability, not a gate.
