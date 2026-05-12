@@ -1,0 +1,11 @@
+[
+  {
+    "user_id": "9214050a-76d5-4fda-bee2-433692b9f027",
+    "pool_id": "cc0cc1d0-e52b-4f39-976c-a3df81f5c534",
+    "pool_active": "true",
+    "mode": "live",
+    "symbol": "ZEC_USDT",
+    "coin_active": "true",
+    "is_tradable": "true"
+  }
+]
