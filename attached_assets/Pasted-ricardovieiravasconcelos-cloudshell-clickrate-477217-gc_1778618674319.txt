@@ -1,0 +1,21 @@
+ricardovieiravasconcelos@cloudshell:~ (clickrate-477217)$ gcloud logging read 'resource.labels.service_name="scalpyn" AND (textPayload:"DB session error" OR textPayload:"/api/dashboard/")' --limit=20 --freshness=10m --format='value(textPayload)'
+INFO:     169.254.169.126:17254 - "GET /api/dashboard/overview HTTP/1.1" 200 OK
+INFO:     169.254.169.126:28582 - "GET /api/dashboard/overview HTTP/1.1" 200 OK
+INFO:     169.254.169.126:61132 - "GET /api/dashboard/overview HTTP/1.1" 200 OK
+INFO:     169.254.169.126:51948 - "GET /api/dashboard/overview HTTP/1.1" 200 OK
+INFO:     169.254.169.126:33610 - "GET /api/dashboard/overview HTTP/1.1" 200 OK
+INFO:     169.254.169.126:22740 - "GET /api/dashboard/overview HTTP/1.1" 200 OK
+INFO:     169.254.169.126:50542 - "GET /api/dashboard/overview HTTP/1.1" 200 OK
+INFO:     169.254.169.126:41512 - "GET /api/dashboard/ml-dataset/export?limit=1000 HTTP/1.1" 503 Service Unavailable
+ERROR:app.database:DB session error: ProgrammingError: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.UndefinedColumnError'>: column "decision_type" does not exist
+INFO:     169.254.169.126:41504 - "GET /api/dashboard/overview HTTP/1.1" 200 OK
+INFO:     169.254.169.126:57100 - "GET /api/dashboard/events?limit=100 HTTP/1.1" 200 OK
+INFO:     169.254.169.126:57086 - "GET /api/dashboard/overview HTTP/1.1" 200 OK
+INFO:     169.254.169.126:8332 - "GET /api/dashboard/overview HTTP/1.1" 200 OK
+INFO:     169.254.169.126:44676 - "GET /api/dashboard/overview HTTP/1.1" 200 OK
+INFO:     169.254.169.126:49298 - "GET /api/dashboard/overview HTTP/1.1" 200 OK
+INFO:     169.254.169.126:10528 - "GET /api/dashboard/overview HTTP/1.1" 200 OK
+INFO:     169.254.169.126:53278 - "GET /api/dashboard/overview HTTP/1.1" 200 OK
+INFO:     169.254.169.126:34948 - "GET /api/dashboard/overview HTTP/1.1" 200 OK
+INFO:     169.254.169.126:12754 - "GET /api/dashboard/trade-comparison?days=30 HTTP/1.1" 503 Service Unavailable
+ERROR:app.database:DB session error: ProgrammingError: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.PostgresSyntaxError'>: syntax error at or near ":"
