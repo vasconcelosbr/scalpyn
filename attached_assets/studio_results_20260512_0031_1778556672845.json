@@ -1,0 +1,50 @@
+[
+  {
+    "symbol": "ZEC_USDT",
+    "timeframe": "5m",
+    "rsi": "{\"value\": 59.48, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "adx": "{\"value\": 17.0, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "macd_h": "{\"value\": 0.34769977, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "time": "2026-05-12T03:27:03.692461Z"
+  },
+  {
+    "symbol": "ZEC_USDT",
+    "timeframe": "5m",
+    "rsi": "{\"value\": 48.25, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "adx": "{\"value\": 18.17, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "macd_h": "{\"value\": 0.3931196, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "time": "2026-05-12T03:21:04.575366Z"
+  },
+  {
+    "symbol": "ZEC_USDT",
+    "timeframe": "5m",
+    "rsi": "{\"value\": 55.36, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "adx": "{\"value\": 23.94, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "macd_h": "{\"value\": 0.53875227, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "time": "2026-05-12T03:07:22.812078Z"
+  },
+  {
+    "symbol": "ZEC_USDT",
+    "timeframe": "5m",
+    "rsi": "{\"value\": 59.35, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "adx": "{\"value\": 26.75, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "macd_h": "{\"value\": 0.66049935, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "time": "2026-05-12T03:02:19.415929Z"
+  },
+  {
+    "symbol": "ZEC_USDT",
+    "timeframe": "5m",
+    "rsi": "{\"value\": 66.72, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "adx": "{\"value\": 29.33, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "macd_h": "{\"value\": 0.66846669, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "time": "2026-05-12T02:57:19.981345Z"
+  },
+  {
+    "symbol": "ZEC_USDT",
+    "timeframe": "5m",
+    "rsi": "{\"value\": 67.33, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "adx": "{\"value\": 31.71, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "macd_h": "{\"value\": 0.62289362, \"source\": \"candle_computed\", \"status\": \"VALID\", \"confidence\": 0.8}",
+    "time": "2026-05-12T02:52:33.377157Z"
+  }
+]
