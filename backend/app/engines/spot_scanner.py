@@ -23,6 +23,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import InterfaceError, OperationalError
 
 from ..database import AsyncSessionLocal
 from ..models.trade import Trade
@@ -152,6 +153,27 @@ class SpotScanner:
 
             except asyncio.CancelledError:
                 break
+            except (InterfaceError, OperationalError) as exc:
+                # The cycle holds a DB session check-out across hundreds of
+                # exchange HTTP calls (``_score_universe`` → ``get_klines``
+                # per symbol). When the cycle stretches past the Cloud SQL
+                # idle timeout, asyncpg closes the underlying connection
+                # and SQLAlchemy's exit-path rollback raises
+                # ``cannot call Transaction.rollback(): the underlying
+                # connection is closed``. The cycle's per-statement work
+                # already committed (no ``async with db.begin()`` wraps the
+                # whole cycle), so the rollback failure is cosmetic.
+                #
+                # Downgrade to WARNING so this shows up as ops noise without
+                # masking real failures (which still hit the generic Exception
+                # handler below). Structural fix tracked in
+                # ``.local/tasks/refactor-spot-scanner-io-out-of-session.md``.
+                logger.warning(
+                    "SpotScanner cycle %d (user %s): stale DB connection on session exit "
+                    "(Cloud SQL idle timeout during long cycle) — %s",
+                    self._cycle, self.user_id, exc,
+                )
+                self._last_error = None
             except Exception as e:
                 self._last_error = str(e)
                 logger.exception("SpotScanner cycle error (user %s): %s", self.user_id, e)
