@@ -105,6 +105,9 @@ TASK_ROUTES = {
     # Task #262 — structural 30m pipeline (replaces OHLCV 1h em collect_all + compute 1h).
     "app.tasks.collect_structural_30m.run":              {"queue": QUEUE_STRUCTURAL},
     "app.tasks.compute_indicators.compute_30m":          {"queue": QUEUE_STRUCTURAL},
+    # Structural-on-5m (close gap entre cadência 30m e leitor estrutural).
+    # Roteada para QUEUE_STRUCTURAL (não competir com worker-micro).
+    "app.tasks.compute_indicators.compute_structural_5m": {"queue": QUEUE_STRUCTURAL},
     # compute (1h) permanece como stub deprecated — invariant #4 exige
     # rota para toda task registrada. Remover na limpeza pós-estabilização.
     "app.tasks.compute_indicators.compute":              {"queue": QUEUE_STRUCTURAL},
@@ -239,6 +242,10 @@ TASK_ANNOTATIONS = {
     # crontab(minute="0,30"); idempotente + beat-driven → opt-out acks_late.
     "app.tasks.collect_structural_30m.run":              {**_STRUCTURAL_GUARDS, "rate_limit": "2/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.compute_indicators.compute_30m":          {**_STRUCTURAL_GUARDS, "rate_limit": "2/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    # Structural-on-5m: idempotente + chain-driven a cada 5min → opt-out acks_late.
+    # rate_limit "12/m" alinhado com cadência do collect_5m (1 disparo / 5min,
+    # ad-hoc dispatch fica com folga).
+    "app.tasks.compute_indicators.compute_structural_5m": {**_STRUCTURAL_GUARDS, "rate_limit": "12/m", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.compute_indicators.compute":              {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.compute_scores.score":                    {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
     # pipeline_scan.scan: structural cadence (5-min safety-net scan,

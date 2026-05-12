@@ -978,4 +978,14 @@ def collect_5m():
             dedup_key="compute_5m",
             ttl_seconds=210,
         )
+        # Structural-on-5m: paralelo ao chain micro acima. Roda no
+        # worker-structural (não competir com micro) e fecha o gap entre a
+        # cadência 30m do compute_30m e o leitor estrutural canônico
+        # (indicators_provider.get_merged_indicators). Dedup-key próprio
+        # para nunca colidir com o slot do compute_5m micro.
+        task_dispatch.enqueue(
+            "app.tasks.compute_indicators.compute_structural_5m",
+            dedup_key="compute_structural_5m",
+            ttl_seconds=210,
+        )
     return f"Collected 5m data for {count} symbols"

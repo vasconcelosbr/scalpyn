@@ -858,3 +858,200 @@ def compute_5m():
         ttl_seconds=210,
     )
     return f"Computed 5m indicators for {count} symbols"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Structural-on-5m pipeline (close gap entre cadência 30m e leitor estrutural)
+# ─────────────────────────────────────────────────────────────────────────────
+# Antes desta task: ``_compute_5m_async`` já calculava rsi/macd/adx/bollinger
+# sobre candles 5m, mas persistia com ``scheduler_group='microstructure'``.
+# O leitor canônico ``indicators_provider.get_merged_indicators`` filtra por
+# grupo, então o consumidor estrutural (score, watchlist L3, ML) só enxergava
+# a cadência 30m de ``compute_30m`` (idade p99 ≈ 1770 s).
+#
+# ``_compute_structural_5m_async`` reusa exatamente os mesmos candles 5m e o
+# mesmo ``FeatureEngine`` — única diferença é ``group="structural"`` (filtro
+# pelas chaves canônicas em ``indicator_classifier.STRUCTURAL_CALC_KEYS``,
+# zero hardcode aqui) e a tag ``scheduler_group='structural'`` na escrita.
+# Resultado: idade do bloco estrutural lido pelo merged provider cai para
+# ~330 s (5 min de cadence + chain TTL), sem alterar ``compute_5m`` micro
+# nem ``compute_30m`` nem o read-side.
+#
+# Não escreve em ``market_metadata`` (responsabilidade do compute_5m micro
+# — escrever de novo aqui geraria contention de UPSERT em hot rows; ver
+# gotchas Tasks #245/#251/#273) e não puxa order-flow nem ``_compute_score_fields``
+# (esses são consumidos pelo robust score, alimentado pelo merged provider).
+async def _compute_structural_5m_async():
+    """Compute STRUCTURAL indicators (rsi/adx/macd/bollinger) sobre candles 5m.
+
+    Roteada para ``QUEUE_STRUCTURAL`` (não competir com o worker-micro).
+    Convive com ``compute_5m`` (microstructure) e ``compute_30m`` (structural@30m):
+    a UNIQUE real em ``indicators`` é ``(time, symbol, timeframe)`` — coexistência
+    é viabilizada por ``time=now()`` distinto por execução (linhas separadas no
+    índice ``(symbol, scheduler_group, time DESC)``) E por ``mode="insert_only"``
+    aqui (DO NOTHING em colisão de microsegundo, ver bloco abaixo). NÃO usar
+    ``mode="upsert"`` sem antes migrar a UNIQUE para incluir ``scheduler_group``.
+    """
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
+    from ..services.feature_engine import FeatureEngine
+    from ..services.seed_service import DEFAULT_INDICATORS
+
+    import sqlalchemy.exc as _sqla_exc
+    logger.info("[COMPUTE-S5m] Starting structural-on-5m indicator computation…")
+
+    indicators_config = DEFAULT_INDICATORS
+    engine = FeatureEngine(indicators_config)
+    min_candles_5m = _derive_min_candles(indicators_config, "5m")
+    query_limit_5m = max(288, min_candles_5m)
+    computed = 0
+
+    async with AsyncSessionLocal() as db:
+        try:
+            # Task #232: ingestion gate é ``is_active`` only.
+            symbols_result = await db.execute(text("""
+                SELECT DISTINCT o.symbol, p.market_type
+                FROM ohlcv o
+                JOIN pool_coins p ON o.symbol = p.symbol
+                WHERE p.is_active = true
+                  AND o.timeframe = '5m'
+                  AND o.time > now() - interval '2 hours'
+            """))
+            symbol_rows = symbols_result.fetchall()
+            # Task #273: deterministic sort — invariante anti-deadlock 40P01
+            # (lint test ``test_pipeline_symbol_ordering_invariants``).
+            symbols = sorted(row.symbol for row in symbol_rows)
+            symbol_market_type = {row.symbol: row.market_type for row in symbol_rows}
+
+            for symbol in symbols:
+                try:
+                    ohlcv_result = await db.execute(text("""
+                        SELECT time, open, high, low, close, volume, quote_volume
+                        FROM ohlcv
+                        WHERE symbol = :symbol AND timeframe = '5m'
+                        ORDER BY time DESC
+                        LIMIT :limit
+                    """), {"symbol": symbol, "limit": query_limit_5m})
+                    rows = ohlcv_result.fetchall()
+
+                    if len(rows) < min_candles_5m:
+                        logger.debug(
+                            "[COMPUTE-S5m] Skipping %s: only %d candles (need ≥%d)",
+                            symbol, len(rows), min_candles_5m,
+                        )
+                        continue
+
+                    df = pd.DataFrame([{
+                        "time": r.time, "open": float(r.open), "high": float(r.high),
+                        "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
+                        "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
+                    } for r in reversed(rows)])
+
+                    # ``group="structural"`` aplica filtro por
+                    # ``indicator_classifier.STRUCTURAL_CALC_KEYS`` — zero hardcode
+                    # de lista de indicadores aqui. ``market_data=None`` porque
+                    # spread/depth/volume_24h são micro (escritos pelo compute_5m).
+                    results = engine.calculate(df, market_data=None, group="structural")
+                    if not results:
+                        continue
+
+                    now = datetime.now(timezone.utc)
+                    payload_json = json.dumps(envelop_results(
+                        results,
+                        default_source="candle_computed",
+                        default_confidence=0.80,
+                        key_source_map=_COMPUTE_KEY_SOURCE_MAP,
+                    ))
+
+                    if _pq.is_enabled():
+                        # ``mode="insert_only"`` (ON CONFLICT DO NOTHING) — a UNIQUE
+                        # constraint real em ``indicators`` é ``(time, symbol, timeframe)``
+                        # SEM ``scheduler_group``. ``compute_5m`` micro grava com o
+                        # mesmo ``(symbol, timeframe='5m')`` e ``time=now()`` em
+                        # microsegundos diferentes (linhas separadas no índice
+                        # ``(symbol, scheduler_group, time DESC)``). Em uma colisão
+                        # de microsegundo improvável, ``insert_only`` garante que
+                        # esta task NUNCA sobrescreva a linha do micro — o próximo
+                        # ciclo de 5min reescreve. Trocar para ``upsert`` aqui
+                        # abriria a porta pra perder ``volume_delta``/``taker_ratio``
+                        # do micro num race. Migrar a UNIQUE para incluir
+                        # ``scheduler_group`` resolveria de vez, mas exige migration
+                        # (fora do escopo aditivo desta task).
+                        await _pq.enqueue_or_log(
+                            producer="compute-structural-5m",
+                            msg=_pq.IndicatorsUpsert(
+                                category="scheduler",
+                                enqueued_at=_pq.now_monotonic(),
+                                symbol=symbol,
+                                timeframe="5m",
+                                market_type=symbol_market_type.get(symbol, "spot"),
+                                scheduler_group="structural",
+                                time=now,
+                                payload_json=payload_json,
+                                mode="insert_only",
+                            ),
+                        )
+                    else:
+                        # SAVEPOINT por símbolo — falha isolada não derruba o lote.
+                        # Nested-savepoint rule (Task #222): re-raise sem db.rollback().
+                        # ON CONFLICT DO NOTHING — mesma justificativa do branch
+                        # persistence_queue acima.
+                        try:
+                            async with db.begin_nested():
+                                await db.execute(text("""
+                                    INSERT INTO indicators
+                                        (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
+                                    VALUES
+                                        (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
+                                    ON CONFLICT (time, symbol, timeframe) DO NOTHING
+                                """), {
+                                    "time":            now,
+                                    "symbol":          symbol,
+                                    "timeframe":       "5m",
+                                    "market_type":     symbol_market_type.get(symbol, "spot"),
+                                    "scheduler_group": "structural",
+                                    "indicators":      payload_json,
+                                })
+                        except Exception as _sp_exc:
+                            logger.error(
+                                "[COMPUTE-S5m] SAVEPOINT failed for %s — savepoint rolled back: %s",
+                                symbol, _sp_exc,
+                            )
+                            raise
+
+                    computed += 1
+
+                except Exception as e:
+                    if isinstance(e, _sqla_exc.PendingRollbackError):
+                        await db.rollback()
+                        logger.error(
+                            "[COMPUTE-S5m] PendingRollbackError for %s — session rolled back, stopping: %s",
+                            symbol, e,
+                        )
+                        break
+                    logger.warning("[COMPUTE-S5m] Failed to compute for %s: %s", symbol, e)
+                    if not db.is_active:
+                        logger.error("[COMPUTE-S5m] Session inactive after %s — stopping", symbol)
+                        break
+                    continue
+
+            await db.commit()
+        except Exception as e:
+            logger.error("[COMPUTE-S5m] computation failed: %s", e)
+            await db.rollback()
+            raise
+
+    logger.info("[COMPUTE-S5m] complete: %d symbols", computed)
+    return computed
+
+
+@celery_app.task(name="app.tasks.compute_indicators.compute_structural_5m")
+def compute_structural_5m():
+    """Celery entry point — structural indicators on 5m candles.
+
+    Enqueued by: ``collect_market_data.collect_5m`` (chain paralelo ao compute_5m
+    micro). Não encadeia para ``score`` nem ``pipeline_scan`` — esses já são
+    acionados pelo ``compute_30m`` (estrutural canônico) e pelo ``compute_5m``
+    (micro). Encadear aqui geraria storms.
+    """
+    count = _run_async(_compute_structural_5m_async())
+    return f"[COMPUTE-S5m] Computed structural indicators for {count} symbols"
