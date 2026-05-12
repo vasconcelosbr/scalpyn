@@ -154,7 +154,7 @@ async def get_ohlcv_rate(
             COUNT(*)::int              AS candles
         FROM ohlcv
         WHERE timeframe = :tf
-          AND time > NOW() - (:minutes || ' minutes')::interval
+          AND time > NOW() - (:minutes::text || ' minutes')::interval
         GROUP BY bucket
         ORDER BY bucket
         """
@@ -186,7 +186,7 @@ async def get_decisions(
             COALESCE(SUM(CASE WHEN decision = 'BLOCK' THEN 1 ELSE 0 END), 0)::int AS block_count,
             AVG(score)::float                                                 AS avg_score
         FROM decisions_log
-        WHERE created_at > NOW() - (:hours || ' hours')::interval
+        WHERE created_at > NOW() - (:hours::text || ' hours')::interval
         """
     )
     agg = (await db.execute(agg_sql, {"hours": hours})).one()
@@ -207,7 +207,7 @@ async def get_decisions(
             END AS bucket,
             COUNT(*)::int AS count
         FROM decisions_log
-        WHERE created_at > NOW() - (:hours || ' hours')::interval
+        WHERE created_at > NOW() - (:hours::text || ' hours')::interval
         GROUP BY bucket
         ORDER BY bucket
         """
@@ -233,7 +233,7 @@ async def get_decisions(
             END
         ) AS reason
         WHERE d.decision = 'BLOCK'
-          AND d.created_at > NOW() - (:hours || ' hours')::interval
+          AND d.created_at > NOW() - (:hours::text || ' hours')::interval
           AND d.reasons IS NOT NULL
         GROUP BY reason
         ORDER BY count DESC
@@ -282,7 +282,7 @@ async def get_trades(
         FROM trade_tracking
         WHERE is_simulated = false
           AND outcome IS NOT NULL
-          AND exit_time > NOW() - (:days || ' days')::interval
+          AND exit_time > NOW() - (:days::text || ' days')::interval
         """
     )
     agg = (await db.execute(agg_sql, {"days": days})).one()
@@ -297,7 +297,7 @@ async def get_trades(
         FROM trade_tracking
         WHERE is_simulated = false
           AND outcome IS NOT NULL
-          AND exit_time > NOW() - (:days || ' days')::interval
+          AND exit_time > NOW() - (:days::text || ' days')::interval
         ORDER BY exit_time
         LIMIT 1000
         """
@@ -340,7 +340,7 @@ async def get_trade_comparison(
             AVG(pnl_pct)::float                                                 AS avg_pnl_pct
         FROM trade_tracking
         WHERE outcome IS NOT NULL
-          AND exit_time > NOW() - (:days || ' days')::interval
+          AND exit_time > NOW() - (:days::text || ' days')::interval
         GROUP BY is_simulated
         """
     )
