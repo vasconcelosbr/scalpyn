@@ -46,6 +46,8 @@ auditable place. Bounded backoff is implemented per-task where retries
 are actually used; ``max_retries`` here is the upper bound.
 """
 
+import os
+
 from celery import Celery
 from celery.schedules import crontab
 from kombu import Exchange, Queue
@@ -84,6 +86,7 @@ celery_app = Celery(
         "app.tasks.trade_reconciliation",
         "app.tasks.trade_monitor",
         "app.tasks.orphan_tx_watchdog",
+        "app.tasks.health_checks",
     ],
 )
 
@@ -135,6 +138,11 @@ TASK_ROUTES = {
     # one that historically holds the orphan TX (collect_all/compute), so
     # we want a different worker process tearing it down.
     "app.tasks.orphan_tx_watchdog.kill_orphans":         {"queue": QUEUE_EXECUTION},
+
+    # Pipeline coverage health check — beat-driven sweep (idempotent).
+    # Lives on the structural queue because the auto-recovery dispatch it
+    # emits targets the structural pipeline.
+    "app.tasks.health_checks.check_structural_coverage": {"queue": QUEUE_STRUCTURAL},
 
     # Execution (latency-sensitive, must run on isolated workers)
     "app.tasks.evaluate_signals.evaluate":          {"queue": QUEUE_EXECUTION},
@@ -255,6 +263,16 @@ TASK_ANNOTATIONS = {
     # Orphan TX Watchdog (Task #256) — beat-driven idempotent sweep, opt-out
     # of acks_late so a SIGKILL mid-scan never re-queues. Scans are cheap
     # but the kill statement can wait on Cloud SQL roundtrip; cap at 60s.
+    # Pipeline coverage health check — idempotent + beat-driven, opt-out
+    # of acks_late so a SIGKILL mid-scan never re-queues. Beat re-fires
+    # at the configured interval (default 30 min); auto-recovery dispatch
+    # is itself deduped via task_dispatch.
+    "app.tasks.health_checks.check_structural_coverage": {
+        **_STRUCTURAL_GUARDS,
+        "rate_limit": "4/h",
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
+
     "app.tasks.orphan_tx_watchdog.kill_orphans": {
         "time_limit": 60,
         "soft_time_limit": 50,
@@ -415,6 +433,15 @@ celery_app.conf.beat_schedule = {
     "collect_structural_30m_candle_close": {
         "task": "app.tasks.collect_structural_30m.run",
         "schedule": crontab(minute="0,30"),
+    },
+    # Structural coverage health-check — detects per-symbol indicator
+    # gaps that the pool-wide ``ingestion_stale`` probe cannot see (root
+    # cause of the 2026-05-03 ZEC_USDT outage). Auto-recovers by
+    # re-enqueuing the universe-wide collectors. Interval comes from
+    # ``STRUCTURAL_COVERAGE_CHECK_INTERVAL_S`` (default 1800 s = 30 min).
+    "structural_coverage_health_check": {
+        "task": "app.tasks.health_checks.check_structural_coverage",
+        "schedule": float(os.environ.get("STRUCTURAL_COVERAGE_CHECK_INTERVAL_S", 1800)),
     },
 }
 

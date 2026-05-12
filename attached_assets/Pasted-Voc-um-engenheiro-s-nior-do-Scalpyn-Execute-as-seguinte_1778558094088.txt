@@ -1,0 +1,95 @@
+Você é um engenheiro sênior do Scalpyn. Execute as seguintes tarefas em sequência, de forma aditiva e sem remover nada existente.
+
+## Contexto do problema
+
+O worker `compute_structural` crashou parcialmente em 03/05/2026 às ~17:58 UTC. Símbolos que entraram no pool depois disso, ou que estavam no batch que travou, nunca tiveram indicadores structural computados. O sistema não detecta isso — símbolos ficam travados em L3 com timer subindo, sem nenhum alerta.
+
+Causa raiz confirmada por dados de prod:
+- ZEC_USDT entrou no pool em 07/05 (`pool_coins.added_at`)
+- Última linha structural de ZEC: 03/05 (anterior à entrada no pool)
+- 20+ outros símbolos ativos com structural parado na mesma janela de 03/05
+
+## Tarefa 1 — Bootstrap ao entrar no pool
+
+Localize o serviço ou endpoint que faz INSERT em `pool_coins` (provavelmente em `backend/app/services/pool_service.py` ou similar).
+
+Após o INSERT bem-sucedido de um novo símbolo, dispare imediatamente as tasks Celery de recomputação para esse símbolo:
+- `compute_structural` 
+- `compute_microstructure`
+
+Regras:
+- O dispatch deve ser **assíncrono** (`.delay()` ou `.apply_async()`) — não bloqueia o request
+- Se as tasks não existirem com esse nome exato, localize os nomes reais antes de implementar
+- Adicione log explícito: `logger.info(f"Bootstrap triggered for new pool symbol: {symbol}")`
+- Não altere a assinatura do INSERT nem remova validações existentes
+
+## Tarefa 2 — Health check periódico com alerta
+
+Crie uma nova Celery periodic task chamada `check_structural_coverage` em `backend/app/tasks/health_checks.py` (crie o arquivo se não existir).
+
+A task deve:
+1. Executar a seguinte query (ou equivalente via ORM):
+
+```sql
+SELECT pc.symbol
+FROM pool_coins pc
+LEFT JOIN (
+    SELECT symbol, MAX(time) AS last_structural
+    FROM indicators
+    WHERE scheduler_group = 'structural'
+    GROUP BY symbol
+) i ON pc.symbol = i.symbol
+WHERE pc.is_active = true
+  AND (i.last_structural IS NULL 
+       OR i.last_structural < NOW() - INTERVAL '2 hours')
+ORDER BY pc.symbol;
+```
+
+2. Se retornar **qualquer símbolo**:
+   - Logar em nível WARNING: `f"Structural coverage gap: {len(orphans)} symbols without fresh structural indicators: {orphan_list}"`
+   - Disparar `compute_structural.delay(symbol)` para cada símbolo órfão (auto-recovery)
+   - Registrar o evento em uma tabela `health_check_log` se ela existir — se não existir, apenas logar, não criar a tabela agora
+
+3. Se não retornar nada: logar INFO `"Structural coverage OK — all active symbols have fresh indicators"`
+
+Regras:
+- A task deve usar a sessão de DB assíncrona padrão do projeto (mesmo padrão das outras tasks em `backend/app/tasks/`)
+- Registrar no Celery beat schedule com frequência de 30 minutos — localize onde o beat schedule é definido no projeto e adicione lá
+- Não criar tabelas novas neste momento
+- Adicionar migração Alembic **apenas se** a task precisar de nova coluna em tabela existente
+
+## Tarefa 3 — Backfill imediato para símbolos órfãos atuais
+
+Crie um script one-shot em `backend/scripts/backfill_structural_orphans.py`.
+
+O script deve:
+1. Executar a mesma query da Tarefa 2
+2. Para cada símbolo órfão encontrado, disparar `compute_structural.delay(symbol)` e `compute_microstructure.delay(symbol)`
+3. Logar cada dispatch: `f"Backfill dispatched for: {symbol}"`
+4. Ao final, imprimir resumo: `f"Backfill complete. {n} symbols queued."`
+
+O script deve ser executável via:
+```bash
+python backend/scripts/backfill_structural_orphans.py
+```
+
+Ou via Claude Code com:
+```bash
+cd backend && python scripts/backfill_structural_orphans.py
+```
+
+## Antes de implementar qualquer tarefa
+
+1. Leia os arquivos relevantes antes de escrever código — não assuma nomes de funções, tasks ou padrões
+2. Confirme os nomes reais das tasks Celery para `compute_structural` e `compute_microstructure`
+3. Confirme o padrão de sessão DB usado nas outras tasks (sync vs async, `get_db` vs `AsyncSession`)
+4. Confirme onde o Celery beat schedule é definido (`celeryconfig.py`, `celery_app.py`, ou outro)
+5. Confirme a estrutura real de `pool_coins` antes de escrever queries
+
+## Restrições absolutas
+
+- Zero hardcode: nenhum valor de threshold, intervalo ou símbolo fixo no código — `INTERVAL '2 hours'` pode vir de env var `STRUCTURAL_GAP_ALERT_HOURS` com default `2`
+- Estritamente aditivo: não remova rotas, funções, tabelas ou imports existentes
+- Não crie migrations Alembic a menos que seja estritamente necessário
+- Não altere `is_complete()`, `get_merged_indicators()`, nem nenhum contrato de leitura de indicadores
+- Scripts formatados para Claude Code CLI, não para browser

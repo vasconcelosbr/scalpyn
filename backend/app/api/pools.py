@@ -22,6 +22,60 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/pools", tags=["Pools"])
 
 
+def _bootstrap_pipeline_for_new_symbols(symbols: List[str]) -> None:
+    """Trigger structural + microstructure collection right after one or more
+    symbols enter ``pool_coins`` (``is_active=true``).
+
+    Why this exists
+    ---------------
+    The structural pipeline only runs at minute 0/30 UTC and the 5m chain
+    every 5 min. Without a bootstrap, a freshly-added symbol can sit
+    between 0 and 30 minutes with no indicators row — long enough to be
+    quarantined by ``is_complete()`` on the very first decision pass and
+    create false orphans (root cause of the 2026-05-03 ZEC_USDT outage).
+
+    Why one dispatch per task family is enough
+    ------------------------------------------
+    ``collect_structural_30m.run`` and ``collect_market_data.collect_5m``
+    are universe-wide — neither accepts a symbol arg, both iterate every
+    ``pool_coins.is_active=true`` row in one pass. Looping per-symbol
+    here would produce identical work; instead we dedup at the task
+    level (Redis SET NX EX inside ``task_dispatch.enqueue``) and log
+    each new symbol individually for traceability.
+
+    Failure mode
+    ------------
+    Best-effort: any exception is logged and swallowed. The HTTP
+    response that triggered the bootstrap must not fail because the
+    broker is briefly unreachable — the next beat tick will catch up.
+    """
+    if not symbols:
+        return
+
+    for symbol in symbols:
+        logger.info("Bootstrap triggered for new pool symbol: %s", symbol)
+
+    try:
+        from ..tasks import task_dispatch
+
+        task_dispatch.enqueue(
+            "app.tasks.collect_structural_30m.run",
+            dedup_key="pool_bootstrap:collect_structural_30m",
+            ttl_seconds=120,
+        )
+        task_dispatch.enqueue(
+            "app.tasks.collect_market_data.collect_5m",
+            dedup_key="pool_bootstrap:collect_5m",
+            ttl_seconds=120,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Bootstrap dispatch failed for %d symbol(s) — beat will catch up: %s",
+            len(symbols),
+            exc,
+        )
+
+
 def _pool_to_dict(pool: Pool, asset_count: int = 0) -> Dict[str, Any]:
     return {
         "id": str(pool.id),
@@ -190,6 +244,7 @@ async def add_pool_coin(pool_id: UUID, payload: Dict[str, Any], db: AsyncSession
     db.add(coin)
     await db.commit()
     await db.refresh(coin)
+    _bootstrap_pipeline_for_new_symbols([symbol])
     return _coin_to_dict(coin)
 
 
@@ -278,6 +333,8 @@ async def bulk_add_pool_coins(
                 logger.warning("Failed to upsert market_metadata for %s: %s", sym, e)
 
     await db.commit()
+
+    _bootstrap_pipeline_for_new_symbols(added)
 
     return {
         "status": "success",
@@ -627,6 +684,8 @@ async def discover_pool_assets(
             await db.delete(coin_obj)
 
     await db.commit()
+
+    _bootstrap_pipeline_for_new_symbols(sorted(to_add))
 
     return {
         "found": found,
