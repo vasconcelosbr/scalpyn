@@ -2,50 +2,66 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
-import { CheckCircle2, Inbox } from "lucide-react";
+import { CheckCircle2, Inbox, WalletCards } from "lucide-react";
 import { apiGet } from "@/lib/api";
 
 /**
- * Subset of ``trade_decisions`` rows returned by
- * ``GET /api/diagnostics/decisions?status=APPROVED``.
+ * One row from ``GET /api/diagnostics/l3-queue`` — the L3-approved
+ * snapshot the pipeline scan keeps in ``pipeline_watchlist_assets``.
  *
- * Only the fields used by this card are typed strictly; the catch-all
- * keeps us forward-compatible with new columns the backend adds.
+ * This is the same source the ``/watchlist`` page L3 tab reads, so
+ * the card always reflects "what passed L3 in the latest scan",
+ * independent of whether ``execute_buy`` has fired or whether the
+ * caller has any USDT to spend.
  */
-interface DecisionRow {
-  id: number | string;
-  trace_id: string;
+interface L3QueueRow {
   symbol: string;
+  score: number | null;
+  score_long: number | null;
+  score_short: number | null;
+  confidence_score: number | null;
+  futures_direction: string | null;
   market_type: string;
-  status: string;
-  decided_at: string;
-  score_breakdown?: Record<string, unknown> | null;
-  indicators_snapshot?: Record<string, unknown> | null;
-  [k: string]: unknown;
+  approved_at: string | null;
+  pool_id: string | null;
+  watchlist_id: string;
+  watchlist_name: string;
 }
 
-interface DecisionsResponse {
-  items: DecisionRow[];
-  limit: number;
-  offset: number;
+interface L3QueueResponse {
+  items: L3QueueRow[];
   count: number;
+  /** ``buying.capital_per_trade_min_usdt`` from the user's spot_engine
+   * config, or ``10.0`` when no config row exists. Drives the
+   * "aguardando saldo" badge below. */
+  min_trade_usdt: number;
 }
 
-const ENDPOINT = "/api/diagnostics/decisions?status=APPROVED&limit=20";
+interface BalanceResponse {
+  available_usdt: number;
+  in_positions: number;
+  total: number;
+  source: string;
+}
+
+const ENDPOINT = "/api/diagnostics/l3-queue?limit=50";
+const BALANCE_ENDPOINT = "/api/live/balance";
 
 
 /**
- * Left-column card showing the most recent L3-approved assets.
+ * Left-column card showing the L3-approved assets currently sitting
+ * in the active-pool pipeline. Source: the same
+ * ``pipeline_watchlist_assets`` table the watchlist page L3 tab reads.
  *
- * Pulse animation is triggered on the *first render that contains a
- * trace_id we haven't seen before* — we keep the seen-set in a ref so
- * the effect doesn't fire on every poll for the same row. Avoids the
+ * Pulse animation fires on the *first render that contains a symbol
+ * we haven't seen before* — we keep the seen-set in a ref so the
+ * effect doesn't fire on every poll for the same row. Avoids the
  * page being a constant disco of pulses while the user is scrolling.
  */
 export function L3ApprovedList() {
-  const { data, isLoading } = useSWR<DecisionsResponse>(
+  const { data, isLoading } = useSWR<L3QueueResponse>(
     ENDPOINT,
-    (url: string) => apiGet<DecisionsResponse>(url),
+    (url: string) => apiGet<L3QueueResponse>(url),
     {
       refreshInterval: 8_000,
       revalidateOnFocus: true,
@@ -54,7 +70,26 @@ export function L3ApprovedList() {
     }
   );
 
+  // Balance is fetched separately so the L3 list keeps rendering
+  // even if the exchange call fails (no_connection / exchange_error
+  // both surface as available_usdt=0, which is the conservative
+  // assumption — every row gets the "aguardando saldo" badge until
+  // the user wires credentials).
+  const { data: balance } = useSWR<BalanceResponse>(
+    BALANCE_ENDPOINT,
+    (url: string) => apiGet<BalanceResponse>(url),
+    {
+      refreshInterval: 15_000,
+      revalidateOnFocus: true,
+      dedupingInterval: 5_000,
+      keepPreviousData: true,
+    }
+  );
+
   const items = data?.items ?? [];
+  const minTradeUsdt = data?.min_trade_usdt ?? 10;
+  const availableUsdt = balance?.available_usdt ?? 0;
+  const awaitingBalance = availableUsdt < minTradeUsdt;
 
   const seenRef = useRef<Set<string>>(new Set());
   const [recentlyAdded, setRecentlyAdded] = useState<Set<string>>(new Set());
@@ -62,9 +97,10 @@ export function L3ApprovedList() {
   useEffect(() => {
     const fresh: string[] = [];
     for (const row of items) {
-      if (!seenRef.current.has(row.trace_id)) {
-        seenRef.current.add(row.trace_id);
-        fresh.push(row.trace_id);
+      const key = rowKey(row);
+      if (!seenRef.current.has(key)) {
+        seenRef.current.add(key);
+        fresh.push(key);
       }
     }
     if (fresh.length > 0 && seenRef.current.size > fresh.length) {
@@ -112,14 +148,16 @@ export function L3ApprovedList() {
           <EmptyState
             icon={<Inbox size={24} />}
             title="Nada aprovado ainda"
-            subtitle="Decisões APPROVED do L3 vão aparecer aqui em tempo real."
+            subtitle="Ativos que passarem pelos filtros L3 do pipeline aparecem aqui."
           />
         ) : (
           items.map((row) => (
             <ApprovedCard
-              key={String(row.id) + row.trace_id}
+              key={rowKey(row)}
               row={row}
-              pulse={recentlyAdded.has(row.trace_id)}
+              pulse={recentlyAdded.has(rowKey(row))}
+              awaitingBalance={awaitingBalance}
+              minTradeUsdt={minTradeUsdt}
             />
           ))
         )}
@@ -131,7 +169,17 @@ export function L3ApprovedList() {
 // ── Internal ────────────────────────────────────────────────────────
 
 
-function ApprovedCard({ row, pulse }: { row: DecisionRow; pulse: boolean }) {
+function ApprovedCard({
+  row,
+  pulse,
+  awaitingBalance,
+  minTradeUsdt,
+}: {
+  row: L3QueueRow;
+  pulse: boolean;
+  awaitingBalance: boolean;
+  minTradeUsdt: number;
+}) {
   const score = useMemo(() => extractScore(row), [row]);
   const scoreColor = score == null
     ? "var(--text-tertiary)"
@@ -177,6 +225,7 @@ function ApprovedCard({ row, pulse }: { row: DecisionRow; pulse: boolean }) {
             display: "flex",
             gap: 8,
             alignItems: "center",
+            flexWrap: "wrap",
           }}
         >
           <span
@@ -191,9 +240,44 @@ function ApprovedCard({ row, pulse }: { row: DecisionRow; pulse: boolean }) {
           >
             {row.market_type}
           </span>
+          {row.futures_direction && (
+            <span
+              style={{
+                padding: "1px 6px",
+                border: "1px solid var(--border-default)",
+                borderRadius: 4,
+                textTransform: "uppercase",
+                letterSpacing: "0.04em",
+                fontWeight: 600,
+              }}
+            >
+              {row.futures_direction}
+            </span>
+          )}
           <span style={{ fontFamily: "var(--font-mono)" }}>
-            {fmtTime(row.decided_at)}
+            {fmtTime(row.approved_at)}
           </span>
+          {awaitingBalance && (
+            <span
+              title={`Saldo disponível abaixo do mínimo (${minTradeUsdt.toFixed(2)} USDT)`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "1px 6px",
+                borderRadius: 4,
+                background: "color-mix(in srgb, var(--color-warning) 14%, transparent)",
+                border: "1px solid color-mix(in srgb, var(--color-warning) 35%, transparent)",
+                color: "var(--color-warning)",
+                fontWeight: 600,
+                textTransform: "uppercase",
+                letterSpacing: "0.04em",
+              }}
+            >
+              <WalletCards size={11} />
+              aguardando saldo
+            </span>
+          )}
         </div>
       </div>
       {score != null && (
@@ -269,36 +353,33 @@ function EmptyState({
 
 
 /**
- * Pulls a numeric "score" from the decision row using a small
- * waterfall of likely shapes. Returns ``null`` when nothing usable is
- * found so the card renders without a pill rather than ``"NaN"``.
- *
- * Order: explicit ``score`` field → sum of layer_* breakdown for
- * futures (5 layers) → sum of any numeric leaf in score_breakdown
- * (last-ditch — caps at 100 anyway).
+ * Stable identity for an L3-queue row across polls. ``watchlist_id``
+ * is needed because the same symbol can legitimately exist on both
+ * a spot and a futures L3 watchlist for the same user — keying by
+ * symbol alone would collapse them and break the pulse-on-new
+ * heuristic.
  */
-function extractScore(row: DecisionRow): number | null {
-  const explicit = (row as any).score;
-  if (typeof explicit === "number" && isFinite(explicit)) return clamp(explicit);
+function rowKey(row: L3QueueRow): string {
+  return `${row.watchlist_id}:${row.symbol}`;
+}
 
-  const breakdown = row.score_breakdown;
-  if (!breakdown || typeof breakdown !== "object") return null;
-
-  const layerKeys = Object.keys(breakdown).filter((k) => k.startsWith("layer_"));
-  if (layerKeys.length > 0) {
-    const sum = layerKeys.reduce((acc, k) => {
-      const v = (breakdown as any)[k];
-      return acc + (typeof v === "number" && isFinite(v) ? v : 0);
-    }, 0);
-    return clamp(sum);
+/**
+ * Pulls a numeric "score" from the row using a small waterfall:
+ * spot ``alpha_score`` → futures ``confidence_score`` →
+ * max(score_long, score_short). Returns ``null`` when nothing is
+ * usable so the card renders without a pill rather than ``"NaN"``.
+ */
+function extractScore(row: L3QueueRow): number | null {
+  if (typeof row.score === "number" && isFinite(row.score)) return clamp(row.score);
+  if (typeof row.confidence_score === "number" && isFinite(row.confidence_score)) {
+    return clamp(row.confidence_score);
   }
-  // Fallback: average of numeric leaves.
-  const leaves = Object.values(breakdown).filter(
-    (v) => typeof v === "number" && isFinite(v as number)
-  ) as number[];
-  if (leaves.length === 0) return null;
-  const avg = leaves.reduce((a, b) => a + b, 0) / leaves.length;
-  return clamp(avg);
+  const longS = typeof row.score_long === "number" && isFinite(row.score_long) ? row.score_long : null;
+  const shortS = typeof row.score_short === "number" && isFinite(row.score_short) ? row.score_short : null;
+  if (longS != null || shortS != null) {
+    return clamp(Math.max(longS ?? 0, shortS ?? 0));
+  }
+  return null;
 }
 
 function clamp(n: number): number {
