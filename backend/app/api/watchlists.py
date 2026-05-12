@@ -2176,15 +2176,50 @@ async def get_watchlist_assets(
             timestamp=_iso_utc(getattr(a, "refreshed_at", None)),
             snapshot=a.analysis_snapshot,
         )
-        evaluation_trace = normalized_snapshot["details"]["evaluation_trace"]
-        if not evaluation_trace and profile_config:
-            # Pass `enriched_asset` values via the meta dict so the
-            # helper's "indicators win over meta None" rule still applies
-            # but we keep the existing fallback to DB-stored asset
-            # columns when meta_map is incomplete.
+        stored_evaluation_trace = normalized_snapshot["details"]["evaluation_trace"]
+        # Always recompute on read when we have profile_config + indicators
+        # so backend semantic changes (e.g. "no more PULADO") show up
+        # immediately on the Approved/Pending tabs without waiting for the
+        # next scheduled scan to repopulate `analysis_snapshot`. Mirrors
+        # the on-read recompute the Rejected tab already does. Falls back
+        # to the stored trace when indicators are missing (collector gap)
+        # or no profile_config is available — same defensive contract as
+        # `recompute_rejection_trace`.
+        evaluation_trace = stored_evaluation_trace
+        if profile_config and indicators:
+            try:
+                trace_asset = build_trace_asset(
+                    a.symbol,
+                    indicators=indicators,
+                    meta={
+                        "current_price":        enriched_asset.get("current_price"),
+                        "price_change_24h":     enriched_asset.get("price_change_24h"),
+                        "volume_24h":           enriched_asset.get("volume_24h"),
+                        "market_cap":           enriched_asset.get("market_cap"),
+                        "spread_pct":           (meta or {}).get("spread_pct"),
+                        "orderbook_depth_usdt": (meta or {}).get("orderbook_depth_usdt"),
+                    },
+                    alpha_score=enriched_asset.get("alpha_score"),
+                )
+                evaluation_trace = build_asset_evaluation_trace(
+                    trace_asset,
+                    profile_config=profile_config,
+                    selected_filter_conditions=selected_trace_conditions,
+                )
+            except Exception as _exc:
+                logger.debug(
+                    "[Pipeline] Approved trace recompute fell back to stored snapshot for %s: %s",
+                    a.symbol,
+                    _exc,
+                )
+                evaluation_trace = stored_evaluation_trace
+        elif not evaluation_trace and profile_config:
+            # No indicators row but a profile_config exists — keep the
+            # legacy single-shot rebuild so an empty trace still gets
+            # populated (will be SEM-DADOS-heavy but better than blank).
             trace_asset = build_trace_asset(
                 a.symbol,
-                indicators=indicators,
+                indicators=None,
                 meta={
                     "current_price":        enriched_asset.get("current_price"),
                     "price_change_24h":     enriched_asset.get("price_change_24h"),
