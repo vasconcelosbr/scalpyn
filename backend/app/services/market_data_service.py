@@ -31,6 +31,11 @@ class MarketDataNormalized:
     volume_quote: Optional[float] = None
     orderbook_depth: Optional[float] = None
     spread_pct: Optional[float] = None
+    # Order book pressure (top-N níveis). Ambos no range [-1.0, +1.0].
+    # bid_ask_imbalance = (Σ bid_qty - Σ ask_qty) / (Σ bid_qty + Σ ask_qty)
+    # orderbook_pressure = alias semântico (mesma fórmula).
+    bid_ask_imbalance: Optional[float] = None
+    orderbook_pressure: Optional[float] = None
     taker_buy_volume: Optional[float] = None
     taker_sell_volume: Optional[float] = None
     taker_ratio: Optional[float] = None
@@ -55,6 +60,10 @@ class MarketDataNormalized:
             payload["orderbook_depth_usdt"] = round(float(self.orderbook_depth), 8)
         if self.spread_pct is not None:
             payload["spread_pct"] = round(float(self.spread_pct), 4)
+        if self.bid_ask_imbalance is not None:
+            payload["bid_ask_imbalance"] = round(float(self.bid_ask_imbalance), 6)
+        if self.orderbook_pressure is not None:
+            payload["orderbook_pressure"] = round(float(self.orderbook_pressure), 6)
         if self.taker_buy_volume is not None:
             payload["taker_buy_volume"] = round(float(self.taker_buy_volume), 8)
         if self.taker_sell_volume is not None:
@@ -338,10 +347,28 @@ class MarketDataService:
                 return {}
             bid_depth = sum((self._as_float(price) or 0.0) * (self._as_float(qty) or 0.0) for price, qty in bids[:depth])
             ask_depth = sum((self._as_float(price) or 0.0) * (self._as_float(qty) or 0.0) for price, qty in asks[:depth])
-            return {
+
+            # ── bid_ask_imbalance / orderbook_pressure (top-N níveis) ─────────
+            # Fórmula: (Σ bid_qty[0:depth] - Σ ask_qty[0:depth]) /
+            #         (Σ bid_qty[0:depth] + Σ ask_qty[0:depth])
+            # Range: -1.0 (sell pressure total) → +1.0 (buy pressure total).
+            # Calculado em try/except isolado: falha aqui NUNCA afeta
+            # spread_pct/orderbook_depth_usdt (contrato aditivo).
+            metrics: Dict[str, Optional[float]] = {
                 "spread_pct": round((best_ask - best_bid) / best_ask * 100, 4),
                 "orderbook_depth_usdt": round(bid_depth + ask_depth, 8),
             }
+            try:
+                bid_qty_sum = sum((self._as_float(qty) or 0.0) for _price, qty in bids[:depth])
+                ask_qty_sum = sum((self._as_float(qty) or 0.0) for _price, qty in asks[:depth])
+                total_qty = bid_qty_sum + ask_qty_sum
+                if total_qty > 0:
+                    imbalance = round((bid_qty_sum - ask_qty_sum) / total_qty, 6)
+                    metrics["bid_ask_imbalance"] = imbalance
+                    metrics["orderbook_pressure"] = imbalance  # alias semântico
+            except Exception as exc:
+                logger.warning("[DATA_FAIL] bid_ask_imbalance calc falhou: %s", exc)
+            return metrics
         except Exception as exc:
             logger.warning("[DATA_FAIL] _extract_orderbook_metrics parse error: %s", exc)
             return {}
@@ -562,6 +589,10 @@ class MarketDataService:
             payload["spread_pct"] = round(float(normalized.spread_pct), 4)
         if normalized.orderbook_depth is not None:
             payload["orderbook_depth_usdt"] = round(float(normalized.orderbook_depth), 8)
+        if normalized.bid_ask_imbalance is not None:
+            payload["bid_ask_imbalance"] = round(float(normalized.bid_ask_imbalance), 6)
+        if normalized.orderbook_pressure is not None:
+            payload["orderbook_pressure"] = round(float(normalized.orderbook_pressure), 6)
 
         # ── Explicit Binance safety net for spread ────────────────────────────
         # fetch_normalized_market_data triggers Binance when Gate *depth* is
@@ -676,7 +707,14 @@ class MarketDataService:
                 reason="missing_from_gate",
             )
 
-        if not self.is_valid_data("orderbook_depth_usdt", normalized.orderbook_depth):
+        # Gating estendido: dispara fetch quando depth OU bid_ask_imbalance
+        # estiverem ausentes. existing_data legado nunca traz imbalance, então
+        # sem este OR os novos indicadores nunca seriam populados quando o
+        # pipeline já cacheou depth (achado CRITICAL do code review).
+        if (
+            not self.is_valid_data("orderbook_depth_usdt", normalized.orderbook_depth)
+            or normalized.bid_ask_imbalance is None
+        ):
             gate_book_metrics = self._extract_orderbook_metrics(
                 await self._fetch_gate_orderbook(normalized_symbol, depth),
                 depth,
@@ -689,8 +727,27 @@ class MarketDataService:
                 "gate",
                 "orderbook_depth_usdt",
             )
+            # Order book pressure (top-N) — aditivo, calculado no mesmo fetch
+            self._record_indicator(
+                normalized,
+                "bid_ask_imbalance",
+                gate_book_metrics.get("bid_ask_imbalance"),
+                "gate",
+                "bid_ask_imbalance",
+            )
+            self._record_indicator(
+                normalized,
+                "orderbook_pressure",
+                gate_book_metrics.get("orderbook_pressure"),
+                "gate",
+                "orderbook_pressure",
+            )
 
-        if not self.is_valid_data("orderbook_depth_usdt", normalized.orderbook_depth):
+        # Mesmo gating estendido para o fallback Binance (mesmo motivo).
+        if (
+            not self.is_valid_data("orderbook_depth_usdt", normalized.orderbook_depth)
+            or normalized.bid_ask_imbalance is None
+        ):
             binance_book_metrics = self._extract_orderbook_metrics(
                 await self._fetch_binance_orderbook(normalized_symbol, depth),
                 depth,
@@ -709,6 +766,23 @@ class MarketDataService:
                 binance_book_metrics.get("orderbook_depth_usdt"),
                 "binance",
                 "orderbook_depth_usdt",
+                reason="missing_from_gate",
+            )
+            # Order book pressure (Binance fallback)
+            self._record_indicator(
+                normalized,
+                "bid_ask_imbalance",
+                binance_book_metrics.get("bid_ask_imbalance"),
+                "binance",
+                "bid_ask_imbalance",
+                reason="missing_from_gate",
+            )
+            self._record_indicator(
+                normalized,
+                "orderbook_pressure",
+                binance_book_metrics.get("orderbook_pressure"),
+                "binance",
+                "orderbook_pressure",
                 reason="missing_from_gate",
             )
 

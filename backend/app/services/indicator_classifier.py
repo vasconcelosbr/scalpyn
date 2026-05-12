@@ -74,6 +74,9 @@ _MICRO_EXPLICIT: frozenset[str] = frozenset({
     "taker_sell_volume",
     "spread_pct",
     "orderbook_depth_usdt",
+    # Order book pressure (top-10 níveis): -1.0 sell pressure / +1.0 buy pressure
+    "bid_ask_imbalance",
+    "orderbook_pressure",
     # Market data provenance
     "market_data_source",
     "market_data_confidence",
@@ -88,6 +91,9 @@ _MICRO_EXPLICIT: frozenset[str] = frozenset({
 _STRUCT_EXPLICIT: frozenset[str] = frozenset({
     # RSI / ADX
     "rsi",
+    "rsi_6",     # multi-period RSI (todos struct: mesmo grupo do `rsi` canônico)
+    "rsi_12",
+    "rsi_24",
     "adx",
     "di_plus",
     "di_minus",
@@ -109,9 +115,14 @@ _STRUCT_EXPLICIT: frozenset[str] = frozenset({
     "macd_histogram_slope",
     "macd_histogram_mean_10",
     "macd_histogram_std_10",
-    # Parabolic SAR
+    # Parabolic SAR (canônicos + extensões: ep, af, distance, signal, reversal)
     "psar",
     "psar_trend",
+    "psar_ep",
+    "psar_af",
+    "psar_distance_pct",
+    "psar_signal",
+    "psar_reversal",
     # Z-score
     "zscore",
     # OBV (cumulative — structural by nature)

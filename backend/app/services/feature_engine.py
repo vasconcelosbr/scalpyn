@@ -155,11 +155,14 @@ class FeatureEngine:
             # Hybrid derived values (ema9_gt_ema50, ema_full_alignment) are
             # computed at query-merge time when both groups' data is available;
             # each scheduler only stores what it can compute independently.
+            # EMA30 (period 22-49 → struct/hybrid) + EMA10 (period ≤21 → micro)
+            # mantêm o mesmo padrão de filtragem por período já aplicado em
+            # indicator_classifier (Priority 2: EMA period rule).
             _EMA_STRUCT_KEYS = frozenset({
-                "ema50", "ema200", "ema50_gt_ema200",
+                "ema30", "ema50", "ema200", "ema50_gt_ema200",
             })
             _EMA_MICRO_KEYS = frozenset({
-                "ema5", "ema9", "ema21",
+                "ema5", "ema9", "ema10", "ema21",
                 "ema9_gt_ema21",   # EMA9 vs EMA21 — both in micro
                 "ema9_distance_pct",
             })
@@ -307,14 +310,58 @@ class FeatureEngine:
         return result
 
     def _calc_rsi(self, df: pd.DataFrame) -> Dict[str, Any]:
-        period = self.config["rsi"].get("period", 14)
-        delta = df["close"].diff()
-        gain = delta.where(delta > 0, 0.0).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0.0)).rolling(window=period).mean()
-        rs = gain / loss.replace(0, np.nan)
-        rsi = 100 - (100 / (1 + rs))
-        val = rsi.iloc[-1]
-        return {"rsi": round(float(val), 2) if pd.notna(val) else None}
+        """RSI canônico (`rsi`, período `config["rsi"]["period"]`, default 14)
+        + RSI multi-período aditivo (`rsi_6`, `rsi_12`, `rsi_24`) quando
+        `config["rsi"]["periods"]` é uma lista. Cada período roda em try/except
+        isolado: falha em rsi_24 nunca afeta rsi_6/12 nem o `rsi` legado.
+        Retorna None pra qualquer período sem candles suficientes
+        (mín = period + 1) — nunca lança.
+        """
+        cfg = self.config["rsi"]
+        result: Dict[str, Any] = {}
+
+        # ── RSI canônico (período único, retrocompat) ────────────────────────
+        try:
+            period = int(cfg.get("period", 14))
+            if len(df) >= period + 1:
+                delta = df["close"].diff()
+                gain = delta.where(delta > 0, 0.0).rolling(window=period).mean()
+                loss = (-delta.where(delta < 0, 0.0)).rolling(window=period).mean()
+                rs = gain / loss.replace(0, np.nan)
+                rsi = 100 - (100 / (1 + rs))
+                val = rsi.iloc[-1]
+                result["rsi"] = round(float(val), 2) if pd.notna(val) else None
+            else:
+                result["rsi"] = None
+        except Exception as exc:
+            logger.warning("[FEATURE_ENGINE] rsi (legado) falhou: %s", exc)
+            result["rsi"] = None
+
+        # ── RSI multi-período (aditivo, nomes rsi_<N>) ───────────────────────
+        periods = cfg.get("periods") or []
+        if isinstance(periods, (list, tuple)):
+            for raw_p in periods:
+                try:
+                    p = int(raw_p)
+                    if p <= 0:
+                        continue
+                    key = f"rsi_{p}"
+                    if len(df) < p + 1:
+                        result[key] = None
+                        continue
+                    delta = df["close"].diff()
+                    gain = delta.where(delta > 0, 0.0).rolling(window=p).mean()
+                    loss = (-delta.where(delta < 0, 0.0)).rolling(window=p).mean()
+                    rs = gain / loss.replace(0, np.nan)
+                    rsi = 100 - (100 / (1 + rs))
+                    val = rsi.iloc[-1]
+                    result[key] = round(float(val), 2) if pd.notna(val) else None
+                except Exception as exc:
+                    logger.warning(
+                        "[FEATURE_ENGINE] rsi_%s falhou: %s", raw_p, exc
+                    )
+                    result[f"rsi_{raw_p}"] = None
+        return result
 
     def _calc_adx(self, df: pd.DataFrame) -> Dict[str, Any]:
         period = self.config["adx"].get("period", 14)
@@ -481,50 +528,164 @@ class FeatureEngine:
         }
 
     def _calc_parabolic_sar(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Simplified Parabolic SAR."""
-        step = self.config.get("parabolic_sar", {}).get("step", 0.02)
-        max_step = self.config.get("parabolic_sar", {}).get("max_step", 0.2)
+        """Parabolic SAR (Wilder) estendido — canônicos + extensões.
 
-        high = df["high"].values
-        low = df["low"].values
-        close = df["close"].values
-        n = len(close)
-        if n < 3:
-            return {"psar": None}
+        Retorna (todas as chaves preservam comportamento legado de `psar`/`psar_trend`):
+            psar, psar_trend, psar_ep, psar_af, psar_distance_pct,
+            psar_signal ("BUY" | "SELL" | "HOLD"), psar_reversal (bool)
 
-        psar = np.zeros(n)
-        af = step
-        bull = True
-        ep = low[0]
-        psar[0] = high[0]
+        Anti-exaustão (bloqueia BUY → "HOLD"):
+            * `psar_distance_pct > max_distance_pct`  (preço já correu demais)
+            * `rsi > rsi_max`                         (RSI saturado)
 
-        for i in range(1, n):
-            if bull:
-                psar[i] = psar[i - 1] + af * (ep - psar[i - 1])
-                psar[i] = min(psar[i], low[i - 1])
-                if low[i] < psar[i]:
-                    bull = False
-                    psar[i] = ep
-                    ep = low[i]
-                    af = step
+        Filtro ADX opcional (bloqueia BUY+SELL → "HOLD"):
+            * `adx_filter_enabled = True` E `adx < adx_min_threshold`
+
+        Thresholds lidos de `self.config["parabolic_sar"]` (Zero Hardcode env-safe,
+        hidratado por DEFAULT_INDICATORS no seed e tunável via update_config).
+
+        Cross-reference RSI/ADX usa o último valor disponível no DataFrame se
+        existir como coluna; caso contrário, anti-exaustão por RSI/ADX é skip
+        (não bloqueia). O cross-reference **com `results` do mesmo ciclo** é
+        feito downstream se o caller quiser — aqui mantemos a função pura.
+
+        Retrocompat: `step`/`max_step` continuam funcionando como aliases de
+        `af_start`/`af_max`. Falha em qualquer extensão NUNCA quebra `psar`/`psar_trend`.
+        """
+        cfg = self.config.get("parabolic_sar", {}) or {}
+        # Aliases: step/max_step (legado) → af_start/af_max (canônico Wilder)
+        af_start = float(cfg.get("af_start", cfg.get("step", 0.02)))
+        af_increment = float(cfg.get("af_increment", cfg.get("step", 0.02)))
+        af_max = float(cfg.get("af_max", cfg.get("max_step", 0.20)))
+
+        try:
+            high = df["high"].values
+            low = df["low"].values
+            close = df["close"].values
+            n = len(close)
+            if n < 3:
+                return {"psar": None, "psar_trend": None}
+
+            psar = np.zeros(n)
+            af = af_start
+            bull = True
+            ep = float(low[0])
+            psar[0] = float(high[0])
+            reversal_at_last = False
+
+            for i in range(1, n):
+                prev_bull = bull
+                if bull:
+                    psar[i] = psar[i - 1] + af * (ep - psar[i - 1])
+                    # Anti-repaint: SAR não invade as 2 mínimas anteriores
+                    psar[i] = min(psar[i], low[i - 1], low[i - 2] if i >= 2 else low[i - 1])
+                    if low[i] < psar[i]:
+                        bull = False
+                        psar[i] = ep                # SAR reinicia no EP da tendência anterior
+                        ep = float(low[i])         # EP reinicia na mínima do candle atual
+                        af = af_start
+                    else:
+                        if high[i] > ep:
+                            ep = float(high[i])
+                            af = min(af + af_increment, af_max)
                 else:
-                    if high[i] > ep:
-                        ep = high[i]
-                        af = min(af + step, max_step)
+                    psar[i] = psar[i - 1] + af * (ep - psar[i - 1])
+                    psar[i] = max(psar[i], high[i - 1], high[i - 2] if i >= 2 else high[i - 1])
+                    if high[i] > psar[i]:
+                        bull = True
+                        psar[i] = ep
+                        ep = float(high[i])
+                        af = af_start
+                    else:
+                        if low[i] < ep:
+                            ep = float(low[i])
+                            af = min(af + af_increment, af_max)
+                if i == n - 1:
+                    reversal_at_last = (prev_bull != bull)
+
+            sar_value = float(psar[-1])
+            close_last = float(close[-1])
+            distance_pct = (
+                round(abs(close_last - sar_value) / close_last * 100.0, 4)
+                if close_last > 0 else None
+            )
+        except Exception as exc:
+            logger.warning("[FEATURE_ENGINE] _calc_parabolic_sar core falhou: %s", exc)
+            return {"psar": None, "psar_trend": None}
+
+        result: Dict[str, Any] = {
+            "psar": round(sar_value, 8),
+            "psar_trend": "bullish" if bull else "bearish",
+            "psar_ep": round(float(ep), 8),
+            "psar_af": round(float(af), 6),
+            "psar_distance_pct": distance_pct,
+            "psar_reversal": bool(reversal_at_last),
+        }
+
+        # ── Sinal base: trend bullish e (acabou de reverter ou tendência fresca)
+        # → BUY; trend bearish + reversão → SELL; senão HOLD.
+        try:
+            # Sinal canônico: SAR é um indicador de evento (gatilho de
+            # reversal), não de estado. Emitir BUY/SELL em TODOS os candles
+            # da mesma tendência geraria spam para o SignalEngine. Sinal
+            # ativo só no candle onde a reversal acontece; demais candles
+            # ficam HOLD (consumidores que precisam do estado podem ler
+            # `psar_trend` diretamente).
+            if reversal_at_last and bull:
+                signal = "BUY"
+            elif reversal_at_last and not bull:
+                signal = "SELL"
             else:
-                psar[i] = psar[i - 1] + af * (ep - psar[i - 1])
-                psar[i] = max(psar[i], high[i - 1])
-                if high[i] > psar[i]:
-                    bull = True
-                    psar[i] = ep
-                    ep = high[i]
-                    af = step
-                else:
-                    if low[i] < ep:
-                        ep = low[i]
-                        af = min(af + step, max_step)
+                signal = "HOLD"
 
-        return {"psar": round(float(psar[-1]), 8), "psar_trend": "bullish" if bull else "bearish"}
+            # ── Anti-exaustão (bloqueia só BUY) ─────────────────────────────
+            max_distance_pct = float(cfg.get("max_distance_pct", 3.0))
+            rsi_max = float(cfg.get("rsi_max", 75.0))
+
+            if signal == "BUY" and distance_pct is not None and distance_pct > max_distance_pct:
+                logger.debug(
+                    "[PSAR] BUY bloqueado: distance_pct=%.4f > max=%.4f",
+                    distance_pct, max_distance_pct,
+                )
+                signal = "HOLD"
+
+            # RSI cross-reference: usa coluna 'rsi' se já existir no DataFrame
+            # (algumas pipelines pré-anotam). Caso contrário, anti-exaustão
+            # por RSI é skip — bloqueio adicional pode ser feito downstream
+            # (compute_indicators) com base no `results` do mesmo ciclo.
+            if signal == "BUY" and "rsi" in df.columns:
+                try:
+                    rsi_now = float(df["rsi"].iloc[-1])
+                    if pd.notna(rsi_now) and rsi_now > rsi_max:
+                        logger.debug(
+                            "[PSAR] BUY bloqueado: rsi=%.2f > rsi_max=%.2f",
+                            rsi_now, rsi_max,
+                        )
+                        signal = "HOLD"
+                except (TypeError, ValueError):
+                    pass
+
+            # ── Filtro ADX (opcional, bloqueia BUY E SELL) ──────────────────
+            if bool(cfg.get("adx_filter_enabled", False)):
+                adx_min = float(cfg.get("adx_min_threshold", 20.0))
+                if "adx" in df.columns:
+                    try:
+                        adx_now = float(df["adx"].iloc[-1])
+                        if pd.notna(adx_now) and adx_now < adx_min:
+                            logger.debug(
+                                "[PSAR] %s bloqueado: adx=%.2f < min=%.2f",
+                                signal, adx_now, adx_min,
+                            )
+                            signal = "HOLD"
+                    except (TypeError, ValueError):
+                        pass
+
+            result["psar_signal"] = signal
+        except Exception as exc:
+            logger.warning("[FEATURE_ENGINE] _calc_parabolic_sar signal falhou: %s", exc)
+            result["psar_signal"] = "HOLD"
+
+        return result
 
     def _calc_zscore(self, df: pd.DataFrame) -> Dict[str, Any]:
         lookback = self.config.get("zscore", {}).get("lookback", 20)
@@ -573,6 +734,8 @@ class FeatureEngine:
             "volume_24h_usdt",
             "orderbook_depth_usdt",
             "spread_pct",
+            "bid_ask_imbalance",
+            "orderbook_pressure",
             "taker_buy_volume",
             "taker_sell_volume",
             "taker_ratio",

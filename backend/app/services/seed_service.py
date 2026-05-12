@@ -11,15 +11,33 @@ from .config_service import config_service
 logger = logging.getLogger(__name__)
 
 DEFAULT_INDICATORS = {
-    "rsi": {"enabled": True, "period": 14},
+    # `period` (legado, único) preservado para retrocompat; `periods` (lista
+    # opcional) ativa cálculo multi-período aditivo (rsi_6, rsi_12, rsi_24).
+    "rsi": {"enabled": True, "period": 14, "periods": [6, 12, 24]},
     "adx": {"enabled": True, "period": 14},
-    "ema": {"enabled": True, "periods": [5, 9, 21, 50, 200]},
+    # EMA10 (micro, ≤21) e EMA30 (struct/hybrid, 22-49) adicionados.
+    "ema": {"enabled": True, "periods": [5, 9, 10, 21, 30, 50, 200]},
     "atr": {"enabled": True, "period": 14},
     "macd": {"enabled": True, "fast": 12, "slow": 26, "signal": 9},
     "vwap": {"enabled": True, "reset_period": "daily"},
     "stochastic": {"enabled": True, "k": 14, "d": 3, "smooth": 3},
     "obv": {"enabled": True},
-    "parabolic_sar": {"enabled": True, "step": 0.02, "max_step": 0.2},
+    # PSAR estendido: AF padrão Wilder + sistema anti-exaustão (RSI / distance)
+    # + filtro ADX opcional. Todos os thresholds env-safe via update_config.
+    "parabolic_sar": {
+        "enabled": True,
+        "step": 0.02,           # legado — alias de af_start (preservado)
+        "max_step": 0.2,        # legado — alias de af_max (preservado)
+        "af_start": 0.02,
+        "af_increment": 0.02,
+        "af_max": 0.20,
+        # Anti-exaustão: bloqueia sinal BUY quando preço já correu demais ou RSI saturou
+        "max_distance_pct": 3.0,
+        "rsi_max": 75.0,
+        # Filtro ADX (opt-in): só permite sinal quando tendência é forte
+        "adx_filter_enabled": False,
+        "adx_min_threshold": 20.0,
+    },
     "bollinger": {"enabled": True, "period": 20, "deviation": 2.0},
     "zscore": {"enabled": False, "lookback": 20},
     # Robust indicators: when no real trade-flow data is available the
