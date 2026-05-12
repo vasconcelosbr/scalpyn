@@ -21,6 +21,24 @@ class Settings(BaseSettings):
     # environment variable.  Default is 24 hours (86 400 s).
     TRADE_MONITOR_TIMEOUT_SECONDS: int = 86_400
 
+    # ── Dynamic exit signals via order flow (additive — TP/SL always wins) ──
+    # Master switch — when False, the new _check_exit_signals path is a no-op
+    # and the monitor keeps the legacy TP/SL/timeout-only behavior. Default
+    # off so the change ships dark; flip to 1 in env after observation.
+    TRADE_MONITOR_EXIT_FLOW_ENABLED: bool = False
+    # Order-flow look-back window passed to get_order_flow_data().
+    TRADE_MONITOR_EXIT_FLOW_WINDOW_SECONDS: int = 60
+    # Maximum acceptable data age (seconds). Stale flow → skip the check.
+    TRADE_MONITOR_EXIT_FLOW_MAX_AGE_SECONDS: int = 20
+    # Bear threshold for taker_ratio. For LONG: ratio < threshold = sellers
+    # dominating → exit. For SHORT: ratio > (1 - threshold) = buyers
+    # dominating → exit (symmetric).
+    TRADE_MONITOR_EXIT_TAKER_BEAR_THRESHOLD: float = 0.35
+    # Volume exhaustion multiplier. The check is satisfied when the
+    # adverse-side dominance fraction exceeds (1 - 1/threshold), i.e. with
+    # the default 2.0 → dominance > 0.5 (one side has > 50% net flow).
+    TRADE_MONITOR_EXIT_VOLUME_SPIKE_THRESHOLD: float = 2.0
+
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
     def fix_db_url(cls, v: str) -> str:

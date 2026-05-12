@@ -50,8 +50,10 @@ import httpx
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import settings
 from ..models.trade_tracking import TradeTracking
 from ..models.backoffice import DecisionLog
+from .order_flow_service import get_order_flow_data
 
 logger = logging.getLogger(__name__)
 
@@ -319,6 +321,22 @@ class TradeMonitorService:
                 else:
                     outcome = _check_exit_conditions(trade, price, now, timeout_seconds)
                     if outcome is None:
+                        # ── Dynamic exit via order flow (additive, post-TP/SL) ──
+                        # TP/SL/timeout always win — only reached when the legacy
+                        # check returned None. Master switch defaults False so the
+                        # path is dark until the operator opts in.
+                        if settings.TRADE_MONITOR_EXIT_FLOW_ENABLED:
+                            should_exit, reason = await self._check_exit_signals(trade, price)
+                            if should_exit:
+                                logger.info(
+                                    "[TradeMonitor][%s] dynamic flow exit reason=%s price=%s",
+                                    trade.symbol, reason, price,
+                                )
+                                flow_outcome = f"flow_{reason}"
+                                await self._close_trade(
+                                    trade, price, _PRICE_SOURCE_MARKET, flow_outcome, now,
+                                )
+                                summary["closed_flow"] = summary.get("closed_flow", 0) + 1
                         continue
                     exit_price = price
 
@@ -403,4 +421,131 @@ class TradeMonitorService:
             pnl_pct,
             exit_price_source,
         )
+
+    # ── Dynamic exit via order flow (additive — TP/SL always wins) ───────────
+    #
+    # Why thresholds are read from ``settings`` (env vars) and NOT from
+    # ``ConfigService``: ``ConfigService.get_config`` requires ``user_id``
+    # (NOT NULL UUID) and ``TradeTracking`` rows have no ``user_id``/``pool_id``
+    # column. Adding those would require a migration (out of scope for this
+    # additive change). The env-var path mirrors the existing
+    # ``TRADE_MONITOR_TIMEOUT_SECONDS`` pattern in this same service — same
+    # "Zero Hardcode" guarantee (operators tune via env without a code deploy).
+    #
+    # Why ``order_flow_service`` is imported as a function and not injected:
+    # ``get_order_flow_data`` is a module-level coroutine, not a class.
+    # No DI surface to add to ``TradeMonitorService.__init__``.
+    #
+    # Side semantics:
+    #   * LONG  → exit when sellers dominate (taker_ratio low, volume_delta
+    #             very negative).
+    #   * SHORT → exit when buyers dominate  (taker_ratio high, volume_delta
+    #             very positive). Symmetric mirror of the LONG branch.
+    async def _check_exit_signals(
+        self,
+        trade: TradeTracking,
+        current_price: float,
+    ) -> tuple[bool, str]:
+        """Evaluate dynamic exit signals from live order flow.
+
+        Returns ``(should_exit, reason)``. ``reason`` is a SHORT 2-char tag
+        (``tb``/``ve``/``tu``/``vs``) so the final ``outcome=f"flow_{reason}"``
+        (7 chars) fits the ``String(20)`` column on ``trade_tracking.outcome``
+        and ``decisions_log.outcome``. Numeric diagnostics (ratio, dominance)
+        are emitted via ``logger.info`` at the signal site, NOT embedded in
+        the outcome string.
+
+        Never raises: any failure is logged and returns ``(False, "flow_error")``
+        so the legacy TP/SL/timeout path is never affected.
+        """
+        try:
+            window  = int(settings.TRADE_MONITOR_EXIT_FLOW_WINDOW_SECONDS)
+            max_age = int(settings.TRADE_MONITOR_EXIT_FLOW_MAX_AGE_SECONDS)
+            bear_threshold  = float(settings.TRADE_MONITOR_EXIT_TAKER_BEAR_THRESHOLD)
+            spike_threshold = float(settings.TRADE_MONITOR_EXIT_VOLUME_SPIKE_THRESHOLD)
+
+            market_type = (trade.market_type or "spot").lower()
+            side = (trade.position_side or "long").lower()
+
+            flow = await get_order_flow_data(
+                symbol=trade.symbol,
+                window_seconds=window,
+                market_type=market_type,
+            )
+
+            # ``get_order_flow_data`` always returns a dict; the guard is a
+            # defensive belt-and-braces in case the contract changes.
+            if not flow:
+                return False, "flow_unavailable"
+
+            taker_ratio = flow.get("taker_ratio")
+            if taker_ratio is None:
+                # Empty buffer + REST fallback empty → no signal.
+                return False, "flow_empty"
+
+            age = flow.get("data_age_seconds")
+            if age is not None and age > max_age:
+                return False, f"stale_{age:.0f}s"
+
+            taker_buy  = flow.get("taker_buy_volume") or 0.0
+            taker_sell = flow.get("taker_sell_volume") or 0.0
+            volume_delta = flow.get("volume_delta") or 0.0
+            total_vol = taker_buy + taker_sell
+
+            # Volume-exhaustion dominance threshold derived from spike multiplier:
+            # spike=2.0 → dominance > 0.5 (one side > 50% net of total).
+            try:
+                dominance_floor = 1.0 - (1.0 / spike_threshold)
+            except ZeroDivisionError:
+                dominance_floor = 0.5
+
+            # Reason tags are intentionally short (<= 5 chars) so the final
+            # outcome ``flow_<reason>`` fits the ``String(20)`` column on
+            # ``trade_tracking.outcome`` and ``decisions_log.outcome``.
+            # Numeric diagnostics (ratio, dominance) go into the INFO log
+            # at the call-site, not into the outcome string.
+            #   tb = taker bear        (LONG : sellers dominate taker flow)
+            #   ve = volume exhaustion (LONG : net delta strongly negative)
+            #   tu = taker bull/up     (SHORT: buyers  dominate taker flow)
+            #   vs = volume squeeze    (SHORT: net delta strongly positive)
+            if side == "long":
+                if taker_ratio < bear_threshold:
+                    logger.info(
+                        "[TradeMonitor][%s] flow_tb signal taker_ratio=%.3f < %.3f",
+                        trade.symbol, taker_ratio, bear_threshold,
+                    )
+                    return True, "tb"
+                if total_vol > 0 and volume_delta < 0:
+                    sell_dominance = abs(volume_delta) / total_vol
+                    if sell_dominance > dominance_floor:
+                        logger.info(
+                            "[TradeMonitor][%s] flow_ve signal sell_dominance=%.2f > %.2f",
+                            trade.symbol, sell_dominance, dominance_floor,
+                        )
+                        return True, "ve"
+            else:  # short
+                bull_threshold = 1.0 - bear_threshold
+                if taker_ratio > bull_threshold:
+                    logger.info(
+                        "[TradeMonitor][%s] flow_tu signal taker_ratio=%.3f > %.3f",
+                        trade.symbol, taker_ratio, bull_threshold,
+                    )
+                    return True, "tu"
+                if total_vol > 0 and volume_delta > 0:
+                    buy_dominance = abs(volume_delta) / total_vol
+                    if buy_dominance > dominance_floor:
+                        logger.info(
+                            "[TradeMonitor][%s] flow_vs signal buy_dominance=%.2f > %.2f",
+                            trade.symbol, buy_dominance, dominance_floor,
+                        )
+                        return True, "vs"
+
+            return False, "flow_ok"
+
+        except Exception as exc:
+            logger.warning(
+                "[TradeMonitor][%s] _check_exit_signals error: %r — ignoring",
+                trade.symbol, exc,
+            )
+            return False, "flow_error"
 

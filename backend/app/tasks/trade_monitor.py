@@ -36,6 +36,7 @@ def monitor(self) -> str:
             result.get("closed_tp", 0)
             + result.get("closed_sl", 0)
             + result.get("closed_timeout", 0)
+            + result.get("closed_flow", 0)
         )
         return (
             f"TradeMonitor: {result.get('open_trades', 0)} open, "
