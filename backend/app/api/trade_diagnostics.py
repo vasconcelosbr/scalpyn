@@ -156,101 +156,37 @@ async def get_trace_timeline(
 
 @router.get("/l3-queue")
 async def list_l3_queue(
-    market_mode: Optional[str] = Query(None, description="spot | futures"),
-    limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
     caller_id: UUID = Depends(get_current_user_id),
 ) -> Dict[str, Any]:
     """List the caller's L3-approved assets straight from the pipeline.
 
-    Reads ``pipeline_watchlist_assets`` joined with ``pipeline_watchlists``
-    where ``level='L3'`` (case-insensitive) — the same source the
-    ``/watchlist`` page L3 tab already renders. Unlike
-    ``/api/diagnostics/decisions?status=APPROVED`` (which only has rows
-    when ``execute_buy`` actually fired), this endpoint reflects every
-    symbol that has cleared the L3 gates in the most recent pipeline
-    scan, regardless of execution / balance.
-
-    A recursive CTE walks back through ``source_watchlist_id`` so the
-    root ``source_pool_id`` is resolved even on long chains
-    (POOL → L1 → L2 → L3). When the chain's root pool is inactive the
-    asset is dropped — we always scope to the caller's "pool ativo".
+    Mirrors the exact query the watchlist page "Approved" tab uses
+    against ``pipeline_watchlist_assets`` (see
+    ``app.api.watchlists._load_active_watchlist_assets``): rows whose
+    ``level_direction`` is NULL or ``'up'``, scoped to the caller's
+    own L3 watchlists via ``pw.user_id = :user_id`` (tenancy).
 
     Also returns ``min_trade_usdt`` at the top level so the UI can
     show an "aguardando saldo" badge without a second config call:
     sourced from the caller's ``spot_engine`` config
     (``buying.capital_per_trade_min_usdt``); falls back to ``10.0``
-    if no spot_engine config exists yet (matches the spec's $10
-    default).
+    when no config row exists yet.
     """
-    mode_filter = None
-    if market_mode and market_mode.lower() in {"spot", "futures"}:
-        mode_filter = market_mode.lower()
-
-    # Strict scope: require a resolved root pool that is currently
-    # active. Drops rows where the chain back to ``source_pool_id`` is
-    # broken (orphan watchlist) OR the root pool was paused — both
-    # mean "not part of the user's pool ativo" per the task spec.
-    where = [
-        "pw.user_id = :caller_id",
-        "UPPER(pw.level) = 'L3'",
-        "r.source_pool_id IS NOT NULL",
-        "p.is_active = TRUE",
-    ]
-    params: Dict[str, Any] = {"caller_id": str(caller_id), "limit": limit}
-    if mode_filter:
-        where.append("pw.market_mode = :market_mode")
-        params["market_mode"] = mode_filter
-    where_sql = " WHERE " + " AND ".join(where)
-
-    # Recursive CTE: starting from each L3 watchlist, walk source_watchlist_id
-    # upward until we hit the watchlist whose source_pool_id is set. That
-    # source_pool_id is the chain's root pool. Cycle protection: depth cap
-    # at 8 (POOL→L1→L2→L3 is 4 hops; 8 is double the worst legitimate case
-    # and prevents an accidental SET NULL → self-reference loop from
-    # spinning forever).
-    sql = text(f"""
-        WITH RECURSIVE chain(wl_id, current_id, source_pool_id, source_watchlist_id, depth) AS (
-            SELECT id, id, source_pool_id, source_watchlist_id, 0
-              FROM pipeline_watchlists
-             WHERE user_id = :caller_id AND UPPER(level) = 'L3'
-            UNION ALL
-            SELECT c.wl_id, pw2.id, pw2.source_pool_id, pw2.source_watchlist_id, c.depth + 1
-              FROM chain c
-              JOIN pipeline_watchlists pw2 ON pw2.id = c.source_watchlist_id
-             WHERE c.source_pool_id IS NULL
-               AND c.source_watchlist_id IS NOT NULL
-               AND c.depth < 8
-        ),
-        roots AS (
-            SELECT DISTINCT ON (wl_id) wl_id, source_pool_id
-              FROM chain
-             WHERE source_pool_id IS NOT NULL
-             ORDER BY wl_id, depth DESC
-        )
-        SELECT pwa.symbol                      AS symbol,
-               pwa.alpha_score                 AS score,
-               pwa.score_long                  AS score_long,
-               pwa.score_short                 AS score_short,
-               pwa.confidence_score            AS confidence_score,
-               pwa.futures_direction           AS futures_direction,
-               pw.market_mode                  AS market_type,
-               COALESCE(pwa.refreshed_at, pwa.entered_at) AS approved_at,
-               r.source_pool_id                AS pool_id,
-               pw.id                           AS watchlist_id,
-               pw.name                         AS watchlist_name
+    sql = text("""
+        SELECT pwa.symbol,
+               pwa.alpha_score   AS score,
+               pwa.refreshed_at  AS approved_at,
+               pw.id             AS watchlist_id,
+               pw.name           AS watchlist_name
           FROM pipeline_watchlist_assets pwa
           JOIN pipeline_watchlists pw ON pw.id = pwa.watchlist_id
-          LEFT JOIN roots r           ON r.wl_id = pw.id
-          LEFT JOIN pools p           ON p.id = r.source_pool_id
-        {where_sql}
-        ORDER BY COALESCE(
-            pwa.alpha_score,
-            GREATEST(COALESCE(pwa.score_long, 0), COALESCE(pwa.score_short, 0))
-        ) DESC NULLS LAST
-        LIMIT :limit
+         WHERE pw.user_id = :user_id
+           AND pw.level   = 'L3'
+           AND (pwa.level_direction IS NULL OR pwa.level_direction = 'up')
+         ORDER BY pwa.alpha_score DESC NULLS LAST
     """)
-    result = await db.execute(sql, params)
+    result = await db.execute(sql, {"user_id": str(caller_id)})
     rows = [_row_to_dict(r) for r in result.fetchall()]
 
     # ── min_trade_usdt — read from caller's spot_engine config (same
