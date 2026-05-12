@@ -16,6 +16,7 @@ from .indicator_snapshot import IndicatorSnapshot
 from .trade_tracking import TradeTracking
 from .exchange_execution import ExchangeExecution
 from .position_lifecycle import PositionLifecycle
+from .shadow_trade import ShadowTrade
 
 __all__ = [
     "User",
@@ -44,4 +45,5 @@ __all__ = [
     "TradeTracking",
     "ExchangeExecution",
     "PositionLifecycle",
+    "ShadowTrade",
 ]
