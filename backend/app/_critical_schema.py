@@ -76,4 +76,11 @@ CRITICAL_COLUMNS: List[Tuple[str, str]] = [
     # Added by migration 042; without this the monitor cannot record the price
     # authority (market vs exchange), causing UndefinedColumnError on every close.
     ("trade_tracking", "exit_price_source"),
+    # Added by migration 025; without this the /dashboard/ml-dataset and
+    # /dashboard/ml-dataset/export endpoints raise ProgrammingError ("relation
+    # trade_simulations does not exist"), which get_db catches and re-raises as
+    # 503 "Database error", causing Promise.all to fail all analytics panels.
+    # The table is never touched by ORM models, so it was absent from this list
+    # until the Rule N/N+1 promotion window (Task #224 / Task #225).
+    ("trade_simulations", "id"),
 ]

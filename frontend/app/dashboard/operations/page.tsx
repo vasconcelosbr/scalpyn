@@ -1146,20 +1146,27 @@ function AnalyticsSection() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     setErr(null);
-    try {
-      const [a, b, c, d, e] = await Promise.all([
-        apiGet<OhlcvRateResp>("/dashboard/ohlcv-rate?minutes=60"),
-        apiGet<DecisionsResp>("/dashboard/decisions?hours=24"),
-        apiGet<TradesResp>("/dashboard/trades?days=30"),
-        apiGet<CompResp>("/dashboard/trade-comparison?days=30"),
-        apiGet<MlResp>("/dashboard/ml-dataset?limit=100"),
-      ]);
-      setIngest(a); setDecisions(b); setTrades(c); setComp(d); setMl(e);
-    } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
+    const [ra, rb, rc, rd, re] = await Promise.allSettled([
+      apiGet<OhlcvRateResp>("/dashboard/ohlcv-rate?minutes=60"),
+      apiGet<DecisionsResp>("/dashboard/decisions?hours=24"),
+      apiGet<TradesResp>("/dashboard/trades?days=30"),
+      apiGet<CompResp>("/dashboard/trade-comparison?days=30"),
+      apiGet<MlResp>("/dashboard/ml-dataset?limit=100"),
+    ]);
+    if (ra.status === "fulfilled") setIngest(ra.value);
+    if (rb.status === "fulfilled") setDecisions(rb.value);
+    if (rc.status === "fulfilled") setTrades(rc.value);
+    if (rd.status === "fulfilled") setComp(rd.value);
+    if (re.status === "fulfilled") setMl(re.value);
+    const failures = [ra, rb, rc, rd, re].filter((r) => r.status === "rejected");
+    if (failures.length > 0) {
+      const msgs = failures.map((r) => {
+        const err = (r as PromiseRejectedResult).reason;
+        return err instanceof Error ? err.message : String(err);
+      });
+      setErr(msgs.join(" | "));
     }
+    setLoading(false);
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
