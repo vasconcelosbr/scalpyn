@@ -353,29 +353,32 @@ async def _evaluate_async():
                         or (failed_required[0].get("rule") if failed_required and isinstance(failed_required[0], dict) else None)
                     )
                     has_signal = bool(signal_result.get("signal"))
-                    await _safe_record_decision(
-                        db=db,
-                        trace_id=get_trace(),
-                        user_id=str(user.id),
-                        pool_id=pool_id_for_ctx,
-                        symbol=symbol,
-                        market_type="spot",
-                        exchange="gate",
-                        status="APPROVED" if has_signal else "REJECTED",
-                        stage="L3",
-                        reason=None if has_signal else (
-                            signal_result.get("reason") or "signal_rules_failed"
-                        ),
-                        blocking_rule=None if has_signal else blocking_rule_name,
-                        rule_details=signal_result.get("rule_details"),
-                        rules_matched=matched,
-                        rules_failed=failed_required,
-                        rules_skipped=skipped,
-                        score_breakdown={"alpha_score": alpha_score},
-                        indicators_snapshot=indicators,
-                        latency_ms={"l3": eval_latency_ms},
-                    )
                     if not has_signal:
+                        # REJECTED is recorded here (signal stage).
+                        # APPROVED is intentionally NOT recorded yet —
+                        # it must wait until block + risk + tradable +
+                        # L3 gates all pass below, otherwise the audit
+                        # row promises an execution that never happens.
+                        await _safe_record_decision(
+                            db=db,
+                            trace_id=get_trace(),
+                            user_id=str(user.id),
+                            pool_id=pool_id_for_ctx,
+                            symbol=symbol,
+                            market_type="spot",
+                            exchange="gate",
+                            status="REJECTED",
+                            stage="L3",
+                            reason=signal_result.get("reason") or "signal_rules_failed",
+                            blocking_rule=blocking_rule_name,
+                            rule_details=signal_result.get("rule_details"),
+                            rules_matched=matched,
+                            rules_failed=failed_required,
+                            rules_skipped=skipped,
+                            score_breakdown={"alpha_score": alpha_score},
+                            indicators_snapshot=indicators,
+                            latency_ms={"l3": eval_latency_ms},
+                        )
                         continue
 
                     # 2. Check blocks
@@ -464,6 +467,31 @@ async def _evaluate_async():
                             },
                         )
                         continue
+
+                    # APPROVED at L3 — signal + block + risk + is_tradable
+                    # + L3 membership all passed. Score-zero floor: refuse
+                    # to promote a 0-point evaluation to APPROVED even when
+                    # signal flags align (defensive net — there is no
+                    # threshold check on this code path, unlike execute_buy).
+                    if alpha_score > 0:
+                        await _safe_record_decision(
+                            db=db,
+                            trace_id=get_trace(),
+                            user_id=str(user.id),
+                            pool_id=pool_id_for_ctx,
+                            symbol=symbol,
+                            market_type="spot",
+                            exchange="gate",
+                            status="APPROVED",
+                            stage="L3",
+                            rule_details=signal_result.get("rule_details"),
+                            rules_matched=matched,
+                            rules_failed=failed_required,
+                            rules_skipped=skipped,
+                            score_breakdown={"alpha_score": alpha_score},
+                            indicators_snapshot=indicators,
+                            latency_ms={"l3": eval_latency_ms},
+                        )
 
                     signals_found += 1
 

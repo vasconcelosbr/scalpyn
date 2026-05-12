@@ -678,20 +678,28 @@ async def _execute_buy_cycle_async() -> dict:
                     # rules + tradable gate all passed. Audit before
                     # execute_trade so we capture the L3 decision even
                     # if the exchange call later fails.
+                    #
+                    # Score-zero floor: refuse to record APPROVED on a
+                    # 0-point evaluation even when the operator-configured
+                    # threshold allows it through (belt-and-suspenders to
+                    # the threshold guard at line ~567). An APPROVED row
+                    # implies non-zero evidence of a setup; a flat zero
+                    # is by definition no evidence.
                     _latency_l3_ms = round((time.monotonic() - _t_l3_start) * 1000)
-                    await safe_record_decision(
-                        db=db, trace_id=get_trace(),
-                        user_id=str(user_id),
-                        pool_id=str(pool.id) if pool else None,
-                        symbol=symbol, market_type="spot", exchange="gate",
-                        status="APPROVED", stage="L3",
-                        score_breakdown={
-                            "alpha_score": alpha_score,
-                            "threshold": threshold,
-                        },
-                        indicators_snapshot=indicators,
-                        latency_ms={"l3": _latency_l3_ms},
-                    )
+                    if alpha_score > 0:
+                        await safe_record_decision(
+                            db=db, trace_id=get_trace(),
+                            user_id=str(user_id),
+                            pool_id=str(pool.id) if pool else None,
+                            symbol=symbol, market_type="spot", exchange="gate",
+                            status="APPROVED", stage="L3",
+                            score_breakdown={
+                                "alpha_score": alpha_score,
+                                "threshold": threshold,
+                            },
+                            indicators_snapshot=indicators,
+                            latency_ms={"l3": _latency_l3_ms},
+                        )
 
                     # 6f. Execute
                     trade_result = await execution_engine.execute_trade(
