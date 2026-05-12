@@ -28,6 +28,12 @@ from ..core.trace_context import (
     set_ctx,
 )
 from ..services.decision_audit_service import safe_record_decision
+from ..services.shadow_trade_service import (
+    map_capital_reason,
+    map_per_asset_reason,
+    safe_bulk_create_from_user_skip,
+    safe_create_from_symbol_skip,
+)
 from ..tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -250,8 +256,30 @@ async def _execute_buy_cycle_async() -> dict:
                 state           = await capital_mgr.get_state(usdt_balance, db, str(user_id))
                 allowed, reason = capital_mgr.can_open_new_position(state)
 
+                # Shadow Portfolio config (env defaults; ZERO HARDCODE de
+                # valor de negócio). ``sl_pct`` proxy = kill_switch
+                # max_drawdown_from_hwm — o spot engine real NÃO tem
+                # ``stop_loss_pct`` fixo (usa multi-layer sell flow); o
+                # kill switch é o teto de risco mais próximo de um SL.
+                _shadow_user_config = {
+                    "tp_pct": float(se_cfg.selling.take_profit_pct),
+                    "sl_pct": float(se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct),
+                    "timeout_candles": None,  # service usa SHADOW_TIMEOUT_CANDLES
+                }
+
                 if not allowed:
                     logger.info("Buy blocked for user %s — %s", user_id, reason)
+                    # Shadow Portfolio: gate user-level barra TODAS as
+                    # promoções L3 deste ciclo. Fan-out por símbolo via
+                    # query em decisions_log (own-session, fire-and-forget).
+                    try:
+                        await safe_bulk_create_from_user_skip(
+                            user_id=user_id,
+                            skip_reason=map_capital_reason(reason),
+                            user_config=_shadow_user_config,
+                        )
+                    except Exception:
+                        logger.exception("[shadow] user-level skip bookkeeping failed")
                     stats["skipped"] += 1
                     continue
 
@@ -581,6 +609,16 @@ async def _execute_buy_cycle_async() -> dict:
                             blocking_rule="SymbolCooldown",
                             rule_details={"cooldown_seconds": cooldown_s},
                         )
+                        # Shadow Portfolio: cooldown é gate de risco
+                        # (recente buy aconteceu) — registra missed.
+                        try:
+                            await safe_create_from_symbol_skip(
+                                user_id=user_id, symbol=symbol,
+                                skip_reason="COOLDOWN",
+                                user_config=_shadow_user_config,
+                            )
+                        except Exception:
+                            logger.exception("[shadow] cooldown bookkeeping failed")
                         stats["skipped"] += 1
                         continue
 
@@ -631,6 +669,16 @@ async def _execute_buy_cycle_async() -> dict:
                             "Asset capital check failed %s (user %s): %s",
                             symbol, user_id, asset_reason,
                         )
+                        # Shadow Portfolio: per-asset capital gate
+                        # (max_positions_per_asset / max_exposure).
+                        try:
+                            await safe_create_from_symbol_skip(
+                                user_id=user_id, symbol=symbol,
+                                skip_reason=map_per_asset_reason(asset_reason),
+                                user_config=_shadow_user_config,
+                            )
+                        except Exception:
+                            logger.exception("[shadow] per-asset bookkeeping failed")
                         stats["skipped"] += 1
                         continue
 
@@ -671,6 +719,16 @@ async def _execute_buy_cycle_async() -> dict:
                                 "threshold": threshold,
                             },
                         )
+                        # Shadow Portfolio: execução barrada pelo gate
+                        # is_tradable=false. Promoção L3 já existe.
+                        try:
+                            await safe_create_from_symbol_skip(
+                                user_id=user_id, symbol=symbol,
+                                skip_reason="NOT_TRADABLE",
+                                user_config=_shadow_user_config,
+                            )
+                        except Exception:
+                            logger.exception("[shadow] not-tradable bookkeeping failed")
                         stats["skipped"] += 1
                         continue
 
