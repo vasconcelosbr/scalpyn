@@ -87,6 +87,7 @@ celery_app = Celery(
         "app.tasks.trade_monitor",
         "app.tasks.orphan_tx_watchdog",
         "app.tasks.health_checks",
+        "app.tasks.shadow_trade_monitor",
     ],
 )
 
@@ -148,6 +149,12 @@ TASK_ROUTES = {
     "app.tasks.evaluate_signals.evaluate":          {"queue": QUEUE_EXECUTION},
     "app.tasks.execute_buy.execute_buy_cycle":      {"queue": QUEUE_EXECUTION},
     "app.tasks.anti_liq_monitor.monitor":           {"queue": QUEUE_EXECUTION},
+
+    # Shadow Portfolio Fase 3 — beat-driven monitor de shadow trades.
+    # Vive na execution queue: latência baixa preserva o objetivo de
+    # acompanhar as oportunidades barradas perto do contexto financeiro
+    # real, e a carga é leve (batch ≤ SHADOW_MONITOR_BATCH_SIZE).
+    "app.tasks.shadow_trade_monitor.run":           {"queue": QUEUE_EXECUTION},
 }
 
 # Static queue declarations so beat / dispatch never rely on an "implicit"
@@ -286,6 +293,15 @@ TASK_ANNOTATIONS = {
     "app.tasks.execute_buy.execute_buy_cycle":      {**_EXECUTION_GUARDS, "rate_limit": "2/m"},
     # anti_liq force-close: never retry — duplicate close attempts are dangerous.
     "app.tasks.anti_liq_monitor.monitor":           {**_EXECUTION_GUARDS, "max_retries": 0},
+
+    # Shadow Portfolio monitor (Fase 3) — idempotente + beat-driven →
+    # opt-out de acks_late (gotcha #245). rate_limit alinhado com beat
+    # default de 5 min (12/h dá folga pra ad-hoc dispatch manual).
+    "app.tasks.shadow_trade_monitor.run":           {
+        **_EXECUTION_GUARDS,
+        "rate_limit": "12/h",
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
 }
 
 celery_app.conf.update(
@@ -442,6 +458,13 @@ celery_app.conf.beat_schedule = {
     "structural_coverage_health_check": {
         "task": "app.tasks.health_checks.check_structural_coverage",
         "schedule": float(os.environ.get("STRUCTURAL_COVERAGE_CHECK_INTERVAL_S", 1800)),
+    },
+    # Shadow Portfolio monitor (Fase 3) — avança shadow_trades
+    # PENDING/RUNNING candle-a-candle até TP/SL/timeout. Beat default
+    # 5 min (override via SHADOW_MONITOR_INTERVAL_S env).
+    "shadow_trade_monitor": {
+        "task": "app.tasks.shadow_trade_monitor.run",
+        "schedule": float(os.environ.get("SHADOW_MONITOR_INTERVAL_S", 300)),
     },
 }
 

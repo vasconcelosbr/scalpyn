@@ -317,6 +317,122 @@ async def safe_bulk_create_from_user_skip(
     return created_count
 
 
+_INSERT_SIM_SQL = text("""
+    INSERT INTO trade_simulations (
+        id, symbol, timestamp_entry, entry_price,
+        tp_price, sl_price,
+        exit_price, exit_timestamp,
+        result, time_to_result,
+        direction, is_simulated, source,
+        decision_type, decision_id,
+        features_snapshot, config_snapshot,
+        created_at
+    ) VALUES (
+        gen_random_uuid(), :symbol, :timestamp_entry, :entry_price,
+        :tp_price, :sl_price,
+        :exit_price, :exit_timestamp,
+        :result, :time_to_result,
+        :direction, TRUE, :source,
+        :decision_type, :decision_id,
+        CAST(:features_snapshot AS JSONB),
+        CAST(:config_snapshot AS JSONB),
+        NOW()
+    )
+    ON CONFLICT (decision_id) WHERE source = 'SHADOW' DO NOTHING
+    RETURNING id
+""")
+
+
+async def record_as_simulation(
+    db: AsyncSession,
+    shadow: ShadowTrade,
+) -> Optional[UUID]:
+    """Replica um ``ShadowTrade`` COMPLETED em ``trade_simulations``.
+
+    Idempotente via WHERE NOT EXISTS (decision_id, source='SHADOW') —
+    como ``trade_simulations`` não tem UNIQUE em ``decision_id`` (FK
+    nullable + ondelete=SET NULL), usamos anti-join atômico no INSERT
+    pra evitar race entre execuções concorrentes do monitor.
+
+    Retorna o ``id`` da simulação criada, ou ``None`` se já existia.
+
+    Mapeamento:
+      * outcome 'TP_HIT' → result='WIN'
+      * outcome 'SL_HIT' → result='LOSS'
+      * outcome 'TIMEOUT' → result='TIMEOUT'
+      * direction sempre 'SPOT' (shadow é spot-only)
+      * decision_type sempre 'ALLOW' (shadow só nasce de promoção L3)
+      * source = 'SHADOW'
+    """
+    outcome = (shadow.outcome or "").upper()
+    if outcome == "TP_HIT":
+        result = "WIN"
+    elif outcome == "SL_HIT":
+        result = "LOSS"
+    elif outcome == "TIMEOUT":
+        result = "TIMEOUT"
+    else:
+        logger.warning(
+            "[shadow] record_as_simulation skipped — unknown outcome=%r for shadow_id=%s",
+            shadow.outcome, shadow.id,
+        )
+        return None
+
+    if (
+        shadow.entry_price is None
+        or shadow.tp_price is None
+        or shadow.sl_price is None
+        or shadow.exit_price is None
+        or shadow.entry_timestamp is None
+        or shadow.exit_timestamp is None
+    ):
+        logger.warning(
+            "[shadow] record_as_simulation skipped — missing price/timestamp "
+            "for shadow_id=%s (entry=%s tp=%s sl=%s exit=%s)",
+            shadow.id, shadow.entry_price, shadow.tp_price,
+            shadow.sl_price, shadow.exit_price,
+        )
+        return None
+
+    import json
+
+    res = await db.execute(
+        _INSERT_SIM_SQL,
+        {
+            "symbol": shadow.symbol,
+            "timestamp_entry": shadow.entry_timestamp,
+            "entry_price": shadow.entry_price,
+            "tp_price": shadow.tp_price,
+            "sl_price": shadow.sl_price,
+            "exit_price": shadow.exit_price,
+            "exit_timestamp": shadow.exit_timestamp,
+            "result": result,
+            "time_to_result": shadow.holding_seconds,
+            "direction": "SPOT",
+            "source": "SHADOW",
+            "decision_type": "ALLOW",
+            "decision_id": shadow.decision_id,
+            "features_snapshot": json.dumps(shadow.features_snapshot or {}, default=str),
+            "config_snapshot": json.dumps(shadow.config_snapshot or {}, default=str),
+        },
+    )
+    row = res.fetchone()
+    if row is None:
+        logger.info(
+            "[shadow] simulation already exists for decision_id=%s source=SHADOW "
+            "(shadow_id=%s) — dedup hit",
+            shadow.decision_id, shadow.id,
+        )
+        return None
+    sim_id = row[0]
+    logger.info(
+        "[shadow] simulation recorded id=%s shadow_id=%s decision_id=%s "
+        "result=%s symbol=%s",
+        sim_id, shadow.id, shadow.decision_id, result, shadow.symbol,
+    )
+    return sim_id
+
+
 async def get_pending(
     db: AsyncSession,
     user_id,
