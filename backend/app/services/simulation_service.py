@@ -15,6 +15,31 @@ from .simulation_engine import SimulationEngine
 logger = logging.getLogger(__name__)
 
 
+def _flatten_indicators_for_ml(metrics: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Achata ``metrics["indicators_snapshot"]`` em ``{key: scalar}``.
+
+    Contrato compartilhado com ``ShadowTradeService._build_features_snapshot``
+    (Task #290). ``decisions_log.metrics["indicators_snapshot"]`` é gravado por
+    ``indicators_provider.build_indicators_snapshot`` no formato aninhado
+    ``{key: {"value": …, "source_group": …, "ts": …, "stale": …}}`` —
+    ótimo para "decision vs DB" mas incompatível com
+    ``DatasetBuilder.extract_features`` (que chama ``float(value)``).
+    Flatten aqui mantém o dataset ML consistente.
+    """
+    if not isinstance(metrics, dict):
+        return {}
+    snap = metrics.get("indicators_snapshot") or {}
+    if not isinstance(snap, dict):
+        return {}
+    flat: Dict[str, Any] = {}
+    for key, entry in snap.items():
+        if isinstance(entry, dict) and "value" in entry:
+            flat[key] = entry.get("value")
+        else:
+            flat[key] = entry
+    return flat
+
+
 class SimulationService:
     """Service for orchestrating trade simulations."""
 
@@ -228,7 +253,16 @@ class SimulationService:
                 "direction": direction,
                 "decision_type": decision.decision,
                 "decision_id": decision.id,
-                "features_snapshot": decision.metrics,  # Store decision metrics as features
+                # Achata `decision.metrics["indicators_snapshot"]` para
+                # `{key: scalar}` — mesmo contrato do Shadow Portfolio
+                # (Task #290, ver replit.md "Shadow Portfolio → ML
+                # feature flatten"). `decision.metrics` cru contém
+                # estrutura aninhada `{key: {value, source_group, …}}`
+                # que quebra `DatasetBuilder.extract_features` com
+                # `float(dict)` TypeError. Flatten aqui mantém o
+                # dataset ML consistente entre o path normal de
+                # `simulate_decision` e o path Shadow.
+                "features_snapshot": _flatten_indicators_for_ml(decision.metrics),
                 "config_snapshot": config,
             }
 

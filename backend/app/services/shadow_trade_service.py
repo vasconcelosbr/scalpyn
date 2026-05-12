@@ -93,17 +93,37 @@ async def _resolve_decision(
 
 
 def _build_features_snapshot(decision: DecisionLog) -> Dict[str, Any]:
-    """Copia indicators_snapshot de decisions_log.metrics.
+    """Constrói features_snapshot FLAT a partir de ``decision.metrics``.
 
-    Copia tudo (sem filtrar por keys do DatasetBuilder) para ser
-    forward-compatible: se a Fase 6 adicionar novas features ao
-    DatasetBuilder, elas já vão estar presentes nos shadow trades
-    históricos. ``DatasetBuilder.extract_features`` ignora keys
-    desconhecidas via ``.get()``.
+    Crítico para Fase 6 (ML): ``DatasetBuilder.extract_features`` lê
+    ``features_snapshot.get(feat)`` esperando escalares (float/bool/None)
+    e chama ``float(value)`` se não for None. Mas
+    ``decisions_log.metrics["indicators_snapshot"]`` (escrito por
+    ``indicators_provider.build_indicators_snapshot``) tem forma
+    ``{key: {"value": …, "source_group": …, "ts": …, "stale": …}}``.
+    Copiar essa estrutura crua quebra o DatasetBuilder
+    (``float({"value": …})`` → TypeError) e contamina o dataset com
+    NaNs/zeros mascarados.
+
+    Aqui achatamos para ``{key: scalar}`` extraindo apenas ``value``.
+    Forward-compatible: qualquer key extra (além das ALL_BASE_FEATURES
+    do builder) é preservada — ``.get()`` simplesmente ignora as
+    desconhecidas. Keys ausentes (ex.: ``ema9``, ``volume_24h_usdt``)
+    viram None no extract e são preenchidas com 0.0 pelo
+    ``prepare_dataset.fillna``.
     """
     metrics = decision.metrics or {}
     snap = metrics.get("indicators_snapshot") or {}
-    return dict(snap) if isinstance(snap, dict) else {}
+    if not isinstance(snap, dict):
+        return {}
+    flat: Dict[str, Any] = {}
+    for key, entry in snap.items():
+        if isinstance(entry, dict) and "value" in entry:
+            flat[key] = entry.get("value")
+        else:
+            # Defensive: se um caller futuro persistir flat direto, mantém.
+            flat[key] = entry
+    return flat
 
 
 # ── core: criação a partir de uma DecisionLog ────────────────────────────────
