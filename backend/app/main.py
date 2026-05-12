@@ -433,6 +433,11 @@ app.include_router(dashboard_api.router)
 from .api import performance as performance_api  # noqa: E402
 app.include_router(performance_api.router)
 
+# Shadow Portfolio (Task #289) — read-only endpoints sobre `shadow_trades`
+# para a aba Shadow Trade do frontend (lista paginada / summary / detail).
+from .api import shadow_trades as shadow_trades_api  # noqa: E402
+app.include_router(shadow_trades_api.router)
+
 # WebSocket
 app.include_router(websocket.router)
 
