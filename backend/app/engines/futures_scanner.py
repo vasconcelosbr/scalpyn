@@ -259,8 +259,9 @@ class FuturesScanner:
 
         # Fresh trace per evaluated contract so this scoring pass + any
         # downstream ``_try_enter`` audit rows share one correlation id.
-        new_trace()
+        tid = new_trace()
         set_ctx(TraceContext(
+            trace_id=tid,
             user_id=str(self.user_id), symbol=contract,
             pool_id=None, market_type="futures", exchange="gate",
         ))

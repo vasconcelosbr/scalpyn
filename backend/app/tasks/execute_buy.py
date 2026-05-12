@@ -348,8 +348,9 @@ async def _execute_buy_cycle_async() -> dict:
                         # symbol so the audit row + structured log carry
                         # the same trace_id (the main eval loop will
                         # rebind a fresh trace per surviving candidate).
-                        new_trace()
+                        tid = new_trace()
                         set_ctx(TraceContext(
+                            trace_id=tid,
                             user_id=str(user_id), symbol=_sym,
                             pool_id=str(pool.id) if pool else None,
                             market_type="spot", exchange="gate",
@@ -496,8 +497,9 @@ async def _execute_buy_cycle_async() -> dict:
                     if _r.symbol in l3_symbols:
                         _kept_candidates.append(_r)
                         continue
-                    new_trace()
+                    tid = new_trace()
                     set_ctx(TraceContext(
+                        trace_id=tid,
                         user_id=str(user_id), symbol=_r.symbol,
                         pool_id=str(pool.id) if pool else None,
                         market_type="spot", exchange="gate",
@@ -528,8 +530,9 @@ async def _execute_buy_cycle_async() -> dict:
                     # Fresh trace per evaluated symbol so the audit
                     # rows + structured logs of this iteration share
                     # the same correlation id end-to-end.
-                    new_trace()
+                    tid = new_trace()
                     set_ctx(TraceContext(
+                        trace_id=tid,
                         user_id=str(user_id), symbol=row.symbol,
                         pool_id=str(pool.id) if pool else None,
                         market_type="spot", exchange="gate",
