@@ -1024,7 +1024,14 @@ def _evaluate_l3_decisions(
             "reasons": _decision_reason_map(processed, has_signal_conditions),
             "metrics": _decision_metrics(asset, processed),
             "latency_ms": latency_ms,
-            "direction": asset.get("futures_direction"),
+            # Defesa em profundidade (Task #292): se _apply_robust_authoritative_scoring
+            # não rodou (fallback path) ou um caller futuro montar dict sem
+            # passar pelo setter, ainda gravamos valor canônico em vez de NULL.
+            # Pool atual é spot-only; ``is_futures`` flag determina o default.
+            "direction": (
+                asset.get("futures_direction")
+                or ("NEUTRAL" if asset.get("is_futures") else "SPOT")
+            ),
             "created_at": datetime.now(timezone.utc),
             "_processed": processed,
             "_asset": asset,
@@ -1291,6 +1298,11 @@ async def _apply_robust_authoritative_scoring(
             if isinstance(indicators, dict) else None
         )
         asset["engine_tag"] = "robust"
+        # Task #292: propagar is_futures (parâmetro da função) para o asset
+        # de modo que o fallback em ``_evaluate_l3_decisions`` consiga
+        # decidir entre 'SPOT' e 'NEUTRAL' mesmo quando esta função não
+        # roda até o fim (fallback path, exceções, etc).
+        asset["is_futures"] = bool(is_futures)
         counters["bucketed"] += 1
 
         envelopes = None
@@ -1397,6 +1409,14 @@ async def _apply_robust_authoritative_scoring(
             asset.setdefault("block_both", False)
             asset.setdefault("entry_long_blocked", False)
             asset.setdefault("entry_short_blocked", False)
+        else:
+            # SPOT path (Task #292, Bug B fix): spot é long-only por
+            # natureza — qualquer ALLOW spot é semanticamente uma
+            # "compra". Setar 'SPOT' aqui garante que
+            # ``decisions_log.direction`` seja populado (antes ficava
+            # NULL no path SPOT, o que travava o gate Shadow Portfolio
+            # que filtra por direction IN ('SPOT','LONG')).
+            asset["futures_direction"] = "SPOT"
         asset["_score"] = new_score
         asset["score"] = new_score
         asset["alpha_score"] = new_score

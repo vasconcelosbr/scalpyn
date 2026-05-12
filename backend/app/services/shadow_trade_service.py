@@ -73,8 +73,20 @@ async def _next_1m_open(
 async def _resolve_decision(
     db: AsyncSession, user_id, symbol: str, lookback_minutes: int
 ) -> Optional[DecisionLog]:
-    """Mais recente promoção L3 (decision='ALLOW' AND direction='up')
-    para (user_id, symbol) dentro da janela de lookback."""
+    """Mais recente promoção L3 spot (decision='ALLOW' AND direction='SPOT')
+    para (user_id, symbol) dentro da janela de lookback.
+
+    Vocabulário canônico (Task #292): ``decisions_log.direction`` usa
+    ``'LONG' | 'SHORT' | 'NEUTRAL' | 'SPOT'`` (uppercase). Shadow é
+    **spot-only** hoje (capital simulado U$1000 USDT, sem leverage,
+    long-only) — por isso filtramos APENAS por ``'SPOT'``, NÃO por
+    ``'LONG'``. Aceitar ``'LONG'`` aqui contaminaria shadow_trades com
+    decisões futures cuja semântica de TP/SL/timeout é diferente.
+
+    Quando o Shadow para futures for habilitado (follow-up), criar um
+    helper separado ``_resolve_futures_decision`` ou expandir o filtro
+    com guard explícito de ``market_mode``.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
     q = (
         select(DecisionLog)
@@ -82,7 +94,7 @@ async def _resolve_decision(
             DecisionLog.user_id == user_id,
             DecisionLog.symbol == symbol,
             DecisionLog.decision == "ALLOW",
-            DecisionLog.direction == "up",
+            DecisionLog.direction == "SPOT",
             DecisionLog.created_at >= cutoff,
         )
         .order_by(DecisionLog.created_at.desc())
@@ -291,7 +303,7 @@ async def safe_bulk_create_from_user_skip(
                           FROM decisions_log d
                          WHERE d.user_id = :uid
                            AND d.decision = 'ALLOW'
-                           AND d.direction = 'up'
+                           AND d.direction = 'SPOT'
                            AND d.created_at >= :cutoff
                            AND NOT EXISTS (
                                SELECT 1 FROM shadow_trades s

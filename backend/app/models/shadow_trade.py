@@ -1,10 +1,15 @@
 """Shadow Portfolio — registro de promoções L3 que não viraram trade real.
 
 Uma linha em ``shadow_trades`` representa uma promoção
-``decisions_log.decision='ALLOW' AND decisions_log.direction='up'`` que
-``execute_buy.py`` barrou por gate de capital/risco e que o sistema
+``decisions_log.decision='ALLOW' AND decisions_log.direction='SPOT'``
+que ``execute_buy.py`` barrou por gate de capital/risco e que o sistema
 acompanha como trade simulado de U$1000 USDT (configurável via
 ``SHADOW_TRADE_AMOUNT_USDT``) até atingir TP, SL ou timeout.
+
+Vocabulário canônico (Task #292): ``decisions_log.direction`` usa
+``'LONG' | 'SHORT' | 'NEUTRAL' | 'SPOT'`` (uppercase). Shadow é
+**spot-only** hoje (sem leverage, long-only) — só promove ``'SPOT'``.
+Habilitar Shadow para futures requer helper separado.
 
 Os dados desta tabela NUNCA contaminam P&L real, win rate real ou
 capital em uso. Eventualmente são replicados em ``trade_simulations``
