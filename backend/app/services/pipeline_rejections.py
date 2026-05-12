@@ -596,26 +596,12 @@ def _build_asset_evaluation_trace(
     for index, block in enumerate(block_rules):
         block_trace = _normalized_trace_item(_evaluate_block_rule(rule_engine, asset, block))
         trace.append(block_trace)
-        if block_trace["status"] == "FAIL":
+        if block_trace["status"] == "FAIL" and failed_trace is None:
+            # Capture rejection attribution but DO NOT short-circuit the
+            # remaining blocks/filters — every entry keeps evaluating so
+            # the trace shows real OK/TRIPPED/PASS/FAIL with the real
+            # current_value (no "PULADO" labels anywhere).
             failed_trace = block_trace
-            for remaining_block in block_rules[index + 1:]:
-                trace.append(
-                    _skipped_block_rule(remaining_block, reason="cascade_short_circuit")
-                )
-            # Filters are evaluated normally even after a block trips so the
-            # operator sees the real PASS/FAIL/SEM-DADOS status of every
-            # filter (no "PULADO" labels). The asset stays rejected by the
-            # tripped block — `failed_trace` already captured that — so the
-            # extra filter evaluations are diagnostic only.
-            for condition in filters:
-                trace.append(
-                    _normalized_trace_item(_evaluate_filter(rule_engine, asset, condition))
-                )
-            for condition in entry_triggers:
-                trace.append(_normalized_trace_item(_evaluate_entry_trigger(rule_engine, asset, condition)))
-            for condition in signal_conditions:
-                trace.append(_normalized_trace_item(_evaluate_signal_condition(rule_engine, asset, condition)))
-            return trace, failed_trace
 
     filter_results: List[Dict[str, Any]] = []
     for index, condition in enumerate(filters):

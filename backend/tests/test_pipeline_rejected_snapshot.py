@@ -138,10 +138,11 @@ def test_pool_stage_rejections_are_labeled_as_pool():
 
 
 def test_cascade_skipped_blocks_carry_short_circuit_reason():
-    """When the first block fails the asset is rejected immediately; the
-    remaining blocks/filters must be marked SKIPPED with
-    `reason="cascade_short_circuit"` so the frontend can label them
-    'PULADO' instead of the misleading 'SEM DADOS / aguardando coleta'.
+    """No more cascade short-circuit anywhere: every block and filter
+    keeps evaluating with its real status/current_value, even after an
+    earlier block has tripped. The asset is still rejected by the first
+    failing block (`failed_trace`), but the trace is fully diagnostic —
+    no 'PULADO' labels.
     """
     profile_config = {
         "filters": {
@@ -193,18 +194,22 @@ def test_cascade_skipped_blocks_carry_short_circuit_reason():
     trace = rejected[0]["evaluation_trace"]
 
     by_indicator = {item["indicator"]: item for item in trace}
+    # First block tripped (the rejection cause).
     assert by_indicator["Taker Ratio"]["status"] == "FAIL"
 
-    # Cascade-skipped blocks carry the new reason.
+    # Remaining blocks evaluate normally — no PULADO. Spike (volume_spike
+    # 0.5 < 1.2) → block trips; BB Width (bb_width 0.04 < 0.01 is False)
+    # → block does NOT trip.
     spike = by_indicator["Spike"]
     bbw = by_indicator["BB Width"]
-    assert spike["status"] == "SKIPPED"
-    assert spike["reason"] == "cascade_short_circuit"
-    assert bbw["status"] == "SKIPPED"
-    assert bbw["reason"] == "cascade_short_circuit"
+    assert spike["status"] == "FAIL"
+    assert spike.get("reason") in (None, "")
+    assert spike["current_value"] == 0.5
+    assert bbw["status"] == "PASS"
+    assert bbw.get("reason") in (None, "")
+    assert bbw["current_value"] == 0.04
 
-    # Filters are evaluated normally even after a block trips so the
-    # operator sees the real PASS/FAIL status (no "PULADO" filters).
+    # Filter is evaluated normally too.
     adx = by_indicator["ADX"]
     assert adx["status"] == "PASS"
     assert adx.get("reason") in (None, "")
@@ -391,10 +396,13 @@ def test_recompute_rejection_trace_uses_current_indicators_for_cascade_label():
 
     by_indicator = {item["indicator"]: item for item in trace}
     assert by_indicator["Taker Ratio"]["status"] == "FAIL"
+    # Cascade-skipped path is gone: Spike block now evaluates normally
+    # (volume_spike 0.5 < 1.2 → trips) with real current_value.
     spike = by_indicator["Spike"]
-    assert spike["status"] == "SKIPPED"
-    assert spike["reason"] == "cascade_short_circuit"
-    # Filter is evaluated normally even when a block tripped (no "PULADO").
+    assert spike["status"] == "FAIL"
+    assert spike.get("reason") in (None, "")
+    assert spike["current_value"] == 0.5
+    # Filter also evaluates normally.
     adx = by_indicator["ADX"]
     assert adx["status"] == "PASS"
     assert adx.get("reason") in (None, "")
@@ -911,11 +919,13 @@ def test_block_rule_outcome_matches_screenshot_scenario():
     assert fired["condition_matched"] is True
     assert fired["status"] == "FAIL"  # legacy inverted encoding
 
-    # Anything after the firing block is cascade-skipped (short-circuit).
-    cascaded = by_indicator["RSI > 80"]
-    assert cascaded["outcome"] == "SKIPPED"
-    assert cascaded["condition_matched"] is None
-    assert cascaded["reason"] == "cascade_short_circuit"
+    # No more cascade short-circuit: the block AFTER the firing one keeps
+    # evaluating (rsi 55 > 80 is False → outcome OK / not tripped) so the
+    # operator sees its real value, not "PULADO".
+    after_firing = by_indicator["RSI > 80"]
+    assert after_firing["outcome"] == "OK"
+    assert after_firing["condition_matched"] is False
+    assert after_firing.get("reason") in (None, "")
 
 
 def test_block_rule_condition_matched_mirrors_raw_math_for_or_logic():
