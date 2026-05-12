@@ -42,6 +42,37 @@ _DEFAULT_STALENESS_MINUTES = 30
 _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY = False
 _PIPELINE_EXECUTION_TRACKING_SCHEMA_LOCK = asyncio.Lock()
 
+# ── L3 Live Order Flow injection ─────────────────────────────────────────────
+# Antes da regra de entrada L3 ser avaliada, sobrescrevemos os indicadores de
+# fluxo (``taker_*``, ``buy_pressure``, ``volume_delta``) com o snapshot ao
+# vivo do buffer Redis ``trades_buffer:{market_type}:{symbol}`` populado pelo
+# WS handler. Os valores em ``indicators`` (DB) podem estar até 5 min velhos
+# (frequência do ``compute_5m``) — para uma decisão de execução o frescor
+# importa.
+#
+# Mapeamento { chave em ``asset["indicators"]`` : chave no retorno do
+# ``order_flow_service.get_order_flow_data`` }. Use o mesmo nome em ambos os
+# lados quando o contrato bate (caso atual).
+_LIVE_ORDER_FLOW_FIELDS = {
+    "taker_ratio":       "taker_ratio",
+    "buy_pressure":      "buy_pressure",
+    "taker_buy_volume":  "taker_buy_volume",
+    "taker_sell_volume": "taker_sell_volume",
+    "volume_delta":      "volume_delta",
+}
+# Janela do agregado live em segundos. Tempo curto → mais sensível ao
+# regime corrente; tempo longo → mais robusto a ruído. Configurável via
+# ``ConfigProfile(config_type="pipeline")["l3_order_flow_window_seconds"]``.
+_ORDER_FLOW_WINDOW_CONFIG_KEY = "l3_order_flow_window_seconds"
+_ORDER_FLOW_WINDOW_DEFAULT = 60
+# Idade máxima permitida (segundos) para o trade mais recente do snapshot
+# live. Acima disso, a decisão é BLOQUEADA (skipped no ciclo, re-tentada
+# no próximo). Defesa explícita contra "decidir com dado morto" quando
+# o WS leader está com lag ou caiu. Configurável via
+# ``ConfigProfile(config_type="pipeline")["l3_order_flow_max_age_seconds"]``.
+_ORDER_FLOW_MAX_AGE_CONFIG_KEY = "l3_order_flow_max_age_seconds"
+_ORDER_FLOW_MAX_AGE_DEFAULT = 15
+
 # Strict metadata fields — NULL means FAIL (not skip) in profile filters.
 # Used by diagnostic logging in _apply_level_filter.
 _DIAG_STRICT_META = STRICT_META_FIELDS
@@ -973,12 +1004,118 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
     return _jsonable(metrics)
 
 
-def _evaluate_l3_decisions(
+async def _inject_live_order_flow(
+    *,
+    symbol: str,
+    indicators: dict,
+    db,
+    user_id,
+    pool_id,
+) -> tuple[dict, bool]:
+    """Sobrescrever indicadores de fluxo do ``indicators`` (DB) com o
+    snapshot ao vivo do buffer Redis antes da regra L3 avaliar.
+
+    Retorna ``(updated_indicators, ok)``:
+      * ``updated_indicators`` — cópia rasa de ``indicators`` com as
+        chaves de :data:`_LIVE_ORDER_FLOW_FIELDS` substituídas pelos
+        valores do live, quando o respectivo valor live é não-nulo.
+        Quando o live é indisponível (buffer + REST falham), retorna o
+        ``indicators`` original (fail-soft: nunca pior que o estado
+        atual baseado em DB).
+      * ``ok`` — ``True`` quando a decisão pode prosseguir; ``False``
+        APENAS quando o snapshot live foi obtido mas o trade mais
+        recente excede ``l3_order_flow_max_age_seconds``. Caller deve
+        usar ``continue`` (skip do ciclo, re-tentada no próximo).
+
+    Falhas (config_service indisponível, exceção ao ler Redis,
+    get_order_flow_data raise) NUNCA bloqueiam a decisão — log
+    estruturado + fallback ao DB. O bloqueio por idade é a ÚNICA
+    decisão "fail-closed" desta função.
+
+    Configuração (Zero Hardcode):
+      * ``l3_order_flow_window_seconds`` (default :data:`_ORDER_FLOW_WINDOW_DEFAULT`)
+      * ``l3_order_flow_max_age_seconds`` (default :data:`_ORDER_FLOW_MAX_AGE_DEFAULT`,
+        valor ``<= 0`` desabilita o gate de idade)
+
+    Lidos via ``ConfigProfile(config_type="pipeline")``; pool-scoped
+    quando ``pool_id`` é não-nulo, senão global por usuário.
+    """
+    from ..services.config_service import config_service
+    from ..services.order_flow_service import get_order_flow_data
+
+    # ── Config (best-effort) ─────────────────────────────────────────────
+    window = _ORDER_FLOW_WINDOW_DEFAULT
+    max_age = _ORDER_FLOW_MAX_AGE_DEFAULT
+    try:
+        cfg = await config_service.get_config(
+            db, "pipeline", user_id, pool_id=pool_id,
+        )
+        if isinstance(cfg, dict):
+            window = int(cfg.get(_ORDER_FLOW_WINDOW_CONFIG_KEY, window))
+            max_age = int(cfg.get(_ORDER_FLOW_MAX_AGE_CONFIG_KEY, max_age))
+    except Exception as exc:
+        logger.warning(
+            "[L3][%s] live_order_flow config read failed (%s) — using defaults",
+            symbol, exc,
+        )
+
+    # ── Live snapshot ────────────────────────────────────────────────────
+    try:
+        live = await get_order_flow_data(symbol=symbol, window_seconds=window)
+    except Exception as exc:
+        logger.error(
+            "[L3][%s] live_order_flow fetch failed (%r) — falling back to DB",
+            symbol, exc,
+        )
+        return indicators, True
+
+    if not isinstance(live, dict):
+        logger.warning("[L3][%s] live_order_flow returned non-dict — fallback", symbol)
+        return indicators, True
+
+    # ── Stale guard ──────────────────────────────────────────────────────
+    age = live.get("data_age_seconds")
+    if age is not None and max_age > 0 and age > max_age:
+        logger.warning(
+            "[L3][%s] live_order_flow STALE: age=%.1fs > max=%ds — blocking decision this cycle",
+            symbol, age, max_age,
+        )
+        return indicators, False
+
+    # ── Merge (live wins quando não-nulo) ─────────────────────────────────
+    updated = dict(indicators) if isinstance(indicators, dict) else {}
+    overridden: list[str] = []
+    for asset_key, live_key in _LIVE_ORDER_FLOW_FIELDS.items():
+        live_val = live.get(live_key)
+        if live_val is not None:
+            updated[asset_key] = live_val
+            overridden.append(asset_key)
+
+    logger.debug(
+        "[L3][%s] live_order_flow injected age=%s window=%ds source=%s overrode=%s",
+        symbol, age, window, live.get("taker_source"), overridden,
+    )
+    return updated, True
+
+
+async def _evaluate_l3_decisions(
     assets: list,
     profile_config: Optional[dict],
     strategy_level: str,
     score_config: Optional[dict] = None,
+    *,
+    db=None,
+    user_id=None,
+    pool_id=None,
 ) -> list[dict]:
+    """Avaliar candidatos L3 (rules + entry triggers) e produzir decisions.
+
+    Quando ``db``, ``user_id`` recebidos: para cada asset, sobrescrevemos
+    indicadores de fluxo (taker_*, buy_pressure, volume_delta) com o
+    snapshot live do Redis ANTES de avaliar a regra (Task: live order
+    flow injection). Sem esses parâmetros (call sites legados), o
+    comportamento é o original (lê só do DB).
+    """
     from ..services.profile_engine import ProfileEngine
 
     engine = ProfileEngine(profile_config)
@@ -995,8 +1132,36 @@ def _evaluate_l3_decisions(
     has_signal_conditions = bool(sig_conditions)
     timeframe = (profile_config or {}).get("default_timeframe", "5m")
 
+    inject_live = db is not None and user_id is not None
     decisions: list[dict] = []
     for asset in assets:
+        # ── L3 LIVE ORDER FLOW INJECTION ─────────────────────────────────
+        # Sobrescreve indicators de fluxo com snapshot live do Redis
+        # antes da regra avaliar. Stale → continue (skip do ciclo).
+        if inject_live:
+            symbol = asset.get("symbol")
+            current_indicators = asset.get("indicators") or {}
+            updated_indicators, order_flow_ok = await _inject_live_order_flow(
+                symbol=symbol,
+                indicators=current_indicators,
+                db=db,
+                user_id=user_id,
+                pool_id=pool_id,
+            )
+            if not order_flow_ok:
+                logger.info(
+                    "[L3][%s] skipped this cycle (stale order flow) — will retry next tick",
+                    symbol,
+                )
+                continue
+            # Re-flatten escalares no top-level do asset (mesmo padrão
+            # de ``_build_pipeline_asset``) para que ``ProfileEngine``
+            # leia as overrides via ``asset[key]`` quando aplicável.
+            asset["indicators"] = updated_indicators
+            for k, v in updated_indicators.items():
+                if isinstance(v, (int, float, bool, str)) and k in _LIVE_ORDER_FLOW_FIELDS:
+                    asset[k] = v
+
         started_at = datetime.now(timezone.utc)
         processed = engine.evaluate_asset(asset)
         latency_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
@@ -2294,11 +2459,18 @@ async def _run_pipeline_scan():
                         rejected_rows,
                         execution_id=execution_id,
                     )
-                    decisions = _evaluate_l3_decisions(
+                    decisions = await _evaluate_l3_decisions(
                         profile_passed,
                         profile_config,
                         level,
                         score_config=score_config,
+                        # Live order flow injection: pré-fetch do snapshot
+                        # WS/Redis por candidato antes da regra L3 avaliar.
+                        # Sem esses kwargs o helper degrada para o
+                        # comportamento legado (lê só do DB).
+                        db=db,
+                        user_id=wl.user_id,
+                        pool_id=wl.source_pool_id,
                     )
                     signals = [
                         {

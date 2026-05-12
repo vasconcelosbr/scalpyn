@@ -111,6 +111,12 @@ _ORDER_FLOW_AUDIT_KEYS: frozenset = frozenset({
     "coverage_pct",
     "partial_window",
     "recent_handover_age_s",
+    # ``data_age_seconds`` (post-Task #292+L3-live order flow injection):
+    # idade do trade mais recente do snapshot live, usado pelo gate
+    # stale em ``pipeline_scan._inject_live_order_flow``. Diagnóstico
+    # de freshness, não indicador — não persiste, não envelopa, não
+    # entra no scoring.
+    "data_age_seconds",
 })
 
 

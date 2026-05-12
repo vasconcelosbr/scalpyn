@@ -144,7 +144,12 @@ def envelope_indicators(
                     # not be wrapped in IndicatorEnvelope or scored.
                     "n_trades", "oldest_trade_ms", "newest_trade_ms",
                     "coverage_pct", "partial_window",
-                    "recent_handover_age_s"):
+                    "recent_handover_age_s",
+                    # ``data_age_seconds`` (post-Task #292+L3-live):
+                    # diagnóstico de freshness para o consumidor L3
+                    # (gate stale em pipeline_scan). Não é indicador
+                    # de mercado — não deve virar IndicatorEnvelope.
+                    "data_age_seconds"):
             continue
         if name.endswith("_timestamp"):
             continue

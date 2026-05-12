@@ -1,0 +1,131 @@
+Leia os arquivos completos antes de escrever qualquer linha:
+  - backend/app/tasks/pipeline_scan.py
+  - backend/app/services/order_flow_service.py
+
+PROBLEMA:
+A L3 no pipeline_scan avalia taker_ratio, buy_pressure, taker_buy_volume,
+taker_sell_volume e volume_delta lendo da tabela de indicadores — valor
+commitado pelo compute_5m há até 5 minutos. O dado fresco já existe no
+Redis buffer (sorted set trades_buffer:spot:{symbol}, TTL 360s), alimentado
+continuamente pelo WebSocket. A L3 não lê esse buffer.
+
+OBJETIVO:
+Modificar pipeline_scan.py e order_flow_service.py de forma estritamente
+aditiva para que a L3 consuma order flow ao vivo do Redis antes de avaliar
+regras de entrada.
+
+PASSO 1 — Identifique no pipeline_scan.py:
+  a) O ponto exato onde candidatos L3 têm regras avaliadas
+  b) Como o dict de indicators é construído para cada candidato
+  c) Quais imports já existem (order_flow_service, config_service, logger)
+  d) Como pool_id e user_id chegam ao contexto
+
+PASSO 2 — Identifique no order_flow_service.py:
+  a) Assinatura exata de get_order_flow_data e seus parâmetros
+  b) Campos que o retorno já contém
+  c) A chave Redis do buffer e se o score é em segundos ou milissegundos
+
+PASSO 3 — Aplique em order_flow_service.py:
+Adicionar campo data_age_seconds ao retorno de get_order_flow_data().
+Após montar o resultado, antes do return:
+
+  import time as _time
+  redis_key = f"trades_buffer:spot:{symbol}"  # ajustar se diferente
+  latest = await self.redis.zrange(redis_key, -1, -1, withscores=True)
+  if latest:
+      _, ts = latest[0]
+      if ts > 1_000_000_000_000:  # ms → s
+          ts /= 1000
+      result["data_age_seconds"] = round(_time.time() - ts, 1)
+  else:
+      result["data_age_seconds"] = None
+
+PASSO 4 — Aplique em pipeline_scan.py:
+
+4a. Adicionar constantes junto das existentes no topo do arquivo:
+
+  _LIVE_ORDER_FLOW_FIELDS = {
+      "taker_ratio":       "taker_ratio",
+      "buy_pressure":      "buy_pressure",
+      "taker_buy_volume":  "taker_buy_volume",
+      "taker_sell_volume": "taker_sell_volume",
+      "volume_delta":      "volume_delta",
+  }
+  _ORDER_FLOW_WINDOW_CONFIG_KEY  = "l3_order_flow_window_seconds"
+  _ORDER_FLOW_WINDOW_DEFAULT     = 60
+  _ORDER_FLOW_MAX_AGE_CONFIG_KEY = "l3_order_flow_max_age_seconds"
+  _ORDER_FLOW_MAX_AGE_DEFAULT    = 15
+
+4b. Adicionar função antes de _scan_async (ou equivalente):
+
+  async def _inject_live_order_flow(
+      symbol, indicators, pool_id, user_id,
+      config_service, order_flow_service, logger,
+  ):
+      try:
+          cfg = await config_service.get_config(
+              user_id=user_id, pool_id=pool_id, config_type="pipeline"
+          )
+          window  = int(cfg.get(_ORDER_FLOW_WINDOW_CONFIG_KEY,  _ORDER_FLOW_WINDOW_DEFAULT))
+          max_age = int(cfg.get(_ORDER_FLOW_MAX_AGE_CONFIG_KEY, _ORDER_FLOW_MAX_AGE_DEFAULT))
+
+          live = await order_flow_service.get_order_flow_data(
+              symbol=symbol, window_seconds=window
+          )
+          if live is None:
+              logger.warning(f"[L3][{symbol}] order_flow buffer vazio — fallback")
+              return indicators, True
+
+          age = live.get("data_age_seconds")
+          if age is not None and max_age > 0 and age > max_age:
+              logger.warning(f"[L3][{symbol}] STALE BLOCK age={age}s > max={max_age}s")
+              return indicators, False
+
+          updated = dict(indicators)
+          for k, f in _LIVE_ORDER_FLOW_FIELDS.items():
+              if live.get(f) is not None:
+                  updated[k] = live[f]
+
+          logger.debug(f"[L3][{symbol}] order flow injetado age={age}s window={window}s")
+          return updated, True
+
+      except Exception as exc:
+          logger.error(f"[L3][{symbol}] _inject_live_order_flow erro: {exc!r} — fallback")
+          return indicators, True
+
+4c. Dentro do loop L3, ANTES de _apply_level_filter (ou equivalente):
+
+  # --- L3 LIVE ORDER FLOW ---
+  indicators, order_flow_ok = await _inject_live_order_flow(
+      symbol=candidate["symbol"],
+      indicators=indicators,
+      pool_id=pool_id,
+      user_id=user_id,
+      config_service=config_service,
+      order_flow_service=order_flow_service,
+      logger=logger,
+  )
+  if not order_flow_ok:
+      logger.info(f"[L3][{candidate['symbol']}] bloqueado por stale — próximo ciclo")
+      continue
+  # --- FIM L3 LIVE ORDER FLOW ---
+
+PASSO 5 — Ajustes obrigatórios baseados no que você leu:
+  - Se order_flow_service não está importado no pipeline_scan, adicione o import correto
+  - Se get_order_flow_data não aceita window_seconds, ajuste o parâmetro
+  - Se config_service.get_config tem assinatura diferente, ajuste
+  - Se o campo symbol no candidate dict tem nome diferente, ajuste
+  - Se o buffer Redis usa chave diferente de trades_buffer:spot:{symbol}, ajuste
+
+PASSO 6 — Verificação após aplicar:
+  python -m py_compile backend/app/tasks/pipeline_scan.py
+  python -m py_compile backend/app/services/order_flow_service.py
+  grep -n "_inject_live_order_flow" backend/app/tasks/pipeline_scan.py
+  grep -n "data_age_seconds" backend/app/services/order_flow_service.py
+
+RESTRIÇÕES ABSOLUTAS:
+  - NÃO remover nenhuma linha existente
+  - NÃO modificar compute_5m, compute_30m ou qualquer task de coleta
+  - NÃO criar tabelas, migrations, novas tasks ou rotas
+  - NÃO quebrar quando order_flow retornar None ou lançar exceção
+  - Todos os parâmetros configuráveis lidos via config_service (Zero Hardcode)

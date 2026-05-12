@@ -217,6 +217,17 @@ def _aggregate_buy_sell(
             min(observed_span_s / float(window_seconds), 1.0) * 100.0, 2,
         )
 
+    # Idade do trade mais recente que entrou no agregado (segundos).
+    # Permite que consumidores L3 (pipeline_scan) decidam bloquear a
+    # decisão quando o buffer está stale demais para a regra ser
+    # confiável (ex.: WS leader caiu e a janela cobre só dados velhos).
+    # None quando newest_trade_ms é desconhecido (sem trades ou erro).
+    data_age_seconds: Optional[float] = None
+    if newest_trade_ms is not None and newest_trade_ms > 0:
+        age_s = time.time() - (newest_trade_ms / 1000.0)
+        if age_s >= 0:
+            data_age_seconds = round(age_s, 1)
+
     audit_meta = {
         "n_trades":              n_trades,
         "oldest_trade_ms":       oldest_trade_ms,
@@ -224,6 +235,7 @@ def _aggregate_buy_sell(
         "coverage_pct":          coverage_pct,
         "partial_window":        bool(partial_window),
         "recent_handover_age_s": recent_handover_age_s,
+        "data_age_seconds":      data_age_seconds,
     }
 
     total_vol = buy_vol + sell_vol
@@ -496,6 +508,10 @@ async def get_order_flow_data(
         "volume_delta":      None,
         "taker_source":      "gate_io_trades",
         "taker_window":      f"{window_seconds}s",
+        # Consumidores L3 inspecionam ``data_age_seconds`` para decidir
+        # se aceitam o snapshot — mantemos a chave mesmo no path empty
+        # para evitar KeyError em código defensivo do chamador.
+        "data_age_seconds":  None,
     }
 
     try:
