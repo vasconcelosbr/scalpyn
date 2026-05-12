@@ -153,7 +153,7 @@ async def get_balance(
     """
     from ..exchange_adapters.gate_adapter import GateAdapter
     from ..models.exchange_connection import ExchangeConnection
-    from ..utils.encryption import decrypt
+    from ..services.exchange_credentials import decrypt_credentials
 
     available_usdt = 0.0
     source = "no_connection"
@@ -169,17 +169,8 @@ async def get_balance(
 
     if exc_row is not None:
         try:
-            raw_key = (
-                bytes(exc_row.api_key_encrypted)
-                if isinstance(exc_row.api_key_encrypted, memoryview)
-                else exc_row.api_key_encrypted
-            )
-            raw_secret = (
-                bytes(exc_row.api_secret_encrypted)
-                if isinstance(exc_row.api_secret_encrypted, memoryview)
-                else exc_row.api_secret_encrypted
-            )
-            adapter = GateAdapter(decrypt(raw_key).strip(), decrypt(raw_secret).strip())
+            api_key, api_secret = decrypt_credentials(exc_row)
+            adapter = GateAdapter(api_key, api_secret)
             spot_accounts = await adapter.get_spot_balance()
             available_usdt = next(
                 (

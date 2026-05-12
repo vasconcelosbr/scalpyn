@@ -93,16 +93,10 @@ async def test_exchange_connection(exchange_id: str, db: AsyncSession = Depends(
         import httpx
 
         if normalize_exchange_name(conn.exchange_name) == "gate.io":
-            # Safely convert BYTEA / memoryview to bytes before decrypting
-            raw_key = conn.api_key_encrypted
-            raw_secret = conn.api_secret_encrypted
-            if isinstance(raw_key, memoryview):
-                raw_key = bytes(raw_key)
-            if isinstance(raw_secret, memoryview):
-                raw_secret = bytes(raw_secret)
-
-            api_key = decrypt(raw_key).strip()
-            api_secret = decrypt(raw_secret).strip()
+            # Shared helper — same code path used by /api/live/balance so
+            # any drift in bytes-coercion / Fernet decrypt is impossible.
+            from ..services.exchange_credentials import decrypt_credentials
+            api_key, api_secret = decrypt_credentials(conn)
 
             logger.info(f"[Gate.io] api_key length: {len(api_key)}, api_secret length: {len(api_secret)}")
             logger.info(f"[Gate.io] api_key starts with: {api_key[:6]}...")
