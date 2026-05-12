@@ -20,28 +20,28 @@ class ScannerConfig(BaseModel):
     universe_source: Literal["dynamic", "watchlist", "custom"] = "dynamic"
     buy_threshold_score: float = Field(75.0, ge=0, le=100)
     strong_buy_threshold: float = Field(85.0, ge=0, le=100)
-    max_opportunities_per_scan: int = Field(3, ge=1, le=20)
+    max_opportunities_per_scan: int = Field(3, ge=0, le=20)
     symbol_cooldown_seconds: int = Field(300, ge=0)
     global_cooldown_after_n_buys: int = Field(0, ge=0)
 
 
 class BuyingConfig(BaseModel):
-    capital_per_trade_pct: float = Field(10.0, ge=0.1, le=100)
-    capital_per_trade_min_usdt: float = Field(20.0, ge=1)
-    capital_reserve_pct: float = Field(10.0, ge=0, le=99)
-    max_capital_in_use_pct: float = Field(80.0, ge=10, le=100)
+    capital_per_trade_pct: float = Field(10.0, ge=0, le=100)
+    capital_per_trade_min_usdt: float = Field(20.0, ge=0)
+    capital_reserve_pct: float = Field(10.0, ge=0, le=100)
+    max_capital_in_use_pct: float = Field(80.0, ge=0, le=100)
     max_positions_total: int = Field(20, ge=1, le=500)
     max_positions_per_asset: int = Field(5, ge=1, le=50)
-    max_exposure_per_asset_pct: float = Field(25.0, ge=1, le=100)
+    max_exposure_per_asset_pct: float = Field(25.0, ge=0, le=100)
     order_type: Literal["market", "limit"] = "market"
     limit_order_timeout_seconds: int = Field(120, ge=10)
 
 
 class SellingConfig(BaseModel):
-    take_profit_pct: float = Field(1.5, ge=0.1, le=1000)
-    min_profit_pct: float = Field(0.5, ge=0.0, le=1000)
+    take_profit_pct: float = Field(1.5, ge=0, le=100)
+    min_profit_pct: float = Field(0.5, ge=0, le=100)
     never_sell_at_loss: bool = True
-    safety_margin_above_entry_pct: float = Field(0.3, ge=0)
+    safety_margin_above_entry_pct: float = Field(0.3, ge=0, le=100)
     enable_ai_consultation: bool = False
     ai_rate_limit_seconds: int = Field(60, ge=10)
     ai_model: str = "google/gemini-2.5-flash"
@@ -55,12 +55,12 @@ class HoldingUnderwaterConfig(BaseModel):
 
 class DCAConfig(BaseModel):
     enabled: bool = False
-    trigger_drop_pct: float = Field(5.0, ge=0.5, le=50)
+    trigger_drop_pct: float = Field(5.0, ge=0, le=100)
     min_score_for_dca: float = Field(70.0, ge=0, le=100)
     max_dca_layers: int = Field(3, ge=1, le=10)
-    dca_amount_usdt: float = Field(50.0, ge=1)
+    dca_amount_usdt: float = Field(50.0, ge=0)
     dca_decay_factor: float = Field(0.7, ge=0.1, le=1.0)
-    max_total_exposure_per_asset_pct: float = Field(30.0, ge=1, le=100)
+    max_total_exposure_per_asset_pct: float = Field(30.0, ge=0, le=100)
 
 
 # ── Sell Pipeline Layers ──────────────────────────────────────────────────────

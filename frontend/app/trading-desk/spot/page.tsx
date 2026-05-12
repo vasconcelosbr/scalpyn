@@ -246,7 +246,7 @@ export default function SpotTradingPage() {
             label="Buy Score Threshold"
             value={buyScoreThreshold}
             onChange={(v) => updateConfig('buying.score_threshold', v)}
-            min={50}
+            min={0}
             max={100}
             hint="Minimum score required to place a buy"
           />
@@ -254,7 +254,7 @@ export default function SpotTradingPage() {
             label="Strong Buy Score"
             value={strongBuyScore}
             onChange={(v) => updateConfig('buying.strong_buy_score', v)}
-            min={60}
+            min={0}
             max={100}
             hint="Score considered a strong conviction buy"
           />
@@ -273,8 +273,8 @@ export default function SpotTradingPage() {
             label="Per Trade %"
             value={perTradePct}
             onChange={(v) => updateConfig('capital.per_trade_pct', v)}
-            min={1}
-            max={50}
+            min={0}
+            max={100}
             unit="%"
             hint={`≈ $${((perTradePct / 100) * capital).toFixed(0)} per trade`}
           />
@@ -325,7 +325,7 @@ export default function SpotTradingPage() {
             value={capitalReservePct}
             onChange={(v) => updateConfig('capital.reserve_pct', v)}
             min={0}
-            max={30}
+            max={100}
             unit="%"
             hint="Always keep this portion of capital unused"
           />
@@ -333,8 +333,8 @@ export default function SpotTradingPage() {
             label="Max Capital in Use %"
             value={maxCapitalInUsePct}
             onChange={(v) => updateConfig('capital.max_in_use_pct', v)}
-            min={30}
-            max={95}
+            min={0}
+            max={100}
             unit="%"
             hint="Hard cap on total deployed capital"
           />
@@ -388,8 +388,8 @@ export default function SpotTradingPage() {
             label="Max Exposure per Asset %"
             value={maxExposurePerAssetPct}
             onChange={(v) => updateConfig('limits.max_exposure_per_asset_pct', v)}
-            min={5}
-            max={50}
+            min={0}
+            max={100}
             unit="%"
             hint="Maximum portfolio share for a single asset"
           />
@@ -464,7 +464,7 @@ export default function SpotTradingPage() {
             value={maxSlippagePct}
             onChange={(v) => updateConfig('orders.max_slippage_pct', v)}
             min={0}
-            max={2}
+            max={100}
             step={0.01}
             unit="%"
             decimals={2}
@@ -519,8 +519,8 @@ export default function SpotTradingPage() {
             label="Take Profit Target %"
             value={takeProfitPct}
             onChange={(v) => updateConfig('sell.take_profit_pct', v)}
-            min={0.5}
-            max={10}
+            min={0}
+            max={100}
             unit="%"
             decimals={2}
             hint="Target gain to trigger a sell evaluation"
@@ -529,8 +529,8 @@ export default function SpotTradingPage() {
             label="Min Profit to Sell %"
             value={minProfitToSellPct}
             onChange={(v) => updateConfig('sell.min_profit_pct', v)}
-            min={0.1}
-            max={5}
+            min={0}
+            max={100}
             unit="%"
             decimals={2}
             hint="Absolute floor — position will not sell below this"
@@ -540,7 +540,7 @@ export default function SpotTradingPage() {
             value={safetyMarginPct}
             onChange={(v) => updateConfig('sell.safety_margin_pct', v)}
             min={0}
-            max={2}
+            max={100}
             step={0.05}
             unit="%"
             decimals={2}
@@ -750,8 +750,8 @@ export default function SpotTradingPage() {
                 label="Trigger after drop %"
                 value={dcaTriggerDropPct}
                 onChange={(v) => updateConfig('dca.trigger_drop_pct', v)}
-                min={1}
-                max={20}
+                min={0}
+                max={100}
                 unit="%"
                 hint="DCA kicks in when position drops this much"
               />
@@ -759,7 +759,7 @@ export default function SpotTradingPage() {
                 label="Min score for DCA"
                 value={dcaMinScore}
                 onChange={(v) => updateConfig('dca.min_score', v)}
-                min={50}
+                min={0}
                 max={100}
                 hint="Asset must still score above this to DCA"
               />
@@ -819,8 +819,8 @@ export default function SpotTradingPage() {
                 label="Max Total Exposure %"
                 value={dcaMaxExposurePct}
                 onChange={(v) => updateConfig('dca.max_total_exposure_pct', v)}
-                min={10}
-                max={60}
+                min={0}
+                max={100}
                 unit="%"
                 hint="Cap on total capital committed via DCA for one position"
               />
