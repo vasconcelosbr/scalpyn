@@ -602,9 +602,14 @@ def _build_asset_evaluation_trace(
                 trace.append(
                     _skipped_block_rule(remaining_block, reason="cascade_short_circuit")
                 )
+            # Filters are evaluated normally even after a block trips so the
+            # operator sees the real PASS/FAIL/SEM-DADOS status of every
+            # filter (no "PULADO" labels). The asset stays rejected by the
+            # tripped block — `failed_trace` already captured that — so the
+            # extra filter evaluations are diagnostic only.
             for condition in filters:
                 trace.append(
-                    _skipped_filter(condition, reason="cascade_short_circuit")
+                    _normalized_trace_item(_evaluate_filter(rule_engine, asset, condition))
                 )
             for condition in entry_triggers:
                 trace.append(_normalized_trace_item(_evaluate_entry_trigger(rule_engine, asset, condition)))
@@ -617,17 +622,11 @@ def _build_asset_evaluation_trace(
         filter_trace = _normalized_trace_item(_evaluate_filter(rule_engine, asset, condition))
         trace.append(filter_trace)
         filter_results.append(filter_trace)
-        if filter_logic != "OR" and filter_trace["status"] == "FAIL":
+        if filter_logic != "OR" and filter_trace["status"] == "FAIL" and failed_trace is None:
+            # Record which filter caused the rejection but DO NOT short-circuit
+            # the remaining filters — they keep evaluating so the trace shows
+            # every filter's real PASS/FAIL/SEM-DADOS status (no "PULADO").
             failed_trace = filter_trace
-            for remaining_condition in filters[index + 1:]:
-                trace.append(
-                    _skipped_filter(remaining_condition, reason="cascade_short_circuit")
-                )
-            for condition in entry_triggers:
-                trace.append(_normalized_trace_item(_evaluate_entry_trigger(rule_engine, asset, condition)))
-            for condition in signal_conditions:
-                trace.append(_normalized_trace_item(_evaluate_signal_condition(rule_engine, asset, condition)))
-            return trace, failed_trace
 
     if filter_logic == "OR" and filter_results and not any(
         item["status"] == "PASS" for item in filter_results

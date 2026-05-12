@@ -43,7 +43,9 @@ def test_block_rules_reject_before_filters_and_mark_remaining_trace_as_skipped()
     assert len(rejected) == 1
     assert rejected[0]["failed_type"] == "block_rule"
     assert rejected[0]["failed_indicator"] == "Overbought RSI"
-    assert [item["status"] for item in rejected[0]["evaluation_trace"]] == ["FAIL", "SKIPPED"]
+    # Block tripped (FAIL) but the filter still evaluates normally (PASS):
+    # filters never short-circuit so the operator sees real PASS/FAIL.
+    assert [item["status"] for item in rejected[0]["evaluation_trace"]] == ["FAIL", "PASS"]
 
 
 def test_filter_failure_trace_preserves_profile_order_and_stop_point():
@@ -70,7 +72,9 @@ def test_filter_failure_trace_preserves_profile_order_and_stop_point():
     assert len(rejected) == 1
     assert rejected[0]["failed_type"] == "filter"
     assert rejected[0]["failed_indicator"] == "RSI"
-    assert [item["status"] for item in rejected[0]["evaluation_trace"]] == ["PASS", "FAIL", "SKIPPED"]
+    # Filters never short-circuit: ADX is evaluated and shown PASS even
+    # though RSI already failed (operator-visible diagnostic trace).
+    assert [item["status"] for item in rejected[0]["evaluation_trace"]] == ["PASS", "FAIL", "PASS"]
 
 
 def test_approved_assets_include_full_pass_trace():
@@ -199,14 +203,19 @@ def test_cascade_skipped_blocks_carry_short_circuit_reason():
     assert bbw["status"] == "SKIPPED"
     assert bbw["reason"] == "cascade_short_circuit"
 
-    # The downstream filter is also cascade-skipped.
+    # Filters are evaluated normally even after a block trips so the
+    # operator sees the real PASS/FAIL status (no "PULADO" filters).
     adx = by_indicator["ADX"]
-    assert adx["status"] == "SKIPPED"
-    assert adx["reason"] == "cascade_short_circuit"
+    assert adx["status"] == "PASS"
+    assert adx.get("reason") in (None, "")
 
 
-def test_filter_cascade_emits_short_circuit_reason_for_remaining_filters():
-    """Filter cascade (AND logic) must propagate the new reason too."""
+def test_filter_cascade_evaluates_remaining_filters_with_real_status():
+    """Filters never short-circuit: the trace shows every filter's real
+    PASS/FAIL status even after one fails (operator request — no
+    'PULADO' badges). The asset is still rejected by the first failing
+    filter, but the rest are evaluated diagnostically.
+    """
     profile_config = {
         "filters": {
             "logic": "AND",
@@ -228,12 +237,13 @@ def test_filter_cascade_emits_short_circuit_reason_for_remaining_filters():
 
     trace = rejected[0]["evaluation_trace"]
     statuses = [(item["indicator"], item["status"], item.get("reason")) for item in trace]
-    # rsi FAIL → adx + volume_24h are cascade-skipped.
     assert statuses == [
         ("RSI", "FAIL", None),
-        ("ADX", "SKIPPED", "cascade_short_circuit"),
-        ("Volume 24h", "SKIPPED", "cascade_short_circuit"),
+        ("ADX", "PASS", None),
+        ("Volume 24h", "PASS", None),
     ]
+    # Rejection is still attributed to the first failing filter.
+    assert rejected[0]["failed_indicator"] == "RSI"
 
 
 def test_taker_ratio_above_plausibility_bound_is_invalid_value():
@@ -384,9 +394,10 @@ def test_recompute_rejection_trace_uses_current_indicators_for_cascade_label():
     spike = by_indicator["Spike"]
     assert spike["status"] == "SKIPPED"
     assert spike["reason"] == "cascade_short_circuit"
+    # Filter is evaluated normally even when a block tripped (no "PULADO").
     adx = by_indicator["ADX"]
-    assert adx["status"] == "SKIPPED"
-    assert adx["reason"] == "cascade_short_circuit"
+    assert adx["status"] == "PASS"
+    assert adx.get("reason") in (None, "")
 
 
 def test_recompute_rejection_trace_falls_back_when_indicators_missing():
