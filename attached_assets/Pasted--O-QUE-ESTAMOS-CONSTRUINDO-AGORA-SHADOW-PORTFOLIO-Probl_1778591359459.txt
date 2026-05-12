@@ -1,0 +1,131 @@
+## O QUE ESTAMOS CONSTRUINDO AGORA: SHADOW PORTFOLIO
+
+### Problema
+Quando um ALLOW da L3 não vira trade por falta de saldo, some sem rastro.
+Isso causa dois problemas:
+1. O XGBoost treina apenas com trades executados — dataset com viés de seleção de capital
+2. O usuário não sabe quanto dinheiro "deixou na mesa" por falta de saldo
+
+### Solução: Shadow Portfolio
+Quando não há saldo para executar, o sistema:
+1. Cria um "shadow trade" — simula a compra com U$ 1.000 USDT fixos
+2. Acompanha o ativo via OHLCV histórico até TP, SL ou timeout
+3. Registra o resultado em `shadow_trades` (nova tabela)
+4. Grava também em `trade_simulations` — alimenta o dataset do XGBoost automaticamente
+5. Expõe os dados na aba "Shadow Trade" da UI
+
+### Regra absoluta de separação
+Shadow data NUNCA contamina:
+- P&L real
+- Win rate real
+- Capital em uso
+- Posições abertas
+- Qualquer métrica de performance real
+
+Shadow data SÓ aparece em:
+- Tabela `shadow_trades`
+- Registros em `trade_simulations` com `is_simulated=TRUE`
+- Endpoints `/api/shadow-trades/*`
+- Aba "Shadow Trade" na UI
+- Dataset de treinamento do XGBoost
+
+### Parâmetros do shadow trade
+- **Valor investido**: U$ 1.000 USDT (fixo por enquanto)
+- **Entry price**: open da próxima candle 1m após o ALLOW
+- **TP/SL**: sempre os mesmos do config real do usuário no momento do ALLOW
+- **Convenção intra-candle**: SL verificado antes de TP (conservador)
+- **Timeout**: `timeout_candles` do config real do usuário
+
+### Estado atual do banco (referência)
+- `decisions_log`: 530 registros, todos ALLOW, período 2026-05-06 a 2026-05-11
+- `trade_simulations`: 0 registros (dataset ML vazio — problema crítico)
+- `trade_tracking`: 567 linhas, 37 reconciliados com fill real
+- O pipeline de treino do XGBoost não tem dados para treinar
+
+---
+
+## FLUXO COMPLETO DO SHADOW PORTFOLIO
+
+```
+L3 ALLOW gravado em decisions_log
+    ↓
+execute_buy.py — gate de capital (SpotCapitalManager)
+    ├── TEM SALDO
+    │       ↓
+    │   Executa ordem real na corretora (fluxo existente — não mudar)
+    │
+    └── NÃO TEM SALDO (ou outro gate: max_positions, circuit_breaker, cooldown...)
+            ↓
+        ShadowTradeService.create_from_skip(decision, skip_reason, user_config)
+        [fire-and-forget — nunca bloqueia o fluxo real]
+            ↓
+        Cria registro em shadow_trades:
+          status = PENDING
+          amount_usdt = 1000.0
+          entry_price = open da próxima candle 1m
+          tp_price = entry_price * (1 + tp_pct/100)
+          sl_price = entry_price * (1 - sl_pct/100)
+          features_snapshot = decisions_log.metrics.indicators_snapshot
+          config_snapshot = config real do momento
+            ↓
+        [5 minutos depois — Celery task shadow_trade_monitor]
+            ↓
+        Para cada shadow trade PENDING/RUNNING:
+          Busca candles 1m após entry
+          Verifica SL antes de TP em cada candle
+          Quando resolve: status = COMPLETED
+            ↓
+        ShadowTradeService.record_as_simulation(shadow_trade)
+            ↓
+        Grava em trade_simulations:
+          is_simulated = True
+          decision_type = 'ALLOW'
+          result = WIN | LOSS | TIMEOUT
+          [compatível com DatasetBuilder.load_simulations()]
+            ↓
+        DatasetBuilder já inclui automaticamente no próximo treino
+```
+
+---
+
+## ARQUIVOS PARA LER ANTES DE IMPLEMENTAR
+
+```
+# Modelos existentes
+backend/app/models/backoffice.py              # DecisionLog
+backend/app/models/trade_simulation.py        # TradeSimulation
+backend/app/models/trade_tracking.py          # TradeTracking
+
+# Serviços existentes
+backend/app/tasks/execute_buy.py              # Ponto de injeção — gate de capital
+backend/app/services/simulation_engine.py     # Lógica TP/SL — reutilizar
+backend/app/services/simulation_service.py    # Orquestração — reutilizar
+backend/app/tasks/simulation.py               # Celery tasks existentes
+backend/app/services/capital_manager.py       # SpotCapitalManager — gates de capital
+backend/app/services/config_service.py        # Como ler configs
+
+# ML
+backend/app/ml/dataset_builder.py             # load_simulations() — validar compatibilidade
+
+# Infraestrutura
+backend/app/api/                              # Ver padrão de rotas existentes
+backend/app/main.py                           # Onde registrar novo router
+backend/alembic/versions/                     # Ver último número de migration
+backend/requirements.txt
+```
+
+---
+
+## CHECKLIST DE QUALIDADE (antes de considerar algo pronto)
+
+```
+[ ] Nenhum valor de negócio hardcoded — tudo via config_service
+[ ] Nenhuma rota, tabela, coluna ou função existente foi removida
+[ ] Imports pesados são lazy (dentro de handlers/métodos)
+[ ] Operações não-críticas são fire-and-forget com try/except
+[ ] Shadow data não contamina nenhuma métrica real
+[ ] Migration tem upgrade() e downgrade() completos
+[ ] Novo router registrado em main.py
+[ ] Todos os endpoints têm autenticação JWT (Depends(get_current_user_id))
+[ ] Celery task registrada no beat schedule
+[ ] Script de backfill é idempotente (pode rodar múltiplas vezes sem duplicar)
