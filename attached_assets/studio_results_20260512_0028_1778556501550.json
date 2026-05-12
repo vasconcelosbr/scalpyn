@@ -1,0 +1,78 @@
+[
+  {
+    "level": "L3",
+    "symbol": "AAVE_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "ADA_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "BNB_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "BTC_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "DOGE_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "ETH_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "HYPE_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "LINK_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "LTC_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "NEAR_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "ONDO_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "PEPE_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "SOL_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "SUI_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "TAO_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "TON_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "UNI_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "XRP_USDT"
+  },
+  {
+    "level": "L3",
+    "symbol": "ZEC_USDT"
+  }
+]
