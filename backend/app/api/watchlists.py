@@ -258,12 +258,14 @@ async def _seed_market_metadata_bg(symbols: List[str]) -> None:
 # Map: profile config field name → key in indicators_json (or special source)
 FIELD_MAP: Dict[str, str] = {
     # Market metadata (sourced from market_metadata table, not indicators_json)
+    "price":               "_meta:price",
     "volume_24h":          "_meta:volume_24h",
     "market_cap":          "_meta:market_cap",
     "change_24h":          "_meta:price_change_24h",
     "price_change_24h":    "_meta:price_change_24h",
     # Indicator fields
     "atr_pct":             "atr_pct",
+    "atr_percent":         "atr_percent",
     "rsi":                 "rsi",
     "adx":                 "adx",
     "di_plus":             "di_plus",
@@ -272,6 +274,7 @@ FIELD_MAP: Dict[str, str] = {
     "bb_width":            "bb_width",
     "zscore":              "zscore",
     "ema_full_alignment":  "ema_full_alignment",
+    "ema_trend":           "ema_trend",
     "ema9_gt_ema50":       "ema9_gt_ema50",
     "ema50_gt_ema200":     "ema50_gt_ema200",
     "ema9":                "ema9",
@@ -279,6 +282,7 @@ FIELD_MAP: Dict[str, str] = {
     "ema200":              "ema200",
     "ema_align_label":     "ema_align_label",
     "volume_spike":        "volume_spike",
+    "volume_delta":        "volume_delta",
     "macd":                "macd",
     "macd_signal":         "macd_signal",
     "stoch_k":             "stoch_k",
@@ -291,10 +295,14 @@ FIELD_MAP: Dict[str, str] = {
 
 # Human-readable labels
 FIELD_LABELS: Dict[str, str] = {
+    "_meta:price":         "Price",
     "_meta:volume_24h":    "Vol 24h (Gate Spot)",
     "_meta:market_cap":    "Market Cap",
     "_meta:price_change_24h": "24h%",
     "atr_pct":             "ATR%",
+    "atr_percent":         "ATR%",
+    "ema_trend":           "EMA Trend",
+    "volume_delta":        "Vol Δ",
     "rsi":                 "RSI",
     "adx":                 "ADX",
     "di_plus":             "DI+",
@@ -326,45 +334,71 @@ def _uses_pipeline_filters(level: Optional[str]) -> bool:
     return uses_pipeline_filters(level)
 
 
-def _extract_profile_indicator_fields(profile_config: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
+def _extract_profile_indicator_fields(
+    profile_config: Optional[Dict[str, Any]],
+    *,
+    global_rules: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, str]]:
     """
-    Extract the ordered list of unique indicator fields referenced in a profile's
-    filter conditions (Filters tab only — not Signals).
+    Extract the ordered list of unique indicator fields to expose as columns
+    in the watchlist table.
 
-    Watchlist columns are driven exclusively by the Filter Conditions defined in
-    the profile, so users can see the values of every field they are filtering on.
-    Signal/entry-trigger conditions are not included because they apply at a
-    different stage of the pipeline.
+    Source priority:
+      1. ``price`` — always prepended as the first (mandatory) column.
+      2. ``scoring.selected_rule_ids`` — indicators picked in the profile's
+         Score tab (mapped via ``global_rules`` → ``rule.indicator``).
+         This is the authoritative source per product spec — what users
+         enable in the Score Engine drives what they see in the table.
+      3. ``filters.conditions[].field`` — legacy fallback when a profile has
+         no scoring rules selected (e.g. pre-scoring profiles), or to
+         complement scoring with strict filter fields.
 
     Returns [{"key": "_meta:volume_24h", "label": "Vol 24h (Gate Spot)", "field": "volume_24h"}, ...]
     """
-    if not profile_config:
-        # Default columns when no profile is assigned
-        return [
-            {"key": "_meta:price_change_24h", "label": "24h%",       "field": "price_change_24h"},
-            {"key": "_meta:volume_24h",       "label": "Vol 24h (Gate Spot)", "field": "volume_24h"},
-            {"key": "_meta:market_cap",       "label": "Market Cap", "field": "market_cap"},
-        ]
-
     seen: Dict[str, bool] = {}   # key → already_added (ordered dedup)
     result: List[Dict[str, str]] = []
 
     def _add(field: str):
-        mapped = FIELD_MAP.get(field)
-        if mapped and mapped not in seen:
-            seen[mapped] = True
-            result.append({
-                "key":   mapped,
-                "label": FIELD_LABELS.get(mapped, field),
-                "field": field,
-            })
+        if not field:
+            return
+        mapped = FIELD_MAP.get(field, field)
+        if mapped in seen:
+            return
+        seen[mapped] = True
+        # Prefer label by mapped key; fall back to label by raw field; finally upper-case raw field.
+        label = (
+            FIELD_LABELS.get(mapped)
+            or FIELD_LABELS.get(field)
+            or field.replace("_", " ").upper()
+        )
+        result.append({"key": mapped, "label": label, "field": field})
 
-    # Collect from Filter Conditions ONLY (not Signals)
+    # 1) Price is always the first column (product requirement).
+    _add("price")
+
+    if not profile_config:
+        # Default columns when no profile is assigned (price + market metadata)
+        _add("price_change_24h")
+        _add("volume_24h")
+        _add("market_cap")
+        return result
+
+    # 2) Score Engine selected indicators (preferred source).
+    scoring_section = profile_config.get("scoring") or {}
+    selected_ids_raw = scoring_section.get("selected_rule_ids") or []
+    if selected_ids_raw and global_rules:
+        sel_set = {str(rid) for rid in selected_ids_raw}
+        # Preserve global rule order so columns appear in a stable sequence.
+        for rule in global_rules:
+            if str(rule.get("id")) in sel_set:
+                _add(str(rule.get("indicator") or ""))
+
+    # 3) Filter Conditions (legacy / complement).
     for cond in profile_config.get("filters", {}).get("conditions", []):
         _add(cond.get("field", ""))
 
-    # Auto-expand EMA columns: if any EMA field is referenced in the profile,
-    # inject ema9 / ema50 / ema200 + alignment badge in logical order.
+    # 4) Auto-expand EMA columns: if any EMA field is referenced, inject
+    #    ema9 / ema50 / ema200 + alignment badge in logical order.
     EMA_KEYS = {"ema_full_alignment", "ema9_gt_ema50", "ema50_gt_ema200", "ema9", "ema50", "ema200"}
     if any(k in seen for k in EMA_KEYS):
         result = [r for r in result if r["key"] not in {
@@ -376,6 +410,72 @@ def _extract_profile_indicator_fields(profile_config: Optional[Dict[str, Any]]) 
             _add(field)
 
     return result
+
+
+async def _load_user_score_rules(db: AsyncSession, user_id: UUID) -> List[Dict[str, Any]]:
+    """Load the global score rule set for a user.
+
+    Prefers the user's own ``ConfigProfile(config_type='score', pool_id=NULL)``
+    (same source ``pipeline_scan`` reads) and falls back to ``DEFAULT_SCORE``
+    if the user never customised the score engine. Returns the ``scoring_rules``
+    list (each item carries ``id`` + ``indicator`` + thresholds).
+    """
+    from ..services.seed_service import DEFAULT_SCORE
+    try:
+        from ..models.config_profile import ConfigProfile as _CP
+        row = (await db.execute(
+            select(_CP).where(
+                _CP.user_id == user_id,
+                _CP.pool_id.is_(None),
+                _CP.config_type == "score",
+            ).order_by(_CP.updated_at.desc()).limit(1)
+        )).scalars().first()
+        cfg = row.config_json if row and row.config_json else DEFAULT_SCORE
+        return list(cfg.get("scoring_rules") or cfg.get("rules") or [])
+    except Exception as exc:
+        logger.warning("[Pipeline] failed loading user score rules: %s", exc)
+        return list(DEFAULT_SCORE.get("scoring_rules") or DEFAULT_SCORE.get("rules") or [])
+
+
+def _build_live_current_values(
+    profile_indicators: List[Dict[str, str]],
+    *,
+    indicators: Optional[Dict[str, Any]] = None,
+    meta: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Resolve the live value for every column declared in ``profile_indicators``.
+
+    Output is keyed by the column's ``key`` (e.g. ``_meta:price`` or ``adx``)
+    so the frontend can render dynamic columns with one lookup per cell.
+    Indicator values come from ``indicators`` (flat ``{key: scalar}`` from
+    ``fetch_merged_indicators``); market/meta values from ``meta`` (the
+    ``PipelineWatchlistAsset`` row dumped to dict, or ``market_metadata``).
+    """
+    indicators = indicators or {}
+    meta = meta or {}
+    out: Dict[str, Any] = {}
+    _META_SOURCE = {
+        "_meta:price":            ("current_price", "price"),
+        "_meta:volume_24h":       ("volume_24h",),
+        "_meta:market_cap":       ("market_cap",),
+        "_meta:price_change_24h": ("price_change_24h", "change_24h"),
+    }
+    for col in profile_indicators:
+        key = col.get("key", "")
+        field = col.get("field", "")
+        if key in _META_SOURCE:
+            for src in _META_SOURCE[key]:
+                if meta.get(src) is not None:
+                    out[key] = meta.get(src)
+                    break
+            out.setdefault(key, None)
+        else:
+            # Indicator: try by raw field then by mapped key.
+            v = indicators.get(field)
+            if v is None:
+                v = indicators.get(key)
+            out[key] = v
+    return out
 
 
 async def _fetch_indicators_map(
@@ -1878,7 +1978,12 @@ async def get_watchlist_assets(
         except Exception as e:
             logger.warning("[Pipeline] Auto-refresh snapshot failed for %s: %s", watchlist_id, e)
 
-    profile_indicators = _extract_profile_indicator_fields(profile_config)
+    # Resolve dynamic columns from the profile's Score tab (selected_rule_ids).
+    _global_rules_assets = await _load_user_score_rules(db, user_id)
+    profile_indicators = _extract_profile_indicator_fields(
+        profile_config,
+        global_rules=_global_rules_assets,
+    )
 
     # ── Fetch live indicator values for all asset symbols ─────────────────────
     symbols = [a.symbol for a in assets]
@@ -2288,8 +2393,9 @@ async def get_watchlist_assets(
         )
 
 
-    approved_items = [
-        _normalize_decision_snapshot(
+    approved_items: List[Dict[str, Any]] = []
+    for asset in assets:
+        normalized = _normalize_decision_snapshot(
             symbol=asset.symbol,
             status="approved",
             stage=wl.level,
@@ -2299,8 +2405,22 @@ async def get_watchlist_assets(
             alpha_score=float(asset.alpha_score) if asset.alpha_score is not None else None,
             score_rules=list((asset.analysis_snapshot or {}).get("score_rules") or []),
         )
-        for asset in assets
-    ]
+        # Inject live values for the dynamic indicator columns so the table
+        # renders the latest reading per row (price + each Score-engine indicator).
+        _asset_meta = {
+            "current_price":    float(asset.current_price)    if getattr(asset, "current_price",    None) is not None else None,
+            "volume_24h":       float(asset.volume_24h)       if getattr(asset, "volume_24h",       None) is not None else None,
+            "market_cap":       float(asset.market_cap)       if getattr(asset, "market_cap",       None) is not None else None,
+            "price_change_24h": float(asset.price_change_24h) if getattr(asset, "price_change_24h", None) is not None else None,
+        }
+        live_vals = _build_live_current_values(
+            profile_indicators,
+            indicators=ind_map.get(asset.symbol) or {},
+            meta=_asset_meta,
+        )
+        normalized["current_values"] = {**normalized["current_values"], **{k: v for k, v in live_vals.items() if v is not None}}
+        normalized["details"]["current_values"] = dict(normalized["current_values"])
+        approved_items.append(normalized)
 
     return {
         "assets":             enriched,
@@ -2398,6 +2518,14 @@ async def _get_watchlist_rejections_payload(
             except Exception:
                 meta_map = {}
 
+    # Resolve dynamic columns (price + Score-engine selected indicators) so
+    # the Rejected tab renders the same column set as the Approved tab.
+    _global_rules_rej = await _load_user_score_rules(db, user_id)
+    profile_indicators = _extract_profile_indicator_fields(
+        profile_config,
+        global_rules=_global_rules_rej,
+    )
+
     trace_filter_conditions = list(((profile_config or {}).get("filters") or {}).get("conditions") or [])
     selected_trace_conditions = trace_filter_conditions
     if effective_level in ("L1", "L2", "L3") and wl.profile_id and trace_filter_conditions and rejection_symbols:
@@ -2493,9 +2621,21 @@ async def _get_watchlist_rejections_payload(
         # must overwrite it here too — otherwise the recompute is invisible
         # to traders and the original bug ("Current: aguardando coleta")
         # would still show on rows snapshotted before #71.
+        # Inject live current_values for the dynamic indicator columns so the
+        # Rejected tab shows the same per-row indicator readings as Approved.
+        live_vals = _build_live_current_values(
+            profile_indicators,
+            indicators=ind_map.get(row.symbol) or {},
+            meta=meta_map.get(row.symbol) or {},
+        )
+        normalized["current_values"] = {
+            **normalized["current_values"],
+            **{k: v for k, v in live_vals.items() if v is not None},
+        }
         normalized["details"] = {
             **normalized["details"],
             "evaluation_trace": recomputed_trace,
+            "current_values": dict(normalized["current_values"]),
         }
         items.append({
             **normalized,
@@ -2519,6 +2659,7 @@ async def _get_watchlist_rejections_payload(
         "profile_id": str(wl.profile_id) if wl.profile_id else None,
         "items": items,
         "metrics": metrics,
+        "profile_indicators": profile_indicators,  # [{key, label, field}, ...]
     }
 
 

@@ -110,6 +110,43 @@ function summarizeConditions(item: WatchlistDecisionItem): string {
   return `${item.details.conditions[0]} +${item.details.conditions.length - 1}`;
 }
 
+export interface IndicatorColumnSpec {
+  /** Storage key inside `current_values` (e.g. `_meta:price`, `adx`). */
+  key: string;
+  /** Header label rendered to the user. */
+  label: string;
+  /** Original profile field name (e.g. `price`, `taker_ratio`). */
+  field: string;
+}
+
+/** Render a per-row indicator value for the dynamic column set. */
+function fmtIndicatorCell(key: string, raw: unknown): string {
+  if (raw == null) return "—";
+  if (typeof raw === "boolean") return raw ? "✓" : "✗";
+  const num = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(num)) return String(raw);
+  if (key === "_meta:price") {
+    if (num >= 1) return `$${num.toFixed(2)}`;
+    if (num >= 0.01) return `$${num.toFixed(4)}`;
+    return `$${num.toPrecision(4)}`;
+  }
+  if (key === "_meta:volume_24h" || key === "_meta:market_cap") {
+    if (num >= 1e9) return `$${(num / 1e9).toFixed(1)}B`;
+    if (num >= 1e6) return `$${(num / 1e6).toFixed(1)}M`;
+    if (num >= 1e3) return `$${(num / 1e3).toFixed(0)}K`;
+    return `$${num.toFixed(0)}`;
+  }
+  if (key === "_meta:price_change_24h") {
+    return `${num >= 0 ? "+" : ""}${num.toFixed(2)}%`;
+  }
+  if (Math.abs(num) >= 1_000_000_000) return `${(num / 1e9).toFixed(1)}B`;
+  if (Math.abs(num) >= 1_000_000)     return `${(num / 1e6).toFixed(1)}M`;
+  if (Math.abs(num) >= 1_000)         return `${(num / 1e3).toFixed(1)}K`;
+  if (Math.abs(num) >= 100)           return num.toFixed(1);
+  if (Math.abs(num) >= 1)             return num.toFixed(2);
+  return num.toFixed(4);
+}
+
 function metricTopIndicator(items: WatchlistDecisionItem[]): string {
   const counts = new Map<string, number>();
   for (const item of items) {
@@ -125,10 +162,19 @@ export function WatchlistDecisionTable({
   items,
   loading,
   emptyMessage,
+  indicatorCols,
 }: {
   items: WatchlistDecisionItem[];
   loading: boolean;
   emptyMessage?: string;
+  /**
+   * Dynamic indicator columns derived from the watchlist's profile (Score
+   * tab + filters). When provided, replaces the legacy "Indicators" /
+   * "Conditions" summary columns with one column per indicator. ``price``
+   * is always the first column. When omitted (or empty), falls back to
+   * the legacy summary view.
+   */
+  indicatorCols?: IndicatorColumnSpec[];
 }) {
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -216,18 +262,43 @@ export function WatchlistDecisionTable({
         <div className="rounded-xl border border-[#1E2433] bg-[#06080E] px-4 py-10 text-center text-sm text-[#4B5563]">
           {emptyMessage ?? "No decision snapshots for the current filters."}
         </div>
-      ) : (
+      ) : (() => {
+          // Dynamic column mode: when the backend supplies profile_indicators
+          // (always at least `price`), render one column per indicator and
+          // drop the legacy summary columns. Fallback to the legacy view
+          // only when the watchlist truly has no profile-driven columns.
+          const dynCols = indicatorCols ?? [];
+          const useDynamic = dynCols.length > 0;
+          // Column count: chevron + Symbol + Score + [dynCols] + Stage + Status + Timestamp
+          //          OR  chevron + Symbol + Score + Stage + Status + Indicators + Conditions + Timestamp
+          const totalCols = useDynamic ? 6 + dynCols.length : 8;
+          const minWidth = useDynamic ? Math.max(720, 420 + dynCols.length * 110) : 1040;
+          return (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1040px] text-xs">
+          <table className="w-full text-xs" style={{ minWidth: `${minWidth}px` }}>
             <thead>
               <tr className="border-b border-[#1A2035] bg-[#060810]">
                 <th className="w-8 px-2 py-2.5" />
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Symbol</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563] min-w-[130px]">Score</th>
+                {useDynamic ? (
+                  dynCols.map((col) => (
+                    <th
+                      key={col.key}
+                      className="px-3 py-2.5 text-right text-[#4B5563] whitespace-nowrap"
+                      title={col.field}
+                    >
+                      {col.label}
+                    </th>
+                  ))
+                ) : (
+                  <>
+                    <th className="px-3 py-2.5 text-left text-[#4B5563]">Indicators</th>
+                    <th className="px-3 py-2.5 text-left text-[#4B5563]">Conditions</th>
+                  </>
+                )}
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Stage</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Status</th>
-                <th className="px-3 py-2.5 text-left text-[#4B5563]">Indicators</th>
-                <th className="px-3 py-2.5 text-left text-[#4B5563]">Conditions</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Timestamp</th>
               </tr>
             </thead>
@@ -247,19 +318,29 @@ export function WatchlistDecisionTable({
                       </td>
                       <td className="px-3 py-2.5 font-semibold text-[#E2E8F0]">{item.symbol}</td>
                       <td className="px-3 py-2.5"><ScoreBar value={item.alpha_score} /></td>
+                      {useDynamic ? (
+                        dynCols.map((col) => (
+                          <td key={col.key} className="px-3 py-2.5 text-right tabular-nums text-[#CBD5E1] whitespace-nowrap">
+                            {fmtIndicatorCell(col.key, item.current_values?.[col.key])}
+                          </td>
+                        ))
+                      ) : (
+                        <>
+                          <td className={`px-3 py-2.5 font-medium ${palette.accent}`}>{summarizeIndicators(item)}</td>
+                          <td className="px-3 py-2.5 text-[#CBD5E1]">{summarizeConditions(item)}</td>
+                        </>
+                      )}
                       <td className="px-3 py-2.5 text-[#94A3B8]">{item.stage ?? "—"}</td>
                       <td className="px-3 py-2.5">
                         <span className={`inline-flex rounded px-2 py-0.5 text-[10px] font-semibold ${palette.badge}`}>
                           {item.status}
                         </span>
                       </td>
-                      <td className={`px-3 py-2.5 font-medium ${palette.accent}`}>{summarizeIndicators(item)}</td>
-                      <td className="px-3 py-2.5 text-[#CBD5E1]">{summarizeConditions(item)}</td>
                       <td className="px-3 py-2.5 text-[#64748B]">{item.timestamp ? new Date(item.timestamp).toLocaleString() : "—"}</td>
                     </tr>
                     {isExpanded && (
                       <tr className="border-b border-[#1A2035] bg-[#06080E]">
-                        <td colSpan={8} className="p-4">
+                        <td colSpan={totalCols} className="p-4">
                           <div className="grid gap-4 lg:grid-cols-2">
                             <TraceSection
                               title="Block Rules"
@@ -293,7 +374,8 @@ export function WatchlistDecisionTable({
             </tbody>
           </table>
         </div>
-      )}
+          );
+        })()}
     </div>
   );
 }

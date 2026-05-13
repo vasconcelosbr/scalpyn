@@ -5,6 +5,7 @@ import { WatchlistTable } from '@/components/watchlist/WatchlistTable';
 import {
   WatchlistDecisionTable,
   type RejectedAssetItem,
+  type IndicatorColumnSpec,
 } from '@/components/watchlist/RejectedAssetTable';
 import { apiFetch } from '@/lib/api';
 import { useWebSocket, getCurrentUserId } from '@/hooks/useWebSocket';
@@ -919,6 +920,8 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
   const [detailTab, setDetailTab] = useState<WatchlistDetailTab>('approved');
   const [approvedItems, setApprovedItems] = useState<RejectedAssetItem[]>([]);
   const [rejectedItems, setRejectedItems] = useState<RejectedAssetItem[]>([]);
+  const [approvedCols, setApprovedCols] = useState<IndicatorColumnSpec[]>([]);
+  const [rejectedCols, setRejectedCols] = useState<IndicatorColumnSpec[]>([]);
   const [futuresAssets, setFuturesAssets] = useState<FuturesAsset[]>([]);
   const [hideNeutral, setHideNeutral] = useState(false);
   const [loadingAssets, setLoadingAssets] = useState(false);
@@ -962,12 +965,18 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
           total: number;
           market_mode?: string;
           is_futures?: boolean;
+          profile_indicators?: IndicatorColumnSpec[];
         }>(assetsUrl),
-        apiFetch<{ items: RejectedAssetItem[] }>(`/pipeline/rejected?watchlist_id=${wl.id}`),
+        apiFetch<{
+          items: RejectedAssetItem[];
+          profile_indicators?: IndicatorColumnSpec[];
+        }>(`/pipeline/rejected?watchlist_id=${wl.id}`),
       ]);
       setApprovedItems(data.approved_items ?? []);
       setFuturesAssets(data.assets ?? []);
       setRejectedItems(rejected.items ?? []);
+      setApprovedCols(data.profile_indicators ?? []);
+      setRejectedCols(rejected.profile_indicators ?? data.profile_indicators ?? []);
       if (triggerParentRefresh && ((data.approved_items?.length ?? 0) > 0 || (data.assets?.length ?? 0) > 0)) {
         onRefreshed();
       }
@@ -1161,12 +1170,14 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
               items={approvedItems}
               loading={loadingAssets}
               emptyMessage="No approved assets for the current filters."
+              indicatorCols={approvedCols}
             />
           ) : (
             <WatchlistDecisionTable
               items={rejectedItems}
               loading={loadingRejected}
               emptyMessage="No rejected assets for the current filters."
+              indicatorCols={rejectedCols}
             />
           )}
         </div>
