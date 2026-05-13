@@ -94,3 +94,73 @@ sucesso (string vazia + `case` sem match = exit 0) → workers/beat zumbis
 NÃO são detectados, container responde HTTP indefinidamente sem consumir
 do broker. `procps` está em `apt-get install` no `backend/Dockerfile`.
 **Não remover**.
+
+---
+
+# Bloco 2 — Movido de `replit.md` em 2026-05-13
+
+Critério: gotchas estáveis há ≥4 dias com lint test ou runbook dedicado.
+
+## `acks_late=False` em tasks idempotentes beat-driven — Task #245
+
+O global `task_acks_late=True` + `task_reject_on_worker_lost=True`
+(`celery_app.py:246-247`) faz o broker re-entregar QUALQUER task que estoure
+`time_limit` (SIGKILL) — fora do contador de `max_retries=3` (que só conta
+`task.retry()` explícito). Em maio/2026 isso gerou loop infinito: UPSERT em
+`market_metadata` contendido estourava `command_timeout=60s` → outer tx
+poisoned → `_inner` raise → reject_on_worker_lost requeue → repete forever.
+Backlog `structural=473`/`execution=1206`. Fix em `celery_app.py:179-209`:
+`_NO_REQUEUE_ON_WORKER_LOSS = {"acks_late": False}` aplicado a `collect_5m`,
+`collect_all`, `compute_5m`, `compute`, `compute_30m`, `score`,
+`pipeline_scan.scan`, `health_checks.check_structural_coverage` (todas
+idempotentes — beat re-roda em ≤60s/5min/30min). Tasks de execução
+(`evaluate_signals`, `execute_buy_cycle`) MANTÊM o global `acks_late=True` —
+perder uma decisão de compra sem retry é inaceitável.
+**Não desligar acks_late nessas duas.**
+
+## Dois budgets distintos no probe Celery — Task #246
+
+`OperationalSnapshotService._refresh_celery` usa **dois** budgets independentes
+que NÃO devem ser unificados. `CELERY_INSPECT_TIMEOUT_S` (default 2s) é passado
+a cada `inspect(timeout=...)`; `CELERY_INSPECT_BUDGET_S` (default 8s) envolve
+o probe inteiro via `asyncio.wait_for`. Em maio/2026 os dois eram a MESMA
+constante (2s) — com Redis Labs externo em us-central1 + workers ocupados, as
+4 chamadas sequenciais passavam de 2s no agregado → snapshot reportava
+`Workers: 0` mesmo com 5 workers vivos. Fix complementar: snapshot path chama
+APENAS `active()` + `registered()` (2 broadcasts em vez de 4); `reserved`/
+`scheduled` continuam no shape mas sempre 0 (backlog real coberto pelo `LLEN`
+em `_refresh_redis`). Não restaurar essas duas chamadas ao snapshot.
+
+## `command_timeout=180s` para sessions Celery — Task #245
+
+API engine usa 60s (HTTP precisa falhar rápido); engine Celery
+(`database.py:240`) usa 180s porque `collect_market_data.collect_all/_5m`
+envolve o loop do universo inteiro em UMA outer transaction. SAVEPOINTs
+internos NÃO liberam row-locks — só o COMMIT do outer libera. Com 5 workers
+Cloud Run UPSERTando concorrentemente em `market_metadata`, contenção
+transiente regularmente passava de 60s. 180s dá folga sem ultrapassar
+`soft_time_limit=540s` do structural. Override via env
+`CELERY_DB_COMMAND_TIMEOUT`.
+
+## Pipeline recovery 2026-05-08/09 (4 incidentes correlacionados)
+
+`_MICRO_GUARDS` time_limit 180→480s + `idle_in_transaction_session_timeout=300s`
+no Celery engine + `scalpyn` API ingress
+`internal-and-cloud-load-balancing`→`all` + **`lock_timeout=30s` REVERTIDO em
+2026-05-09** (regressão em <12h: hot symbols ETH_USDT/GT_USDT/FLOKI_USDT/
+NEXO_USDT falhando com `LockNotAvailableError` cronicamente, backlog
+execution=2446). **NÃO re-adicionar `lock_timeout` < 120s sem medir p95
+lock-wait por símbolo em janela de 24h**. `command_timeout=180s` é o teto
+correto. Recovery manual (TX órfã):
+`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='scalpyn' AND state LIKE 'idle in transaction%' AND NOW()-state_change > INTERVAL '1 minute';`
+(Cloud Shell, com `--database=scalpyn` explícito). Rolling restart dos workers
+usa `--max-instances=1` depois `=2` (Cloud Run rejeita `=0`). Detalhes em
+`backend/docs/runbooks/2026-05-08-pipeline-recovery.md`.
+
+## Cloud Build trigger / YAML escape / secrets / GitHub sync (2026-05-08)
+
+5 lições do recovery em `backend/docs/runbooks/cloudbuild-trigger-history.md`.
+Resumo: SA do trigger é `330575088921-compute@`; shell vars em scripts inline
+precisam de `$$VAR`; `--update-secrets` é incremental (use `--remove-secrets`);
+`gcloud run services describe` NÃO aceita `--filter`; origin do Replit é
+gitsafe-backup.
