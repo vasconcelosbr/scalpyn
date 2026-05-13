@@ -90,6 +90,7 @@ interface ShadowTradeDetail extends ShadowTradeRead {
   updated_at: string | null;
   config_snapshot: Record<string, unknown> | null;
   features_snapshot: Record<string, unknown> | null;
+  features_snapshot_exit: Record<string, unknown> | null;
   decision_strategy: string | null;
   decision_score: number | null;
   decision_decision: string | null;
@@ -1533,14 +1534,18 @@ function DetailModal({
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
+                  gridTemplateColumns: "1fr 1fr 1fr",
                   gap: 16,
                 }}
               >
                 <SnapshotBlock title="Config Snapshot" data={data.config_snapshot} />
                 <SnapshotBlock
-                  title="Features Snapshot (indicadores no momento)"
+                  title="Indicadores na ENTRADA"
                   data={data.features_snapshot}
+                />
+                <SnapshotBlock
+                  title="Indicadores na SAÍDA"
+                  data={data.features_snapshot_exit}
                 />
               </div>
 

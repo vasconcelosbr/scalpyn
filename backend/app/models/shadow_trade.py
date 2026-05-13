@@ -80,6 +80,10 @@ class ShadowTrade(Base):
 
     config_snapshot = Column(JSONB, nullable=True)
     features_snapshot = Column(JSONB, nullable=True)
+    # Snapshot dos indicadores no momento em que TP/SL/TIMEOUT foi
+    # atingido (preenchido pelo ``shadow_trade_monitor`` no fechamento).
+    # Mesmo formato FLAT do entry (ver ``_build_features_snapshot``).
+    features_snapshot_exit = Column(JSONB, nullable=True)
 
     last_processed_time = Column(DateTime(timezone=True), nullable=True)
 

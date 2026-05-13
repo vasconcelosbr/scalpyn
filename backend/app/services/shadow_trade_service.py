@@ -49,7 +49,13 @@ SHADOW_LOOKBACK_MINUTES = int(os.environ.get("SHADOW_LOOKBACK_MINUTES", "10"))
 async def _next_1m_open(
     db: AsyncSession, symbol: str, after_ts: datetime
 ) -> tuple[Optional[float], Optional[datetime]]:
-    """Open + timestamp da próxima candle 1m de ``ohlcv`` após ``after_ts``."""
+    """Open + timestamp da próxima candle 1m de ``ohlcv`` após ``after_ts``.
+
+    Mantido como **fallback** legado para shadows criados antes do fluxo
+    "entry-at-decision-time" (Task 2026-05-13). Novo fluxo prefere
+    :func:`_get_current_price_multi_tf` para nunca deixar um shadow em
+    PENDING — a entrada é o preço corrente no instante da decisão.
+    """
     res = await db.execute(
         text(
             """
@@ -68,6 +74,40 @@ async def _next_1m_open(
     if row is None or row.open is None:
         return None, None
     return float(row.open), row.time
+
+
+async def _get_current_price_multi_tf(
+    db: AsyncSession, symbol: str
+) -> tuple[Optional[float], Optional[datetime]]:
+    """Último ``close`` disponível de ``ohlcv`` em qualquer timeframe rápido.
+
+    Por que multi-timeframe: em produção o coletor não ingere 1m
+    universalmente — muitos símbolos só têm 5m / 15m / 30m. Limitar a
+    1m deixava o shadow eternamente sem entry_price (status PENDING),
+    quebrando a expectativa do usuário de "executar trade simulado com
+    o preço do momento" assim que a decisão ALLOW chega.
+
+    Estratégia: pegar a candle MAIS RECENTE entre 1m/5m/15m/30m e usar
+    ``close`` como preço de entrada simulado + ``time`` como
+    ``entry_timestamp``. Cobertura prática perto de 100% do pool ativo.
+    """
+    res = await db.execute(
+        text(
+            """
+            SELECT close, time
+              FROM ohlcv
+             WHERE symbol = :s
+               AND timeframe IN ('1m', '5m', '15m', '30m')
+             ORDER BY time DESC
+             LIMIT 1
+            """
+        ),
+        {"s": symbol},
+    )
+    row = res.fetchone()
+    if row is None or row.close is None:
+        return None, None
+    return float(row.close), row.time
 
 
 async def _resolve_decision(
@@ -145,14 +185,16 @@ _INSERT_SHADOW_SQL = text("""
         decision_id, user_id, symbol, strategy, direction,
         amount_usdt, entry_price, entry_timestamp,
         tp_price, sl_price, tp_pct, sl_pct, timeout_candles,
-        status, skip_reason, config_snapshot, features_snapshot
+        status, skip_reason, config_snapshot, features_snapshot,
+        last_processed_time
     ) VALUES (
         :decision_id, :user_id, :symbol, :strategy, :direction,
         :amount_usdt, :entry_price, :entry_timestamp,
         :tp_price, :sl_price, :tp_pct, :sl_pct, :timeout_candles,
         :status, :skip_reason,
         CAST(:config_snapshot AS JSONB),
-        CAST(:features_snapshot AS JSONB)
+        CAST(:features_snapshot AS JSONB),
+        :last_processed_time
     )
     ON CONFLICT (decision_id) DO NOTHING
     RETURNING id
@@ -181,7 +223,21 @@ async def _create_from_decision(
     sl_pct = float(user_config.get("sl_pct") or 0.0)
     timeout_candles = int(user_config.get("timeout_candles") or SHADOW_TIMEOUT_CANDLES)
 
-    entry_price, entry_ts = await _next_1m_open(db, decision.symbol, decision.created_at)
+    # Entry-at-decision-time (Task 2026-05-13): preço corrente no
+    # instante da decisão ALLOW vira entry_price imediatamente.
+    # Fallback para next-1m-open mantém compat caso o pool não tenha
+    # NENHUMA candle recente do símbolo (cenário raro, e ainda assim o
+    # monitor reprocessa via _ensure_entry).
+    entry_price, entry_ts = await _get_current_price_multi_tf(
+        db, decision.symbol
+    )
+    initial_status = "RUNNING"
+    if entry_price is None:
+        entry_price, entry_ts = await _next_1m_open(
+            db, decision.symbol, decision.created_at
+        )
+        if entry_price is None:
+            initial_status = "PENDING"
 
     if entry_price is not None and entry_price > 0 and tp_pct > 0 and sl_pct > 0:
         tp_price = entry_price * (1 + tp_pct / 100.0)
@@ -214,10 +270,14 @@ async def _create_from_decision(
             "tp_pct": tp_pct or None,
             "sl_pct": sl_pct or None,
             "timeout_candles": timeout_candles,
-            "status": "PENDING",
+            "status": initial_status,
             "skip_reason": skip_reason,
             "config_snapshot": json.dumps(config_snap, default=str),
             "features_snapshot": json.dumps(features_snap, default=str),
+            # Bookmark do monitor: começa em entry_ts para que a
+            # primeira janela de candles avaliada seja "tudo após a
+            # entrada" (e não tudo desde sempre).
+            "last_processed_time": entry_ts,
         },
     )
     row = res.fetchone()

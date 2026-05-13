@@ -39,7 +39,7 @@ from sqlalchemy import select, text
 
 from .celery_app import celery_app
 from ..models.shadow_trade import ShadowTrade
-from ..services import shadow_trade_service
+from ..services import indicators_provider, shadow_trade_service
 
 logger = logging.getLogger(__name__)
 
@@ -105,23 +105,41 @@ async def _fetch_candles(
 async def _ensure_entry(db, shadow: ShadowTrade) -> bool:
     """Garante que o shadow tem ``entry_price`` + ``entry_timestamp``.
 
-    Se faltar (cenário onde, no momento da Fase 2, ainda não havia
-    candle 1m), tenta resolver agora a partir de ``shadow.created_at``.
-    Recomputa TP/SL com base no entry novo + tp_pct/sl_pct.
+    Novo fluxo (Task 2026-05-13): a criação já tenta preencher entry
+    com o preço CORRENTE multi-timeframe (1m/5m/15m/30m), então a
+    grande maioria dos shadows nasce em RUNNING. Esse helper cobre:
 
-    Retorna ``True`` se o shadow está pronto pra ser processado.
+    * shadows legados criados antes da migration (status PENDING +
+      entry NULL — backfill on-the-fly aqui);
+    * raros casos onde nem candle 1m, nem 5m/15m/30m estavam
+      disponíveis no instante da decisão.
+
+    Estratégia: tenta primeiro o preço corrente multi-tf (mesmo helper
+    usado pelo creator). Só recai pro ``_next_1m_open`` legado se nada
+    disponível — mantendo o contrato antigo como último recurso.
     """
     if shadow.entry_price is not None and shadow.entry_timestamp is not None:
         return True
 
-    entry_price, entry_ts = await shadow_trade_service._next_1m_open(
-        db, shadow.symbol, shadow.created_at
+    entry_price, entry_ts = await shadow_trade_service._get_current_price_multi_tf(
+        db, shadow.symbol
     )
+    if entry_price is None or entry_ts is None:
+        entry_price, entry_ts = await shadow_trade_service._next_1m_open(
+            db, shadow.symbol, shadow.created_at
+        )
     if entry_price is None or entry_ts is None:
         return False
 
     shadow.entry_price = entry_price
     shadow.entry_timestamp = entry_ts
+    # Promove legado a RUNNING assim que a entrada é resolvida — caso
+    # contrário, se não houver candles 1m novas neste tick, o trade
+    # ficaria PENDING mesmo já tendo entry_price (ressalva do review).
+    if shadow.status == "PENDING":
+        shadow.status = "RUNNING"
+    if shadow.last_processed_time is None:
+        shadow.last_processed_time = entry_ts
     if (
         shadow.tp_pct is not None
         and shadow.sl_pct is not None
@@ -222,6 +240,35 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
     shadow.status = "COMPLETED"
     shadow.completed_at = datetime.now(timezone.utc)
     shadow.last_processed_time = exit_ts
+
+    # Captura indicadores no momento da SAÍDA (Task 2026-05-13).
+    # Mesmo formato FLAT do entry (build_indicators_snapshot devolve o
+    # envelope {value, source_group, ts, stale}; aqui achatamos para
+    # {key: value} via _build_features_snapshot-style, alimentando o
+    # ML com "indicadores na entrada vs indicadores na saída").
+    # Nunca propaga falha — perda de snapshot de saída não anula o
+    # outcome; só loga e segue.
+    try:
+        merged_map = await indicators_provider.get_merged_indicators(
+            db, [shadow.symbol], include_stale=True
+        )
+        merged = merged_map.get(shadow.symbol)
+        if merged is not None:
+            envelope = indicators_provider.build_indicators_snapshot(
+                merged, keys=list(merged.values.keys())
+            )
+            shadow.features_snapshot_exit = {
+                k: (v.get("value") if isinstance(v, dict) else v)
+                for k, v in envelope.items()
+            }
+        else:
+            shadow.features_snapshot_exit = {}
+    except Exception:
+        logger.exception(
+            "[shadow-monitor] features_snapshot_exit failed for shadow_id=%s "
+            "— outcome persisted, exit snapshot empty",
+            shadow.id,
+        )
 
     try:
         await shadow_trade_service.record_as_simulation(db, shadow)

@@ -234,6 +234,9 @@ def _to_detail(
         features_snapshot=row.features_snapshot
         if isinstance(row.features_snapshot, dict)
         else None,
+        features_snapshot_exit=row.features_snapshot_exit
+        if isinstance(row.features_snapshot_exit, dict)
+        else None,
     )
 
 
