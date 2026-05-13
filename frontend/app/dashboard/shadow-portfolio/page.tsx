@@ -1,0 +1,1512 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Activity,
+  AlertTriangle,
+  ArrowDownRight,
+  ArrowUpRight,
+  Clock,
+  Hourglass,
+  RefreshCw,
+  Target,
+  TrendingDown,
+  TrendingUp,
+  X,
+} from "lucide-react";
+import { apiGet, ApiError } from "@/lib/api";
+
+// ── theme (alinhado com /dashboard/performance) ──────────────────────────────
+const C = {
+  bg: "#0A0B10",
+  surface: "#10121A",
+  elevated: "#161824",
+  border: "rgba(255,255,255,0.06)",
+  borderStrong: "rgba(255,255,255,0.12)",
+  text: "#E6E8EE",
+  muted: "#8A91A4",
+  dim: "#5A6075",
+  green: "#22B97A",
+  red: "#E5484D",
+  blue: "#4F7BF7",
+  amber: "#F2A33A",
+  purple: "#9D7CF7",
+} as const;
+
+// ── domain types (espelham backend/app/schemas/shadow_trade.py) ──────────────
+type ShadowStatus = "PENDING" | "RUNNING" | "COMPLETED" | "ERROR";
+type ShadowOutcome = "TP_HIT" | "SL_HIT" | "TIMEOUT" | null;
+
+interface ShadowTradeRead {
+  id: string;
+  symbol: string;
+  direction: string | null;
+  entry_price: number | null;
+  tp_price: number | null;
+  sl_price: number | null;
+  amount_usdt: number;
+  outcome: ShadowOutcome;
+  pnl_pct: number | null;
+  pnl_usdt: number | null;
+  status: ShadowStatus;
+  skip_reason: string | null;
+  created_at: string | null;
+  completed_at: string | null;
+}
+
+interface ShadowTradeListResponse {
+  items: ShadowTradeRead[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+interface ShadowTradeSummary {
+  total: number;
+  pending: number;
+  completed: number;
+  win: number;
+  loss: number;
+  timeout: number;
+  win_rate: number;
+  total_pnl_usdt: number;
+  avg_pnl_pct: number;
+  period_start: string | null;
+  period_end: string | null;
+}
+
+interface ShadowTradeDetail extends ShadowTradeRead {
+  strategy: string | null;
+  entry_timestamp: string | null;
+  exit_price: number | null;
+  exit_timestamp: string | null;
+  tp_pct: number | null;
+  sl_pct: number | null;
+  timeout_candles: number | null;
+  holding_seconds: number | null;
+  decision_id: number | null;
+  last_processed_time: string | null;
+  updated_at: string | null;
+  config_snapshot: Record<string, unknown> | null;
+  features_snapshot: Record<string, unknown> | null;
+}
+
+// ── filter shape ─────────────────────────────────────────────────────────────
+type StatusFilter = "ALL" | "OPEN" | "TP_HIT" | "SL_HIT" | "TIMEOUT";
+
+interface FilterState {
+  status: StatusFilter;
+  symbol: string;
+  minDate: string; // YYYY-MM-DD
+  maxDate: string;
+  page: number;
+  pageSize: number;
+}
+
+const DEFAULT_FILTER: FilterState = {
+  status: "ALL",
+  symbol: "",
+  minDate: "",
+  maxDate: "",
+  page: 1,
+  pageSize: 50,
+};
+
+// ── formatters ───────────────────────────────────────────────────────────────
+function fmtUsd(n: number | null | undefined, dp = 2): string {
+  if (n === null || n === undefined || !isFinite(n)) return "—";
+  const abs = Math.abs(n);
+  const formatted = abs.toLocaleString("en-US", {
+    minimumFractionDigits: dp,
+    maximumFractionDigits: dp,
+  });
+  return n < 0 ? `-$${formatted}` : `$${formatted}`;
+}
+
+function fmtPct(n: number | null | undefined, dp = 2): string {
+  if (n === null || n === undefined || !isFinite(n)) return "—";
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${n.toFixed(dp)}%`;
+}
+
+function fmtPrice(n: number | null | undefined): string {
+  if (n === null || n === undefined || !isFinite(n)) return "—";
+  const abs = Math.abs(n);
+  if (abs === 0) return "$0";
+  if (abs < 0.0001) return `$${n.toExponential(2)}`;
+  if (abs < 0.01) return `$${n.toFixed(6)}`;
+  if (abs < 1) return `$${n.toFixed(4)}`;
+  if (abs < 1000) return `$${n.toFixed(2)}`;
+  if (abs < 1_000_000) return `$${(n / 1000).toFixed(2)}K`;
+  return `$${(n / 1_000_000).toFixed(2)}M`;
+}
+
+function fmtDateTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "—";
+    return d.toLocaleString("pt-BR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "—";
+  }
+}
+
+function fmtHolding(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || seconds < 0) return "—";
+  if (seconds < 60) return `${seconds}s`;
+  const mins = Math.floor(seconds / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  if (hours < 24) return `${hours}h ${remMins}m`;
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return `${days}d ${remHours}h`;
+}
+
+// ── status / outcome helpers ─────────────────────────────────────────────────
+interface BadgeStyle {
+  bg: string;
+  fg: string;
+  border: string;
+  label: string;
+}
+
+function statusStyle(status: ShadowStatus): BadgeStyle {
+  switch (status) {
+    case "PENDING":
+      return { bg: `${C.amber}22`, fg: C.amber, border: `${C.amber}55`, label: "Pendente" };
+    case "RUNNING":
+      return { bg: `${C.blue}22`, fg: C.blue, border: `${C.blue}55`, label: "Em andamento" };
+    case "COMPLETED":
+      return { bg: `${C.muted}22`, fg: C.text, border: `${C.muted}55`, label: "Finalizado" };
+    case "ERROR":
+      return { bg: `${C.red}22`, fg: C.red, border: `${C.red}55`, label: "Erro" };
+  }
+}
+
+function outcomeStyle(outcome: ShadowOutcome): BadgeStyle | null {
+  if (!outcome) return null;
+  switch (outcome) {
+    case "TP_HIT":
+      return { bg: `${C.green}22`, fg: C.green, border: `${C.green}55`, label: "TP" };
+    case "SL_HIT":
+      return { bg: `${C.red}22`, fg: C.red, border: `${C.red}55`, label: "SL" };
+    case "TIMEOUT":
+      return { bg: `${C.purple}22`, fg: C.purple, border: `${C.purple}55`, label: "Timeout" };
+  }
+}
+
+function Badge({ style }: { style: BadgeStyle }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        background: style.bg,
+        color: style.fg,
+        border: `1px solid ${style.border}`,
+        borderRadius: 4,
+        padding: "2px 8px",
+        fontSize: 10.5,
+        fontWeight: 600,
+        letterSpacing: 0.4,
+        textTransform: "uppercase",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {style.label}
+    </span>
+  );
+}
+
+// ── stat card (alinhado com /dashboard/performance) ──────────────────────────
+function StatCard({
+  label,
+  value,
+  sub,
+  accent,
+  icon,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  accent?: "green" | "red" | "amber" | "blue" | "purple";
+  icon?: React.ReactNode;
+}) {
+  const accentColor =
+    accent === "green"
+      ? C.green
+      : accent === "red"
+      ? C.red
+      : accent === "amber"
+      ? C.amber
+      : accent === "blue"
+      ? C.blue
+      : accent === "purple"
+      ? C.purple
+      : C.text;
+  return (
+    <div
+      style={{
+        background: C.elevated,
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        padding: "14px 16px",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          fontSize: 11,
+          color: C.muted,
+          letterSpacing: 0.6,
+          textTransform: "uppercase",
+        }}
+      >
+        {icon}
+        <span>{label}</span>
+      </div>
+      <div
+        style={{
+          fontSize: 22,
+          fontWeight: 600,
+          fontVariantNumeric: "tabular-nums",
+          color: accentColor,
+          marginTop: 6,
+        }}
+      >
+        {value}
+      </div>
+      {sub ? (
+        <div
+          style={{
+            fontSize: 11,
+            color: C.muted,
+            fontVariantNumeric: "tabular-nums",
+            marginTop: 4,
+          }}
+        >
+          {sub}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ── filter bar ───────────────────────────────────────────────────────────────
+const STATUS_TABS: { key: StatusFilter; label: string }[] = [
+  { key: "ALL", label: "Todos" },
+  { key: "OPEN", label: "Em aberto" },
+  { key: "TP_HIT", label: "TP" },
+  { key: "SL_HIT", label: "SL" },
+  { key: "TIMEOUT", label: "Timeout" },
+];
+
+function FilterBar({
+  filter,
+  onChange,
+  onRefresh,
+  loading,
+}: {
+  filter: FilterState;
+  onChange: (next: FilterState) => void;
+  onRefresh: () => void;
+  loading: boolean;
+}) {
+  return (
+    <div
+      style={{
+        background: C.surface,
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        padding: "10px 14px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        flexWrap: "wrap",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        {STATUS_TABS.map((tab) => {
+          const active = filter.status === tab.key;
+          return (
+            <button
+              key={tab.key}
+              onClick={() => onChange({ ...filter, status: tab.key, page: 1 })}
+              style={{
+                background: active ? C.elevated : "transparent",
+                color: active ? C.text : C.muted,
+                border: `1px solid ${active ? C.borderStrong : C.border}`,
+                borderRadius: 6,
+                padding: "5px 12px",
+                fontSize: 11.5,
+                cursor: "pointer",
+                letterSpacing: 0.4,
+              }}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <input
+          type="text"
+          value={filter.symbol}
+          onChange={(e) =>
+            onChange({ ...filter, symbol: e.target.value.toUpperCase(), page: 1 })
+          }
+          placeholder="Símbolo (ex.: BTC_USDT)"
+          style={{
+            background: C.elevated,
+            border: `1px solid ${C.border}`,
+            color: C.text,
+            borderRadius: 6,
+            padding: "6px 10px",
+            fontSize: 11.5,
+            width: 170,
+            outline: "none",
+          }}
+        />
+        <input
+          type="date"
+          value={filter.minDate}
+          onChange={(e) => onChange({ ...filter, minDate: e.target.value, page: 1 })}
+          style={{
+            background: C.elevated,
+            border: `1px solid ${C.border}`,
+            color: C.text,
+            borderRadius: 6,
+            padding: "6px 10px",
+            fontSize: 11.5,
+            outline: "none",
+            colorScheme: "dark",
+          }}
+          title="Data inicial"
+        />
+        <span style={{ color: C.dim, fontSize: 11 }}>até</span>
+        <input
+          type="date"
+          value={filter.maxDate}
+          onChange={(e) => onChange({ ...filter, maxDate: e.target.value, page: 1 })}
+          style={{
+            background: C.elevated,
+            border: `1px solid ${C.border}`,
+            color: C.text,
+            borderRadius: 6,
+            padding: "6px 10px",
+            fontSize: 11.5,
+            outline: "none",
+            colorScheme: "dark",
+          }}
+          title="Data final"
+        />
+        <button
+          onClick={onRefresh}
+          disabled={loading}
+          style={{
+            background: C.elevated,
+            border: `1px solid ${C.borderStrong}`,
+            color: C.text,
+            borderRadius: 6,
+            padding: "6px 12px",
+            fontSize: 11.5,
+            cursor: loading ? "default" : "pointer",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            opacity: loading ? 0.6 : 1,
+          }}
+          title="Atualizar"
+        >
+          <RefreshCw size={13} className={loading ? "spin" : ""} />
+          {loading ? "Carregando…" : "Atualizar"}
+        </button>
+      </div>
+      <style jsx>{`
+        .spin {
+          animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+          from {
+            transform: rotate(0deg);
+          }
+          to {
+            transform: rotate(360deg);
+          }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ── summary cards ────────────────────────────────────────────────────────────
+function SummaryCards({
+  data,
+  loading,
+}: {
+  data: ShadowTradeSummary | null;
+  loading: boolean;
+}) {
+  const placeholder = loading || !data;
+  const pnlAccent: "green" | "red" =
+    data && data.total_pnl_usdt >= 0 ? "green" : "red";
+  const avgAccent: "green" | "red" = data && data.avg_pnl_pct >= 0 ? "green" : "red";
+  const winRateAccent: "green" | "red" | undefined = !data
+    ? undefined
+    : data.win_rate >= 50
+    ? "green"
+    : "red";
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(5, 1fr)",
+        gap: 12,
+      }}
+    >
+      <StatCard
+        label="Total"
+        icon={<Activity size={12} />}
+        value={placeholder ? "—" : String(data!.total)}
+        sub={placeholder ? "" : `${data!.completed} finalizados`}
+      />
+      <StatCard
+        label="Em aberto"
+        icon={<Hourglass size={12} />}
+        value={placeholder ? "—" : String(data!.pending)}
+        accent="amber"
+        sub="PENDING + RUNNING"
+      />
+      <StatCard
+        label="Win Rate"
+        icon={<Target size={12} />}
+        value={placeholder ? "—" : `${data!.win_rate.toFixed(1)}%`}
+        accent={winRateAccent}
+        sub={
+          placeholder
+            ? ""
+            : `W ${data!.win} · L ${data!.loss} · TO ${data!.timeout}`
+        }
+      />
+      <StatCard
+        label="P&L Total"
+        icon={
+          data && data.total_pnl_usdt >= 0 ? (
+            <ArrowUpRight size={12} />
+          ) : (
+            <ArrowDownRight size={12} />
+          )
+        }
+        value={placeholder ? "—" : fmtUsd(data!.total_pnl_usdt)}
+        accent={pnlAccent}
+        sub="Soma dos finalizados"
+      />
+      <StatCard
+        label="P&L Médio"
+        icon={
+          data && data.avg_pnl_pct >= 0 ? (
+            <TrendingUp size={12} />
+          ) : (
+            <TrendingDown size={12} />
+          )
+        }
+        value={placeholder ? "—" : fmtPct(data!.avg_pnl_pct)}
+        accent={avgAccent}
+        sub="Por trade finalizado"
+      />
+    </div>
+  );
+}
+
+// ── trade table ──────────────────────────────────────────────────────────────
+const COLS: { key: string; label: string; align?: "left" | "right" | "center" }[] = [
+  { key: "created_at", label: "Aberto em" },
+  { key: "symbol", label: "Símbolo" },
+  { key: "status", label: "Status", align: "center" },
+  { key: "entry", label: "Entrada", align: "right" },
+  { key: "tp", label: "TP", align: "right" },
+  { key: "sl", label: "SL", align: "right" },
+  { key: "outcome", label: "Resultado", align: "center" },
+  { key: "pnl_pct", label: "P&L %", align: "right" },
+  { key: "pnl_usdt", label: "P&L $", align: "right" },
+  { key: "completed_at", label: "Fechado em" },
+];
+
+function TradeTable({
+  items,
+  loading,
+  error,
+  onRowClick,
+}: {
+  items: ShadowTradeRead[];
+  loading: boolean;
+  error: string | null;
+  onRowClick: (id: string) => void;
+}) {
+  if (error) {
+    return (
+      <div
+        style={{
+          background: C.surface,
+          border: `1px solid ${C.red}55`,
+          borderRadius: 10,
+          padding: 16,
+          color: C.red,
+          fontSize: 12,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        <AlertTriangle size={14} />
+        Erro ao carregar shadow trades: {error}
+      </div>
+    );
+  }
+
+  if (loading && items.length === 0) {
+    return (
+      <div
+        style={{
+          background: C.surface,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          padding: 24,
+          color: C.muted,
+          fontSize: 12,
+          textAlign: "center",
+        }}
+      >
+        Carregando…
+      </div>
+    );
+  }
+
+  if (!loading && items.length === 0) {
+    return (
+      <div
+        style={{
+          background: C.surface,
+          border: `1px solid ${C.border}`,
+          borderRadius: 10,
+          padding: 24,
+          color: C.muted,
+          fontSize: 12,
+          textAlign: "center",
+        }}
+      >
+        Nenhum shadow trade no filtro selecionado.
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        background: C.surface,
+        border: `1px solid ${C.border}`,
+        borderRadius: 10,
+        overflow: "auto",
+      }}
+    >
+      <table
+        style={{
+          width: "100%",
+          borderCollapse: "collapse",
+          fontSize: 12,
+          color: C.text,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        <thead>
+          <tr style={{ background: C.elevated }}>
+            {COLS.map((col) => (
+              <th
+                key={col.key}
+                style={{
+                  textAlign: col.align ?? "left",
+                  padding: "10px 12px",
+                  fontSize: 10.5,
+                  fontWeight: 600,
+                  color: C.muted,
+                  letterSpacing: 0.5,
+                  textTransform: "uppercase",
+                  borderBottom: `1px solid ${C.border}`,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {col.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((it) => {
+            const sStyle = statusStyle(it.status);
+            const oStyle = outcomeStyle(it.outcome);
+            const pnlPctColor =
+              it.pnl_pct === null
+                ? C.dim
+                : it.pnl_pct >= 0
+                ? C.green
+                : C.red;
+            const pnlUsdtColor =
+              it.pnl_usdt === null
+                ? C.dim
+                : it.pnl_usdt >= 0
+                ? C.green
+                : C.red;
+            return (
+              <tr
+                key={it.id}
+                onClick={() => onRowClick(it.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onRowClick(it.id);
+                  }
+                }}
+                tabIndex={0}
+                role="button"
+                aria-label={`Abrir detalhe de ${it.symbol}`}
+                style={{
+                  borderBottom: `1px solid ${C.border}`,
+                  cursor: "pointer",
+                  transition: "background 80ms ease",
+                  outline: "none",
+                }}
+                onFocus={(e) =>
+                  ((e.currentTarget as HTMLElement).style.background = C.elevated)
+                }
+                onBlur={(e) =>
+                  ((e.currentTarget as HTMLElement).style.background = "transparent")
+                }
+                onMouseEnter={(e) =>
+                  ((e.currentTarget as HTMLElement).style.background = C.elevated)
+                }
+                onMouseLeave={(e) =>
+                  ((e.currentTarget as HTMLElement).style.background = "transparent")
+                }
+              >
+                <td style={{ padding: "10px 12px", whiteSpace: "nowrap", color: C.muted }}>
+                  {fmtDateTime(it.created_at)}
+                </td>
+                <td style={{ padding: "10px 12px", fontWeight: 600 }}>{it.symbol}</td>
+                <td style={{ padding: "10px 12px", textAlign: "center" }}>
+                  <Badge style={sStyle} />
+                </td>
+                <td style={{ padding: "10px 12px", textAlign: "right" }}>
+                  {fmtPrice(it.entry_price)}
+                </td>
+                <td style={{ padding: "10px 12px", textAlign: "right", color: C.green }}>
+                  {fmtPrice(it.tp_price)}
+                </td>
+                <td style={{ padding: "10px 12px", textAlign: "right", color: C.red }}>
+                  {fmtPrice(it.sl_price)}
+                </td>
+                <td style={{ padding: "10px 12px", textAlign: "center" }}>
+                  {oStyle ? <Badge style={oStyle} /> : <span style={{ color: C.dim }}>—</span>}
+                </td>
+                <td
+                  style={{
+                    padding: "10px 12px",
+                    textAlign: "right",
+                    color: pnlPctColor,
+                    fontWeight: 600,
+                  }}
+                >
+                  {fmtPct(it.pnl_pct)}
+                </td>
+                <td
+                  style={{
+                    padding: "10px 12px",
+                    textAlign: "right",
+                    color: pnlUsdtColor,
+                    fontWeight: 600,
+                  }}
+                >
+                  {fmtUsd(it.pnl_usdt)}
+                </td>
+                <td style={{ padding: "10px 12px", whiteSpace: "nowrap", color: C.muted }}>
+                  {fmtDateTime(it.completed_at)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── pagination ───────────────────────────────────────────────────────────────
+function Pagination({
+  page,
+  pageSize,
+  total,
+  onChange,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  onChange: (page: number) => void;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const to = Math.min(page * pageSize, total);
+
+  const btn = (label: string, target: number, disabled: boolean) => (
+    <button
+      onClick={() => !disabled && onChange(target)}
+      disabled={disabled}
+      style={{
+        background: C.elevated,
+        border: `1px solid ${C.border}`,
+        color: disabled ? C.dim : C.text,
+        borderRadius: 6,
+        padding: "5px 10px",
+        fontSize: 11.5,
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "8px 4px",
+        fontSize: 11.5,
+        color: C.muted,
+      }}
+    >
+      <span>
+        {from}–{to} de {total}
+      </span>
+      <div style={{ display: "flex", gap: 6 }}>
+        {btn("«", 1, page === 1)}
+        {btn("‹", page - 1, page === 1)}
+        <span style={{ alignSelf: "center", padding: "0 6px" }}>
+          {page} / {totalPages}
+        </span>
+        {btn("›", page + 1, page >= totalPages)}
+        {btn("»", totalPages, page >= totalPages)}
+      </div>
+    </div>
+  );
+}
+
+// ── detail modal ─────────────────────────────────────────────────────────────
+function DetailRow({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: React.ReactNode;
+  color?: string;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        padding: "8px 0",
+        borderBottom: `1px solid ${C.border}`,
+        fontSize: 12,
+      }}
+    >
+      <span style={{ color: C.muted }}>{label}</span>
+      <span
+        style={{
+          color: color ?? C.text,
+          fontWeight: 500,
+          fontVariantNumeric: "tabular-nums",
+          textAlign: "right",
+        }}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function SnapshotBlock({
+  title,
+  data,
+}: {
+  title: string;
+  data: Record<string, unknown> | null;
+}) {
+  if (!data || Object.keys(data).length === 0) {
+    return (
+      <div>
+        <div
+          style={{
+            fontSize: 11,
+            color: C.muted,
+            letterSpacing: 0.6,
+            textTransform: "uppercase",
+            marginBottom: 8,
+          }}
+        >
+          {title}
+        </div>
+        <div
+          style={{
+            fontSize: 11.5,
+            color: C.dim,
+            background: C.bg,
+            border: `1px solid ${C.border}`,
+            borderRadius: 6,
+            padding: 10,
+          }}
+        >
+          Sem dados.
+        </div>
+      </div>
+    );
+  }
+  const entries = Object.entries(data).sort((a, b) => a[0].localeCompare(b[0]));
+  return (
+    <div>
+      <div
+        style={{
+          fontSize: 11,
+          color: C.muted,
+          letterSpacing: 0.6,
+          textTransform: "uppercase",
+          marginBottom: 8,
+        }}
+      >
+        {title}
+      </div>
+      <div
+        style={{
+          background: C.bg,
+          border: `1px solid ${C.border}`,
+          borderRadius: 6,
+          padding: "8px 12px",
+          maxHeight: 240,
+          overflow: "auto",
+        }}
+      >
+        {entries.map(([k, v]) => {
+          let display: string;
+          if (v === null || v === undefined) {
+            display = "—";
+          } else if (typeof v === "number") {
+            display = Number.isInteger(v) ? String(v) : v.toFixed(4);
+          } else if (typeof v === "boolean") {
+            display = v ? "true" : "false";
+          } else if (typeof v === "object") {
+            display = JSON.stringify(v);
+          } else {
+            display = String(v);
+          }
+          return (
+            <div
+              key={k}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                fontSize: 11.5,
+                padding: "4px 0",
+                borderBottom: `1px solid ${C.border}`,
+                fontFamily:
+                  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+              }}
+            >
+              <span style={{ color: C.muted }}>{k}</span>
+              <span
+                style={{
+                  color: C.text,
+                  textAlign: "right",
+                  wordBreak: "break-all",
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                {display}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function DetailModal({
+  shadowId,
+  onClose,
+}: {
+  shadowId: string;
+  onClose: () => void;
+}) {
+  const [data, setData] = useState<ShadowTradeDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    apiGet<ShadowTradeDetail>(`/api/shadow-trades/${shadowId}`)
+      .then((res) => {
+        if (!cancelled) setData(res);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          const msg =
+            err instanceof ApiError
+              ? err.toDescriptiveString()
+              : err?.message ?? "Erro desconhecido";
+          setError(msg);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [shadowId]);
+
+  // Close on Escape
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [onClose]);
+
+  return (
+    <div
+      onClick={onClose}
+      role="presentation"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(6,7,11,0.65)",
+        backdropFilter: "blur(4px)",
+        zIndex: 100,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Detalhe do shadow trade"
+        style={{
+          background: C.surface,
+          border: `1px solid ${C.borderStrong}`,
+          borderRadius: 12,
+          width: "min(720px, 100%)",
+          maxHeight: "90vh",
+          overflow: "auto",
+          boxShadow: "0 24px 64px rgba(0,0,0,0.5)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "14px 18px",
+            borderBottom: `1px solid ${C.border}`,
+            position: "sticky",
+            top: 0,
+            background: C.surface,
+            zIndex: 1,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>
+              {data ? data.symbol : "Carregando…"}
+            </div>
+            {data ? <Badge style={statusStyle(data.status)} /> : null}
+            {data && outcomeStyle(data.outcome) ? (
+              <Badge style={outcomeStyle(data.outcome)!} />
+            ) : null}
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Fechar"
+            style={{
+              background: "transparent",
+              border: "none",
+              color: C.muted,
+              cursor: "pointer",
+              padding: 4,
+              display: "flex",
+            }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div style={{ padding: 18 }}>
+          {error ? (
+            <div
+              style={{
+                color: C.red,
+                fontSize: 12,
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+              }}
+            >
+              <AlertTriangle size={14} /> {error}
+            </div>
+          ) : loading || !data ? (
+            <div style={{ color: C.muted, fontSize: 12 }}>Carregando detalhes…</div>
+          ) : (
+            <div style={{ display: "grid", gap: 16 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 18,
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: C.muted,
+                      letterSpacing: 0.6,
+                      textTransform: "uppercase",
+                      marginBottom: 4,
+                    }}
+                  >
+                    Trade
+                  </div>
+                  <DetailRow
+                    label="Direção"
+                    value={data.direction ?? "—"}
+                  />
+                  <DetailRow label="Estratégia" value={data.strategy ?? "—"} />
+                  <DetailRow
+                    label="Aberto em"
+                    value={fmtDateTime(data.entry_timestamp ?? data.created_at)}
+                  />
+                  <DetailRow
+                    label="Fechado em"
+                    value={fmtDateTime(data.exit_timestamp ?? data.completed_at)}
+                  />
+                  <DetailRow
+                    label="Tempo em posição"
+                    value={fmtHolding(data.holding_seconds)}
+                  />
+                  <DetailRow
+                    label="Decision ID"
+                    value={data.decision_id ?? "—"}
+                  />
+                </div>
+
+                <div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: C.muted,
+                      letterSpacing: 0.6,
+                      textTransform: "uppercase",
+                      marginBottom: 4,
+                    }}
+                  >
+                    Preços
+                  </div>
+                  <DetailRow
+                    label="Entrada"
+                    value={fmtPrice(data.entry_price)}
+                  />
+                  <DetailRow
+                    label="Take Profit"
+                    value={`${fmtPrice(data.tp_price)} (${fmtPct(data.tp_pct)})`}
+                    color={C.green}
+                  />
+                  <DetailRow
+                    label="Stop Loss"
+                    value={`${fmtPrice(data.sl_price)} (${fmtPct(data.sl_pct)})`}
+                    color={C.red}
+                  />
+                  <DetailRow
+                    label="Saída"
+                    value={fmtPrice(data.exit_price)}
+                  />
+                  <DetailRow
+                    label="Tamanho"
+                    value={fmtUsd(data.amount_usdt)}
+                  />
+                  <DetailRow
+                    label="P&L"
+                    value={`${fmtPct(data.pnl_pct)} (${fmtUsd(data.pnl_usdt)})`}
+                    color={
+                      data.pnl_usdt === null
+                        ? undefined
+                        : data.pnl_usdt >= 0
+                        ? C.green
+                        : C.red
+                    }
+                  />
+                </div>
+              </div>
+
+              {data.skip_reason ? (
+                <div
+                  style={{
+                    background: `${C.amber}11`,
+                    border: `1px solid ${C.amber}44`,
+                    borderRadius: 8,
+                    padding: "10px 12px",
+                    fontSize: 12,
+                    color: C.amber,
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "flex-start",
+                  }}
+                >
+                  <AlertTriangle size={14} style={{ marginTop: 2, flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontWeight: 600, marginBottom: 2 }}>
+                      Motivo do skip
+                    </div>
+                    <div style={{ color: C.text }}>{data.skip_reason}</div>
+                  </div>
+                </div>
+              ) : null}
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 16,
+                }}
+              >
+                <SnapshotBlock title="Config Snapshot" data={data.config_snapshot} />
+                <SnapshotBlock
+                  title="Features Snapshot (indicadores no momento)"
+                  data={data.features_snapshot}
+                />
+              </div>
+
+              <div
+                style={{
+                  fontSize: 10.5,
+                  color: C.dim,
+                  display: "flex",
+                  gap: 12,
+                  flexWrap: "wrap",
+                  paddingTop: 4,
+                }}
+              >
+                <span>
+                  <Clock size={10} style={{ verticalAlign: "middle", marginRight: 4 }} />
+                  Última candle processada: {fmtDateTime(data.last_processed_time)}
+                </span>
+                <span>Atualizado: {fmtDateTime(data.updated_at)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── data hooks ───────────────────────────────────────────────────────────────
+//
+// Backend limitation: `status` query param só aceita PENDING|RUNNING|
+// COMPLETED|ERROR. Não há filtro nativo por `outcome` (TP_HIT/SL_HIT/TIMEOUT).
+// Estratégia adotada (sem mudar backend):
+//
+// • ALL          → 1 GET paginado server-side (sem filtro de status).
+// • OPEN         → 2 GETs (status=PENDING + status=RUNNING) com page_size=MAX,
+//                  merge + sort por created_at desc, paginação client-side.
+// • TP/SL/TIMEOUT → 1 GET (status=COMPLETED) com page_size=MAX e filtro
+//                   client-side por `outcome`, paginação client-side.
+//
+// MAX_LOCAL_FETCH é cap de segurança — assumimos que volumes shadow por
+// usuário cabem nessa janela. Se algum dia atingir, o backend ganha um
+// param `outcome` e a UI volta a paginar 100% server-side.
+const MAX_LOCAL_FETCH = 200; // = _MAX_PAGE_SIZE em backend/app/api/shadow_trades.py
+const CLIENT_PAGE_SIZE = 50;
+
+function buildBaseQuery(
+  filter: FilterState,
+  overrides: { status?: string; page?: number; page_size?: number } = {}
+): string {
+  const params = new URLSearchParams();
+  if (overrides.status) params.set("status", overrides.status);
+  if (filter.symbol.trim()) params.set("symbol", filter.symbol.trim());
+  if (filter.minDate) params.set("min_date", filter.minDate);
+  if (filter.maxDate) params.set("max_date", filter.maxDate);
+  params.set("page", String(overrides.page ?? filter.page));
+  params.set("page_size", String(overrides.page_size ?? filter.pageSize));
+  return params.toString();
+}
+
+function buildSummaryQuery(filter: FilterState): string {
+  const params = new URLSearchParams();
+  if (filter.symbol.trim()) params.set("symbol", filter.symbol.trim());
+  if (filter.minDate) params.set("min_date", filter.minDate);
+  if (filter.maxDate) params.set("max_date", filter.maxDate);
+  return params.toString();
+}
+
+// ── page ─────────────────────────────────────────────────────────────────────
+export default function ShadowPortfolioPage() {
+  const [filter, setFilter] = useState<FilterState>(DEFAULT_FILTER);
+  const [list, setList] = useState<ShadowTradeListResponse | null>(null);
+  const [summary, setSummary] = useState<ShadowTradeSummary | null>(null);
+  const [loadingList, setLoadingList] = useState(false);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+  const [errorList, setErrorList] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const fetchList = useCallback(() => {
+    setLoadingList(true);
+    setErrorList(null);
+
+    const handleError = (err: unknown) => {
+      const msg =
+        err instanceof ApiError
+          ? err.toDescriptiveString()
+          : err instanceof Error
+          ? err.message
+          : "Erro desconhecido";
+      setErrorList(msg);
+      setList({
+        items: [],
+        total: 0,
+        page: filter.page,
+        page_size: filter.pageSize,
+      });
+    };
+
+    if (filter.status === "ALL") {
+      // Server-side pagination puro.
+      const qs = buildBaseQuery(filter);
+      apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qs}`)
+        .then(setList)
+        .catch(handleError)
+        .finally(() => setLoadingList(false));
+      return;
+    }
+
+    if (filter.status === "OPEN") {
+      // 2 fetches paralelos (PENDING + RUNNING) e merge — backend não
+      // suporta `IN (...)` em status.
+      const qsPending = buildBaseQuery(filter, {
+        status: "PENDING",
+        page: 1,
+        page_size: MAX_LOCAL_FETCH,
+      });
+      const qsRunning = buildBaseQuery(filter, {
+        status: "RUNNING",
+        page: 1,
+        page_size: MAX_LOCAL_FETCH,
+      });
+      Promise.all([
+        apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qsPending}`),
+        apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qsRunning}`),
+      ])
+        .then(([pending, running]) => {
+          const merged = [...pending.items, ...running.items].sort((a, b) => {
+            const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+            const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+            return tb - ta;
+          });
+          setList({
+            items: merged,
+            total: pending.total + running.total,
+            page: 1,
+            page_size: merged.length,
+          });
+        })
+        .catch(handleError)
+        .finally(() => setLoadingList(false));
+      return;
+    }
+
+    // TP_HIT / SL_HIT / TIMEOUT: 1 fetch COMPLETED + filtro local por outcome.
+    const qsCompleted = buildBaseQuery(filter, {
+      status: "COMPLETED",
+      page: 1,
+      page_size: MAX_LOCAL_FETCH,
+    });
+    apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qsCompleted}`)
+      .then((res) => setList(res))
+      .catch(handleError)
+      .finally(() => setLoadingList(false));
+  }, [filter]);
+
+  const fetchSummary = useCallback(() => {
+    setLoadingSummary(true);
+    const qs = buildSummaryQuery(filter);
+    apiGet<ShadowTradeSummary>(
+      qs ? `/api/shadow-trades/summary?${qs}` : `/api/shadow-trades/summary`
+    )
+      .then((res) => setSummary(res))
+      .catch(() => setSummary(null))
+      .finally(() => setLoadingSummary(false));
+  }, [filter]);
+
+  useEffect(() => {
+    fetchList();
+    fetchSummary();
+  }, [fetchList, fetchSummary, tick]);
+
+  // Quando status != ALL, paginamos client-side sobre o conjunto local
+  // (já filtrado/agregado em fetchList). Ao mudar de aba zeramos a página.
+  const filteredAll = useMemo(() => {
+    if (!list) return [];
+    if (filter.status === "ALL") return list.items;
+    if (filter.status === "OPEN") {
+      // fetchList já mergeou PENDING+RUNNING e ordenou desc.
+      return list.items;
+    }
+    // TP_HIT/SL_HIT/TIMEOUT — list.items aqui é a janela COMPLETED.
+    return list.items.filter((it) => it.outcome === filter.status);
+  }, [list, filter.status]);
+
+  const isClientPaginated = filter.status !== "ALL";
+  const clientTotal = filteredAll.length;
+  const clientPageStart = (filter.page - 1) * CLIENT_PAGE_SIZE;
+  const displayItems = isClientPaginated
+    ? filteredAll.slice(clientPageStart, clientPageStart + CLIENT_PAGE_SIZE)
+    : filteredAll;
+
+  // O fetch local é capado em MAX_LOCAL_FETCH para cada base de status.
+  // Se a janela bate o teto, sinalizamos pro usuário que pode haver mais.
+  const fetchedAtCap =
+    isClientPaginated && list
+      ? (filter.status === "OPEN"
+          ? list.total >= MAX_LOCAL_FETCH * 2
+          : (list.total ?? 0) >= MAX_LOCAL_FETCH)
+      : false;
+
+  return (
+    <div
+      style={{
+        background: C.bg,
+        minHeight: "100vh",
+        padding: "20px 24px 40px",
+        color: C.text,
+      }}
+    >
+      <div style={{ maxWidth: 1400, margin: "0 auto", display: "grid", gap: 16 }}>
+        <div>
+          <h1
+            style={{
+              fontSize: 20,
+              fontWeight: 600,
+              margin: 0,
+              letterSpacing: 0.2,
+            }}
+          >
+            Shadow Portfolio
+          </h1>
+          <p
+            style={{
+              fontSize: 12,
+              color: C.muted,
+              margin: "4px 0 0",
+              maxWidth: 720,
+            }}
+          >
+            Trades simulados a partir de decisões <code>ALLOW</code> spot do
+            pipeline. Cada decisão vira uma row em{" "}
+            <code>shadow_trades</code> com <code>entry_price</code> da próxima
+            candle 1m e é avançada candle-a-candle até TP, SL ou timeout — sem
+            execução real, alimenta o dataset ML.
+          </p>
+        </div>
+
+        <FilterBar
+          filter={filter}
+          onChange={setFilter}
+          onRefresh={() => setTick((t) => t + 1)}
+          loading={loadingList || loadingSummary}
+        />
+
+        <SummaryCards data={summary} loading={loadingSummary} />
+
+        {fetchedAtCap ? (
+          <div
+            style={{
+              fontSize: 11,
+              color: C.amber,
+              padding: "8px 12px",
+              background: `${C.amber}11`,
+              border: `1px solid ${C.amber}33`,
+              borderRadius: 6,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <AlertTriangle size={12} />
+            Mostrando os {MAX_LOCAL_FETCH} itens mais recentes desse filtro.
+            Use intervalo de datas ou filtro de símbolo para ver mais.
+          </div>
+        ) : null}
+
+        <TradeTable
+          items={displayItems}
+          loading={loadingList}
+          error={errorList}
+          onRowClick={(id) => setSelectedId(id)}
+        />
+
+        {list ? (
+          isClientPaginated ? (
+            <Pagination
+              page={filter.page}
+              pageSize={CLIENT_PAGE_SIZE}
+              total={clientTotal}
+              onChange={(page) => setFilter({ ...filter, page })}
+            />
+          ) : (
+            <Pagination
+              page={list.page}
+              pageSize={list.page_size}
+              total={list.total}
+              onChange={(page) => setFilter({ ...filter, page })}
+            />
+          )
+        ) : null}
+      </div>
+
+      {selectedId ? (
+        <DetailModal shadowId={selectedId} onClose={() => setSelectedId(null)} />
+      ) : null}
+    </div>
+  );
+}

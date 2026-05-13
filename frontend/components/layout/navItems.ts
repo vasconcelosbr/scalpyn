@@ -24,6 +24,7 @@ import {
   Users,
   Activity,
   CandlestickChart,
+  TestTube2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -56,6 +57,7 @@ export const TRADING_ITEMS: NavItem[] = [
 export const BACKOFFICE_ITEMS: NavItem[] = [
   { name: "Exec Dashboard", href: "/dashboard", icon: BarChart2 },
   { name: "Performance", href: "/dashboard/performance", icon: Activity },
+  { name: "Shadow Portfolio", href: "/dashboard/shadow-portfolio", icon: TestTube2 },
   { name: "Centro Operacional", href: "/dashboard/operations", icon: Monitor },
   { name: "Operations", href: "/backoffice", icon: Monitor },
   { name: "Asset Trace", href: "/assets", icon: Search },
