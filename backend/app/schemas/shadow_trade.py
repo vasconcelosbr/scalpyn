@@ -22,6 +22,7 @@ class ShadowTradeRead(BaseModel):
     symbol: str
     direction: Optional[str] = None
     entry_price: Optional[float] = None
+    current_price: Optional[float] = None
     tp_price: Optional[float] = None
     sl_price: Optional[float] = None
     amount_usdt: float
@@ -57,6 +58,18 @@ class ShadowTradeListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class ShadowTradePricesResponse(BaseModel):
+    """Lookup leve de preços correntes para refresh sem repaginar.
+
+    `prices` mapeia symbol → último close 1m em USDT. Símbolos sem
+    candle recente são omitidos (frontend mantém o último valor conhecido
+    ou exibe '—').
+    """
+
+    prices: Dict[str, float]
+    fetched_at: datetime
 
 
 class ShadowTradeSummary(BaseModel):

@@ -42,6 +42,7 @@ interface ShadowTradeRead {
   symbol: string;
   direction: string | null;
   entry_price: number | null;
+  current_price: number | null;
   tp_price: number | null;
   sl_price: number | null;
   amount_usdt: number;
@@ -538,6 +539,7 @@ const COLS: { key: string; label: string; align?: "left" | "right" | "center" }[
   { key: "symbol", label: "Símbolo" },
   { key: "status", label: "Status", align: "center" },
   { key: "entry", label: "Entrada", align: "right" },
+  { key: "current", label: "Preço Atual", align: "right" },
   { key: "tp", label: "TP", align: "right" },
   { key: "sl", label: "SL", align: "right" },
   { key: "outcome", label: "Resultado", align: "center" },
@@ -712,6 +714,26 @@ function TradeTable({
                 </td>
                 <td style={{ padding: "10px 12px", textAlign: "right" }}>
                   {fmtPrice(it.entry_price)}
+                </td>
+                <td
+                  style={{
+                    padding: "10px 12px",
+                    textAlign: "right",
+                    color:
+                      it.current_price == null || it.entry_price == null
+                        ? C.text
+                        : it.current_price >= it.entry_price
+                        ? C.green
+                        : C.red,
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                  title={
+                    it.current_price != null && it.entry_price != null
+                      ? `${(((it.current_price - it.entry_price) / it.entry_price) * 100).toFixed(2)}% vs entrada`
+                      : undefined
+                  }
+                >
+                  {fmtPrice(it.current_price)}
                 </td>
                 <td style={{ padding: "10px 12px", textAlign: "right", color: C.green }}>
                   {fmtPrice(it.tp_price)}
@@ -1308,6 +1330,7 @@ export default function ShadowPortfolioPage() {
   const [errorList, setErrorList] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
 
   const fetchList = useCallback(() => {
     setLoadingList(true);
@@ -1402,18 +1425,59 @@ export default function ShadowPortfolioPage() {
     fetchSummary();
   }, [fetchList, fetchSummary, tick]);
 
+  // Polling leve de preços correntes a cada 15s, só com símbolos visíveis,
+  // sem repaginar a lista. Pausa quando a aba do navegador está oculta.
+  useEffect(() => {
+    if (!list || list.items.length === 0) return;
+    const symbols = Array.from(new Set(list.items.map((it) => it.symbol)));
+    if (symbols.length === 0) return;
+
+    let cancelled = false;
+    const fetchPrices = () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      const qs = new URLSearchParams({ symbols: symbols.join(",") }).toString();
+      apiGet<{ prices: Record<string, number>; fetched_at: string }>(
+        `/api/shadow-trades/prices?${qs}`,
+      )
+        .then((res) => {
+          if (cancelled) return;
+          setLivePrices((prev) => ({ ...prev, ...res.prices }));
+        })
+        .catch(() => {
+          // silencioso — preços continuam exibindo o último valor conhecido
+        });
+    };
+    fetchPrices();
+    const interval = setInterval(fetchPrices, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [list]);
+
+  // Mescla livePrices em cima do current_price vindo do backend.
+  const itemsWithLivePrices = useMemo(() => {
+    if (!list) return [] as ShadowTradeRead[];
+    if (Object.keys(livePrices).length === 0) return list.items;
+    return list.items.map((it) => {
+      const live = livePrices[it.symbol];
+      if (live === undefined) return it;
+      return { ...it, current_price: live };
+    });
+  }, [list, livePrices]);
+
   // Quando status != ALL, paginamos client-side sobre o conjunto local
   // (já filtrado/agregado em fetchList). Ao mudar de aba zeramos a página.
   const filteredAll = useMemo(() => {
     if (!list) return [];
-    if (filter.status === "ALL") return list.items;
+    if (filter.status === "ALL") return itemsWithLivePrices;
     if (filter.status === "OPEN") {
       // fetchList já mergeou PENDING+RUNNING e ordenou desc.
-      return list.items;
+      return itemsWithLivePrices;
     }
-    // TP_HIT/SL_HIT/TIMEOUT — list.items aqui é a janela COMPLETED.
-    return list.items.filter((it) => it.outcome === filter.status);
-  }, [list, filter.status]);
+    // TP_HIT/SL_HIT/TIMEOUT — itemsWithLivePrices aqui é a janela COMPLETED.
+    return itemsWithLivePrices.filter((it) => it.outcome === filter.status);
+  }, [list, itemsWithLivePrices, filter.status]);
 
   const isClientPaginated = filter.status !== "ALL";
   const clientTotal = filteredAll.length;

@@ -20,11 +20,11 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, time, timezone
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, case, desc, func, or_, select
+from sqlalchemy import and_, case, desc, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
@@ -32,6 +32,7 @@ from ..models.shadow_trade import ShadowTrade
 from ..schemas.shadow_trade import (
     ShadowTradeDetail,
     ShadowTradeListResponse,
+    ShadowTradePricesResponse,
     ShadowTradeRead,
     ShadowTradeSummary,
 )
@@ -115,12 +116,52 @@ def _build_filters(
     return conditions
 
 
-def _to_read(row: ShadowTrade) -> ShadowTradeRead:
+async def _fetch_latest_prices(
+    db: AsyncSession, symbols: list[str]
+) -> Dict[str, float]:
+    """Batch lookup do último close 1m em ``ohlcv`` para uma lista de símbolos.
+
+    UMA query agregada via ``DISTINCT ON (symbol) … ORDER BY symbol, time DESC``
+    — O(N) em vez de N round-trips. Símbolos sem candle 1m recente
+    simplesmente não aparecem no dict resultante (caller decide o fallback).
+    """
+    if not symbols:
+        return {}
+    unique = sorted({s for s in symbols if s})
+    if not unique:
+        return {}
+    res = await db.execute(
+        text(
+            """
+            SELECT DISTINCT ON (symbol) symbol, close
+              FROM ohlcv
+             WHERE symbol = ANY(:symbols)
+               AND timeframe = '1m'
+             ORDER BY symbol, time DESC
+            """
+        ),
+        {"symbols": unique},
+    )
+    out: Dict[str, float] = {}
+    for row in res.fetchall():
+        if row.close is None:
+            continue
+        try:
+            out[row.symbol] = float(row.close)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _to_read(
+    row: ShadowTrade, *, current_price: Optional[float] = None
+) -> ShadowTradeRead:
     return ShadowTradeRead(
         id=row.id,
         symbol=row.symbol,
         direction=row.direction,
         entry_price=float(row.entry_price) if row.entry_price is not None else None,
+        current_price=current_price,
         tp_price=float(row.tp_price) if row.tp_price is not None else None,
         sl_price=float(row.sl_price) if row.sl_price is not None else None,
         amount_usdt=float(row.amount_usdt or 0.0),
@@ -204,8 +245,10 @@ async def list_shadow_trades(
         )
         rows = (await db.execute(page_q)).scalars().all()
 
+        prices = await _fetch_latest_prices(db, [r.symbol for r in rows])
+
         return ShadowTradeListResponse(
-            items=[_to_read(r) for r in rows],
+            items=[_to_read(r, current_price=prices.get(r.symbol)) for r in rows],
             total=total,
             page=page,
             page_size=page_size,
@@ -297,6 +340,38 @@ async def shadow_trades_summary(
         logger.error("Failed to summarize shadow trades: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500, detail="Failed to summarize shadow trades"
+        ) from exc
+
+
+@router.get("/prices", response_model=ShadowTradePricesResponse)
+async def shadow_trade_prices(
+    symbols: str = Query(
+        ...,
+        description="CSV de símbolos (ex.: BTC_USDT,ETH_USDT). Limite 200.",
+    ),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> ShadowTradePricesResponse:
+    """Lookup leve de preços correntes — usado pelo polling do frontend.
+
+    Sem checagem de ownership por símbolo (preços de OHLCV são públicos
+    e não revelam nada sobre o portfólio do usuário). Limita a 200
+    símbolos por chamada para evitar abuso.
+    """
+    parsed = [s.strip().upper() for s in (symbols or "").split(",") if s.strip()]
+    if not parsed:
+        return ShadowTradePricesResponse(prices={}, fetched_at=datetime.now(timezone.utc))
+    if len(parsed) > 200:
+        raise HTTPException(status_code=422, detail="too many symbols (max 200)")
+    try:
+        prices = await _fetch_latest_prices(db, parsed)
+        return ShadowTradePricesResponse(
+            prices=prices, fetched_at=datetime.now(timezone.utc)
+        )
+    except Exception as exc:
+        logger.error("Failed to fetch shadow prices: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500, detail="Failed to fetch prices"
         ) from exc
 
 
