@@ -28,6 +28,7 @@ from sqlalchemy import and_, case, desc, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
+from ..models.backoffice import DecisionLog
 from ..models.shadow_trade import ShadowTrade
 from ..schemas.shadow_trade import (
     ShadowTradeDetail,
@@ -119,11 +120,16 @@ def _build_filters(
 async def _fetch_latest_prices(
     db: AsyncSession, symbols: list[str]
 ) -> Dict[str, float]:
-    """Batch lookup do último close 1m em ``ohlcv`` para uma lista de símbolos.
+    """Batch lookup do último close em ``ohlcv`` para uma lista de símbolos.
 
     UMA query agregada via ``DISTINCT ON (symbol) … ORDER BY symbol, time DESC``
-    — O(N) em vez de N round-trips. Símbolos sem candle 1m recente
-    simplesmente não aparecem no dict resultante (caller decide o fallback).
+    — O(N) em vez de N round-trips. **Multi-timeframe** intencionalmente:
+    nem todo símbolo do shadow_trades tem candle 1m em ``ohlcv`` (em prod o
+    coletor ingere principalmente 5m/30m). Aceitar 1m/5m/15m/30m garante
+    cobertura em ~100% dos símbolos ativos do pipeline. O preço retornado é o
+    close mais recente em qualquer um desses timeframes (o mais "vivo" por
+    construção da ORDER BY time DESC). Símbolos sem candle nenhum simplesmente
+    não aparecem no dict (caller decide fallback — frontend mostra "—").
     """
     if not symbols:
         return {}
@@ -136,7 +142,7 @@ async def _fetch_latest_prices(
             SELECT DISTINCT ON (symbol) symbol, close
               FROM ohlcv
              WHERE symbol = ANY(:symbols)
-               AND timeframe = '1m'
+               AND timeframe IN ('1m','5m','15m','30m')
              ORDER BY symbol, time DESC
             """
         ),
@@ -176,7 +182,9 @@ def _to_read(
     )
 
 
-def _to_detail(row: ShadowTrade) -> ShadowTradeDetail:
+def _to_detail(
+    row: ShadowTrade, *, decision: Optional[DecisionLog] = None
+) -> ShadowTradeDetail:
     return ShadowTradeDetail(
         id=row.id,
         symbol=row.symbol,
@@ -205,6 +213,23 @@ def _to_detail(row: ShadowTrade) -> ShadowTradeDetail:
         updated_at=row.updated_at,
         config_snapshot=row.config_snapshot
         if isinstance(row.config_snapshot, dict)
+        else None,
+        decision_strategy=decision.strategy if decision else None,
+        decision_score=float(decision.score)
+        if decision and decision.score is not None
+        else None,
+        decision_decision=decision.decision if decision else None,
+        decision_event_type=decision.event_type if decision else None,
+        decision_l1_pass=decision.l1_pass if decision else None,
+        decision_l2_pass=decision.l2_pass if decision else None,
+        decision_l3_pass=decision.l3_pass if decision else None,
+        decision_latency_ms=decision.latency_ms if decision else None,
+        decision_created_at=decision.created_at if decision else None,
+        decision_reasons=(decision.reasons or {})
+        if decision and isinstance(decision.reasons, dict)
+        else None,
+        decision_metrics=(decision.metrics or {})
+        if decision and isinstance(decision.metrics, dict)
         else None,
         features_snapshot=row.features_snapshot
         if isinstance(row.features_snapshot, dict)
@@ -389,7 +414,19 @@ async def get_shadow_trade(
         row = (await db.execute(q)).scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=404, detail="Shadow trade not found")
-        return _to_detail(row)
+        decision: Optional[DecisionLog] = None
+        if row.decision_id is not None:
+            # Defesa em profundidade: shadow já foi filtrado por user_id, mas
+            # restringimos a decision_log pelo mesmo user_id para evitar
+            # vazamento entre tenants caso decision_id seja "envenenado".
+            dq = select(DecisionLog).where(
+                and_(
+                    DecisionLog.id == row.decision_id,
+                    DecisionLog.user_id == user_id,
+                )
+            )
+            decision = (await db.execute(dq)).scalar_one_or_none()
+        return _to_detail(row, decision=decision)
     except HTTPException:
         raise
     except Exception as exc:

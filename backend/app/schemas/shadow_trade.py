@@ -51,6 +51,20 @@ class ShadowTradeDetail(ShadowTradeRead):
     updated_at: Optional[datetime] = None
     config_snapshot: Optional[Dict[str, Any]] = None
     features_snapshot: Optional[Dict[str, Any]] = None
+    # Auditoria L1/L2/L3 — replicado da decision_log original (espelha
+    # o painel de drill-down em /decisions). Preenchido apenas quando
+    # ``decision_id`` aponta para uma linha existente em ``decisions_log``.
+    decision_strategy: Optional[str] = None
+    decision_score: Optional[float] = None
+    decision_decision: Optional[str] = None
+    decision_event_type: Optional[str] = None
+    decision_l1_pass: Optional[bool] = None
+    decision_l2_pass: Optional[bool] = None
+    decision_l3_pass: Optional[bool] = None
+    decision_latency_ms: Optional[int] = None
+    decision_created_at: Optional[datetime] = None
+    decision_reasons: Optional[Dict[str, Any]] = None
+    decision_metrics: Optional[Dict[str, Any]] = None
 
 
 class ShadowTradeListResponse(BaseModel):

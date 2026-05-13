@@ -90,6 +90,17 @@ interface ShadowTradeDetail extends ShadowTradeRead {
   updated_at: string | null;
   config_snapshot: Record<string, unknown> | null;
   features_snapshot: Record<string, unknown> | null;
+  decision_strategy: string | null;
+  decision_score: number | null;
+  decision_decision: string | null;
+  decision_event_type: string | null;
+  decision_l1_pass: boolean | null;
+  decision_l2_pass: boolean | null;
+  decision_l3_pass: boolean | null;
+  decision_latency_ms: number | null;
+  decision_created_at: string | null;
+  decision_reasons: Record<string, unknown> | null;
+  decision_metrics: Record<string, unknown> | null;
 }
 
 // ── filter shape ─────────────────────────────────────────────────────────────
@@ -891,6 +902,281 @@ function DetailRow({
   );
 }
 
+function DecisionAuditBlock({ data }: { data: ShadowTradeDetail }) {
+  const reasons = data.decision_reasons
+    ? Object.entries(data.decision_reasons)
+    : [];
+  const metrics = data.decision_metrics
+    ? Object.entries(data.decision_metrics)
+    : [];
+  const hasAny =
+    data.decision_id !== null ||
+    reasons.length > 0 ||
+    metrics.length > 0 ||
+    data.decision_l1_pass !== null ||
+    data.decision_l2_pass !== null ||
+    data.decision_l3_pass !== null;
+
+  if (!hasAny) {
+    return null;
+  }
+
+  const passColor = (v: boolean | null) =>
+    v === null ? C.dim : v ? C.green : C.red;
+  const passLabel = (v: boolean | null) =>
+    v === null ? "—" : v ? "PASS" : "FAIL";
+
+  const fmtMetric = (v: unknown): string => {
+    if (v === null || v === undefined) return "—";
+    if (typeof v === "number") {
+      if (!Number.isFinite(v)) return String(v);
+      return Number.isInteger(v) ? String(v) : v.toFixed(2);
+    }
+    if (typeof v === "boolean") return v ? "true" : "false";
+    if (typeof v === "object") {
+      const obj = v as Record<string, unknown>;
+      if ("value" in obj && typeof obj.value !== "object") {
+        return fmtMetric(obj.value);
+      }
+      return JSON.stringify(v);
+    }
+    return String(v);
+  };
+
+  return (
+    <div>
+      <div
+        style={{
+          fontSize: 11,
+          color: C.muted,
+          letterSpacing: 0.6,
+          textTransform: "uppercase",
+          marginBottom: 8,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        Auditoria da Decisão (L1/L2/L3)
+        {data.decision_strategy ? (
+          <span
+            style={{
+              fontFamily: "monospace",
+              fontSize: 10,
+              color: C.text,
+              background: C.bg,
+              border: `1px solid ${C.border}`,
+              borderRadius: 4,
+              padding: "1px 6px",
+              letterSpacing: 0,
+              textTransform: "none",
+            }}
+          >
+            {data.decision_strategy}
+          </span>
+        ) : null}
+        {data.decision_score !== null ? (
+          <span
+            style={{
+              fontFamily: "monospace",
+              fontSize: 10,
+              color: C.text,
+              letterSpacing: 0,
+              textTransform: "none",
+            }}
+          >
+            score {data.decision_score.toFixed(1)}
+          </span>
+        ) : null}
+        {data.decision_created_at ? (
+          <span
+            style={{
+              fontSize: 10,
+              color: C.dim,
+              letterSpacing: 0,
+              textTransform: "none",
+            }}
+          >
+            • {fmtDateTime(data.decision_created_at)}
+          </span>
+        ) : null}
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr 1fr",
+          gap: 12,
+        }}
+      >
+        {/* Reasons */}
+        <div
+          style={{
+            background: C.bg,
+            border: `1px solid ${C.border}`,
+            borderRadius: 6,
+            padding: 10,
+            maxHeight: 260,
+            overflow: "auto",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 10,
+              color: C.dim,
+              textTransform: "uppercase",
+              letterSpacing: 0.6,
+              marginBottom: 6,
+            }}
+          >
+            Reasons
+          </div>
+          {reasons.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: C.dim }}>—</div>
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+              {reasons.map(([k, v]) => {
+                const label = String(v);
+                const ok = label.toUpperCase() === "OK";
+                return (
+                  <span
+                    key={k}
+                    style={{
+                      fontSize: 10.5,
+                      fontFamily: "monospace",
+                      padding: "2px 6px",
+                      borderRadius: 4,
+                      border: `1px solid ${ok ? C.green : C.red}`,
+                      color: ok ? C.green : C.red,
+                      background: "transparent",
+                    }}
+                  >
+                    {k}: {label}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Metrics */}
+        <div
+          style={{
+            background: C.bg,
+            border: `1px solid ${C.border}`,
+            borderRadius: 6,
+            padding: 10,
+            maxHeight: 260,
+            overflow: "auto",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 10,
+              color: C.dim,
+              textTransform: "uppercase",
+              letterSpacing: 0.6,
+              marginBottom: 6,
+            }}
+          >
+            Metrics
+          </div>
+          {metrics.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: C.dim }}>—</div>
+          ) : (
+            metrics
+              .sort((a, b) => a[0].localeCompare(b[0]))
+              .map(([k, v]) => (
+                <div
+                  key={k}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    fontSize: 11,
+                    padding: "2px 0",
+                  }}
+                >
+                  <span style={{ color: C.muted }}>{k}</span>
+                  <span
+                    style={{
+                      color: C.text,
+                      fontFamily: "monospace",
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    {fmtMetric(v)}
+                  </span>
+                </div>
+              ))
+          )}
+        </div>
+
+        {/* Timeline */}
+        <div
+          style={{
+            background: C.bg,
+            border: `1px solid ${C.border}`,
+            borderRadius: 6,
+            padding: 10,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 10,
+              color: C.dim,
+              textTransform: "uppercase",
+              letterSpacing: 0.6,
+              marginBottom: 6,
+            }}
+          >
+            Timeline
+          </div>
+          {(
+            [
+              ["L1", data.decision_l1_pass],
+              ["L2", data.decision_l2_pass],
+              ["L3", data.decision_l3_pass],
+            ] as const
+          ).map(([label, passed]) => (
+            <div
+              key={label}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                fontSize: 11,
+                padding: "3px 0",
+              }}
+            >
+              <span style={{ fontFamily: "monospace", color: C.text }}>
+                {label}
+              </span>
+              <span style={{ color: passColor(passed) }}>
+                {passLabel(passed)}
+              </span>
+            </div>
+          ))}
+          <div
+            style={{
+              fontSize: 10.5,
+              color: C.muted,
+              marginTop: 6,
+              borderTop: `1px solid ${C.border}`,
+              paddingTop: 6,
+            }}
+          >
+            Latency total:{" "}
+            <span
+              style={{ fontFamily: "monospace", color: C.text }}
+            >
+              {data.decision_latency_ms ?? 0}ms
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SnapshotBlock({
   title,
   data,
@@ -1241,6 +1527,8 @@ function DetailModal({
                   </div>
                 </div>
               ) : null}
+
+              <DecisionAuditBlock data={data} />
 
               <div
                 style={{
