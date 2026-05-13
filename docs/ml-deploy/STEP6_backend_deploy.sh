@@ -121,7 +121,7 @@ gcloud scheduler jobs list --location $REGION --format="table(name,schedule,stat
 
 echo ""
 echo "=== Secrets ==="
-for SECRET in SCALPYN_DB_URL SCALPYN_REDIS_URL; do
+for SECRET in database-url redis-url; do
   gcloud secrets versions access latest --secret=$SECRET &>/dev/null && \
     echo "✅ $SECRET" || echo "❌ $SECRET — não configurado"
 done

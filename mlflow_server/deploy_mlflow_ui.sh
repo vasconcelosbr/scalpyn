@@ -23,7 +23,7 @@ gcloud run deploy $SERVICE_NAME \
   --min-instances 0 \
   --max-instances 1 \
   --timeout 300 \
-  --set-secrets="MLFLOW_TRACKING_URI=SCALPYN_DB_URL:latest" \
+  --set-secrets="MLFLOW_TRACKING_URI=database-url:latest" \
   --set-env-vars="MLFLOW_ARTIFACT_ROOT=gs://scalpyn-mlflow/artifacts" \
   --no-allow-unauthenticated \
   --quiet

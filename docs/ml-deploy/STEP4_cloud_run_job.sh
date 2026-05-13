@@ -35,7 +35,7 @@ gcloud run jobs create $JOB_NAME \
   --task-timeout 3600 \
   --max-retries 1 \
   --set-cloudsql-instances $CLOUD_SQL_INSTANCE \
-  --set-secrets="DB_URL=SCALPYN_DB_URL:latest" \
+  --set-secrets="DB_URL=database-url:latest" \
   --set-env-vars="\
 BUCKET_NAME=scalpyn-mlflow,\
 DAYS_LOOKBACK=90,\
@@ -52,7 +52,7 @@ gcloud run jobs update $JOB_NAME \
   --task-timeout 3600 \
   --max-retries 1 \
   --set-cloudsql-instances $CLOUD_SQL_INSTANCE \
-  --set-secrets="DB_URL=SCALPYN_DB_URL:latest" \
+  --set-secrets="DB_URL=database-url:latest" \
   --set-env-vars="\
 BUCKET_NAME=scalpyn-mlflow,\
 DAYS_LOOKBACK=90,\

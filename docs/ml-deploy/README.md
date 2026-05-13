@@ -72,10 +72,10 @@ chmod +x STEP1_gcp_infra.sh
 
 # Após rodar, preencher os secrets manualmente:
 echo -n 'postgresql+psycopg2://user:pass@/dbname?host=/cloudsql/PROJECT:REGION:INSTANCE' | \
-  gcloud secrets versions add SCALPYN_DB_URL --data-file=-
+  gcloud secrets versions add database-url --data-file=-
 
 echo -n 'redis://user:pass@host:6379' | \
-  gcloud secrets versions add SCALPYN_REDIS_URL --data-file=-
+  gcloud secrets versions add redis-url --data-file=-
 ```
 
 ### STEP 2 — Criar arquivos ML no repositório
