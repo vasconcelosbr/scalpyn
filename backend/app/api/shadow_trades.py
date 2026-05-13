@@ -129,6 +129,7 @@ def _to_read(row: ShadowTrade) -> ShadowTradeRead:
         pnl_usdt=float(row.pnl_usdt) if row.pnl_usdt is not None else None,
         status=row.status,
         skip_reason=row.skip_reason,
+        holding_seconds=row.holding_seconds,
         created_at=row.created_at,
         completed_at=row.completed_at,
     )
@@ -148,6 +149,7 @@ def _to_detail(row: ShadowTrade) -> ShadowTradeDetail:
         pnl_usdt=float(row.pnl_usdt) if row.pnl_usdt is not None else None,
         status=row.status,
         skip_reason=row.skip_reason,
+        holding_seconds=row.holding_seconds,
         created_at=row.created_at,
         completed_at=row.completed_at,
         strategy=row.strategy,
@@ -157,7 +159,6 @@ def _to_detail(row: ShadowTrade) -> ShadowTradeDetail:
         tp_pct=float(row.tp_pct) if row.tp_pct is not None else None,
         sl_pct=float(row.sl_pct) if row.sl_pct is not None else None,
         timeout_candles=row.timeout_candles,
-        holding_seconds=row.holding_seconds,
         decision_id=row.decision_id,
         last_processed_time=row.last_processed_time,
         updated_at=row.updated_at,

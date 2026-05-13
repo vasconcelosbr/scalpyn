@@ -30,6 +30,7 @@ class ShadowTradeRead(BaseModel):
     pnl_usdt: Optional[float] = None
     status: str  # PENDING | RUNNING | COMPLETED | ERROR
     skip_reason: Optional[str] = None
+    holding_seconds: Optional[int] = None
     created_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
@@ -44,7 +45,6 @@ class ShadowTradeDetail(ShadowTradeRead):
     tp_pct: Optional[float] = None
     sl_pct: Optional[float] = None
     timeout_candles: Optional[int] = None
-    holding_seconds: Optional[int] = None
     decision_id: Optional[int] = None
     last_processed_time: Optional[datetime] = None
     updated_at: Optional[datetime] = None

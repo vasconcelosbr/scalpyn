@@ -50,6 +50,7 @@ interface ShadowTradeRead {
   pnl_usdt: number | null;
   status: ShadowStatus;
   skip_reason: string | null;
+  holding_seconds: number | null;
   created_at: string | null;
   completed_at: string | null;
 }
@@ -83,7 +84,6 @@ interface ShadowTradeDetail extends ShadowTradeRead {
   tp_pct: number | null;
   sl_pct: number | null;
   timeout_candles: number | null;
-  holding_seconds: number | null;
   decision_id: number | null;
   last_processed_time: string | null;
   updated_at: string | null;
@@ -543,6 +543,7 @@ const COLS: { key: string; label: string; align?: "left" | "right" | "center" }[
   { key: "outcome", label: "Resultado", align: "center" },
   { key: "pnl_pct", label: "P&L %", align: "right" },
   { key: "pnl_usdt", label: "P&L $", align: "right" },
+  { key: "holding", label: "Holding", align: "right" },
   { key: "completed_at", label: "Fechado em" },
 ];
 
@@ -740,6 +741,24 @@ function TradeTable({
                   }}
                 >
                   {fmtUsd(it.pnl_usdt)}
+                </td>
+                <td
+                  style={{
+                    padding: "10px 12px",
+                    textAlign: "right",
+                    whiteSpace: "nowrap",
+                    color: it.outcome === "TP_HIT" ? C.green : C.muted,
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                  title={
+                    it.holding_seconds != null
+                      ? `${it.holding_seconds}s desde a inclusão até ${
+                          it.outcome === "TP_HIT" ? "bater o TP" : "fechar"
+                        }`
+                      : undefined
+                  }
+                >
+                  {fmtHolding(it.holding_seconds)}
                 </td>
                 <td style={{ padding: "10px 12px", whiteSpace: "nowrap", color: C.muted }}>
                   {fmtDateTime(it.completed_at)}
