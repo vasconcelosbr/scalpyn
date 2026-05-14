@@ -150,6 +150,60 @@ async def _ensure_entry(db, shadow: ShadowTrade) -> bool:
     return True
 
 
+def _finalize_outcome(
+    shadow: ShadowTrade,
+    outcome: str,
+    exit_price: Optional[float],
+    exit_ts: Optional[datetime],
+    entry_price: float,
+) -> None:
+    """Aplica os campos finais do shadow ao bater outcome (TP/SL/TIMEOUT).
+
+    Refatoração 2026-05-14: extraído do bloco inline de ``_advance_shadow``
+    para que o caminho live-close (introduzido nesta data) reuse a mesma
+    lógica de PnL/holding/COMPLETED sem duplicar. Comportamento
+    idêntico ao bloco legado — pure refactor.
+    """
+    shadow.outcome = outcome
+    shadow.exit_price = exit_price
+    shadow.exit_timestamp = exit_ts
+    if entry_price > 0 and exit_price is not None:
+        pnl_pct = (exit_price - entry_price) / entry_price * 100.0
+        shadow.pnl_pct = pnl_pct
+        shadow.pnl_usdt = float(shadow.amount_usdt) * pnl_pct / 100.0
+    if shadow.entry_timestamp and exit_ts:
+        shadow.holding_seconds = int(
+            (exit_ts - shadow.entry_timestamp).total_seconds()
+        )
+    shadow.status = "COMPLETED"
+    shadow.completed_at = datetime.now(timezone.utc)
+    shadow.last_processed_time = exit_ts
+
+
+async def _capture_exit_features(db, shadow: ShadowTrade) -> None:
+    """Preenche ``features_snapshot_exit`` com os indicadores na saída.
+
+    Mesmo formato FLAT do entry (build_indicators_snapshot devolve o
+    envelope {value, source_group, ts, stale}; aqui achatamos pra
+    {key: value}, alimentando o ML com "entrada vs saída"). Caller
+    DEVE envolver em try/except — falha aqui não pode anular o outcome.
+    """
+    merged_map = await indicators_provider.get_merged_indicators(
+        db, [shadow.symbol], include_stale=True
+    )
+    merged = merged_map.get(shadow.symbol)
+    if merged is not None:
+        envelope = indicators_provider.build_indicators_snapshot(
+            merged, keys=list(merged.values.keys())
+        )
+        shadow.features_snapshot_exit = {
+            k: (v.get("value") if isinstance(v, dict) else v)
+            for k, v in envelope.items()
+        }
+    else:
+        shadow.features_snapshot_exit = {}
+
+
 async def _enrich_market_context(db, shadow: ShadowTrade) -> None:
     """Preenche os 4 campos de contexto de mercado (migration 052).
 
@@ -215,6 +269,79 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
         shadow.completed_at = datetime.now(timezone.utc)
         return "completed"
 
+    tp = float(shadow.tp_price)
+    sl = float(shadow.sl_price)
+    entry_price = float(shadow.entry_price)
+
+    # ── Live-close path (2026-05-14): muitos símbolos do pool não têm
+    # OHLCV 1m ingerido — só 5m/15m/30m. O scan candle-a-candle 1m
+    # abaixo nunca encontrava nada, e trades que VISIVELMENTE já
+    # cruzaram o TP no preço atual ficavam parados em RUNNING (a UI
+    # mostra current_price > tp_price mas o monitor não fechava).
+    #
+    # Fix aditivo: ANTES do scan 1m, lê o preço corrente multi-tf
+    # (mesmo helper usado pra resolver entry — close da candle mais
+    # recente em qualquer tf 1m/5m/15m/30m). Se já cruzou TP/SL,
+    # fecha imediatamente. Caso contrário, segue o caminho legado de
+    # candle-a-candle (necessário para casos onde o trade cruzou TP
+    # numa candle intermediária mas o preço atual já voltou).
+    #
+    # Conservadorismo: se current_price <= sl, registramos SL_HIT
+    # (mesma lógica do scan candle). exit_price é fixado em tp/sl
+    # para manter o PnL simulado consistente com tp_pct/sl_pct
+    # (o scan 1m existente também usa tp/sl, não c["high"]/c["low"]).
+    try:
+        live_price, live_ts = await shadow_trade_service._get_current_price_multi_tf(
+            db, shadow.symbol
+        )
+    except Exception:
+        logger.exception(
+            "[shadow-monitor] live-close: get_current_price_multi_tf failed for "
+            "shadow_id=%s — caindo no scan 1m legado",
+            shadow.id,
+        )
+        live_price, live_ts = None, None
+
+    if live_price is not None and live_ts is not None:
+        # Só consideramos a leitura como "nova" se for posterior à
+        # entrada — evita fechar imediatamente um trade recém-criado
+        # com a mesma candle usada como entry_price (race teórico).
+        if shadow.entry_timestamp is None or live_ts >= shadow.entry_timestamp:
+            live_outcome: Optional[str] = None
+            if live_price <= sl:
+                live_outcome = "SL_HIT"
+            elif live_price >= tp:
+                live_outcome = "TP_HIT"
+
+            if live_outcome is not None:
+                outcome = live_outcome
+                exit_price = sl if outcome == "SL_HIT" else tp
+                exit_ts = live_ts
+                logger.info(
+                    "[shadow-monitor] live-close shadow_id=%s symbol=%s "
+                    "outcome=%s entry=%.8f live=%.8f tp=%.8f sl=%.8f",
+                    shadow.id, shadow.symbol, outcome,
+                    entry_price, live_price, tp, sl,
+                )
+                _finalize_outcome(shadow, outcome, exit_price, exit_ts, entry_price)
+                try:
+                    await _capture_exit_features(db, shadow)
+                except Exception:
+                    logger.exception(
+                        "[shadow-monitor] features_snapshot_exit (live) failed "
+                        "for shadow_id=%s",
+                        shadow.id,
+                    )
+                try:
+                    await shadow_trade_service.record_as_simulation(db, shadow)
+                except Exception:
+                    logger.exception(
+                        "[shadow-monitor] record_as_simulation (live) failed "
+                        "for shadow_id=%s",
+                        shadow.id,
+                    )
+                return "completed"
+
     after_ts = shadow.last_processed_time or shadow.entry_timestamp
     candles = await _fetch_candles(
         db, shadow.symbol, after_ts, SHADOW_MONITOR_MAX_CANDLES_PER_RUN
@@ -230,9 +357,6 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
         delta = shadow.last_processed_time - shadow.entry_timestamp
         candles_seen_before = max(int(delta.total_seconds() // 60), 0)
 
-    tp = float(shadow.tp_price)
-    sl = float(shadow.sl_price)
-    entry_price = float(shadow.entry_price)
     outcome: Optional[str] = None
     exit_price: Optional[float] = None
     exit_ts: Optional[datetime] = None
@@ -269,44 +393,15 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
             return "running"
         return "running"
 
-    # Outcome atingido — atualiza shadow + record_as_simulation.
-    shadow.outcome = outcome
-    shadow.exit_price = exit_price
-    shadow.exit_timestamp = exit_ts
-    if entry_price > 0 and exit_price is not None:
-        pnl_pct = (exit_price - entry_price) / entry_price * 100.0
-        shadow.pnl_pct = pnl_pct
-        shadow.pnl_usdt = float(shadow.amount_usdt) * pnl_pct / 100.0
-    if shadow.entry_timestamp and exit_ts:
-        shadow.holding_seconds = int(
-            (exit_ts - shadow.entry_timestamp).total_seconds()
-        )
-    shadow.status = "COMPLETED"
-    shadow.completed_at = datetime.now(timezone.utc)
-    shadow.last_processed_time = exit_ts
+    # Outcome atingido (caminho candle-a-candle 1m) — usa os mesmos
+    # helpers do live-close.
+    _finalize_outcome(shadow, outcome, exit_price, exit_ts, entry_price)
 
     # Captura indicadores no momento da SAÍDA (Task 2026-05-13).
-    # Mesmo formato FLAT do entry (build_indicators_snapshot devolve o
-    # envelope {value, source_group, ts, stale}; aqui achatamos para
-    # {key: value} via _build_features_snapshot-style, alimentando o
-    # ML com "indicadores na entrada vs indicadores na saída").
     # Nunca propaga falha — perda de snapshot de saída não anula o
     # outcome; só loga e segue.
     try:
-        merged_map = await indicators_provider.get_merged_indicators(
-            db, [shadow.symbol], include_stale=True
-        )
-        merged = merged_map.get(shadow.symbol)
-        if merged is not None:
-            envelope = indicators_provider.build_indicators_snapshot(
-                merged, keys=list(merged.values.keys())
-            )
-            shadow.features_snapshot_exit = {
-                k: (v.get("value") if isinstance(v, dict) else v)
-                for k, v in envelope.items()
-            }
-        else:
-            shadow.features_snapshot_exit = {}
+        await _capture_exit_features(db, shadow)
     except Exception:
         logger.exception(
             "[shadow-monitor] features_snapshot_exit failed for shadow_id=%s "
