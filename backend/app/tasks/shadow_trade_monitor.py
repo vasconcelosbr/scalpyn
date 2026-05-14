@@ -273,87 +273,83 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
     sl = float(shadow.sl_price)
     entry_price = float(shadow.entry_price)
 
-    # ── Live-close path (2026-05-14): muitos símbolos do pool não têm
-    # OHLCV 1m ingerido — só 5m/15m/30m. O scan candle-a-candle 1m
-    # abaixo nunca encontrava nada, e trades que VISIVELMENTE já
-    # cruzaram o TP no preço atual ficavam parados em RUNNING (a UI
+    # ── Live-close path (Task #292, 2026-05-14): muitos símbolos do
+    # pool não têm OHLCV 1m ingerido — só 5m/15m/30m. O scan candle-a-
+    # candle 1m abaixo nunca encontrava nada, e trades que VISIVELMENTE
+    # já cruzaram o TP no preço atual ficavam parados em RUNNING (a UI
     # mostra current_price > tp_price mas o monitor não fechava).
     #
-    # Fix aditivo: ANTES do scan 1m, lê o preço corrente multi-tf
-    # (mesmo helper usado pra resolver entry — close da candle mais
-    # recente em qualquer tf 1m/5m/15m/30m). Se já cruzou TP/SL,
-    # fecha imediatamente. Caso contrário, segue o caminho legado de
-    # candle-a-candle (necessário para casos onde o trade cruzou TP
-    # numa candle intermediária mas o preço atual já voltou).
+    # Fonte do preço: ``market_metadata.price`` (refresh ~60s via ticker
+    # REST do Gate.io em ``collect_all``), NÃO ``ohlcv``. Iteração #1
+    # desta task usou ``_get_current_price_multi_tf`` (close de candle
+    # 5m/15m/30m), mas como ``_ensure_entry`` usa o MESMO helper, o
+    # ``entry_price`` ficava igual ao ``live_price`` (mesma candle) e o
+    # guard ``live_price != entry_price`` rejeitava o fechamento. Além
+    # disso, o frontend lê ``market_metadata.price`` para mostrar o
+    # current_price ao usuário — usar a mesma fonte garante coerência
+    # visual: se a UI mostra preço acima do TP, o monitor fecha.
     #
     # Conservadorismo: se current_price <= sl, registramos SL_HIT
     # (mesma lógica do scan candle). exit_price é fixado em tp/sl
     # para manter o PnL simulado consistente com tp_pct/sl_pct
     # (o scan 1m existente também usa tp/sl, não c["high"]/c["low"]).
     try:
-        live_price, live_ts = await shadow_trade_service._get_current_price_multi_tf(
+        live_price, live_ts = await shadow_trade_service._get_market_metadata_price(
             db, shadow.symbol
         )
     except Exception:
         logger.exception(
-            "[shadow-monitor] live-close: get_current_price_multi_tf failed for "
+            "[shadow-monitor] live-close: get_market_metadata_price failed for "
             "shadow_id=%s — caindo no scan 1m legado",
             shadow.id,
         )
         live_price, live_ts = None, None
 
-    if live_price is not None and live_ts is not None:
-        # Guarda anti-race: se o preço corrente é literalmente o mesmo
-        # da entrada (origem na mesma candle 5m/15m/30m que resolveu o
-        # entry_price há alguns segundos), pulamos o live-close pra
-        # evitar fechar com 0% de movimento. Qualquer mudança de preço
-        # ≠ entrada já indica candle posterior ou movimento intra-candle.
-        #
-        # NÃO comparamos `live_ts >= entry_timestamp`: o timestamp do
-        # multi-tf é o close da candle 5m/15m/30m mais recente
-        # (ex.: 12:00), enquanto entry_timestamp = próximo open de 1m
-        # após a decisão (ex.: 12:02), então `live_ts < entry_ts` é o
-        # caso COMUM e descartaria todos os fechamentos legítimos.
-        if live_price != float(shadow.entry_price):
-            live_outcome: Optional[str] = None
-            if live_price <= sl:
-                live_outcome = "SL_HIT"
-            elif live_price >= tp:
-                live_outcome = "TP_HIT"
+    if live_price is not None:
+        live_outcome: Optional[str] = None
+        if live_price <= sl:
+            live_outcome = "SL_HIT"
+        elif live_price >= tp:
+            live_outcome = "TP_HIT"
 
-            if live_outcome is not None:
-                outcome = live_outcome
-                exit_price = sl if outcome == "SL_HIT" else tp
-                # exit_ts deve ser >= entry_ts (holding_seconds não pode
-                # ser negativo). live_ts pode ser anterior em tfs > 1m.
-                if shadow.entry_timestamp and live_ts < shadow.entry_timestamp:
-                    exit_ts = shadow.entry_timestamp
-                else:
-                    exit_ts = live_ts
-                logger.info(
-                    "[shadow-monitor] live-close shadow_id=%s symbol=%s "
-                    "outcome=%s entry=%.8f live=%.8f tp=%.8f sl=%.8f",
-                    shadow.id, shadow.symbol, outcome,
-                    entry_price, live_price, tp, sl,
+        if live_outcome is not None:
+            outcome = live_outcome
+            exit_price = sl if outcome == "SL_HIT" else tp
+            # exit_ts: prefere ``last_updated`` do market_metadata (quando
+            # o ticker foi atualizado pela última vez); fallback para
+            # ``now()`` se NULL. Em qualquer caso, garante >= entry_ts
+            # para holding_seconds não-negativo.
+            now_utc = datetime.now(timezone.utc)
+            base_ts = live_ts or now_utc
+            if shadow.entry_timestamp and base_ts < shadow.entry_timestamp:
+                exit_ts = shadow.entry_timestamp
+            else:
+                exit_ts = base_ts
+            logger.info(
+                "[shadow-monitor] live-close shadow_id=%s symbol=%s "
+                "outcome=%s entry=%.8f live=%.8f tp=%.8f sl=%.8f "
+                "last_updated=%s",
+                shadow.id, shadow.symbol, outcome,
+                entry_price, live_price, tp, sl, live_ts,
+            )
+            _finalize_outcome(shadow, outcome, exit_price, exit_ts, entry_price)
+            try:
+                await _capture_exit_features(db, shadow)
+            except Exception:
+                logger.exception(
+                    "[shadow-monitor] features_snapshot_exit (live) failed "
+                    "for shadow_id=%s",
+                    shadow.id,
                 )
-                _finalize_outcome(shadow, outcome, exit_price, exit_ts, entry_price)
-                try:
-                    await _capture_exit_features(db, shadow)
-                except Exception:
-                    logger.exception(
-                        "[shadow-monitor] features_snapshot_exit (live) failed "
-                        "for shadow_id=%s",
-                        shadow.id,
-                    )
-                try:
-                    await shadow_trade_service.record_as_simulation(db, shadow)
-                except Exception:
-                    logger.exception(
-                        "[shadow-monitor] record_as_simulation (live) failed "
-                        "for shadow_id=%s",
-                        shadow.id,
-                    )
-                return "completed"
+            try:
+                await shadow_trade_service.record_as_simulation(db, shadow)
+            except Exception:
+                logger.exception(
+                    "[shadow-monitor] record_as_simulation (live) failed "
+                    "for shadow_id=%s",
+                    shadow.id,
+                )
+            return "completed"
 
     after_ts = shadow.last_processed_time or shadow.entry_timestamp
     candles = await _fetch_candles(

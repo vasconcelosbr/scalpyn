@@ -110,6 +110,41 @@ async def _get_current_price_multi_tf(
     return float(row.close), row.time
 
 
+async def _get_market_metadata_price(
+    db: AsyncSession, symbol: str
+) -> tuple[Optional[float], Optional[datetime]]:
+    """Preço corrente vindo de ``market_metadata`` (ticker REST, refresh ~60s).
+
+    Por que não ``ohlcv`` aqui (Task #292): muitos símbolos do pool só têm
+    candle 5m/15m/30m. ``_get_current_price_multi_tf`` lê o close da candle
+    fechada mais recente — pode ter até 30 min de defasagem em relação ao
+    preço real do mercado. ``market_metadata.price`` é atualizado a cada
+    ciclo de ``collect_all`` (≈60s) com o ticker REST do Gate.io e é
+    exatamente a fonte que o frontend mostra como "current_price" para o
+    usuário. Usar a mesma fonte garante que o monitor feche os trades
+    consistentemente com o que o usuário vê na UI (TP/SL visíveis ⇒ TP/SL
+    fechados).
+    """
+    res = await db.execute(
+        text(
+            """
+            SELECT price, last_updated
+              FROM market_metadata
+             WHERE symbol = :s
+            """
+        ),
+        {"s": symbol},
+    )
+    row = res.fetchone()
+    if row is None or row.price is None:
+        return None, None
+    try:
+        price = float(row.price)
+    except (TypeError, ValueError):
+        return None, None
+    return price, row.last_updated
+
+
 async def _resolve_decision(
     db: AsyncSession, user_id, symbol: str, lookback_minutes: int
 ) -> Optional[DecisionLog]:
