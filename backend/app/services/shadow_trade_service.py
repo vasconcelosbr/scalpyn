@@ -178,6 +178,161 @@ def _build_features_snapshot(decision: DecisionLog) -> Dict[str, Any]:
     return flat
 
 
+# ── market context enrichment (migration 052, ML Fase 6) ────────────────────
+
+
+# Símbolo canônico do BTC no banco (mesmo formato dos demais ativos —
+# subscrito por `_USDT`). Usado pelas duas leituras de contexto BTC.
+BTC_CONTEXT_SYMBOL = os.environ.get("SHADOW_BTC_CONTEXT_SYMBOL", "BTC_USDT")
+
+
+async def enrich_market_context(
+    db: AsyncSession,
+    *,
+    symbol: str,
+    entry_timestamp: datetime,
+    decision_id: Optional[int] = None,
+) -> Dict[str, Optional[float]]:
+    """Calcula os 4 campos de contexto de mercado para um shadow trade.
+
+    Retorna sempre um dict com as 4 chaves (``btc_price_at_entry``,
+    ``btc_change_1h_pct``, ``funding_rate_at_entry``,
+    ``n_concurrent_signals``); valores faltantes vêm como ``None``
+    (o caller decide se sobrescreve a coluna ou mantém o que já tinha).
+
+    NUNCA falha: qualquer exceção isolada de cada query é convertida em
+    ``None`` para a chave correspondente. Esse contrato garante que
+    o monitor pode chamar essa função no caminho quente sem afetar
+    TP/SL/timeout em caso de schema parcial / lock momentâneo.
+
+    Fontes
+    ------
+    * ``btc_price_at_entry`` / ``btc_change_1h_pct``: ``ohlcv`` para
+      ``BTC_USDT`` no timeframe ``1h``. Pega a candle mais recente
+      ``time <= entry_timestamp`` (close = preço BTC âncora) e a candle
+      anterior dentro de uma janela de 75 min para cobrir gaps de
+      ingestão.
+    * ``funding_rate_at_entry``: ``funding_rates`` (schema:
+      ``time TIMESTAMPTZ, symbol VARCHAR(20), exchange VARCHAR(50),
+      rate NUMERIC(10,6)``) — última leitura ``time <= entry_timestamp``
+      do mesmo símbolo. Spot puro pode não ter funding (NULL — não
+      falha).
+    * ``n_concurrent_signals``: contagem de ``DISTINCT symbol`` em
+      ``decisions_log`` com ``decision='ALLOW'`` no MESMO minuto da
+      entrada. Inclui o próprio sinal (proxy de "concorrência" que o
+      ML pode normalizar dividindo por 1).
+    """
+    out: Dict[str, Optional[float]] = {
+        "btc_price_at_entry": None,
+        "btc_change_1h_pct": None,
+        "funding_rate_at_entry": None,
+        "n_concurrent_signals": None,
+    }
+    if entry_timestamp is None:
+        return out
+
+    # ── BTC anchor + 1h change ────────────────────────────────────────────
+    try:
+        res = await db.execute(
+            text(
+                """
+                SELECT close, time
+                  FROM ohlcv
+                 WHERE symbol = :s
+                   AND timeframe = '1h'
+                   AND time <= :t
+                 ORDER BY time DESC
+                 LIMIT 1
+                """
+            ),
+            {"s": BTC_CONTEXT_SYMBOL, "t": entry_timestamp},
+        )
+        cur_row = res.fetchone()
+        if cur_row is not None and cur_row.close is not None:
+            cur_close = float(cur_row.close)
+            out["btc_price_at_entry"] = cur_close
+
+            prev_res = await db.execute(
+                text(
+                    """
+                    SELECT close
+                      FROM ohlcv
+                     WHERE symbol = :s
+                       AND timeframe = '1h'
+                       AND time <= :t_anchor - interval '60 minutes'
+                       AND time >= :t_anchor - interval '135 minutes'
+                     ORDER BY time DESC
+                     LIMIT 1
+                    """
+                ),
+                {"s": BTC_CONTEXT_SYMBOL, "t_anchor": cur_row.time},
+            )
+            prev_row = prev_res.fetchone()
+            if prev_row is not None and prev_row.close is not None:
+                prev_close = float(prev_row.close)
+                if prev_close > 0:
+                    out["btc_change_1h_pct"] = (
+                        (cur_close - prev_close) / prev_close * 100.0
+                    )
+    except Exception:
+        logger.exception(
+            "[shadow] enrich_market_context: BTC OHLCV lookup failed "
+            "(symbol=%s entry_ts=%s)",
+            symbol, entry_timestamp,
+        )
+
+    # ── funding rate ──────────────────────────────────────────────────────
+    try:
+        res = await db.execute(
+            text(
+                """
+                SELECT rate
+                  FROM funding_rates
+                 WHERE symbol = :s
+                   AND time <= :t
+                 ORDER BY time DESC
+                 LIMIT 1
+                """
+            ),
+            {"s": symbol, "t": entry_timestamp},
+        )
+        row = res.fetchone()
+        if row is not None and row.rate is not None:
+            out["funding_rate_at_entry"] = float(row.rate)
+    except Exception:
+        logger.exception(
+            "[shadow] enrich_market_context: funding_rates lookup failed "
+            "(symbol=%s entry_ts=%s)",
+            symbol, entry_timestamp,
+        )
+
+    # ── concurrent signals (mesmo minuto, ALLOW) ─────────────────────────
+    try:
+        res = await db.execute(
+            text(
+                """
+                SELECT COUNT(DISTINCT symbol) AS n
+                  FROM decisions_log
+                 WHERE decision = 'ALLOW'
+                   AND date_trunc('minute', created_at)
+                     = date_trunc('minute', CAST(:t AS timestamptz))
+                """
+            ),
+            {"t": entry_timestamp},
+        )
+        row = res.fetchone()
+        if row is not None and row.n is not None:
+            out["n_concurrent_signals"] = int(row.n)
+    except Exception:
+        logger.exception(
+            "[shadow] enrich_market_context: concurrent_signals lookup failed "
+            "(symbol=%s entry_ts=%s decision_id=%s)",
+            symbol, entry_timestamp, decision_id,
+        )
+
+    return out
+
+
 # ── core: criação a partir de uma DecisionLog ────────────────────────────────
 
 _INSERT_SHADOW_SQL = text("""

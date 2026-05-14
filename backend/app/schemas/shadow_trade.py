@@ -39,6 +39,13 @@ class ShadowTradeRead(BaseModel):
     # shadows novos, mas legados podem ter delta).
     entry_timestamp: Optional[datetime] = None
 
+    # Market-context (migration 052). Preenchidos pelo monitor após
+    # resolver a entrada; ficam None em shadows legados sem backfill.
+    btc_price_at_entry: Optional[float] = None
+    btc_change_1h_pct: Optional[float] = None
+    funding_rate_at_entry: Optional[float] = None
+    n_concurrent_signals: Optional[int] = None
+
 
 class ShadowTradeDetail(ShadowTradeRead):
     """Detalhe completo — adiciona snapshots para a página de drill-down."""

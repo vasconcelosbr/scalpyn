@@ -150,6 +150,46 @@ async def _ensure_entry(db, shadow: ShadowTrade) -> bool:
     return True
 
 
+async def _enrich_market_context(db, shadow: ShadowTrade) -> None:
+    """Preenche os 4 campos de contexto de mercado (migration 052).
+
+    Idempotente: só chama o serviço se ALGUM dos 4 campos ainda for NULL
+    (uma vez preenchidos no momento da entrada, são imutáveis — o
+    contexto é "como era o mercado quando o trade entrou", não muda
+    com o tempo). Defesa adicional: nunca propaga exceção, perda do
+    enriquecimento não afeta TP/SL/timeout.
+    """
+    needs_fill = (
+        shadow.btc_price_at_entry is None
+        or shadow.btc_change_1h_pct is None
+        or shadow.funding_rate_at_entry is None
+        or shadow.n_concurrent_signals is None
+    )
+    if not needs_fill or shadow.entry_timestamp is None:
+        return
+    try:
+        ctx = await shadow_trade_service.enrich_market_context(
+            db,
+            symbol=shadow.symbol,
+            entry_timestamp=shadow.entry_timestamp,
+            decision_id=shadow.decision_id,
+        )
+        if shadow.btc_price_at_entry is None and ctx["btc_price_at_entry"] is not None:
+            shadow.btc_price_at_entry = ctx["btc_price_at_entry"]
+        if shadow.btc_change_1h_pct is None and ctx["btc_change_1h_pct"] is not None:
+            shadow.btc_change_1h_pct = ctx["btc_change_1h_pct"]
+        if shadow.funding_rate_at_entry is None and ctx["funding_rate_at_entry"] is not None:
+            shadow.funding_rate_at_entry = ctx["funding_rate_at_entry"]
+        if shadow.n_concurrent_signals is None and ctx["n_concurrent_signals"] is not None:
+            shadow.n_concurrent_signals = ctx["n_concurrent_signals"]
+    except Exception:
+        logger.exception(
+            "[shadow-monitor] enrich_market_context failed for shadow_id=%s "
+            "— continuing without context (TP/SL/timeout untouched)",
+            shadow.id,
+        )
+
+
 async def _advance_shadow(db, shadow: ShadowTrade) -> str:
     """Avança um único shadow trade até outcome ou esgotar candles do tick.
 
@@ -159,6 +199,10 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
     if not await _ensure_entry(db, shadow):
         # Sem candle 1m disponível ainda — deixa em PENDING, próximo tick.
         return "pending"
+
+    # Após a entrada estar resolvida, enriquece o contexto de mercado
+    # (additive — migration 052). Idempotente e fail-safe internamente.
+    await _enrich_market_context(db, shadow)
 
     # Sem TP/SL utilizáveis (config sem tp_pct/sl_pct) → não dá pra simular.
     if shadow.tp_price is None or shadow.sl_price is None:

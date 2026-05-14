@@ -1,0 +1,102 @@
+O Scalpyn tem uma tabela shadow_trades que registra trades simulados.
+Ela já tem features_snapshot (JSONB com indicadores técnicos na entrada)
+e features_snapshot_exit (indicadores na saída).
+
+Precisamos adicionar 4 campos de contexto de mercado que estão faltando
+e são críticos para o treinamento do modelo XGBoost:
+
+btc_price_at_entry     → preço do BTC no momento da entrada
+btc_change_1h_pct      → variação % do BTC na última hora antes da entrada
+funding_rate_at_entry  → funding rate do ativo no momento da entrada
+n_concurrent_signals   → quantos ativos sinalizaram no mesmo minuto
+Esses dados existem internamente:
+
+BTC price/change → tabela ohlcv (symbol='BTC_USDT', timeframe='1h')
+funding_rate → tabela funding_rates
+concurrent signals → tabela decisions_log (contar sinais no mesmo minuto)
+
+Regras obrigatórias
+
+ADDITIVE ONLY — não remover ou alterar nada existente
+Validar o que existe antes de criar qualquer arquivo
+Nunca alterar tabelas existentes além do ALTER TABLE solicitado
+
+Tarefa — executar em sequência
+PASSO 1 — Leitura obrigatória
+Leia os seguintes arquivos antes de escrever qualquer linha de código:
+
+backend/app/models/shadow_trade.py
+backend/app/services/shadow_trade_service.py
+backend/app/tasks/shadow_trade_monitor.py
+backend/alembic/versions/ (último arquivo de migration)
+backend/app/database.py
+
+PASSO 2 — Migration Alembic
+Criar migration additive para adicionar os 4 campos na tabela shadow_trades:
+sqlALTER TABLE shadow_trades
+    ADD COLUMN IF NOT EXISTS btc_price_at_entry    NUMERIC(18,8),
+    ADD COLUMN IF NOT EXISTS btc_change_1h_pct     NUMERIC(8,4),
+    ADD COLUMN IF NOT EXISTS funding_rate_at_entry NUMERIC(10,6),
+    ADD COLUMN IF NOT EXISTS n_concurrent_signals  INTEGER;
+
+Criar o arquivo em backend/alembic/versions/ com número sequencial
+correto (verificar o último número existente antes de criar).
+Incluir upgrade() e downgrade() corretos.
+
+PASSO 3 — Atualizar o Model SQLAlchemy
+Adicionar os 4 campos no model existente em
+backend/app/models/shadow_trade.py (additive only — não remover nada):
+pythonbtc_price_at_entry    = Column(Numeric(18, 8), nullable=True)
+btc_change_1h_pct     = Column(Numeric(8, 4),  nullable=True)
+funding_rate_at_entry = Column(Numeric(10, 6), nullable=True)
+n_concurrent_signals  = Column(Integer,         nullable=True)
+PASSO 4 — Função de enriquecimento
+Criar função em backend/app/services/shadow_trade_service.py
+(additive only) chamada enrich_market_context:
+pythonasync def enrich_market_context(
+    db: AsyncSession,
+    shadow_trade_id: uuid,
+    entry_timestamp: datetime,
+    symbol: str,
+    decision_id: int
+) -> dict:
+    """
+    Busca os 4 campos de contexto de mercado para um shadow_trade.
+    
+    BTC price/change → ohlcv WHERE symbol='BTC_USDT' AND time <= entry_timestamp
+                        ORDER BY time DESC LIMIT 1
+                        change_1h = (close - close_1h_ago) / close_1h_ago * 100
+    
+    funding_rate → funding_rates WHERE symbol=symbol AND time <= entry_timestamp
+                   ORDER BY time DESC LIMIT 1
+                   Se não encontrar → NULL (não falhar)
+    
+    """
+
+PASSO 5 — Integrar no shadow_trade_monitor.py
+No task que processa os shadow_trades em andamento, após registrar
+a entrada, chamar enrich_market_context e salvar os 4 campos.
+ADDITIVE ONLY — não alterar lógica existente, apenas adicionar
+o enriquecimento após o fluxo atual.
+
+PASSO 6 — Script de backfill
+Criar script backend/scripts/backfill_shadow_trade_context.py
+que popula os 4 campos retroativamente para todos os shadow_trades
+que já existem com entry_timestamp preenchido mas campos NULL.
+Formato: script standalone que pode ser rodado via:
+bashpython backend/scripts/backfill_shadow_trade_context.py
+
+Com logging claro:
+Processando 72 shadow_trades sem contexto...
+[1/72] ENA_USDT — btc_change_1h: -0.23% | funding: 0.0001 | concurrent: 3
+[2/72] ADA_USDT — btc_change_1h: -0.23% | funding: NULL   | concurrent: 3
+...
+Concluído: 72 registros atualizados, 0 erros
+
+PASSO 7 — Atualizar Schema Pydantic (se existir)
+Verificar se existe backend/app/schemas/shadow_trade.py
+Se existir, adicionar os 4 campos como Optional nos schemas
+de response (additive only).
+
+# Rodar backfill
+python scripts/backfill_shadow_trade_context.py

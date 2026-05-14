@@ -24,6 +24,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Numeric,
     String,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -102,5 +103,16 @@ class ShadowTrade(Base):
         onupdate=func.now(),
     )
     completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # ── Market-context columns (migration 052, ML Fase 6) ────────────────
+    # Preenchidos pelo monitor (`shadow_trade_monitor._enrich_market_context`)
+    # após resolver a entrada — additive, não afeta TP/SL/timeout. Backfill
+    # offline via `scripts/backfill_shadow_trade_context.py`.
+    # Todos nullable: shadows criados antes da migration ou com dados de
+    # contexto indisponíveis ficam em NULL (o XGBoost trata como missing).
+    btc_price_at_entry = Column(Numeric(18, 8), nullable=True)
+    btc_change_1h_pct = Column(Numeric(8, 4), nullable=True)
+    funding_rate_at_entry = Column(Numeric(10, 6), nullable=True)
+    n_concurrent_signals = Column(Integer, nullable=True)
 
     decision = relationship("DecisionLog", foreign_keys=[decision_id])
