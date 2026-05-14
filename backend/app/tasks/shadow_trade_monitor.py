@@ -305,7 +305,21 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
         )
         live_price, live_ts = None, None
 
-    if live_price is not None:
+    # Skew guard: se temos `last_updated` do market_metadata e ele é
+    # anterior ao entry_timestamp, o ticker está defasado em relação à
+    # entrada — pular o live-close para não fechar com dado pré-entrada
+    # stale. Cai no scan candle 1m legado abaixo. Quando `live_ts` é
+    # NULL (raro — coluna nullable), aceitamos o preço (sem timestamp
+    # não há como caracterizar skew) e o pipeline legado serve de rede
+    # de segurança no próximo tick.
+    skew_skip = (
+        live_price is not None
+        and live_ts is not None
+        and shadow.entry_timestamp is not None
+        and live_ts < shadow.entry_timestamp
+    )
+
+    if live_price is not None and not skew_skip:
         live_outcome: Optional[str] = None
         if live_price <= sl:
             live_outcome = "SL_HIT"
@@ -315,16 +329,15 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
         if live_outcome is not None:
             outcome = live_outcome
             exit_price = sl if outcome == "SL_HIT" else tp
-            # exit_ts: prefere ``last_updated`` do market_metadata (quando
-            # o ticker foi atualizado pela última vez); fallback para
-            # ``now()`` se NULL. Em qualquer caso, garante >= entry_ts
-            # para holding_seconds não-negativo.
-            now_utc = datetime.now(timezone.utc)
-            base_ts = live_ts or now_utc
-            if shadow.entry_timestamp and base_ts < shadow.entry_timestamp:
+            # exit_ts = max(live_ts, entry_ts) — preserva semântica
+            # original (holding_seconds não-negativo). Se `live_ts` for
+            # NULL, usa entry_timestamp (holding_seconds=0 vs negativo).
+            if live_ts is None:
+                exit_ts = shadow.entry_timestamp or datetime.now(timezone.utc)
+            elif shadow.entry_timestamp and live_ts < shadow.entry_timestamp:
                 exit_ts = shadow.entry_timestamp
             else:
-                exit_ts = base_ts
+                exit_ts = live_ts
             logger.info(
                 "[shadow-monitor] live-close shadow_id=%s symbol=%s "
                 "outcome=%s entry=%.8f live=%.8f tp=%.8f sl=%.8f "
