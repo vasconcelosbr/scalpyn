@@ -303,10 +303,18 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
         live_price, live_ts = None, None
 
     if live_price is not None and live_ts is not None:
-        # Só consideramos a leitura como "nova" se for posterior à
-        # entrada — evita fechar imediatamente um trade recém-criado
-        # com a mesma candle usada como entry_price (race teórico).
-        if shadow.entry_timestamp is None or live_ts >= shadow.entry_timestamp:
+        # Guarda anti-race: se o preço corrente é literalmente o mesmo
+        # da entrada (origem na mesma candle 5m/15m/30m que resolveu o
+        # entry_price há alguns segundos), pulamos o live-close pra
+        # evitar fechar com 0% de movimento. Qualquer mudança de preço
+        # ≠ entrada já indica candle posterior ou movimento intra-candle.
+        #
+        # NÃO comparamos `live_ts >= entry_timestamp`: o timestamp do
+        # multi-tf é o close da candle 5m/15m/30m mais recente
+        # (ex.: 12:00), enquanto entry_timestamp = próximo open de 1m
+        # após a decisão (ex.: 12:02), então `live_ts < entry_ts` é o
+        # caso COMUM e descartaria todos os fechamentos legítimos.
+        if live_price != float(shadow.entry_price):
             live_outcome: Optional[str] = None
             if live_price <= sl:
                 live_outcome = "SL_HIT"
@@ -316,7 +324,12 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
             if live_outcome is not None:
                 outcome = live_outcome
                 exit_price = sl if outcome == "SL_HIT" else tp
-                exit_ts = live_ts
+                # exit_ts deve ser >= entry_ts (holding_seconds não pode
+                # ser negativo). live_ts pode ser anterior em tfs > 1m.
+                if shadow.entry_timestamp and live_ts < shadow.entry_timestamp:
+                    exit_ts = shadow.entry_timestamp
+                else:
+                    exit_ts = live_ts
                 logger.info(
                     "[shadow-monitor] live-close shadow_id=%s symbol=%s "
                     "outcome=%s entry=%.8f live=%.8f tp=%.8f sl=%.8f",
