@@ -34,6 +34,10 @@ class ShadowTradeRead(BaseModel):
     holding_seconds: Optional[int] = None
     created_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    # Necessário para o frontend calcular holding "ao vivo" enquanto a
+    # operação está em RUNNING (created_at ≈ entry_timestamp para
+    # shadows novos, mas legados podem ter delta).
+    entry_timestamp: Optional[datetime] = None
 
 
 class ShadowTradeDetail(ShadowTradeRead):

@@ -179,6 +179,7 @@ def _to_read(
         holding_seconds=row.holding_seconds,
         created_at=row.created_at,
         completed_at=row.completed_at,
+        entry_timestamp=row.entry_timestamp,
     )
 
 

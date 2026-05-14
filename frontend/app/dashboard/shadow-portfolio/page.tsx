@@ -54,6 +54,7 @@ interface ShadowTradeRead {
   holding_seconds: number | null;
   created_at: string | null;
   completed_at: string | null;
+  entry_timestamp: string | null;
 }
 
 interface ShadowTradeListResponse {
@@ -572,6 +573,15 @@ function TradeTable({
   error: string | null;
   onRowClick: (id: string) => void;
 }) {
+  // Tick a cada 30s para o "Holding" das operações em aberto avançar
+  // visualmente sem precisar de refetch. P&L em aberto também usa esse
+  // re-render quando livePrices chegam (via parent).
+  const [nowTick, setNowTick] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNowTick(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
   if (error) {
     return (
       <div
@@ -673,16 +683,46 @@ function TradeTable({
           {items.map((it) => {
             const sStyle = statusStyle(it.status);
             const oStyle = outcomeStyle(it.outcome);
+            // Para trades em aberto (sem pnl_pct persistido), calcula
+            // P&L "marked-to-market" usando current_price vs entry_price.
+            // Para trades fechados, usa o valor persistido pelo monitor.
+            const isOpen = it.status === "PENDING" || it.status === "RUNNING";
+            const livePnlPct: number | null =
+              isOpen && it.entry_price != null && it.current_price != null && it.entry_price > 0
+                ? ((it.current_price - it.entry_price) / it.entry_price) * 100
+                : it.pnl_pct;
+            const livePnlUsdt: number | null =
+              isOpen && livePnlPct != null && it.amount_usdt
+                ? (it.amount_usdt * livePnlPct) / 100
+                : it.pnl_usdt;
+            // Holding "ao vivo" enquanto a operação está em aberto:
+            // entry_timestamp → agora. Para fechados, usa holding_seconds
+            // persistido (= entry → exit).
+            const entryRef = it.entry_timestamp ?? it.created_at;
+            let liveHolding: number | null = it.holding_seconds;
+            if (isOpen && entryRef) {
+              try {
+                const entryMs = new Date(entryRef).getTime();
+                if (!isNaN(entryMs)) {
+                  liveHolding = Math.max(
+                    0,
+                    Math.floor((nowTick - entryMs) / 1000),
+                  );
+                }
+              } catch {
+                /* keep null */
+              }
+            }
             const pnlPctColor =
-              it.pnl_pct === null
+              livePnlPct === null
                 ? C.dim
-                : it.pnl_pct >= 0
+                : livePnlPct >= 0
                 ? C.green
                 : C.red;
             const pnlUsdtColor =
-              it.pnl_usdt === null
+              livePnlUsdt === null
                 ? C.dim
-                : it.pnl_usdt >= 0
+                : livePnlUsdt >= 0
                 ? C.green
                 : C.red;
             return (
@@ -764,7 +804,7 @@ function TradeTable({
                     fontWeight: 600,
                   }}
                 >
-                  {fmtPct(it.pnl_pct)}
+                  {fmtPct(livePnlPct)}
                 </td>
                 <td
                   style={{
@@ -774,7 +814,7 @@ function TradeTable({
                     fontWeight: 600,
                   }}
                 >
-                  {fmtUsd(it.pnl_usdt)}
+                  {fmtUsd(livePnlUsdt)}
                 </td>
                 <td
                   style={{
@@ -785,14 +825,14 @@ function TradeTable({
                     fontVariantNumeric: "tabular-nums",
                   }}
                   title={
-                    it.holding_seconds != null
-                      ? `${it.holding_seconds}s desde a inclusão até ${
-                          it.outcome === "TP_HIT" ? "bater o TP" : "fechar"
+                    liveHolding != null
+                      ? `${liveHolding}s ${
+                          isOpen ? "em aberto" : it.outcome === "TP_HIT" ? "até bater o TP" : "até fechar"
                         }`
                       : undefined
                   }
                 >
-                  {fmtHolding(it.holding_seconds)}
+                  {fmtHolding(liveHolding)}
                 </td>
                 <td style={{ padding: "10px 12px", whiteSpace: "nowrap", color: C.muted }}>
                   {fmtDateTime(it.completed_at)}
