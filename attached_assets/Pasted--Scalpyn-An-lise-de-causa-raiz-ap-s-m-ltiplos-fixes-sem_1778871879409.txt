@@ -1,0 +1,307 @@
+# Scalpyn — Análise de causa raiz após múltiplos fixes sem efeito
+# Regras: SOMENTE LEITURA E DIAGNÓSTICO | NÃO ALTERAR CÓDIGO
+
+---
+
+## Contexto crítico
+
+Múltiplos fixes foram aplicados e o problema persiste há 3+ dias:
+
+```
+FIX B1 — registrar task no worker-execution → aplicado
+FIX B2 — early-check de timeout              → aplicado
+FIX B3 — vocabulário direction               → aplicado
+FIX C1 — ON CONFLICT predicate mismatch      → aplicado
+FIX C2 — skew guard timezone-safe            → aplicado
+FIX C3 — isolar enrichment em sessão separada → aplicado
+```
+
+Estado atual após todos os fixes:
+
+```
+shadow_trades: 107 trades
+  RUNNING:    86  fechados=0  ultimo_proc=2026-05-15T12:15:00Z
+  PENDING:    21  fechados=0  ultimo_proc=NULL
+
+EVIDÊNCIA CRÍTICA — trades muito além do TP sem fechar:
+  HYPE_USDT: entry=$39.06, TP=$39.45, atual=$44.11 (+12.92%), 1d6h aberto
+  UNI_USDT:  entry=$3.60,  TP=$3.63,  atual=$3.63  (+0.75%),  1d6h aberto
+  ZEC_USDT:  entry=$521.84, TP=$527.06, atual=$529.50 (+1.47%), 1d aberto
+
+LOGS DO BEAT:
+  Scheduler dispara trade_monitor a cada 10s  ✅
+  Scheduler NUNCA dispara shadow_trade_monitor ❌
+  
+LOGS DO WORKER-EXECUTION:
+  Processa trade_monitor (trades reais)        ✅
+  Nenhum log com "shadow"                       ❌
+
+CÓDIGO VERIFICADO:
+  celery_app.py:90  → include shadow_trade_monitor    ✅
+  celery_app.py:160 → TASK_ROUTES queue=execution      ✅
+  celery_app.py:472 → beat_schedule shadow-trade-monitor ✅
+  celery_app.py:473 → task: shadow_trade_monitor.run   ✅
+
+DEPLOY:
+  scalpyn-beat revisão 00104-rjk (deploy 17:27)
+  Build SUCCESS
+  Restart do beat realizado
+  Schedule no Redis ainda contém versão antiga (suspeita)
+```
+
+## Stack
+
+- Backend: FastAPI + Python no Cloud Run
+- Task queue: Celery + Redis (redislabs)
+- celery_app.py: backend/app/tasks/celery_app.py
+- shadow_trade_monitor: backend/app/tasks/shadow_trade_monitor.py
+- shadow_trade_service: backend/app/services/shadow_trade_service.py
+- Banco: PostgreSQL (Cloud SQL)
+- Repositório: https://github.com/vasconcelosbr/scalpyn.git
+- PROJECT_ID: clickrate-477217
+- Cloud Run services: scalpyn, scalpyn-beat, scalpyn-worker-execution,
+                      scalpyn-worker-micro, scalpyn-worker-structural
+
+## Regras obrigatórias
+
+1. SOMENTE LEITURA — não alterar nenhum arquivo ou configuração
+2. Apresentar diagnóstico completo antes de qualquer proposta de fix
+3. Validar cada hipótese com evidência (código, log ou query)
+4. Não confiar em fixes anteriores — verificar do zero se foram efetivos
+5. Pensar fora da caixa — o problema pode estar em camadas não óbvias
+
+---
+
+## FASE 1 — Verificação de premissas (READ-ONLY)
+
+### PASSO 1 — Confirmar versão do código em produção
+
+```bash
+# Ver o commit atual em produção via Cloud Build
+gcloud builds list --limit 5 \
+  --format "table(id,status,createTime,substitutions.COMMIT_SHA)"
+
+# Comparar com HEAD local
+git log -5 --oneline
+git status
+```
+
+Reportar:
+- Hash do commit deployado no último build
+- Hash do HEAD local
+- Diferença entre os dois (se houver)
+- Branch atual
+
+### PASSO 2 — Inspeção COMPLETA do celery_app.py
+
+Ler o arquivo INTEIRO, não só os trechos com "shadow".
+Reportar:
+
+1. Como o `app` Celery é construído?
+2. Qual é o conteúdo COMPLETO do parâmetro `include` (todas as linhas)?
+3. Qual é o conteúdo COMPLETO de `beat_schedule` (todas as entradas)?
+4. Existe alguma condição `if` que pode desabilitar entradas do schedule?
+5. Existem variáveis de ambiente que controlam o schedule (RUN_BEAT, etc)?
+6. O `task_routes` está completo? `shadow_trade_monitor.run` está roteado?
+7. Existe algum decorator ou middleware que possa estar filtrando tasks?
+
+### PASSO 3 — Inspeção do shadow_trade_monitor.py
+
+Ler o arquivo INTEIRO. Reportar:
+
+1. Como o task é registrado? (`@app.task`, `@shared_task`, etc)
+2. O nome do task bate exatamente com o configurado no celery_app.py?
+3. A função `run` existe e está corretamente decorada?
+4. Existe alguma condição inicial que pode retornar antes de processar?
+   (ex: feature flag, env var, status check)
+5. Como a query principal de shadow_trades é feita?
+   - Qual o filtro de status?
+   - Existe LIMIT?
+   - Existe WHERE user_id que pode estar filtrando demais?
+
+### PASSO 4 — Verificar estado real do Celery beat
+
+```bash
+# Ver variáveis de ambiente do beat
+gcloud run services describe scalpyn-beat \
+  --region us-central1 \
+  --format "value(spec.template.spec.containers[0].env)"
+
+# Ver os argumentos do container
+gcloud run services describe scalpyn-beat \
+  --region us-central1 \
+  --format "value(spec.template.spec.containers[0].args,spec.template.spec.containers[0].command)"
+
+# Logs completos do startup do beat (últimos 100)
+gcloud logging read \
+  "resource.labels.service_name=scalpyn-beat" \
+  --project clickrate-477217 \
+  --limit 100 \
+  --freshness 30m \
+  --format "value(timestamp,textPayload)" \
+  2>/dev/null | head -100
+```
+
+Reportar:
+- Quais env vars o beat tem?
+- O beat foi iniciado com `--schedule` apontando para arquivo persistente?
+- No startup, quais entries do beat_schedule são listadas?
+- Existem mensagens de erro ou warning no startup?
+
+### PASSO 5 — Verificar Redis (schedule persistente)
+
+```bash
+# Listar todas as keys do Redis
+redis-cli -u "redis://default:SENHA@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005" \
+  KEYS "*celery*"
+
+redis-cli -u "redis://default:SENHA@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005" \
+  KEYS "*beat*"
+
+redis-cli -u "redis://default:SENHA@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005" \
+  KEYS "*schedule*"
+```
+
+Reportar:
+- Quais keys do Celery existem no Redis?
+- Existe key relacionada a schedule?
+- O conteúdo dessas keys (se houver) menciona shadow_trade_monitor?
+
+### PASSO 6 — Verificar worker-execution detalhadamente
+
+```bash
+# Variáveis de ambiente do worker
+gcloud run services describe scalpyn-worker-execution \
+  --region us-central1 \
+  --format "value(spec.template.spec.containers[0].env)"
+
+# Comando/args do worker
+gcloud run services describe scalpyn-worker-execution \
+  --region us-central1 \
+  --format "value(spec.template.spec.containers[0].args,spec.template.spec.containers[0].command)"
+
+# Startup do worker — ver quais queues ele consome
+gcloud logging read \
+  "resource.labels.service_name=scalpyn-worker-execution" \
+  --project clickrate-477217 \
+  --limit 50 \
+  --freshness 20m \
+  --format "value(timestamp,textPayload)" \
+  2>/dev/null | grep -iE "queue|registered|task|celery@" | head -30
+```
+
+Reportar:
+- O worker consome a queue 'execution'?
+- O task `app.tasks.shadow_trade_monitor.run` aparece como registered no startup?
+- O worker foi reiniciado após o último deploy?
+
+### PASSO 7 — Verificar se o task chega na fila Redis
+
+```bash
+# Ver tasks pendentes em cada fila
+redis-cli -u "redis://default:SENHA@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005" \
+  LLEN execution
+
+redis-cli -u "redis://default:SENHA@redis-18005.c279.us-central1-1.gce.cloud.redislabs.com:18005" \
+  LRANGE execution 0 5
+```
+
+Reportar:
+- Tem tasks pendentes na fila execution?
+- O conteúdo mostra alguma task shadow_trade_monitor?
+
+### PASSO 8 — Verificar query no banco e estrutura atual
+
+```sql
+-- Última vez que ALGUM shadow foi processado
+SELECT
+    MAX(last_processed_time) AS ultimo_proc_global,
+    MAX(updated_at)          AS ultimo_update_global,
+    NOW()                    AS agora,
+    NOW() - MAX(last_processed_time) AS tempo_sem_processar
+FROM shadow_trades;
+
+-- Verificar se há trades duplicados ou com problemas
+SELECT
+    decision_id,
+    COUNT(*) AS qtd
+FROM shadow_trades
+GROUP BY decision_id
+HAVING COUNT(*) > 1
+ORDER BY qtd DESC
+LIMIT 10;
+
+-- Verificar índices existentes
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE tablename IN ('shadow_trades', 'trade_simulations')
+ORDER BY tablename, indexname;
+```
+
+---
+
+## FASE 2 — Diagnóstico estruturado
+
+Após coletar todas as evidências, produzir relatório:
+
+```
+═══════════════════════════════════════════════════
+DIAGNÓSTICO PROFUNDO — SHADOW TRADES NÃO FECHAM
+═══════════════════════════════════════════════════
+
+1. CONFIRMAÇÃO DOS FIXES ANTERIORES
+   - B1 efetivo? [SIM/NÃO + evidência]
+   - B2 efetivo? [SIM/NÃO + evidência]
+   - B3 efetivo? [SIM/NÃO + evidência]
+   - C1 efetivo? [SIM/NÃO + evidência]
+   - C2 efetivo? [SIM/NÃO + evidência]
+   - C3 efetivo? [SIM/NÃO + evidência]
+
+2. CAUSA RAIZ IDENTIFICADA
+   [Descrição precisa do que está bloqueando o fechamento]
+   
+   Evidência 1: [arquivo:linha ou log] — [o que mostra]
+   Evidência 2: [arquivo:linha ou log] — [o que mostra]
+   Evidência 3: [arquivo:linha ou log] — [o que mostra]
+
+3. POR QUE OS FIXES ANTERIORES NÃO RESOLVERAM
+   [Análise honesta — os fixes foram aplicados na camada errada?
+    O problema é em outro lugar? Houve regressão?]
+
+4. CAUSA RAIZ EM 1 FRASE
+   [O fechamento não acontece porque _____________]
+
+5. SOLUÇÃO PROPOSTA
+   [Descrição da correção — aguardar aprovação antes de implementar]
+
+6. RISCOS
+   [O que pode dar errado com a solução proposta]
+
+7. PLANO DE VALIDAÇÃO
+   [Como confirmar que o fix funcionou desta vez]
+```
+
+---
+
+## FASE 3 — NÃO IMPLEMENTAR NADA
+
+Esta auditoria é EXCLUSIVAMENTE diagnóstica.
+Não criar arquivos, não fazer commits, não alterar configurações.
+
+Apresentar o relatório completo e aguardar aprovação para
+implementar a correção em prompt separado.
+
+## Pensar fora da caixa
+
+Hipóteses não óbvias a considerar:
+
+1. O beat está rodando 2 instâncias e uma tem schedule antigo
+2. O Cloud Run beat está com min-instances=0 e nunca sobe
+3. O task tem nome duplicado em algum lugar
+4. Existe um decorator customizado que silenciosamente skip tasks
+5. O Celery worker-execution não está fazendo poll na queue correta
+6. O Redis tem múltiplos schedules salvos de versões diferentes
+7. Existe um circuit breaker ou rate limit interceptando o task
+8. O task está sendo executado mas crasha antes do primeiro log
+9. Variável de ambiente RUN_BEAT ou similar desabilita schedules específicos
+10. O task está registrado em uma queue diferente da que o worker consome
