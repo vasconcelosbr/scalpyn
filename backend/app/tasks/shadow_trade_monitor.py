@@ -293,57 +293,97 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
     # (mesma lógica do scan candle). exit_price é fixado em tp/sl
     # para manter o PnL simulado consistente com tp_pct/sl_pct
     # (o scan 1m existente também usa tp/sl, não c["high"]/c["low"]).
+    # Lemos AS DUAS fontes de preço corrente e fechamos se QUALQUER uma
+    # cruzou TP/SL. Por quê:
+    #   - `market_metadata.price` = ticker REST (refresh ~60s).
+    #   - `ohlcv` close multi-tf (1m/5m/15m/30m) = mesma fonte usada por
+    #     `_fetch_latest_prices` no endpoint `/api/shadow-trades/prices`,
+    #     que é o que o frontend mostra como "Atual" para o usuário.
+    # As duas podem divergir (ticker passou pelo TP num minuto sem candle
+    # fechada, ou ohlcv mais recente que ticker). Avaliar AS DUAS:
+    #   - garante coerência visual (UI ≥ TP ⇒ fechamento)
+    #   - é mais agressivo no fechamento (qualquer fonte que cruzou já
+    #     prova que o preço passou por lá em algum momento)
     try:
-        live_price, live_ts = await shadow_trade_service._get_market_metadata_price(
+        mm_price, mm_ts = await shadow_trade_service._get_market_metadata_price(
             db, shadow.symbol
         )
     except Exception:
         logger.exception(
-            "[shadow-monitor] live-close: get_market_metadata_price failed for "
-            "shadow_id=%s — caindo no scan 1m legado",
+            "[shadow-monitor] live-close: get_market_metadata_price failed "
+            "for shadow_id=%s",
             shadow.id,
         )
-        live_price, live_ts = None, None
+        mm_price, mm_ts = None, None
 
-    # Skew guard: se temos `last_updated` do market_metadata e ele é
-    # anterior ao entry_timestamp, o ticker está defasado em relação à
-    # entrada — pular o live-close para não fechar com dado pré-entrada
-    # stale. Cai no scan candle 1m legado abaixo. Quando `live_ts` é
-    # NULL (raro — coluna nullable), aceitamos o preço (sem timestamp
-    # não há como caracterizar skew) e o pipeline legado serve de rede
-    # de segurança no próximo tick.
-    skew_skip = (
-        live_price is not None
-        and live_ts is not None
-        and shadow.entry_timestamp is not None
-        and live_ts < shadow.entry_timestamp
-    )
+    try:
+        ohlcv_price, ohlcv_ts = await shadow_trade_service._get_current_price_multi_tf(
+            db, shadow.symbol
+        )
+    except Exception:
+        logger.exception(
+            "[shadow-monitor] live-close: get_current_price_multi_tf failed "
+            "for shadow_id=%s",
+            shadow.id,
+        )
+        ohlcv_price, ohlcv_ts = None, None
 
-    if live_price is not None and not skew_skip:
+    # Skew guard por fonte: descarta dado anterior ao entry_timestamp
+    # (ticker/candle pré-entrada). Mantém a fonte cujo timestamp é
+    # >= entry_ts (ou é NULL — sem como caracterizar skew, aceitamos).
+    def _ok(price, ts) -> bool:
+        if price is None:
+            return False
+        if ts is None or shadow.entry_timestamp is None:
+            return True
+        return ts >= shadow.entry_timestamp
+
+    candidates: list[tuple[float, Optional[datetime], str]] = []
+    if _ok(mm_price, mm_ts):
+        candidates.append((float(mm_price), mm_ts, "mm"))
+    if _ok(ohlcv_price, ohlcv_ts):
+        candidates.append((float(ohlcv_price), ohlcv_ts, "ohlcv"))
+
+    if candidates:
+        # Para TP, considera o MAIOR preço entre as fontes (mais agressivo
+        # no fechamento positivo). Para SL, o MENOR (mais agressivo no
+        # negativo). Se ambas as fontes cruzaram lados opostos no mesmo
+        # tick (caso patológico), TP vence — coerente com a precedência
+        # do scan 1m legado que checa SL antes de TP, mas como aqui
+        # estamos resolvendo divergência entre fontes, preferimos a
+        # leitura otimista (qualquer fonte ≥ TP).
+        max_price, max_ts, max_src = max(candidates, key=lambda c: c[0])
+        min_price, min_ts, min_src = min(candidates, key=lambda c: c[0])
+
         live_outcome: Optional[str] = None
-        if live_price <= sl:
-            live_outcome = "SL_HIT"
-        elif live_price >= tp:
+        chosen_price: Optional[float] = None
+        chosen_ts: Optional[datetime] = None
+        chosen_src: Optional[str] = None
+        if max_price >= tp:
             live_outcome = "TP_HIT"
+            chosen_price, chosen_ts, chosen_src = max_price, max_ts, max_src
+        elif min_price <= sl:
+            live_outcome = "SL_HIT"
+            chosen_price, chosen_ts, chosen_src = min_price, min_ts, min_src
 
         if live_outcome is not None:
             outcome = live_outcome
             exit_price = sl if outcome == "SL_HIT" else tp
-            # exit_ts = max(live_ts, entry_ts) — preserva semântica
-            # original (holding_seconds não-negativo). Se `live_ts` for
-            # NULL, usa entry_timestamp (holding_seconds=0 vs negativo).
-            if live_ts is None:
+            # exit_ts = max(chosen_ts, entry_ts) — holding_seconds não
+            # negativo. Se `chosen_ts` for NULL, usa entry_timestamp.
+            if chosen_ts is None:
                 exit_ts = shadow.entry_timestamp or datetime.now(timezone.utc)
-            elif shadow.entry_timestamp and live_ts < shadow.entry_timestamp:
+            elif shadow.entry_timestamp and chosen_ts < shadow.entry_timestamp:
                 exit_ts = shadow.entry_timestamp
             else:
-                exit_ts = live_ts
+                exit_ts = chosen_ts
             logger.info(
                 "[shadow-monitor] live-close shadow_id=%s symbol=%s "
-                "outcome=%s entry=%.8f live=%.8f tp=%.8f sl=%.8f "
-                "last_updated=%s",
-                shadow.id, shadow.symbol, outcome,
-                entry_price, live_price, tp, sl, live_ts,
+                "outcome=%s src=%s entry=%.8f chosen=%.8f tp=%.8f sl=%.8f "
+                "mm=(%s,%s) ohlcv=(%s,%s)",
+                shadow.id, shadow.symbol, outcome, chosen_src,
+                entry_price, chosen_price, tp, sl,
+                mm_price, mm_ts, ohlcv_price, ohlcv_ts,
             )
             _finalize_outcome(shadow, outcome, exit_price, exit_ts, entry_price)
             try:
