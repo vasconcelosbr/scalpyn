@@ -1,0 +1,65 @@
+Leia antes de alterar:
+  backend/app/services/shadow_trade_service.py (linha 629)
+  backend/app/tasks/shadow_trade_monitor.py (linha 334-339)
+  backend/alembic/versions/048_shadow_sim_unique.py
+
+FIXES A IMPLEMENTAR — additive only:
+
+FIX C1 — ON CONFLICT predicate (CRÍTICO — 1 linha)
+Localizar shadow_trade_service.py linha 629:
+
+  ANTES:
+  ON CONFLICT (decision_id) WHERE source = 'SHADOW' DO NOTHING
+
+  DEPOIS:
+  ON CONFLICT (decision_id) WHERE source = 'SHADOW'
+  AND decision_id IS NOT NULL DO NOTHING
+
+Verificar que o predicado bate exatamente com o índice
+da migration 048_shadow_sim_unique.py antes de alterar.
+
+FIX C2 — Skew guard timezone-safe
+Localizar shadow_trade_monitor.py linhas 334-339.
+Substituir o return da função _ok por versão defensiva:
+
+  def _ok(price, ts) -> bool:
+      if price is None:
+          return False
+      if ts is None or shadow.entry_timestamp is None:
+          return True
+      try:
+          return ts >= shadow.entry_timestamp
+      except TypeError:
+          return True  # naive vs aware — aceitar fonte válida
+
+Verificar o tipo de market_metadata.last_updated no banco:
+  SELECT column_name, data_type
+  FROM information_schema.columns
+  WHERE table_name = 'market_metadata'
+    AND column_name = 'last_updated';
+
+Se retornar 'timestamp without time zone' → confirma C2.
+
+VALIDAÇÃO PÓS-FIX:
+Após deploy, aguardar 10 minutos e rodar:
+
+  SELECT
+      status,
+      COUNT(*) AS total,
+      COUNT(last_processed_time) AS processados,
+      COUNT(completed_at) AS fechados,
+      MAX(last_processed_time) AS ultimo_proc
+  FROM shadow_trades
+  GROUP BY status;
+
+Resultado esperado:
+- fechados > 0 (C1 resolvido)
+- HYPE_USDT, UNI_USDT, ZEC_USDT aparecem como closed
+
+COMMIT:
+  git add -A
+  git commit -m "fix: shadow trades C1 ON CONFLICT predicate C2 timezone guard"
+  git push
+
+Regras: ADDITIVE ONLY | ZERO HARDCODE | git pull --rebase primeiro
+Não alterar nada além das 2 linhas identificadas.

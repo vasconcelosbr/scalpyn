@@ -331,12 +331,23 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
     # Skew guard por fonte: descarta dado anterior ao entry_timestamp
     # (ticker/candle pré-entrada). Mantém a fonte cujo timestamp é
     # >= entry_ts (ou é NULL — sem como caracterizar skew, aceitamos).
+    # FIX C2 (2026-05-15): try/except em torno da comparação de datas
+    # para cobrir possível mismatch timezone-naive vs timezone-aware
+    # (ex: market_metadata.last_updated gravado como TIMESTAMP sem tz
+    # enquanto shadow.entry_timestamp é TIMESTAMPTZ). Se a comparação
+    # lançar TypeError, aceita a fonte — melhor fechar trade válido com
+    # preço ligeiramente impreciso do que nunca fechar (fail-open
+    # intencional no skew guard; TP/SL check ainda valida o cruzamento).
     def _ok(price, ts) -> bool:
         if price is None:
             return False
         if ts is None or shadow.entry_timestamp is None:
             return True
-        return ts >= shadow.entry_timestamp
+        try:
+            return ts >= shadow.entry_timestamp
+        except TypeError:
+            # naive vs aware — aceitar fonte válida (ver FIX C2 acima)
+            return True
 
     candidates: list[tuple[float, Optional[datetime], str]] = []
     if _ok(mm_price, mm_ts):

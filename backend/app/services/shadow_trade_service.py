@@ -626,7 +626,8 @@ _INSERT_SIM_SQL = text("""
         CAST(:config_snapshot AS JSONB),
         NOW()
     )
-    ON CONFLICT (decision_id) WHERE source = 'SHADOW' DO NOTHING
+    ON CONFLICT (decision_id) WHERE source = 'SHADOW'
+        AND decision_id IS NOT NULL DO NOTHING
     RETURNING id
 """)
 
