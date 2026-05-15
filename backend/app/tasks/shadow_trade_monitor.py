@@ -244,6 +244,41 @@ async def _enrich_market_context(db, shadow: ShadowTrade) -> None:
         )
 
 
+async def _enrich_one_async(
+    shadow_id: Any,
+    symbol: str,
+    entry_timestamp: datetime,
+    decision_id: Optional[int],
+) -> None:
+    """Enriquece campos de contexto ML de um shadow em sessão isolada.
+
+    FIX C3 (2026-05-15): enriquecimento movido para fora da tx principal do
+    monitor. Qualquer SQL error dentro de ``enrich_market_context`` (ex:
+    coluna ausente, lock, timeout) agora aborta apenas ``db_enrich`` — a
+    sessão principal já commitou os fechamentos e está encerrada.
+    Falha é logada como WARNING e ignorada (best-effort por design).
+    """
+    from ..database import CeleryAsyncSessionLocal
+
+    try:
+        async with CeleryAsyncSessionLocal() as db_enrich:
+            async with db_enrich.begin():
+                res = await db_enrich.execute(
+                    select(ShadowTrade).where(ShadowTrade.id == shadow_id)
+                )
+                shadow = res.scalar_one_or_none()
+                if shadow is None:
+                    return
+                # Reutiliza o wrapper já fail-safe internamente.
+                await _enrich_market_context(db_enrich, shadow)
+    except Exception:
+        logger.warning(
+            "[shadow-monitor] _enrich_one_async falhou para shadow_id=%s "
+            "— ignorando (best-effort, fechamentos não afetados)",
+            shadow_id,
+        )
+
+
 async def _advance_shadow(db, shadow: ShadowTrade) -> str:
     """Avança um único shadow trade até outcome ou esgotar candles do tick.
 
@@ -254,9 +289,9 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
         # Sem candle 1m disponível ainda — deixa em PENDING, próximo tick.
         return "pending"
 
-    # Após a entrada estar resolvida, enriquece o contexto de mercado
-    # (additive — migration 052). Idempotente e fail-safe internamente.
-    await _enrich_market_context(db, shadow)
+    # NOTA: enriquecimento de contexto ML (_enrich_market_context) foi movido
+    # para FORA da tx principal — ver _enrich_one_async + _monitor_async.
+    # FIX C3 (2026-05-15): SQL error no enrich não deve abortar fechamentos.
 
     # Sem TP/SL utilizáveis (config sem tp_pct/sl_pct) → não dá pra simular.
     if shadow.tp_price is None or shadow.sl_price is None:
@@ -562,6 +597,8 @@ async def _monitor_async() -> Dict[str, int]:
     from ..database import CeleryAsyncSessionLocal
 
     summary = {"processed": 0, "completed": 0, "errors": 0}
+    # Coletado dentro da tx principal e consumido após o commit — FIX C3.
+    enrich_targets: List[Dict[str, Any]] = []
 
     async with CeleryAsyncSessionLocal() as db:
         async with db.begin():
@@ -594,6 +631,38 @@ async def _monitor_async() -> Dict[str, int]:
                         "[shadow-monitor] advance failed for shadow_id=%s",
                         shadow.id,
                     )
+
+            # Snapshot de dados escalares ANTES do commit — ORM objects
+            # ficam detached após o fechamento da sessão. Filtro por
+            # entry_timestamp não-NULL replica o guard de _enrich_market_context
+            # (só enriquece shadows com entrada confirmada).
+            enrich_targets = [
+                {
+                    "shadow_id": s.id,
+                    "symbol": s.symbol,
+                    "entry_timestamp": s.entry_timestamp,
+                    "decision_id": s.decision_id,
+                    "needs_fill": (
+                        s.btc_price_at_entry is None
+                        or s.btc_change_1h_pct is None
+                        or s.funding_rate_at_entry is None
+                        or s.n_concurrent_signals is None
+                    ),
+                }
+                for s in shadows
+                if s.entry_timestamp is not None
+            ]
+
+    # Enriquecimento ML best-effort — tx isolada por shadow, FORA da tx
+    # principal (FIX C3, 2026-05-15). Falha aqui NUNCA aborta fechamentos.
+    for t in enrich_targets:
+        if t["needs_fill"]:
+            await _enrich_one_async(
+                t["shadow_id"],
+                t["symbol"],
+                t["entry_timestamp"],
+                t["decision_id"],
+            )
 
     return summary
 
