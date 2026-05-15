@@ -1,0 +1,111 @@
+Scalpyn — Diagnóstico completo do shadow_trade_monitor
+Regras: ZERO HARDCODE | ADDITIVE ONLY | git pull --rebase primeiro
+LEITURA APENAS — não alterar nada até diagnóstico completo
+
+Contexto do problema
+O Shadow Portfolio tem 106 trades em aberto e 0 finalizados.
+O sistema calcula P&L em tempo real (preço atual vs entrada) mas
+nenhum trade está sendo fechado por TP, SL ou Timeout.
+Exemplo crítico observado:
+
+ZEC_USDT: entrada $547.43, preço atual $531.49 → -2.91% por 4h42min
+SL configurado em -5% → deveria fechar se atingir $520.06
+TAO_USDT: -1.16% por 4h57min
+
+O problema pode estar em:
+
+O task de monitoramento não está rodando (Celery)
+O task roda mas não encontra os trades
+O mecanismo de fechamento tem bug
+A fonte de preço atual está errada
+O cálculo de TP/SL está incorreto
+O status dos trades não está sendo atualizado
+
+Regras obrigatórias
+
+FASE 1 É SÓ LEITURA — não alterar nada antes do diagnóstico
+ADDITIVE ONLY em qualquer correção posterior
+git pull --rebase antes de qualquer alteração
+Nunca remover código, tabelas ou dados existentes
+
+
+FASE 1 — Mapeamento completo (SÓ LEITURA)
+PASSO 1 — Leia os arquivos do sistema de shadow trades
+Leia COMPLETAMENTE (não resuma) os seguintes arquivos:
+backend/app/tasks/shadow_trade_monitor.py
+backend/app/services/shadow_trade_service.py
+backend/app/models/shadow_trade.py
+backend/app/tasks/celery_app.py
+Para cada arquivo, identifique e reporte:
+
+Qual é a função principal?
+Como o fechamento de trades é triggado?
+Qual é a fonte do preço atual usado para comparar com TP/SL?
+Qual é o schedule/frequência de execução?
+Existem condições que possam impedir o fechamento?
+
+PASSO 2 — Verificar registro do task no Celery
+No celery_app.py, verificar:
+
+O task shadow_trade_monitor está registrado?
+Qual é o schedule (beat_schedule)?
+O task está ativo ou comentado?
+
+Reportar o trecho exato do schedule.
+
+PASSO 3 — Verificar fonte de preço atual
+No shadow_trade_monitor.py ou shadow_trade_service.py, identificar:
+
+De onde vem o "preço atual" usado para calcular P&L em tempo real?
+É do ohlcv? Do WebSocket? De uma API externa?
+O mesmo preço é usado para decidir fechar o trade?
+Existe alguma condição de "preço não disponível" que pula o fechamento?
+
+PASSO 4 — Verificar lógica de fechamento
+Identificar a função que decide fechar um trade e reportar:
+
+Qual é a condição exata para fechar por TP?
+Qual é a condição exata para fechar por SL?
+Qual é a condição para timeout?
+O que acontece quando fecha? (UPDATE no banco, mudança de status)
+Existe algum lock ou guard que pode estar impedindo?
+
+
+FASE 2 — Diagnóstico
+Após a leitura completa, produzir um relatório com:
+DIAGNÓSTICO DO SISTEMA DE FECHAMENTO
+=====================================
+
+PROBLEMA IDENTIFICADO:
+[descrição clara do que está falhando]
+
+CAUSA RAIZ:
+[código/configuração específica que causa o problema]
+
+EVIDÊNCIAS:
+1. [arquivo:linha] — [o que encontrou]
+2. [query resultado] — [o que revela]
+3. [log encontrado] — [o que indica]
+
+IMPACTO:
+- X trades deveriam ter fechado por SL
+- X trades deveriam ter fechado por TP
+- X trades estão em timeout
+
+SOLUÇÃO PROPOSTA:
+[descrição da correção — aguardar aprovação antes de implementar]
+
+RISCO DA CORREÇÃO:
+[o que pode ser afetado pela mudança]
+
+FASE 3 — Correção (somente após aprovação do diagnóstico)
+Somente após apresentar o diagnóstico completo e receber confirmação,
+implementar a correção seguindo:
+
+ADDITIVE ONLY — não remover código existente
+Criar função nova se necessário, não alterar funções existentes
+Testar a lógica com 1 trade antes de aplicar a todos
+Commitar com mensagem descritiva do fix
+
+NÃO implementar nada na FASE 1 ou 2.
+Apresentar o diagnóstico completo e aguardar aprovação.
