@@ -345,13 +345,12 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
         candidates.append((float(ohlcv_price), ohlcv_ts, "ohlcv"))
 
     if candidates:
-        # Para TP, considera o MAIOR preço entre as fontes (mais agressivo
-        # no fechamento positivo). Para SL, o MENOR (mais agressivo no
-        # negativo). Se ambas as fontes cruzaram lados opostos no mesmo
-        # tick (caso patológico), TP vence — coerente com a precedência
-        # do scan 1m legado que checa SL antes de TP, mas como aqui
-        # estamos resolvendo divergência entre fontes, preferimos a
-        # leitura otimista (qualquer fonte ≥ TP).
+        # Para SL, considera o MENOR preço entre as fontes (mais agressivo
+        # no negativo). Para TP, o MAIOR (mais agressivo no positivo).
+        # Precedência SL ANTES de TP — mesma ordem do scan 1m legado
+        # (`_check_outcome_for_candle`) e do `TradeMonitorService` em
+        # produção: política conservadora, perda reconhecida primeiro
+        # quando ambos os lados são tocados no mesmo tick.
         max_price, max_ts, max_src = max(candidates, key=lambda c: c[0])
         min_price, min_ts, min_src = min(candidates, key=lambda c: c[0])
 
@@ -359,12 +358,12 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
         chosen_price: Optional[float] = None
         chosen_ts: Optional[datetime] = None
         chosen_src: Optional[str] = None
-        if max_price >= tp:
-            live_outcome = "TP_HIT"
-            chosen_price, chosen_ts, chosen_src = max_price, max_ts, max_src
-        elif min_price <= sl:
+        if min_price <= sl:
             live_outcome = "SL_HIT"
             chosen_price, chosen_ts, chosen_src = min_price, min_ts, min_src
+        elif max_price >= tp:
+            live_outcome = "TP_HIT"
+            chosen_price, chosen_ts, chosen_src = max_price, max_ts, max_src
 
         if live_outcome is not None:
             outcome = live_outcome
