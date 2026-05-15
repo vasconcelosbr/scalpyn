@@ -451,7 +451,13 @@ async def _create_from_decision(
             "user_id": decision.user_id,
             "symbol": decision.symbol,
             "strategy": decision.strategy,
-            "direction": "long",  # spot é long-only
+            # Vocabulário canônico (Task #292): UPPERCASE
+            # 'SPOT' | 'LONG' | 'SHORT' | 'NEUTRAL'. Herda de
+            # ``decisions_log.direction`` quando presente; fallback
+            # para 'SPOT' (shadow é spot-only por enquanto, e os 515
+            # registros antigos com direction=NULL no decisions_log
+            # eram todos spot — ver migration 049).
+            "direction": (getattr(decision, "direction", None) or "SPOT"),
             "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
             "entry_price": entry_price,
             "entry_timestamp": entry_ts,

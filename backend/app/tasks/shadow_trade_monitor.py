@@ -408,6 +408,71 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
         db, shadow.symbol, after_ts, SHADOW_MONITOR_MAX_CANDLES_PER_RUN
     )
     if not candles:
+        # ── FIX B2 (additive, 2026-05-15) — Timeout por elapsed time ───
+        # Muitos símbolos do pool não têm OHLCV 1m ingerido; quando o
+        # `_fetch_candles` devolve [], o branch TIMEOUT do scan candle-a-
+        # candle (abaixo) NUNCA é alcançado e trades ficam RUNNING
+        # indefinidamente mesmo após >24h. Aqui fechamos por TIMEOUT
+        # quando o tempo decorrido (em minutos) já ultrapassa
+        # `timeout_candles` (definido em minutos para candles 1m).
+        #
+        # Posição CRÍTICA: este early-check vive DENTRO do `if not
+        # candles` propositalmente. Se houver candles 1m disponíveis,
+        # o loop abaixo prevalece (TP/SL detectados intra-candle ainda
+        # têm prioridade sobre TIMEOUT, por candle, mesma regra
+        # histórica). Mexer para fora deste `if` quebra a regra
+        # canônica TP/SL > TIMEOUT em cenários de retrace (preço tocou
+        # TP/SL em candle pendente mas voltou; sem este guard, o
+        # TIMEOUT marcaria o trade antes de o scan ver o hit real).
+        #
+        # Nunca propaga falha (mesma política de `_capture_exit_features`
+        # / `record_as_simulation`): se algo aqui levanta, fallback é
+        # manter o status atual e tentar de novo no próximo tick.
+        timeout_candles_m = int(shadow.timeout_candles or 0) or None
+        if timeout_candles_m and shadow.entry_timestamp is not None:
+            now_utc = datetime.now(timezone.utc)
+            elapsed_minutes = (
+                now_utc - shadow.entry_timestamp
+            ).total_seconds() / 60.0
+            if elapsed_minutes >= timeout_candles_m:
+                # exit_price: melhor preço corrente disponível
+                # (mm > ohlcv > entry_price). Coerente com a precedência
+                # do live-close.
+                if mm_price is not None:
+                    exit_price_to = float(mm_price)
+                elif ohlcv_price is not None:
+                    exit_price_to = float(ohlcv_price)
+                else:
+                    exit_price_to = entry_price
+                logger.info(
+                    "[shadow-monitor] timeout-elapsed shadow_id=%s "
+                    "symbol=%s elapsed_min=%.1f timeout_candles=%d "
+                    "exit_price=%.8f entry=%.8f (no 1m candles to scan)",
+                    shadow.id, shadow.symbol, elapsed_minutes,
+                    timeout_candles_m, exit_price_to, entry_price,
+                )
+                _finalize_outcome(
+                    shadow, "TIMEOUT", exit_price_to, now_utc, entry_price
+                )
+                try:
+                    await _capture_exit_features(db, shadow)
+                except Exception:
+                    logger.exception(
+                        "[shadow-monitor] features_snapshot_exit "
+                        "(timeout) failed for shadow_id=%s",
+                        shadow.id,
+                    )
+                try:
+                    await shadow_trade_service.record_as_simulation(
+                        db, shadow
+                    )
+                except Exception:
+                    logger.exception(
+                        "[shadow-monitor] record_as_simulation "
+                        "(timeout) failed for shadow_id=%s",
+                        shadow.id,
+                    )
+                return "completed"
         # Sem candles novas — mantém status atual.
         return "pending" if shadow.status == "PENDING" else "running"
 

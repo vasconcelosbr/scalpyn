@@ -1,0 +1,224 @@
+Fix Sistema de Fechamento Shadow Trades
+# Scalpyn — Fixes B1 + B2 + B3 consolidados
+
+## Contexto do problema
+
+O Shadow Portfolio tem 106 trades abertos e 0 fechados.
+Diagnóstico confirmado por logs e queries:
+
+```
+PROBLEMA 1 (B1): shadow_trade_monitor não executa no worker-execution
+- last_processed_time = NULL em 100% dos 106 trades
+- Nenhum log de shadow-monitor no scalpyn-worker-execution
+- Log encontrado: safe_bulk_create_from_user_skip failed
+
+PROBLEMA 2 (B2): Timeout nunca dispara
+- timeout_candles=1440 (minutos em candle 1m)
+- Sistema não tem candles 1m → _fetch_candles retorna []
+- Retorno antecipado impede avaliação do timeout
+- Trades com >72h abertos nunca fecham
+
+PROBLEMA 3 (B3): Vocabulário direction inconsistente
+- decisions_log.direction = 'SPOT' (correto)
+- shadow_trades.direction = 'long' (errado)
+- _create_from_decision não herda o direction da decisions_log
+```
+
+## Dados confirmados no banco
+
+```
+shadow_trades: 107 trades, direction='long', 0 fechados
+decisions_log: 494 com direction='SPOT', 515 com direction=NULL
+last_processed_time: NULL em todos os trades
+```
+
+## Stack
+
+- Backend: FastAPI + Python no Cloud Run
+- Task queue: Celery + Redis
+- celery_app.py: backend/app/tasks/celery_app.py
+- shadow_trade_monitor: backend/app/tasks/shadow_trade_monitor.py
+- shadow_trade_service: backend/app/services/shadow_trade_service.py
+- Banco: PostgreSQL (Cloud SQL)
+- Repositório: https://github.com/vasconcelosbr/scalpyn.git
+
+## Regras obrigatórias
+
+1. ZERO HARDCODE — nenhum valor fixo no código
+2. ADDITIVE ONLY — não remover ou alterar código existente
+3. git pull --rebase antes de qualquer alteração
+4. Ler os arquivos completos antes de escrever qualquer linha
+5. Nunca remover tabelas, rotas ou dados existentes
+6. Apresentar diagnóstico de cada fix antes de implementar
+
+---
+
+## PASSO 1 — Leitura obrigatória
+
+Leia COMPLETAMENTE antes de escrever qualquer código:
+
+```
+backend/app/tasks/shadow_trade_monitor.py
+backend/app/services/shadow_trade_service.py
+backend/app/models/shadow_trade.py
+backend/app/tasks/celery_app.py
+backend/tests/test_direction_vocabulary_invariants.py
+```
+
+Reportar para cada arquivo:
+- Onde o task shadow_trade_monitor está registrado no celery
+- Qual queue está configurada
+- Como o direction é atribuído em _create_from_decision
+- Onde está o _fetch_candles e o timeout check
+
+---
+
+## FIX B1 — Registrar task no worker-execution
+
+### O que verificar
+No celery_app.py, localizar:
+- O parâmetro `include` do Celery app
+- O `beat_schedule` do shadow_trade_monitor
+- A queue configurada para o task (deve ser `execution`)
+
+### O que corrigir
+Se `app.tasks.shadow_trade_monitor` não estiver no `include`
+do worker-execution → adicionar.
+
+Se o beat_schedule não tiver o task → adicionar entry:
+```python
+"shadow-trade-monitor": {
+    "task": "app.tasks.shadow_trade_monitor.run",
+    "schedule": 300.0,  # 5 minutos
+    "options": {"queue": "execution"},
+},
+```
+
+### Verificação pós-fix
+```bash
+gcloud logging read \
+  "resource.labels.service_name=scalpyn-worker-execution" \
+  --project clickrate-477217 \
+  --limit 20 \
+  --freshness 1h \
+  2>/dev/null | grep -i shadow
+```
+Deve aparecer logs de processamento após deploy.
+
+---
+
+## FIX B2 — Timeout independente de candles 1m
+
+### O que corrigir
+Em `shadow_trade_monitor.py`, ANTES da chamada `_fetch_candles`,
+adicionar verificação de timeout por tempo elapsed:
+
+```python
+# FIX B2 — Timeout por elapsed time (additive)
+# Não remove nada — apenas adiciona early-check antes do scan de candles
+from datetime import timezone
+
+now_utc = datetime.now(timezone.utc)
+entry_ts = shadow.entry_timestamp
+if entry_ts and shadow.timeout_candles:
+    elapsed_minutes = (now_utc - entry_ts).total_seconds() / 60
+    if elapsed_minutes >= shadow.timeout_candles:
+        return await _finalize_outcome(
+            db, shadow,
+            outcome="timeout",
+            exit_price=current_price,
+            exit_timestamp=now_utc,
+        )
+# Continua com o scan de candles existente normalmente
+```
+
+### Regras do fix
+- Inserir ANTES do `_fetch_candles` existente
+- Não alterar nada depois desse ponto
+- `_finalize_outcome` já existe — usar sem modificar
+- Se `entry_timestamp` for None → pular (não falhar)
+- Se `timeout_candles` for None → pular (sem timeout configurado)
+
+---
+
+## FIX B3 — Vocabulário direction consistente
+
+### Vocabulário correto definido
+
+```
+'SPOT'  → compra spot, long-only, sem alavancagem
+          TP: preço >= tp_price
+          SL: preço <= sl_price
+
+'LONG'  → futures comprado (uso futuro)
+          TP: preço >= tp_price
+          SL: preço <= sl_price
+
+'SHORT' → futures vendido (uso futuro)
+          TP: preço <= tp_price  ← invertido
+          SL: preço >= sl_price  ← invertido
+```
+
+### Fix em _create_from_decision
+
+Localizar a linha com `"direction": "long"` e substituir por:
+
+```python
+"direction": getattr(decision, "direction", None) or "SPOT",
+```
+
+Herda o direction da decisions_log. Fallback para 'SPOT'
+se NULL (515 registros antigos sem direction).
+
+### Fix na lógica de fechamento
+
+No monitor, preparar para os três tipos (additive):
+
+```python
+# FIX B3 — Lógica de fechamento por direction
+direction = (shadow.direction or "SPOT").upper()
+
+if direction in ("SPOT", "LONG"):
+    tp_hit = current_price >= shadow.tp_price
+    sl_hit = current_price <= shadow.sl_price
+elif direction == "SHORT":
+    tp_hit = current_price <= shadow.tp_price
+    sl_hit = current_price >= shadow.sl_price
+else:
+    # Fallback seguro para direction desconhecido
+    tp_hit = current_price >= shadow.tp_price
+    sl_hit = current_price <= shadow.sl_price
+```
+
+### Backfill dos 107 existentes
+
+```sql
+UPDATE shadow_trades
+SET direction = 'SPOT'
+WHERE direction = 'long';
+```
+
+Rodar via Alembic data migration ou script standalone.
+Não criar migration de schema — só UPDATE de dados.
+
+### Verificar test
+
+```bash
+cd backend
+python -m pytest tests/test_direction_vocabulary_invariants.py -v
+```
+
+Deve passar sem modificações.
+
+---
+
+## Ordem de implementação
+
+```
+1. Ler todos os arquivos (PASSO 1)
+2. Fix B1 → registrar task (mais crítico)
+3. Fix B2 → timeout elapsed (segundo mais crítico)
+4. Fix B3 → direction + backfill
+```
+Não pular para B2 ou B3 antes de confirmar B1 —
+se o task não executa, os outros fixes não têm efeito.
