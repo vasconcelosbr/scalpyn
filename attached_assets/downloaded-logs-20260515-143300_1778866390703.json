@@ -1,0 +1,1406 @@
+[
+  {
+    "insertId": "6a0731440003ad5d27d6d0cf",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/api/shadow-trades/prices?symbols=ICP_USDT%2CBNB_USDT%2CXRP_USDT%2CZEC_USDT%2CTAO_USDT%2CDOGE_USDT%2CPI_USDT%2CAAVE_USDT%2CETH_USDT%2CONDO_USDT%2CKAS_USDT%2CASTER_USDT%2CWLFI_USDT%2CADA_USDT%2CUNI_USDT%2CENA_USDT%2CAVAX_USDT%2CLTC_USDT%2CNEAR_USDT",
+      "requestSize": "4357",
+      "status": 401,
+      "responseSize": "126",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "174.129.140.78",
+      "referer": "https://scalpyn.vercel.app/dashboard/shadow-portfolio",
+      "serverIp": "34.143.72.2",
+      "latency": "0.022290630s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00564-7cq",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-15T14:44:20.216069Z",
+    "severity": "WARNING",
+    "labels": {
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "instanceId": "0007b734d946664c326f34ff1c238c0649301b1cd358730ad9aec1a2b822f4bf39d4f2f9ff2b662c5aba3eb23cc1bf2ee304857d3b2a80e9bd66b7daeb2c3372fe79a2c569cdcbdb400f8c919dad18",
+      "gcb-trigger-region": "global",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/a240e2d0af9efe8d9307e1b2d1840234",
+    "receiveTimestamp": "2026-05-15T14:44:20.248027124Z",
+    "spanId": "d43afd0a532da6de",
+    "traceSampled": true
+  },
+  {
+    "insertId": "6a073bad000d9b098fb81027",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/api/shadow-trades/summary",
+      "requestSize": "4137",
+      "status": 401,
+      "responseSize": "126",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "3.90.57.233",
+      "referer": "https://scalpyn.vercel.app/dashboard/shadow-portfolio",
+      "serverIp": "34.143.79.2",
+      "latency": "0.021172268s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00565-q8t",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-15T15:28:45.868586Z",
+    "severity": "WARNING",
+    "labels": {
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d97d383a26b3eb0be34a022af987386d7f622bca9caa7ecceadb18a2730fb5af7c3218a1833a6e474f11d2abdaf8420c6571edfd7f142f8eb9f8318ab5756b776fa02cdf6678e60c42",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/36788d6b4b51b2c82bddc3f239a271b4",
+    "receiveTimestamp": "2026-05-15T15:28:45.897943938Z",
+    "spanId": "267cdcb89808bdad",
+    "traceSampled": true
+  },
+  {
+    "insertId": "6a073bae00062b06cf280b7d",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/api/shadow-trades?page=2&page_size=50",
+      "requestSize": "4149",
+      "status": 401,
+      "responseSize": "126",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "34.207.103.110",
+      "referer": "https://scalpyn.vercel.app/dashboard/shadow-portfolio",
+      "serverIp": "34.143.74.2",
+      "latency": "0.005255490s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00565-q8t",
+        "location": "us-central1",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T15:28:46.396949Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d97d383a26b3eb0be34a022af987386d7f622bca9caa7ecceadb18a2730fb5af7c3218a1833a6e474f11d2abdaf8420c6571edfd7f142f8eb9f8318ab5756b776fa02cdf6678e60c42",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/93b0d80b6ad67c284568aa1d14a08528",
+    "receiveTimestamp": "2026-05-15T15:28:46.565223442Z",
+    "spanId": "065d38c2875f2af6"
+  },
+  {
+    "insertId": "6a074b6c0009d1a113c57d10",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/api/shadow-trades/prices?symbols=UNI_USDT%2CWLFI_USDT%2CSOL_USDT%2CTAO_USDT%2CICP_USDT%2CXRP_USDT%2CLINK_USDT%2CCRO_USDT%2CZEC_USDT%2CAAVE_USDT%2CASTER_USDT%2CLTC_USDT%2CNEAR_USDT%2CENA_USDT%2CHYPE_USDT%2CADA_USDT%2CBNB_USDT",
+      "requestSize": "4336",
+      "status": 401,
+      "responseSize": "126",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "18.206.91.178",
+      "referer": "https://scalpyn.vercel.app/dashboard/shadow-portfolio",
+      "serverIp": "34.143.76.2",
+      "latency": "0.003815441s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00565-q8t",
+        "project_id": "clickrate-477217",
+        "location": "us-central1",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T16:35:56.637591Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "instanceId": "0007b734d97d383a26b3eb0be34a022af987386d7f622bca9caa7ecceadb18a2730fb5af7c3218a1833a6e474f11d2abdaf8420c6571edfd7f142f8eb9f8318ab5756b776fa02cdf6678e60c42",
+      "gcb-trigger-region": "global",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/421f98765592d686dda414dae9c9320a",
+    "receiveTimestamp": "2026-05-15T16:35:56.649220807Z",
+    "spanId": "b198103f1fd95d9a",
+    "traceSampled": true
+  },
+  {
+    "insertId": "6a074fb800071b4590e3b685",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/api/dashboard/ml-dataset?limit=100",
+      "requestSize": "4139",
+      "status": 503,
+      "responseSize": "127",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "100.31.138.191",
+      "referer": "https://scalpyn.vercel.app/dashboard/operations",
+      "serverIp": "34.143.76.2",
+      "latency": "0.066633189s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-15T16:54:16.397566Z",
+    "severity": "ERROR",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/c157d67bc092632aa7771012a22d68a2",
+    "receiveTimestamp": "2026-05-15T16:54:16.569421633Z",
+    "spanId": "fee31c721c5d422e"
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 526, in _prepare_and_execute\n    prepared_stmt, attributes = await adapt_connection._prepare(\n                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 773, in _prepare\n    prepared_stmt = await self._connection.prepare(\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 638, in prepare\n    return await self._prepare(\n           ^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 657, in _prepare\n    stmt = await self._get_statement(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/asyncpg/connection.py\", line 443, in _get_statement\n    statement = await self._protocol.prepare(\n                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"asyncpg/protocol/protocol.pyx\", line 165, in prepare\nasyncpg.exceptions.UndefinedColumnError: column \"time_to_result\" does not exist",
+    "insertId": "6a074fb8000717592017545d",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-15T16:54:16.464729Z",
+    "severity": "ERROR",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-15T16:54:16.471899292Z",
+    "errorGroups": [
+      {
+        "id": "CMf0_rTL7M6ikAE"
+      }
+    ]
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1967, in _exec_single_context\n    self.dialect.do_execute(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py\", line 952, in do_execute\n    cursor.execute(statement, parameters)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 585, in execute\n    self._adapt_connection.await_(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 563, in _prepare_and_execute\n    self._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 513, in _handle_exception\n    self._adapt_connection._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 797, in _handle_exception\n    raise translated_error from error\nsqlalchemy.dialects.postgresql.asyncpg.AsyncAdapt_asyncpg_dbapi.ProgrammingError: <class 'asyncpg.exceptions.UndefinedColumnError'>: column \"time_to_result\" does not exist",
+    "insertId": "6a074fb800071775a113fc81",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-15T16:54:16.464757Z",
+    "severity": "ERROR",
+    "labels": {
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-trigger-region": "global"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-15T16:54:16.471899292Z",
+    "errorGroups": [
+      {
+        "id": "COmc-bO3nLH64wE"
+      }
+    ]
+  },
+  {
+    "textPayload": "Traceback (most recent call last):\n  File \"/app/app/database.py\", line 449, in get_db\n    yield session\n  File \"/usr/local/lib/python3.12/site-packages/fastapi/routing.py\", line 120, in app\n    response = await f(request)\n               ^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/fastapi/routing.py\", line 674, in app\n    raw_response = await run_endpoint_function(\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/fastapi/routing.py\", line 328, in run_endpoint_function\n    return await dependant.call(**values)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/api/dashboard.py\", line 389, in get_ml_dataset\n    rows = (await db.execute(sql, {\"limit\": limit})).all()\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/ext/asyncio/session.py\", line 449, in execute\n    result = await greenlet_spawn(\n             ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 201, in greenlet_spawn\n    result = context.throw(*sys.exc_info())\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2351, in execute\n    return self._execute_internal(\n           ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/orm/session.py\", line 2258, in _execute_internal\n    result = conn.execute(\n             ^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1419, in execute\n    return meth(\n           ^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/sql/elements.py\", line 527, in _execute_on_connection\n    return connection._execute_clauseelement(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1641, in _execute_clauseelement\n    ret = self._execute_context(\n          ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1846, in _execute_context\n    return self._exec_single_context(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1986, in _exec_single_context\n    self._handle_dbapi_exception(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 2363, in _handle_dbapi_exception\n    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/base.py\", line 1967, in _exec_single_context\n    self.dialect.do_execute(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/engine/default.py\", line 952, in do_execute\n    cursor.execute(statement, parameters)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 585, in execute\n    self._adapt_connection.await_(\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 132, in await_only\n    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/util/_concurrency_py3k.py\", line 196, in greenlet_spawn\n    value = await result\n            ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 563, in _prepare_and_execute\n    self._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 513, in _handle_exception\n    self._adapt_connection._handle_exception(error)\n  File \"/usr/local/lib/python3.12/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py\", line 797, in _handle_exception\n    raise translated_error from error\nsqlalchemy.exc.ProgrammingError: (sqlalchemy.dialects.postgresql.asyncpg.ProgrammingError) <class 'asyncpg.exceptions.UndefinedColumnError'>: column \"time_to_result\" does not exist",
+    "insertId": "6a074fb8000717ae324c05e0",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-15T16:54:16.464814Z",
+    "severity": "ERROR",
+    "labels": {
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-region": "global",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Fstderr",
+    "receiveTimestamp": "2026-05-15T16:54:16.802304526Z",
+    "errorGroups": [
+      {
+        "id": "CNKfvtvozfaAbw"
+      }
+    ]
+  },
+  {
+    "insertId": "6a07510900044e5594de6eec",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "697",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.74.2",
+      "latency": "0.002668s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00566-knt",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-15T16:59:53.274058Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-trigger-region": "global",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/055acb18ec8a264579e74eed404961f8",
+    "receiveTimestamp": "2026-05-15T16:59:53.313825125Z",
+    "spanId": "ecfdc6ca79a84743"
+  },
+  {
+    "insertId": "6a07510a0008178303047cda",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "697",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.74.2",
+      "latency": "0.003285s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217",
+        "location": "us-central1",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T16:59:54.521801Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-region": "global"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/f7bbc104299d3c9cf35247c7a8ded75e",
+    "receiveTimestamp": "2026-05-15T16:59:54.645597293Z",
+    "spanId": "8fb7f4b39acf6dc2"
+  },
+  {
+    "insertId": "6a07510c000be0dac55143f8",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "696",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.74.2",
+      "latency": "0.002934s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217",
+        "location": "us-central1",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T16:59:56.770097Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-region": "global"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/e6d9d39d23950d6e4ada5a01c4c08a48",
+    "receiveTimestamp": "2026-05-15T16:59:56.972957440Z",
+    "spanId": "a268c34d68b82f41"
+  },
+  {
+    "insertId": "6a07511100007d8eed45eb06",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "696",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.74.2",
+      "latency": "0.003597s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-15T17:00:01.023760Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/737da18abba4fbc51c90e8262927cf20",
+    "receiveTimestamp": "2026-05-15T17:00:01.308105097Z",
+    "spanId": "2d99a10a8674ed8a",
+    "traceSampled": true
+  },
+  {
+    "insertId": "6a075119000423bc97e9b6e4",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "697",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.74.2",
+      "latency": "0.003091s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217",
+        "location": "us-central1",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T17:00:09.263818Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/e9fba9dc491bf43097d4abbe6078ca90",
+    "receiveTimestamp": "2026-05-15T17:00:09.299448398Z",
+    "spanId": "55d254deeb44af31"
+  },
+  {
+    "insertId": "6a0751290007e9496449bc5b",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "696",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.74.2",
+      "latency": "0.003246s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "scalpyn",
+        "location": "us-central1",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00566-knt",
+        "service_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T17:00:25.510930Z",
+    "severity": "WARNING",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/8a705a7a7dc603546557e0155c21833f",
+    "receiveTimestamp": "2026-05-15T17:00:25.545265205Z",
+    "spanId": "68b62f446f06d62c"
+  },
+  {
+    "insertId": "6a0751480001f18165f0ec21",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "696",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.79.2",
+      "latency": "0.002987s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-15T17:00:56.117186Z",
+    "severity": "WARNING",
+    "labels": {
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-trigger-region": "global",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/a342cc8292355f8136174bbecf0d2ddb",
+    "receiveTimestamp": "2026-05-15T17:00:56.404115707Z",
+    "spanId": "bec7765e84962a59"
+  },
+  {
+    "insertId": "6a07516700007e86955ff8fb",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "697",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.79.2",
+      "latency": "0.002827s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00566-knt",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-15T17:01:27.024771Z",
+    "severity": "WARNING",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-region": "global",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/4cd799c0ae289343f8bb0434cc9196c0",
+    "receiveTimestamp": "2026-05-15T17:01:27.036526156Z",
+    "spanId": "a217da9e6f19d850",
+    "traceSampled": true
+  },
+  {
+    "insertId": "6a075185000549a34e18c7f6",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "696",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.77.2",
+      "latency": "0.004001s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "service_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00566-knt"
+      }
+    },
+    "timestamp": "2026-05-15T17:01:57.338581Z",
+    "severity": "WARNING",
+    "labels": {
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-region": "global",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/aec6d9adc5d230f75cdf3ad9441a3d0e",
+    "receiveTimestamp": "2026-05-15T17:01:57.593153476Z",
+    "spanId": "c499b4cc044198ef"
+  },
+  {
+    "insertId": "6a0751a40000db0877fd8c6f",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "696",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.77.2",
+      "latency": "0.002860s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "scalpyn",
+        "location": "us-central1",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00566-knt",
+        "service_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T17:02:28.048422Z",
+    "severity": "WARNING",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/1089fbf9444c3881653404fa578fe721",
+    "receiveTimestamp": "2026-05-15T17:02:28.063029615Z",
+    "spanId": "f5ab64e9ca3be745",
+    "traceSampled": true
+  },
+  {
+    "insertId": "6a0751c300025ddbc10a8d74",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "695",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.79.2",
+      "latency": "0.003433s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217"
+      }
+    },
+    "timestamp": "2026-05-15T17:02:59.144632Z",
+    "severity": "WARNING",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/e9556e74c37dd417d6fe8a1481430f6c",
+    "receiveTimestamp": "2026-05-15T17:02:59.333472324Z",
+    "spanId": "ccad01dab411c04f"
+  },
+  {
+    "insertId": "6a0752be00008a2060bfe1f2",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/api/pools/",
+      "requestSize": "4104",
+      "status": 401,
+      "responseSize": "126",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "100.31.138.191",
+      "referer": "https://scalpyn.vercel.app/watchlist",
+      "serverIp": "34.143.77.2",
+      "latency": "0.003306910s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-15T17:07:10.029796Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/bd5305e845b58134b5730987d91af974",
+    "receiveTimestamp": "2026-05-15T17:07:10.042017579Z",
+    "spanId": "e0c8408c16d14d51",
+    "traceSampled": true
+  },
+  {
+    "insertId": "6a0752be0000dd12bc72d3d0",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/api/watchlists/",
+      "requestSize": "4110",
+      "status": 401,
+      "responseSize": "126",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "13.220.65.36",
+      "referer": "https://scalpyn.vercel.app/watchlist",
+      "serverIp": "34.143.72.2",
+      "latency": "0.003697350s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00566-knt",
+        "location": "us-central1",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T17:07:10.050794Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/4d11d83812ad6507a2c21483ab9c4eb1",
+    "receiveTimestamp": "2026-05-15T17:07:10.374535921Z",
+    "spanId": "b07574c66f09647f"
+  },
+  {
+    "insertId": "6a0752be0000dd1fbf583c5a",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/api/watchlists/c1249770-acc7-474f-a01c-9d9efc64f3c0/assets",
+      "requestSize": "4153",
+      "status": 401,
+      "responseSize": "126",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "98.93.78.68",
+      "referer": "https://scalpyn.vercel.app/watchlist",
+      "serverIp": "34.143.76.2",
+      "latency": "0.003824950s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-15T17:07:10.051233Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-region": "global"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/0852a3e5d859b0cdeb8ce76a43076da2",
+    "receiveTimestamp": "2026-05-15T17:07:10.374535921Z",
+    "spanId": "8ccad241b42b755b"
+  },
+  {
+    "insertId": "6a0752be0000fcf557fc1ff9",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/api/profiles/",
+      "requestSize": "4107",
+      "status": 401,
+      "responseSize": "126",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "3.235.62.159",
+      "referer": "https://scalpyn.vercel.app/watchlist",
+      "serverIp": "34.143.73.2",
+      "latency": "0.003531240s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00566-knt",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-15T17:07:10.059653Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-region": "global",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/1236a0fcaa6e9de44ab149cc48f1065d",
+    "receiveTimestamp": "2026-05-15T17:07:10.374535921Z",
+    "spanId": "30f91fe6ef31ab8a"
+  },
+  {
+    "insertId": "6a0752be0000fced82411212",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/api/pipeline/rejected?watchlist_id=c1249770-acc7-474f-a01c-9d9efc64f3c0",
+      "requestSize": "4166",
+      "status": 401,
+      "responseSize": "126",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "54.165.188.251",
+      "referer": "https://scalpyn.vercel.app/watchlist",
+      "serverIp": "34.143.73.2",
+      "latency": "0.002556580s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "scalpyn",
+        "location": "us-central1",
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217",
+        "service_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T17:07:10.060543Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-region": "global",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/58315334d37bb72113a390679f37b78b",
+    "receiveTimestamp": "2026-05-15T17:07:10.374535921Z",
+    "spanId": "b44d3382eefbbdff"
+  },
+  {
+    "insertId": "6a0753990008b12ad415c650",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "695",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.75.2",
+      "latency": "0.002514s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "scalpyn",
+        "location": "us-central1",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00566-knt",
+        "service_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T17:10:49.560544Z",
+    "severity": "WARNING",
+    "labels": {
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-region": "global",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/b82e264e16f1a5d1ba724e6182e6fe9e",
+    "receiveTimestamp": "2026-05-15T17:10:49.591840542Z",
+    "spanId": "a75336056cad44ec"
+  },
+  {
+    "insertId": "6a07539a000c8b3d27f671f3",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "697",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.75.2",
+      "latency": "0.002452s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-15T17:10:50.814496Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-region": "global",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/f39958ed2ff37580b4ff1b3f777cb0bc",
+    "receiveTimestamp": "2026-05-15T17:10:50.923073034Z",
+    "spanId": "e2ef4213e2fba295"
+  },
+  {
+    "insertId": "6a07539d000157dd18ff3916",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "696",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.75.2",
+      "latency": "0.002995s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "scalpyn",
+        "location": "us-central1",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00566-knt",
+        "service_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T17:10:53.081283Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-region": "global"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/6725e0db670173b032672b1eff0675b1",
+    "receiveTimestamp": "2026-05-15T17:10:53.254444135Z",
+    "spanId": "d7b8cbfaa9230d49"
+  },
+  {
+    "insertId": "6a0753a100050d710cc3f3b3",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "696",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.75.2",
+      "latency": "0.002369s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00566-knt",
+        "location": "us-central1",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T17:10:57.324777Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-region": "global",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/b541e00944b0aebf1a53d5a8164b6a7a",
+    "receiveTimestamp": "2026-05-15T17:10:57.587397451Z",
+    "spanId": "b1e7731f15c2dab6"
+  },
+  {
+    "insertId": "6a0753a90008e42173f295ab",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "697",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.75.2",
+      "latency": "0.002182s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217",
+        "location": "us-central1",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T17:11:05.575580Z",
+    "severity": "WARNING",
+    "labels": {
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-trigger-region": "global",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/2c4373e6273e28f4c2734a088e4948f9",
+    "receiveTimestamp": "2026-05-15T17:11:05.911510627Z",
+    "spanId": "152a31063d68a7df"
+  },
+  {
+    "insertId": "6a0753b9000c9cc3760e52d8",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "696",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.75.2",
+      "latency": "0.002391s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "service_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00566-knt"
+      }
+    },
+    "timestamp": "2026-05-15T17:11:21.820146Z",
+    "severity": "WARNING",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-region": "global",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/1536fae3031a5b0d139f99cda7165b21",
+    "receiveTimestamp": "2026-05-15T17:11:21.898450341Z",
+    "spanId": "e103ea635791ad63",
+    "traceSampled": true
+  },
+  {
+    "insertId": "6a0753d90001e7071e3d1386",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "697",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.76.2",
+      "latency": "0.002479s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "scalpyn",
+        "location": "us-central1",
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217",
+        "service_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T17:11:53.118214Z",
+    "severity": "WARNING",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-trigger-region": "global",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/eec291301f8780c90740e8e8eb2f0da9",
+    "receiveTimestamp": "2026-05-15T17:11:53.434469882Z",
+    "spanId": "b837c4d022b51c4f"
+  },
+  {
+    "insertId": "6a0753ff000067411124efee",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "697",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.76.2",
+      "latency": "0.002392s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "configuration_name": "scalpyn",
+        "location": "us-central1",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00566-knt",
+        "service_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T17:12:31.019781Z",
+    "severity": "WARNING",
+    "labels": {
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/2946b7816d391be7e7a7b7a1b4fa8575",
+    "receiveTimestamp": "2026-05-15T17:12:31.031562235Z",
+    "spanId": "0af7bc1eccdc1ad2",
+    "traceSampled": true
+  },
+  {
+    "insertId": "6a07543b00027991eb8c9c94",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "697",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.72.2",
+      "latency": "0.003287s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217",
+        "location": "us-central1",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T17:13:31.154528Z",
+    "severity": "WARNING",
+    "labels": {
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "gcb-trigger-region": "global",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/a315d0da5a71acb1af4032e1733c7081",
+    "receiveTimestamp": "2026-05-15T17:13:31.166067333Z",
+    "spanId": "0206b1ddb11a5268",
+    "traceSampled": true
+  },
+  {
+    "insertId": "6a07545a00008422672c7418",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "697",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.72.2",
+      "latency": "0.002903s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "location": "us-central1",
+        "configuration_name": "scalpyn",
+        "service_name": "scalpyn",
+        "project_id": "clickrate-477217",
+        "revision_name": "scalpyn-00566-knt"
+      }
+    },
+    "timestamp": "2026-05-15T17:14:02.025008Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/7e8adec86e71e99cfa489b5ec9b6d7fb",
+    "receiveTimestamp": "2026-05-15T17:14:02.137427094Z",
+    "spanId": "2308ba2ed79a9099",
+    "traceSampled": true
+  },
+  {
+    "insertId": "6a0754790001c01402cf9ff2",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/ws/alerts",
+      "requestSize": "697",
+      "status": 403,
+      "responseSize": "95",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "152.250.148.107",
+      "serverIp": "34.143.73.2",
+      "latency": "0.002803s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "revision_name": "scalpyn-00566-knt",
+        "project_id": "clickrate-477217",
+        "service_name": "scalpyn",
+        "configuration_name": "scalpyn",
+        "location": "us-central1"
+      }
+    },
+    "timestamp": "2026-05-15T17:14:33.108211Z",
+    "severity": "WARNING",
+    "labels": {
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "gcb-trigger-region": "global",
+      "instanceId": "0007b734d942760185f763832741a14ff9b05c104f50b495fc1e1c494b29d241e17afd126cfd0f712e4467537c6238d906ab1a3ef0f5f7b9de97e4a7c88aa053c6962cdca141feff1bd3470209c9",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/17bc456c6cca06beb1fd0d8acf4ce8e2",
+    "receiveTimestamp": "2026-05-15T17:14:33.120259382Z",
+    "spanId": "0a187379c3da75f5",
+    "traceSampled": true
+  },
+  {
+    "insertId": "6a0757cf0009cb0f6535d33d",
+    "httpRequest": {
+      "requestMethod": "GET",
+      "requestUrl": "https://scalpyn-wm56dfqgta-uc.a.run.app/api/shadow-trades/prices?symbols=UNI_USDT%2CWLFI_USDT%2CSOL_USDT%2CTAO_USDT%2CICP_USDT%2CXRP_USDT%2CLINK_USDT%2CCRO_USDT%2CZEC_USDT%2CAAVE_USDT%2CASTER_USDT%2CLTC_USDT%2CNEAR_USDT%2CENA_USDT%2CHYPE_USDT%2CADA_USDT%2CBNB_USDT",
+      "requestSize": "4336",
+      "status": 401,
+      "responseSize": "126",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+      "remoteIp": "32.197.130.208",
+      "referer": "https://scalpyn.vercel.app/dashboard/shadow-portfolio",
+      "serverIp": "34.143.76.2",
+      "latency": "0.002987010s",
+      "protocol": "HTTP/1.1"
+    },
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "service_name": "scalpyn",
+        "revision_name": "scalpyn-00567-hk7",
+        "project_id": "clickrate-477217",
+        "location": "us-central1",
+        "configuration_name": "scalpyn"
+      }
+    },
+    "timestamp": "2026-05-15T17:28:47.637669Z",
+    "severity": "WARNING",
+    "labels": {
+      "gcb-build-id": "818e9d08-1845-46f1-b38f-f671fe27ba3d",
+      "commit-sha": "058c77646550517efafefc192f56b7944c405077",
+      "managed-by": "gcp-cloud-build-deploy-cloud-run",
+      "gcb-trigger-id": "806f4336-706a-404f-82be-dd0d5c01ebfa",
+      "instanceId": "0007b734d949c6a61905e0498a982d362f50e0dab8f6cf6078bcc9454002e626964199173aa99b8319e8c74ac0843e38dbe796c27f7da4510b119ac2ae653b74a1b27fdec7a4eb616156403d6a3e",
+      "gcb-trigger-region": "global"
+    },
+    "logName": "projects/clickrate-477217/logs/run.googleapis.com%2Frequests",
+    "trace": "projects/clickrate-477217/traces/658e5025c0212d38a096ff67521b57a8",
+    "receiveTimestamp": "2026-05-15T17:28:47.650749647Z",
+    "spanId": "45ca7efa07a1651b",
+    "traceSampled": true
+  }
+]
