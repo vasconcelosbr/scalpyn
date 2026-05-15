@@ -469,9 +469,13 @@ celery_app.conf.beat_schedule = {
     # Shadow Portfolio monitor (Fase 3) — avança shadow_trades
     # PENDING/RUNNING candle-a-candle até TP/SL/timeout. Beat default
     # 5 min (override via SHADOW_MONITOR_INTERVAL_S env).
+    # options.queue torna o roteamento explícito — sem isso o beat pode
+    # cair no task_default_queue="__no_default__" em vez de aplicar
+    # TASK_ROUTES, fazendo a task nunca chegar a nenhum worker.
     "shadow_trade_monitor": {
         "task": "app.tasks.shadow_trade_monitor.run",
         "schedule": float(os.environ.get("SHADOW_MONITOR_INTERVAL_S", 300)),
+        "options": {"queue": QUEUE_EXECUTION},
     },
 }
 
