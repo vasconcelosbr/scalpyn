@@ -452,3 +452,30 @@ async def get_shadow_trade(
         raise HTTPException(
             status_code=500, detail="Failed to fetch shadow trade"
         ) from exc
+
+
+@router.post("/monitor/trigger", status_code=202)
+async def trigger_monitor(
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """Dispara o shadow_trade_monitor ad-hoc na fila de execução.
+
+    Útil para recuperação de produção quando o beat não está processando
+    (ex.: após deploy, janela entre ticks, debug). Requer autenticação normal.
+    A task é idempotente e usa FOR UPDATE SKIP LOCKED — múltiplos disparos
+    simultâneos são seguros.
+    """
+    try:
+        from ..tasks.shadow_trade_monitor import run as _shadow_monitor_task
+        result = _shadow_monitor_task.apply_async(queue="execution")
+        return {
+            "dispatched": True,
+            "task_id": result.id,
+            "queue": "execution",
+            "message": "Shadow monitor task dispatched. Check logs in ~5s.",
+        }
+    except Exception as exc:
+        logger.error("Failed to dispatch shadow monitor: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"Dispatch failed: {exc}"
+        ) from exc
