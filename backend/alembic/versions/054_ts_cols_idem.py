@@ -1,6 +1,6 @@
 """Idempotent ADD COLUMN time_to_result + source on trade_simulations.
 
-Revision ID: 054_ts_time_to_result_source_idem
+Revision ID: 054_ts_cols_idem
 Revises: 053_shadow_dir_canon
 Create Date: 2026-05-15
 
@@ -21,15 +21,19 @@ O mesmo padrão foi corrigido para ``decision_type`` na migration 050.
 Fix: ADD COLUMN IF NOT EXISTS + backfill defensivo — ambas as operações
 são idempotentes e seguras de re-executar.
 
-NÃO incluídas em CRITICAL_COLUMNS nesta migration (regra N/N+1 — esperar
-um deploy com a coluna presente antes de o validator referenciá-la).
+ATENÇÃO — ID curto obrigatório: ``alembic_version.version_num`` é
+``VARCHAR(32)`` em produção. IDs de revisão devem ter ≤ 32 caracteres
+ou o ``alembic upgrade head`` quebra com
+``StringDataRightTruncationError`` ao gravar a versão aplicada.
+
+NÃO incluídas em CRITICAL_COLUMNS nesta migration (regra N/N+1).
 """
 
 from alembic import op
 import sqlalchemy as sa
 
 
-revision = "054_ts_time_to_result_source_idem"
+revision = "054_ts_cols_idem"
 down_revision = "053_shadow_dir_canon"
 branch_labels = None
 depends_on = None
