@@ -3,6 +3,10 @@
 .env.local
 .env.*.local
 
+# Attached assets (user-uploaded images, logs, diagnostic files)
+# Runtime artifacts — not source code, should not be tracked.
+attached_assets/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -65,6 +65,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # ATENÇÃO — semântica de rollback parcial:
+    # Este downgrade remove as colunas/índice que tanto 054 quanto 055
+    # definem.  Fazendo downgrade APENAS de 055 (sem fazer downgrade de 054),
+    # o schema ficaria divergente do estado que 054 deveria ter produzido.
+    # Isso é aceitável para um workflow prod-forward (nunca se faz downgrade
+    # seletivo em produção), mas deve ser observado em ambientes de teste:
+    # após ``alembic downgrade 054_ts_cols_idem`` as colunas ainda
+    # existem (055 não rodou seu downgrade); após
+    # ``alembic downgrade base`` ambas as migrations fazem drop.
+    # Em produção, o caminho de rollback recomendado é sempre
+    # ``alembic downgrade -1`` (sequencial), nunca downgrade seletivo.
     op.execute(sa.text(
         "DROP INDEX IF EXISTS ix_trade_simulations_shadow_decision_uniq"
     ))
