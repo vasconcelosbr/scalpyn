@@ -279,6 +279,53 @@ async def _enrich_one_async(
         )
 
 
+async def _record_simulation_one_async(shadow_id: Any) -> None:
+    """Grava simulação de um shadow COMPLETED em sessão isolada.
+
+    FIX D1 (2026-05-15): record_as_simulation + _capture_exit_features
+    movidos para FORA da tx principal do monitor, seguindo EXATAMENTE o
+    padrão de _enrich_one_async (FIX C3). Qualquer SQL error (ex: coluna
+    ausente em trade_simulations, lock timeout, schema drift) agora aborta
+    apenas db_sim — a sessão principal já commitou shadow.status='COMPLETED'
+    e está encerrada. Falha é logada como WARNING e ignorada (best-effort).
+
+    Invariante: recarrega o shadow por ID e verifica status == 'COMPLETED'
+    antes de gravar — garante idempotência e protege contra rollback externo.
+    """
+    from ..database import CeleryAsyncSessionLocal
+
+    try:
+        async with CeleryAsyncSessionLocal() as db_sim:
+            async with db_sim.begin():
+                res = await db_sim.execute(
+                    select(ShadowTrade).where(ShadowTrade.id == shadow_id)
+                )
+                shadow = res.scalar_one_or_none()
+                if shadow is None:
+                    return
+                if shadow.status != "COMPLETED":
+                    # Shadow foi revertido por outra tx — não gravar simulação
+                    # órfã. Não logar como erro: é comportamento esperado em
+                    # cenário de concorrência (FOR UPDATE SKIP LOCKED garante
+                    # exclusividade mas não impede revert manual/admin).
+                    return
+                try:
+                    await _capture_exit_features(db_sim, shadow)
+                except Exception:
+                    logger.exception(
+                        "[shadow-monitor] features_snapshot_exit failed for "
+                        "shadow_id=%s — simulação gravada sem exit snapshot",
+                        shadow_id,
+                    )
+                await shadow_trade_service.record_as_simulation(db_sim, shadow)
+    except Exception:
+        logger.warning(
+            "[shadow-monitor] _record_simulation_one_async falhou para "
+            "shadow_id=%s — ignorando (best-effort, fechamento não afetado)",
+            shadow_id,
+        )
+
+
 async def _advance_shadow(db, shadow: ShadowTrade) -> str:
     """Avança um único shadow trade até outcome ou esgotar candles do tick.
 
@@ -431,22 +478,9 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
                 mm_price, mm_ts, ohlcv_price, ohlcv_ts,
             )
             _finalize_outcome(shadow, outcome, exit_price, exit_ts, entry_price)
-            try:
-                await _capture_exit_features(db, shadow)
-            except Exception:
-                logger.exception(
-                    "[shadow-monitor] features_snapshot_exit (live) failed "
-                    "for shadow_id=%s",
-                    shadow.id,
-                )
-            try:
-                await shadow_trade_service.record_as_simulation(db, shadow)
-            except Exception:
-                logger.exception(
-                    "[shadow-monitor] record_as_simulation (live) failed "
-                    "for shadow_id=%s",
-                    shadow.id,
-                )
+            # FIX D1 (2026-05-15): _capture_exit_features + record_as_simulation
+            # movidos para _record_simulation_one_async (sessão isolada, pós-
+            # commit). Qualquer SQL error lá não aborta esta tx principal.
             return "completed"
 
     after_ts = shadow.last_processed_time or shadow.entry_timestamp
@@ -500,24 +534,9 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
                 _finalize_outcome(
                     shadow, "TIMEOUT", exit_price_to, now_utc, entry_price
                 )
-                try:
-                    await _capture_exit_features(db, shadow)
-                except Exception:
-                    logger.exception(
-                        "[shadow-monitor] features_snapshot_exit "
-                        "(timeout) failed for shadow_id=%s",
-                        shadow.id,
-                    )
-                try:
-                    await shadow_trade_service.record_as_simulation(
-                        db, shadow
-                    )
-                except Exception:
-                    logger.exception(
-                        "[shadow-monitor] record_as_simulation "
-                        "(timeout) failed for shadow_id=%s",
-                        shadow.id,
-                    )
+                # FIX D1 (2026-05-15): _capture_exit_features + record_as_simulation
+                # movidos para _record_simulation_one_async (sessão isolada, pós-
+                # commit). Qualquer SQL error lá não aborta esta tx principal.
                 return "completed"
         # Sem candles novas — mantém status atual.
         return "pending" if shadow.status == "PENDING" else "running"
@@ -568,27 +587,9 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
     # Outcome atingido (caminho candle-a-candle 1m) — usa os mesmos
     # helpers do live-close.
     _finalize_outcome(shadow, outcome, exit_price, exit_ts, entry_price)
-
-    # Captura indicadores no momento da SAÍDA (Task 2026-05-13).
-    # Nunca propaga falha — perda de snapshot de saída não anula o
-    # outcome; só loga e segue.
-    try:
-        await _capture_exit_features(db, shadow)
-    except Exception:
-        logger.exception(
-            "[shadow-monitor] features_snapshot_exit failed for shadow_id=%s "
-            "— outcome persisted, exit snapshot empty",
-            shadow.id,
-        )
-
-    try:
-        await shadow_trade_service.record_as_simulation(db, shadow)
-    except Exception:
-        logger.exception(
-            "[shadow-monitor] record_as_simulation failed for shadow_id=%s — "
-            "shadow stays COMPLETED, simulation row missing",
-            shadow.id,
-        )
+    # FIX D1 (2026-05-15): _capture_exit_features + record_as_simulation
+    # movidos para _record_simulation_one_async (sessão isolada, pós-
+    # commit). Qualquer SQL error lá não aborta esta tx principal.
     return "completed"
 
 
@@ -597,8 +598,11 @@ async def _monitor_async() -> Dict[str, int]:
     from ..database import CeleryAsyncSessionLocal
 
     summary = {"processed": 0, "completed": 0, "errors": 0}
-    # Coletado dentro da tx principal e consumido após o commit — FIX C3.
+    # Coletados dentro da tx principal e consumidos após o commit — FIX C3/D1.
     enrich_targets: List[Dict[str, Any]] = []
+    # FIX D1 (2026-05-15): IDs dos shadows fechados neste tick — gravação de
+    # simulação em sessão isolada APÓS o commit da tx principal.
+    sim_targets: List[Any] = []
 
     async with CeleryAsyncSessionLocal() as db:
         async with db.begin():
@@ -625,6 +629,9 @@ async def _monitor_async() -> Dict[str, int]:
                     transition = await _advance_shadow(db, shadow)
                     if transition == "completed":
                         summary["completed"] += 1
+                        # FIX D1: coleta ID antes do commit para gravação
+                        # de simulação em sessão isolada pós-commit.
+                        sim_targets.append(shadow.id)
                 except Exception:
                     summary["errors"] += 1
                     logger.exception(
@@ -652,9 +659,17 @@ async def _monitor_async() -> Dict[str, int]:
                 for s in shadows
                 if s.entry_timestamp is not None
             ]
+    # ── Pós-commit: operações best-effort em sessões isoladas ─────────────────
+    # A tx principal já commitou todos os shadow.status='COMPLETED'. A partir
+    # daqui, qualquer falha SQL não desfaz os fechamentos (FIX C3/D1).
 
-    # Enriquecimento ML best-effort — tx isolada por shadow, FORA da tx
-    # principal (FIX C3, 2026-05-15). Falha aqui NUNCA aborta fechamentos.
+    # Simulação ML best-effort — tx isolada por shadow (FIX D1, 2026-05-15).
+    # record_as_simulation + _capture_exit_features usam db_sim próprio;
+    # UndefinedColumnError ou lock em trade_simulations não aborta fechamentos.
+    for shadow_id in sim_targets:
+        await _record_simulation_one_async(shadow_id)
+
+    # Enriquecimento ML best-effort — tx isolada por shadow (FIX C3, 2026-05-15).
     for t in enrich_targets:
         if t["needs_fill"]:
             await _enrich_one_async(
