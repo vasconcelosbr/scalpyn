@@ -396,7 +396,7 @@ _INSERT_SHADOW_SQL = text("""
         CAST(:features_snapshot AS JSONB),
         :last_processed_time
     )
-    ON CONFLICT (decision_id) DO NOTHING
+    ON CONFLICT (user_id, symbol) WHERE status = 'RUNNING' DO NOTHING
     RETURNING id
 """)
 
