@@ -597,7 +597,7 @@ async def _monitor_async() -> Dict[str, int]:
     """Uma execução do monitor — processa até ``BATCH_SIZE`` shadows."""
     from ..database import CeleryAsyncSessionLocal
 
-    summary = {"processed": 0, "completed": 0, "errors": 0}
+    summary = {"processed": 0, "completed": 0, "errors": 0, "backfill_created": 0}
     # Coletados dentro da tx principal e consumidos após o commit — FIX C3/D1.
     enrich_targets: List[Dict[str, Any]] = []
     # FIX D1 (2026-05-15): IDs dos shadows fechados neste tick — gravação de
@@ -679,7 +679,53 @@ async def _monitor_async() -> Dict[str, int]:
                 t["decision_id"],
             )
 
+    # Backfill best-effort: cria shadows para símbolos aprovados na watchlist
+    # sem shadow RUNNING. Cobre o gap entre pipeline_scan (apenas transições
+    # de estado → decisions_log) e execute_buy (janela 10 min). Idempotente
+    # via ON CONFLICT (decision_id) DO NOTHING.
+    summary["backfill_created"] = await _backfill_shadows_for_all_users()
+
     return summary
+
+
+async def _backfill_shadows_for_all_users() -> int:
+    """Carrega SpotEngineConfig por usuário e chama safe_backfill_watchlist_shadows."""
+    from ..database import CeleryAsyncSessionLocal
+    from ..models.config_profile import ConfigProfile
+    from ..schemas.spot_engine_config import SpotEngineConfig
+    from ..services.shadow_trade_service import safe_backfill_watchlist_shadows
+    from sqlalchemy import select
+
+    try:
+        async with CeleryAsyncSessionLocal() as db:
+            cfg_res = await db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.config_type == "spot_engine",
+                    ConfigProfile.is_active.is_(True),
+                )
+            )
+            cfg_rows = cfg_res.scalars().all()
+
+        total = 0
+        for cfg_row in cfg_rows:
+            try:
+                se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
+                user_config = {
+                    "tp_pct": float(se_cfg.selling.take_profit_pct),
+                    "sl_pct": float(
+                        se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct
+                    ),
+                    "timeout_candles": None,
+                }
+                total += await safe_backfill_watchlist_shadows(cfg_row.user_id, user_config)
+            except Exception:
+                logger.exception(
+                    "[shadow-monitor] backfill failed for user=%s", cfg_row.user_id
+                )
+        return total
+    except Exception:
+        logger.exception("[shadow-monitor] _backfill_shadows_for_all_users failed")
+        return 0
 
 
 @celery_app.task(name="app.tasks.shadow_trade_monitor.run", bind=True)
@@ -687,9 +733,11 @@ def run(self) -> str:
     """Beat-driven monitor — default a cada ``SHADOW_MONITOR_INTERVAL_S`` s."""
     try:
         result = _run_async(_monitor_async())
+        backfill = result.get("backfill_created", 0)
         msg = (
             f"Shadow monitor: {result['processed']} processed, "
-            f"{result['completed']} completed, {result['errors']} errors"
+            f"{result['completed']} completed, {result['errors']} errors, "
+            f"{backfill} backfill created"
         )
         logger.info("[shadow-monitor] %s", msg)
         return msg

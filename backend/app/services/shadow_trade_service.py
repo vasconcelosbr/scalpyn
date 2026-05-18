@@ -146,10 +146,19 @@ async def _get_market_metadata_price(
 
 
 async def _resolve_decision(
-    db: AsyncSession, user_id, symbol: str, lookback_minutes: int
+    db: AsyncSession,
+    user_id,
+    symbol: str,
+    lookback_minutes: Optional[int] = SHADOW_LOOKBACK_MINUTES,
 ) -> Optional[DecisionLog]:
     """Mais recente promoção L3 spot (decision='ALLOW' AND direction='SPOT')
-    para (user_id, symbol) dentro da janela de lookback.
+    para (user_id, symbol).
+
+    ``lookback_minutes=None`` desativa o filtro de tempo — útil para o
+    backfill do monitor, onde o símbolo pode estar em ALLOW estável há
+    horas sem nova transição de estado (``_should_log_decision`` só grava
+    transições). O ``ON CONFLICT (decision_id) DO NOTHING`` em
+    ``_create_from_decision`` garante idempotência mesmo sem janela de tempo.
 
     Vocabulário canônico (Task #292): ``decisions_log.direction`` usa
     ``'LONG' | 'SHORT' | 'NEUTRAL' | 'SPOT'`` (uppercase). Shadow é
@@ -162,7 +171,6 @@ async def _resolve_decision(
     helper separado ``_resolve_futures_decision`` ou expandir o filtro
     com guard explícito de ``market_mode``.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
     q = (
         select(DecisionLog)
         .where(
@@ -170,11 +178,13 @@ async def _resolve_decision(
             DecisionLog.symbol == symbol,
             DecisionLog.decision == "ALLOW",
             DecisionLog.direction == "SPOT",
-            DecisionLog.created_at >= cutoff,
         )
         .order_by(DecisionLog.created_at.desc())
         .limit(1)
     )
+    if lookback_minutes is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
+        q = q.where(DecisionLog.created_at >= cutoff)
     res = await db.execute(q)
     return res.scalar_one_or_none()
 
@@ -601,6 +611,98 @@ async def safe_bulk_create_from_user_skip(
             "[shadow] safe_bulk_create_from_user_skip failed "
             "(user=%s skip_reason=%s)",
             user_id, skip_reason,
+        )
+    return created_count
+
+
+async def safe_backfill_watchlist_shadows(
+    user_id,
+    user_config: Dict[str, Any],
+) -> int:
+    """Cria shadow trades para símbolos aprovados na watchlist sem shadow RUNNING.
+
+    Mecanismo de safety-net acionado pelo ``shadow_trade_monitor`` a cada
+    ciclo. Cobre o gap estrutural entre:
+
+    * ``pipeline_scan._should_log_decision`` — só grava em ``decisions_log``
+      em transições de estado (BLOCK→ALLOW, ALLOW→BLOCK, ALLOW→ALLOW com
+      delta de score). Símbolo em ALLOW estável NÃO gera nova linha.
+    * ``_resolve_decision`` com janela de 10 min — retorna None quando a
+      decisão mais recente é mais antiga que a janela, impedindo criação
+      de shadow mesmo com o símbolo aprovado na watchlist.
+
+    Usa ``_resolve_decision(lookback_minutes=None)`` (sem limite de tempo)
+    e ``ON CONFLICT (decision_id) DO NOTHING`` para idempotência: se o
+    shadow já existe para aquela decisão, não cria duplicata.
+
+    Fire-and-forget: nunca raise. Retorna o número de shadows criados.
+    """
+    from ..database import AsyncSessionLocal
+
+    symbols: List[str] = []
+    try:
+        async with AsyncSessionLocal() as read_db:
+            rows = await read_db.execute(
+                text(
+                    """
+                    SELECT DISTINCT pwa.symbol
+                      FROM pipeline_watchlist_assets pwa
+                      JOIN pipeline_watchlists pw ON pw.id = pwa.watchlist_id
+                     WHERE pw.user_id = :uid
+                       AND pwa.is_approved = true
+                       AND NOT EXISTS (
+                           SELECT 1 FROM shadow_trades st
+                            WHERE st.user_id = :uid
+                              AND st.symbol   = pwa.symbol
+                              AND st.status   = 'RUNNING'
+                       )
+                     ORDER BY pwa.symbol ASC
+                    """
+                ),
+                {"uid": str(user_id)},
+            )
+            symbols = [r.symbol for r in rows.fetchall()]
+    except Exception:
+        logger.exception(
+            "[shadow] backfill: watchlist query failed for user=%s", user_id
+        )
+        return 0
+
+    if not symbols:
+        return 0
+
+    created_count = 0
+    for symbol in symbols:
+        try:
+            async with AsyncSessionLocal() as own_db:
+                async with own_db.begin():
+                    decision = await _resolve_decision(
+                        own_db, user_id, symbol, lookback_minutes=None
+                    )
+                    if decision is None:
+                        logger.debug(
+                            "[shadow] backfill: no ALLOW decision for user=%s symbol=%s",
+                            user_id, symbol,
+                        )
+                        continue
+                    new_id = await _create_from_decision(
+                        own_db, decision, "NOT_TRADABLE", user_config
+                    )
+                    if new_id is not None:
+                        created_count += 1
+                        logger.info(
+                            "[shadow] backfill created id=%s symbol=%s decision_id=%s",
+                            new_id, symbol, decision.id,
+                        )
+        except Exception:
+            logger.exception(
+                "[shadow] backfill failed for user=%s symbol=%s",
+                user_id, symbol,
+            )
+    if created_count:
+        logger.info(
+            "[shadow] backfill total=%d new shadow(s) for user=%s",
+            created_count, user_id,
         )
     return created_count
 
