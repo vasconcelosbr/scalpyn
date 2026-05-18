@@ -2359,6 +2359,21 @@ async def _run_pipeline_scan():
                             score_config=score_config,
                             apply_profile_filters=False,
                         )
+                        # Watchlist-level minimum score gate (filters_json.min_alpha_score).
+                        # Applied AFTER scoring so is_approved reflects the user's Score Filter
+                        # setting rather than letting every asset through regardless of score.
+                        _wl_min_score = float((filters_json or {}).get("min_alpha_score") or 0)
+                        if _wl_min_score > 0:
+                            _pre = len(monitored)
+                            monitored = [
+                                a for a in monitored
+                                if (a.get("_score") or a.get("alpha_score") or 0) >= _wl_min_score
+                            ]
+                            if len(monitored) < _pre:
+                                logger.info(
+                                    "[PipelineScan] custom min_alpha_score gate (%.1f): %d → %d approved",
+                                    _wl_min_score, _pre, len(monitored),
+                                )
                         await _replace_rejection_snapshot(
                             db, wl_id, wl.user_id, wl.profile_id, [], execution_id=execution_id
                         )
@@ -2451,6 +2466,34 @@ async def _run_pipeline_scan():
                         stage=effective_level,
                         profile_id=str(wl.profile_id) if wl.profile_id else None,
                     )
+                    # Watchlist-level minimum score gate (filters_json.min_alpha_score).
+                    # Applied after profile filter, before L3 decision evaluation so that
+                    # assets below the threshold never get an ALLOW decision or shadow.
+                    _wl_min_score = float((filters_json or {}).get("min_alpha_score") or 0)
+                    if _wl_min_score > 0:
+                        _pre = len(profile_passed)
+                        _low_score = [
+                            a for a in profile_passed
+                            if (a.get("_score") or a.get("alpha_score") or 0) < _wl_min_score
+                        ]
+                        profile_passed = [
+                            a for a in profile_passed
+                            if (a.get("_score") or a.get("alpha_score") or 0) >= _wl_min_score
+                        ]
+                        if _low_score:
+                            logger.info(
+                                "[PipelineScan] L3 min_alpha_score gate (%.1f): %d → %d passed (%d below threshold)",
+                                _wl_min_score, _pre, len(profile_passed), len(_low_score),
+                            )
+                            # Merge low-score assets into rejected_rows so they appear in the Rejected tab.
+                            for _a in _low_score:
+                                rejected_rows.append({
+                                    "symbol": _a.get("symbol", ""),
+                                    "score": _a.get("_score") or _a.get("alpha_score") or 0,
+                                    "rejection_reasons": [{"reason": f"score < min_alpha_score ({_wl_min_score:g})", "stage": "L3"}],
+                                    "stage": "L3",
+                                    "status": "rejected",
+                                })
                     await _replace_rejection_snapshot(
                         db,
                         wl_id,
