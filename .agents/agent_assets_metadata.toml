@@ -30,3 +30,9 @@ id = "hgjNaNMdxIJzgM0-hiBkr"
 uri = "file://exports/database_run_db_task_L346.txt"
 type = "text"
 title = "database.py L346+ — run_db_task & get_db"
+
+[[outputs]]
+id = "8dVdScp7gFLCeUik3oQ7k"
+uri = "file://.local/tasks/dieselparts-claude-code-prompt.md"
+type = "text"
+title = "Prompt Claude Code — DieselParts AI"
