@@ -3,56 +3,62 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 
+function numFmt(n: number): string {
+  if (Object.is(n, -0)) return "0";
+  return String(n);
+}
+
+function numParse(s: string): number | null {
+  const normalized = s.trim().replace(",", ".");
+  if (normalized === "" || normalized === "-" || normalized === "." || normalized === "-.") return null;
+  const n = parseFloat(normalized);
+  return isNaN(n) ? null : n;
+}
+
 function NumericInput({
   value,
   onChange,
   disabled,
   className,
+  placeholder,
   "data-testid": dataTestId,
 }: {
   value: number;
   onChange: (v: number) => void;
   disabled?: boolean;
   className?: string;
+  placeholder?: string;
   "data-testid"?: string;
 }) {
-  const [raw, setRaw] = useState(String(value));
+  const [raw, setRaw] = useState(() => numFmt(value));
   const focused = useRef(false);
 
   useEffect(() => {
-    if (!focused.current) {
-      setRaw(String(value));
-    }
+    if (!focused.current) setRaw(numFmt(value));
   }, [value]);
-
-  function parse(s: string): number | null {
-    const normalized = s.replace(",", ".");
-    const n = parseFloat(normalized);
-    return isNaN(n) ? null : n;
-  }
 
   return (
     <input
       className={className}
       type="text"
-      inputMode="decimal"
       value={raw}
       disabled={disabled}
+      placeholder={placeholder}
       data-testid={dataTestId}
       onFocus={() => { focused.current = true; }}
       onChange={(e) => {
         const v = e.target.value;
         setRaw(v);
-        const parsed = parse(v);
+        const parsed = numParse(v);
         if (parsed !== null) onChange(parsed);
       }}
       onBlur={() => {
         focused.current = false;
-        const parsed = parse(raw);
+        const parsed = numParse(raw);
         if (parsed === null) {
-          setRaw(String(value));
+          setRaw(numFmt(value));
         } else {
-          setRaw(String(parsed));
+          setRaw(numFmt(parsed));
           onChange(parsed);
         }
       }}
@@ -418,12 +424,11 @@ export function ConditionBuilder({
               />
             ) : isBetween ? (
               <>
-                <input
+                <NumericInput
                   className="input w-20"
-                  type="number"
-                  value={condition.min ?? 0}
-                  onChange={(event) => updateCondition(index, {
-                    min: parseFloat(event.target.value) || 0,
+                  value={typeof condition.min === "number" ? condition.min : 0}
+                  onChange={(v) => updateCondition(index, {
+                    min: v,
                     rule_id: undefined,
                     points: 0,
                     category: undefined,
@@ -433,12 +438,11 @@ export function ConditionBuilder({
                   data-testid={`condition-min-${index}`}
                 />
                 <span className="text-[var(--text-secondary)] text-xs font-medium">e</span>
-                <input
+                <NumericInput
                   className="input w-20"
-                  type="number"
-                  value={condition.max ?? 100}
-                  onChange={(event) => updateCondition(index, {
-                    max: parseFloat(event.target.value) || 0,
+                  value={typeof condition.max === "number" ? condition.max : 100}
+                  onChange={(v) => updateCondition(index, {
+                    max: v,
                     rule_id: undefined,
                     points: 0,
                     category: undefined,
@@ -451,7 +455,7 @@ export function ConditionBuilder({
             ) : (
               <NumericInput
                 className="input w-28"
-                value={typeof condition.value === "number" ? condition.value : parseFloat(String(condition.value ?? 0).replace(",", ".")) || 0}
+                value={typeof condition.value === "number" ? condition.value : numParse(String(condition.value ?? 0)) ?? 0}
                 onChange={(v) => updateCondition(index, {
                   value: v,
                   rule_id: undefined,
