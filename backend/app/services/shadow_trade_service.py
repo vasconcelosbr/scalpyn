@@ -649,7 +649,7 @@ async def safe_backfill_watchlist_shadows(
                       FROM pipeline_watchlist_assets pwa
                       JOIN pipeline_watchlists pw ON pw.id = pwa.watchlist_id
                      WHERE pw.user_id = :uid
-                       AND pwa.is_approved = true
+                       AND (pwa.level_direction IS NULL OR pwa.level_direction = 'up')
                        AND NOT EXISTS (
                            SELECT 1 FROM shadow_trades st
                             WHERE st.user_id = :uid
