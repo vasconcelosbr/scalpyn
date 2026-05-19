@@ -41,6 +41,7 @@ function NumericInput({
     <input
       className={className}
       type="text"
+      inputMode="decimal"
       value={raw}
       disabled={disabled}
       placeholder={placeholder}
