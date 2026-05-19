@@ -42,7 +42,11 @@ class ShadowTrade(Base):
     decision_id = Column(
         BigInteger,
         ForeignKey("decisions_log.id"),
-        nullable=False,
+        # Nullable since migration 057 (Task #303): shadows criadas a partir
+        # do snapshot vivo da L3 (``pipeline_watchlist_assets``) não têm uma
+        # DecisionLog correspondente porque o gate
+        # ``pipeline_scan._should_log_decision`` só grava transições.
+        nullable=True,
         index=True,
     )
     user_id = Column(

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -34,8 +35,39 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.backoffice import DecisionLog
 from ..models.shadow_trade import ShadowTrade
+from . import shadow_metrics
 
 logger = logging.getLogger(__name__)
+
+
+# ── Synthetic decision (Task #303) ──────────────────────────────────────────
+#
+# ``pipeline_scan._should_log_decision`` só grava em ``decisions_log`` em
+# transições (BLOCK→ALLOW, mudança de direção, delta de score). Símbolos
+# cronicamente aprovados em L3 com score estável NUNCA têm uma DecisionLog
+# correspondente. Para o Shadow promover esses símbolos, construímos uma
+# "decisão sintética" a partir do snapshot vivo de
+# ``pipeline_watchlist_assets`` — mesmos atributos esperados por
+# ``_create_from_decision`` (duck-typing), mas ``id=None`` para que o
+# INSERT em ``shadow_trades`` grave ``decision_id=NULL`` (migration 057).
+
+@dataclass
+class _SyntheticDecision:
+    """Decisão construída a partir do estado vivo da L3.
+
+    Compatível por duck-typing com ``DecisionLog`` no único caminho que
+    consome o objeto (``_create_from_decision``): acesso a ``.id``,
+    ``.user_id``, ``.symbol``, ``.strategy``, ``.direction``, ``.metrics``
+    e ``.created_at``. ``id=None`` é o sinal canônico de "sem decision_id
+    real" — propagado como NULL na coluna ``shadow_trades.decision_id``.
+    """
+    user_id: Any
+    symbol: str
+    direction: str = "SPOT"
+    strategy: Optional[str] = None
+    id: Optional[int] = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    metrics: Dict[str, Any] = field(default_factory=dict)
 
 
 # Defaults vindos de env — ZERO HARDCODE de valor de negócio.
@@ -490,10 +522,12 @@ async def _create_from_decision(
     }
     features_snap = _build_features_snapshot(decision)
 
+    # Task #303: ``decision.id`` é ``None`` para ``_SyntheticDecision``
+    # (fallback "live_l3") — vira NULL na coluna após migration 057.
     res = await db.execute(
         _INSERT_SHADOW_SQL,
         {
-            "decision_id": decision.id,
+            "decision_id": getattr(decision, "id", None),
             "user_id": decision.user_id,
             "symbol": decision.symbol,
             "strategy": decision.strategy,
@@ -651,6 +685,140 @@ async def safe_bulk_create_from_user_skip(
     return created_count
 
 
+async def get_currently_approved_l3(
+    db: AsyncSession,
+    user_id,
+    direction: str = "SPOT",
+) -> List[Dict[str, Any]]:
+    """Snapshot vivo dos símbolos atualmente aprovados em L3 (Task #303).
+
+    Fonte canônica da L3 "currently approved" — lê
+    ``pipeline_watchlist_assets`` (atualizado a cada ciclo do
+    ``pipeline_scan``, mesma tabela que serve o botão "Currently Approved
+    (L3)" no Decision Log via ``/decisions/approved-snapshot`` e a aba L3
+    do diagnostics page via ``/api/diagnostics/l3-queue``).
+
+    Cada item retorna no formato:
+        {
+            "symbol":              str,
+            "score":               float | None,
+            "direction":           "SPOT" | "LONG" | "SHORT" | None,
+            "approved_at":         datetime | None,
+            "watchlist_id":        UUID,
+            "watchlist_name":      str,
+            "indicators_snapshot": dict[str, float|None]  # FLAT, contrato Task #290
+        }
+
+    ``direction='SPOT'`` (default) escopo o sweep ao Shadow Portfolio
+    (spot-only por design — Task #292). Para futures, passar ``LONG`` /
+    ``SHORT`` e cuidar do ``market_mode='futures'`` upstream.
+    """
+    direction_norm = (direction or "SPOT").upper()
+    market_mode = "futures" if direction_norm in {"LONG", "SHORT"} else "spot"
+
+    sql = text(
+        """
+        SELECT pwa.symbol,
+               pwa.alpha_score              AS alpha,
+               pwa.score_long               AS score_long,
+               pwa.score_short              AS score_short,
+               pwa.futures_direction        AS futures_direction,
+               pwa.refreshed_at             AS approved_at,
+               pwa.entered_at               AS entered_at,
+               pwa.analysis_snapshot        AS analysis_snapshot,
+               pw.id                        AS watchlist_id,
+               pw.name                      AS watchlist_name,
+               pw.market_mode               AS market_mode
+          FROM pipeline_watchlist_assets pwa
+          JOIN pipeline_watchlists pw ON pw.id = pwa.watchlist_id
+         WHERE pw.user_id = :uid
+           AND UPPER(pw.level) = 'L3'
+           AND LOWER(pw.market_mode) = :market_mode
+           AND (pwa.level_direction IS NULL OR pwa.level_direction = 'up')
+         ORDER BY pwa.symbol ASC
+        """
+    )
+    res = await db.execute(sql, {"uid": str(user_id), "market_mode": market_mode})
+    rows = res.fetchall()
+
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        # Direction canônica (Task #292): SPOT para watchlists spot; para
+        # futures escolhe ``futures_direction`` (LONG/SHORT/NEUTRAL).
+        if market_mode == "spot":
+            row_direction = "SPOT"
+        else:
+            raw = (r.futures_direction or "").upper()
+            row_direction = raw if raw in {"LONG", "SHORT", "NEUTRAL"} else None
+
+        # Filtra pela direção pedida (em spot só tem SPOT mesmo, mas o
+        # contrato fica simétrico para futures).
+        if direction_norm == "SPOT" and row_direction != "SPOT":
+            continue
+        if direction_norm in {"LONG", "SHORT"} and row_direction != direction_norm:
+            continue
+
+        # Score canônico: alpha para spot, score_long/score_short para futures.
+        if direction_norm == "LONG":
+            score = r.score_long
+        elif direction_norm == "SHORT":
+            score = r.score_short
+        else:
+            score = r.alpha
+
+        out.append({
+            "symbol": r.symbol,
+            "score": float(score) if score is not None else None,
+            "direction": row_direction,
+            "approved_at": r.approved_at or r.entered_at,
+            "watchlist_id": r.watchlist_id,
+            "watchlist_name": r.watchlist_name,
+            "indicators_snapshot": _flatten_analysis_snapshot(r.analysis_snapshot),
+        })
+    return out
+
+
+def _flatten_analysis_snapshot(
+    analysis_snapshot: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Achata ``pipeline_watchlist_assets.analysis_snapshot`` para o formato
+    FLAT consumido pelo ``DatasetBuilder`` (contrato Task #290).
+
+    O ``analysis_snapshot`` traz uma lista de dicts em
+    ``["indicators"]`` ou ``["details"]["indicators"]`` com entradas no
+    formato ``{"key": "rsi", "value": 42.5, ...}``. Extraímos pares
+    ``{key: value}`` ignorando entradas sem ``key`` ou ``value`` válido.
+    Compatível com o ``_build_features_snapshot`` legado: chave intermediária
+    ``"indicators_snapshot"`` envelopa cada valor em ``{"value": v}``.
+    """
+    if not isinstance(analysis_snapshot, dict):
+        return {}
+    details = analysis_snapshot.get("details") if isinstance(
+        analysis_snapshot.get("details"), dict
+    ) else {}
+    ind_list = (
+        details.get("indicators")
+        or analysis_snapshot.get("indicators")
+        or []
+    )
+    if not isinstance(ind_list, list):
+        return {}
+    flat: Dict[str, Any] = {}
+    for entry in ind_list:
+        if not isinstance(entry, dict):
+            continue
+        key = entry.get("key") or entry.get("indicator") or entry.get("name")
+        if not key:
+            continue
+        val = entry.get("value")
+        # Aceita escalar (int/float/bool/None); descarta dict/list para não
+        # contaminar o dataset.
+        if isinstance(val, (dict, list)):
+            continue
+        flat[str(key)] = val
+    return flat
+
+
 async def safe_backfill_watchlist_shadows(
     user_id,
     user_config: Dict[str, Any],
@@ -675,49 +843,59 @@ async def safe_backfill_watchlist_shadows(
     """
     from ..database import CeleryAsyncSessionLocal
 
-    symbols: List[str] = []
+    # ── Sweep 1: snapshot vivo da L3 (Task #303) ─────────────────────────
+    # Anti-join in-memory (não no SQL) contra shadows RUNNING para evitar
+    # competir com o INSERT idempotente downstream (``ON CONFLICT
+    # (user_id, symbol) WHERE status='RUNNING'``).
+    snapshot: List[Dict[str, Any]] = []
+    running_set: set = set()
     try:
         async with CeleryAsyncSessionLocal() as read_db:
-            rows = await read_db.execute(
+            snapshot = await get_currently_approved_l3(
+                read_db, user_id, direction="SPOT"
+            )
+            running_rows = await read_db.execute(
                 text(
                     """
-                    SELECT DISTINCT pwa.symbol
-                      FROM pipeline_watchlist_assets pwa
-                      JOIN pipeline_watchlists pw ON pw.id = pwa.watchlist_id
-                     WHERE pw.user_id = :uid
-                       AND (pwa.level_direction IS NULL OR pwa.level_direction = 'up')
-                       AND NOT EXISTS (
-                           SELECT 1 FROM shadow_trades st
-                            WHERE st.user_id = :uid
-                              AND st.symbol   = pwa.symbol
-                              AND st.status   = 'RUNNING'
-                       )
-                     ORDER BY pwa.symbol ASC
+                    SELECT symbol FROM shadow_trades
+                     WHERE user_id = :uid AND status = 'RUNNING'
                     """
                 ),
                 {"uid": str(user_id)},
             )
-            symbols = [r.symbol for r in rows.fetchall()]
+            running_set = {r.symbol for r in running_rows.fetchall()}
     except Exception:
         logger.exception(
-            "[shadow] backfill: watchlist query failed for user=%s", user_id
+            "[shadow] backfill: live-L3 snapshot query failed for user=%s", user_id
         )
         return 0
 
-    if not symbols:
+    # Mapa symbol → snapshot item (fallback "live_l3" precisa do snapshot).
+    snapshot_by_symbol: Dict[str, Dict[str, Any]] = {
+        item["symbol"]: item for item in snapshot
+    }
+    eligible_symbols = sorted(
+        s for s in snapshot_by_symbol.keys() if s not in running_set
+    )
+    if not eligible_symbols:
         return 0
 
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=SHADOW_LOOKBACK_MINUTES)
+    counts_by_source: Dict[str, int] = {
+        "recent_log": 0, "stale_log": 0, "live_l3": 0
+    }
     created_count = 0
-    for symbol in symbols:
+    for symbol in eligible_symbols:
+        snap_item = snapshot_by_symbol[symbol]
         try:
             async with AsyncSessionLocal() as own_db:
                 async with own_db.begin():
-                    decision = await _resolve_decision(
-                        own_db, user_id, symbol, lookback_minutes=None
+                    decision, source = await _resolve_decision_with_fallback(
+                        own_db, user_id, symbol, snap_item, cutoff
                     )
                     if decision is None:
                         logger.debug(
-                            "[shadow] backfill: no ALLOW decision for user=%s symbol=%s",
+                            "[shadow] backfill: no resolution path for user=%s symbol=%s",
                             user_id, symbol,
                         )
                         continue
@@ -726,9 +904,13 @@ async def safe_backfill_watchlist_shadows(
                     )
                     if new_id is not None:
                         created_count += 1
+                        counts_by_source[source] = counts_by_source.get(source, 0) + 1
+                        shadow_metrics.record_resolved_source(source)
                         logger.info(
-                            "[shadow] backfill created id=%s symbol=%s decision_id=%s",
-                            new_id, symbol, decision.id,
+                            "[shadow] backfill created id=%s symbol=%s "
+                            "decision_id=%s source=%s",
+                            new_id, symbol,
+                            getattr(decision, "id", None), source,
                         )
         except Exception:
             logger.exception(
@@ -737,10 +919,93 @@ async def safe_backfill_watchlist_shadows(
             )
     if created_count:
         logger.info(
-            "[shadow] backfill total=%d new shadow(s) for user=%s",
-            created_count, user_id,
+            "[shadow] backfill total=%d new shadow(s) for user=%s "
+            "by_source=%s",
+            created_count, user_id, counts_by_source,
         )
     return created_count
+
+
+async def _resolve_decision_with_fallback(
+    db: AsyncSession,
+    user_id,
+    symbol: str,
+    snap_item: Dict[str, Any],
+    cutoff: datetime,
+) -> tuple[Optional[Any], str]:
+    """Resolve uma decisão para promover ao Shadow seguindo a cascata da
+    Task #303:
+
+    1. ``recent_log`` — última ``decisions_log`` ALLOW/SPOT dentro de
+       ``SHADOW_LOOKBACK_MINUTES`` (default 10 min).
+    2. ``stale_log``  — última ALLOW/SPOT sem janela de tempo.
+    3. ``live_l3``    — snapshot vivo de ``pipeline_watchlist_assets``
+       (símbolo cronicamente aprovado que nunca gerou transição em
+       ``decisions_log``).
+
+    Retorna ``(decision, source)`` onde ``decision`` é ``DecisionLog`` ou
+    ``_SyntheticDecision``. ``(None, "")`` se nada disponível
+    (não deveria acontecer — o caller só chama com símbolos já no
+    snapshot, mas mantido por defesa).
+    """
+    # (a) janela de 10 min
+    res = await db.execute(
+        select(DecisionLog)
+        .where(
+            DecisionLog.user_id == user_id,
+            DecisionLog.symbol == symbol,
+            DecisionLog.decision == "ALLOW",
+            DecisionLog.direction == "SPOT",
+            DecisionLog.created_at >= cutoff,
+        )
+        .order_by(DecisionLog.created_at.desc())
+        .limit(1)
+    )
+    decision = res.scalar_one_or_none()
+    if decision is not None:
+        return decision, "recent_log"
+
+    # (b) sem janela
+    res = await db.execute(
+        select(DecisionLog)
+        .where(
+            DecisionLog.user_id == user_id,
+            DecisionLog.symbol == symbol,
+            DecisionLog.decision == "ALLOW",
+            DecisionLog.direction == "SPOT",
+        )
+        .order_by(DecisionLog.created_at.desc())
+        .limit(1)
+    )
+    decision = res.scalar_one_or_none()
+    if decision is not None:
+        return decision, "stale_log"
+
+    # (c) snapshot vivo da L3
+    if snap_item is None:
+        return None, ""
+    flat = snap_item.get("indicators_snapshot") or {}
+    # Envelopa em ``{"indicators_snapshot": {k: {"value": v}}}`` para
+    # reusar ``_build_features_snapshot`` sem ramificação adicional.
+    metrics = {
+        "indicators_snapshot": {k: {"value": v} for k, v in flat.items()},
+        "source": "live_l3_snapshot",
+        "score": snap_item.get("score"),
+        "watchlist_id": (
+            str(snap_item["watchlist_id"])
+            if snap_item.get("watchlist_id") is not None else None
+        ),
+    }
+    synthetic = _SyntheticDecision(
+        user_id=user_id,
+        symbol=symbol,
+        direction=snap_item.get("direction") or "SPOT",
+        strategy=None,
+        id=None,
+        created_at=snap_item.get("approved_at") or datetime.now(timezone.utc),
+        metrics=metrics,
+    )
+    return synthetic, "live_l3"
 
 
 _INSERT_SIM_SQL = text("""
