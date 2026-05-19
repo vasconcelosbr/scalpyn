@@ -60,22 +60,73 @@ def _env_float(name: str, default: float) -> float:
 def _run_async(coro):
     """Run async coroutine in a sync Celery task.
 
-    Mirrors the helper used by every other task in this package
-    (``compute_indicators._run_async`` etc.) — drains pending asyncpg
-    tasks before closing the loop so the next invocation does not hit
-    ``RuntimeError: Event loop is closed``.
+    Task #274 — canonical 5-step teardown. See collect_market_data._run_async
+    for the full rationale. Steps: cancel pending tasks → dispose engine →
+    hard-terminate asyncpg connections → shutdown_asyncgens → close loop.
     """
     loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
         return loop.run_until_complete(coro)
     finally:
+        # Step 1 — cancel and drain pending asyncio tasks.
         try:
-            pending = asyncio.all_tasks(loop)
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            for t in pending:
+                t.cancel()
             if pending:
-                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-        except Exception:
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+        except BaseException as exc:
+            logger.debug("[_run_async] pending-task drain failed: %s", exc)
+
+        # Step 2 — graceful engine dispose (closes asyncpg sockets in-loop).
+        try:
+            from ..database import _celery_engine
+            loop.run_until_complete(_celery_engine.dispose())
+        except BaseException as exc:
+            logger.debug("[_run_async] _celery_engine.dispose failed: %s", exc)
+
+        # Step 3 — hard-terminate any asyncpg connection still cached on the pool.
+        try:
+            from ..database import _celery_engine as _ce
+            sync_pool = _ce.sync_engine.pool
+            records = list(getattr(sync_pool, "_all_conns", None) or [])
+            for record in records:
+                raw = (
+                    getattr(record, "dbapi_connection", None)
+                    or getattr(record, "connection", None)
+                )
+                asyncpg_conn = (
+                    getattr(raw, "_connection", None)
+                    or getattr(raw, "connection", None)
+                    or raw
+                )
+                terminate = getattr(asyncpg_conn, "terminate", None)
+                if callable(terminate):
+                    try:
+                        terminate()
+                    except BaseException:
+                        pass
+        except BaseException as exc:
+            logger.debug("[_run_async] hard-terminate sweep failed: %s", exc)
+
+        # Step 4 — drain async generators registered on the loop.
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except BaseException as exc:
+            logger.debug("[_run_async] shutdown_asyncgens failed: %s", exc)
+
+        # Step 5 — close the loop. Always last; never propagate.
+        try:
+            loop.close()
+        except BaseException as exc:
+            logger.debug("[_run_async] loop.close failed: %s", exc)
+        try:
+            asyncio.set_event_loop(None)
+        except BaseException:
             pass
-        loop.close()
 
 
 async def _query_orphans(gap_hours: float) -> List[str]:

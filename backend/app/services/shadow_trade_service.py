@@ -553,12 +553,12 @@ async def safe_bulk_create_from_user_skip(
     onde TODAS as promoções L3 daquele ciclo são barradas. Itera
     promoções recentes que ainda não têm shadow_trade.
     """
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal
 
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
     created_count = 0
     try:
-        async with AsyncSessionLocal() as own_db:
+        async with CeleryAsyncSessionLocal() as own_db:
             async with own_db.begin():
                 # Promoções recentes do usuário ainda sem shadow_trade
                 # (anti-join via NOT EXISTS para idempotência)
