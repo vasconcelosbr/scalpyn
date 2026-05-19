@@ -506,10 +506,10 @@ async def safe_create_from_symbol_skip(
 
     Use em gates per-symbol (cooldown, per-asset capital, NOT_TRADABLE).
     """
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal
 
     try:
-        async with AsyncSessionLocal() as own_db:
+        async with CeleryAsyncSessionLocal() as own_db:
             async with own_db.begin():
                 decision = await _resolve_decision(
                     own_db, user_id, symbol, lookback_minutes
@@ -637,11 +637,11 @@ async def safe_backfill_watchlist_shadows(
 
     Fire-and-forget: nunca raise. Retorna o número de shadows criados.
     """
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal
 
     symbols: List[str] = []
     try:
-        async with AsyncSessionLocal() as read_db:
+        async with CeleryAsyncSessionLocal() as read_db:
             rows = await read_db.execute(
                 text(
                     """

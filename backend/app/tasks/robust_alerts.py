@@ -115,11 +115,11 @@ async def _query_window(db, minutes: int) -> Optional[dict]:
 
 async def _evaluate_async() -> dict:
     """Inspect recent snapshots and fire alerts. Returns a small report."""
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal
 
     report = {"checked": 0, "fired": []}
     try:
-        async with AsyncSessionLocal() as db:
+        async with CeleryAsyncSessionLocal() as db:
             window_5m = await _query_window(db, 5)
             window_2m = await _query_window(db, 2)
             window_1m = await _query_window(db, 1)
@@ -206,24 +206,68 @@ def _run_async(coro):
     causing RuntimeError: Event loop is closed on the next invocation.
     """
     loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
         return loop.run_until_complete(coro)
     finally:
+        # Step 1 — cancel and drain pending asyncio tasks.
         try:
-            pending = asyncio.all_tasks(loop)
+            pending = [t for t in asyncio.all_tasks(loop) if not t.done()]
+            for t in pending:
+                t.cancel()
             if pending:
                 loop.run_until_complete(
                     asyncio.gather(*pending, return_exceptions=True)
                 )
+        except BaseException as exc:
+            logger.debug("[_run_async] pending-task drain failed: %s", exc)
+
+        # Step 2 — graceful engine dispose (closes asyncpg sockets in-loop).
+        try:
+            from ..database import _celery_engine
+            loop.run_until_complete(_celery_engine.dispose())
+        except BaseException as exc:
+            logger.debug("[_run_async] _celery_engine.dispose failed: %s", exc)
+
+        # Step 3 — hard-terminate any asyncpg connection still cached on the pool.
+        try:
+            from ..database import _celery_engine as _ce
+            sync_pool = _ce.sync_engine.pool
+            records = list(getattr(sync_pool, "_all_conns", None) or [])
+            for record in records:
+                raw = (
+                    getattr(record, "dbapi_connection", None)
+                    or getattr(record, "connection", None)
+                )
+                asyncpg_conn = (
+                    getattr(raw, "_connection", None)
+                    or getattr(raw, "connection", None)
+                    or raw
+                )
+                terminate = getattr(asyncpg_conn, "terminate", None)
+                if callable(terminate):
+                    try:
+                        terminate()
+                    except BaseException:
+                        pass
+        except BaseException as exc:
+            logger.debug("[_run_async] hard-terminate sweep failed: %s", exc)
+
+        # Step 4 — drain async generators registered on the loop.
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except BaseException as exc:
+            logger.debug("[_run_async] shutdown_asyncgens failed: %s", exc)
+
+        # Step 5 — close the loop. Always last; never propagate.
+        try:
+            loop.close()
+        except BaseException as exc:
+            logger.debug("[_run_async] loop.close failed: %s", exc)
+        try:
+            asyncio.set_event_loop(None)
         except BaseException:
             pass
-        finally:
-            try:
-                from ..database import _celery_engine
-                loop.run_until_complete(_celery_engine.dispose())
-            except Exception:
-                pass
-            loop.close()
 
 
 @celery_app.task(name="app.tasks.robust_alerts.evaluate")

@@ -483,10 +483,6 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
   const [entryTriggersScoringEnabled, setEntryTriggersScoringEnabled] = useState(
     profile?.config?.entry_triggers?.scoring?.enabled !== false
   );
-  const [entryLogicPreview, setEntryLogicPreview] = useState(
-    profile?.config?.entry_triggers?.logic_preview_text || ""
-  );
-
   const scoreRules = useMemo<ScoreRule[]>(
     () => ((globalScoreConfig?.scoring_rules as ScoreRule[] | undefined) || []).map((rule) => ({
       ...rule,
@@ -838,7 +834,6 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     if (result?.config) {
       const normalized = normalizePresetConfig(result.config);
       setConfig(normalized);
-      setEntryLogicPreview(normalized.entry_triggers?.logic_preview_text || "");
       if (normalized.scoring?.enabled !== undefined) {
         setScoringEnabled(normalized.scoring.enabled !== false);
       }
@@ -858,11 +853,6 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
     () => buildEntryLogicPreview(entryConditions, config.default_timeframe || "5m", entryLogic),
     [entryConditions, config.default_timeframe, entryLogic]
   );
-
-  useEffect(() => {
-    const manualPreview = config.entry_triggers?.logic_preview_text;
-    setEntryLogicPreview(manualPreview || autoEntryLogicPreview);
-  }, [autoEntryLogicPreview, config.entry_triggers?.logic_preview_text]);
 
   const TABS: { key: ActiveTab; label: string; count?: number; icon?: React.ReactNode }[] = [
     { key: "filters",       label: "Filters",       count: config.filters?.conditions?.length ?? 0 },
@@ -1588,38 +1578,15 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                 <div className="card bg-[var(--bg-base)]">
                   <div className="p-4">
                     <div className="flex items-center justify-between gap-3 mb-2">
-                      <p className="text-[11px] text-[var(--text-tertiary)] font-semibold uppercase tracking-wider">Logic Preview</p>
-                      <button
-                        type="button"
-                        className="btn btn-secondary text-[11px] px-2.5 py-1"
-                        onClick={() => {
-                          setEntryLogicPreview(autoEntryLogicPreview);
-                          setConfig((c: any) => ({
-                            ...c,
-                            entry_triggers: {
-                              ...c.entry_triggers,
-                              logic_preview_text: undefined,
-                            },
-                          }));
-                        }}
-                      >
-                        Reset Auto
-                      </button>
+                      <p className="text-[11px] text-[var(--text-tertiary)] font-semibold uppercase tracking-wider">
+                        Logic Preview <span className="text-[10px] normal-case font-normal text-[var(--text-tertiary)]">(somente leitura — edite os campos acima)</span>
+                      </p>
                     </div>
                     <textarea
-                      className="input min-h-[220px] text-[12px] font-mono text-[var(--text-secondary)]"
-                      value={entryLogicPreview}
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        setEntryLogicPreview(value);
-                        setConfig((c: any) => ({
-                          ...c,
-                          entry_triggers: {
-                            ...c.entry_triggers,
-                            logic_preview_text: value,
-                          },
-                        }));
-                      }}
+                      readOnly
+                      tabIndex={-1}
+                      className="input min-h-[220px] text-[12px] font-mono text-[var(--text-secondary)] cursor-default select-text"
+                      value={autoEntryLogicPreview}
                     />
                   </div>
                 </div>
