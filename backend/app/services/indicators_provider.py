@@ -173,6 +173,53 @@ def _emit_sampled_telemetry(merged: Dict[str, MergedIndicators]) -> None:
         )
 
 
+async def build_full_flat_snapshot(
+    db,
+    symbol: str,
+    *,
+    include_stale: bool = True,
+) -> Dict[str, Any]:
+    """Single-source-of-truth flat ``{key: scalar}`` snapshot for ML capture.
+
+    Task #306 — canonical helper used to populate
+    ``shadow_trades.features_snapshot_exit`` (and any future ML-feature
+    capture point on the shadow / trade-simulation paths). Contract:
+
+    * Reads ALL merged indicators for ``symbol`` via the same SSoT path
+      used by the decision engines (:func:`get_merged_indicators`), so
+      the exit snapshot has the **same key set** as the entry snapshot
+      that ``decisions_log.metrics["indicators_snapshot"]`` captured.
+    * Returns a flat ``{key: scalar}`` dict where every value is a
+      scalar (int / float / bool / None). Non-scalar values (dict /
+      list) are filtered out defensively — required by
+      :class:`DatasetBuilder` (Task #290 gotcha: ``float({"value": …})``
+      raises ``TypeError`` and contaminates the dataset).
+    * Returns an empty dict when no merged indicators exist for the
+      symbol (caller decides how to surface that to the UI). Never
+      raises — exceptions propagate from the caller's try/except
+      because the capture is best-effort (must not abort the shadow
+      close / TP/SL/timeout invariant).
+
+    ``include_stale=True`` (default) so the exit snapshot reflects
+    "whatever the system saw" at close time, even if a microstructure
+    refresh was momentarily missing. Stale flag is preserved in
+    ``merged.meta`` (not used here — flat output is values-only).
+    """
+    merged_map = await get_merged_indicators(
+        db, [symbol], include_stale=include_stale
+    )
+    merged = merged_map.get(symbol)
+    if merged is None:
+        return {}
+    flat: Dict[str, Any] = {}
+    for key, value in merged.values.items():
+        # Defensive: never emit dict/list — would break DatasetBuilder.
+        if isinstance(value, (dict, list)):
+            continue
+        flat[key] = value
+    return flat
+
+
 def build_indicators_snapshot(
     merged: MergedIndicators,
     keys: Optional[Iterable[str]] = None,

@@ -1221,11 +1221,21 @@ function DecisionAuditBlock({ data }: { data: ShadowTradeDetail }) {
 function SnapshotBlock({
   title,
   data,
+  emptyMessage,
 }: {
   title: string;
   data: Record<string, unknown> | null;
+  emptyMessage?: string;
 }) {
-  if (!data || Object.keys(data).length === 0) {
+  // Task #306: o capture de saída pode gravar um marcador
+  // `{"_capture_failed": true, "_reason": "..."}` quando o provider de
+  // indicadores estava sem dados no instante do fechamento. Tratamos
+  // esse caso como "sem dados informativos" (não renderiza as duas
+  // chaves técnicas) e exibe a mensagem contextual.
+  const captureFailed =
+    !!data && typeof data === "object" && data["_capture_failed"] === true;
+  const isEmpty = !data || Object.keys(data).length === 0 || captureFailed;
+  if (isEmpty) {
     return (
       <div>
         <div
@@ -1249,7 +1259,7 @@ function SnapshotBlock({
             padding: 10,
           }}
         >
-          Sem dados.
+          {emptyMessage ?? "Sem dados."}
         </div>
       </div>
     );
@@ -1586,6 +1596,16 @@ function DetailModal({
                 <SnapshotBlock
                   title="Indicadores na SAÍDA"
                   data={data.features_snapshot_exit}
+                  emptyMessage={
+                    data.status === "COMPLETED"
+                      ? (data.features_snapshot_exit &&
+                          (data.features_snapshot_exit as Record<string, unknown>)[
+                            "_capture_failed"
+                          ] === true)
+                        ? "Snapshot indisponível no fechamento — indicadores estavam stale ou ausentes no provider."
+                        : "Snapshot ainda não capturado para este trade (fechado antes da Task #306)."
+                      : "Trade ainda em aberto — snapshot da saída será capturado quando TP/SL/timeout for atingido."
+                  }
                 />
               </div>
 

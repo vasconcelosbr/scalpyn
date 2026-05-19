@@ -1092,6 +1092,27 @@ async def record_as_simulation(
 
     import json
 
+    # Task #306: ``trade_simulations.features_snapshot`` recebe o snapshot
+    # COMPLETO de saída (gravado em ``shadow_trades.features_snapshot_exit``
+    # pelo monitor). Isso garante que o dataset ML tenha as ~70 chaves
+    # canônicas de indicadores no instante do desfecho — alinhado com o
+    # bloco "Indicadores na SAÍDA" do modal. Fallback para o snapshot de
+    # entrada quando o capture de saída devolveu:
+    #   * NULL (trade fechado antes do deploy da Task #306), ou
+    #   * marcador ``{"_capture_failed": True, ...}`` (provider sem dados
+    #     no instante do fechamento — preserva pelo menos as features de
+    #     entrada para o DatasetBuilder não perder a linha).
+    # Contrato flat (Task #290) preservado: ambas as colunas-fonte são
+    # ``{key: scalar}``; o marcador ``_capture_failed`` é descartado para
+    # não contaminar o ``float()`` do ``DatasetBuilder``.
+    exit_snap = shadow.features_snapshot_exit
+    if isinstance(exit_snap, dict) and exit_snap and not exit_snap.get(
+        "_capture_failed"
+    ):
+        features_for_sim = exit_snap
+    else:
+        features_for_sim = shadow.features_snapshot or {}
+
     res = await db.execute(
         _INSERT_SIM_SQL,
         {
@@ -1108,7 +1129,7 @@ async def record_as_simulation(
             "source": "SHADOW",
             "decision_type": "ALLOW",
             "decision_id": shadow.decision_id,
-            "features_snapshot": json.dumps(shadow.features_snapshot or {}, default=str),
+            "features_snapshot": json.dumps(features_for_sim, default=str),
             "config_snapshot": json.dumps(shadow.config_snapshot or {}, default=str),
         },
     )

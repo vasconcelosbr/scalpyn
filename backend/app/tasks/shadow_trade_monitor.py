@@ -252,27 +252,41 @@ def _finalize_outcome(
 
 
 async def _capture_exit_features(db, shadow: ShadowTrade) -> None:
-    """Preenche ``features_snapshot_exit`` com os indicadores na saída.
+    """Preenche ``features_snapshot_exit`` com o snapshot completo de
+    indicadores na saída (Task #306).
 
-    Mesmo formato FLAT do entry (build_indicators_snapshot devolve o
-    envelope {value, source_group, ts, stale}; aqui achatamos pra
-    {key: value}, alimentando o ML com "entrada vs saída"). Caller
-    DEVE envolver em try/except — falha aqui não pode anular o outcome.
+    Usa o helper canônico ``indicators_provider.build_full_flat_snapshot``
+    — single source of truth do contrato flat ``{key: scalar}`` — para
+    capturar o MESMO conjunto de chaves que aparece no snapshot de
+    entrada (gravado por ``decisions_log.metrics["indicators_snapshot"]``).
+    Isso alimenta o XGBoost com "entrada vs saída" simétricos
+    (Task #290: contrato flat preservado).
+
+    Caller DEVE envolver em try/except — falha aqui não pode anular o
+    outcome (invariante D1: TP/SL/timeout sempre vencem).
+
+    Quando o provider devolve vazio (símbolo sem indicadores merged no
+    instante do fechamento — Redis fora, indicador stale fora da janela
+    aceita, etc.), gravamos um marcador ``{"_capture_failed": True,
+    "_reason": "indicators_unavailable_at_close"}`` para que o frontend
+    consiga distinguir "snapshot indisponível" de "ainda não capturado"
+    (NULL) e renderizar uma mensagem informativa em vez de "Sem dados".
     """
-    merged_map = await indicators_provider.get_merged_indicators(
-        db, [shadow.symbol], include_stale=True
+    snapshot = await indicators_provider.build_full_flat_snapshot(
+        db, shadow.symbol, include_stale=True
     )
-    merged = merged_map.get(shadow.symbol)
-    if merged is not None:
-        envelope = indicators_provider.build_indicators_snapshot(
-            merged, keys=list(merged.values.keys())
+    if snapshot:
+        shadow.features_snapshot_exit = snapshot
+    else:
+        logger.warning(
+            "[shadow-monitor] _capture_exit_features: empty snapshot for "
+            "shadow_id=%s symbol=%s — provider returned no merged indicators",
+            shadow.id, shadow.symbol,
         )
         shadow.features_snapshot_exit = {
-            k: (v.get("value") if isinstance(v, dict) else v)
-            for k, v in envelope.items()
+            "_capture_failed": True,
+            "_reason": "indicators_unavailable_at_close",
         }
-    else:
-        shadow.features_snapshot_exit = {}
 
 
 async def _enrich_market_context(db, shadow: ShadowTrade) -> None:
