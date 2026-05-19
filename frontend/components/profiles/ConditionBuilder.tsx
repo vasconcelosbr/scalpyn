@@ -1,6 +1,64 @@
 "use client";
 
 import { Plus, Trash2 } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+
+function NumericInput({
+  value,
+  onChange,
+  disabled,
+  className,
+  "data-testid": dataTestId,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  disabled?: boolean;
+  className?: string;
+  "data-testid"?: string;
+}) {
+  const [raw, setRaw] = useState(String(value));
+  const focused = useRef(false);
+
+  useEffect(() => {
+    if (!focused.current) {
+      setRaw(String(value));
+    }
+  }, [value]);
+
+  function parse(s: string): number | null {
+    const normalized = s.replace(",", ".");
+    const n = parseFloat(normalized);
+    return isNaN(n) ? null : n;
+  }
+
+  return (
+    <input
+      className={className}
+      type="text"
+      inputMode="decimal"
+      value={raw}
+      disabled={disabled}
+      data-testid={dataTestId}
+      onFocus={() => { focused.current = true; }}
+      onChange={(e) => {
+        const v = e.target.value;
+        setRaw(v);
+        const parsed = parse(v);
+        if (parsed !== null) onChange(parsed);
+      }}
+      onBlur={() => {
+        focused.current = false;
+        const parsed = parse(raw);
+        if (parsed === null) {
+          setRaw(String(value));
+        } else {
+          setRaw(String(parsed));
+          onChange(parsed);
+        }
+      }}
+    />
+  );
+}
 
 type ConditionValue = string | number | boolean | null | undefined;
 
@@ -391,12 +449,11 @@ export function ConditionBuilder({
                 />
               </>
             ) : (
-              <input
+              <NumericInput
                 className="input w-28"
-                type="number"
-                value={typeof condition.value === "number" ? condition.value : Number(condition.value ?? 0)}
-                onChange={(event) => updateCondition(index, {
-                  value: parseFloat(event.target.value) || 0,
+                value={typeof condition.value === "number" ? condition.value : parseFloat(String(condition.value ?? 0).replace(",", ".")) || 0}
+                onChange={(v) => updateCondition(index, {
+                  value: v,
                   rule_id: undefined,
                   points: 0,
                   category: undefined,
