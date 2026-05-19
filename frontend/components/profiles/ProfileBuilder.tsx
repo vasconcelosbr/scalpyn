@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { ArrowLeft, Save, Play, ShieldOff, Zap, Plus, Trash2, Target } from "lucide-react";
 import { apiPost } from "@/lib/api";
-import { ConditionBuilder, type ScoreRule } from "./ConditionBuilder";
+import { ConditionBuilder, NumericInput, type ScoreRule } from "./ConditionBuilder";
 import { WeightSliders } from "./WeightSliders";
 import PresetIAButton from "./PresetIAButton";
 import ProfileRoleSelector, { ProfileRole } from "./ProfileRoleSelector";
@@ -1483,37 +1483,25 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                         </select>
                         {trig.operator === "between" ? (
                           <>
-                            <input
-                              type="number"
+                            <NumericInput
                               className="input h-8 text-[12px] w-20 font-mono"
-                              value={trig.min ?? 0}
-                              onChange={(e) => {
-                                const num = parseFloat(e.target.value);
-                                updateTrigger(trig.id, "min", isNaN(num) ? 0 : num);
-                              }}
+                              value={typeof trig.min === "number" ? trig.min : 0}
+                              onChange={(v) => updateTrigger(trig.id, "min", v)}
                               placeholder="Min"
                             />
                             <span className="text-[11px] text-[var(--text-secondary)] font-medium">e</span>
-                            <input
-                              type="number"
+                            <NumericInput
                               className="input h-8 text-[12px] w-20 font-mono"
-                              value={trig.max ?? 100}
-                              onChange={(e) => {
-                                const num = parseFloat(e.target.value);
-                                updateTrigger(trig.id, "max", isNaN(num) ? (trig.max ?? 100) : num);
-                              }}
+                              value={typeof trig.max === "number" ? trig.max : 100}
+                              onChange={(v) => updateTrigger(trig.id, "max", v)}
                               placeholder="Max"
                             />
                           </>
                         ) : (
-                          <input
-                            type="text"
+                          <NumericInput
                             className="input h-8 text-[12px] w-20 font-mono"
-                            value={String(trig.value ?? "")}
-                            onChange={(e) => {
-                              const num = parseFloat(e.target.value);
-                              updateTrigger(trig.id, "value", isNaN(num) ? e.target.value : num);
-                            }}
+                            value={typeof trig.value === "number" ? trig.value : null}
+                            onChange={(v) => updateTrigger(trig.id, "value", v)}
                           />
                         )}
                       </>

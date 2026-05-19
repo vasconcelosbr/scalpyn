@@ -3,20 +3,20 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 
-function numFmt(n: number | null): string {
+export function numFmt(n: number | null): string {
   if (n === null) return "";
   if (Object.is(n, -0)) return "0";
   return String(n);
 }
 
-function numParse(s: string): number | null {
+export function numParse(s: string): number | null {
   const normalized = s.trim().replace(",", ".");
   if (normalized === "" || normalized === "-" || normalized === "." || normalized === "-.") return null;
   const n = parseFloat(normalized);
   return isNaN(n) ? null : n;
 }
 
-function NumericInput({
+export function NumericInput({
   value,
   onChange,
   disabled,
