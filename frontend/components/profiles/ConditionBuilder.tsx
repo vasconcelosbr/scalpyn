@@ -3,7 +3,8 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 
-function numFmt(n: number): string {
+function numFmt(n: number | null): string {
+  if (n === null) return "";
   if (Object.is(n, -0)) return "0";
   return String(n);
 }
@@ -23,7 +24,7 @@ function NumericInput({
   placeholder,
   "data-testid": dataTestId,
 }: {
-  value: number;
+  value: number | null;
   onChange: (v: number) => void;
   disabled?: boolean;
   className?: string;
@@ -456,7 +457,7 @@ export function ConditionBuilder({
             ) : (
               <NumericInput
                 className="input w-28"
-                value={typeof condition.value === "number" ? condition.value : numParse(String(condition.value ?? 0)) ?? 0}
+                value={typeof condition.value === "number" ? condition.value : numParse(String(condition.value ?? "")) ?? null}
                 onChange={(v) => updateCondition(index, {
                   value: v,
                   rule_id: undefined,
