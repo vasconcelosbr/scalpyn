@@ -95,6 +95,11 @@ def _run_async(coro):
         try:
             from ..database import _celery_engine
             loop.run_until_complete(_celery_engine.dispose())
+            # Step 2b (Task #300 review) — drain microtasks scheduled
+            # during dispose() (asyncpg finalizers) before hard-terminate
+            # so half-released sockets don't re-arm GC callbacks on a
+            # loop we're about to close.
+            loop.run_until_complete(asyncio.sleep(0))
         except BaseException as exc:
             logger.debug("[_run_async] _celery_engine.dispose failed: %s", exc)
 
