@@ -192,6 +192,17 @@ async def _ensure_entry(db, shadow: ShadowTrade) -> bool:
         return False
 
     shadow.entry_price = entry_price
+    # Guard contra produtor errôneo (storm Cloud SQL 2026-05-19): se
+    # algum helper retornar entry_ts não-datetime, o enrich_market_context
+    # subsequente vai gerar `timestamp with time zone <= interval` em prod.
+    # Logamos e abortamos a entrada — shadow fica PENDING e tenta no próximo ciclo.
+    if not isinstance(entry_ts, datetime):
+        logger.error(
+            "[shadow-monitor] _ensure_entry: entry_ts não-datetime "
+            "(type=%s value=%r shadow_id=%s symbol=%s) — abortando entrada",
+            type(entry_ts).__name__, entry_ts, shadow.id, shadow.symbol,
+        )
+        return False
     shadow.entry_timestamp = entry_ts
     # Promove legado a RUNNING assim que a entrada é resolvida — caso
     # contrário, se não houver candles 1m novas neste tick, o trade

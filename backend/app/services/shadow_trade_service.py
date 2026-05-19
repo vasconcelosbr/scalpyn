@@ -73,6 +73,13 @@ async def _next_1m_open(
     row = res.fetchone()
     if row is None or row.open is None:
         return None, None
+    if not isinstance(row.time, datetime):
+        logger.error(
+            "[shadow] _next_1m_open: ohlcv.time não-datetime "
+            "(type=%s value=%r symbol=%s) — retornando None",
+            type(row.time).__name__, row.time, symbol,
+        )
+        return None, None
     return float(row.open), row.time
 
 
@@ -106,6 +113,13 @@ async def _get_current_price_multi_tf(
     )
     row = res.fetchone()
     if row is None or row.close is None:
+        return None, None
+    if not isinstance(row.time, datetime):
+        logger.error(
+            "[shadow] _get_current_price_multi_tf: ohlcv.time não-datetime "
+            "(type=%s value=%r symbol=%s) — retornando None",
+            type(row.time).__name__, row.time, symbol,
+        )
         return None, None
     return float(row.close), row.time
 
@@ -142,6 +156,13 @@ async def _get_market_metadata_price(
         price = float(row.price)
     except (TypeError, ValueError):
         return None, None
+    if row.last_updated is not None and not isinstance(row.last_updated, datetime):
+        logger.error(
+            "[shadow] _get_market_metadata_price: last_updated não-datetime "
+            "(type=%s value=%r symbol=%s) — retornando ts=None",
+            type(row.last_updated).__name__, row.last_updated, symbol,
+        )
+        return price, None
     return price, row.last_updated
 
 
@@ -274,6 +295,21 @@ async def enrich_market_context(
         "n_concurrent_signals": None,
     }
     if entry_timestamp is None:
+        return out
+    # Defesa contra produtor errôneo (storm Cloud SQL 2026-05-19, char 183 do
+    # `time <= :t` em ohlcv/funding_rates/decisions_log): asyncpg encoda
+    # `timedelta` como INTERVAL → Postgres rejeita com
+    # ``operator does not exist: timestamp with time zone <= interval``.
+    # Sem este guard, um único shadow com entry_timestamp corrompido
+    # produz 3 erros raiz + 9 erros de cascata (transação abortada) por
+    # ciclo do shadow_trade_monitor. Não-fatal: retornamos contexto vazio
+    # e o ML lida com NULL nos 4 campos.
+    if not isinstance(entry_timestamp, datetime):
+        logger.error(
+            "[shadow] enrich_market_context: entry_timestamp não-datetime "
+            "(type=%s value=%r symbol=%s decision_id=%s) — pulando enrichment",
+            type(entry_timestamp).__name__, entry_timestamp, symbol, decision_id,
+        )
         return out
 
     # ── BTC anchor + 1h change ────────────────────────────────────────────
