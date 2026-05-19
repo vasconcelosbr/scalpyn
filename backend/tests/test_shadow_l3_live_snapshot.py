@@ -51,6 +51,9 @@ class _StubResult:
     def scalar_one_or_none(self):
         return self.rows[0] if self.rows else None
 
+    def fetchall(self):
+        return list(self.rows)
+
 
 class _StubSession:
     """Pre-seeded results queue — one per ``execute`` call in order."""
@@ -169,3 +172,79 @@ async def test_resolve_with_fallback_prefers_recent_log_over_snapshot():
     assert decision is fake
     # Só a primeira query (recent) deve ter sido feita — sem fallback.
     assert session.calls == 1
+
+
+# ── safe_backfill_watchlist_shadows: idempotência por status ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_backfill_skips_symbols_with_pending_or_running_shadow(monkeypatch):
+    """Símbolos com shadow PENDING ou RUNNING não devem ser re-promovidos.
+
+    Regressão: o caminho sintético (decision_id=NULL) não passa pela
+    UNIQUE parcial ``ux_shadow_running_user_symbol`` enquanto o status é
+    PENDING — se o sweep não filtrar PENDING, ciclos seguintes recriariam
+    a mesma linha indefinidamente.
+    """
+    from app.services import shadow_trade_service as svc
+
+    user_id = uuid4()
+
+    # Snapshot vivo trazendo 3 símbolos L3 SPOT.
+    fake_snapshot = [
+        {"symbol": "AAA_USDT", "score": 50.0, "direction": "SPOT",
+         "approved_at": None, "watchlist_id": uuid4(),
+         "watchlist_name": "L3", "indicators_snapshot": {"rsi": 1.0}},
+        {"symbol": "BBB_USDT", "score": 50.0, "direction": "SPOT",
+         "approved_at": None, "watchlist_id": uuid4(),
+         "watchlist_name": "L3", "indicators_snapshot": {"rsi": 2.0}},
+        {"symbol": "CCC_USDT", "score": 50.0, "direction": "SPOT",
+         "approved_at": None, "watchlist_id": uuid4(),
+         "watchlist_name": "L3", "indicators_snapshot": {"rsi": 3.0}},
+    ]
+    # Estado pré-existente: AAA RUNNING, BBB PENDING. CCC livre.
+    running_rows = [
+        type("R", (), {"symbol": "AAA_USDT"})(),
+        type("R", (), {"symbol": "BBB_USDT"})(),
+    ]
+
+    class _TxCtx:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+
+    class _ReadDb:
+        async def execute(self, *_a, **_kw):
+            return _StubResult(running_rows)
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        def begin(self): return _TxCtx()
+
+    def _read_factory():
+        return _ReadDb()
+
+    async def _fake_get_currently_approved_l3(db, uid, direction="SPOT"):
+        return fake_snapshot
+
+    # Patches: snapshot fonte, leitor de open shadows, e impede que o
+    # caminho de criação real (que abriria DB) execute.
+    monkeypatch.setattr(svc, "get_currently_approved_l3",
+                        _fake_get_currently_approved_l3)
+
+    from app import database as _db_mod
+    monkeypatch.setattr(_db_mod, "CeleryAsyncSessionLocal", _read_factory)
+
+    eligible_seen: List[str] = []
+
+    async def _fake_resolve(*args, **_kw):
+        symbol = args[2]
+        eligible_seen.append(symbol)
+        return None, ""
+
+    monkeypatch.setattr(svc, "_resolve_decision_with_fallback", _fake_resolve)
+
+    created = await svc.safe_backfill_watchlist_shadows(user_id, user_config={})
+
+    # AAA e BBB filtrados (RUNNING+PENDING). Só CCC chega ao resolver.
+    assert eligible_seen == ["CCC_USDT"]
+    # _fake_resolve devolve None → nada é criado, mas o filtro é o ponto chave.
+    assert created == 0

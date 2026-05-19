@@ -854,11 +854,15 @@ async def safe_backfill_watchlist_shadows(
             snapshot = await get_currently_approved_l3(
                 read_db, user_id, direction="SPOT"
             )
+            # Tratar PENDING como aberto: shadows sintéticas (decision_id NULL)
+            # podem ficar PENDING enquanto o entry_price não resolve. Sem
+            # incluir PENDING, ciclos seguintes recriariam linha duplicada
+            # (a UNIQUE parcial cobre RUNNING, não PENDING).
             running_rows = await read_db.execute(
                 text(
                     """
                     SELECT symbol FROM shadow_trades
-                     WHERE user_id = :uid AND status = 'RUNNING'
+                     WHERE user_id = :uid AND status IN ('RUNNING', 'PENDING')
                     """
                 ),
                 {"uid": str(user_id)},
@@ -888,7 +892,7 @@ async def safe_backfill_watchlist_shadows(
     for symbol in eligible_symbols:
         snap_item = snapshot_by_symbol[symbol]
         try:
-            async with AsyncSessionLocal() as own_db:
+            async with CeleryAsyncSessionLocal() as own_db:
                 async with own_db.begin():
                     decision, source = await _resolve_decision_with_fallback(
                         own_db, user_id, symbol, snap_item, cutoff
