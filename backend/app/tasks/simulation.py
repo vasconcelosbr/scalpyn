@@ -3,9 +3,17 @@
 import logging
 from typing import Optional
 
+from sqlalchemy import text
+
 from .celery_app import celery_app
 from ..database import run_db_task, CeleryAsyncSessionLocal
 from ..services.simulation_service import SimulationService
+
+# Advisory lock ID para mutual exclusion de batches de simulação.
+# Previne deadlocks por INSERT concorrente na UNIQUE constraint
+# (symbol, timestamp_entry, direction) de trade_simulations
+# (diagnosticado nos logs Cloud SQL 2026-05-20, Task #309).
+_SIMULATION_BATCH_LOCK_ID = 1_000_000_001
 
 logger = logging.getLogger(__name__)
 
@@ -106,46 +114,84 @@ def run_simulation_batch(
     )
 
     async def _run():
-        async def _inner(session):
-            service = SimulationService(session)
-            return await service.run_simulation_batch(
-                limit=limit,
-                skip_existing=skip_existing,
-                user_id=user_id,
-                exchange=exchange,
-                session_factory=CeleryAsyncSessionLocal,
-            )
-
-        try:
-            result = await run_db_task(_inner, celery=True)
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-            logger.info(
-                "[Simulation] Batch complete in %.2fs: processed=%d, skipped=%d, "
-                "simulated=%d, errors=%d, records_inserted=%d",
-                duration,
-                result.get("processed", 0),
-                result.get("skipped", 0),
-                result.get("simulated", 0),
-                result.get("errors", 0),
-                result.get("records_inserted", 0),
-            )
-            result["last_run"] = start_time.isoformat()
-            result["duration_seconds"] = duration
-            return result
-
-        except Exception as exc:
-            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
-            logger.error(
-                "[Simulation] Batch failed after %.2fs: %s",
-                duration, exc, exc_info=True,
-            )
-            if self.request.retries < self.max_retries:
-                logger.info(
-                    "[Simulation] Retrying batch (attempt %d/%d)",
-                    self.request.retries + 1, self.max_retries,
+        # Mutual exclusion via PostgreSQL advisory lock — evita deadlocks
+        # por INSERT concorrente na UNIQUE (symbol, timestamp_entry, direction)
+        # quando dois batches se sobrepõem.  pg_try_advisory_lock é
+        # não-bloqueante: se outro batch estiver rodando, pulamos este ciclo.
+        # O lock é session-level: liberado automaticamente quando lock_conn
+        # fecha, e explicitamente no finally para belt-and-suspenders.
+        async with CeleryAsyncSessionLocal() as lock_conn:
+            async with lock_conn.begin():
+                lock_result = await lock_conn.execute(
+                    text("SELECT pg_try_advisory_lock(:id)"),
+                    {"id": _SIMULATION_BATCH_LOCK_ID},
                 )
-                raise self.retry(exc=exc)
-            raise
+                acquired = lock_result.scalar()
+            # Transação committed; advisory lock session-level ainda mantido.
+
+            if not acquired:
+                logger.info(
+                    "[Simulation] Skipping — outro batch de simulação já está "
+                    "rodando (advisory lock %d em uso)",
+                    _SIMULATION_BATCH_LOCK_ID,
+                )
+                return {
+                    "status": "skipped",
+                    "reason": "concurrent_run",
+                    "message": "Another simulation batch is already running.",
+                    "processed": 0,
+                    "simulated": 0,
+                    "errors": 0,
+                }
+
+            try:
+                async def _inner(session):
+                    service = SimulationService(session)
+                    return await service.run_simulation_batch(
+                        limit=limit,
+                        skip_existing=skip_existing,
+                        user_id=user_id,
+                        exchange=exchange,
+                        session_factory=CeleryAsyncSessionLocal,
+                    )
+
+                try:
+                    result = await run_db_task(_inner, celery=True)
+                    duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+                    logger.info(
+                        "[Simulation] Batch complete in %.2fs: processed=%d, skipped=%d, "
+                        "simulated=%d, errors=%d, records_inserted=%d",
+                        duration,
+                        result.get("processed", 0),
+                        result.get("skipped", 0),
+                        result.get("simulated", 0),
+                        result.get("errors", 0),
+                        result.get("records_inserted", 0),
+                    )
+                    result["last_run"] = start_time.isoformat()
+                    result["duration_seconds"] = duration
+                    return result
+
+                except Exception as exc:
+                    duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+                    logger.error(
+                        "[Simulation] Batch failed after %.2fs: %s",
+                        duration, exc, exc_info=True,
+                    )
+                    if self.request.retries < self.max_retries:
+                        logger.info(
+                            "[Simulation] Retrying batch (attempt %d/%d)",
+                            self.request.retries + 1, self.max_retries,
+                        )
+                        raise self.retry(exc=exc)
+                    raise
+
+            finally:
+                async with lock_conn.begin():
+                    await lock_conn.execute(
+                        text("SELECT pg_advisory_unlock(:id)"),
+                        {"id": _SIMULATION_BATCH_LOCK_ID},
+                    )
 
     try:
         return asyncio.run(_run())

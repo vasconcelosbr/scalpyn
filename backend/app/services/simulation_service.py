@@ -410,8 +410,11 @@ class SimulationService:
         # Get config
         config = await self.get_simulation_config(user_id)
 
-        # Fetch decisions (read-only; uses the outer session)
-        query = select(DecisionLog).order_by(DecisionLog.created_at.desc()).limit(limit)
+        # Fetch decisions (read-only; uses the outer session).
+        # order_by id ASC garante ordem consistente de aquisição de locks
+        # entre batches concorrentes — mesmo princípio do sorted-IDs no
+        # shadow_trade_monitor (deadlock-safety, Task #309).
+        query = select(DecisionLog).order_by(DecisionLog.id.asc()).limit(limit)
         if user_id:
             query = query.where(DecisionLog.user_id == user_id)
 
