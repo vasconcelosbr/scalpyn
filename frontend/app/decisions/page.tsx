@@ -143,6 +143,7 @@ function eventTypeTone(eventType?: string | null): string {
     case "SIGNAL_REGAINED":  return "bg-[rgba(20,184,166,0.12)] text-[rgb(20,184,166)] border-[rgba(20,184,166,0.3)]";
     case "SIGNAL_EVOLVED_SCORE":
     case "SIGNAL_EVOLVED_DIRECTION": return "bg-[rgba(251,191,36,0.12)] text-[var(--color-warning)] border-[rgba(251,191,36,0.25)]";
+    case "L3_VISIBLE":       return "bg-[rgba(139,92,246,0.12)] text-[rgb(167,139,250)] border-[rgba(139,92,246,0.3)]";
     default:                 return "bg-[var(--bg-elevated)] text-[var(--text-secondary)] border-[var(--border-default)]";
   }
 }
@@ -154,6 +155,7 @@ function eventTypeLabel(eventType?: string | null): string {
     case "SIGNAL_REGAINED":          return "Regained";
     case "SIGNAL_EVOLVED_SCORE":     return "Δ Score";
     case "SIGNAL_EVOLVED_DIRECTION": return "Δ Dir";
+    case "L3_VISIBLE":               return "L3 Visible";
     default:                         return eventType ?? "";
   }
 }

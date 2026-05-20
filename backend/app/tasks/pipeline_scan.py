@@ -433,6 +433,50 @@ def _save_decision_states(redis, watchlist_id: str, states: dict, ttl: int = 600
         pass
 
 
+# ─── L3 visibility (edge-triggered guarantee) ─────────────────────────────────
+# Independent of ``decision_states`` (short TTL, transition-based).  Tracks
+# which symbols already got at least one decisions_log row in the current
+# *presence cycle* at L3 ALLOW.  Pure edge trigger:
+#
+#     not in L3 → in L3   ⇒ force-log once (event_type = 'L3_VISIBLE')
+#     in L3 → in L3       ⇒ skip
+#     in L3 → not in L3   ⇒ remove from set (reset)
+#     not in L3 → not L3  ⇒ noop
+#
+# So every symbol *visually shown* in L3 Approved gets at least one row,
+# without turning the Audit Trail into a heartbeat.
+_L3_VISIBILITY_TTL = 86400  # 24h, refreshed every scan — survives Redis restarts
+
+
+def _prior_l3_visibility(redis, watchlist_id: str) -> set:
+    """Return the set of symbols already logged in the current L3 presence cycle."""
+    if not redis:
+        return set()
+    try:
+        raw = redis.smembers(f"{_REDIS_PREFIX}{watchlist_id}:l3_visibility")
+        return {s.decode() if isinstance(s, bytes) else s for s in (raw or [])}
+    except Exception:
+        return set()
+
+
+def _save_l3_visibility(redis, watchlist_id: str, symbols: set, ttl: int = _L3_VISIBILITY_TTL):
+    """Replace the L3 visibility set with the symbols currently in ALLOW state."""
+    if not redis:
+        return
+    key = f"{_REDIS_PREFIX}{watchlist_id}:l3_visibility"
+    try:
+        pipe = redis.pipeline()
+        pipe.delete(key)
+        if symbols:
+            # Task #310: deterministic ordering before SADD (defensive — SADD itself
+            # is set-semantics, but matches the project-wide convention).
+            pipe.sadd(key, *sorted(symbols))
+            pipe.expire(key, ttl)
+        pipe.execute()
+    except Exception:
+        pass
+
+
 def _should_log_decision(
     decision: dict,
     prior: Optional[dict],
@@ -2631,9 +2675,13 @@ async def _run_pipeline_scan():
                         )
 
                     prior_states = _prior_decision_states(redis, wl_id)
+                    prior_visibility = _prior_l3_visibility(redis, wl_id)
                     new_states: dict = {}
+                    current_l3_visibility: set = set()
                     decisions_to_log: list = []
-                    for d in decisions:
+                    # Task #310: deterministic symbol ordering before DB writes
+                    # (decisions_log INSERT downstream).
+                    for d in sorted(decisions, key=lambda x: x.get("symbol") or ""):
                         sym = d.get("symbol")
                         prior = prior_states.get(sym)
                         # Warn when recovering a symbol stuck due to ordering bug
@@ -2647,6 +2695,17 @@ async def _run_pipeline_scan():
                             score_delta_threshold=dl_score_delta,
                             direction_change_logs=dl_direction_logs,
                         )
+                        # Edge-triggered L3 visibility guarantee: every symbol
+                        # currently shown in L3 Approved must exist in the Decision
+                        # Log at least once per presence cycle.  If the transition
+                        # detector did not already flag this row (stable ALLOW with
+                        # no score/direction change) AND the symbol was not logged
+                        # in the current cycle, force-emit a single L3_VISIBLE row.
+                        if d.get("decision") == "ALLOW":
+                            current_l3_visibility.add(sym)
+                            if not should_log and sym not in prior_visibility:
+                                should_log = True
+                                event_type = "L3_VISIBLE"
                         new_states[sym] = {
                             "state": d.get("decision"),
                             "score": d.get("score"),
@@ -2690,6 +2749,11 @@ async def _run_pipeline_scan():
                             f"Decision persistence failed for watchlist {wl_id}: {_dl_exc}"
                         ) from _dl_exc
                     _save_decision_states(redis, wl_id, new_states)
+                    # Refresh L3 visibility set AFTER successful DB write — same
+                    # ordering invariant as decision_states (Task #109): Redis
+                    # must never advance ahead of the DB or symbols get stuck
+                    # without a log row in the current presence cycle.
+                    _save_l3_visibility(redis, wl_id, current_l3_visibility)
                     await _upsert_assets(db, wl_id, signals, filters_json, execution_id=execution_id)
                     await _update_last_scanned(db, wl_id)
 
