@@ -323,7 +323,19 @@ async def _evaluate_async():
 
                 merged_by_sym = await get_merged_indicators(db, pool_symbols)
 
-                for symbol, mi in merged_by_sym.items():
+                # Task #310 (2026-05-20): deterministic sort by symbol — same
+                # invariante anti-deadlock 40P01 das Tasks #251/#273. O loop
+                # abaixo emite INSERT em ``decisions_log`` e dispara
+                # ``execute_trade`` (que escreve ``trades`` + atualiza estado
+                # compartilhado). Worker-execution roda --concurrency=2, então
+                # dois ticks de ``evaluate`` podem rodar em paralelo iterando
+                # o MESMO set de símbolos vindo de ``get_merged_indicators``
+                # (cuja ordem é não-determinística — depende da ordem de
+                # inserção interna do provider). Sem ``sorted()`` aqui dois
+                # workers podem adquirir row-locks (e sequence/page locks no
+                # índice (user_id, symbol) de ``decisions_log``) em ordens
+                # opostas → 40P01.
+                for symbol, mi in sorted(merged_by_sym.items()):
                     # Re-bind the trace context with the current symbol +
                     # the user's pool_id. set_ctx replaces the whole ctx,
                     # so we re-emit the user-level fields too.

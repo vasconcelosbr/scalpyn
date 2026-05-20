@@ -66,6 +66,15 @@ _PIPELINE_FILES = (
     "app/tasks/compute_indicators.py",
     "app/tasks/compute_scores.py",
     "app/tasks/pipeline_scan.py",
+    # Task #310 (2026-05-20): bisect novo apontou
+    # ``evaluate_signals`` + ``execute_buy`` iterando ``merged_by_sym``
+    # (dict do ``get_merged_indicators``, ordem não-determinística)
+    # com ``decisions_log`` INSERT + ``execute_trade``/QUARANTINED
+    # writes no corpo do loop. Worker-execution roda --concurrency=2
+    # → dois ticks paralelos podem deadlockar em row-locks
+    # compartilhados se o iter order diverge.
+    "app/tasks/evaluate_signals.py",
+    "app/tasks/execute_buy.py",
     "app/services/scheduler_service.py",
     "app/services/structural_scheduler_service.py",
     "app/services/microstructure_scheduler_service.py",
@@ -98,6 +107,22 @@ _SYMBOL_LIKE_NAMES = frozenset({
     "assets",
     "candidates",
     "sorted_symbols",  # already-sorted form, allowed as iter source
+})
+
+# Task #310 (2026-05-20): symbol-keyed dicts whose ``.items()`` / ``.keys()``
+# / ``.values()`` iteration must also be ``sorted(...)`` when the loop body
+# issues per-row DB writes. Dict iteration order in Python 3.7+ is insertion
+# order, and the dicts below come from DB queries / provider internals whose
+# row order is non-deterministic — so two concurrent workers iterate the same
+# set of symbols in different orders and deadlock. Same root-cause class as
+# Tasks #251/#273; this extension closes the ``dict.items()`` gap that the
+# original AST walker missed (it only inspected ``ast.Name`` iter nodes).
+_SYMBOL_KEYED_DICT_NAMES = frozenset({
+    "merged_by_sym",          # get_merged_indicators output
+    "market_cap_by_sym",
+    "tradable_by_symbol",
+    "symbol_market_type",
+    "symbol_to_market_type",
 })
 
 
@@ -209,6 +234,23 @@ _DB_WRITE_CALL_NAMES = frozenset({
     "bulk_save_objects",
     "enqueue_or_log",   # persistence queue write (idempotent UPSERT msg)
     "enqueue",
+    # Task #310: execution-path write wrappers that proxy per-row INSERTs
+    # into decisions_log / trades / shadow_trades. Adding them here so the
+    # AST walker recognizes the loop body as DB-writing even when the
+    # raw ``db.execute`` lives behind the helper. Without this, a future
+    # ``for k, v in merged_by_sym.items(): await safe_record_decision(...)``
+    # would silently slip past the lint (the marker layer would still need
+    # to be updated by the author — defeats the "structural defense" goal).
+    "safe_record_decision",
+    "_safe_record_decision",
+    "safe_create_from_symbol_skip",
+    "safe_bulk_create_from_user_skip",
+    "safe_backfill_watchlist_shadows",
+    "_create_from_decision",
+    "execute_trade",
+    "execute_buy",
+    "close_trade",
+    "send_trade_alert",  # writes notification rows
 })
 
 
@@ -227,28 +269,56 @@ def _loop_body_has_db_write(node: ast.AST) -> bool:
     return False
 
 
+def _symbol_keyed_dict_iter(iter_node: ast.AST) -> str | None:
+    """Return the dict name when ``iter_node`` is
+    ``<name>.items()`` / ``.keys()`` / ``.values()`` on a known
+    symbol-keyed dict (Task #310 lint gap). Returns None otherwise."""
+    if not isinstance(iter_node, ast.Call):
+        return None
+    func = iter_node.func
+    if not isinstance(func, ast.Attribute):
+        return None
+    if func.attr not in {"items", "keys", "values"}:
+        return None
+    if not isinstance(func.value, ast.Name):
+        return None
+    if func.value.id not in _SYMBOL_KEYED_DICT_NAMES:
+        return None
+    return func.value.id
+
+
 def _check_for_loop(
     node: ast.For | ast.AsyncFor, tree: ast.Module, lines: list[str]
 ) -> str | None:
     iter_node = node.iter
     if _is_sorted_call(iter_node):
         return None
-    if not isinstance(iter_node, ast.Name):
-        return None
-    if iter_node.id not in _SYMBOL_LIKE_NAMES:
-        return None
     line = lines[node.lineno - 1] if node.lineno - 1 < len(lines) else ""
     if _line_has_optout(line):
         return None
-    if _name_pre_sorted(tree, node.lineno, iter_node.id):
-        return None
-    if not _loop_body_has_db_write(node):
-        return None
-    return (
-        f"line {node.lineno}: ``for ... in {iter_node.id}:`` issues per-row "
-        "DB writes without a sort — wrap with sorted(...) or pre-sort the "
-        "variable; see Task #273 invariant."
-    )
+    # Path A: ``for x in <symbol_like_name>:``
+    if isinstance(iter_node, ast.Name) and iter_node.id in _SYMBOL_LIKE_NAMES:
+        if _name_pre_sorted(tree, node.lineno, iter_node.id):
+            return None
+        if not _loop_body_has_db_write(node):
+            return None
+        return (
+            f"line {node.lineno}: ``for ... in {iter_node.id}:`` issues per-row "
+            "DB writes without a sort — wrap with sorted(...) or pre-sort the "
+            "variable; see Task #273 invariant."
+        )
+    # Path B (Task #310): ``for k, v in <symbol_keyed_dict>.items():``
+    dict_name = _symbol_keyed_dict_iter(iter_node)
+    if dict_name is not None:
+        if not _loop_body_has_db_write(node):
+            return None
+        return (
+            f"line {node.lineno}: ``for ... in {dict_name}.items()`` (or "
+            ".keys()/.values()) issues per-row DB writes without a sort — wrap "
+            "with sorted(...) so iteration order is deterministic across "
+            "concurrent workers; see Task #310 / #273 invariant."
+        )
+    return None
 
 
 def _check_comprehension(
@@ -398,6 +468,23 @@ _REQUIRED_MARKERS: tuple[tuple[str, str, str], ...] = (
         "app/services/ohlcv_backfill_service.py",
         "sorted_symbols = sorted(symbols)",
         "ohlcv_backfill_service iterates symbols UPSERTing into ohlcv hypertable; sorted_symbols also keeps result mapping aligned",
+    ),
+
+    # ── Task #310 callsites (2026-05-20) ──
+    (
+        "app/tasks/evaluate_signals.py",
+        "for symbol, mi in sorted(merged_by_sym.items()):",
+        "evaluate_signals.evaluate loop emits per-symbol INSERTs in decisions_log "
+        "and calls execute_trade; worker-execution runs --concurrency=2 so two "
+        "ticks iterating the same merged_by_sym dict in different orders can "
+        "deadlock on shared row-locks (decisions_log index pages, trades, pool state)",
+    ),
+    (
+        "app/tasks/execute_buy.py",
+        "for _sym, _mi in sorted(merged_by_sym.items()):",
+        "execute_buy candidate-build loop issues safe_record_decision INSERTs for "
+        "QUARANTINED symbols and feeds the downstream per-row execute path; same "
+        "non-deterministic dict ordering risk as evaluate_signals",
     ),
 )
 

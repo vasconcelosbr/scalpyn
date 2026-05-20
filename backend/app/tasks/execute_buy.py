@@ -417,7 +417,16 @@ async def _execute_buy_cycle_async() -> dict:
                 # reach the per-row evaluation.
                 _Candidate = type("_Candidate", (), {})
                 candidates: list = []
-                for _sym, _mi in merged_by_sym.items():
+                # Task #310 (2026-05-20): deterministic sort by symbol antes
+                # de qualquer INSERT em ``decisions_log`` (path QUARANTINED) ou
+                # downstream ``execute_trade``/``shadow_trade`` writes. Mesma
+                # invariante anti-deadlock 40P01 das Tasks #251/#273:
+                # ``get_merged_indicators`` devolve dict com ordem dependente
+                # do provider, então sem ``sorted()`` dois ticks concorrentes
+                # (worker-execution --concurrency=2) iteram o mesmo set de
+                # símbolos em ordens opostas e podem deadlockar em row-locks
+                # compartilhados.
+                for _sym, _mi in sorted(merged_by_sym.items()):
                     _flat = _mi.as_flat_dict()
                     _ok, _missing = is_complete(_flat)
                     if not _ok:
@@ -453,6 +462,13 @@ async def _execute_buy_cycle_async() -> dict:
                     _row.indicators_json = _flat
                     _row.market_cap = market_cap_by_sym.get(_sym)
                     candidates.append(_row)
+
+                # Task #310: explicit sort marker (already deterministic by
+                # construction — built from sorted(merged_by_sym.items()) —
+                # but materialize the invariant for the AST lint walker, which
+                # tracks .sort()/=sorted() on the variable but cannot trace
+                # the implicit ordering of an append-loop fed by a sorted iter.
+                candidates.sort(key=lambda c: c.symbol)
 
                 if not candidates:
                     logger.debug(
@@ -590,7 +606,12 @@ async def _execute_buy_cycle_async() -> dict:
                         reason="NOT_IN_L3",
                         blocking_rule="L3PipelineFilter",
                     )
-                candidates = _kept_candidates
+                # Task #310: preserve deterministic order across the second
+                # consumer loop (per-candidate execute path below). Same
+                # justification as the post-build sort above — _kept_candidates
+                # was filtered in sorted order, but the AST walker only sees
+                # the assignment.
+                candidates = sorted(_kept_candidates, key=lambda c: c.symbol)
                 logger.info(
                     "L3 pipeline filter for user %s: %d → %d candidates (%d removed)",
                     user_id, before_l3, len(candidates), before_l3 - len(candidates),

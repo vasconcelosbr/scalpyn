@@ -76,6 +76,9 @@ Mapping table → owning callsites (curated for the post-#273 audit):
 | `alpha_scores`                     | `compute_scores.py` |
 | `pipeline_watchlist_assets`        | `pipeline_scan.py` (`_upsert_assets`) |
 | `pipeline_watchlist_rejections`    | `pipeline_scan.py` (`_replace_rejection_snapshot`) |
+| `decisions_log`                    | `evaluate_signals.py` (per-symbol `_safe_record_decision`), `execute_buy.py` (QUARANTINED + per-symbol `safe_record_decision`), `pipeline_scan.py` (L3 evaluation) |
+| `trades` / `pool_coins`            | `evaluate_signals.py` (execute_trade), `execute_buy.py`, `trade_monitor.py` (close_trade) |
+| `shadow_trades`                    | `shadow_trade_service.py` (`safe_bulk_create_from_user_skip`, `safe_backfill_watchlist_shadows`) — already sorted by symbol/ID |
 
 ---
 
@@ -254,3 +257,55 @@ accepts the marker, the comment is the audit trail.
   `pipeline_scan._upsert_assets` were never covered by the #251
   patch. Fix: Task #273 — `sorted()` on those 5 callsites + the
   AST lint test that pins the invariant.
+
+* **2026-05-20 — Task #310** — segunda regressão pós-#273. Burst
+  de 40P01 voltou após o ciclo de mudanças 2026-05-18+ (Tasks
+  #303 shadow live-L3, continuous shadow trading, min_alpha_score
+  gate) aumentar a pressão de escrita no worker-execution. Bisect
+  feito por inspeção de código (Cloud SQL logs não acessíveis no
+  ambiente do agente nesta janela). Suspeitos auditados e
+  liberados: `shadow_trade_service.safe_bulk_create_from_user_skip`
+  (já `sorted(ids)`), `safe_backfill_watchlist_shadows` (já
+  `sorted(eligible_symbols)`), `trade_reconciliation_service`
+  (loops sobre connections/trades, não symbol-keyed),
+  `persistence/repositories.py` (1 mensagem/tx, sem contenção
+  inter-worker).
+
+  **Root cause**: dois call-sites no caminho de execução iterando
+  `merged_by_sym.items()` (dict devolvido por
+  `get_merged_indicators`, cuja ordem é não-determinística — depende
+  da ordem de inserção interna do provider) com `decisions_log`
+  INSERT + `execute_trade`/`safe_record_decision` writes no corpo
+  do loop:
+
+  - `app/tasks/evaluate_signals.py:326` (`_evaluate_async`)
+  - `app/tasks/execute_buy.py:420` (candidate-build / QUARANTINED
+    path)
+
+  Worker-execution roda `--concurrency=2`, então dois ticks
+  paralelos podem iterar o MESMO set de símbolos em ordens
+  opostas → 40P01 em row-locks compartilhados
+  (`decisions_log`, `trades`, `pool_coins`).
+
+  **Por que o lint #273 não pegou**: o AST walker original só
+  inspecionava `ast.Name` no nó `iter` do `for`. Iteração via
+  `dict.items()` (que é um `ast.Call` sobre `ast.Attribute`) era
+  silenciosamente ignorada. E `evaluate_signals.py` /
+  `execute_buy.py` nem estavam em `_PIPELINE_FILES`.
+
+  **Fix**:
+  1. `sorted(merged_by_sym.items())` nos dois call-sites com
+     comentário "Task #310".
+  2. `evaluate_signals.py` + `execute_buy.py` adicionados a
+     `_PIPELINE_FILES`.
+  3. Novo helper `_symbol_keyed_dict_iter` no AST walker detecta
+     `<name>.items()/.keys()/.values()` em dicts de
+     `_SYMBOL_KEYED_DICT_NAMES` (`merged_by_sym`,
+     `market_cap_by_sym`, `tradable_by_symbol`, etc.) e exige
+     `sorted()` quando o corpo escreve no DB. Fecha o gap
+     estrutural — qualquer novo `for k, v in merged_by_sym.items()`
+     em arquivo coberto vira erro de lint sem precisar atualizar
+     marker.
+  4. Dois markers literais novos em `_REQUIRED_MARKERS`.
+  5. Mapping table acima estendida com `decisions_log`, `trades`,
+     `pool_coins`, `shadow_trades`.
