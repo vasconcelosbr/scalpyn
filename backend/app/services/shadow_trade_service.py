@@ -78,6 +78,38 @@ SHADOW_LOOKBACK_MINUTES = int(os.environ.get("SHADOW_LOOKBACK_MINUTES", "10"))
 
 # ── helpers internos ─────────────────────────────────────────────────────────
 
+
+def _validate_temporal_param(
+    value: Any,
+    *,
+    param_name: str,
+    symbol: Optional[str] = None,
+    decision_id: Optional[Any] = None,
+) -> Optional[datetime]:
+    """Valida que ``value`` pode ser bound como timestamptz numa query raw.
+
+    Defesa contra o storm Cloud SQL 2026-05-19/20 (Task #309): qualquer
+    `timedelta`, `None`, `str`, `int`, etc. passado como parâmetro de
+    `time <= :param` quebra com ``operator does not exist: timestamp
+    with time zone <= interval`` (asyncpg encoda timedelta como
+    INTERVAL). A transação aborta, e toda statement subsequente naquela
+    sessão cai em cascata com ``current transaction is aborted``.
+
+    Retorna o próprio ``datetime`` se válido; ``None`` (com log de erro
+    estruturado) caso contrário. O caller DEVE abortar APENAS o bloco
+    que depende desse parâmetro — não a função inteira — para preservar
+    enriquecimento parcial.
+    """
+    if isinstance(value, datetime):
+        return value
+    logger.error(
+        "[shadow] temporal param inválido (%s=%r type=%s symbol=%s decision_id=%s) "
+        "— bloco pulado para evitar 'timestamptz <= interval' (storm 2026-05-19, Task #309)",
+        param_name, value, type(value).__name__, symbol, decision_id,
+    )
+    return None
+
+
 async def _next_1m_open(
     db: AsyncSession, symbol: str, after_ts: datetime
 ) -> tuple[Optional[float], Optional[datetime]]:
@@ -326,22 +358,26 @@ async def enrich_market_context(
         "funding_rate_at_entry": None,
         "n_concurrent_signals": None,
     }
-    if entry_timestamp is None:
-        return out
-    # Defesa contra produtor errôneo (storm Cloud SQL 2026-05-19, char 183 do
-    # `time <= :t` em ohlcv/funding_rates/decisions_log): asyncpg encoda
-    # `timedelta` como INTERVAL → Postgres rejeita com
-    # ``operator does not exist: timestamp with time zone <= interval``.
-    # Sem este guard, um único shadow com entry_timestamp corrompido
-    # produz 3 erros raiz + 9 erros de cascata (transação abortada) por
-    # ciclo do shadow_trade_monitor. Não-fatal: retornamos contexto vazio
-    # e o ML lida com NULL nos 4 campos.
-    if not isinstance(entry_timestamp, datetime):
-        logger.error(
-            "[shadow] enrich_market_context: entry_timestamp não-datetime "
-            "(type=%s value=%r symbol=%s decision_id=%s) — pulando enrichment",
-            type(entry_timestamp).__name__, entry_timestamp, symbol, decision_id,
-        )
+    # Defesa contra produtor errôneo (storm Cloud SQL 2026-05-19/20,
+    # char 183 do `time <= :t` em ohlcv/funding_rates/decisions_log):
+    # asyncpg encoda `timedelta` Python como INTERVAL no Postgres, então
+    # `timestamptz <= :param` quebra com ``operator does not exist:
+    # timestamp with time zone <= interval``. Sem guard, um único shadow
+    # corrompido produz 3 erros raiz + 9 erros de cascata (transação
+    # abortada) por ciclo do shadow_trade_monitor (Task #309).
+    #
+    # Estratégia (Task #309): validar TODOS os parâmetros temporais
+    # bound em CADA bloco (`:t` ohlcv, `:t_anchor` ohlcv prev,
+    # `:t` funding_rates, `:t` decisions_log). Se algum vier não-datetime,
+    # abortamos APENAS o bloco afetado — campos não-afetados continuam
+    # sendo enriquecidos (retorno parcial com None nos campos quebrados).
+    entry_ts = _validate_temporal_param(
+        entry_timestamp,
+        param_name="entry_timestamp",
+        symbol=symbol,
+        decision_id=decision_id,
+    )
+    if entry_ts is None:
         return out
 
     # ── BTC anchor + 1h change ────────────────────────────────────────────
@@ -358,40 +394,51 @@ async def enrich_market_context(
                  LIMIT 1
                 """
             ),
-            {"s": BTC_CONTEXT_SYMBOL, "t": entry_timestamp},
+            {"s": BTC_CONTEXT_SYMBOL, "t": entry_ts},
         )
         cur_row = res.fetchone()
         if cur_row is not None and cur_row.close is not None:
             cur_close = float(cur_row.close)
             out["btc_price_at_entry"] = cur_close
 
-            prev_res = await db.execute(
-                text(
-                    """
-                    SELECT close
-                      FROM ohlcv
-                     WHERE symbol = :s
-                       AND timeframe = '1h'
-                       AND time <= :t_anchor - interval '60 minutes'
-                       AND time >= :t_anchor - interval '135 minutes'
-                     ORDER BY time DESC
-                     LIMIT 1
-                    """
-                ),
-                {"s": BTC_CONTEXT_SYMBOL, "t_anchor": cur_row.time},
+            # Guard adicional: `cur_row.time` é coluna timestamptz, mas
+            # se driver/migration corrompida devolver algo diferente
+            # (timedelta, None, str), passar como :t_anchor reintroduz
+            # o storm. Validar antes de bind. (Task #309)
+            t_anchor = _validate_temporal_param(
+                cur_row.time,
+                param_name="t_anchor",
+                symbol=symbol,
+                decision_id=decision_id,
             )
-            prev_row = prev_res.fetchone()
-            if prev_row is not None and prev_row.close is not None:
-                prev_close = float(prev_row.close)
-                if prev_close > 0:
-                    out["btc_change_1h_pct"] = (
-                        (cur_close - prev_close) / prev_close * 100.0
-                    )
+            if t_anchor is not None:
+                prev_res = await db.execute(
+                    text(
+                        """
+                        SELECT close
+                          FROM ohlcv
+                         WHERE symbol = :s
+                           AND timeframe = '1h'
+                           AND time <= :t_anchor - interval '60 minutes'
+                           AND time >= :t_anchor - interval '135 minutes'
+                         ORDER BY time DESC
+                         LIMIT 1
+                        """
+                    ),
+                    {"s": BTC_CONTEXT_SYMBOL, "t_anchor": t_anchor},
+                )
+                prev_row = prev_res.fetchone()
+                if prev_row is not None and prev_row.close is not None:
+                    prev_close = float(prev_row.close)
+                    if prev_close > 0:
+                        out["btc_change_1h_pct"] = (
+                            (cur_close - prev_close) / prev_close * 100.0
+                        )
     except Exception:
         logger.exception(
             "[shadow] enrich_market_context: BTC OHLCV lookup failed "
             "(symbol=%s entry_ts=%s)",
-            symbol, entry_timestamp,
+            symbol, entry_ts,
         )
 
     # ── funding rate ──────────────────────────────────────────────────────
@@ -407,7 +454,7 @@ async def enrich_market_context(
                  LIMIT 1
                 """
             ),
-            {"s": symbol, "t": entry_timestamp},
+            {"s": symbol, "t": entry_ts},
         )
         row = res.fetchone()
         if row is not None and row.rate is not None:
@@ -416,7 +463,7 @@ async def enrich_market_context(
         logger.exception(
             "[shadow] enrich_market_context: funding_rates lookup failed "
             "(symbol=%s entry_ts=%s)",
-            symbol, entry_timestamp,
+            symbol, entry_ts,
         )
 
     # ── concurrent signals (mesmo minuto, ALLOW) ─────────────────────────
@@ -431,7 +478,7 @@ async def enrich_market_context(
                      = date_trunc('minute', CAST(:t AS timestamptz))
                 """
             ),
-            {"t": entry_timestamp},
+            {"t": entry_ts},
         )
         row = res.fetchone()
         if row is not None and row.n is not None:
@@ -440,7 +487,7 @@ async def enrich_market_context(
         logger.exception(
             "[shadow] enrich_market_context: concurrent_signals lookup failed "
             "(symbol=%s entry_ts=%s decision_id=%s)",
-            symbol, entry_timestamp, decision_id,
+            symbol, entry_ts, decision_id,
         )
 
     return out
