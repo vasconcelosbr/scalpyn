@@ -200,67 +200,18 @@ function indicatorChipLabel(entry: Record<string, unknown> | string): string {
 }
 
 function DecisionsPageInner() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const initialTab: Tab = searchParams.get("tab") === "approved" ? "approved" : "audit";
-  const [tab, setTab] = useState<Tab>(initialTab);
-
-  const switchTab = useCallback(
-    (next: Tab) => {
-      setTab(next);
-      const sp = new URLSearchParams(Array.from(searchParams.entries()));
-      if (next === "audit") {
-        sp.delete("tab");
-      } else {
-        sp.set("tab", next);
-      }
-      const qs = sp.toString();
-      router.replace(qs ? `/decisions?${qs}` : "/decisions");
-    },
-    [router, searchParams]
-  );
-
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">Decision Log</h1>
           <p className="mt-1 text-[13px] text-[var(--text-secondary)]">
-            {tab === "audit"
-              ? "Real pipeline audit trail — state transitions only"
-              : "Snapshot of every asset currently approved at L3"}
+            Real pipeline audit trail — state transitions only
           </p>
         </div>
-        <TabSwitcher tab={tab} onChange={switchTab} />
       </div>
 
-      {tab === "audit" ? <AuditTrailView /> : <ApprovedSnapshotView />}
-    </div>
-  );
-}
-
-function TabSwitcher({ tab, onChange }: { tab: Tab; onChange: (next: Tab) => void }) {
-  const baseClass =
-    "rounded-[var(--radius-sm)] px-3 py-1.5 text-[12px] font-medium transition-colors";
-  const activeClass = "bg-[var(--accent-primary)] text-white";
-  const inactiveClass =
-    "bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-default)] hover:text-[var(--text-primary)]";
-  return (
-    <div className="flex items-center gap-2">
-      <button
-        type="button"
-        onClick={() => onChange("audit")}
-        className={`${baseClass} ${tab === "audit" ? activeClass : inactiveClass}`}
-      >
-        Audit Trail
-      </button>
-      <button
-        type="button"
-        onClick={() => onChange("approved")}
-        className={`${baseClass} ${tab === "approved" ? activeClass : inactiveClass}`}
-      >
-        Currently Approved (L3)
-      </button>
+      <AuditTrailView />
     </div>
   );
 }
