@@ -1218,6 +1218,35 @@ function DecisionAuditBlock({ data }: { data: ShadowTradeDetail }) {
   );
 }
 
+// Task #312: a partir desta data, TODO shadow fechado deve ter
+// ``features_snapshot_exit`` preenchido (snapshot real OU marcador
+// ``{"_capture_failed": True, ...}``) graças à fortificação do
+// ``_capture_exit_features`` (helper agora nunca propaga exceção e
+// nunca deixa NULL) + split de transações em ``_record_simulation_one_async``.
+// Para trades fechados ANTES desta data, manter a mensagem antiga
+// ("antes da Task #306") como fallback. Para trades posteriores com
+// NULL, mostrar mensagem técnica que sinaliza regressão imediata —
+// não mascarar como "trade antigo".
+const SHADOW_EXIT_CAPTURE_INVARIANT_SINCE = new Date(
+  "2026-05-20T00:00:00Z",
+);
+
+function exitSnapshotEmptyMessage(data: ShadowTradeDetail): string {
+  if (data.status !== "COMPLETED") {
+    return "Trade ainda em aberto — snapshot da saída será capturado quando TP/SL/timeout for atingido.";
+  }
+  const exit = data.features_snapshot_exit as Record<string, unknown> | null;
+  if (exit && exit["_capture_failed"] === true) {
+    return "Snapshot indisponível no fechamento — indicadores estavam stale ou ausentes no provider.";
+  }
+  // features_snapshot_exit === null neste branch
+  const closedAt = data.completed_at ? new Date(data.completed_at) : null;
+  if (closedAt && closedAt >= SHADOW_EXIT_CAPTURE_INVARIANT_SINCE) {
+    return "Snapshot ausente — captura não chegou a executar (regressão pós-Task #312). Abrir ticket.";
+  }
+  return "Snapshot ainda não capturado para este trade (fechado antes da Task #306).";
+}
+
 function SnapshotBlock({
   title,
   data,
@@ -1596,16 +1625,7 @@ function DetailModal({
                 <SnapshotBlock
                   title="Indicadores na SAÍDA"
                   data={data.features_snapshot_exit}
-                  emptyMessage={
-                    data.status === "COMPLETED"
-                      ? (data.features_snapshot_exit &&
-                          (data.features_snapshot_exit as Record<string, unknown>)[
-                            "_capture_failed"
-                          ] === true)
-                        ? "Snapshot indisponível no fechamento — indicadores estavam stale ou ausentes no provider."
-                        : "Snapshot ainda não capturado para este trade (fechado antes da Task #306)."
-                      : "Trade ainda em aberto — snapshot da saída será capturado quando TP/SL/timeout for atingido."
-                  }
+                  emptyMessage={exitSnapshotEmptyMessage(data)}
                 />
               </div>
 

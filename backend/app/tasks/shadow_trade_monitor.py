@@ -253,7 +253,7 @@ def _finalize_outcome(
 
 async def _capture_exit_features(db, shadow: ShadowTrade) -> None:
     """Preenche ``features_snapshot_exit`` com o snapshot completo de
-    indicadores na saída (Task #306).
+    indicadores na saída (Task #306, fortificado pela Task #312).
 
     Usa o helper canônico ``indicators_provider.build_full_flat_snapshot``
     — single source of truth do contrato flat ``{key: scalar}`` — para
@@ -262,31 +262,55 @@ async def _capture_exit_features(db, shadow: ShadowTrade) -> None:
     Isso alimenta o XGBoost com "entrada vs saída" simétricos
     (Task #290: contrato flat preservado).
 
-    Caller DEVE envolver em try/except — falha aqui não pode anular o
-    outcome (invariante D1: TP/SL/timeout sempre vencem).
+    Invariante Task #312: este helper NUNCA propaga exceção e NUNCA
+    deixa ``features_snapshot_exit`` em ``NULL`` quando chamado para um
+    shadow COMPLETED. Em qualquer falha (provider exception, símbolo
+    sem indicadores merged, Redis fora, schema drift) gravamos um
+    marcador ``{"_capture_failed": True, "_reason": <classificação>,
+    "_error"?: <tipo da exceção>}`` para que o frontend distinga
+    "snapshot indisponível" de "ainda não capturado" (NULL) e renderize
+    uma mensagem informativa em vez de mascarar o NULL como "fechado
+    antes da Task #306".
 
-    Quando o provider devolve vazio (símbolo sem indicadores merged no
-    instante do fechamento — Redis fora, indicador stale fora da janela
-    aceita, etc.), gravamos um marcador ``{"_capture_failed": True,
-    "_reason": "indicators_unavailable_at_close"}`` para que o frontend
-    consiga distinguir "snapshot indisponível" de "ainda não capturado"
-    (NULL) e renderizar uma mensagem informativa em vez de "Sem dados".
+    Continua valendo o invariante D1 (TP/SL/timeout invioláveis): falha
+    aqui é best-effort e não anula o outcome — o caller pode logar mas
+    não precisa de try/except defensivo extra.
     """
-    snapshot = await indicators_provider.build_full_flat_snapshot(
-        db, shadow.symbol, include_stale=True
-    )
-    if snapshot:
-        shadow.features_snapshot_exit = snapshot
-    else:
-        logger.warning(
-            "[shadow-monitor] _capture_exit_features: empty snapshot for "
-            "shadow_id=%s symbol=%s — provider returned no merged indicators",
+    try:
+        snapshot = await indicators_provider.build_full_flat_snapshot(
+            db, shadow.symbol, include_stale=True
+        )
+    except Exception as exc:
+        # Hipótese 1 do task #312: exceção dentro do provider (DB drop,
+        # símbolo sem registro, classifier quebrado) ANTES de qualquer
+        # atribuição → snapshot ficava NULL e a UI mostrava a mensagem
+        # enganosa "fechado antes da Task #306". Aqui convertemos em
+        # marcador estruturado para a UI sinalizar regressão imediata.
+        logger.exception(
+            "[shadow-monitor] _capture_exit_features: provider raised for "
+            "shadow_id=%s symbol=%s — gravando marcador _capture_failed",
             shadow.id, shadow.symbol,
         )
         shadow.features_snapshot_exit = {
             "_capture_failed": True,
-            "_reason": "indicators_unavailable_at_close",
+            "_reason": "capture_exception",
+            "_error": type(exc).__name__,
         }
+        return
+
+    if snapshot:
+        shadow.features_snapshot_exit = snapshot
+        return
+
+    logger.warning(
+        "[shadow-monitor] _capture_exit_features: empty snapshot for "
+        "shadow_id=%s symbol=%s — provider returned no merged indicators",
+        shadow.id, shadow.symbol,
+    )
+    shadow.features_snapshot_exit = {
+        "_capture_failed": True,
+        "_reason": "indicators_unavailable_at_close",
+    }
 
 
 async def _enrich_market_context(db, shadow: ShadowTrade) -> None:
@@ -374,11 +398,59 @@ async def _record_simulation_one_async(shadow_id: Any) -> None:
     apenas db_sim — a sessão principal já commitou shadow.status='COMPLETED'
     e está encerrada. Falha é logada como WARNING e ignorada (best-effort).
 
+    FIX Task #312 (2026-05-20): o capture e o INSERT em
+    ``trade_simulations`` rodam agora em **transações separadas**. Antes,
+    quando ``record_as_simulation`` levantava (hipótese 3 do task),
+    o rollback do ``db_sim`` desfazia também a atribuição de
+    ``shadow.features_snapshot_exit`` feita por ``_capture_exit_features``
+    no mesmo bloco — o trade aparecia COMPLETED com snapshot NULL.
+
+    Agora:
+      * **TX1 (capture)**: recarrega o shadow, chama
+        ``_capture_exit_features`` (que sempre grava snapshot ou marcador
+        ``_capture_failed`` — invariante Task #312) e COMMITA antes de
+        sair do bloco. Mesmo se o passo seguinte falhar, o snapshot já
+        está persistido.
+      * **TX2 (record)**: recarrega o shadow (já com snapshot persistido)
+        e chama ``shadow_trade_service.record_as_simulation``. Falha aqui
+        agora só afeta ``trade_simulations``; o shadow continua com o
+        ``features_snapshot_exit`` correto para a UI/ML.
+
     Invariante: recarrega o shadow por ID e verifica status == 'COMPLETED'
     antes de gravar — garante idempotência e protege contra rollback externo.
     """
     from ..database import CeleryAsyncSessionLocal
 
+    # ── TX1 — captura do snapshot de saída (commit independente) ────────
+    try:
+        async with CeleryAsyncSessionLocal() as db_cap:
+            async with db_cap.begin():
+                res = await db_cap.execute(
+                    select(ShadowTrade).where(ShadowTrade.id == shadow_id)
+                )
+                shadow_cap = res.scalar_one_or_none()
+                if shadow_cap is None:
+                    return
+                if shadow_cap.status != "COMPLETED":
+                    # Shadow foi revertido por outra tx — não tocar.
+                    return
+                # `_capture_exit_features` é fail-safe por contrato
+                # (Task #312): sempre grava snapshot ou marcador, nunca
+                # propaga. Não precisa de try/except aqui.
+                await _capture_exit_features(db_cap, shadow_cap)
+    except Exception:
+        # Falha estrutural (DB pool, sessão Celery, etc.) — não dá pra
+        # gravar nem snapshot nem marcador. Loga e segue: o frontend
+        # ainda vai mostrar o fallback "captura não executou" pelo
+        # cutoff de data (ver page.tsx).
+        logger.warning(
+            "[shadow-monitor] _record_simulation_one_async TX1 (capture) "
+            "falhou para shadow_id=%s — ignorando (best-effort, fechamento "
+            "não afetado)",
+            shadow_id,
+        )
+
+    # ── TX2 — gravação em trade_simulations (sessão separada) ───────────
     try:
         async with CeleryAsyncSessionLocal() as db_sim:
             async with db_sim.begin():
@@ -389,24 +461,13 @@ async def _record_simulation_one_async(shadow_id: Any) -> None:
                 if shadow is None:
                     return
                 if shadow.status != "COMPLETED":
-                    # Shadow foi revertido por outra tx — não gravar simulação
-                    # órfã. Não logar como erro: é comportamento esperado em
-                    # cenário de concorrência (FOR UPDATE SKIP LOCKED garante
-                    # exclusividade mas não impede revert manual/admin).
                     return
-                try:
-                    await _capture_exit_features(db_sim, shadow)
-                except Exception:
-                    logger.exception(
-                        "[shadow-monitor] features_snapshot_exit failed for "
-                        "shadow_id=%s — simulação gravada sem exit snapshot",
-                        shadow_id,
-                    )
                 await shadow_trade_service.record_as_simulation(db_sim, shadow)
     except Exception:
         logger.warning(
-            "[shadow-monitor] _record_simulation_one_async falhou para "
-            "shadow_id=%s — ignorando (best-effort, fechamento não afetado)",
+            "[shadow-monitor] _record_simulation_one_async TX2 (record) "
+            "falhou para shadow_id=%s — ignorando (best-effort, snapshot "
+            "de saída já foi commitado em TX1)",
             shadow_id,
         )
 

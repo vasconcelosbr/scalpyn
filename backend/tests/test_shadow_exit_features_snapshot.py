@@ -172,9 +172,19 @@ async def test_capture_exit_features_writes_marker_when_empty():
 
 
 @pytest.mark.asyncio
-async def test_capture_exit_features_propagates_provider_failure():
-    """Exceção do provider sobe — caller (``_record_simulation_one_async``)
-    é quem captura para preservar o invariante D1 (TP/SL/timeout inviolável)."""
+async def test_capture_exit_features_writes_marker_on_provider_exception():
+    """Task #312 — exceção do provider NUNCA sobe; helper grava marcador.
+
+    Antes (Task #306): a exceção subia para o caller, que tinha try/except
+    em volta — mas qualquer atribuição feita ANTES da exceção era perdida
+    e ``features_snapshot_exit`` ficava NULL. A UI então mostrava
+    "fechado antes da Task #306" mesmo para trades recentes (hipótese 1
+    do task #312).
+
+    Agora: o helper engole a exceção e grava
+    ``{"_capture_failed": True, "_reason": "capture_exception",
+    "_error": "<tipo>"}`` para a UI sinalizar regressão imediata.
+    """
     from app.tasks import shadow_trade_monitor
 
     shadow = SimpleNamespace(
@@ -182,21 +192,23 @@ async def test_capture_exit_features_propagates_provider_failure():
     )
 
     async def _boom(db, symbol, **kw):
-        raise RuntimeError("provider down")
+        raise RuntimeError("DB down")
 
     with patch.object(
         shadow_trade_monitor.indicators_provider,
         "build_full_flat_snapshot",
         new=_boom,
     ):
-        with pytest.raises(RuntimeError):
-            await shadow_trade_monitor._capture_exit_features(
-                db=None, shadow=shadow
-            )
+        # Não levanta — invariante Task #312.
+        await shadow_trade_monitor._capture_exit_features(
+            db=None, shadow=shadow
+        )
 
-    # Snapshot permanece None — o caller decide o fallback (no fluxo real, a
-    # simulação é gravada sem exit snapshot e o trade já está COMPLETED).
-    assert shadow.features_snapshot_exit is None
+    assert shadow.features_snapshot_exit == {
+        "_capture_failed": True,
+        "_reason": "capture_exception",
+        "_error": "RuntimeError",
+    }
 
 
 # ── record_as_simulation: persistência do exit snapshot ──────────────────────
