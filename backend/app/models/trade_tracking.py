@@ -1,7 +1,7 @@
 """Trade tracking model — open-trade records spawned by the Decision Log Enricher."""
 
 from sqlalchemy import BigInteger, Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 import uuid
 from datetime import datetime, timezone
 
@@ -54,5 +54,20 @@ class TradeTracking(Base):
     # 'market'   — ticker price used by the Trade Monitor (estimated close)
     # 'exchange' — actual fill price confirmed by future reconciliation
     exit_price_source = Column(String(20), nullable=True)
+
+    # Task #316 — Snapshot simétrico de indicadores na SAÍDA (flat
+    # ``{key: scalar}``, mesmo catálogo do entry capturado em
+    # ``decisions_log.metrics["indicators_snapshot"]``).
+    #
+    # Populado por ``TradeMonitorService._close_trade`` via
+    # ``app.services.exit_metrics.build_exit_snapshot`` quando a flag
+    # ``ENABLE_EXIT_METRICS_CAPTURE`` está ligada. NULL em (a) trades
+    # ainda em aberto, (b) trades fechados antes da migration 059 e
+    # (c) trades fechados com a flag desligada.
+    #
+    # Marcador estruturado quando o capture falha:
+    # ``{"_capture_error": "<repr>"}`` — TP/SL/timeout sempre são gravados
+    # mesmo que o snapshot falhe (invariante D1 do runbook).
+    exit_metrics_json = Column(JSONB, nullable=True)
 
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))

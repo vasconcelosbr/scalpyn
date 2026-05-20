@@ -53,6 +53,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import settings
 from ..models.trade_tracking import TradeTracking
 from ..models.backoffice import DecisionLog
+from .exit_metrics import (
+    build_exit_snapshot,
+    flatten_entry_snapshot,
+    validate_parity,
+)
 from .order_flow_service import get_order_flow_data
 
 logger = logging.getLogger(__name__)
@@ -385,20 +390,67 @@ class TradeMonitorService:
             int((now - entry_time).total_seconds()) if entry_time is not None else None
         )
 
+        # ── Task #316 — symmetric exit-metrics capture ───────────────────────
+        # CRÍTICO (runbook §3.3 + gotchas #251/#273/#310): build_exit_snapshot
+        # faz I/O de DB (DISTINCT ON em indicators). DEVE rodar ANTES de
+        # ``begin_nested()`` para não segurar XID enquanto o monitor itera
+        # N trades — senão risco de Lock: transactionid no worker-execution.
+        # NUNCA propaga exceção (TP/SL/timeout invioláveis — invariante D1).
+        exit_metrics_json: dict | None = None
+        if settings.ENABLE_EXIT_METRICS_CAPTURE:
+            exit_metrics_json = await build_exit_snapshot(self.session, trade.symbol)
+            # Fetch entry snapshot for parity validation (best-effort).
+            entry_snapshot_nested: dict | None = None
+            if trade.decision_id is not None:
+                try:
+                    res = await self.session.execute(
+                        select(DecisionLog.metrics).where(
+                            DecisionLog.id == trade.decision_id
+                        )
+                    )
+                    metrics = res.scalar_one_or_none()
+                    if isinstance(metrics, dict):
+                        snap = metrics.get("indicators_snapshot")
+                        if isinstance(snap, dict):
+                            entry_snapshot_nested = snap
+                except Exception as exc:
+                    logger.debug(
+                        "[TradeMonitor] entry snapshot lookup failed "
+                        "trade_id=%s decision_id=%s: %r",
+                        trade.id, trade.decision_id, exc,
+                    )
+            try:
+                validate_parity(
+                    flatten_entry_snapshot(entry_snapshot_nested),
+                    exit_metrics_json,
+                    trade_id=trade.id,
+                    outcome=outcome,
+                )
+            except Exception as exc:
+                # Parity is diagnostic only — never blocks close.
+                logger.debug(
+                    "[TradeMonitor] validate_parity raised (ignored) "
+                    "trade_id=%s: %r",
+                    trade.id, exc,
+                )
+
         async with self.session.begin_nested():
             # ── Update trade_tracking ─────────────────────────────────────────
+            update_values: dict[str, Any] = dict(
+                status="closed",
+                exit_price=exit_price,
+                exit_price_source=exit_price_source,
+                exit_time=now,
+                outcome=outcome,
+                pnl_pct=pnl_pct,
+                holding_seconds=holding_secs,
+            )
+            if exit_metrics_json is not None:
+                update_values["exit_metrics_json"] = exit_metrics_json
             await self.session.execute(
                 update(TradeTracking)
                 .where(TradeTracking.id == trade.id)
-                .values(
-                    status="closed",
-                    exit_price=exit_price,
-                    exit_price_source=exit_price_source,
-                    exit_time=now,
-                    outcome=outcome,
-                    pnl_pct=pnl_pct,
-                    holding_seconds=holding_secs,
-                )
+                .values(**update_values)
             )
 
             # ── Mirror outcome to decisions_log (if linked) ───────────────────

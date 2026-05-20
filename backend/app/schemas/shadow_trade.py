@@ -79,6 +79,15 @@ class ShadowTradeDetail(ShadowTradeRead):
     decision_created_at: Optional[datetime] = None
     decision_reasons: Optional[Dict[str, Any]] = None
     decision_metrics: Optional[Dict[str, Any]] = None
+    # Task #316 — pair entry/exit flat snapshots para o painel
+    # lado-a-lado com deltas. ``entry_metrics`` é o ``features_snapshot``
+    # já achatado (ou ``flatten_entry_snapshot(decision.metrics["indicators_snapshot"])``
+    # como fallback). ``exit_metrics`` mira ``features_snapshot_exit``
+    # quando este é flat — quando o marcador ``_capture_failed`` está
+    # presente, o frontend usa ``exit_snapshotEmptyMessage`` para
+    # renderizar a razão.
+    entry_metrics: Optional[Dict[str, Any]] = None
+    exit_metrics: Optional[Dict[str, Any]] = None
 
 
 class ShadowTradeListResponse(BaseModel):

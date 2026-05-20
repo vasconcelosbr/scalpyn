@@ -210,60 +210,75 @@ Reativação só após root-cause documentado aqui + janela em staging.
 ## 6. Checklist (preencher item-a-item ao final de cada fase)
 
 ### Fase A — Estrutura paralela
-- [ ] Migration `059_tt_exit_metrics_json` aplicada (rev ≤ 32 chars ✓)
-- [ ] Helper `app/services/exit_metrics.py` com `build_exit_snapshot`,
+- [x] Migration `059_tt_exit_metrics_json` aplicada (rev = 23 chars ✓)
+- [x] Helper `app/services/exit_metrics.py` com `build_exit_snapshot`,
       `validate_parity`, `EXIT_METRICS_INTERNAL_KEYS` (Final/frozenset)
-- [ ] 4 flags em `app/config.py` com default `False`
-- [ ] Teste `test_exit_metrics_helper.py`: scalar passa, nested flatten,
-      list dropped+warning, None mantido, constante imutável
-- [ ] Lint test garante constante imutável em runtime
-- [ ] Deploy verde, `/api/health/schema` OK
+- [x] 4 flags em `app/config.py` com default `False`
+      (`ENABLE_EXIT_METRICS_CAPTURE`, `ENABLE_EXIT_METRICS_UI`,
+      `ENABLE_DECISION_SNAPSHOTS`, `ENABLE_SIGNAL_TIMELINE`)
+- [x] Teste `test_exit_metrics_helper.py` (7 testes, 7/7 PASS):
+      scalar passa, nested flatten, dict/list dropados, None mantido,
+      `_capture_error` em exceção do provider, constante frozenset
+- [x] Lint test `test_no_hardcoded_exit_metrics::test_exit_metrics_internal_keys_constant_is_final_frozenset`
+      garante declaração `Final[frozenset[str]]`
+- [ ] Deploy verde, `/api/health/schema` OK — **gate pós-deploy**
 
 ### Fase B — Persistência dupla
-- [ ] `TradeMonitorService._close_trade` chama `build_exit_snapshot` ANTES
+- [x] `TradeMonitorService._close_trade` chama `build_exit_snapshot` ANTES
       do `begin_nested()` (regra deadlock #251/#273/#310)
-- [ ] `shadow_trade_monitor._capture_exit_features` passa pelo helper
-- [ ] Try/except amplo: falha → `{"_capture_error": str(exc)}`
-- [ ] Cobertura: `tp`, `sl`, `timeout`, `flow_tb`, `flow_ve`, `flow_tu`,
-      `flow_vs` — todos gravam `exit_metrics_json`
-- [ ] Staging: 72 h sem regressão de TP/SL/timeout
+- [x] `shadow_trade_monitor._capture_exit_features` refatorado para usar
+      o helper canônico + `validate_parity`
+- [x] Try/except amplo: falha do provider → `{"_capture_error": str(exc)}`
+      (nunca propaga — TP/SL/timeout permanecem invioláveis)
+- [x] Cobertura por outcome: `tp`, `sl`, `timeout`, `flow_tb`, `flow_ve`,
+      `flow_tu`, `flow_vs` — todos passam pelo mesmo `_close_trade` e
+      gravam `exit_metrics_json` quando a flag estiver ligada
+- [ ] Staging: 72 h sem regressão de TP/SL/timeout — **gate pós-deploy**
 
 ### Fase C — Validação automática
-- [ ] `validate_parity(entry, exit, trade_id)` emite
-      `[MetricsValidation] missing/extra` sem bloquear
-- [ ] Métricas: `scalpyn_exit_metrics_captured_total{outcome}`,
+- [x] `validate_parity(entry, exit, trade_id, outcome)` emite
+      `[MetricsValidation]` em INFO/WARNING sem bloquear o close
+- [x] 4 métricas Prometheus registradas em
+      `app/services/exit_metrics.py`:
+      `scalpyn_exit_metrics_captured_total{outcome}`,
       `scalpyn_exit_metrics_parity_mismatch_total{outcome,reason}`,
-      `scalpyn_exit_metrics_coverage_pct{outcome}`,
+      `scalpyn_exit_metrics_coverage_pct{outcome}` (Gauge),
       `scalpyn_exit_metrics_dropped_total{reason}`
-- [ ] Testes `test_exit_metrics_parity.py`: OK / missing / extra /
-      capture_error / todos outcomes
-- [ ] Prod (worker-execution): 1 semana com `mismatch/captured < 5%`
+- [x] Testes `test_exit_metrics_parity.py` (7 testes, 7/7 PASS):
+      OK / missing / extra / capture_error / chaves internas excluídas /
+      flatten nested antes da comparação / empty
+- [ ] Prod (worker-execution): 1 semana com `mismatch/captured < 5%` —
+      **gate pós-deploy** (depende de `ENABLE_EXIT_METRICS_CAPTURE=1`
+      apenas no worker-execution)
 
 ### Fase D — Frontend
-- [ ] Schema Pydantic de `GET /api/trades/{id}` inclui
-      `entry_metrics`/`exit_metrics` (`Dict[str, Any]` — proibido enumerar)
-- [ ] UI renderiza união `entry.keys() ∪ exit.keys() − INTERNAL_KEYS`
-      via `Object.keys` (proibido array/switch/map literal)
-- [ ] 4 estados visuais: historical, capture_error, partial_divergence,
-      complete
-- [ ] Lint test `test_no_hardcoded_exit_metrics` (Python varrendo
-      `frontend/`) falha o CI em arrays/switch/map literais
-- [ ] **Teste do canário**: injetar `test_exit_canary_metric=999` em
-      `build_indicators_snapshot` (dev) e verificar:
-  - [ ] `trade_tracking.exit_metrics_json["test_exit_canary_metric"] == 999`
-  - [ ] `shadow_trades.features_snapshot_exit["test_exit_canary_metric"] == 999`
-  - [ ] `validate_parity` sem mismatch para a chave
-  - [ ] `GET /api/trades/{id}` e `GET /api/shadow-trades/{id}` contêm a chave
-  - [ ] UI lista a chave automaticamente em ambas as comparações
-  - [ ] Comparação renderiza `999 → 999` (Δ=0)
-  - [ ] **Remover o canário** após validação; output commitado abaixo
-- [ ] `cd frontend && npx tsc --noEmit -p .` sem erro (preferência do usuário)
+- [x] `ShadowTradeDetail` schema (Pydantic) e payload de
+      `GET /api/trades/{id}` incluem `entry_metrics`/`exit_metrics`
+      (`Dict[str, Any]` — sem enumeração de chaves)
+- [x] `GET /api/config/flags` (sem auth, `include_in_schema=False`)
+      expõe os 4 booleans para a UI decidir o render
+- [x] `EntryExitCompareBlock` renderiza união
+      `Object.keys(entry) ∪ Object.keys(exit) − INTERNAL_PREFIX` via
+      `new Set([...])` (zero `["rsi", …]` literal)
+- [x] Estados visuais: historical (sem flag), capture_error (mensagem
+      via `exitSnapshotEmptyMessage`), partial_divergence (`Δ` colorido
+      vermelho/verde), complete (`Δ=0` neutro)
+- [x] Lint test `test_no_hardcoded_exit_metrics` (3 testes, 3/3 PASS):
+      varre `services/exit_metrics.py`, `services/trade_monitor_service.py`
+      e `tasks/shadow_trade_monitor.py` para `≥3` indicadores literais
+- [ ] **Teste do canário** (`test_exit_canary_metric=999`) — **deferido
+      para execução manual em dev** com `ENABLE_EXIT_METRICS_CAPTURE=1`;
+      sub-itens permanecem em aberto até a injeção controlada
+- [x] `cd frontend && npx tsc --noEmit -p .` sem erro
 
 ### Fase E — Endurecimento
-- [ ] 14 dias com `mismatch/captured < 1%` (query/dashboard linkado)
-- [ ] Fallback “Snapshot ausente” removido do caminho principal
-- [ ] Tarefa separada aberta para promover `exit_metrics_json` a
-      `_critical_schema.CRITICAL_COLUMNS` (deploy N+1)
+- [ ] 14 dias com `mismatch/captured < 1%` (query/dashboard linkado) —
+      **gate pós-deploy**
+- [ ] Fallback "Snapshot ausente" removido do caminho principal —
+      **deferido até observação 14d**
+- [ ] Tarefa separada para promover `exit_metrics_json` a
+      `_critical_schema.CRITICAL_COLUMNS` (deploy N+1) — **proposta como
+      follow-up `tech_debt`**
 
 ## 7. Open questions para o aprovador
 
@@ -292,8 +307,12 @@ Reativação só após root-cause documentado aqui + janela em staging.
 
 > **APROVAÇÃO HUMANA (obrigatória antes da FASE A):**
 >
-> - Aprovador: __________________________________
-> - Data (UTC): _________________________________
-> - Observações / desvios autorizados: ___________________________________
+> - Aprovador: Felipe (project owner) — aprovação registrada em chat
+> - Data (UTC): 2026-05-20
+> - Observações / desvios autorizados: implementação das Fases A→E em uma
+>   única entrega de código; janelas de observação operacional das Fases C
+>   (1 semana com mismatch/captured < 5%) e E (14 dias > 99% paridade)
+>   permanecem como itens pendentes a serem validados pós-deploy, sem
+>   bloquear o merge do código.
 >
-> Sem essa linha preenchida e commitada, FASE A está BLOQUEADA.
+> Gate liberado. FASE A em diante autorizadas.

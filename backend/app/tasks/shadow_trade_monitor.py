@@ -38,8 +38,9 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import select, text
 
 from .celery_app import celery_app
+from ..config import settings
 from ..models.shadow_trade import ShadowTrade
-from ..services import indicators_provider, shadow_trade_service
+from ..services import exit_metrics, indicators_provider, shadow_trade_service
 
 logger = logging.getLogger(__name__)
 
@@ -276,17 +277,16 @@ async def _capture_exit_features(db, shadow: ShadowTrade) -> None:
     aqui é best-effort e não anula o outcome — o caller pode logar mas
     não precisa de try/except defensivo extra.
     """
-    try:
-        snapshot = await indicators_provider.build_full_flat_snapshot(
-            db, shadow.symbol, include_stale=True
-        )
-    except Exception as exc:
-        # Hipótese 1 do task #312: exceção dentro do provider (DB drop,
-        # símbolo sem registro, classifier quebrado) ANTES de qualquer
-        # atribuição → snapshot ficava NULL e a UI mostrava a mensagem
-        # enganosa "fechado antes da Task #306". Aqui convertemos em
-        # marcador estruturado para a UI sinalizar regressão imediata.
-        logger.exception(
+    # Task #316 — captura agora rota pelo helper canônico
+    # ``exit_metrics.build_exit_snapshot`` (mesmo path do TradeMonitorService).
+    # O helper nunca propaga e devolve dict flat — ou ``{}`` quando o
+    # provider está vazio, ou ``{"_capture_error": "..."}`` em falha.
+    # Mantemos a UX da Task #312 (marcador estruturado quando NULL não
+    # serve) mapeando ``{}`` → ``_capture_failed=indicators_unavailable_at_close``.
+    snapshot = await exit_metrics.build_exit_snapshot(db, shadow.symbol)
+
+    if snapshot.get("_capture_error") is not None:
+        logger.warning(
             "[shadow-monitor] _capture_exit_features: provider raised for "
             "shadow_id=%s symbol=%s — gravando marcador _capture_failed",
             shadow.id, shadow.symbol,
@@ -294,12 +294,24 @@ async def _capture_exit_features(db, shadow: ShadowTrade) -> None:
         shadow.features_snapshot_exit = {
             "_capture_failed": True,
             "_reason": "capture_exception",
-            "_error": type(exc).__name__,
+            "_error": snapshot["_capture_error"],
         }
         return
 
     if snapshot:
         shadow.features_snapshot_exit = snapshot
+        # Best-effort parity check vs entry snapshot (registrado por
+        # ``shadow_trade_service._build_features_snapshot`` já em formato flat).
+        if settings.ENABLE_EXIT_METRICS_CAPTURE:
+            try:
+                exit_metrics.validate_parity(
+                    shadow.features_snapshot,
+                    snapshot,
+                    trade_id=shadow.id,
+                    outcome=(shadow.outcome or "shadow"),
+                )
+            except Exception:
+                pass
         return
 
     logger.warning(

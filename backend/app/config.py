@@ -39,6 +39,23 @@ class Settings(BaseSettings):
     # the default 2.0 → dominance > 0.5 (one side has > 50% net flow).
     TRADE_MONITOR_EXIT_VOLUME_SPIKE_THRESHOLD: float = 2.0
 
+    # ── Symmetric Exit Metrics (Task #315 / #316) ────────────────────────────
+    # Master switch — when True, ``TradeMonitorService._close_trade`` and
+    # ``shadow_trade_monitor._capture_exit_features`` chamam
+    # ``app.services.exit_metrics.build_exit_snapshot`` antes de fechar.
+    # Default False (dark rollout — runbook Fase B). Setar em worker-execution
+    # APENAS (única réplica que roda essas tasks).
+    ENABLE_EXIT_METRICS_CAPTURE: bool = False
+    # Quando True, ``GET /api/trades/{id}`` e ``GET /api/shadow-trades/{id}``
+    # devolvem ``entry_metrics``/``exit_metrics`` e a UI renderiza a
+    # comparação Entry | Exit lado-a-lado. Default False.
+    ENABLE_EXIT_METRICS_UI: bool = False
+    # Reservadas para escopo futuro (multi-snapshot intra-trade no runbook).
+    # Declaradas aqui na Fase A com default False, sem call-sites — evitam
+    # drift quando o seguinte commit ligar essas features.
+    ENABLE_DECISION_SNAPSHOTS: bool = False
+    ENABLE_SIGNAL_TIMELINE: bool = False
+
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
     def fix_db_url(cls, v: str) -> str:

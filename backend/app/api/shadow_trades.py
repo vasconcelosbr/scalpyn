@@ -27,9 +27,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, case, desc, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import settings
 from ..database import get_db
 from ..models.backoffice import DecisionLog
 from ..models.shadow_trade import ShadowTrade
+from ..services.exit_metrics import flatten_entry_snapshot
 from ..schemas.shadow_trade import (
     ShadowTradeDetail,
     ShadowTradeListResponse,
@@ -193,6 +195,23 @@ def _to_read(
 def _to_detail(
     row: ShadowTrade, *, decision: Optional[DecisionLog] = None
 ) -> ShadowTradeDetail:
+    # Task #316 — pair entry/exit para o painel lado-a-lado.
+    # ``features_snapshot`` já é flat (gotcha #290). Fallback para o
+    # entry da decision quando o shadow não capturou (shadows legados).
+    entry_metrics: Optional[Dict[str, Any]] = None
+    exit_metrics: Optional[Dict[str, Any]] = None
+    if settings.ENABLE_EXIT_METRICS_UI:
+        if isinstance(row.features_snapshot, dict):
+            entry_metrics = dict(row.features_snapshot)
+        elif decision is not None and isinstance(decision.metrics, dict):
+            snap = decision.metrics.get("indicators_snapshot")
+            if isinstance(snap, dict):
+                entry_metrics = flatten_entry_snapshot(snap)
+        if isinstance(row.features_snapshot_exit, dict) and (
+            row.features_snapshot_exit.get("_capture_failed") is not True
+        ):
+            exit_metrics = dict(row.features_snapshot_exit)
+
     return ShadowTradeDetail(
         id=row.id,
         symbol=row.symbol,
@@ -252,6 +271,8 @@ def _to_detail(
         funding_rate_at_entry=float(row.funding_rate_at_entry)
         if row.funding_rate_at_entry is not None else None,
         n_concurrent_signals=row.n_concurrent_signals,
+        entry_metrics=entry_metrics,
+        exit_metrics=exit_metrics,
     )
 
 

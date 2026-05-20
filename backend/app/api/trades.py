@@ -6,8 +6,12 @@ from sqlalchemy import select, desc
 from typing import Optional
 from uuid import UUID
 
+from ..config import settings
 from ..database import get_db
 from ..models.trade import Trade
+from ..models.trade_tracking import TradeTracking
+from ..models.backoffice import DecisionLog
+from ..services.exit_metrics import flatten_entry_snapshot
 from .config import get_current_user_id
 from ..services.portfolio_service import portfolio_service
 from ..services.trade_sync_service import trade_sync_service
@@ -119,7 +123,21 @@ async def get_trade(
     trade = result.scalars().first()
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found")
-    return _serialize_trade(trade)
+    payload = _serialize_trade(trade)
+
+    # Task #316 — quando a UI está habilitada e há um trade_tracking row
+    # correlato, anexa o par entry_metrics/exit_metrics para o painel
+    # lado-a-lado. Sem flag: campos saem como None (schema estável).
+    if settings.ENABLE_EXIT_METRICS_UI:
+        entry, exit_ = await _lookup_entry_exit_metrics(
+            db, trade.symbol, trade.entry_at
+        )
+        payload["entry_metrics"] = entry
+        payload["exit_metrics"] = exit_
+    else:
+        payload["entry_metrics"] = None
+        payload["exit_metrics"] = None
+    return payload
 
 
 @router.post("/sync")
@@ -207,3 +225,47 @@ def _safe_num(value: Optional[float]) -> float:
     if value is None:
         return 0.0
     return float(value)
+
+
+async def _lookup_entry_exit_metrics(
+    db: AsyncSession,
+    symbol: Optional[str],
+    entry_at,
+) -> tuple[Optional[dict], Optional[dict]]:
+    """Best-effort lookup do par entry/exit para o trade real.
+
+    ``Trade`` (importado da Gate.io) não tem FK para ``TradeTracking``
+    nem para ``decisions_log``. Casamos pelo símbolo + janela de tempo
+    (±90s do entry_at) para anexar o snapshot quando existir. Sem match
+    retorna (None, None) — o frontend renderiza "Snapshot ausente".
+    """
+    if symbol is None or entry_at is None:
+        return None, None
+    try:
+        from datetime import timedelta
+        window = timedelta(seconds=90)
+        q = (
+            select(TradeTracking.decision_id, TradeTracking.exit_metrics_json)
+            .where(
+                TradeTracking.symbol == symbol,
+                TradeTracking.entry_time >= entry_at - window,
+                TradeTracking.entry_time <= entry_at + window,
+            )
+            .order_by(TradeTracking.created_at.desc())
+            .limit(1)
+        )
+        row = (await db.execute(q)).first()
+        if row is None:
+            return None, None
+        decision_id, exit_metrics = row
+        entry_flat: Optional[dict] = None
+        if decision_id is not None:
+            dq = select(DecisionLog.metrics).where(DecisionLog.id == decision_id)
+            metrics = (await db.execute(dq)).scalar_one_or_none()
+            if isinstance(metrics, dict):
+                snap = metrics.get("indicators_snapshot")
+                if isinstance(snap, dict):
+                    entry_flat = flatten_entry_snapshot(snap)
+        return entry_flat, (exit_metrics if isinstance(exit_metrics, dict) else None)
+    except Exception:
+        return None, None

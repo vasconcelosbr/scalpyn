@@ -28,6 +28,23 @@ async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depend
 
 router = APIRouter(prefix="/api/config", tags=["Configuration"])
 
+
+@router.get("/flags", include_in_schema=False)
+async def get_feature_flags() -> Dict[str, Any]:
+    """Public feature-flag bundle for the frontend.
+
+    Task #316 — UI consulta este endpoint para decidir se renderiza o
+    painel Entry | Exit lado-a-lado. Sem auth: nenhum dado sensível
+    (apenas booleanos de feature). Mantido como ``include_in_schema=False``
+    para não poluir o OpenAPI público.
+    """
+    return {
+        "exit_metrics_ui": bool(settings.ENABLE_EXIT_METRICS_UI),
+        "exit_metrics_capture": bool(settings.ENABLE_EXIT_METRICS_CAPTURE),
+        "decision_snapshots": bool(settings.ENABLE_DECISION_SNAPSHOTS),
+        "signal_timeline": bool(settings.ENABLE_SIGNAL_TIMELINE),
+    }
+
 _GONE_DETAIL = (
     "The 'signal' config_type has been retired. "
     "Entry conditions are now managed under 'block' (entry_triggers). "

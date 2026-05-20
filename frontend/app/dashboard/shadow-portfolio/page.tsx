@@ -103,6 +103,10 @@ interface ShadowTradeDetail extends ShadowTradeRead {
   decision_created_at: string | null;
   decision_reasons: Record<string, unknown> | null;
   decision_metrics: Record<string, unknown> | null;
+  // Task #316 — par entry/exit flat para o painel side-by-side.
+  // Backend só preenche quando ENABLE_EXIT_METRICS_UI=true.
+  entry_metrics: Record<string, unknown> | null;
+  exit_metrics: Record<string, unknown> | null;
 }
 
 // ── filter shape ─────────────────────────────────────────────────────────────
@@ -1363,6 +1367,169 @@ function SnapshotBlock({
   );
 }
 
+// Task #316 — Painel comparativo Entry | Exit lado-a-lado com delta.
+//
+// Catálogo dinâmico: união ordenada das chaves de ``entry`` ∪ ``exit``
+// (descartando chaves internas começadas em ``_`` — _capture_error,
+// _capture_failed, etc.). Sem nenhuma lista hardcoded de indicadores
+// (runbook §4.1). Renderiza linhas com Δ absoluto e %; sem comparação
+// quando algum lado é não-numérico ou ausente.
+const _INTERNAL_PREFIX = "_";
+
+function _isScalarNumber(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
+function _formatValue(v: unknown): string {
+  if (v === null || v === undefined) return "—";
+  if (typeof v === "number") {
+    return Number.isInteger(v) ? String(v) : v.toFixed(4);
+  }
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+function _formatDelta(entry: unknown, exit_: unknown): {
+  abs: string;
+  pct: string;
+  color: string;
+} {
+  if (!_isScalarNumber(entry) || !_isScalarNumber(exit_)) {
+    return { abs: "—", pct: "—", color: C.dim };
+  }
+  const delta = exit_ - entry;
+  const pct = entry !== 0 ? (delta / Math.abs(entry)) * 100 : 0;
+  const color = delta > 0 ? C.green : delta < 0 ? C.red : C.muted;
+  const absStr =
+    (delta >= 0 ? "+" : "") +
+    (Number.isInteger(delta) ? String(delta) : delta.toFixed(4));
+  const pctStr =
+    entry !== 0
+      ? (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%"
+      : "—";
+  return { abs: absStr, pct: pctStr, color };
+}
+
+function EntryExitCompareBlock({
+  entry,
+  exit,
+  exitEmptyMessage,
+}: {
+  entry: Record<string, unknown> | null;
+  exit: Record<string, unknown> | null;
+  exitEmptyMessage: string;
+}) {
+  const entryObj = entry ?? {};
+  const exitObj = exit ?? {};
+  const allKeys = Array.from(
+    new Set([...Object.keys(entryObj), ...Object.keys(exitObj)]),
+  )
+    .filter((k) => !k.startsWith(_INTERNAL_PREFIX))
+    .sort((a, b) => a.localeCompare(b));
+
+  const hasEntry = entry !== null && Object.keys(entryObj).length > 0;
+  const hasExit = exit !== null && Object.keys(exitObj).length > 0;
+
+  return (
+    <div>
+      <div
+        style={{
+          fontSize: 11,
+          color: C.muted,
+          letterSpacing: 0.6,
+          textTransform: "uppercase",
+          marginBottom: 8,
+        }}
+      >
+        Comparativo Entry | Exit (Δ)
+      </div>
+      <div
+        style={{
+          background: C.bg,
+          border: `1px solid ${C.border}`,
+          borderRadius: 6,
+          padding: "8px 12px",
+          maxHeight: 320,
+          overflow: "auto",
+        }}
+      >
+        {allKeys.length === 0 ? (
+          <div style={{ fontSize: 11.5, color: C.dim }}>
+            {hasEntry || hasExit
+              ? "Sem indicadores comparáveis."
+              : exitEmptyMessage}
+          </div>
+        ) : (
+          <>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1.4fr 1fr 1fr 1fr",
+                gap: 8,
+                fontSize: 10.5,
+                color: C.muted,
+                paddingBottom: 6,
+                borderBottom: `1px solid ${C.border}`,
+                letterSpacing: 0.4,
+                textTransform: "uppercase",
+              }}
+            >
+              <span>Indicador</span>
+              <span style={{ textAlign: "right" }}>Entry</span>
+              <span style={{ textAlign: "right" }}>Exit</span>
+              <span style={{ textAlign: "right" }}>Δ</span>
+            </div>
+            {allKeys.map((k) => {
+              const e = entryObj[k];
+              const x = exitObj[k];
+              const delta = _formatDelta(e, x);
+              return (
+                <div
+                  key={k}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1.4fr 1fr 1fr 1fr",
+                    gap: 8,
+                    fontSize: 11.5,
+                    padding: "4px 0",
+                    borderBottom: `1px solid ${C.border}`,
+                    fontFamily:
+                      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  <span style={{ color: C.muted }}>{k}</span>
+                  <span style={{ color: C.text, textAlign: "right" }}>
+                    {_formatValue(e)}
+                  </span>
+                  <span style={{ color: C.text, textAlign: "right" }}>
+                    {_formatValue(x)}
+                  </span>
+                  <span
+                    style={{
+                      color: delta.color,
+                      textAlign: "right",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {delta.abs}
+                    {delta.pct !== "—" ? (
+                      <span style={{ color: C.dim, marginLeft: 6 }}>
+                        ({delta.pct})
+                      </span>
+                    ) : null}
+                  </span>
+                </div>
+              );
+            })}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DetailModal({
   shadowId,
   onClose,
@@ -1628,6 +1795,20 @@ function DetailModal({
                   emptyMessage={exitSnapshotEmptyMessage(data)}
                 />
               </div>
+
+              {/*
+                Task #316 — Painel comparativo Entry | Exit com deltas.
+                Só aparece quando o backend devolve os pares (flag
+                ENABLE_EXIT_METRICS_UI=true). União das chaves: catálogo
+                dinâmico, ZERO hardcode (runbook §4.1).
+              */}
+              {data.entry_metrics || data.exit_metrics ? (
+                <EntryExitCompareBlock
+                  entry={data.entry_metrics}
+                  exit={data.exit_metrics}
+                  exitEmptyMessage={exitSnapshotEmptyMessage(data)}
+                />
+              ) : null}
 
               <div
                 style={{
