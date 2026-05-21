@@ -43,27 +43,43 @@ def main():
     # 1. Extrai dados da decisions_log
     # ---------------------------------------------------------
     logger.info("Extraindo dados da decisions_log...")
+    # Task #324 — DISTINCT ON (symbol, pnl_pct) dedupes the massive
+    # NEW_SIGNAL/SIGNAL_EVOLVED/visibility-tick amplification (up to 88× per
+    # unique trade in the 90d audit). Keep the earliest row per (symbol,
+    # pnl_pct) so the outer ORDER BY preserves temporal split integrity.
+    # pnl_pct IS NULL rows are dropped — we cannot label an unrealised trade.
     with engine.connect() as conn:
         result = conn.execute(text("""
-            SELECT
-                id, symbol, created_at,
-                metrics, score,
-                pnl_pct, holding_seconds, outcome
-            FROM decisions_log
-            WHERE l3_pass = true
-              AND decision = 'ALLOW'
-              AND outcome IS NOT NULL
-              AND created_at >= NOW() - INTERVAL :days
+            SELECT id, symbol, created_at, metrics, score,
+                   pnl_pct, holding_seconds, outcome
+            FROM (
+                SELECT DISTINCT ON (symbol, pnl_pct)
+                    id, symbol, created_at, metrics, score,
+                    pnl_pct, holding_seconds, outcome
+                FROM decisions_log
+                WHERE l3_pass = true
+                  AND decision = 'ALLOW'
+                  AND outcome IS NOT NULL
+                  AND pnl_pct IS NOT NULL
+                  AND created_at >= NOW() - INTERVAL :days
+                ORDER BY symbol, pnl_pct, created_at ASC
+            ) AS deduped
             ORDER BY created_at ASC
         """), {"days": f"{DAYS_LOOKBACK} days"})
         records = [dict(row._mapping) for row in result.fetchall()]
 
     total = len(records)
-    logger.info(f"Registros encontrados: {total}")
+    logger.info(f"Registros encontrados (pós-dedup): {total}")
 
     if total < MIN_RECORDS:
-        logger.error(f"Dados insuficientes: {total} < {MIN_RECORDS}. Job abortado.")
-        sys.exit(1)
+        # Task #324 — exit 0 (não 1) durante acumulação de dataset. Dataset
+        # insuficiente NÃO é falha de job — não dispara alerta de Cloud Run
+        # Job failure enquanto o DB ainda acumula amostras pós-wipe.
+        logger.info(
+            f"[TRAINER] insufficient data — skipping run "
+            f"({total} < {MIN_RECORDS})"
+        )
+        sys.exit(0)
 
     # ---------------------------------------------------------
     # 2. Build DataFrame
@@ -87,7 +103,15 @@ def main():
     optuna_storage = DB_URL.replace("postgresql+psycopg2", "postgresql")
 
     trainer = WinFastTrainer(n_trials=N_TRIALS)
-    result = trainer.train(df, optuna_storage_url=optuna_storage)
+    try:
+        result = trainer.train(df, optuna_storage_url=optuna_storage)
+    except ValueError as exc:
+        # Task #324 — degenerate dataset (single-class y_train or < min
+        # samples per class). Exit 0: this is "still warming up", not a
+        # failed run; we do not want Cloud Run Job failure alerts firing
+        # while the post-wipe dataset accumulates.
+        logger.info(f"[TRAINER] dataset degenerate — skipping: {exc}")
+        sys.exit(0)
 
     logger.info(f"Treino concluído: {result['metrics']}")
 
@@ -150,7 +174,7 @@ def main():
                 :precision, :recall, :f1, :roc_auc,
                 :capture_rate, :fpr,
                 :train_from, :train_to,
-                :model_path, 0.500,
+                :model_path, :threshold,
                 NOW(), :notes
             )
         """), {
@@ -168,7 +192,15 @@ def main():
             "train_from":   result["train_from"],
             "train_to":     result["train_to"],
             "model_path":   gcs_model_uri,
-            "notes":        f"MLflow run_id: {result['run_id']} | GCS: {gcs_model_uri}",
+            # Task #324 — calibrated via PR curve on the test set (no more
+            # hardcoded 0.500). See trainer._calibrate_threshold.
+            "threshold":    float(result.get("decision_threshold", 0.5)),
+            "notes":        (
+                f"MLflow run_id: {result['run_id']} | GCS: {gcs_model_uri} | "
+                f"winrate_base={result.get('winrate_base', 0):.2f}% | "
+                f"n_pos={result.get('n_pos', 0)} n_neg={result.get('n_neg', 0)} | "
+                f"threshold={float(result.get('decision_threshold', 0.5)):.4f}"
+            ),
         })
 
     logger.info(f"Modelo v{ver} registrado e ativado.")

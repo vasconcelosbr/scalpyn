@@ -3,6 +3,7 @@
 import json
 import logging
 import math
+import os
 from typing import Dict, List
 
 import pandas as pd
@@ -161,6 +162,9 @@ def extract_features(metrics: dict) -> Dict[str, float]:
     return f
 
 
+_MIN_WIN_PNL_PCT = float(os.getenv("MIN_WIN_PNL_PCT", "0.0"))
+
+
 def build_training_dataframe(records: list) -> pd.DataFrame:
     """
     Build training DataFrame from decisions_log records.
@@ -172,9 +176,26 @@ def build_training_dataframe(records: list) -> pd.DataFrame:
 
     Returns:
         DataFrame with FEATURE_COLUMNS + is_win_fast + _created_at columns.
+
+    Label semantics (Task #324):
+        is_win_fast = 1 when pnl_pct > MIN_WIN_PNL_PCT (env, default 0.0),
+        else 0. Rows with pnl_pct IS NULL are DROPPED — we cannot label them.
+
+        Vocabulário canônico de ``decisions_log.outcome`` é lowercase
+        ``tp``/``sl`` (regime pós-14/05; timeout foi descontinuado — trades
+        agora ficam abertos até TP ou SL). NÃO usar `outcome == "WIN"` para
+        derivar o label: esse vocabulário uppercase nunca existiu em prod,
+        produzia 0% de positivos e colapsava o treino (scale_pos_weight=1.0,
+        Optuna AUC=0 silencioso).
     """
     rows = []
+    dropped_null_pnl = 0
     for r in records:
+        pnl_pct = r.get("pnl_pct")
+        if pnl_pct is None:
+            dropped_null_pnl += 1
+            continue
+
         metrics = r.get("metrics") or {}
         if isinstance(metrics, str):
             try:
@@ -188,13 +209,27 @@ def build_training_dataframe(records: list) -> pd.DataFrame:
         # (removido de FEATURE_COLUMNS em P0-2). Não passar para df[FEATURE_COLUMNS].
         features["_score_meta"] = float(r.get("score") or 0.0)
 
-        # Target: WIN_FAST = trade that resulted in a win
-        features["is_win_fast"] = 1 if r.get("outcome") == "WIN" else 0
+        try:
+            pnl_val = float(pnl_pct)
+        except (TypeError, ValueError):
+            dropped_null_pnl += 1
+            continue
 
-        # Metadata for time-based split — NOT a model feature
+        # Target: WIN_FAST = trade with PnL > MIN_WIN_PNL_PCT (default 0).
+        features["is_win_fast"] = 1 if pnl_val > _MIN_WIN_PNL_PCT else 0
+
+        # Metadata for time-based split — NOT model features
         features["_created_at"] = r.get("created_at")
+        features["_outcome"] = r.get("outcome")
+        features["_pnl_pct"] = pnl_val
 
         rows.append(features)
+
+    if dropped_null_pnl:
+        logger.info(
+            f"Dropped {dropped_null_pnl} records with NULL pnl_pct "
+            f"(cannot label without realized PnL)"
+        )
 
     df = pd.DataFrame(rows)
     logger.info(f"Training dataframe: {len(df)} rows, {len(df.columns)} cols")

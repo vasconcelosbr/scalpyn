@@ -65,9 +65,16 @@ class WinFastPredictor:
         # Threshold do banco
         model_id, threshold = await self._get_threshold(db)
 
-        # Extrai e vetoriza features
+        # Extrai e vetoriza features.
+        # Task #324 — preserve NaN. XGBoost was treinado com missing=nan;
+        # default 0.0 colapsaria "ausente" e "zero real" (ex.: taker_ratio=0
+        # = 100% venda) e o runtime divergiria do treino.
         features = extract_features(metrics)
-        X = np.array([[features.get(f, 0.0) for f in FEATURE_COLUMNS]])
+        _nan = float("nan")
+        X = np.array(
+            [[features.get(f, _nan) for f in FEATURE_COLUMNS]],
+            dtype="float32",
+        )
 
         # Predição
         proba = float(model.predict_proba(X)[0][1])
