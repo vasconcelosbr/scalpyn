@@ -1751,30 +1751,6 @@ function DetailModal({
                 </div>
               </div>
 
-              {data.skip_reason ? (
-                <div
-                  style={{
-                    background: `${C.amber}11`,
-                    border: `1px solid ${C.amber}44`,
-                    borderRadius: 8,
-                    padding: "10px 12px",
-                    fontSize: 12,
-                    color: C.amber,
-                    display: "flex",
-                    gap: 8,
-                    alignItems: "flex-start",
-                  }}
-                >
-                  <AlertTriangle size={14} style={{ marginTop: 2, flexShrink: 0 }} />
-                  <div>
-                    <div style={{ fontWeight: 600, marginBottom: 2 }}>
-                      Motivo do skip
-                    </div>
-                    <div style={{ color: C.text }}>{data.skip_reason}</div>
-                  </div>
-                </div>
-              ) : null}
-
               <DecisionAuditBlock data={data} />
 
               <div
