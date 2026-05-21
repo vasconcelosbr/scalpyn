@@ -2586,6 +2586,15 @@ async def _run_pipeline_scan():
                                     "rejection_reasons": [{"reason": f"score < min_alpha_score ({_wl_min_score:g})", "stage": "L3"}],
                                     "stage": "L3",
                                     "status": "rejected",
+                                    # Required keys for _replace_rejection_snapshot (line 1725-1727).
+                                    # Missing them raised KeyError 'failed_type' and aborted the
+                                    # entire L3 watchlist iteration, preventing _evaluate_l3_decisions
+                                    # from running and zeroing decisions_log persistence.
+                                    "failed_type": "score_gate",
+                                    "failed_indicator": "alpha_score",
+                                    "condition": f"alpha_score >= {_wl_min_score:g}",
+                                    "current_value": _a.get("_score") or _a.get("alpha_score") or 0,
+                                    "expected": f">= {_wl_min_score:g}",
                                 })
                     await _replace_rejection_snapshot(
                         db,
