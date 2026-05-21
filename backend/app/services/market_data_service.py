@@ -903,12 +903,16 @@ class MarketDataService:
             if volume < min_volume:
                 continue
             price = float(t.get("last", 0) or 0)
-            change_pct = float(t.get("change_percentage", 0) or 0)
+            # P2-5: change_percentage=0 is a valid signal (no change).
+            # Use None when field is absent/null so consumers can distinguish
+            # from a legitimate 0% change. The old `or 0` fallback was silently
+            # replacing missing data with 0, biasing the dataset.
+            _cp = t.get("change_percentage")
+            change_pct = float(_cp) if _cp is not None else None
             result.append({
                 "symbol": symbol,
                 "price": price,
                 "volume_24h": volume,
-                "market_cap": 0,  # Gate.io tickers don't include market_cap
                 "change_24h_pct": change_pct,
             })
         return result

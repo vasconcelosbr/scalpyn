@@ -31,8 +31,9 @@ def _compute_score_fields(results: dict) -> dict:
       * macd_signal == "positive"          — MACD bullish cross
       * price > vwap                       — price above VWAP
 
-    score_normalized (0–100) = score_raw / score_max * 100
-    score mirrors score_normalized for direct use in ranking/display.
+    score (0–100) = score_raw / score_max * 100
+    Stored as "score" in the indicators dict. "score_normalized" was an
+    identical alias kept for legacy display; removed to eliminate duplication.
     """
     score = 0
     max_score = 0
@@ -88,13 +89,12 @@ def _compute_score_fields(results: dict) -> dict:
         except (TypeError, ValueError):
             pass
 
-    score_normalized = round((score / max_score) * 100, 2) if max_score > 0 else 0.0
+    score_value = round((score / max_score) * 100, 2) if max_score > 0 else 0.0
 
     return {
         "score_raw": score,
         "score_max": max_score,
-        "score_normalized": score_normalized,
-        "score": score_normalized,
+        "score": score_value,
     }
 
 # Source/confidence map for order-flow keys fetched from real trades.

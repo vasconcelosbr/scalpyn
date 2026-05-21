@@ -40,7 +40,13 @@ class ValidationRule:
     get_affected_indicators: Callable[[Dict[str, IndicatorEnvelope]], List[str]] = lambda envs: []
 
 
-# Critical indicators that must be available for trading
+# Critical indicators that must be available for trading.
+# NOTE: This list covers the IndicatorEnvelope validation layer (envelope-level
+# checks on the full merged snapshot).  It intentionally differs from
+# indicator_constants.REQUIRED_CORE_INDICATORS:
+#   - Includes "volume_24h_usdt" (microstructure field, checked here).
+#   - Omits "macd_histogram" (structural-only; validated by indicators_provider).
+# Do not merge the two lists — they guard different stages of the pipeline.
 CRITICAL_INDICATORS = [
     "volume_24h_usdt",
     "rsi",

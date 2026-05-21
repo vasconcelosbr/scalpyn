@@ -30,6 +30,7 @@ import os
 import random
 from typing import Any, Dict, Iterable, List, Optional
 
+from .indicator_constants import REQUIRED_CORE_INDICATORS  # noqa: F401 — re-exported
 from .indicator_validity import unwrap_envelope_value
 from ..utils.indicator_merge import (
     MergedIndicators,
@@ -41,22 +42,10 @@ logger = logging.getLogger(__name__)
 
 
 # ── Required-core completeness rule ──────────────────────────────────────────
-# These keys are the canonical OUTPUT names of the structural scheduler's
-# RSI / ADX / MACD calculations.
-#
-# * ``rsi`` and ``adx`` are written directly by ``feature_engine``.
-# * ``macd_histogram`` is the actionable momentum field consumed by
-#   ``robust_indicators/asset_score.py:60`` and the entry-trigger /
-#   block-rule engines. The raw ``macd`` line value is also written but
-#   is not what downstream rules read; ``macd_histogram`` is the
-#   authoritative key for "MACD presence" in decision logic.
-#
-# Renaming any of these requires updating, in order:
-#   1. ``feature_engine._calc_macd`` (writer side)
-#   2. ``structural_scheduler_service`` (cadence / payload shape)
-#   3. ``indicator_validity._PLAUSIBILITY_RULES`` (validity rules)
-#   4. all decision engines (consumer side)
-REQUIRED_CORE_INDICATORS: tuple[str, ...] = ("adx", "rsi", "macd_histogram")
+# Imported from indicator_constants.py (single source of truth).
+# See that module's docstring for the full rationale and rename procedure.
+# Re-exported here so existing importers (``from .indicators_provider import
+# REQUIRED_CORE_INDICATORS``) continue to work without modification.
 
 
 def _env_int(name: str, default: int) -> int:

@@ -9,7 +9,7 @@ Five rules from the Phase 1 spec, all CRITICAL:
      and ``volume_delta`` (when present) must equal
      ``taker_buy_volume - taker_sell_volume`` within the same 5 % tolerance.
   2. ``critical_no_data`` — the critical indicator set
-     (``rsi``, ``adx``, ``macd``, ``ema50``) must not be ``NO_DATA``.
+     (``rsi``, ``adx``, ``macd_histogram``, ``ema50``) must not be ``NO_DATA``.
   3. ``flow_primary_source`` — flow indicators (``taker_ratio``,
      ``buy_pressure``, ``volume_delta``, ``taker_buy_volume``,
      ``taker_sell_volume``) must come from a primary flow source.
@@ -33,7 +33,10 @@ from typing import Dict, Iterable, List, Mapping, Optional
 from .envelope import DataSource, IndicatorEnvelope, IndicatorStatus
 
 
-CRITICAL_INDICATORS: tuple[str, ...] = ("rsi", "adx", "macd", "ema50")
+# "macd_histogram" (not "macd") is the authoritative MACD key for decision
+# logic — see indicator_constants.py for full rationale.  "ema50" is retained
+# here because regime detection in this scoring pipeline uses it directly.
+CRITICAL_INDICATORS: tuple[str, ...] = ("rsi", "adx", "macd_histogram", "ema50")
 
 FLOW_INDICATORS: tuple[str, ...] = (
     "taker_ratio",

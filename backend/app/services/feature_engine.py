@@ -483,7 +483,11 @@ class FeatureEngine:
         vwap = cumulative_tp_vol / cumulative_vol.replace(0, np.nan)
         val = vwap.iloc[-1]
         close = df["close"].iloc[-1]
-        result = {"vwap": round(float(val), 8) if pd.notna(val) else None}
+        result = {
+            "vwap": round(float(val), 8) if pd.notna(val) else None,
+            # P2-2: warm-up counter — consumers guard against < 12 candles (< 1h on 5m bars)
+            "vwap_candle_count": int(len(df)),
+        }
         if pd.notna(val) and val > 0:
             result["vwap_distance_pct"] = round(((close - val) / val) * 100, 4)
         return result
@@ -507,7 +511,17 @@ class FeatureEngine:
 
     def _calc_obv(self, df: pd.DataFrame) -> Dict[str, Any]:
         obv = (np.sign(df["close"].diff()) * self._base_volume(df)).fillna(0).cumsum()
-        return {"obv": round(float(obv.iloc[-1]), 2)}
+        result: Dict[str, Any] = {"obv": round(float(obv.iloc[-1]), 2)}
+        # P2-1: obv_slope_5 = (obv[-1] - obv[-5]) / 5 — stationary derivative of OBV.
+        # Raw OBV is cumulative and non-comparable cross-asset; the slope captures
+        # the direction and velocity of flow without absolute scale dependence.
+        n = min(5, len(obv))
+        if n >= 2:
+            slope = (obv.iloc[-1] - obv.iloc[-n]) / n
+            result["obv_slope_5"] = round(float(slope), 4) if pd.notna(slope) else None
+        else:
+            result["obv_slope_5"] = None
+        return result
 
     def _calc_bollinger(self, df: pd.DataFrame) -> Dict[str, Any]:
         cfg = self.config["bollinger"]
