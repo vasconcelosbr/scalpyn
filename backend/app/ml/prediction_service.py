@@ -3,7 +3,7 @@ import numpy as np
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
-from app.ml.feature_extractor import FEATURE_COLUMNS, extract_features
+from app.ml.feature_extractor import FEATURE_COLUMNS, ML_EXCLUDED_FIELDS, extract_features
 from app.ml.gcs_model_loader import get_model
 
 logger = logging.getLogger(__name__)
@@ -69,8 +69,18 @@ class WinFastPredictor:
         # Task #324 — preserve NaN. XGBoost was treinado com missing=nan;
         # default 0.0 colapsaria "ausente" e "zero real" (ex.: taker_ratio=0
         # = 100% venda) e o runtime divergiria do treino.
+        #
+        # ML_EXCLUDED_FIELDS — strip leakage fields aqui também (defesa em
+        # profundidade, espelha o filtro de extract_features para o caso de
+        # callers que bypassem extract_features no futuro).
+        if metrics and any(k in metrics for k in ML_EXCLUDED_FIELDS):
+            metrics = {k: v for k, v in metrics.items() if k not in ML_EXCLUDED_FIELDS}
         features = extract_features(metrics)
         _nan = float("nan")
+        # Assert defensivo: nenhum campo proibido pode acabar no vetor de inferência.
+        assert not ML_EXCLUDED_FIELDS.intersection(FEATURE_COLUMNS), (
+            "ML_EXCLUDED_FIELDS contaminou FEATURE_COLUMNS — abortar inferência."
+        )
         X = np.array(
             [[features.get(f, _nan) for f in FEATURE_COLUMNS]],
             dtype="float32",

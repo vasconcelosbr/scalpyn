@@ -41,10 +41,42 @@ FEATURE_COLUMNS: List[str] = [
     "ema50_distance_pct",     # (close - ema50) / ema50 * 100  (P1-2)
     "ema200_distance_pct",    # (close - ema200) / ema200 * 100 (P1-2)
 ]
+# ── ML_EXCLUDED_FIELDS — defesa em profundidade ──────────────────────────────
+# Filtro global aplicado ao dict de input em ``extract_features`` E asserts
+# em ``build_training_dataframe`` / ``trainer.train``. Garante que mesmo se
+# alguém reintroduzir um desses nomes em FEATURE_COLUMNS por engano, a
+# entrada do modelo (treino E inferência) recusa o campo.
+#
+# Por que cada um está aqui:
+# - score / score_raw / score_normalized / score_max:
+#     leakage circular. ``score`` é derivado de rsi, ema9_gt_ema21,
+#     volume_spike, atr_pct, macd_signal, price>vwap — features que JÁ
+#     estão no modelo. XGBoost aprende o atalho ``if score > 80`` em vez
+#     de aprender a relação estrutural (ADX forte + compressão + fluxo +
+#     expansão).
+# - score_classification:
+#     derivado do ``score`` (neutral / buy / strong_buy); informação 100%
+#     redundante.
+# - score_components:
+#     metadado operacional (ex.: ``{"engine":"robust"}``); zero conteúdo
+#     preditivo.
+# - signal_direction:
+#     decisão operacional (long/short), não comportamento de mercado;
+#     introduz viés de execução no modelo.
+ML_EXCLUDED_FIELDS: frozenset = frozenset({
+    "score",
+    "score_raw",
+    "score_normalized",
+    "score_classification",
+    "score_components",
+    "score_max",
+    "signal_direction",
+})
+
 # FEATURES DELIBERATELY EXCLUDED FROM FEATURE_COLUMNS:
 # "score"             — P0-2: calculated from rsi/ema9_gt_ema21/volume_spike/atr_pct/
 #                       macd_signal/price>vwap; circular dependency dominates model.
-#                       Stored as _score_meta in build_training_dataframe() for analysis.
+#                       Reforçado por ML_EXCLUDED_FIELDS acima.
 # "buy_pressure"      — P1-1: exact duplicate of taker_ratio (buy_pressure = taker_ratio
 #                       in order_flow_service.py). Kept in pipeline for scoring layers.
 # "orderbook_pressure"— P1-1: exact duplicate of bid_ask_imbalance. High blast radius in
@@ -75,6 +107,14 @@ def extract_features(metrics: dict) -> Dict[str, float]:
         # 0.0 é um sinal válido (ex.: taker_ratio=0 = 100% venda).
         # O pipeline de treino deve descartar rows com excesso de nan.
         return {f: _nan for f in FEATURE_COLUMNS}
+
+    # ML_EXCLUDED_FIELDS — strip leakage/redundant fields BEFORE qualquer
+    # processamento. Defesa em profundidade: mesmo se um desses nomes
+    # estiver no JSONB do decisions_log.metrics, ele é descartado aqui
+    # antes do _float() loop ou de qualquer engenharia. Cópia shallow
+    # apenas se necessário (evita mutação do dict do caller).
+    if any(k in metrics for k in ML_EXCLUDED_FIELDS):
+        metrics = {k: v for k, v in metrics.items() if k not in ML_EXCLUDED_FIELDS}
 
     def _float(key: str, default: float = _nan) -> float:
         val = metrics.get(key, default)
@@ -205,9 +245,9 @@ def build_training_dataframe(records: list) -> pd.DataFrame:
 
         features = extract_features(metrics)
 
-        # score armazenado como metadado para análise — NÃO é feature do modelo
-        # (removido de FEATURE_COLUMNS em P0-2). Não passar para df[FEATURE_COLUMNS].
-        features["_score_meta"] = float(r.get("score") or 0.0)
+        # ``score`` NÃO é mais propagado nem como metadado (ML_EXCLUDED_FIELDS).
+        # Análises de score vs. desfecho devem usar ``decisions_log.score``
+        # diretamente, fora do pipeline ML.
 
         try:
             pnl_val = float(pnl_pct)
@@ -233,6 +273,15 @@ def build_training_dataframe(records: list) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     logger.info(f"Training dataframe: {len(df)} rows, {len(df.columns)} cols")
+
+    # ML_EXCLUDED_FIELDS — guardrail final: nenhum dos campos vazados pode
+    # estar no df. Falha alta e cedo (fail-fast no Cloud Run Job) em vez de
+    # contaminar silenciosamente o modelo.
+    _leaked = ML_EXCLUDED_FIELDS.intersection(df.columns)
+    assert not _leaked, (
+        f"ML_EXCLUDED_FIELDS detectados no training dataframe: {sorted(_leaked)}. "
+        f"Verificar build_training_dataframe e extract_features."
+    )
 
     if len(df) > 0:
         win_rate = df["is_win_fast"].mean() * 100

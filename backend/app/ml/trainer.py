@@ -19,7 +19,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from .feature_extractor import FEATURE_COLUMNS, train_val_test_split
+from .feature_extractor import FEATURE_COLUMNS, ML_EXCLUDED_FIELDS, train_val_test_split
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,24 @@ class WinFastTrainer:
                        n_train, n_val, n_test
         """
         feature_cols = [c for c in FEATURE_COLUMNS if c in df.columns]
+
+        # ML_EXCLUDED_FIELDS — guardrail no entry-point do treino. Nenhum
+        # desses campos pode entrar em X_train/X_val/X_test (leakage circular
+        # ou metadado operacional sem valor preditivo).
+        _leaked_cols = ML_EXCLUDED_FIELDS.intersection(feature_cols)
+        assert not _leaked_cols, (
+            f"ML_EXCLUDED_FIELDS no feature_cols: {sorted(_leaked_cols)} — "
+            f"revisar FEATURE_COLUMNS em feature_extractor.py."
+        )
+        _leaked_df = ML_EXCLUDED_FIELDS.intersection(df.columns)
+        if _leaked_df:
+            # df pode conter colunas excluídas como metadado herdado (defesa: dropar
+            # silenciosamente, mas logar para detectar produtor poluído upstream).
+            logger.warning(
+                "ML_EXCLUDED_FIELDS presentes no df de treino e serão removidas: %s",
+                sorted(_leaked_df),
+            )
+            df = df.drop(columns=list(_leaked_df))
 
         # Task #324 — drop rows with > MAX_NAN_FRACTION NaN features. They
         # carry too little signal and bias the model toward "all-zero" splits.
