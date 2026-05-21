@@ -2608,6 +2608,13 @@ async def _run_pipeline_scan():
                         user_id=wl.user_id,
                         pool_id=wl.source_pool_id,
                     )
+                    # ── L3_VISIBLE diagnostic (TEMP) — remove once root cause confirmed ──
+                    _allow_count = sum(1 for d in decisions if d.get("decision") == "ALLOW")
+                    _block_count = sum(1 for d in decisions if d.get("decision") == "BLOCK")
+                    logger.info(
+                        "[L3_DIAG] wl=%s decisions=%d ALLOW=%d BLOCK=%d profile_passed=%d",
+                        wl.name, len(decisions), _allow_count, _block_count, len(profile_passed),
+                    )
                     signals = [
                         {
                             "symbol": decision["symbol"],
@@ -2717,6 +2724,17 @@ async def _run_pipeline_scan():
                         if should_log:
                             d["event_type"] = event_type
                             decisions_to_log.append(d)
+                    # ── L3_VISIBLE diagnostic (TEMP) — remove once root cause confirmed ──
+                    _event_breakdown: dict = {}
+                    for _d in decisions_to_log:
+                        _et = _d.get("event_type") or "?"
+                        _event_breakdown[_et] = _event_breakdown.get(_et, 0) + 1
+                    logger.info(
+                        "[L3_DIAG] wl=%s decisions_to_log=%d prior_visibility=%d current_visibility=%d events=%s",
+                        wl.name, len(decisions_to_log),
+                        len(prior_visibility), len(current_l3_visibility),
+                        _event_breakdown or "{}",
+                    )
                     # ─────────────────────────────────────────────────────────
                     # IMPORTANT: persist to DB FIRST, then update Redis.
                     # If DB fails, Redis must NOT advance — otherwise the symbol
