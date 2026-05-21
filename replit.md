@@ -102,6 +102,10 @@ Scalpyn is an institutional-grade cryptocurrency trading platform that provides 
 
 - **`alembic_version.version_num` é `VARCHAR(32)` — IDs de revisão devem ter ≤ 32 chars** (2026-05-15): `StringDataRightTruncationError: value too long for type character varying(32)` ao gravar a revisão aplicada em `alembic upgrade head`. ID `054_ts_time_to_result_source_idem` tinha 33 chars → quebrou startup de todos os workers → crash loop → build `e4334b4f` falhou. Corrigido renomeando para `054_ts_cols_idem` (16 chars). Regra: **sempre contar os chars do `revision =` antes de commitar** — máximo 32 chars.
 
+- **`decisions_log` é audit trail de TRANSIÇÕES, NÃO snapshot por ciclo (2026-05-21)**: símbolo estável em L3 ALLOW não gera row a cada scan — frontend lê `pipeline_watchlist_assets` pra "visibilidade atual", `decisions_log` é histórico de eventos (`NEW_SIGNAL`/`L3_VISIBLE` edge-triggered, `SIGNAL_LOST`, `SIGNAL_REGAINED`, `SIGNAL_EVOLVED_*`). NÃO remover a guarda `sym not in prior_visibility` em `_evaluate_l3_decisions` (~linha 2738) — foi a regressão que tentei e revertei em `4b1922ef`. Causa raiz dos 48h zerado (19→21/05) foi `KeyError 'failed_type'` em `_replace_rejection_snapshot` (commit `02e5aec`): append inline no branch `min_alpha_score` montava dict incompleto (faltavam `failed_type`/`failed_indicator`/`condition`/`current_value`/`expected`), exceção engolida pelo try/except por-watchlist abortava L3 antes de `_evaluate_l3_decisions`. Detalhes completos + contrato das 5 chaves obrigatórias + semântica do sliding TTL em `_save_l3_visibility`: `backend/docs/runbooks/decisions-log-semantics.md`.
+
+- **`shadow_trades.skip_reason` SEMPRE NULL — anti-leak XGBoost (2026-05-21, commit `faaa1d79`)**: textos categóricos pré-execução (`NOT_TRADABLE`/`COOLDOWN`/`MAX_POSITIONS`/etc) correlacionam com desfecho de forma espúria (rows com `skip_reason` populado nunca executam, então status final é sempre o "outcome sintético" do shadow monitor — não label real). Hardcoded `"skip_reason": None` no `_INSERT_SHADOW_SQL` (`shadow_trade_service.py:605`). Coluna mantida no schema pra compat e histórico (sem migration de DROP). UI também removida (`frontend/app/dashboard/shadow-portfolio/page.tsx`, bloco "Motivo do skip" — commit `b391ebc5`). Motivo do skip continua nos INFO logs e no `decisions_log` pra debug operacional. **NÃO** repopular essa coluna sem antes provar (a) que não é feature pré-execução, (b) que o `DatasetBuilder` exclui o campo, e (c) que a UI não vai expor de novo.
+
 ### Estabilizadas (arquivadas em `backend/docs/runbooks/replit-md-archive.md`)
 
 Ler o arquivo antes de mexer no subsistema correspondente. Cada item ainda é autoritativo.
@@ -131,6 +135,7 @@ Ler o arquivo antes de mexer no subsistema correspondente. Cada item ainda é au
 - **Gotchas Estabilizadas (arquivo histórico)**: `backend/docs/runbooks/replit-md-archive.md`
 - **Cloud Build Trigger History (5 lessons, 2026-05-08)**: `backend/docs/runbooks/cloudbuild-trigger-history.md`
 - **Pipeline Recovery 2026-05-08 (3 incidentes + Apêndices A/B/C)**: `backend/docs/runbooks/2026-05-08-pipeline-recovery.md` (Apêndice C = deadlocks `compute_*`/`pipeline_scan` 11/05, Task #273)
+- **`decisions_log` semantics + gap 48h root cause (2026-05-21)**: `backend/docs/runbooks/decisions-log-semantics.md`
 - **Postgres Deadlock Bisect (Task #273)**: `backend/docs/runbooks/postgres-deadlock-bisect.md`
 - **Alembic Migration Guardrails**: Skill #7 (two-deploy rollout for `CRITICAL_COLUMNS`) and Skill #9 (pre-push schema audit).
 - **JWT Secret Generation**: `openssl rand -hex 32`
