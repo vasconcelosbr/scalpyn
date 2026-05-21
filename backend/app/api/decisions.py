@@ -374,12 +374,29 @@ def _build_snapshot_item(
     }
 
 
+_VALID_SNAPSHOT_SCOPES = {"l3", "arrow"}
+# Task #321: nome canônico da watchlist Arrow (custom). Override por env
+# caso o usuário renomeie em prod. Espelha shadow_trade_service.ARROW_WATCHLIST_NAME.
+import os as _os  # noqa: E402 - local-scope import para não poluir top-level
+_ARROW_WATCHLIST_NAME = _os.environ.get("ARROW_WATCHLIST_NAME", "ArrowL1")
+
+
+def _apply_scope_filter(conditions: list, scope: str) -> None:
+    """Anexa o predicado de watchlist (L3 canônico vs Arrow custom)."""
+    if scope == "arrow":
+        conditions.append(func.lower(PipelineWatchlist.level) == "custom")
+        conditions.append(PipelineWatchlist.name == _ARROW_WATCHLIST_NAME)
+    else:
+        conditions.append(func.upper(PipelineWatchlist.level) == "L3")
+
+
 @router.get("/approved-snapshot")
 async def get_approved_snapshot(
     symbol: Optional[str] = Query(None),
     market_mode: str = Query("all"),
     watchlist_id: Optional[UUID] = Query(None),
     sort: str = Query("score_desc"),
+    scope: str = Query("l3"),
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
@@ -404,15 +421,21 @@ async def get_approved_snapshot(
                 detail="sort must be one of: score_desc, score_asc, symbol_asc, approved_at_desc",
             )
         normalized_symbol = _sanitize_symbol(symbol)
+        normalized_scope = (scope or "l3").strip().lower()
+        if normalized_scope not in _VALID_SNAPSHOT_SCOPES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"scope must be one of: {', '.join(sorted(_VALID_SNAPSHOT_SCOPES))}",
+            )
 
         conditions = [
             PipelineWatchlist.user_id == user_id,
-            func.upper(PipelineWatchlist.level) == "L3",
             or_(
                 PipelineWatchlistAsset.level_direction.is_(None),
                 PipelineWatchlistAsset.level_direction == "up",
             ),
         ]
+        _apply_scope_filter(conditions, normalized_scope)
         if normalized_mode in {"spot", "futures"}:
             conditions.append(PipelineWatchlist.market_mode == normalized_mode)
         if watchlist_id is not None:
@@ -457,21 +480,27 @@ async def get_approved_snapshot(
 
 @router.get("/approved-snapshot/watchlists")
 async def list_approved_snapshot_watchlists(
+    scope: str = Query("l3"),
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ):
-    """List the user's L3 watchlists for the snapshot tab filter dropdown."""
+    """Watchlists do escopo (L3 canônico ou Arrow custom) para o filtro."""
     try:
+        normalized_scope = (scope or "l3").strip().lower()
+        if normalized_scope not in _VALID_SNAPSHOT_SCOPES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"scope must be one of: {', '.join(sorted(_VALID_SNAPSHOT_SCOPES))}",
+            )
+        where_clauses = [PipelineWatchlist.user_id == user_id]
+        _apply_scope_filter(where_clauses, normalized_scope)
         result = await db.execute(
             select(
                 PipelineWatchlist.id,
                 PipelineWatchlist.name,
                 PipelineWatchlist.market_mode,
             )
-            .where(
-                PipelineWatchlist.user_id == user_id,
-                func.upper(PipelineWatchlist.level) == "L3",
-            )
+            .where(*where_clauses)
             .order_by(PipelineWatchlist.name.asc())
         )
         rows = result.all()

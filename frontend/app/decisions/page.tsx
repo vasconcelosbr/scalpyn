@@ -58,7 +58,12 @@ interface SnapshotWatchlist {
   market_mode: "spot" | "futures";
 }
 
-type Tab = "audit" | "approved";
+// Task #321: tabs de topo da página /decisions.
+// - "audit"         — trilha de auditoria (decisions_log, comportamento legado)
+// - "approved-l3"   — snapshot vivo dos approved da pipeline canônica L3
+// - "approved-arrow"— snapshot vivo dos approved da watchlist custom ArrowL1
+type Tab = "audit" | "approved-l3" | "approved-arrow";
+type SnapshotScope = "l3" | "arrow";
 
 type Filters = {
   startDate: string;
@@ -202,18 +207,51 @@ function indicatorChipLabel(entry: Record<string, unknown> | string): string {
 }
 
 function DecisionsPageInner() {
+  const [tab, setTab] = useState<Tab>("audit");
+
+  const tabs: Array<{ id: Tab; label: string; desc: string }> = [
+    { id: "audit", label: "Audit Trail", desc: "Real pipeline audit trail — state transitions only" },
+    { id: "approved-l3", label: "L3 Approved", desc: "Snapshot vivo dos ativos aprovados na pipeline L3" },
+    { id: "approved-arrow", label: "Arrow Approved", desc: "Snapshot vivo dos ativos aprovados na watchlist ArrowL1" },
+  ];
+  const active = tabs.find((t) => t.id === tab) ?? tabs[0];
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)]">Decision Log</h1>
-          <p className="mt-1 text-[13px] text-[var(--text-secondary)]">
-            Real pipeline audit trail — state transitions only
-          </p>
+          <p className="mt-1 text-[13px] text-[var(--text-secondary)]">{active.desc}</p>
         </div>
       </div>
 
-      <AuditTrailView />
+      <div className="flex flex-wrap gap-2 border-b border-[var(--border-subtle)]">
+        {tabs.map((t) => {
+          const isActive = t.id === tab;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setTab(t.id)}
+              className={`-mb-px border-b-2 px-3 py-2 text-[13px] font-medium transition-colors ${
+                isActive
+                  ? "border-[var(--accent-primary)] text-[var(--text-primary)]"
+                  : "border-transparent text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+              }`}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === "audit" ? (
+        <AuditTrailView />
+      ) : tab === "approved-l3" ? (
+        <ApprovedSnapshotView scope="l3" />
+      ) : (
+        <ApprovedSnapshotView scope="arrow" />
+      )}
     </div>
   );
 }
@@ -521,7 +559,7 @@ function AuditTrailView() {
   );
 }
 
-function ApprovedSnapshotView() {
+function ApprovedSnapshotView({ scope = "l3" }: { scope?: SnapshotScope }) {
   const [filters, setFilters] = useState<SnapshotFilters>(DEFAULT_SNAPSHOT_FILTERS);
   const [items, setItems] = useState<ApprovedSnapshotItem[]>([]);
   const [watchlists, setWatchlists] = useState<SnapshotWatchlist[]>([]);
@@ -530,6 +568,15 @@ function ApprovedSnapshotView() {
   const [error, setError] = useState<string | null>(null);
   const [asOf, setAsOf] = useState<string | null>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+
+  // Reset state ao trocar de escopo — caso o usuário pule entre L3/Arrow,
+  // o snapshot anterior some imediatamente em vez de ficar "stuck" enquanto
+  // o novo fetch resolve.
+  useEffect(() => {
+    setItems([]);
+    setExpandedKey(null);
+    setFilters(DEFAULT_SNAPSHOT_FILTERS);
+  }, [scope]);
 
   const fetchSnapshot = useCallback(
     async (current: SnapshotFilters, isInitial: boolean) => {
@@ -541,8 +588,11 @@ function ApprovedSnapshotView() {
       }
       try {
         const qs = buildSnapshotParams(current);
+        const params = new URLSearchParams(qs);
+        params.set("scope", scope);
+        const finalQs = params.toString();
         const response = await apiGet<ApprovedSnapshotResponse>(
-          qs ? `/decisions/approved-snapshot?${qs}` : `/decisions/approved-snapshot`
+          `/decisions/approved-snapshot?${finalQs}`
         );
         setItems(response.items ?? []);
         setAsOf(response.as_of ?? null);
@@ -557,14 +607,15 @@ function ApprovedSnapshotView() {
         else setRefreshing(false);
       }
     },
-    []
+    [scope]
   );
 
   useEffect(() => {
-    void apiGet<{ items: SnapshotWatchlist[] }>("/decisions/approved-snapshot/watchlists")
+    const url = `/decisions/approved-snapshot/watchlists?scope=${scope}`;
+    void apiGet<{ items: SnapshotWatchlist[] }>(url)
       .then((response) => setWatchlists(response.items ?? []))
       .catch(() => setWatchlists([]));
-  }, []);
+  }, [scope]);
 
   useEffect(() => {
     void fetchSnapshot(filters, true);
@@ -624,7 +675,7 @@ function ApprovedSnapshotView() {
               onChange={(event) => updateFilter("watchlistId", event.target.value)}
               className={INPUT_CLASS}
             >
-              <option value="">All L3</option>
+              <option value="">{scope === "arrow" ? "All Arrow" : "All L3"}</option>
               {watchlists.map((wl) => (
                 <option key={wl.id} value={wl.id}>
                   {wl.name} ({wl.market_mode})
@@ -662,7 +713,7 @@ function ApprovedSnapshotView() {
 
       <div className="card">
         <div className="card-header">
-          <h3>Currently Approved (L3)</h3>
+          <h3>Currently Approved ({scope === "arrow" ? "Arrow" : "L3"})</h3>
           <span className="caption">{items.length} approved</span>
         </div>
         <div className="overflow-x-auto">
@@ -687,7 +738,9 @@ function ApprovedSnapshotView() {
           ) : items.length === 0 ? (
             <div className="py-16 text-center text-[var(--text-tertiary)]">
               <FileText className="mx-auto mb-2 h-8 w-8 opacity-30" />
-              <p className="text-[13px]">Nenhuma cripto aprovada em L3 no momento.</p>
+              <p className="text-[13px]">
+                Nenhuma cripto aprovada em {scope === "arrow" ? "Arrow" : "L3"} no momento.
+              </p>
             </div>
           ) : (
             <table className="data-table text-[12px]">

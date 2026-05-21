@@ -83,6 +83,11 @@ class ShadowTrade(Base):
     status = Column(String(20), nullable=False, default="PENDING", index=True)
     skip_reason = Column(String(50), nullable=True)
 
+    # Task #321: origem da promoção — 'L3' (gate canônico POOL→L1→L2→L3)
+    # ou 'ARROW' (watchlist custom ArrowL1 / profile "Arrow"). Default
+    # 'L3' garante back-compat com linhas pré-migration 060.
+    source = Column(String(20), nullable=False, default="L3", index=True)
+
     config_snapshot = Column(JSONB, nullable=True)
     features_snapshot = Column(JSONB, nullable=True)
     # Snapshot dos indicadores no momento em que TP/SL/TIMEOUT foi

@@ -46,6 +46,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/shadow-trades", tags=["Shadow Trades"])
 
 _VALID_STATUSES = {"PENDING", "RUNNING", "COMPLETED", "ERROR"}
+# Task #321: filtro de origem da promoção. ``None`` = todos (default —
+# preserva o comportamento legado da UI).
+_VALID_SOURCES = {"L3", "ARROW"}
 _DEFAULT_PAGE_SIZE = 50
 _MAX_PAGE_SIZE = 200
 
@@ -95,6 +98,21 @@ def _sanitize_status(status: Optional[str]) -> Optional[str]:
     return cleaned
 
 
+def _sanitize_source(source: Optional[str]) -> Optional[str]:
+    """Valida o filtro ``?source=l3|arrow``. ``None`` = sem filtro."""
+    if not source:
+        return None
+    cleaned = source.strip().upper()
+    if not cleaned:
+        return None
+    if cleaned not in _VALID_SOURCES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"source must be one of: {', '.join(sorted(_VALID_SOURCES))}",
+        )
+    return cleaned
+
+
 def _build_filters(
     *,
     user_id: UUID,
@@ -102,16 +120,20 @@ def _build_filters(
     symbol: Optional[str],
     min_date: Optional[str],
     max_date: Optional[str],
+    source: Optional[str] = None,
 ) -> list[Any]:
     conditions: list[Any] = [ShadowTrade.user_id == user_id]
     sanitized_status = _sanitize_status(status)
     sanitized_symbol = _sanitize_symbol(symbol)
+    sanitized_source = _sanitize_source(source)
     start_dt = _parse_iso_datetime(min_date)
     end_dt = _parse_iso_datetime(max_date, is_end=True)
     if sanitized_status:
         conditions.append(ShadowTrade.status == sanitized_status)
     if sanitized_symbol:
         conditions.append(ShadowTrade.symbol == sanitized_symbol)
+    if sanitized_source:
+        conditions.append(ShadowTrade.source == sanitized_source)
     if start_dt is not None:
         conditions.append(ShadowTrade.created_at >= start_dt)
     if end_dt is not None:
@@ -282,6 +304,7 @@ async def list_shadow_trades(
     symbol: Optional[str] = Query(None),
     min_date: Optional[str] = Query(None),
     max_date: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(_DEFAULT_PAGE_SIZE, ge=1, le=_MAX_PAGE_SIZE),
     db: AsyncSession = Depends(get_db),
@@ -295,6 +318,7 @@ async def list_shadow_trades(
             symbol=symbol,
             min_date=min_date,
             max_date=max_date,
+            source=source,
         )
         total_q = select(func.count(ShadowTrade.id)).where(and_(*filters))
         total = int((await db.execute(total_q)).scalar_one() or 0)
@@ -332,6 +356,7 @@ async def shadow_trades_summary(
     symbol: Optional[str] = Query(None),
     min_date: Optional[str] = Query(None),
     max_date: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> ShadowTradeSummary:
@@ -343,6 +368,7 @@ async def shadow_trades_summary(
             symbol=symbol,
             min_date=min_date,
             max_date=max_date,
+            source=source,
         )
 
         # Avg de pnl_pct deve considerar APENAS trades com outcome

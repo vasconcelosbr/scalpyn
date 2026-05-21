@@ -1828,25 +1828,32 @@ function DetailModal({
 const MAX_LOCAL_FETCH = 200; // = _MAX_PAGE_SIZE em backend/app/api/shadow_trades.py
 const CLIENT_PAGE_SIZE = 50;
 
+// Task #321: origem da promoção (L3 canônico vs ArrowL1 custom). Filtra
+// `shadow_trades.source` no backend (default 'L3' nas linhas pré-migration 060).
+type SourceTab = "L3" | "ARROW";
+
 function buildBaseQuery(
   filter: FilterState,
-  overrides: { status?: string; page?: number; page_size?: number } = {}
+  overrides: { status?: string; page?: number; page_size?: number } = {},
+  source?: SourceTab,
 ): string {
   const params = new URLSearchParams();
   if (overrides.status) params.set("status", overrides.status);
   if (filter.symbol.trim()) params.set("symbol", filter.symbol.trim());
   if (filter.minDate) params.set("min_date", filter.minDate);
   if (filter.maxDate) params.set("max_date", filter.maxDate);
+  if (source) params.set("source", source);
   params.set("page", String(overrides.page ?? filter.page));
   params.set("page_size", String(overrides.page_size ?? filter.pageSize));
   return params.toString();
 }
 
-function buildSummaryQuery(filter: FilterState): string {
+function buildSummaryQuery(filter: FilterState, source?: SourceTab): string {
   const params = new URLSearchParams();
   if (filter.symbol.trim()) params.set("symbol", filter.symbol.trim());
   if (filter.minDate) params.set("min_date", filter.minDate);
   if (filter.maxDate) params.set("max_date", filter.maxDate);
+  if (source) params.set("source", source);
   return params.toString();
 }
 
@@ -1861,6 +1868,16 @@ export default function ShadowPortfolioPage() {
   const [tick, setTick] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
+  // Task #321: tab de origem (L3 canônico vs Arrow custom). Default 'L3'
+  // preserva o comportamento histórico do painel.
+  const [sourceTab, setSourceTab] = useState<SourceTab>("L3");
+
+  // Reset paginação ao trocar de aba — evita "page 7 vazia" se a aba
+  // nova tem menos páginas que a anterior.
+  useEffect(() => {
+    setFilter((prev) => ({ ...prev, page: 1 }));
+    setList(null);
+  }, [sourceTab]);
 
   const fetchList = useCallback(() => {
     setLoadingList(true);
@@ -1884,7 +1901,7 @@ export default function ShadowPortfolioPage() {
 
     if (filter.status === "ALL") {
       // Server-side pagination puro.
-      const qs = buildBaseQuery(filter);
+      const qs = buildBaseQuery(filter, {}, sourceTab);
       apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qs}`)
         .then(setList)
         .catch(handleError)
@@ -1899,12 +1916,12 @@ export default function ShadowPortfolioPage() {
         status: "PENDING",
         page: 1,
         page_size: MAX_LOCAL_FETCH,
-      });
+      }, sourceTab);
       const qsRunning = buildBaseQuery(filter, {
         status: "RUNNING",
         page: 1,
         page_size: MAX_LOCAL_FETCH,
-      });
+      }, sourceTab);
       Promise.all([
         apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qsPending}`),
         apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qsRunning}`),
@@ -1932,23 +1949,23 @@ export default function ShadowPortfolioPage() {
       status: "COMPLETED",
       page: 1,
       page_size: MAX_LOCAL_FETCH,
-    });
+    }, sourceTab);
     apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qsCompleted}`)
       .then((res) => setList(res))
       .catch(handleError)
       .finally(() => setLoadingList(false));
-  }, [filter]);
+  }, [filter, sourceTab]);
 
   const fetchSummary = useCallback(() => {
     setLoadingSummary(true);
-    const qs = buildSummaryQuery(filter);
+    const qs = buildSummaryQuery(filter, sourceTab);
     apiGet<ShadowTradeSummary>(
       qs ? `/api/shadow-trades/summary?${qs}` : `/api/shadow-trades/summary`
     )
       .then((res) => setSummary(res))
       .catch(() => setSummary(null))
       .finally(() => setLoadingSummary(false));
-  }, [filter]);
+  }, [filter, sourceTab]);
 
   useEffect(() => {
     fetchList();
@@ -2060,6 +2077,42 @@ export default function ShadowPortfolioPage() {
             candle 1m e é avançada candle-a-candle até TP, SL ou timeout — sem
             execução real, alimenta o dataset ML.
           </p>
+        </div>
+
+        {/* Task #321: tabs L3 vs Arrow. Cada aba refaz fetch propagando
+            `source=` ao backend; agregados (P&L, win rate) são recalculados
+            por aba — a UI nunca mistura origens. */}
+        <div
+          style={{
+            display: "flex",
+            gap: 4,
+            borderBottom: `1px solid ${C.border}`,
+            marginBottom: -4,
+          }}
+        >
+          {(["L3", "ARROW"] as SourceTab[]).map((tab) => {
+            const active = tab === sourceTab;
+            return (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setSourceTab(tab)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  borderBottom: `2px solid ${active ? C.blue : "transparent"}`,
+                  color: active ? C.text : C.muted,
+                  cursor: "pointer",
+                  fontSize: 13,
+                  fontWeight: 500,
+                  padding: "8px 14px",
+                  marginBottom: -1,
+                }}
+              >
+                {tab === "L3" ? "L3" : "Arrow"}
+              </button>
+            );
+          })}
         </div>
 
         <FilterBar
