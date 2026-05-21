@@ -1310,11 +1310,22 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
     # supported by asyncpg's parameter binding and could silently match nothing,
     # allowing duplicate rows on Redis restarts. Replaced with ORM-native
     # ``or_()`` conditions which are always correctly parameterised.
+    #
+    # L3_VISIBLE event_type bypasses dedup entirely: product requirement is
+    # "qualquer cripto listada na L3 com status UP deve ser registrada no
+    # decision log" in EVERY scan cycle. Since pipeline_scan runs every ~300s
+    # and the 5-min dedup window is ~300s, consecutive scans would otherwise
+    # collide and suppress legitimate per-cycle audit rows. Transition events
+    # (NEW_SIGNAL, SIGNAL_LOST, SIGNAL_REGAINED, SIGNAL_EVOLVED_*) keep dedup
+    # to protect against retry-within-cycle storms.
     now = datetime.now(timezone.utc)
     recent_window = now - timedelta(minutes=5)
 
+    visibility_decisions = [d for d in decisions if d.get("event_type") == "L3_VISIBLE"]
+    dedup_candidates = [d for d in decisions if d.get("event_type") != "L3_VISIBLE"]
+
     dedup_checks = []
-    for decision in decisions:
+    for decision in dedup_candidates:
         dedup_checks.append((
             decision["symbol"],
             decision["strategy"],
@@ -1338,6 +1349,7 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             select(DecisionLog.symbol, DecisionLog.strategy, DecisionLog.direction)
             .where(and_(
                 DecisionLog.created_at >= recent_window,
+                DecisionLog.event_type != "L3_VISIBLE",
                 or_(*row_conditions),
             ))
             .distinct()
@@ -1350,7 +1362,7 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
 
         decisions_to_insert = []
         skipped_count = 0
-        for decision in decisions:
+        for decision in dedup_candidates:
             key = (
                 decision["symbol"],
                 decision["strategy"],
@@ -1371,7 +1383,9 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
                 skipped_count, len(decisions_to_insert),
             )
 
-        decisions = decisions_to_insert
+        decisions = visibility_decisions + decisions_to_insert
+    else:
+        decisions = visibility_decisions
 
     if not decisions:
         return []
@@ -2711,15 +2725,23 @@ async def _run_pipeline_scan():
                             score_delta_threshold=dl_score_delta,
                             direction_change_logs=dl_direction_logs,
                         )
-                        # Edge-triggered L3 visibility guarantee: every symbol
-                        # currently shown in L3 Approved must exist in the Decision
-                        # Log at least once per presence cycle.  If the transition
-                        # detector did not already flag this row (stable ALLOW with
-                        # no score/direction change) AND the symbol was not logged
-                        # in the current cycle, force-emit a single L3_VISIBLE row.
+                        # Per-cycle L3 visibility guarantee: EVERY symbol currently
+                        # in L3 ALLOW must produce a Decision Log row in EVERY scan
+                        # cycle (product requirement: "qualquer cripto listada na L3
+                        # com status UP deve ser registrada no decision log"). The
+                        # previous edge-triggered design (only log when ``sym not in
+                        # prior_visibility``) was neutralised by the sliding TTL on
+                        # ``_save_l3_visibility`` — once a symbol was seen it stayed
+                        # in the set forever, and ``_should_log_decision`` returns
+                        # False for stable ALLOW → ALLOW transitions, so no row was
+                        # ever written again (root cause of the 48h decisions_log
+                        # gap observed on 2026-05-19 → 2026-05-21). The 5-min
+                        # ORM-level dedup in ``_persist_decision_logs`` continues
+                        # to protect against duplicates from retries inside the
+                        # same scan cycle.
                         if d.get("decision") == "ALLOW":
                             current_l3_visibility.add(sym)
-                            if not should_log and sym not in prior_visibility:
+                            if not should_log:
                                 should_log = True
                                 event_type = "L3_VISIBLE"
                         new_states[sym] = {
