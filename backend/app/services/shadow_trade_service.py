@@ -594,7 +594,12 @@ async def _create_from_decision(
             "sl_pct": sl_pct or None,
             "timeout_candles": timeout_candles,
             "status": initial_status,
-            "skip_reason": skip_reason,
+            # skip_reason intencionalmente NULL: textos como NOT_TRADABLE/COOLDOWN
+            # poluem o dataset do XGBoost (categórica de alta cardinalidade e
+            # correlacionada ao desfecho de forma espúria — pré-execução, não pós).
+            # Mantemos a coluna para compat de schema; o motivo do skip continua
+            # logado em decisions_log/INFO logs para debugging operacional.
+            "skip_reason": None,
             "config_snapshot": json.dumps(config_snap, default=str),
             "features_snapshot": json.dumps(features_snap, default=str),
             # Bookmark do monitor: começa em entry_ts para que a
