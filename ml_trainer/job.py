@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 import json
@@ -183,7 +184,10 @@ def main():
             )
         """), {
             "version":      ver,
-            "hyperparams":  json.dumps(result["best_params"]),
+            "hyperparams":  json.dumps(
+                {k: (None if isinstance(v, float) and math.isnan(v) else v)
+                 for k, v in result["best_params"].items()}
+            ),
             "n_train":      result["n_train"],
             "n_val":        result["n_val"],
             "n_test":       result["n_test"],
