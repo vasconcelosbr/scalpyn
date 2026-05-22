@@ -189,11 +189,11 @@ class WinFastTrainer:
                 "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 1.0),
                 "reg_lambda": trial.suggest_float("reg_lambda", 0.5, 2.0),
             }
-            m = xgb.XGBClassifier(**params)
+            # XGBoost 2.1+: early_stopping_rounds moved from fit() to constructor
+            m = xgb.XGBClassifier(**params, early_stopping_rounds=20)
             m.fit(
                 X_train, y_train,
                 eval_set=[(X_val, y_val)],
-                early_stopping_rounds=20,
                 verbose=False,
             )
             if y_val.nunique() < 2:
