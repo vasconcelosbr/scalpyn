@@ -99,12 +99,13 @@ def main():
     # ---------------------------------------------------------
     logger.info(f"Iniciando Optuna ({N_TRIALS} trials)...")
 
-    # Optuna storage no mesmo Cloud SQL
-    optuna_storage = DB_URL.replace("postgresql+psycopg2", "postgresql")
-
+    # Optuna runs in-memory — avoids alembic_version table collision between
+    # Optuna's internal RDB schema and the backend's Alembic migrations.
+    # The study cannot be resumed across runs, but jobs run ~5 min so this is
+    # not a concern. Best model + metrics are persisted to GCS + ml_models.
     trainer = WinFastTrainer(n_trials=N_TRIALS)
     try:
-        result = trainer.train(df, optuna_storage_url=optuna_storage)
+        result = trainer.train(df, optuna_storage_url=None)
     except ValueError as exc:
         # Task #324 — degenerate dataset (single-class y_train or < min
         # samples per class). Exit 0: this is "still warming up", not a
