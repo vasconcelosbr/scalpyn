@@ -89,6 +89,10 @@ export interface PipelineAssetWithScore {
    *  ScoreEngine produced it. ``null`` for rows persisted before the
    *  rollout columns were added (Migration 028). */
   engine_tag?: 'robust' | 'legacy' | string | null;
+  /** ML model outputs — populated when ml_enabled + use_ml_ranking are active. */
+  ml_probability?: number | null;
+  ml_final_score?: number | null;
+  blocked_by_ml?: boolean | null;
 }
 
 export interface IndicatorColumn {
@@ -626,6 +630,7 @@ export function PipelineAssetTable({
             {showScore && (
               <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[130px]">Score</th>
             )}
+            <th className="px-3 py-2.5 text-center text-[#4B5563] font-medium whitespace-nowrap">ML</th>
             {visibleColumns.map((col) => (
               <th key={col.key} className="px-3 py-2.5 text-right text-[#4B5563] font-medium whitespace-nowrap">
                 {col.label}
@@ -740,6 +745,28 @@ export function PipelineAssetTable({
                     </td>
                   )}
 
+                  {/* ML probability column */}
+                  <td className="px-3 py-2.5 text-center">
+                    {asset.ml_probability != null ? (
+                      <span
+                        className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                          asset.blocked_by_ml
+                            ? 'bg-[#F87171]/10 text-[#F87171] border border-[#F87171]/20'
+                            : asset.ml_probability >= 0.6
+                            ? 'bg-[#34D399]/10 text-[#34D399] border border-[#34D399]/20'
+                            : asset.ml_probability >= 0.4
+                            ? 'bg-[#FBBF24]/10 text-[#FBBF24] border border-[#FBBF24]/20'
+                            : 'bg-[#F87171]/10 text-[#F87171] border border-[#F87171]/20'
+                        }`}
+                        title={`ML win probability: ${(asset.ml_probability * 100).toFixed(1)}%${asset.blocked_by_ml ? ' (blocked by ML)' : ''}`}
+                      >
+                        {(asset.ml_probability * 100).toFixed(0)}%
+                      </span>
+                    ) : (
+                      <span className="text-[#4B5563]">—</span>
+                    )}
+                  </td>
+
                   {/* Dynamic indicator columns from the profile */}
                   {visibleColumns.map((col) => (
                     <td key={col.key} className="px-3 py-2.5 text-right">
@@ -766,7 +793,7 @@ export function PipelineAssetTable({
                 {/* Drilldown row */}
                 {isExpanded && (
                   <tr className="border-b border-[#1A2035]">
-                    <td colSpan={2 + (showScore ? 1 : 0) + 1 + visibleColumns.length} className="p-0">
+                    <td colSpan={2 + (showScore ? 1 : 0) + 1 + 1 + visibleColumns.length} className="p-0">
                       <DrilldownPanel
                         rules={rules}
                         score={score}
