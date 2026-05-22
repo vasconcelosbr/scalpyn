@@ -59,7 +59,7 @@ def main():
                 FROM decisions_log
                 WHERE l3_pass = true
                   AND decision = 'ALLOW'
-                  AND outcome IS NOT NULL
+                  AND outcome IN ('tp', 'sl')
                   AND pnl_pct IS NOT NULL
                   AND created_at >= NOW() - INTERVAL :days
                 ORDER BY symbol, pnl_pct, created_at ASC

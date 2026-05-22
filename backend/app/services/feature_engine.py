@@ -728,7 +728,9 @@ class FeatureEngine:
         if pd.notna(val) and val > 0:
             spike = volume.iloc[-1] / val
             return {"volume_spike": round(float(spike), 2)}
-        return {"volume_spike": 1.0}
+        # Return None (not 1.0) so the envelope tags this as NO_DATA instead of
+        # silently reporting "volume exactly at average" when data is absent.
+        return {"volume_spike": None}
 
     def _calc_taker_ratio(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Taker ratio requires real taker buy/sell flow.
