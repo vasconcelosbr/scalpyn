@@ -345,6 +345,54 @@ async def reload_model(
         )
 
 
+@router.get("/models")
+async def list_ml_models(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """List all ml_models rows ordered by version descending."""
+    from sqlalchemy import text as sa_text
+
+    rows = await db.execute(sa_text("""
+        SELECT
+            id, version, status,
+            hyperparams,
+            train_samples, val_samples, test_samples,
+            precision_score, recall_score, f1_score, roc_auc,
+            win_fast_capture_rate, false_positive_rate,
+            train_from, train_to,
+            model_path, decision_threshold,
+            activated_at, retired_at, notes
+        FROM ml_models
+        ORDER BY version DESC
+    """))
+    models = []
+    for r in rows.mappings():
+        models.append({
+            "id":                   str(r["id"]),
+            "version":              r["version"],
+            "status":               r["status"],
+            "hyperparams":          r["hyperparams"],
+            "train_samples":        r["train_samples"],
+            "val_samples":          r["val_samples"],
+            "test_samples":         r["test_samples"],
+            "precision_score":      r["precision_score"],
+            "recall_score":         r["recall_score"],
+            "f1_score":             r["f1_score"],
+            "roc_auc":              r["roc_auc"],
+            "win_fast_capture_rate": r["win_fast_capture_rate"],
+            "false_positive_rate":  r["false_positive_rate"],
+            "train_from":           r["train_from"].isoformat() if r["train_from"] else None,
+            "train_to":             r["train_to"].isoformat() if r["train_to"] else None,
+            "model_path":           r["model_path"],
+            "decision_threshold":   r["decision_threshold"],
+            "activated_at":         r["activated_at"].isoformat() if r["activated_at"] else None,
+            "retired_at":           r["retired_at"].isoformat() if r["retired_at"] else None,
+            "notes":                r["notes"],
+        })
+    return {"models": models}
+
+
 @router.get("/status")
 async def get_ml_status(
     db: AsyncSession = Depends(get_db),
