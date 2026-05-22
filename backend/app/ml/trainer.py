@@ -225,11 +225,10 @@ class WinFastTrainer:
 
         # Final training with MLflow logging
         with mlflow.start_run() as run:
-            self.model = xgb.XGBClassifier(**best_params)
+            self.model = xgb.XGBClassifier(**best_params, early_stopping_rounds=20)
             self.model.fit(
                 X_train, y_train,
                 eval_set=[(X_val, y_val)],
-                early_stopping_rounds=20,
                 verbose=False,
             )
 
