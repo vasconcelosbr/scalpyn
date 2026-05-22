@@ -28,9 +28,12 @@ DAYS_LOOKBACK     = int(os.getenv("DAYS_LOOKBACK", "90"))
 N_TRIALS          = int(os.getenv("N_TRIALS", "50"))
 MIN_RECORDS       = int(os.getenv("MIN_RECORDS", "200"))
 
-# MLflow aponta para Cloud SQL + GCS
-os.environ["MLFLOW_TRACKING_URI"] = DB_URL
-mlflow.set_tracking_uri(DB_URL)
+# MLflow usa SQLite local — evita colisão com o alembic_version do backend.
+# O modelo já é persistido no GCS via joblib; o MLflow é usado apenas para
+# logar params/metrics e gerar um run_id para rastreabilidade.
+_MLFLOW_URI = "sqlite:////tmp/mlflow_trainer.db"
+os.environ["MLFLOW_TRACKING_URI"] = _MLFLOW_URI
+mlflow.set_tracking_uri(_MLFLOW_URI)
 
 
 def main():
