@@ -1,6 +1,6 @@
 xgboost==2.1.1
 optuna==3.6.1
-optuna-integration[sqlalchemy]==3.6.1
+optuna-integration[sqlalchemy]==3.6.0
 mlflow==2.13.0
 scikit-learn==1.5.0
 pandas==2.2.2
