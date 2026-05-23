@@ -649,6 +649,10 @@ interface FuturesAsset {
   futures_components?: FuturesComponents;
   block_reasons_long?: string[];
   block_reasons_short?: string[];
+  // ML model outputs — populated when ml_enabled + use_ml_ranking are active
+  ml_probability?: number | null;
+  ml_final_score?: number | null;
+  blocked_by_ml?: boolean | null;
 }
 
 function ScorePill({ value, color }: { value: number | null; color: string }) {
@@ -833,6 +837,7 @@ function FuturesAssetTable({
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Score LONG</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Score SHORT</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[110px]">Confidence</th>
+                <th className="px-3 py-2.5 text-center text-[#4B5563] font-medium">ML</th>
                 <th className="px-3 py-2.5 text-center text-[#4B5563] font-medium">Entry Long</th>
                 <th className="px-3 py-2.5 text-center text-[#4B5563] font-medium">Entry Short</th>
                 <th className="px-3 py-2.5 text-right text-[#4B5563] font-medium">Preço</th>
@@ -879,6 +884,26 @@ function FuturesAssetTable({
                       <td className="px-3 py-2.5"><ScorePill value={asset.score_short}      color="bg-red-500"     /></td>
                       <td className="px-3 py-2.5"><ScorePill value={asset.confidence_score} color="bg-[#F472B6]"   /></td>
                       <td className="px-3 py-2.5 text-center">
+                        {asset.ml_probability != null ? (
+                          <span
+                            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                              asset.blocked_by_ml
+                                ? 'bg-[#F87171]/10 text-[#F87171] border border-[#F87171]/20'
+                                : asset.ml_probability >= 0.6
+                                ? 'bg-[#34D399]/10 text-[#34D399] border border-[#34D399]/20'
+                                : asset.ml_probability >= 0.4
+                                ? 'bg-[#FBBF24]/10 text-[#FBBF24] border border-[#FBBF24]/20'
+                                : 'bg-[#F87171]/10 text-[#F87171] border border-[#F87171]/20'
+                            }`}
+                            title={`ML win probability: ${(asset.ml_probability * 100).toFixed(1)}%${asset.blocked_by_ml ? ' (blocked by ML)' : ''}`}
+                          >
+                            {(asset.ml_probability * 100).toFixed(0)}%
+                          </span>
+                        ) : (
+                          <span className="text-[#4B5563]">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-center">
                         <span className={`text-[9px] font-medium ${asset.entry_long_blocked ? 'text-red-400' : 'text-emerald-400'}`}>
                           {asset.entry_long_blocked ? '🔒 Bloq.' : '✓ Open'}
                         </span>
@@ -897,7 +922,7 @@ function FuturesAssetTable({
                     </tr>
                     {isOpen && (
                       <tr key={`${asset.symbol}-drilldown`} className="border-b border-[#1A2035]/60">
-                        <td colSpan={11} className="p-0">
+                        <td colSpan={12} className="p-0">
                           <FuturesDrilldown asset={asset} />
                         </td>
                       </tr>
