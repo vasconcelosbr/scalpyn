@@ -2075,7 +2075,7 @@ async def get_watchlist_assets(
     if wl.level == "L3" and ind_map:
         try:
             from ..services.config_service import config_service
-            from ..ml.predict_service import get_predict_service
+            from ..ml.prediction_service import predictor as _win_fast_predictor
 
             # Get AI settings
             ai_settings = {}
@@ -2090,59 +2090,48 @@ async def get_watchlist_assets(
             use_ml_ranking = ai_settings.get("use_ml_ranking", False)
 
             if ml_enabled and use_ml_ranking:
-                model_path = ai_settings.get("model_path", "/tmp/scalpyn_models/model.pkl")
                 ai_block_threshold = ai_settings.get("ai_block_threshold", 0.5)
 
-                # Get prediction service
-                predict_service = get_predict_service(model_path=model_path)
+                for a in assets:
+                    ind = ind_map.get(a.symbol)
+                    if not ind:
+                        continue
 
-                if predict_service.is_ready():
-                    market_mode = getattr(wl, "market_mode", "spot") or "spot"
-                    profile_type = "FUTURES" if market_mode == "futures" else "SPOT"
+                    base_score = score_override.get(a.symbol) or (
+                        float(a.alpha_score) if a.alpha_score is not None else 0.0
+                    )
 
-                    for a in assets:
-                        ind = ind_map.get(a.symbol)
-                        if not ind:
-                            continue
-
-                        base_score = score_override.get(a.symbol) or (
-                            float(a.alpha_score) if a.alpha_score is not None else 0.0
+                    try:
+                        result = await _win_fast_predictor.predict(
+                            metrics=ind,
+                            db=db,
+                            symbol=a.symbol,
                         )
 
-                        try:
-                            # Predict best direction and probability
-                            prediction = predict_service.predict_best_direction(
-                                features=ind,
-                                profile_type=profile_type,
-                            )
+                        probability = result["win_fast_probability"]
+                        if probability is None:
+                            continue
 
-                            # Calculate final score
-                            final_score = predict_service.calculate_final_score(
-                                score=base_score,
-                                probability=prediction["probability"],
-                            )
+                        # direction from existing pipeline (WinFastPredictor is direction-agnostic)
+                        direction = getattr(a, "futures_direction", None) or "LONG"
 
-                            # Check if trade should be blocked
-                            blocked_by_ml = predict_service.should_block(
-                                probability=prediction["probability"],
-                                ai_block_threshold=ai_block_threshold,
-                            )
+                        # final_score = base_score weighted by win probability
+                        final_score = (base_score / 100) * probability
 
-                            # Store prediction
-                            ml_predictions[a.symbol] = {
-                                "probability": prediction["probability"],
-                                "direction": prediction["direction"],
-                                "base_score": base_score,
-                                "final_score": final_score * 100,  # Scale back to 0-100
-                                "blocked_by_ml": blocked_by_ml,
-                            }
+                        blocked_by_ml = probability < ai_block_threshold
 
-                        except Exception as pred_err:
-                            logger.debug(f"[ML] Prediction failed for {a.symbol}: {pred_err}")
+                        ml_predictions[a.symbol] = {
+                            "probability": probability,
+                            "direction": direction,
+                            "base_score": base_score,
+                            "final_score": final_score * 100,
+                            "blocked_by_ml": blocked_by_ml,
+                        }
 
-                    logger.info(f"[ML] Generated {len(ml_predictions)} predictions for L3")
-                else:
-                    logger.warning("[ML] Model not loaded, skipping ML predictions")
+                    except Exception as pred_err:
+                        logger.debug(f"[ML] Prediction failed for {a.symbol}: {pred_err}")
+
+                logger.info(f"[ML] Generated {len(ml_predictions)} predictions for L3")
         except Exception as ml_err:
             logger.warning(f"[ML] ML prediction pipeline error: {ml_err}")
 

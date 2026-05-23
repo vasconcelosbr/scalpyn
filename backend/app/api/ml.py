@@ -215,23 +215,11 @@ async def predict(
                 "direction": "LONG",
             }
 
-        from ..ml.predict_service import get_predict_service
+        from ..ml.prediction_service import predictor as _win_fast_predictor
 
-        # Get prediction service
-        service = get_predict_service(
-            model_path=ai_settings.get("model_path", "/tmp/scalpyn_models/model.pkl")
-        )
-
-        if not service.is_ready():
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Model not loaded",
-            )
-
-        # Predict
-        result = service.predict_best_direction(
-            features=request.features,
-            profile_type=request.profile_type,
+        result = await _win_fast_predictor.predict(
+            metrics=request.features,
+            db=db,
         )
 
         return {
@@ -271,25 +259,21 @@ async def predict_batch(
                 "predictions": request.assets,
             }
 
-        from ..ml.predict_service import get_predict_service
+        from ..ml.prediction_service import predictor as _win_fast_predictor
 
-        # Get prediction service
-        service = get_predict_service(
-            model_path=ai_settings.get("model_path", "/tmp/scalpyn_models/model.pkl")
-        )
+        ai_block_threshold = ai_settings.get("ai_block_threshold", 0.5)
 
-        if not service.is_ready():
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Model not loaded",
-            )
-
-        # Batch predict
-        results = service.batch_predict_for_l3(
-            assets=request.assets,
-            profile_type=request.profile_type,
-            ai_block_threshold=ai_settings.get("ai_block_threshold", 0.5),
-        )
+        results = []
+        for asset in request.assets:
+            try:
+                pred = await _win_fast_predictor.predict(
+                    metrics=asset.get("features", asset),
+                    db=db,
+                    symbol=asset.get("symbol"),
+                )
+                results.append({**asset, "ml": pred})
+            except Exception:
+                results.append(asset)
 
         return {
             "status": "success",
@@ -410,24 +394,41 @@ async def get_ml_status(
         )
 
         ml_enabled = ai_settings.get("ml_enabled", True)
-        model_path = ai_settings.get("model_path", "/tmp/scalpyn_models/model.pkl")
 
-        from ..ml.predict_service import get_predict_service
+        from ..ml.gcs_model_loader import get_model as _get_gcs_model
+        from sqlalchemy import text as _text
 
-        # Check if model is loaded
-        service = get_predict_service(model_path=model_path)
-        model_loaded = service.is_ready()
+        # Check active model registered by Cloud Run Job
+        active_model = None
+        try:
+            row = (await db.execute(_text(
+                "SELECT id, version, decision_threshold, model_path, activated_at "
+                "FROM ml_models WHERE status = 'active' LIMIT 1"
+            ))).fetchone()
+            if row:
+                active_model = {
+                    "id": str(row.id),
+                    "version": row.version,
+                    "decision_threshold": float(row.decision_threshold) if row.decision_threshold else None,
+                    "model_path": row.model_path,
+                    "activated_at": row.activated_at.isoformat() if row.activated_at else None,
+                }
+        except Exception:
+            pass
 
-        metadata = None
-        if model_loaded and service.loader:
-            metadata = service.loader.get_metadata()
+        # Check if GCS model is cached in memory
+        model_loaded = False
+        try:
+            _get_gcs_model()
+            model_loaded = True
+        except Exception:
+            pass
 
         return {
             "status": "success",
             "ml_enabled": ml_enabled,
             "model_loaded": model_loaded,
-            "model_path": model_path,
-            "metadata": metadata,
+            "active_model": active_model,
             "settings": ai_settings,
         }
 
