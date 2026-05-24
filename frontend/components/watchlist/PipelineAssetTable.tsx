@@ -311,6 +311,10 @@ const GROUP_COLOR: Record<string, string> = {
   combined: 'text-[#94A3B8]',
 };
 
+const BOOLEAN_INDICATOR_KEYS = new Set([
+  'ema_trend', 'ema9_gt_ema50', 'ema_full_alignment', 'di_trend',
+]);
+
 function getWeaknesses(rules: ScoreRule[]): string {
   const failed = rules
     .filter(r => !r.passed && r.points_possible > 0)
@@ -597,6 +601,8 @@ export function PipelineAssetTable({
   showScore?: boolean;
 }) {
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
   if (assets.length === 0) {
     return (
@@ -614,11 +620,45 @@ export function PipelineAssetTable({
     );
   }
 
+  const toggleSort = (key: string) => {
+    if (sortKey === key) {
+      setSortDir(d => d === 'desc' ? 'asc' : 'desc');
+    } else {
+      setSortKey(key);
+      setSortDir('desc');
+    }
+  };
+
+  const visibleColumns = indicatorCols;
+
+  const getAssetColumnValue = (asset: PipelineAssetWithScore, column: IndicatorColumn): IndicatorValue => {
+    const topLevelValue = (asset as unknown as Record<string, unknown>)[column.field] as IndicatorValue;
+    return asset.indicators?.[column.key]
+      ?? asset.indicators?.[normalizeIndicatorKey(column.key)]
+      ?? asset.indicators?.[column.field]
+      ?? topLevelValue
+      ?? null;
+  };
+
+  const sortNum = (a: number, b: number) => sortDir === 'desc' ? b - a : a - b;
+  const sortedAssets = sortKey
+    ? [...assets].sort((a, b) => {
+        if (sortKey === 'score') return sortNum(a.alpha_score ?? -Infinity, b.alpha_score ?? -Infinity);
+        if (sortKey === 'ml') return sortNum(a.ml_probability ?? -Infinity, b.ml_probability ?? -Infinity);
+        const col = visibleColumns.find(c => c.key === sortKey);
+        if (!col) return 0;
+        const av = getAssetColumnValue(a, col);
+        const bv = getAssetColumnValue(b, col);
+        const an = typeof av === 'number' ? av : av == null ? -Infinity : Number(av);
+        const bn = typeof bv === 'number' ? bv : bv == null ? -Infinity : Number(bv);
+        return sortNum(isNaN(an) ? -Infinity : an, isNaN(bn) ? -Infinity : bn);
+      })
+    : assets;
+
   const totalPts  = (rules: ScoreRule[]) =>
     rules.filter(r => (r.type ?? 'positive') !== 'penalty').reduce((s, r) => s + r.points_possible, 0);
   const earnedPts = (rules: ScoreRule[]) =>
     rules.filter(r => (r.type ?? 'positive') !== 'penalty').reduce((s, r) => s + r.points_awarded, 0);
-  const visibleColumns = indicatorCols;
 
   return (
     <div className="overflow-x-auto">
@@ -628,19 +668,45 @@ export function PipelineAssetTable({
             <th className="w-8 px-2 py-2.5" />
             <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium">Symbol</th>
             {showScore && (
-              <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[130px]">Score</th>
-            )}
-            <th className="px-3 py-2.5 text-center text-[#4B5563] font-medium whitespace-nowrap">ML</th>
-            {visibleColumns.map((col) => (
-              <th key={col.key} className="px-3 py-2.5 text-right text-[#4B5563] font-medium whitespace-nowrap">
-                {col.label}
+              <th className="px-3 py-2.5 text-left text-[#4B5563] font-medium min-w-[130px]">
+                <button onClick={() => toggleSort('score')} className="flex items-center gap-1 hover:text-[#94A3B8] transition-colors">
+                  Score
+                  <span className={`text-[9px] ${sortKey === 'score' ? 'text-[#60A5FA]' : 'opacity-30'}`}>
+                    {sortKey === 'score' ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
+                  </span>
+                </button>
               </th>
-            ))}
+            )}
+            <th className="px-3 py-2.5 text-center text-[#4B5563] font-medium whitespace-nowrap">
+              <button onClick={() => toggleSort('ml')} className="flex items-center gap-1 justify-center hover:text-[#94A3B8] transition-colors w-full">
+                ML
+                <span className={`text-[9px] ${sortKey === 'ml' ? 'text-[#60A5FA]' : 'opacity-30'}`}>
+                  {sortKey === 'ml' ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
+                </span>
+              </button>
+            </th>
+            {visibleColumns.map((col) => {
+              const isNumeric = !BOOLEAN_INDICATOR_KEYS.has(col.key) && !BOOLEAN_INDICATOR_KEYS.has(normalizeIndicatorKey(col.key));
+              return (
+                <th key={col.key} className="px-3 py-2.5 text-right text-[#4B5563] font-medium whitespace-nowrap">
+                  {isNumeric ? (
+                    <button onClick={() => toggleSort(col.key)} className="flex items-center gap-1 justify-end hover:text-[#94A3B8] transition-colors w-full">
+                      {col.label}
+                      <span className={`text-[9px] ${sortKey === col.key ? 'text-[#60A5FA]' : 'opacity-30'}`}>
+                        {sortKey === col.key ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
+                      </span>
+                    </button>
+                  ) : (
+                    col.label
+                  )}
+                </th>
+              );
+            })}
             <th className="px-3 py-2.5 text-center text-[#4B5563] font-medium">Status</th>
           </tr>
         </thead>
         <tbody>
-          {assets.map((asset) => {
+          {sortedAssets.map((asset) => {
             const score     = asset.alpha_score ?? 0;
             const rules     = asset.score_rules ?? [];
             const isBlocked = asset.blocked ?? false;
@@ -664,14 +730,7 @@ export function PipelineAssetTable({
                            : hasHighADX       ? 'border-l-2 border-l-[#A78BFA]/60'
                            : '';
 
-            const getColumnValue = (column: IndicatorColumn) => {
-              const topLevelValue = (asset as unknown as Record<string, unknown>)[column.field] as IndicatorValue;
-              return asset.indicators?.[column.key]
-                ?? asset.indicators?.[normalizeIndicatorKey(column.key)]
-                ?? asset.indicators?.[column.field]
-                ?? topLevelValue
-                ?? null;
-            };
+            const getColumnValue = (column: IndicatorColumn) => getAssetColumnValue(asset, column);
 
             return (
               <Fragment key={asset.symbol}>

@@ -11,6 +11,7 @@ interface WatchlistItem {
   price: number;
   change24h: number;
   mcap: string;
+  mcap_raw: number | null;
   vol: string;
   trend: string;
   score: number;
@@ -85,7 +86,8 @@ export function WatchlistTable() {
   const [creatingNew, setCreatingNew] = useState(false);
   const [newListName, setNewListName] = useState("");
   const [loading, setLoading] = useState(true);
-  const [scoreSort, setScoreSort] = useState<"asc" | "desc" | null>("desc");
+  const [sortKey, setSortKey] = useState<string | null>('score');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const nameRef = useRef<HTMLInputElement>(null);
   const newNameRef = useRef<HTMLInputElement>(null);
   
@@ -159,6 +161,7 @@ export function WatchlistTable() {
             price: market.price || 0,
             change24h: change,
             mcap: market.market_cap_formatted || formatLargeNumber(market.market_cap),
+            mcap_raw: market.market_cap ?? null,
             vol: market.volume_24h_formatted || formatLargeNumber(market.volume_24h),
             trend: deriveTrend(change),
             score: market.score || 50,
@@ -170,6 +173,7 @@ export function WatchlistTable() {
           price: 0,
           change24h: 0,
           mcap: "-",
+          mcap_raw: null,
           vol: "-",
           trend: "Range",
           score: 50,
@@ -384,6 +388,7 @@ export function WatchlistTable() {
         price: a.price || 0,
         change24h: a.change_24h || 0,
         mcap: formatLargeNumber(a.market_cap),
+        mcap_raw: a.market_cap ?? null,
         vol: formatLargeNumber(a.volume_24h),
         trend: a.trend || "Range",
         score: a.score || 0,
@@ -429,15 +434,53 @@ export function WatchlistTable() {
 
   const activeWatchlist = watchlists.find(w => w.id === activeId);
   
-  const sortedItems = scoreSort
-    ? [...watchlistItems].sort((a, b) =>
-        scoreSort === "desc" ? b.score - a.score : a.score - b.score
-      )
-    : watchlistItems;
-
-  const cycleScoreSort = () => {
-    setScoreSort(prev => (prev === "desc" ? "asc" : "desc"));
+  const toggleSort = (key: string) => {
+    if (sortKey === key) {
+      setSortDir(d => d === 'desc' ? 'asc' : 'desc');
+    } else {
+      setSortKey(key);
+      setSortDir('desc');
+    }
   };
+
+  const sortNum = (dir: 'asc' | 'desc') => (a: number, b: number) => dir === 'desc' ? b - a : a - b;
+
+  const sortedItems = (() => {
+    if (!sortKey) return watchlistItems;
+    const cmp = sortNum(sortDir);
+    return [...watchlistItems].sort((a, b) => {
+      if (sortKey === 'price') return cmp(a.price, b.price);
+      if (sortKey === 'change24h') return cmp(a.change24h, b.change24h);
+      if (sortKey === 'mcap_raw') return cmp(a.mcap_raw ?? 0, b.mcap_raw ?? 0);
+      if (sortKey === 'score') return cmp(a.score, b.score);
+      return 0;
+    });
+  })();
+
+  const sortedRanked = (() => {
+    if (!sortKey) return rankedAssets;
+    const cmp = sortNum(sortDir);
+    return [...rankedAssets].sort((a, b) => {
+      if (sortKey === 'price') return cmp(a.price, b.price);
+      if (sortKey === 'change24h') return cmp(a.change_24h, b.change_24h);
+      if (sortKey === 'mcap_raw') return cmp(a.market_cap ?? 0, b.market_cap ?? 0);
+      if (sortKey === 'score') return cmp(a.score, b.score);
+      return 0;
+    });
+  })();
+
+  const sortedSignals = (() => {
+    if (!sortKey) return signals;
+    const cmp = sortNum(sortDir);
+    return [...signals].sort((a, b) => {
+      if (sortKey === 'price') return cmp(a.price, b.price);
+      if (sortKey === 'change24h') return cmp(a.change_24h, b.change_24h);
+      if (sortKey === 'mcap_raw') return cmp(a.market_cap ?? 0, b.market_cap ?? 0);
+      if (sortKey === 'score') return cmp(a.score, b.score);
+      if (sortKey === 'confidence') return cmp(a.confidence, b.confidence);
+      return 0;
+    });
+  })();
 
   const handleAddCoins = (coins: SpotCurrency[]) => {
     const symbols = coins.map(c => c.symbol);
@@ -767,9 +810,30 @@ export function WatchlistTable() {
             <thead>
               <tr>
                 <th className="sorted desc">Symbol</th>
-                <th className="text-right">Live Price</th>
-                <th className="text-right">24h %</th>
-                <th className="text-right">Market Cap</th>
+                <th className="text-right">
+                  <button onClick={() => toggleSort('price')} className="flex items-center gap-1 justify-end hover:text-[var(--accent-primary)] transition-colors w-full font-semibold">
+                    Live Price
+                    <span className={`text-[10px] ${sortKey === 'price' ? 'text-[var(--accent-primary)]' : 'opacity-30'}`}>
+                      {sortKey === 'price' ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
+                    </span>
+                  </button>
+                </th>
+                <th className="text-right">
+                  <button onClick={() => toggleSort('change24h')} className="flex items-center gap-1 justify-end hover:text-[var(--accent-primary)] transition-colors w-full font-semibold">
+                    24h %
+                    <span className={`text-[10px] ${sortKey === 'change24h' ? 'text-[var(--accent-primary)]' : 'opacity-30'}`}>
+                      {sortKey === 'change24h' ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
+                    </span>
+                  </button>
+                </th>
+                <th className="text-right">
+                  <button onClick={() => toggleSort('mcap_raw')} className="flex items-center gap-1 justify-end hover:text-[var(--accent-primary)] transition-colors w-full font-semibold">
+                    Market Cap
+                    <span className={`text-[10px] ${sortKey === 'mcap_raw' ? 'text-[var(--accent-primary)]' : 'opacity-30'}`}>
+                      {sortKey === 'mcap_raw' ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
+                    </span>
+                  </button>
+                </th>
                 <th
                   className="text-right"
                   title="Volume 24h em USDT reportado pelo ticker spot da Gate.io. Não inclui futuros perpétuos (que costumam ter volume 5–7× maior) nem outras exchanges."
@@ -779,12 +843,12 @@ export function WatchlistTable() {
                 <th>Trend</th>
                 <th>
                   <button
-                    onClick={cycleScoreSort}
+                    onClick={() => toggleSort('score')}
                     className="flex items-center gap-1 font-semibold hover:text-[var(--accent-primary)] transition-colors"
                   >
                     Alpha Score
-                    <span className="text-[10px] opacity-70">
-                      {scoreSort === "desc" ? "▼" : "▲"}
+                    <span className={`text-[10px] ${sortKey === 'score' ? 'text-[var(--accent-primary)]' : 'opacity-30'}`}>
+                      {sortKey === 'score' ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
                     </span>
                   </button>
                 </th>
@@ -883,21 +947,44 @@ export function WatchlistTable() {
                   <tr>
                     <th className="w-12">#</th>
                     <th>Symbol</th>
-                    <th className="text-right">Price</th>
-                    <th className="text-right">24h %</th>
-                    <th className="text-right">Market Cap</th>
+                    <th className="text-right">
+                      <button onClick={() => toggleSort('price')} className="flex items-center gap-1 justify-end hover:text-[var(--accent-primary)] transition-colors w-full font-semibold">
+                        Price
+                        <span className={`text-[10px] ${sortKey === 'price' ? 'text-[var(--accent-primary)]' : 'opacity-30'}`}>
+                          {sortKey === 'price' ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
+                        </span>
+                      </button>
+                    </th>
+                    <th className="text-right">
+                      <button onClick={() => toggleSort('change24h')} className="flex items-center gap-1 justify-end hover:text-[var(--accent-primary)] transition-colors w-full font-semibold">
+                        24h %
+                        <span className={`text-[10px] ${sortKey === 'change24h' ? 'text-[var(--accent-primary)]' : 'opacity-30'}`}>
+                          {sortKey === 'change24h' ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
+                        </span>
+                      </button>
+                    </th>
+                    <th className="text-right">
+                      <button onClick={() => toggleSort('mcap_raw')} className="flex items-center gap-1 justify-end hover:text-[var(--accent-primary)] transition-colors w-full font-semibold">
+                        Market Cap
+                        <span className={`text-[10px] ${sortKey === 'mcap_raw' ? 'text-[var(--accent-primary)]' : 'opacity-30'}`}>
+                          {sortKey === 'mcap_raw' ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
+                        </span>
+                      </button>
+                    </th>
                     <th>
-                      <span className="flex items-center gap-1">
+                      <button onClick={() => toggleSort('score')} className="flex items-center gap-1 hover:text-[var(--accent-primary)] transition-colors font-semibold">
                         Alpha Score
-                        <span className="text-[10px] opacity-70">▼</span>
-                      </span>
+                        <span className={`text-[10px] ${sortKey === 'score' ? 'text-[var(--accent-primary)]' : 'opacity-30'}`}>
+                          {sortKey === 'score' ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
+                        </span>
+                      </button>
                     </th>
                     <th>Rating</th>
                     <th>Score Breakdown</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rankedAssets.map((asset, idx) => (
+                  {sortedRanked.map((asset, idx) => (
                     <tr key={asset.symbol}>
                       <td className="text-[var(--text-tertiary)] font-mono">{idx + 1}</td>
                       <td className="font-semibold">{asset.symbol}</td>
@@ -969,17 +1056,52 @@ export function WatchlistTable() {
                 <thead>
                   <tr>
                     <th>Symbol</th>
-                    <th className="text-right">Price</th>
-                    <th className="text-right">24h %</th>
-                    <th className="text-right">Market Cap</th>
+                    <th className="text-right">
+                      <button onClick={() => toggleSort('price')} className="flex items-center gap-1 justify-end hover:text-[var(--accent-primary)] transition-colors w-full font-semibold">
+                        Price
+                        <span className={`text-[10px] ${sortKey === 'price' ? 'text-[var(--accent-primary)]' : 'opacity-30'}`}>
+                          {sortKey === 'price' ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
+                        </span>
+                      </button>
+                    </th>
+                    <th className="text-right">
+                      <button onClick={() => toggleSort('change24h')} className="flex items-center gap-1 justify-end hover:text-[var(--accent-primary)] transition-colors w-full font-semibold">
+                        24h %
+                        <span className={`text-[10px] ${sortKey === 'change24h' ? 'text-[var(--accent-primary)]' : 'opacity-30'}`}>
+                          {sortKey === 'change24h' ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
+                        </span>
+                      </button>
+                    </th>
+                    <th className="text-right">
+                      <button onClick={() => toggleSort('mcap_raw')} className="flex items-center gap-1 justify-end hover:text-[var(--accent-primary)] transition-colors w-full font-semibold">
+                        Market Cap
+                        <span className={`text-[10px] ${sortKey === 'mcap_raw' ? 'text-[var(--accent-primary)]' : 'opacity-30'}`}>
+                          {sortKey === 'mcap_raw' ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
+                        </span>
+                      </button>
+                    </th>
                     <th>Action</th>
-                    <th>Score</th>
-                    <th>Confidence</th>
+                    <th>
+                      <button onClick={() => toggleSort('score')} className="flex items-center gap-1 hover:text-[var(--accent-primary)] transition-colors font-semibold">
+                        Score
+                        <span className={`text-[10px] ${sortKey === 'score' ? 'text-[var(--accent-primary)]' : 'opacity-30'}`}>
+                          {sortKey === 'score' ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
+                        </span>
+                      </button>
+                    </th>
+                    <th>
+                      <button onClick={() => toggleSort('confidence')} className="flex items-center gap-1 hover:text-[var(--accent-primary)] transition-colors font-semibold">
+                        Confidence
+                        <span className={`text-[10px] ${sortKey === 'confidence' ? 'text-[var(--accent-primary)]' : 'opacity-30'}`}>
+                          {sortKey === 'confidence' ? (sortDir === 'desc' ? '▼' : '▲') : '⇅'}
+                        </span>
+                      </button>
+                    </th>
                     <th>Matched Conditions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {signals.map(signal => (
+                  {sortedSignals.map(signal => (
                     <tr key={signal.symbol}>
                       <td className="font-semibold">{signal.symbol}</td>
                       <td className="numeric price">{formatCurrency(signal.price)}</td>
