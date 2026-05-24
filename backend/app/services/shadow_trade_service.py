@@ -421,6 +421,19 @@ async def enrich_market_context(
                 decision_id=decision_id,
             )
             if t_anchor is not None:
+                # Task #309 follow-up: mover a aritmética de intervalo para
+                # Python elimina o padrão `:param - interval '...'` do SQL.
+                # Esse padrão causa ``operator does not exist: timestamptz <=
+                # interval`` porque asyncpg/PostgreSQL pode inferir :t_anchor
+                # como INTERVAL (ao invés de TIMESTAMPTZ) durante o PREPARE,
+                # mesmo quando o valor Python é um datetime válido — o
+                # prepared-statement cache contaminado por uma execução
+                # anterior com timedelta perpetua o tipo errado na sessão.
+                # Passando datetimes pré-computados, asyncpg envia OID 1184
+                # (TIMESTAMPTZ) e o PostgreSQL resolve ``TIMESTAMPTZ <=
+                # TIMESTAMPTZ`` sem ambiguidade.
+                t_60m_before = t_anchor - timedelta(minutes=60)
+                t_135m_before = t_anchor - timedelta(minutes=135)
                 prev_res = await db.execute(
                     text(
                         """
@@ -428,13 +441,13 @@ async def enrich_market_context(
                           FROM ohlcv
                          WHERE symbol = :s
                            AND timeframe = '1h'
-                           AND time <= :t_anchor - interval '60 minutes'
-                           AND time >= :t_anchor - interval '135 minutes'
+                           AND time <= :t_60m_before
+                           AND time >= :t_135m_before
                          ORDER BY time DESC
                          LIMIT 1
                         """
                     ),
-                    {"s": BTC_CONTEXT_SYMBOL, "t_anchor": t_anchor},
+                    {"s": BTC_CONTEXT_SYMBOL, "t_60m_before": t_60m_before, "t_135m_before": t_135m_before},
                 )
                 prev_row = prev_res.fetchone()
                 if prev_row is not None and prev_row.close is not None:
