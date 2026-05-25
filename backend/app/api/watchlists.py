@@ -12,6 +12,7 @@ Routes:
   POST   /api/watchlists/{id}/default-setup → create L1/L2/L3 defaults for a pool
 """
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -62,6 +63,18 @@ _PROFILE_STRING_INDICATORS = {"macd_signal", "psar_trend", "ema_align_label"}
 # fallback only fires when the in-process pipeline scheduler missed several
 # cycles (it normally runs every PIPELINE_SCHEDULER_INTERVAL_SECONDS = 600 s).
 _PIPELINE_SCAN_STALE_SECONDS_DEFAULT = 900
+
+# Per-watchlist asyncio locks prevent two concurrent on-read auto-refreshes
+# (e.g. /assets and /pipeline/rejected arriving simultaneously after the
+# frontend expansion) from both calling _resolve_and_persist and doubling
+# the full pipeline computation cost.
+_watchlist_refresh_locks: Dict[str, asyncio.Lock] = {}
+
+
+def _get_watchlist_refresh_lock(watchlist_id: str) -> asyncio.Lock:
+    if watchlist_id not in _watchlist_refresh_locks:
+        _watchlist_refresh_locks[watchlist_id] = asyncio.Lock()
+    return _watchlist_refresh_locks[watchlist_id]
 
 
 def _pipeline_scan_stale_threshold_seconds() -> int:
@@ -1387,8 +1400,20 @@ async def _auto_refresh_watchlist_assets_if_needed(
         wl.last_scanned_at.isoformat() if wl.last_scanned_at else None,
     )
 
-    await _resolve_and_persist(wl, user_id, db)
-    return await _load_active_watchlist_assets(wl.id, db)
+    lock = _get_watchlist_refresh_lock(str(wl.id))
+    if lock.locked():
+        # Another concurrent request is already running _resolve_and_persist
+        # for this watchlist (e.g. /assets and /pipeline/rejected arriving
+        # at the same instant). Skip the duplicate — the first one will
+        # update the DB and the caller can use the now-fresh snapshot.
+        logger.debug(
+            "[Pipeline] Auto-refresh skipped for wl=%s (refresh already in progress)",
+            wl.id,
+        )
+        return assets
+    async with lock:
+        await _resolve_and_persist(wl, user_id, db)
+        return await _load_active_watchlist_assets(wl.id, db)
 
 
 async def _resolve_and_persist(

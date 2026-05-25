@@ -955,6 +955,8 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
   const [deleting, setDeleting] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const assetsRequestInFlight = useRef(false);
+  const rejectedRequestInFlight = useRef(false);
+  const rejectedLoaded = useRef(false);
 
   const sourceName = wl.source_pool_id
     ? pools.find((p) => p.id === wl.source_pool_id)?.name ?? 'Pool'
@@ -966,7 +968,8 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     ? (profiles.find((p) => p.id === wl.profile_id)?.name ?? wl.profile_name ?? 'Profile')
     : null;
 
-  const loadAssets = useCallback(async (
+  // loadApproved: fetches /assets only. Called on expand and periodic refresh.
+  const loadApproved = useCallback(async (
     { triggerParentRefresh = false, silent = false, hn = hideNeutral }: {
       triggerParentRefresh?: boolean;
       silent?: boolean;
@@ -978,30 +981,21 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     if (assetsRequestInFlight.current) return;
     assetsRequestInFlight.current = true;
     if (!silent) setLoadingAssets(true);
-    if (!silent) setLoadingRejected(true);
     try {
       const assetsUrl = isFutures && hn
         ? `/watchlists/${wl.id}/assets?hide_neutral=true`
         : `/watchlists/${wl.id}/assets`;
-      const [data, rejected] = await Promise.all([
-        apiFetch<{
-          approved_items: RejectedAssetItem[];
-          assets: FuturesAsset[];
-          total: number;
-          market_mode?: string;
-          is_futures?: boolean;
-          profile_indicators?: IndicatorColumnSpec[];
-        }>(assetsUrl),
-        apiFetch<{
-          items: RejectedAssetItem[];
-          profile_indicators?: IndicatorColumnSpec[];
-        }>(`/pipeline/rejected?watchlist_id=${wl.id}`),
-      ]);
+      const data = await apiFetch<{
+        approved_items: RejectedAssetItem[];
+        assets: FuturesAsset[];
+        total: number;
+        market_mode?: string;
+        is_futures?: boolean;
+        profile_indicators?: IndicatorColumnSpec[];
+      }>(assetsUrl);
       setApprovedItems(data.approved_items ?? []);
       setFuturesAssets(data.assets ?? []);
-      setRejectedItems(rejected.items ?? []);
       setApprovedCols(data.profile_indicators ?? []);
-      setRejectedCols(rejected.profile_indicators ?? data.profile_indicators ?? []);
       if (triggerParentRefresh && ((data.approved_items?.length ?? 0) > 0 || (data.assets?.length ?? 0) > 0)) {
         onRefreshed();
       }
@@ -1010,26 +1004,50 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     } finally {
       assetsRequestInFlight.current = false;
       if (!silent) setLoadingAssets(false);
-      if (!silent) setLoadingRejected(false);
     }
   }, [wl.id, isFutures, hideNeutral, onRefreshed]);
 
+  // loadRejected: fetches /pipeline/rejected lazily — only when Rejected tab is opened.
+  const loadRejected = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (rejectedRequestInFlight.current) return;
+    rejectedRequestInFlight.current = true;
+    if (!silent) setLoadingRejected(true);
+    try {
+      const rejected = await apiFetch<{
+        items: RejectedAssetItem[];
+        profile_indicators?: IndicatorColumnSpec[];
+      }>(`/pipeline/rejected?watchlist_id=${wl.id}`);
+      setRejectedItems(rejected.items ?? []);
+      setRejectedCols(rejected.profile_indicators ?? approvedCols);
+      rejectedLoaded.current = true;
+    } catch {
+      // ignore
+    } finally {
+      rejectedRequestInFlight.current = false;
+      if (!silent) setLoadingRejected(false);
+    }
+  }, [wl.id, approvedCols]);
+
   useEffect(() => {
     if (expanded) {
-      void loadAssets({ triggerParentRefresh: true });
+      void loadApproved({ triggerParentRefresh: true });
     }
-  }, [expanded, loadAssets]);
+  }, [expanded, loadApproved]);
 
   useEffect(() => {
     if (expanded && wl.auto_refresh && refreshTick > 0) {
-      void loadAssets({ silent: true });
+      void loadApproved({ silent: true });
+      // Only refresh rejected if it was already loaded (user visited that tab).
+      if (rejectedLoaded.current) {
+        void loadRejected({ silent: true });
+      }
     }
-  }, [expanded, wl.auto_refresh, refreshTick, loadAssets]);
+  }, [expanded, wl.auto_refresh, refreshTick, loadApproved, loadRejected]);
 
   // Re-fetch when hide_neutral toggle changes (server-side filter)
   useEffect(() => {
     if (expanded && isFutures) {
-      void loadAssets({ silent: true, hn: hideNeutral });
+      void loadApproved({ silent: true, hn: hideNeutral });
     }
   }, [hideNeutral]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1038,7 +1056,11 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     setRefreshError(null);
     try {
       await apiFetch(`/watchlists/${wl.id}/refresh`, { method: 'POST' });
-      await loadAssets({ silent: true });
+      rejectedLoaded.current = false;
+      await loadApproved({ silent: true });
+      if (detailTab === 'rejected') {
+        await loadRejected({ silent: true });
+      }
       onRefreshed();
     } catch (err: unknown) {
       setRefreshError(err instanceof Error ? err.message : 'Failed to refresh watchlist assets. Check source pool configuration.');
@@ -1162,7 +1184,10 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
             </button>
             <button
               type="button"
-              onClick={() => setDetailTab('rejected')}
+              onClick={() => {
+                setDetailTab('rejected');
+                if (!rejectedLoaded.current) void loadRejected();
+              }}
               className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
                 detailTab === 'rejected'
                   ? 'bg-[#1E2433] text-[#E2E8F0]'
