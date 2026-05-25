@@ -50,6 +50,10 @@ export interface WatchlistDecisionItem {
   current_values: Record<string, unknown>;
   expected_values: Record<string, string | null>;
   details: DecisionDetails;
+  /** ML model outputs — populated when ml_enabled + use_ml_ranking are active. */
+  ml_probability?: number | null;
+  ml_final_score?: number | null;
+  blocked_by_ml?: boolean | null;
 }
 
 export type RejectedTraceItem = DecisionTraceItem;
@@ -228,6 +232,9 @@ export function WatchlistDecisionTable({
         if (sortKey === "score") {
           aVal = a.alpha_score ?? -Infinity;
           bVal = b.alpha_score ?? -Infinity;
+        } else if (sortKey === "ml") {
+          aVal = a.ml_probability ?? -Infinity;
+          bVal = b.ml_probability ?? -Infinity;
         } else {
           const av = a.current_values?.[sortKey];
           const bv = b.current_values?.[sortKey];
@@ -302,9 +309,9 @@ export function WatchlistDecisionTable({
           // only when the watchlist truly has no profile-driven columns.
           const dynCols = indicatorCols ?? [];
           const useDynamic = dynCols.length > 0;
-          // Column count: chevron + Symbol + Score + [dynCols] + Stage + Status + Timestamp
-          //          OR  chevron + Symbol + Score + Stage + Status + Indicators + Conditions + Timestamp
-          const totalCols = useDynamic ? 6 + dynCols.length : 8;
+          // Column count: chevron + Symbol + Score + ML + [dynCols] + Stage + Status + Timestamp
+          //          OR  chevron + Symbol + Score + ML + Stage + Status + Indicators + Conditions + Timestamp
+          const totalCols = useDynamic ? 7 + dynCols.length : 9;
           const minWidth = useDynamic ? Math.max(720, 420 + dynCols.length * 110) : 1040;
           return (
         <div className="overflow-x-auto">
@@ -318,6 +325,14 @@ export function WatchlistDecisionTable({
                     Score
                     <span className={`text-[9px] ${sortKey === "score" ? "text-[#60A5FA]" : "opacity-30"}`}>
                       {sortKey === "score" ? (sortDir === "desc" ? "▼" : "▲") : "⇅"}
+                    </span>
+                  </button>
+                </th>
+                <th className="px-3 py-2.5 text-center text-[#4B5563] whitespace-nowrap">
+                  <button onClick={() => toggleSort("ml")} className="flex items-center gap-1 justify-center hover:text-[#94A3B8] transition-colors w-full">
+                    ML
+                    <span className={`text-[9px] ${sortKey === "ml" ? "text-[#60A5FA]" : "opacity-30"}`}>
+                      {sortKey === "ml" ? (sortDir === "desc" ? "▼" : "▲") : "⇅"}
                     </span>
                   </button>
                 </th>
@@ -370,6 +385,26 @@ export function WatchlistDecisionTable({
                       </td>
                       <td className="px-3 py-2.5 font-semibold text-[#E2E8F0]">{item.symbol}</td>
                       <td className="px-3 py-2.5"><ScoreBar value={item.alpha_score} /></td>
+                      <td className="px-3 py-2.5 text-center">
+                        {item.ml_probability != null ? (
+                          <span
+                            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                              item.blocked_by_ml
+                                ? "bg-[#F87171]/10 text-[#F87171] border border-[#F87171]/20"
+                                : item.ml_probability >= 0.6
+                                ? "bg-[#34D399]/10 text-[#34D399] border border-[#34D399]/20"
+                                : item.ml_probability >= 0.4
+                                ? "bg-[#FBBF24]/10 text-[#FBBF24] border border-[#FBBF24]/20"
+                                : "bg-[#F87171]/10 text-[#F87171] border border-[#F87171]/20"
+                            }`}
+                            title={`ML win probability: ${(item.ml_probability * 100).toFixed(1)}%${item.blocked_by_ml ? " (blocked by ML)" : ""}`}
+                          >
+                            {(item.ml_probability * 100).toFixed(0)}%
+                          </span>
+                        ) : (
+                          <span className="text-[#4B5563]">—</span>
+                        )}
+                      </td>
                       {useDynamic ? (
                         dynCols.map((col) => (
                           <td key={col.key} className="px-3 py-2.5 text-right tabular-nums text-[#CBD5E1] whitespace-nowrap">

@@ -2434,6 +2434,12 @@ async def get_watchlist_assets(
         )
         normalized["current_values"] = {**normalized["current_values"], **{k: v for k, v in live_vals.items() if v is not None}}
         normalized["details"]["current_values"] = dict(normalized["current_values"])
+        # Inject ML prediction fields so the approved table can show the ML column
+        _ml = ml_predictions.get(asset.symbol)
+        if _ml:
+            normalized["ml_probability"]  = _ml.get("probability")
+            normalized["ml_final_score"]  = _ml.get("final_score")
+            normalized["blocked_by_ml"]   = _ml.get("blocked_by_ml")
         approved_items.append(normalized)
 
     return {
