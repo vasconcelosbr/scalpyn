@@ -784,3 +784,42 @@ async def symbol_audit(
     envelope["report"] = report.to_dict()
     envelope["remediation"] = rem.to_dict()
     return envelope
+
+
+@router.get("/diagnostics/ml-models", include_in_schema=False)
+async def ml_models_status(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    """Return all ml_models rows ordered by version descending."""
+    _enforce_auth(authorization)
+    from ..database import AsyncSessionLocal
+    from sqlalchemy import text as _text
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(_text("""
+            SELECT version, status,
+                   precision_score, recall_score, f1_score, roc_auc,
+                   win_fast_capture_rate, false_positive_rate,
+                   train_samples, val_samples, test_samples,
+                   decision_threshold, activated_at, retired_at, notes
+            FROM ml_models ORDER BY version DESC
+        """))).mappings().all()
+    return {
+        "models": [
+            {
+                "version": r["version"],
+                "status": r["status"],
+                "precision": float(r["precision_score"]) if r["precision_score"] is not None else None,
+                "recall": float(r["recall_score"]) if r["recall_score"] is not None else None,
+                "f1": float(r["f1_score"]) if r["f1_score"] is not None else None,
+                "roc_auc": float(r["roc_auc"]) if r["roc_auc"] is not None else None,
+                "capture_rate": float(r["win_fast_capture_rate"]) if r["win_fast_capture_rate"] is not None else None,
+                "fpr": float(r["false_positive_rate"]) if r["false_positive_rate"] is not None else None,
+                "train_samples": r["train_samples"],
+                "val_samples": r["val_samples"],
+                "test_samples": r["test_samples"],
+                "decision_threshold": float(r["decision_threshold"]) if r["decision_threshold"] is not None else None,
+                "activated_at": r["activated_at"].isoformat() if r["activated_at"] else None,
+                "retired_at": r["retired_at"].isoformat() if r["retired_at"] else None,
+                "notes": r["notes"],
+            }
+            for r in rows
+        ]
+    }
