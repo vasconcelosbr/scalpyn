@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # ── Configuration (override via env) ─────────────────────────────────────────
 MDH_BASE_URL = os.getenv(
     "MDH_BASE_URL",
-    "https://project--ef76c935-3c72-4146-86a4-a67c746a5b41.lovable.app",
+    "https://mdatahub.scalpyn.com",
 ).rstrip("/")
 MDH_API_KEY = os.getenv("MDH_API_KEY", "mdh_master_change_me")
 MDH_TIMEOUT = float(os.getenv("MDH_TIMEOUT_S", "5.0"))
