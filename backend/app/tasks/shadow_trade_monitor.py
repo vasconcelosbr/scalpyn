@@ -843,6 +843,13 @@ async def _monitor_async() -> Dict[str, int]:
     # via ON CONFLICT (decision_id) DO NOTHING.
     summary["backfill_created"] = await _backfill_shadows_for_all_users()
 
+    # P0 backfill: label decisions_log rows whose pnl_pct is still NULL even
+    # though the linked shadow trade has COMPLETED. Catches rows persisted
+    # before the record_as_simulation writeback fix was deployed.
+    # Capped at 500 rows/beat to avoid blocking on a large historical backlog.
+    from ..services.shadow_trade_service import backfill_decisions_log_pnl_from_shadows
+    summary["pnl_backfill"] = await backfill_decisions_log_pnl_from_shadows(limit=500)
+
     return summary
 
 

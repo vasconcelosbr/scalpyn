@@ -1445,6 +1445,66 @@ async def record_as_simulation(
     return row[0] if row is not None else None
 
 
+async def backfill_decisions_log_pnl_from_shadows(limit: int = 500) -> int:
+    """Back-fill pnl_pct / outcome / holding_seconds into decisions_log for
+    rows that were created before the P0 writeback fix was deployed.
+
+    Finds COMPLETED shadow trades whose linked decisions_log row still has
+    pnl_pct IS NULL and applies the same outcome vocabulary mapping as
+    record_as_simulation (TP_HIT→tp, SL_HIT→sl, TIMEOUT→timeout).
+
+    Safe to call repeatedly — the UPDATE predicate (pnl_pct IS NULL) is
+    idempotent. Processes up to ``limit`` rows per call so the monitor beat
+    doesn't block on a large historical backlog.
+
+    Returns the number of decisions_log rows updated.
+    """
+    from ..database import CeleryAsyncSessionLocal
+
+    try:
+        async with CeleryAsyncSessionLocal() as db:
+            async with db.begin():
+                result = await db.execute(
+                    text("""
+                        UPDATE decisions_log dl
+                           SET pnl_pct         = st.pnl_pct,
+                               outcome         = CASE st.outcome
+                                                   WHEN 'TP_HIT'  THEN 'tp'
+                                                   WHEN 'SL_HIT'  THEN 'sl'
+                                                   WHEN 'TIMEOUT' THEN 'timeout'
+                                                   ELSE lower(st.outcome)
+                                                 END,
+                               holding_seconds = st.holding_seconds
+                          FROM shadow_trades st
+                         WHERE st.decision_id  = dl.id
+                           AND dl.pnl_pct      IS NULL
+                           AND st.status       = 'COMPLETED'
+                           AND st.pnl_pct      IS NOT NULL
+                           AND dl.id IN (
+                               SELECT dl2.id
+                                 FROM decisions_log dl2
+                                 JOIN shadow_trades st2 ON st2.decision_id = dl2.id
+                                WHERE dl2.pnl_pct IS NULL
+                                  AND st2.status  = 'COMPLETED'
+                                  AND st2.pnl_pct IS NOT NULL
+                                ORDER BY dl2.id
+                                LIMIT :lim
+                           )
+                    """),
+                    {"lim": limit},
+                )
+                updated = result.rowcount
+        if updated:
+            logger.info(
+                "[shadow] backfill_decisions_log_pnl: labelled %d decisions_log row(s)",
+                updated,
+            )
+        return updated
+    except Exception:
+        logger.exception("[shadow] backfill_decisions_log_pnl failed")
+        return 0
+
+
 async def get_pending(
     db: AsyncSession,
     user_id,

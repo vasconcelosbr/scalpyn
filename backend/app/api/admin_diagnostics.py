@@ -679,6 +679,39 @@ async def pipeline_integrity(
     }
 
 
+# ─── P0 pnl backfill ────────────────────────────────────────────────────────
+
+
+@router.post("/diagnostics/backfill-pnl", include_in_schema=False)
+async def backfill_pnl(
+    limit: int = 500,
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Back-fill pnl_pct / outcome / holding_seconds into decisions_log for
+    rows that were labelled NULL before the P0 writeback fix was deployed.
+
+    Finds COMPLETED shadow_trades whose linked decisions_log row still has
+    pnl_pct IS NULL and applies the outcome vocabulary mapping
+    (TP_HIT→tp, SL_HIT→sl, TIMEOUT→timeout). Safe to call repeatedly —
+    the UPDATE predicate (pnl_pct IS NULL) is idempotent.
+
+    ``limit`` caps how many rows are processed per call (default 500).
+    Call repeatedly until ``updated == 0`` to drain the full backlog.
+    """
+    _enforce_auth(authorization)
+
+    from ..services.shadow_trade_service import backfill_decisions_log_pnl_from_shadows
+
+    updated = await backfill_decisions_log_pnl_from_shadows(limit=limit)
+    return {
+        "ok": True,
+        "updated": updated,
+        "limit": limit,
+        "done": updated == 0,
+        "ran_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 # ─── Symbol audit (Task #194) ───────────────────────────────────────────────
 
 
