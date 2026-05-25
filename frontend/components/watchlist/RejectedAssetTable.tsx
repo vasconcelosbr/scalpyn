@@ -181,6 +181,8 @@ export function WatchlistDecisionTable({
   const [stage, setStage] = useState("all");
   const [status, setStatus] = useState<"all" | "approved" | "rejected">("all");
   const [indicator, setIndicator] = useState("all");
+  const [sortKey, setSortKey] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const metrics = useMemo(() => {
     const approved = items.filter((item) => item.status === "approved").length;
@@ -206,6 +208,37 @@ export function WatchlistDecisionTable({
       return true;
     });
   }, [indicator, items, search, stage, status]);
+
+  const BOOLEAN_DECISION_KEYS = new Set([
+    "ema_trend", "ema9_gt_ema50", "ema9_gt_ema21", "ema_full_alignment", "di_trend",
+  ]);
+
+  const toggleSort = (key: string) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    } else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  };
+
+  const sortedFiltered = sortKey
+    ? [...filtered].sort((a, b) => {
+        let aVal: number, bVal: number;
+        if (sortKey === "score") {
+          aVal = a.alpha_score ?? -Infinity;
+          bVal = b.alpha_score ?? -Infinity;
+        } else {
+          const av = a.current_values?.[sortKey];
+          const bv = b.current_values?.[sortKey];
+          aVal = typeof av === "number" ? av : av == null ? -Infinity : Number(av);
+          bVal = typeof bv === "number" ? bv : bv == null ? -Infinity : Number(bv);
+          if (isNaN(aVal)) aVal = -Infinity;
+          if (isNaN(bVal)) bVal = -Infinity;
+        }
+        return sortDir === "desc" ? bVal - aVal : aVal - bVal;
+      })
+    : filtered;
 
   if (loading) {
     return <div className="px-4 py-6 text-sm text-[#4B5563]">Loading decision snapshot…</div>;
@@ -258,7 +291,7 @@ export function WatchlistDecisionTable({
         </select>
       </div>
 
-      {filtered.length === 0 ? (
+      {sortedFiltered.length === 0 ? (
         <div className="rounded-xl border border-[#1E2433] bg-[#06080E] px-4 py-10 text-center text-sm text-[#4B5563]">
           {emptyMessage ?? "No decision snapshots for the current filters."}
         </div>
@@ -280,17 +313,36 @@ export function WatchlistDecisionTable({
               <tr className="border-b border-[#1A2035] bg-[#060810]">
                 <th className="w-8 px-2 py-2.5" />
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Symbol</th>
-                <th className="px-3 py-2.5 text-left text-[#4B5563] min-w-[130px]">Score</th>
+                <th className="px-3 py-2.5 text-left text-[#4B5563] min-w-[130px]">
+                  <button onClick={() => toggleSort("score")} className="flex items-center gap-1 hover:text-[#94A3B8] transition-colors">
+                    Score
+                    <span className={`text-[9px] ${sortKey === "score" ? "text-[#60A5FA]" : "opacity-30"}`}>
+                      {sortKey === "score" ? (sortDir === "desc" ? "▼" : "▲") : "⇅"}
+                    </span>
+                  </button>
+                </th>
                 {useDynamic ? (
-                  dynCols.map((col) => (
-                    <th
-                      key={col.key}
-                      className="px-3 py-2.5 text-right text-[#4B5563] whitespace-nowrap"
-                      title={col.field}
-                    >
-                      {col.label}
-                    </th>
-                  ))
+                  dynCols.map((col) => {
+                    const isNumeric = !BOOLEAN_DECISION_KEYS.has(col.key) && !BOOLEAN_DECISION_KEYS.has(col.field);
+                    return (
+                      <th
+                        key={col.key}
+                        className="px-3 py-2.5 text-right text-[#4B5563] whitespace-nowrap"
+                        title={col.field}
+                      >
+                        {isNumeric ? (
+                          <button onClick={() => toggleSort(col.key)} className="flex items-center gap-1 justify-end hover:text-[#94A3B8] transition-colors w-full">
+                            {col.label}
+                            <span className={`text-[9px] ${sortKey === col.key ? "text-[#60A5FA]" : "opacity-30"}`}>
+                              {sortKey === col.key ? (sortDir === "desc" ? "▼" : "▲") : "⇅"}
+                            </span>
+                          </button>
+                        ) : (
+                          col.label
+                        )}
+                      </th>
+                    );
+                  })
                 ) : (
                   <>
                     <th className="px-3 py-2.5 text-left text-[#4B5563]">Indicators</th>
@@ -303,7 +355,7 @@ export function WatchlistDecisionTable({
               </tr>
             </thead>
             <tbody>
-              {filtered.map((item) => {
+              {sortedFiltered.map((item) => {
                 const palette = itemPalette(item.status);
                 const rowKey = `${item.symbol}-${item.status}-${item.timestamp ?? "na"}`;
                 const isExpanded = expandedRow === rowKey;
