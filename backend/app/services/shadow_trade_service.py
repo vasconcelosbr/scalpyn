@@ -948,6 +948,106 @@ def _flatten_analysis_snapshot(
     return flat
 
 
+async def create_shadows_for_new_decisions(user_id, decision_ids: List[int]) -> int:
+    """Inline shadow creation triggered by pipeline_scan immediately after
+    _persist_decision_logs.
+
+    Eliminates the async gap between the decisions_log commit and the next
+    shadow_trade_monitor beat (up to 5 min), which is the primary source of
+    orphaned ALLOW decisions reported by the P0 pipeline-integrity probe.
+
+    Strategy:
+    * Loads the user's active spot_engine ConfigProfile once (tp_pct / sl_pct).
+    * Opens one own-session per decision_id (deadlock-safe, same as backfill).
+    * Calls _create_from_decision which is idempotent via ON CONFLICT
+      (decision_id) DO NOTHING — safe to call even if the monitor beat runs
+      concurrently and creates the same shadow first.
+
+    Fire-and-forget: never raises. Returns count of new shadows created.
+    """
+    if not decision_ids:
+        return 0
+
+    from ..database import CeleryAsyncSessionLocal
+    from ..models.config_profile import ConfigProfile
+    from ..schemas.spot_engine_config import SpotEngineConfig
+
+    # Load user config once; bail out silently if config is missing.
+    user_config: Dict[str, Any] = {}
+    try:
+        async with CeleryAsyncSessionLocal() as cfg_db:
+            cfg_res = await cfg_db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "spot_engine",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            cfg_row = cfg_res.scalar_one_or_none()
+            if cfg_row:
+                se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
+                user_config = {
+                    "tp_pct": float(se_cfg.selling.take_profit_pct),
+                    "sl_pct": float(
+                        se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct
+                    ),
+                    "timeout_candles": None,
+                }
+    except Exception:
+        logger.exception(
+            "[shadow] inline create: config load failed for user=%s", user_id
+        )
+        return 0
+
+    if not user_config:
+        logger.warning(
+            "[shadow] inline create: no active spot_engine config for user=%s — skipping",
+            user_id,
+        )
+        return 0
+
+    created = 0
+    # Sorted for deadlock safety (same convention as safe_backfill — gotcha #251/#273).
+    for decision_id in sorted(decision_ids):
+        try:
+            async with CeleryAsyncSessionLocal() as own_db:
+                async with own_db.begin():
+                    res = await own_db.execute(
+                        select(DecisionLog).where(DecisionLog.id == decision_id)
+                    )
+                    decision = res.scalar_one_or_none()
+                    if decision is None:
+                        # Shouldn't happen — the pipeline_scan just committed
+                        # this row — but guard against any race.
+                        logger.debug(
+                            "[shadow] inline create: decision_id=%s not found",
+                            decision_id,
+                        )
+                        continue
+                    new_id = await _create_from_decision(
+                        own_db, decision, "NOT_TRADABLE", user_config,
+                        source=SHADOW_SOURCE_L3,
+                    )
+                    if new_id is not None:
+                        created += 1
+                        logger.info(
+                            "[shadow] inline created id=%s symbol=%s decision_id=%s",
+                            new_id, decision.symbol, decision_id,
+                        )
+        except Exception:
+            logger.exception(
+                "[shadow] inline create failed for decision_id=%s user=%s",
+                decision_id, user_id,
+            )
+
+    if created:
+        logger.info(
+            "[shadow] inline create: %d shadow(s) created inline for user=%s",
+            created, user_id,
+        )
+    return created
+
+
 async def safe_backfill_watchlist_shadows(
     user_id,
     user_config: Dict[str, Any],

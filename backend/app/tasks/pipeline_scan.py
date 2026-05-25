@@ -2790,6 +2790,24 @@ async def _run_pipeline_scan():
                         for payload in decision_payloads:
                             publish_decision_event(payload)
 
+                        # P0 fix: close the orphaned-decisions gap.
+                        # _persist_decision_logs + _update_last_scanned have
+                        # already committed.  Create shadows inline now instead
+                        # of waiting up to 5 min for the next monitor beat.
+                        # ON CONFLICT (decision_id) DO NOTHING makes this safe
+                        # even when the monitor runs concurrently.
+                        _allow_decision_ids = [
+                            p["id"] for p in decision_payloads
+                            if p.get("decision") == "ALLOW" and p.get("id")
+                        ]
+                        if _allow_decision_ids:
+                            from ..services.shadow_trade_service import (
+                                create_shadows_for_new_decisions,
+                            )
+                            await create_shadows_for_new_decisions(
+                                wl.user_id, _allow_decision_ids
+                            )
+
                     if new_syms:
                         stats["new_signals"] += len(new_syms)
                         await _broadcast_pipeline_update(
