@@ -1393,14 +1393,56 @@ async def record_as_simulation(
             "(shadow_id=%s) — dedup hit",
             shadow.decision_id, shadow.id,
         )
-        return None
-    sim_id = row[0]
-    logger.info(
-        "[shadow] simulation recorded id=%s shadow_id=%s decision_id=%s "
-        "result=%s symbol=%s",
-        sim_id, shadow.id, shadow.decision_id, result, shadow.symbol,
-    )
-    return sim_id
+    else:
+        sim_id = row[0]
+        logger.info(
+            "[shadow] simulation recorded id=%s shadow_id=%s decision_id=%s "
+            "result=%s symbol=%s",
+            sim_id, shadow.id, shadow.decision_id, result, shadow.symbol,
+        )
+
+    # P0 fix — write pnl_pct / outcome / holding_seconds back to decisions_log.
+    #
+    # This is the root cause of the pnl_null_rate P0 issue: shadow trades were
+    # completing (status=COMPLETED, pnl_pct set on the ShadowTrade row) but the
+    # label was never propagated to decisions_log, so build_training_dataframe()
+    # dropped every row (pnl_pct IS NULL → cannot label → silently skipped).
+    #
+    # Outcome vocabulary in decisions_log is lowercase tp/sl/timeout
+    # (canonical post-14/05 regime — see feature_extractor.py build_training_dataframe).
+    # WHERE pnl_pct IS NULL makes this idempotent on monitor retries.
+    _outcome_dl_map = {"TP_HIT": "tp", "SL_HIT": "sl", "TIMEOUT": "timeout"}
+    if shadow.decision_id is not None and shadow.pnl_pct is not None:
+        dl_outcome = _outcome_dl_map.get(outcome)
+        try:
+            await db.execute(
+                text("""
+                    UPDATE decisions_log
+                       SET pnl_pct         = :pnl_pct,
+                           outcome         = :outcome,
+                           holding_seconds = :holding_seconds
+                     WHERE id = :decision_id
+                       AND pnl_pct IS NULL
+                """),
+                {
+                    "decision_id":     shadow.decision_id,
+                    "pnl_pct":         shadow.pnl_pct,
+                    "outcome":         dl_outcome,
+                    "holding_seconds": shadow.holding_seconds,
+                },
+            )
+            logger.info(
+                "[shadow] decisions_log labelled decision_id=%s pnl_pct=%.4f "
+                "outcome=%s holding_seconds=%s",
+                shadow.decision_id, shadow.pnl_pct, dl_outcome, shadow.holding_seconds,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[shadow] decisions_log label write failed for decision_id=%s: %s",
+                shadow.decision_id, exc,
+            )
+
+    return row[0] if row is not None else None
 
 
 async def get_pending(
