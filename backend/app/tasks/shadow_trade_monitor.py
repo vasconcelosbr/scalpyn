@@ -235,6 +235,10 @@ def _finalize_outcome(
     para que o caminho live-close (introduzido nesta data) reuse a mesma
     lógica de PnL/holding/COMPLETED sem duplicar. Comportamento
     idêntico ao bloco legado — pure refactor.
+
+    Fase Quant 1 (migration 062): computa mae_pct / mfe_pct a partir de
+    min/max_price_post_entry acumulados candle-a-candle durante RUNNING.
+    Não altera TP/SL/timeout — puramente observacional.
     """
     shadow.outcome = outcome
     shadow.exit_price = exit_price
@@ -247,9 +251,66 @@ def _finalize_outcome(
         shadow.holding_seconds = int(
             (exit_ts - shadow.entry_timestamp).total_seconds()
         )
+    # ── MAE/MFE final computation (Fase Quant 1) ─────────────────────────
+    if entry_price > 0:
+        if shadow.min_price_post_entry is not None:
+            mae = (shadow.min_price_post_entry - entry_price) / entry_price * 100.0
+            shadow.mae_pct = mae
+            shadow.max_drawdown_pct = mae
+        if shadow.max_price_post_entry is not None:
+            mfe = (shadow.max_price_post_entry - entry_price) / entry_price * 100.0
+            shadow.mfe_pct = mfe
+            shadow.max_profit_pct = mfe
     shadow.status = "COMPLETED"
     shadow.completed_at = datetime.now(timezone.utc)
     shadow.last_processed_time = exit_ts
+
+
+def _build_exit_metrics_json(
+    shadow: ShadowTrade,
+    indicator_snapshot: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Constrói exit_metrics_json — snapshot rico de saída (Fase Quant 2).
+
+    Consolida num único JSONB: outcome, PnL, MAE/MFE, preços de entrada/saída,
+    e os indicadores flat capturados em features_snapshot_exit.
+    Nunca propaga exceção — falha é silenciosa (exit_metrics_json fica NULL).
+
+    Chamado por ``_capture_exit_features`` após gravar features_snapshot_exit,
+    portanto shadow já tem mae_pct/mfe_pct preenchidos por _finalize_outcome.
+    """
+    try:
+        entry_price = float(shadow.entry_price) if shadow.entry_price is not None else None
+        data: Dict[str, Any] = {
+            "outcome": shadow.outcome,
+            "pnl_pct": round(float(shadow.pnl_pct), 6) if shadow.pnl_pct is not None else None,
+            "pnl_usdt": round(float(shadow.pnl_usdt), 4) if shadow.pnl_usdt is not None else None,
+            "holding_seconds": shadow.holding_seconds,
+            "entry_price": entry_price,
+            "exit_price": float(shadow.exit_price) if shadow.exit_price is not None else None,
+            "tp_price": float(shadow.tp_price) if shadow.tp_price is not None else None,
+            "sl_price": float(shadow.sl_price) if shadow.sl_price is not None else None,
+            "mae_pct": round(float(shadow.mae_pct), 6) if shadow.mae_pct is not None else None,
+            "mfe_pct": round(float(shadow.mfe_pct), 6) if shadow.mfe_pct is not None else None,
+            "max_drawdown_pct": round(float(shadow.max_drawdown_pct), 6)
+                if shadow.max_drawdown_pct is not None else None,
+            "max_profit_pct": round(float(shadow.max_profit_pct), 6)
+                if shadow.max_profit_pct is not None else None,
+            "min_price_post_entry": float(shadow.min_price_post_entry)
+                if shadow.min_price_post_entry is not None else None,
+            "max_price_post_entry": float(shadow.max_price_post_entry)
+                if shadow.max_price_post_entry is not None else None,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if indicator_snapshot and isinstance(indicator_snapshot, dict):
+            if not indicator_snapshot.get("_capture_failed"):
+                data["indicators"] = indicator_snapshot
+        shadow.exit_metrics_json = data
+    except Exception as exc:
+        logger.debug(
+            "[shadow-monitor] _build_exit_metrics_json failed for shadow_id=%s: %s",
+            shadow.id, exc,
+        )
 
 
 async def _capture_exit_features(db, shadow: ShadowTrade) -> None:
@@ -296,6 +357,7 @@ async def _capture_exit_features(db, shadow: ShadowTrade) -> None:
             "_reason": "capture_exception",
             "_error": snapshot["_capture_error"],
         }
+        _build_exit_metrics_json(shadow, shadow.features_snapshot_exit)
         return
 
     if snapshot:
@@ -312,6 +374,7 @@ async def _capture_exit_features(db, shadow: ShadowTrade) -> None:
                 )
             except Exception:
                 pass
+        _build_exit_metrics_json(shadow, snapshot)
         return
 
     logger.warning(
@@ -323,6 +386,7 @@ async def _capture_exit_features(db, shadow: ShadowTrade) -> None:
         "_capture_failed": True,
         "_reason": "indicators_unavailable_at_close",
     }
+    _build_exit_metrics_json(shadow, shadow.features_snapshot_exit)
 
 
 async def _enrich_market_context(db, shadow: ShadowTrade) -> None:
@@ -605,6 +669,12 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
         max_price, max_ts, max_src = max(candidates, key=lambda c: c[0])
         min_price, min_ts, min_src = min(candidates, key=lambda c: c[0])
 
+        # ── MAE/MFE: update from live-close sources (Fase Quant 1) ──────
+        if shadow.min_price_post_entry is None or min_price < shadow.min_price_post_entry:
+            shadow.min_price_post_entry = min_price
+        if shadow.max_price_post_entry is None or max_price > shadow.max_price_post_entry:
+            shadow.max_price_post_entry = max_price
+
         live_outcome: Optional[str] = None
         chosen_price: Optional[float] = None
         chosen_ts: Optional[datetime] = None
@@ -715,6 +785,15 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
         last_seen_ts = c["time"]
         if c["high"] is None or c["low"] is None:
             continue
+        # ── MAE/MFE: update min/max per-candle (Fase Quant 1) ───────────
+        # Usa candle.low / candle.high — nunca só o close.
+        # Atualiza em TODAS as candles, inclusive antes do outcome (running).
+        _cl = c["low"]
+        _ch = c["high"]
+        if shadow.min_price_post_entry is None or _cl < shadow.min_price_post_entry:
+            shadow.min_price_post_entry = _cl
+        if shadow.max_price_post_entry is None or _ch > shadow.max_price_post_entry:
+            shadow.max_price_post_entry = _ch
         # SL antes de TP na mesma candle — regra conservadora.
         if c["low"] <= sl:
             outcome = "SL_HIT"

@@ -33,6 +33,8 @@ from ..models.backoffice import DecisionLog
 from ..models.shadow_trade import ShadowTrade
 from ..services.exit_metrics import flatten_entry_snapshot
 from ..schemas.shadow_trade import (
+    OutcomeMetrics,
+    ShadowTradeAnalytics,
     ShadowTradeDetail,
     ShadowTradeListResponse,
     ShadowTradePricesResponse,
@@ -211,6 +213,12 @@ def _to_read(
         funding_rate_at_entry=float(row.funding_rate_at_entry)
         if row.funding_rate_at_entry is not None else None,
         n_concurrent_signals=row.n_concurrent_signals,
+        mae_pct=float(row.mae_pct) if row.mae_pct is not None else None,
+        mfe_pct=float(row.mfe_pct) if row.mfe_pct is not None else None,
+        max_drawdown_pct=float(row.max_drawdown_pct)
+        if row.max_drawdown_pct is not None else None,
+        max_profit_pct=float(row.max_profit_pct)
+        if row.max_profit_pct is not None else None,
     )
 
 
@@ -295,6 +303,19 @@ def _to_detail(
         n_concurrent_signals=row.n_concurrent_signals,
         entry_metrics=entry_metrics,
         exit_metrics=exit_metrics,
+        mae_pct=float(row.mae_pct) if row.mae_pct is not None else None,
+        mfe_pct=float(row.mfe_pct) if row.mfe_pct is not None else None,
+        max_drawdown_pct=float(row.max_drawdown_pct)
+        if row.max_drawdown_pct is not None else None,
+        max_profit_pct=float(row.max_profit_pct)
+        if row.max_profit_pct is not None else None,
+        min_price_post_entry=float(row.min_price_post_entry)
+        if row.min_price_post_entry is not None else None,
+        max_price_post_entry=float(row.max_price_post_entry)
+        if row.max_price_post_entry is not None else None,
+        exit_metrics_json=row.exit_metrics_json
+        if isinstance(row.exit_metrics_json, dict)
+        else None,
     )
 
 
@@ -462,6 +483,140 @@ async def shadow_trade_prices(
         logger.error("Failed to fetch shadow prices: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500, detail="Failed to fetch prices"
+        ) from exc
+
+
+@router.get("/analytics", response_model=ShadowTradeAnalytics)
+async def shadow_trades_analytics(
+    min_date: Optional[str] = Query(None),
+    max_date: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> ShadowTradeAnalytics:
+    """Analytics segmentado por outcome — Fase Quant 3.
+
+    Retorna taxas por outcome (TP/SL/TIMEOUT), holding times médios,
+    e métricas MAE/MFE por grupo (requer migration 062).
+
+    Recovery analysis:
+    - near_sl_winners_pct: % de TP_HIT com mae_pct < -2% (quase bateram SL)
+    - sl_after_strong_mfe_pct: % de SL_HIT com mfe_pct > 1% (SL após forte MFE)
+    - avg_recovery_pct: avg(mfe_pct - mae_pct) nos TP_HIT (spread de excursão)
+    """
+    try:
+        start_dt = _parse_iso_datetime(min_date)
+        end_dt = _parse_iso_datetime(max_date, is_end=True)
+        sanitized_source = _sanitize_source(source)
+
+        conditions = ["user_id = :uid", "status = 'COMPLETED'"]
+        params: Dict[str, Any] = {"uid": str(user_id)}
+        if start_dt is not None:
+            conditions.append("created_at >= :start_dt")
+            params["start_dt"] = start_dt
+        if end_dt is not None:
+            conditions.append("created_at <= :end_dt")
+            params["end_dt"] = end_dt
+        if sanitized_source:
+            conditions.append("source = :source")
+            params["source"] = sanitized_source
+
+        where_clause = " AND ".join(conditions)
+
+        # Single-query aggregate — todos os outcomes em paralelo.
+        q = text(f"""
+            SELECT
+                COUNT(*) FILTER (WHERE outcome = 'TP_HIT')       AS tp_count,
+                COUNT(*) FILTER (WHERE outcome = 'SL_HIT')       AS sl_count,
+                COUNT(*) FILTER (WHERE outcome = 'TIMEOUT')      AS to_count,
+                COUNT(*)                                          AS total,
+                -- avg pnl por outcome
+                AVG(pnl_pct) FILTER (WHERE outcome = 'TP_HIT')   AS tp_avg_pnl,
+                AVG(pnl_pct) FILTER (WHERE outcome = 'SL_HIT')   AS sl_avg_pnl,
+                AVG(pnl_pct) FILTER (WHERE outcome = 'TIMEOUT')  AS to_avg_pnl,
+                -- avg holding por outcome
+                AVG(holding_seconds) FILTER (WHERE outcome = 'TP_HIT')  AS tp_avg_hold,
+                AVG(holding_seconds) FILTER (WHERE outcome = 'SL_HIT')  AS sl_avg_hold,
+                AVG(holding_seconds) FILTER (WHERE outcome = 'TIMEOUT') AS to_avg_hold,
+                -- MAE/MFE por grupo (nullable: None antes da migration 062)
+                AVG(mae_pct) FILTER (WHERE outcome = 'TP_HIT')   AS tp_avg_mae,
+                AVG(mfe_pct) FILTER (WHERE outcome = 'TP_HIT')   AS tp_avg_mfe,
+                AVG(mae_pct) FILTER (WHERE outcome = 'SL_HIT')   AS sl_avg_mae,
+                AVG(mfe_pct) FILTER (WHERE outcome = 'SL_HIT')   AS sl_avg_mfe,
+                -- Recovery: TP_HIT com mae < -2% (quase perdeu mas venceu)
+                COUNT(*) FILTER (WHERE outcome = 'TP_HIT' AND mae_pct < -2.0)  AS near_sl_winners,
+                -- SL após forte MFE: SL_HIT com mfe > 1%
+                COUNT(*) FILTER (WHERE outcome = 'SL_HIT' AND mfe_pct > 1.0)   AS sl_after_mfe,
+                -- avg recovery spread em TP_HIT (mfe - mae = spread de excursão)
+                AVG(mfe_pct - mae_pct) FILTER (
+                    WHERE outcome = 'TP_HIT' AND mae_pct IS NOT NULL AND mfe_pct IS NOT NULL
+                ) AS avg_recovery,
+                MIN(created_at) AS period_start,
+                MAX(created_at) AS period_end
+            FROM shadow_trades
+            WHERE {where_clause}
+        """)
+
+        row = (await db.execute(q, params)).one()
+
+        total = int(row.total or 0)
+        tp_count = int(row.tp_count or 0)
+        sl_count = int(row.sl_count or 0)
+        to_count = int(row.to_count or 0)
+
+        def _rate(n: int) -> float:
+            return round((n / total) * 100, 2) if total else 0.0
+
+        def _f(v) -> Optional[float]:
+            return round(float(v), 4) if v is not None else None
+
+        near_sl_winners = int(row.near_sl_winners or 0)
+        sl_after_mfe = int(row.sl_after_mfe or 0)
+
+        return ShadowTradeAnalytics(
+            total_completed=total,
+            tp=OutcomeMetrics(
+                count=tp_count,
+                rate_pct=_rate(tp_count),
+                avg_pnl_pct=_f(row.tp_avg_pnl),
+                avg_holding_seconds=_f(row.tp_avg_hold),
+                avg_mae_pct=_f(row.tp_avg_mae),
+                avg_mfe_pct=_f(row.tp_avg_mfe),
+            ),
+            sl=OutcomeMetrics(
+                count=sl_count,
+                rate_pct=_rate(sl_count),
+                avg_pnl_pct=_f(row.sl_avg_pnl),
+                avg_holding_seconds=_f(row.sl_avg_hold),
+                avg_mae_pct=_f(row.sl_avg_mae),
+                avg_mfe_pct=_f(row.sl_avg_mfe),
+            ),
+            timeout=OutcomeMetrics(
+                count=to_count,
+                rate_pct=_rate(to_count),
+                avg_pnl_pct=_f(row.to_avg_pnl),
+                avg_holding_seconds=_f(row.to_avg_hold),
+                avg_mae_pct=None,
+                avg_mfe_pct=None,
+            ),
+            avg_mae_winners=_f(row.tp_avg_mae),
+            avg_mfe_winners=_f(row.tp_avg_mfe),
+            avg_mae_losers=_f(row.sl_avg_mae),
+            avg_mfe_losers=_f(row.sl_avg_mfe),
+            near_sl_winners_pct=round((near_sl_winners / tp_count) * 100, 2)
+                if tp_count else None,
+            sl_after_strong_mfe_pct=round((sl_after_mfe / sl_count) * 100, 2)
+                if sl_count else None,
+            avg_recovery_pct=_f(row.avg_recovery),
+            period_start=row.period_start,
+            period_end=row.period_end,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to compute shadow analytics: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500, detail="Failed to compute shadow analytics"
         ) from exc
 
 

@@ -124,4 +124,25 @@ class ShadowTrade(Base):
     funding_rate_at_entry = Column(Numeric(10, 6), nullable=True)
     n_concurrent_signals = Column(Integer, nullable=True)
 
+    # ── MAE/MFE Tracking (migration 062, Fase Quant 1) ───────────────────
+    # Rastreamento contínuo de trajetória do trade durante RUNNING.
+    # min/max_price_post_entry: atualizados candle-a-candle pelo monitor
+    # usando candle.low / candle.high (nunca só o close).
+    # mae_pct / mfe_pct / max_drawdown_pct / max_profit_pct: calculados no
+    # encerramento. NÃO usados em inferência do XGBoost nesta fase.
+    # Todos nullable: back-compat com trades criados antes desta migration.
+    min_price_post_entry = Column(Float, nullable=True)
+    max_price_post_entry = Column(Float, nullable=True)
+    max_drawdown_pct = Column(Float, nullable=True)   # == mae_pct (alias)
+    max_profit_pct = Column(Float, nullable=True)     # == mfe_pct (alias)
+    mae_pct = Column(Float, nullable=True)             # MAE %: (min-entry)/entry*100
+    mfe_pct = Column(Float, nullable=True)             # MFE %: (max-entry)/entry*100
+
+    # ── Exit Metrics Snapshot (migration 062, Fase Quant 2) ──────────────
+    # Snapshot rico no encerramento: indicadores + PnL + MAE/MFE.
+    # Preenchido por _capture_exit_features após o trade atingir outcome.
+    # Complementa features_snapshot_exit (flat indicators) com contexto
+    # quantitativo completo para análises offline.
+    exit_metrics_json = Column(JSONB, nullable=True)
+
     decision = relationship("DecisionLog", foreign_keys=[decision_id])

@@ -46,6 +46,13 @@ class ShadowTradeRead(BaseModel):
     funding_rate_at_entry: Optional[float] = None
     n_concurrent_signals: Optional[int] = None
 
+    # MAE/MFE (migration 062, Fase Quant 1). None em trades ainda abertos
+    # ou criados antes desta migration. Observacional — não afeta inferência.
+    mae_pct: Optional[float] = None
+    mfe_pct: Optional[float] = None
+    max_drawdown_pct: Optional[float] = None
+    max_profit_pct: Optional[float] = None
+
 
 class ShadowTradeDetail(ShadowTradeRead):
     """Detalhe completo — adiciona snapshots para a página de drill-down."""
@@ -89,6 +96,11 @@ class ShadowTradeDetail(ShadowTradeRead):
     entry_metrics: Optional[Dict[str, Any]] = None
     exit_metrics: Optional[Dict[str, Any]] = None
 
+    # Campos de preço extremo e snapshot rico (migration 062, Fase Quant 1+2).
+    min_price_post_entry: Optional[float] = None
+    max_price_post_entry: Optional[float] = None
+    exit_metrics_json: Optional[Dict[str, Any]] = None
+
 
 class ShadowTradeListResponse(BaseModel):
     items: List[ShadowTradeRead]
@@ -119,5 +131,47 @@ class ShadowTradeSummary(BaseModel):
     win_rate: float  # win / completed × 100 (0 se completed=0)
     total_pnl_usdt: float
     avg_pnl_pct: float
+    period_start: Optional[datetime] = None
+    period_end: Optional[datetime] = None
+
+
+class OutcomeMetrics(BaseModel):
+    """Métricas agregadas por outcome (TP_HIT / SL_HIT / TIMEOUT)."""
+
+    count: int
+    rate_pct: float                      # count / total_completed * 100
+    avg_pnl_pct: Optional[float] = None
+    avg_holding_seconds: Optional[float] = None
+    avg_mae_pct: Optional[float] = None  # avg MAE para este grupo
+    avg_mfe_pct: Optional[float] = None  # avg MFE para este grupo
+
+
+class ShadowTradeAnalytics(BaseModel):
+    """Analytics segmentado por outcome — Fase Quant 3.
+
+    Alimentado por ``GET /api/shadow-trades/analytics``.
+    Contém taxas por outcome, holding times, MAE/MFE médios por grupo,
+    e análise de recovery para trades vencedores que passaram por drawdown.
+
+    Todos os campos de MAE/MFE são None quando ainda não há dados
+    suficientes (migration 062 não preenchida retroativamente).
+    """
+
+    total_completed: int
+    tp: OutcomeMetrics
+    sl: OutcomeMetrics
+    timeout: OutcomeMetrics
+
+    # MAE/MFE cross-outcome (requer migration 062)
+    avg_mae_winners: Optional[float] = None   # avg MAE dos TP_HIT
+    avg_mfe_winners: Optional[float] = None   # avg MFE dos TP_HIT
+    avg_mae_losers: Optional[float] = None    # avg MAE dos SL_HIT
+    avg_mfe_losers: Optional[float] = None    # avg MFE dos SL_HIT
+
+    # Recovery analysis — % de trades com comportamento específico
+    near_sl_winners_pct: Optional[float] = None   # TP_HIT com mae_pct < -2%
+    sl_after_strong_mfe_pct: Optional[float] = None  # SL_HIT com mfe_pct > 1%
+    avg_recovery_pct: Optional[float] = None         # avg(mfe_pct - mae_pct) em TP_HIT
+
     period_start: Optional[datetime] = None
     period_end: Optional[datetime] = None
