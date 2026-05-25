@@ -2159,8 +2159,8 @@ async def get_watchlist_assets(
             except Exception:
                 pass
 
-            ml_enabled = ai_settings.get("ml_enabled", False)
-            use_ml_ranking = ai_settings.get("use_ml_ranking", False)
+            ml_enabled = ai_settings.get("ml_enabled", True)
+            use_ml_ranking = ai_settings.get("use_ml_ranking", True)
 
             if ml_enabled and use_ml_ranking:
                 ai_block_threshold = ai_settings.get("ai_block_threshold", 0.5)
