@@ -1890,6 +1890,7 @@ async def _resolve_and_persist(
     existing_map = {a.symbol: a for a in existing_result.scalars().all()}
     new_symbols = {a["symbol"] for a in assets_out}
     prev_symbols = set(existing_map.keys())
+    newly_approved_l3: list = []  # (sym, event_type, score) for L3 decisions_log entries
 
     for asset_data in assets_out:
         sym = asset_data["symbol"]
@@ -1918,6 +1919,8 @@ async def _resolve_and_persist(
                 row.level_direction = "up"
                 row.level_change_at = now
                 asset_data["level_direction"] = "up"
+                if effective_level == "L3":
+                    newly_approved_l3.append((sym, "SIGNAL_REGAINED", asset_data.get("alpha_score") or 0))
         else:
             # New asset entered this watchlist level
             row = PipelineWatchlistAsset(
@@ -1945,12 +1948,57 @@ async def _resolve_and_persist(
             )
             db.add(row)
             asset_data["level_direction"] = "up"
+            if effective_level == "L3":
+                newly_approved_l3.append((sym, "NEW_SIGNAL", asset_data.get("alpha_score") or 0))
 
     # Assets that left this level
     for sym in prev_symbols - new_symbols:
         row = existing_map[sym]
         row.level_direction = "down"
         row.level_change_at = now
+
+    # Write decisions_log entries for newly approved L3 symbols via the on-demand API path.
+    # The Celery pipeline_scan handles this for auto_refresh watchlists, but there is a
+    # timing gap between when _resolve_and_persist marks symbols as 'up' and when the next
+    # Celery cycle runs. This block closes that gap immediately.
+    if effective_level == "L3" and newly_approved_l3:
+        try:
+            from ..models.backoffice import DecisionLog as _DecisionLog
+            _timeframe = (profile_config_full or {}).get("default_timeframe", "5m")
+            _assets_by_sym = {a["symbol"]: a for a in assets_out}
+            _dl_rows = []
+            for _sym, _evt, _score in newly_approved_l3:
+                _ad = _assets_by_sym.get(_sym, {})
+                _direction = _ad.get("futures_direction") or (
+                    "NEUTRAL" if (wl.market_mode or "spot") == "futures" else "SPOT"
+                )
+                _dl_rows.append(_DecisionLog(
+                    symbol=_sym,
+                    strategy="L3",
+                    timeframe=_timeframe,
+                    score=_score,
+                    decision="ALLOW",
+                    l1_pass=True,
+                    l2_pass=True,
+                    l3_pass=True,
+                    reasons=None,
+                    metrics=None,
+                    latency_ms=None,
+                    direction=_direction,
+                    event_type=_evt,
+                    user_id=user_id,
+                    created_at=now,
+                ))
+            db.add_all(_dl_rows)
+            logger.info(
+                "[Pipeline] _resolve_and_persist: %d decisions_log entr(y/ies) for L3 wl=%s: %s",
+                len(_dl_rows), wl.id, [r.symbol for r in _dl_rows],
+            )
+        except Exception as _dl_exc:
+            logger.warning(
+                "[Pipeline] _resolve_and_persist: failed to write decisions_log for L3 wl=%s: %s",
+                wl.id, _dl_exc,
+            )
 
     # Track when this watchlist was last refreshed
     wl.last_scanned_at = now
