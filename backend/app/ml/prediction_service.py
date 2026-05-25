@@ -5,6 +5,7 @@ from sqlalchemy import text
 
 from app.ml.feature_extractor import FEATURE_COLUMNS, ML_EXCLUDED_FIELDS, extract_features
 from app.ml.gcs_model_loader import get_model
+from app.ml.macro_client import fetch_macro_context
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,23 @@ class WinFastPredictor:
         # Threshold do banco
         model_id, threshold = await self._get_threshold(db)
 
+        # ── Macro enrichment (Market Data Hub) ──────────────────────────────
+        # Fetch global macro context concurrently. Never blocks inference on
+        # failure — on timeout/error returns macro_context_available=False and
+        # all numeric features as None (treated as NaN by XGBoost missing=nan).
+        try:
+            macro = await fetch_macro_context()
+        except Exception as _macro_exc:
+            logger.warning("[ML] macro_client failed: %s — proceeding without macro", _macro_exc)
+            macro = {"macro_context_available": False}
+
+        # Merge macro features into metrics (additive — never overwrite symbol indicators).
+        # Macro keys are at the END of FEATURE_COLUMNS so they never collide with
+        # existing indicator features (e.g. rsi, adx).
+        if metrics is None:
+            metrics = {}
+        metrics = {**metrics, **macro}
+
         # Extrai e vetoriza features.
         # Task #324 — preserve NaN. XGBoost was treinado com missing=nan;
         # default 0.0 colapsaria "ausente" e "zero real" (ex.: taker_ratio=0
@@ -73,7 +91,7 @@ class WinFastPredictor:
         # ML_EXCLUDED_FIELDS — strip leakage fields aqui também (defesa em
         # profundidade, espelha o filtro de extract_features para o caso de
         # callers que bypassem extract_features no futuro).
-        if metrics and any(k in metrics for k in ML_EXCLUDED_FIELDS):
+        if any(k in metrics for k in ML_EXCLUDED_FIELDS):
             metrics = {k: v for k, v in metrics.items() if k not in ML_EXCLUDED_FIELDS}
         features = extract_features(metrics)
         _nan = float("nan")
@@ -85,6 +103,20 @@ class WinFastPredictor:
             [[features.get(f, _nan) for f in FEATURE_COLUMNS]],
             dtype="float32",
         )
+
+        # Backwards-compat: models trained before macro features were added to
+        # FEATURE_COLUMNS expect fewer columns. Truncate X to what the model
+        # was trained with — macro features appear at the end of FEATURE_COLUMNS
+        # so truncation is safe. When the model is retrained with macro data,
+        # n_features_in_ matches len(FEATURE_COLUMNS) and this branch is skipped.
+        expected_features = getattr(model, "n_features_in_", None)
+        if expected_features is not None and X.shape[1] > expected_features:
+            logger.info(
+                "[ML] Model expects %d features, vector has %d — truncating macro features. "
+                "Retrain model to enable macro enrichment in inference.",
+                expected_features, X.shape[1],
+            )
+            X = X[:, :expected_features]
 
         # Predição
         proba = float(model.predict_proba(X)[0][1])

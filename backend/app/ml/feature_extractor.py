@@ -78,6 +78,13 @@ ML_EXCLUDED_FIELDS: frozenset = frozenset({
     "signal_direction",
 })
 
+# ── Macro / intermarket features (Market Data Hub enrichment layer) ──────────
+# Added at the END so that models trained before this change can be used
+# by truncating X to model.n_features_in_ in prediction_service.py.
+# When the model is retrained with macro data, truncation is removed automatically.
+from .macro_features import MACRO_FEATURE_COLUMNS as _MACRO_COLS  # noqa: E402
+FEATURE_COLUMNS = FEATURE_COLUMNS + _MACRO_COLS
+
 # FEATURES DELIBERATELY EXCLUDED FROM FEATURE_COLUMNS:
 # "score"             — P0-2: calculated from rsi/ema9_gt_ema21/volume_spike/atr_pct/
 #                       macd_signal/price>vwap; circular dependency dominates model.
