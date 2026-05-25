@@ -33,6 +33,7 @@ from ..models.backoffice import DecisionLog
 from ..models.shadow_trade import ShadowTrade
 from ..services.exit_metrics import flatten_entry_snapshot
 from ..schemas.shadow_trade import (
+    HoldingTimeAnalytics,
     OutcomeMetrics,
     ShadowTradeAnalytics,
     ShadowTradeDetail,
@@ -40,6 +41,8 @@ from ..schemas.shadow_trade import (
     ShadowTradePricesResponse,
     ShadowTradeRead,
     ShadowTradeSummary,
+    TimeoutAnalyticsResponse,
+    TimeoutPostAnalysis,
 )
 from .config import get_current_user_id
 
@@ -617,6 +620,260 @@ async def shadow_trades_analytics(
         logger.error("Failed to compute shadow analytics: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500, detail="Failed to compute shadow analytics"
+        ) from exc
+
+
+@router.get("/timeout-analysis", response_model=TimeoutAnalyticsResponse)
+async def shadow_trades_timeout_analysis(
+    min_date: Optional[str] = Query(None),
+    max_date: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> TimeoutAnalyticsResponse:
+    """Timeout Post-Analysis + Holding Time Validation (Fases Quant 1+2).
+
+    Retorna métricas observacionais sobre o comportamento de preço
+    após trades TIMEOUT: recovery rate, delayed TP, MFE/MAE adicionais,
+    e validação do holding time por outcome.
+
+    Todos os campos são puramente analíticos — outcomes originais
+    nunca são alterados por este endpoint.
+    """
+    try:
+        dt_min = _parse_iso_datetime(min_date, is_end=False)
+        dt_max = _parse_iso_datetime(max_date, is_end=True)
+
+        base_filters = [ShadowTrade.user_id == user_id]
+        if dt_min:
+            base_filters.append(ShadowTrade.created_at >= dt_min)
+        if dt_max:
+            base_filters.append(ShadowTrade.created_at <= dt_max)
+
+        # ── Fase 1: Timeout Post-Analysis ────────────────────────────────
+        timeout_filter = base_filters + [ShadowTrade.outcome == "TIMEOUT"]
+
+        row = await db.execute(
+            select(
+                func.count().label("total"),
+                func.count(
+                    case((ShadowTrade.timeout_post_analysis_done.is_(True), 1))
+                ).label("analyzed"),
+                func.count(
+                    case((ShadowTrade.delayed_tp.is_(True), 1))
+                ).label("delayed_tp_count"),
+                func.avg(ShadowTrade.delayed_tp_hours).label("avg_delayed_tp_hours"),
+                func.percentile_cont(0.5).within_group(
+                    ShadowTrade.delayed_tp_hours
+                ).label("median_delayed_tp_hours"),
+                func.avg(ShadowTrade.max_profit_after_timeout_pct).label("avg_mfe_after"),
+                func.avg(ShadowTrade.max_drawdown_after_timeout_pct).label("avg_mae_after"),
+                # Variação pós-timeout relativa ao entry_price
+                func.avg(
+                    case(
+                        (
+                            and_(
+                                ShadowTrade.price_after_1h.is_not(None),
+                                ShadowTrade.entry_price.is_not(None),
+                                ShadowTrade.entry_price > 0,
+                            ),
+                            (ShadowTrade.price_after_1h - ShadowTrade.entry_price)
+                            / ShadowTrade.entry_price * 100,
+                        )
+                    )
+                ).label("avg_chg_1h"),
+                func.avg(
+                    case(
+                        (
+                            and_(
+                                ShadowTrade.price_after_2h.is_not(None),
+                                ShadowTrade.entry_price.is_not(None),
+                                ShadowTrade.entry_price > 0,
+                            ),
+                            (ShadowTrade.price_after_2h - ShadowTrade.entry_price)
+                            / ShadowTrade.entry_price * 100,
+                        )
+                    )
+                ).label("avg_chg_2h"),
+                func.avg(
+                    case(
+                        (
+                            and_(
+                                ShadowTrade.price_after_4h.is_not(None),
+                                ShadowTrade.entry_price.is_not(None),
+                                ShadowTrade.entry_price > 0,
+                            ),
+                            (ShadowTrade.price_after_4h - ShadowTrade.entry_price)
+                            / ShadowTrade.entry_price * 100,
+                        )
+                    )
+                ).label("avg_chg_4h"),
+                func.avg(
+                    case(
+                        (
+                            and_(
+                                ShadowTrade.price_after_12h.is_not(None),
+                                ShadowTrade.entry_price.is_not(None),
+                                ShadowTrade.entry_price > 0,
+                            ),
+                            (ShadowTrade.price_after_12h - ShadowTrade.entry_price)
+                            / ShadowTrade.entry_price * 100,
+                        )
+                    )
+                ).label("avg_chg_12h"),
+                func.avg(
+                    case(
+                        (
+                            and_(
+                                ShadowTrade.price_after_24h.is_not(None),
+                                ShadowTrade.entry_price.is_not(None),
+                                ShadowTrade.entry_price > 0,
+                            ),
+                            (ShadowTrade.price_after_24h - ShadowTrade.entry_price)
+                            / ShadowTrade.entry_price * 100,
+                        )
+                    )
+                ).label("avg_chg_24h"),
+                func.min(ShadowTrade.exit_timestamp).label("period_start"),
+                func.max(ShadowTrade.exit_timestamp).label("period_end"),
+            ).where(and_(*timeout_filter))
+        )
+        tr = row.fetchone()
+
+        total = int(tr.total or 0)
+        analyzed = int(tr.analyzed or 0)
+        delayed_tp_count = int(tr.delayed_tp_count or 0)
+        recovery_rate = (delayed_tp_count / analyzed * 100.0) if analyzed > 0 else 0.0
+
+        timeout_post_analysis = TimeoutPostAnalysis(
+            total_timeouts=total,
+            analyzed=analyzed,
+            pending_analysis=total - analyzed,
+            delayed_tp_count=delayed_tp_count,
+            timeout_recovery_rate_pct=round(recovery_rate, 2),
+            avg_delayed_tp_hours=float(tr.avg_delayed_tp_hours)
+                if tr.avg_delayed_tp_hours is not None else None,
+            median_delayed_tp_hours=float(tr.median_delayed_tp_hours)
+                if tr.median_delayed_tp_hours is not None else None,
+            avg_mfe_after_timeout_pct=float(tr.avg_mfe_after)
+                if tr.avg_mfe_after is not None else None,
+            avg_mae_after_timeout_pct=float(tr.avg_mae_after)
+                if tr.avg_mae_after is not None else None,
+            avg_price_change_1h_pct=float(tr.avg_chg_1h)
+                if tr.avg_chg_1h is not None else None,
+            avg_price_change_2h_pct=float(tr.avg_chg_2h)
+                if tr.avg_chg_2h is not None else None,
+            avg_price_change_4h_pct=float(tr.avg_chg_4h)
+                if tr.avg_chg_4h is not None else None,
+            avg_price_change_12h_pct=float(tr.avg_chg_12h)
+                if tr.avg_chg_12h is not None else None,
+            avg_price_change_24h_pct=float(tr.avg_chg_24h)
+                if tr.avg_chg_24h is not None else None,
+            period_start=tr.period_start,
+            period_end=tr.period_end,
+        )
+
+        # ── Fase 2: Holding Time Validation ──────────────────────────────
+        completed_filter = base_filters + [ShadowTrade.status == "COMPLETED"]
+
+        ht_row = await db.execute(
+            select(
+                func.avg(
+                    case((ShadowTrade.outcome == "TP_HIT", ShadowTrade.holding_seconds))
+                ).label("avg_hold_tp"),
+                func.avg(
+                    case((ShadowTrade.outcome == "SL_HIT", ShadowTrade.holding_seconds))
+                ).label("avg_hold_sl"),
+                func.avg(
+                    case((ShadowTrade.outcome == "TIMEOUT", ShadowTrade.holding_seconds))
+                ).label("avg_hold_timeout"),
+                # Delayed TP holding (TIMEOUT trades que teriam batido TP)
+                func.avg(
+                    case(
+                        (
+                            and_(
+                                ShadowTrade.outcome == "TIMEOUT",
+                                ShadowTrade.delayed_tp.is_(True),
+                            ),
+                            ShadowTrade.holding_seconds,
+                        )
+                    )
+                ).label("avg_hold_delayed_tp"),
+                # Slow winners: TP_HIT com mae_pct < -2% (passaram por drawdown significativo)
+                func.count(
+                    case(
+                        (
+                            and_(
+                                ShadowTrade.outcome == "TP_HIT",
+                                ShadowTrade.mae_pct < -2.0,
+                            ),
+                            1,
+                        )
+                    )
+                ).label("slow_winners"),
+                func.count(case((ShadowTrade.outcome == "TP_HIT", 1))).label("tp_count"),
+                # Fast winners: TP_HIT com mfe_pct > 1% (movimento explosivo)
+                func.count(
+                    case(
+                        (
+                            and_(
+                                ShadowTrade.outcome == "TP_HIT",
+                                ShadowTrade.mfe_pct > 1.0,
+                                ShadowTrade.mae_pct.is_not(None),
+                                ShadowTrade.mae_pct > -0.5,
+                            ),
+                            1,
+                        )
+                    )
+                ).label("fast_winners"),
+                # Fake momentum: SL_HIT com mfe_pct > 1%
+                func.count(
+                    case(
+                        (
+                            and_(
+                                ShadowTrade.outcome == "SL_HIT",
+                                ShadowTrade.mfe_pct > 1.0,
+                            ),
+                            1,
+                        )
+                    )
+                ).label("fake_momentum"),
+                func.count(case((ShadowTrade.outcome == "SL_HIT", 1))).label("sl_count"),
+            ).where(and_(*completed_filter))
+        )
+        ht = ht_row.fetchone()
+
+        tp_count = int(ht.tp_count or 0)
+        sl_count = int(ht.sl_count or 0)
+        slow_w = int(ht.slow_winners or 0)
+        fast_w = int(ht.fast_winners or 0)
+        fake_m = int(ht.fake_momentum or 0)
+
+        holding_time = HoldingTimeAnalytics(
+            avg_holding_tp_seconds=float(ht.avg_hold_tp) if ht.avg_hold_tp is not None else None,
+            avg_holding_sl_seconds=float(ht.avg_hold_sl) if ht.avg_hold_sl is not None else None,
+            avg_holding_timeout_seconds=float(ht.avg_hold_timeout)
+                if ht.avg_hold_timeout is not None else None,
+            avg_holding_delayed_tp_seconds=float(ht.avg_hold_delayed_tp)
+                if ht.avg_hold_delayed_tp is not None else None,
+            slow_winners_count=slow_w,
+            slow_winners_pct=round(slow_w / tp_count * 100, 2) if tp_count > 0 else None,
+            fast_winners_count=fast_w,
+            fast_winners_pct=round(fast_w / tp_count * 100, 2) if tp_count > 0 else None,
+            fake_momentum_count=fake_m,
+            fake_momentum_pct=round(fake_m / sl_count * 100, 2) if sl_count > 0 else None,
+        )
+
+        return TimeoutAnalyticsResponse(
+            timeout_post_analysis=timeout_post_analysis,
+            holding_time=holding_time,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to compute timeout analytics: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500, detail="Failed to compute timeout analytics"
         ) from exc
 
 

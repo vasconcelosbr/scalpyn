@@ -175,3 +175,70 @@ class ShadowTradeAnalytics(BaseModel):
 
     period_start: Optional[datetime] = None
     period_end: Optional[datetime] = None
+
+
+class TimeoutPostAnalysis(BaseModel):
+    """Fase Quant — Timeout Post-Analysis (migration 063).
+
+    Alimentado por ``GET /api/shadow-trades/timeout-analysis``.
+    Todas as métricas são puramente observacionais: outcomes originais
+    não são alterados.
+    """
+
+    total_timeouts: int
+    analyzed: int                        # timeout_post_analysis_done=TRUE
+    pending_analysis: int                # ainda não processados
+
+    # Recovery
+    delayed_tp_count: int
+    timeout_recovery_rate_pct: float     # delayed_tp_count / analyzed * 100
+
+    # Delayed TP timing
+    avg_delayed_tp_hours: Optional[float] = None
+    median_delayed_tp_hours: Optional[float] = None
+
+    # Excursão pós-timeout
+    avg_mfe_after_timeout_pct: Optional[float] = None
+    avg_mae_after_timeout_pct: Optional[float] = None
+
+    # Variação de preço média por horizonte (vs entry_price)
+    avg_price_change_1h_pct: Optional[float] = None
+    avg_price_change_2h_pct: Optional[float] = None
+    avg_price_change_4h_pct: Optional[float] = None
+    avg_price_change_12h_pct: Optional[float] = None
+    avg_price_change_24h_pct: Optional[float] = None
+
+    period_start: Optional[datetime] = None
+    period_end: Optional[datetime] = None
+
+
+class HoldingTimeAnalytics(BaseModel):
+    """Fase Quant — Holding Time Validation (Fase 2).
+
+    Alimentado por ``GET /api/shadow-trades/timeout-analysis``
+    (campo aninhado ``holding_time``).
+    """
+
+    avg_holding_tp_seconds: Optional[float] = None
+    avg_holding_sl_seconds: Optional[float] = None
+    avg_holding_timeout_seconds: Optional[float] = None
+    avg_holding_delayed_tp_seconds: Optional[float] = None
+
+    # Winners lentos: TP_HIT com holding acima da mediana e mae_pct < -2%
+    slow_winners_count: Optional[int] = None
+    slow_winners_pct: Optional[float] = None
+
+    # Winners rápidos: TP_HIT com holding abaixo da mediana e mfe_pct > 1%
+    fast_winners_count: Optional[int] = None
+    fast_winners_pct: Optional[float] = None
+
+    # Fake momentum: SL_HIT com mfe_pct > 1% antes da reversão
+    fake_momentum_count: Optional[int] = None
+    fake_momentum_pct: Optional[float] = None
+
+
+class TimeoutAnalyticsResponse(BaseModel):
+    """Resposta agregada do endpoint timeout-analysis (Fases 1+2)."""
+
+    timeout_post_analysis: TimeoutPostAnalysis
+    holding_time: HoldingTimeAnalytics

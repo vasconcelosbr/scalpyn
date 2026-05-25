@@ -88,6 +88,7 @@ celery_app = Celery(
         "app.tasks.orphan_tx_watchdog",
         "app.tasks.health_checks",
         "app.tasks.shadow_trade_monitor",
+        "app.tasks.shadow_timeout_analyzer",
     ],
 )
 
@@ -158,6 +159,11 @@ TASK_ROUTES = {
     # acompanhar as oportunidades barradas perto do contexto financeiro
     # real, e a carga é leve (batch ≤ SHADOW_MONITOR_BATCH_SIZE).
     "app.tasks.shadow_trade_monitor.run":           {"queue": QUEUE_EXECUTION},
+
+    # Shadow Timeout Analyzer (Fase Quant) — análise passiva pós-timeout.
+    # Structural queue: carga moderada (OHLCV lookup por trade × batch),
+    # cadência horária, sem latência crítica.
+    "app.tasks.shadow_timeout_analyzer.analyze":    {"queue": QUEUE_STRUCTURAL},
 }
 
 # Static queue declarations so beat / dispatch never rely on an "implicit"
@@ -307,6 +313,16 @@ TASK_ANNOTATIONS = {
     "app.tasks.shadow_trade_monitor.run":           {
         **_EXECUTION_GUARDS,
         "rate_limit": "12/h",
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
+
+    # Shadow Timeout Analyzer (Fase Quant) — idempotente + beat-driven →
+    # opt-out de acks_late. Cadência horária; cada run processa até
+    # SHADOW_ANALYZER_BATCH_SIZE=100 trades. Budget maior que o monitor
+    # de execução (OHLCV window queries × 24h de candles).
+    "app.tasks.shadow_timeout_analyzer.analyze":    {
+        **_STRUCTURAL_GUARDS,
+        "rate_limit": "4/h",
         **_NO_REQUEUE_ON_WORKER_LOSS,
     },
 }
@@ -476,6 +492,14 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.shadow_trade_monitor.run",
         "schedule": float(os.environ.get("SHADOW_MONITOR_INTERVAL_S", 300)),
         "options": {"queue": QUEUE_EXECUTION},
+    },
+    # Shadow Timeout Analyzer (Fase Quant) — análise passiva pós-timeout.
+    # Beat default 1h (override via SHADOW_ANALYZER_INTERVAL_S env).
+    # Structural queue: sem latência crítica, OHLCV window queries.
+    "shadow_timeout_analyzer": {
+        "task": "app.tasks.shadow_timeout_analyzer.analyze",
+        "schedule": float(os.environ.get("SHADOW_ANALYZER_INTERVAL_S", 3600)),
+        "options": {"queue": QUEUE_STRUCTURAL},
     },
 }
 

@@ -19,6 +19,7 @@ dataset de ML (Fase 3).
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -144,5 +145,25 @@ class ShadowTrade(Base):
     # Complementa features_snapshot_exit (flat indicators) com contexto
     # quantitativo completo para análises offline.
     exit_metrics_json = Column(JSONB, nullable=True)
+
+    # ── Timeout Post-Analysis (migration 063, Fase Quant — Timeout) ──────
+    # Monitoramento passivo pós-timeout: rastreia o preço em horizontes
+    # fixos após exit_timestamp para calcular Timeout Recovery Rate,
+    # Delayed TP Time, e MFE/MAE adicionais. Puramente observacional —
+    # nunca reabre o trade nem altera outcome/pnl. Todos nullable:
+    # back-compat com trades antes da migration.
+    price_after_1h = Column(Float, nullable=True)
+    price_after_2h = Column(Float, nullable=True)
+    price_after_4h = Column(Float, nullable=True)
+    price_after_12h = Column(Float, nullable=True)
+    price_after_24h = Column(Float, nullable=True)
+    # Excursão pós-timeout (high-water / low-water nas 24h seguintes).
+    max_profit_after_timeout_pct = Column(Float, nullable=True)
+    max_drawdown_after_timeout_pct = Column(Float, nullable=True)
+    # Delayed TP: teria atingido tp_price dentro das 24h pós-timeout?
+    delayed_tp = Column(Boolean, nullable=True)
+    delayed_tp_hours = Column(Float, nullable=True)
+    # Flag de controle: TRUE quando o analyzer terminou de processar.
+    timeout_post_analysis_done = Column(Boolean, nullable=True, default=False)
 
     decision = relationship("DecisionLog", foreign_keys=[decision_id])
