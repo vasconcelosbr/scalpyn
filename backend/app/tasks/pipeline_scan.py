@@ -1068,13 +1068,28 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
         "signal_direction": processed.get("signal", {}).get("direction"),
     }
 
-    # Task #215: persist the indicator snapshot used by THIS decision so a
-    # future "decision vs DB" investigation can compare the exact payload
-    # against table state at the same instant. Snapshot is scoped to the
-    # keys this decision actually consumed: required-core (always) +
-    # whatever keys appear in the score-components breakdown (i.e. the
-    # indicators that contributed to the L3 score). Keeps JSONB small.
+    # Task #215 / P0-empty-metrics fix:
+    #
+    # indicators_snapshot MUST always be present in metrics so that
+    # _build_features_snapshot (shadow_trade_service) always produces a
+    # non-empty features_snapshot on shadow trades. Two gaps fixed here:
+    #
+    # Gap A — missing snapshot: the original code only added
+    #   indicators_snapshot when _merged_indicators was non-None. While the
+    #   quarantine guard should prevent None reaching here, a defensive
+    #   fallback is cheaper than debugging a silent empty-features_snapshot.
+    #
+    # Gap B — live injection skew: _inject_live_order_flow overwrites
+    #   asset["indicators"] with live values for taker_ratio / volume_delta
+    #   / spread_pct / vwap_distance_pct etc. BEFORE the decision is made,
+    #   but build_indicators_snapshot reads from merged.values (pre-injection
+    #   DB snapshot). The persisted snapshot therefore doesn't match the
+    #   values that actually drove the decision — a train-serve skew source.
+    #   Fix: after building from merged, overlay asset["indicators"] for any
+    #   live-injection field so the snapshot is always decision-time-accurate.
+    flat_indicators = asset.get("indicators") or {}
     merged = asset.get("_merged_indicators")
+
     if merged is not None:
         from ..services.indicators_provider import build_indicators_snapshot
         consumed_keys: set[str] = set()
@@ -1090,9 +1105,40 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
                         k for k in comp_value.keys()
                         if isinstance(k, str) and k in (merged.values or {})
                     )
-        metrics["indicators_snapshot"] = build_indicators_snapshot(
-            merged, keys=consumed_keys
-        )
+        snapshot = build_indicators_snapshot(merged, keys=consumed_keys)
+
+        # Gap B fix: overlay live-injected values onto snapshot entries so the
+        # persisted snapshot matches what the decision engine actually saw.
+        # Only keys present in _LIVE_ORDER_FLOW_FIELDS are candidates — those
+        # are the only fields that _inject_live_order_flow can override.
+        for key in _LIVE_ORDER_FLOW_FIELDS:
+            if key in flat_indicators:
+                live_val = flat_indicators[key]
+                if key in snapshot:
+                    # Preserve existing metadata (source_group, ts, stale) but
+                    # overwrite value to match the live-injected value that drove
+                    # the decision.
+                    if snapshot[key].get("value") != live_val:
+                        snapshot[key] = {
+                            **snapshot[key],
+                            "value": live_val,
+                            "source_group": "live_injection",
+                        }
+                else:
+                    snapshot[key] = {"value": live_val, "source_group": "live_injection"}
+
+        metrics["indicators_snapshot"] = snapshot
+
+    else:
+        # Gap A fallback: merged unavailable (quarantine should prevent this,
+        # but be defensive). Build snapshot from flat indicators so
+        # features_snapshot is never empty. _build_features_snapshot handles
+        # both {"value": v} dict form and flat scalar form.
+        metrics["indicators_snapshot"] = {
+            k: {"value": v, "source_group": "fallback_no_merged"}
+            for k, v in flat_indicators.items()
+            if isinstance(v, (int, float, bool, type(None)))
+        }
 
     return _jsonable(metrics)
 
@@ -1376,8 +1422,17 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
     if not decisions:
         return []
 
-    rows = [
-        DecisionLog(
+    rows = []
+    for decision in decisions:
+        m = decision.get("metrics") or {}
+        if not m or not m.get("indicators_snapshot"):
+            logger.warning(
+                "[Decision] METRICS_EMPTY symbol=%s decision=%s — "
+                "indicators_snapshot absent; shadow features_snapshot will be empty. "
+                "Check _decision_metrics / _inject_live_order_flow path.",
+                decision.get("symbol"), decision.get("decision"),
+            )
+        rows.append(DecisionLog(
             symbol=decision["symbol"],
             strategy=decision["strategy"],
             timeframe=decision.get("timeframe"),
@@ -1387,15 +1442,13 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             l2_pass=decision.get("l2_pass"),
             l3_pass=decision.get("l3_pass"),
             reasons=decision.get("reasons"),
-            metrics=decision.get("metrics"),
+            metrics=m or None,
             latency_ms=decision.get("latency_ms"),
             direction=decision.get("direction"),
             event_type=decision.get("event_type"),
             user_id=user_id,
             created_at=decision.get("created_at"),
-        )
-        for decision in decisions
-    ]
+        ))
     db.add_all(rows)
     await db.flush()
 
