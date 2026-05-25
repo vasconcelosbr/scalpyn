@@ -524,6 +524,161 @@ async def symbol_health(
     }
 
 
+# ─── P0 pipeline-integrity probes ───────────────────────────────────────────
+
+
+async def _probe_empty_metrics(window_days: int = 7) -> Dict[str, Any]:
+    """ALLOW decisions whose metrics JSONB is NULL or empty ({}).
+
+    These rows land in decisions_log but carry no indicator snapshot,
+    so any shadow trade derived from them will have an empty
+    features_snapshot — making them worthless for ML training.
+    """
+    try:
+        from ..database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            row = (await db.execute(text("""
+                SELECT
+                    COUNT(*) FILTER (
+                        WHERE metrics IS NULL OR metrics = '{}'::jsonb
+                    )                                        AS empty_count,
+                    COUNT(*)                                 AS total_count
+                FROM decisions_log
+                WHERE decision = 'ALLOW'
+                  AND created_at > NOW() - INTERVAL ':days days'
+            """.replace(":days days", f"{window_days} days")))).fetchone()
+        empty = int(row.empty_count or 0)
+        total = int(row.total_count or 0)
+        rate = round(empty / total, 4) if total > 0 else 0.0
+        return {
+            "ok": True,
+            "window_days": window_days,
+            "empty_metrics_count": empty,
+            "total_allow_count": total,
+            "empty_metrics_rate": rate,
+            "healthy": rate < 0.05,  # <5% threshold
+        }
+    except Exception as exc:
+        logger.warning("[admin-diag] empty_metrics probe failed: %s", exc)
+        return _err(exc)
+
+
+async def _probe_orphaned_decisions(window_days: int = 7) -> Dict[str, Any]:
+    """ALLOW decisions that have no corresponding shadow_trades row.
+
+    When this count is high it means the async gap between
+    _persist_decision_logs and _backfill_shadows_for_all_users is
+    losing signals — trades are approved but never simulated, so their
+    outcome never feeds ML training.
+    """
+    try:
+        from ..database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            row = (await db.execute(text(f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE st.id IS NULL) AS orphaned_count,
+                    COUNT(*)                              AS total_count
+                FROM decisions_log dl
+                LEFT JOIN shadow_trades st ON st.decision_id = dl.id
+                WHERE dl.decision = 'ALLOW'
+                  AND dl.created_at > NOW() - INTERVAL '{window_days} days'
+            """))).fetchone()
+        orphaned = int(row.orphaned_count or 0)
+        total = int(row.total_count or 0)
+        rate = round(orphaned / total, 4) if total > 0 else 0.0
+        return {
+            "ok": True,
+            "window_days": window_days,
+            "orphaned_decisions_count": orphaned,
+            "total_allow_count": total,
+            "orphaned_rate": rate,
+            "healthy": rate < 0.10,  # <10% threshold
+        }
+    except Exception as exc:
+        logger.warning("[admin-diag] orphaned_decisions probe failed: %s", exc)
+        return _err(exc)
+
+
+async def _probe_pnl_null_rate() -> Dict[str, Any]:
+    """Rate of ALLOW decisions where pnl_pct is still NULL.
+
+    NULL pnl_pct means the trade was never closed (no TP/SL reached)
+    or the outcome was never written back. These rows are dropped by
+    build_training_dataframe() so they silently shrink the ML dataset.
+    """
+    try:
+        from ..database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            row = (await db.execute(text("""
+                SELECT
+                    COUNT(*) FILTER (WHERE pnl_pct IS NULL) AS null_count,
+                    COUNT(*)                                 AS total_count
+                FROM decisions_log
+                WHERE decision = 'ALLOW'
+            """))).fetchone()
+        null_count = int(row.null_count or 0)
+        total = int(row.total_count or 0)
+        rate = round(null_count / total, 4) if total > 0 else 0.0
+        return {
+            "ok": True,
+            "pnl_null_count": null_count,
+            "total_allow_count": total,
+            "pnl_null_rate": rate,
+            "healthy": rate < 0.20,  # <20% threshold
+        }
+    except Exception as exc:
+        logger.warning("[admin-diag] pnl_null_rate probe failed: %s", exc)
+        return _err(exc)
+
+
+@router.get("/diagnostics/pipeline-integrity", include_in_schema=False)
+async def pipeline_integrity(
+    window_days: int = 7,
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """P0 pipeline integrity checks: empty metrics, orphaned decisions, pnl NULL rate.
+
+    Runs three independent probes concurrently. Returns a ``healthy`` boolean
+    that is True only when all three probes are within their thresholds:
+
+    * ``empty_metrics_rate``    < 5%  (decisions_log ALLOW rows with no indicator snapshot)
+    * ``orphaned_decisions``    < 10% (ALLOW decisions with no shadow_trades row)
+    * ``pnl_null_rate``         < 20% (ALLOW decisions where pnl_pct never got written)
+
+    All probes are read-only. Each reports its own ``healthy`` sub-flag so
+    operators can see which check is failing.
+    """
+    _enforce_auth(authorization)
+
+    empty_metrics, orphaned_decisions, pnl_null = await asyncio.gather(
+        _probe_empty_metrics(window_days),
+        _probe_orphaned_decisions(window_days),
+        _probe_pnl_null_rate(),
+    )
+
+    all_ok = (
+        empty_metrics.get("ok", False)
+        and orphaned_decisions.get("ok", False)
+        and pnl_null.get("ok", False)
+    )
+    all_healthy = (
+        empty_metrics.get("healthy", False)
+        and orphaned_decisions.get("healthy", False)
+        and pnl_null.get("healthy", False)
+    )
+
+    return {
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "window_days": window_days,
+        "healthy": all_ok and all_healthy,
+        "probes": {
+            "empty_metrics": empty_metrics,
+            "orphaned_decisions": orphaned_decisions,
+            "pnl_null_rate": pnl_null,
+        },
+    }
+
+
 # ─── Symbol audit (Task #194) ───────────────────────────────────────────────
 
 
