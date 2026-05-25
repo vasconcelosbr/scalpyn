@@ -1972,6 +1972,28 @@ async def _resolve_and_persist(
                 _direction = _ad.get("futures_direction") or (
                     "NEUTRAL" if (wl.market_mode or "spot") == "futures" else "SPOT"
                 )
+                # Build reasons from score_rules_map (same format as pipeline_scan)
+                _rules = score_rules_map.get(_sym) or []
+                _reasons: dict = {}
+                for _r in _rules:
+                    _rname = str(_r.get("id") or _r.get("label") or "rule")
+                    _rstatus = "OK" if _r.get("passed") else "FAIL"
+                    _reasons[_rname] = _rstatus
+                if not _reasons:
+                    _reasons["pipeline"] = "OK"
+                # Build metrics from ind_map (flat indicator snapshot)
+                _flat_ind = ind_map.get(_sym) or {}
+                _metrics: dict | None = None
+                if _flat_ind:
+                    _metrics = {
+                        **{k: v for k, v in _flat_ind.items() if isinstance(v, (int, float, bool, str, type(None)))},
+                        "indicators_snapshot": {
+                            k: {"value": v, "source_group": "api_resolve"}
+                            for k, v in _flat_ind.items()
+                            if isinstance(v, (int, float, bool, type(None)))
+                        },
+                        "score": _score,
+                    }
                 _dl_rows.append(_DecisionLog(
                     symbol=_sym,
                     strategy="L3",
@@ -1981,8 +2003,8 @@ async def _resolve_and_persist(
                     l1_pass=True,
                     l2_pass=True,
                     l3_pass=True,
-                    reasons=None,
-                    metrics=None,
+                    reasons=_reasons or None,
+                    metrics=_metrics,
                     latency_ms=None,
                     direction=_direction,
                     event_type=_evt,
