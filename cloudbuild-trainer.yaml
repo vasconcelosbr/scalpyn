@@ -1,0 +1,11 @@
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args:
+  - build
+  - -f
+  - ml_trainer/Dockerfile
+  - -t
+  - us-central1-docker.pkg.dev/clickrate-477217/cloud-run-source-deploy/scalpyn-ml-trainer:latest
+  - .
+images:
+- us-central1-docker.pkg.dev/clickrate-477217/cloud-run-source-deploy/scalpyn-ml-trainer:latest
