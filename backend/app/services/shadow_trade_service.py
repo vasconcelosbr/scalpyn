@@ -82,7 +82,10 @@ SHADOW_LOOKBACK_MINUTES = int(os.environ.get("SHADOW_LOOKBACK_MINUTES", "10"))
 ARROW_WATCHLIST_NAME = os.environ.get("ARROW_WATCHLIST_NAME", "ArrowL1")
 SHADOW_SOURCE_L3 = "L3"
 SHADOW_SOURCE_ARROW = "ARROW"
-_VALID_SHADOW_SOURCES = (SHADOW_SOURCE_L3, SHADOW_SOURCE_ARROW)
+# Shadows de ativos rejeitados na L3 — usados exclusivamente para dados ML.
+# Segregados por source para nunca contaminar métricas de aprovados.
+SHADOW_SOURCE_L3_REJECTED = "L3_REJECTED"
+_VALID_SHADOW_SOURCES = (SHADOW_SOURCE_L3, SHADOW_SOURCE_ARROW, SHADOW_SOURCE_L3_REJECTED)
 
 
 # ── helpers internos ─────────────────────────────────────────────────────────
@@ -1048,6 +1051,103 @@ async def create_shadows_for_new_decisions(user_id, decision_ids: List[int]) -> 
     return created
 
 
+async def create_shadows_for_rejected_decisions(user_id, decision_ids: List[int]) -> int:
+    """Inline shadow creation for L3-rejected decisions (ML data collection).
+
+    Mirror of ``create_shadows_for_new_decisions`` for BLOCK decisions.
+    Simulates "what would have happened" if the rejected asset had been
+    traded, giving the ML model negative examples with full indicator context.
+
+    Key differences from approved-shadow flow:
+    * ``source = 'L3_REJECTED'`` — segregated from approved shadows so
+      metrics, P&L dashboards, and the ML DatasetBuilder can filter them
+      independently. Never contaminate approved-asset statistics.
+    * Uses ``ON CONFLICT (user_id, symbol) WHERE status = 'RUNNING' DO NOTHING``
+      (same as approved) — if the same symbol already has a RUNNING shadow
+      (from an approved decision in the same cycle), the rejected shadow is
+      skipped. ML data from the approved period already covers that window.
+
+    Fire-and-forget: never raises. Returns count of new shadows created.
+    """
+    if not decision_ids:
+        return 0
+
+    from ..database import CeleryAsyncSessionLocal
+    from ..models.config_profile import ConfigProfile
+    from ..schemas.spot_engine_config import SpotEngineConfig
+
+    user_config: Dict[str, Any] = {}
+    try:
+        async with CeleryAsyncSessionLocal() as cfg_db:
+            cfg_res = await cfg_db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "spot_engine",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            cfg_row = cfg_res.scalar_one_or_none()
+            if cfg_row:
+                se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
+                user_config = {
+                    "tp_pct": float(se_cfg.selling.take_profit_pct),
+                    "sl_pct": float(
+                        se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct
+                    ),
+                    "timeout_candles": None,
+                }
+    except Exception:
+        logger.exception(
+            "[shadow] rejected create: config load failed for user=%s", user_id
+        )
+        return 0
+
+    if not user_config:
+        logger.warning(
+            "[shadow] rejected create: no active spot_engine config for user=%s — skipping",
+            user_id,
+        )
+        return 0
+
+    created = 0
+    for decision_id in sorted(decision_ids):
+        try:
+            async with CeleryAsyncSessionLocal() as own_db:
+                async with own_db.begin():
+                    res = await own_db.execute(
+                        select(DecisionLog).where(DecisionLog.id == decision_id)
+                    )
+                    decision = res.scalar_one_or_none()
+                    if decision is None:
+                        logger.debug(
+                            "[shadow] rejected create: decision_id=%s not found",
+                            decision_id,
+                        )
+                        continue
+                    new_id = await _create_from_decision(
+                        own_db, decision, "L3_REJECTED", user_config,
+                        source=SHADOW_SOURCE_L3_REJECTED,
+                    )
+                    if new_id is not None:
+                        created += 1
+                        logger.info(
+                            "[shadow] rejected created id=%s symbol=%s decision_id=%s",
+                            new_id, decision.symbol, decision_id,
+                        )
+        except Exception:
+            logger.exception(
+                "[shadow] rejected create failed for decision_id=%s user=%s",
+                decision_id, user_id,
+            )
+
+    if created:
+        logger.info(
+            "[shadow] rejected create: %d shadow(s) created for user=%s",
+            created, user_id,
+        )
+    return created
+
+
 async def safe_backfill_watchlist_shadows(
     user_id,
     user_config: Dict[str, Any],
@@ -1310,7 +1410,7 @@ async def record_as_simulation(
       * outcome 'SL_HIT' → result='LOSS'
       * outcome 'TIMEOUT' → result='TIMEOUT'
       * direction sempre 'SPOT' (shadow é spot-only)
-      * decision_type sempre 'ALLOW' (shadow só nasce de promoção L3)
+      * decision_type 'ALLOW' para shadows aprovados; 'BLOCK' para L3_REJECTED
       * source = 'SHADOW'
     """
     outcome = (shadow.outcome or "").upper()
@@ -1380,7 +1480,9 @@ async def record_as_simulation(
             "time_to_result": shadow.holding_seconds,
             "direction": "SPOT",
             "source": "SHADOW",
-            "decision_type": "ALLOW",
+            # L3_REJECTED shadows usam decision_type='BLOCK' (satisfaz CHECK constraint).
+            # Aprovados mantêm 'ALLOW'. O ML pode separar pelos dois valores.
+            "decision_type": "BLOCK" if shadow.source == SHADOW_SOURCE_L3_REJECTED else "ALLOW",
             "decision_id": shadow.decision_id,
             "features_snapshot": json.dumps(features_for_sim, default=str),
             "config_snapshot": json.dumps(shadow.config_snapshot or {}, default=str),
