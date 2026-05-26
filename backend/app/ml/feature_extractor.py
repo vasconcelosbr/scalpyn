@@ -237,7 +237,7 @@ def extract_features(metrics: dict) -> Dict[str, float]:
     return f
 
 
-_MIN_WIN_PNL_PCT = float(os.getenv("MIN_WIN_PNL_PCT", "0.0"))
+_MIN_WIN_PNL_PCT = float(os.getenv("MIN_WIN_PNL_PCT", "0.008"))
 
 
 def build_training_dataframe(records: list) -> pd.DataFrame:
@@ -253,7 +253,7 @@ def build_training_dataframe(records: list) -> pd.DataFrame:
         DataFrame with FEATURE_COLUMNS + is_win_fast + _created_at columns.
 
     Label semantics (Task #324):
-        is_win_fast = 1 when pnl_pct > MIN_WIN_PNL_PCT (env, default 0.0),
+        is_win_fast = 1 when pnl_pct > MIN_WIN_PNL_PCT (env, default 0.008 = 0.8%),
         else 0. Rows with pnl_pct IS NULL are DROPPED — we cannot label them.
 
         Vocabulário canônico de ``decisions_log.outcome`` é lowercase
