@@ -2657,6 +2657,10 @@ async def _run_pipeline_scan():
                     # Applied after profile filter, before L3 decision evaluation so that
                     # assets below the threshold never get an ALLOW decision or shadow.
                     _wl_min_score = float((filters_json or {}).get("min_alpha_score") or 0)
+                    # Assets captured here are injected as BLOCK decisions after
+                    # _evaluate_l3_decisions so the L3_REJECTED edge trigger logs them
+                    # to decisions_log for ML data collection.
+                    _gate_rejected: list = []
                     if _wl_min_score > 0:
                         _pre = len(profile_passed)
                         _low_score = [
@@ -2668,6 +2672,7 @@ async def _run_pipeline_scan():
                             if (a.get("_score") or a.get("alpha_score") or 0) >= _wl_min_score
                         ]
                         if _low_score:
+                            _gate_rejected = list(_low_score)
                             logger.info(
                                 "[PipelineScan] L3 min_alpha_score gate (%.1f): %d → %d passed (%d below threshold)",
                                 _wl_min_score, _pre, len(profile_passed), len(_low_score),
@@ -2711,6 +2716,34 @@ async def _run_pipeline_scan():
                         user_id=wl.user_id,
                         pool_id=wl.source_pool_id,
                     )
+                    # Inject gate-rejected assets as BLOCK decisions so they flow through
+                    # the L3_REJECTED edge trigger → decisions_log → shadow trade (ML data).
+                    # Uses _decision_metrics with empty processed ({}) — indicators are
+                    # captured from the asset; score components / signal fields are absent
+                    # but that is expected for score-gate rejections.
+                    if _gate_rejected:
+                        _gate_timeframe = (profile_config or {}).get("default_timeframe", "5m")
+                        for _ga in _gate_rejected:
+                            decisions.append({
+                                "symbol": _ga.get("symbol"),
+                                "strategy": level,
+                                "timeframe": _gate_timeframe,
+                                "score": float(_ga.get("_score") or _ga.get("alpha_score") or 0),
+                                "decision": "BLOCK",
+                                "l1_pass": True,
+                                "l2_pass": True,
+                                "l3_pass": False,
+                                "reasons": {
+                                    "score_gate": f"score below min_alpha_score ({_wl_min_score:g})",
+                                },
+                                "metrics": _decision_metrics(_ga, {}),
+                                "latency_ms": 0,
+                                "direction": (
+                                    _ga.get("futures_direction")
+                                    or ("NEUTRAL" if _ga.get("is_futures") else "SPOT")
+                                ),
+                                "created_at": datetime.now(timezone.utc),
+                            })
                     # ── L3_VISIBLE diagnostic (TEMP) — remove once root cause confirmed ──
                     _allow_count = sum(1 for d in decisions if d.get("decision") == "ALLOW")
                     _block_count = sum(1 for d in decisions if d.get("decision") == "BLOCK")
