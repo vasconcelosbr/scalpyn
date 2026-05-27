@@ -237,12 +237,13 @@ def extract_features(metrics: dict) -> Dict[str, float]:
     return f
 
 
-_MIN_WIN_PNL_PCT = float(os.getenv("MIN_WIN_PNL_PCT", "0.008"))
+# pnl_pct is stored as PERCENTAGE in decisions_log/shadow_trades
+# (1.0 = 1%, -1.047 = -1.047%). All threshold values must use the same unit.
+_MIN_WIN_PNL_PCT = float(os.getenv("MIN_WIN_PNL_PCT", "0.8"))      # 0.8%
 # Fee round-trip (taker buy + taker sell). Gate.io default: 0.08% * 2 = 0.16%.
 # Added to the gross PnL threshold so WIN = profitable AFTER fees.
-# Override via env: FEE_ROUND_TRIP_PCT=0.002 for exchanges with higher fees.
-_FEE_ROUND_TRIP_PCT = float(os.getenv("FEE_ROUND_TRIP_PCT", "0.0016"))
-_WIN_THRESHOLD = _MIN_WIN_PNL_PCT + _FEE_ROUND_TRIP_PCT  # effective label threshold
+_FEE_ROUND_TRIP_PCT = float(os.getenv("FEE_ROUND_TRIP_PCT", "0.16"))  # 0.16%
+_WIN_THRESHOLD = _MIN_WIN_PNL_PCT + _FEE_ROUND_TRIP_PCT  # 0.96% effective
 
 
 def build_training_dataframe(records: list) -> pd.DataFrame:
