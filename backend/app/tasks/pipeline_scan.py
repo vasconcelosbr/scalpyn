@@ -3071,6 +3071,87 @@ async def _run_pipeline_scan():
                                 wl.user_id, _rejected_decision_ids
                             )
 
+                        # ── Shadow Bypass Score Gate ──────────────────────────────────────
+                        # SHADOW_BYPASS_SCORE_GATE=true: passa os assets rejeitados pelo
+                        # min_alpha_score gate pelo _evaluate_l3_decisions completo e cria
+                        # shadow trades para os que seriam ALLOW.
+                        #
+                        # Objetivo: medir se assets de baixo score teriam bom desempenho
+                        # caso o gate fosse removido — sem expor capital real.
+                        #
+                        # Garantias:
+                        # * Nunca adiciona à lista `signals` → zero risco de trade real.
+                        # * Persiste em decisions_log com metrics.bypass_score_gate=True
+                        #   para rastreabilidade e filtro em analytics.
+                        # * Qualquer falha é suprimida (não bloqueia o pipeline).
+                        import os as _bypass_os
+                        _bypass_shadow_enabled = (
+                            _bypass_os.getenv("SHADOW_BYPASS_SCORE_GATE", "false").lower() == "true"
+                        )
+                        if _bypass_shadow_enabled and _gate_rejected:
+                            try:
+                                _bypass_decisions = await _evaluate_l3_decisions(
+                                    _gate_rejected,
+                                    profile_config,
+                                    level,
+                                    score_config=score_config,
+                                    db=db,
+                                    user_id=wl.user_id,
+                                    pool_id=wl.source_pool_id,
+                                )
+                                _bypass_allow = [
+                                    d for d in _bypass_decisions
+                                    if d.get("decision") == "ALLOW"
+                                ]
+                                if _bypass_allow:
+                                    for _bd in _bypass_allow:
+                                        _bm = _bd.get("metrics") or {}
+                                        _bm["bypass_score_gate"] = True
+                                        _bm["bypass_score_value"] = float(
+                                            _bd.get("score") or 0
+                                        )
+                                        _bd["metrics"] = _bm
+                                    _bypass_payloads: list = []
+                                    try:
+                                        async with db.begin_nested():
+                                            _bypass_payloads = await _persist_decision_logs(
+                                                db, wl.user_id, _bypass_allow
+                                            )
+                                    except Exception as _bp_persist_exc:
+                                        logger.warning(
+                                            "[BypassShadow] persist failed wl=%s: %s",
+                                            wl.name, _bp_persist_exc,
+                                        )
+                                    _bypass_ids = [
+                                        p["id"] for p in _bypass_payloads if p.get("id")
+                                    ]
+                                    if _bypass_ids:
+                                        from ..services.shadow_trade_service import (
+                                            create_shadows_for_new_decisions as _create_bypass_shadows,
+                                        )
+                                        await _create_bypass_shadows(
+                                            wl.user_id, _bypass_ids
+                                        )
+                                        logger.info(
+                                            "[BypassShadow] wl=%s: %d score-bypassed"
+                                            " → %d L3-ALLOW → %d shadows",
+                                            wl.name,
+                                            len(_gate_rejected),
+                                            len(_bypass_allow),
+                                            len(_bypass_ids),
+                                        )
+                                else:
+                                    logger.info(
+                                        "[BypassShadow] wl=%s: %d score-bypassed"
+                                        " → 0 L3-ALLOW (todos falhariam L3 de qualquer forma)",
+                                        wl.name, len(_gate_rejected),
+                                    )
+                            except Exception as _bypass_exc:
+                                logger.warning(
+                                    "[BypassShadow] wl=%s falhou (non-blocking): %s",
+                                    wl.name, _bypass_exc,
+                                )
+
                         # ML Gate — write ml_predictions rows now that we have decision IDs.
                         # Only fires when ML gate was active AND produced scores.
                         if _ml_gate_enabled and _ml_gate_scores:
