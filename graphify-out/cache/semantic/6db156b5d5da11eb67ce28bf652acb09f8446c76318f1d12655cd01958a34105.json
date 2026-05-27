@@ -1,0 +1,1 @@
+{"nodes": [{"id": "grafana_dashboards_provisioning", "label": "Grafana Dashboard Provisioning (dashboards.yaml)", "file_type": "code", "source_file": "grafana/provisioning/dashboards/dashboards.yaml", "source_location": null, "source_url": null, "captured_at": null, "author": null, "contributor": null}], "edges": [], "hyperedges": []}

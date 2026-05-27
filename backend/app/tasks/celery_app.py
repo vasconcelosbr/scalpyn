@@ -89,6 +89,7 @@ celery_app = Celery(
         "app.tasks.health_checks",
         "app.tasks.shadow_trade_monitor",
         "app.tasks.shadow_timeout_analyzer",
+        "app.tasks.autopilot",
     ],
 )
 
@@ -164,6 +165,10 @@ TASK_ROUTES = {
     # Structural queue: carga moderada (OHLCV lookup por trade × batch),
     # cadência horária, sem latência crítica.
     "app.tasks.shadow_timeout_analyzer.analyze":    {"queue": QUEUE_STRUCTURAL},
+
+    # Auto-Pilot Engine — autonomous profile mutation, every 6h.
+    # Structural queue: calls Claude API + DB reads, moderate load.
+    "app.tasks.autopilot.run":                      {"queue": QUEUE_STRUCTURAL},
 }
 
 # Static queue declarations so beat / dispatch never rely on an "implicit"
@@ -323,6 +328,17 @@ TASK_ANNOTATIONS = {
     "app.tasks.shadow_timeout_analyzer.analyze":    {
         **_STRUCTURAL_GUARDS,
         "rate_limit": "4/h",
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
+
+    # Auto-Pilot Engine — calls Claude API per profile, max 6/day.
+    # time_limit raised to 1800s (30min) for worst-case N profiles × Claude latency.
+    # acks_late=False: beat re-fires every 6h; a missed cycle is recovered next tick.
+    "app.tasks.autopilot.run": {
+        "time_limit": 1800,
+        "soft_time_limit": 1700,
+        "rate_limit": "4/h",
+        "max_retries": 0,
         **_NO_REQUEUE_ON_WORKER_LOSS,
     },
 }
@@ -499,6 +515,15 @@ celery_app.conf.beat_schedule = {
     "shadow_timeout_analyzer": {
         "task": "app.tasks.shadow_timeout_analyzer.analyze",
         "schedule": float(os.environ.get("SHADOW_ANALYZER_INTERVAL_S", 3600)),
+        "options": {"queue": QUEUE_STRUCTURAL},
+    },
+
+    # Auto-Pilot Engine — executa ciclo de mutação autônoma a cada 6h.
+    # Itera todos os profiles com auto_pilot_enabled=True.
+    # Override via AUTOPILOT_INTERVAL_S env (default 6h = 21600s).
+    "autopilot_engine": {
+        "task": "app.tasks.autopilot.run",
+        "schedule": float(os.environ.get("AUTOPILOT_INTERVAL_S", 21600)),
         "options": {"queue": QUEUE_STRUCTURAL},
     },
 }

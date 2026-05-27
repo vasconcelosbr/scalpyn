@@ -380,9 +380,9 @@
     "semantic_hash": "ec4ece23ed08db753a000f4bc75b854a"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\api\\admin_diagnostics.py": {
-    "mtime": 1779719809.819117,
-    "ast_hash": "1e8551ddb5c2f0a5f1f1b2391cc71d6a",
-    "semantic_hash": "1e8551ddb5c2f0a5f1f1b2391cc71d6a"
+    "mtime": 1779847000.3884995,
+    "ast_hash": "a2a2eb6e88388035a7d8594673de7e45",
+    "semantic_hash": "a2a2eb6e88388035a7d8594673de7e45"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\api\\ai_keys.py": {
     "mtime": 1778596574.7167392,
@@ -530,9 +530,9 @@
     "semantic_hash": "07a4819dd6e803aee909672a5c9e7b8e"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\api\\shadow_trades.py": {
-    "mtime": 1779751804.0559754,
-    "ast_hash": "4bb2d88308ffe92bd3e11e43b0b0ae6c",
-    "semantic_hash": "4bb2d88308ffe92bd3e11e43b0b0ae6c"
+    "mtime": 1779822106.0746672,
+    "ast_hash": "8bbaf6baf558c286d64fda6cbde8a464",
+    "semantic_hash": "8bbaf6baf558c286d64fda6cbde8a464"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\api\\simulations.py": {
     "mtime": 1778596574.755326,
@@ -675,14 +675,14 @@
     "semantic_hash": "3c2b36ae1219b1929f92e404693d5341"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\evaluation_report.py": {
-    "mtime": 1778596575.4913352,
-    "ast_hash": "c295650acf764d13342a1c8fd4e7d963",
-    "semantic_hash": "c295650acf764d13342a1c8fd4e7d963"
+    "mtime": 1779846404.5066621,
+    "ast_hash": "26a9bcf8751a48f6455a60db661ab79c",
+    "semantic_hash": "26a9bcf8751a48f6455a60db661ab79c"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\feature_extractor.py": {
-    "mtime": 1779818504.024792,
-    "ast_hash": "8524efb7a88eec9cff08264b8ca2012c",
-    "semantic_hash": "8524efb7a88eec9cff08264b8ca2012c"
+    "mtime": 1779847847.128131,
+    "ast_hash": "1ee9bd790027c555e3da4234f2449f84",
+    "semantic_hash": "1ee9bd790027c555e3da4234f2449f84"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\gcs_model_loader.py": {
     "mtime": 1778683438.7514553,
@@ -705,9 +705,9 @@
     "semantic_hash": "535479b7ea17d6661bca9e68fbb27adc"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\trainer.py": {
-    "mtime": 1779468238.7921336,
-    "ast_hash": "0ce8ffb180742065e6ca98748528ccdc",
-    "semantic_hash": "0ce8ffb180742065e6ca98748528ccdc"
+    "mtime": 1779846512.821473,
+    "ast_hash": "8950d4b386b0726639fd0c3b37165256",
+    "semantic_hash": "8950d4b386b0726639fd0c3b37165256"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\train_model.py": {
     "mtime": 1778596575.4948392,
@@ -1115,9 +1115,9 @@
     "semantic_hash": "5705fa6aa25b1806bfdce76dfe87e3a0"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\services\\shadow_trade_service.py": {
-    "mtime": 1779718438.2094295,
-    "ast_hash": "b236013ae920641de471cc5c233c0432",
-    "semantic_hash": "b236013ae920641de471cc5c233c0432"
+    "mtime": 1779821831.986516,
+    "ast_hash": "28f0a9f0d1fd11fee6c9347d4b4f86c2",
+    "semantic_hash": "28f0a9f0d1fd11fee6c9347d4b4f86c2"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\services\\signal_engine.py": {
     "mtime": 1778596576.9365847,
@@ -1335,9 +1335,9 @@
     "semantic_hash": "01ab36a8fe4d24342177abc52dc7399a"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\tasks\\pipeline_scan.py": {
-    "mtime": 1779717649.8096867,
-    "ast_hash": "2fced3bc0128fdcde7b7c34834231e7a",
-    "semantic_hash": "2fced3bc0128fdcde7b7c34834231e7a"
+    "mtime": 1779848206.5604255,
+    "ast_hash": "85aed9ef96518a6e297c3055d6b3580e",
+    "semantic_hash": "85aed9ef96518a6e297c3055d6b3580e"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\tasks\\robust_alerts.py": {
     "mtime": 1779294243.556555,
@@ -1870,9 +1870,9 @@
     "semantic_hash": "3919dfb64fe849c86b273b334e5c0375"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\frontend\\app\\dashboard\\shadow-portfolio\\page.tsx": {
-    "mtime": 1779393241.7655585,
-    "ast_hash": "49d67fd0bea5125cd45016492a4e557f",
-    "semantic_hash": "49d67fd0bea5125cd45016492a4e557f"
+    "mtime": 1779822091.2898943,
+    "ast_hash": "08c29a53a946b3a0e0215226cdd25f98",
+    "semantic_hash": "08c29a53a946b3a0e0215226cdd25f98"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\frontend\\app\\data\\page.tsx": {
     "mtime": 1778596591.3282702,
@@ -2310,9 +2310,9 @@
     "semantic_hash": "bfb90c883d737c5d327f49e84ef8e953"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\ml_trainer\\job.py": {
-    "mtime": 1778683572.1080165,
-    "ast_hash": "b0472ea49b10de438286ff7b340b0109",
-    "semantic_hash": "b0472ea49b10de438286ff7b340b0109"
+    "mtime": 1779846489.5072417,
+    "ast_hash": "8c5e039faab07668965bd00692c9f632",
+    "semantic_hash": "8c5e039faab07668965bd00692c9f632"
   },
   "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\ml_trainer\\__init__.py": {
     "mtime": 1778683542.348047,
@@ -2613,5 +2613,360 @@
     "mtime": 1779475706.2267606,
     "ast_hash": "978e8d91a6ef2961e97db851c2cc5a93",
     "semantic_hash": "978e8d91a6ef2961e97db851c2cc5a93"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\BOOTSTRAP_IMPLEMENTATION_SUMMARY.md": {
+    "mtime": 1778596570.6769514,
+    "ast_hash": "8fce64b93cf1ca1d89430ba9fa9af219",
+    "semantic_hash": "8fce64b93cf1ca1d89430ba9fa9af219"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\CLAUDE.md": {
+    "mtime": 1779288930.911632,
+    "ast_hash": "084a4ce31e9bdae67718055632b29f90",
+    "semantic_hash": "084a4ce31e9bdae67718055632b29f90"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\cloud-run-job.yaml": {
+    "mtime": 1778596590.8967886,
+    "ast_hash": "eba174200cfaca868c0cdfb80fa99215",
+    "semantic_hash": "eba174200cfaca868c0cdfb80fa99215"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\cloudbuild.yaml": {
+    "mtime": 1778596590.8977892,
+    "ast_hash": "46aaa98e838f81321308fa6a7e6ef24d",
+    "semantic_hash": "46aaa98e838f81321308fa6a7e6ef24d"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docker-compose.dev.yml": {
+    "mtime": 1778596590.8987887,
+    "ast_hash": "8b497da20ccc42f624a3db7d6a437108",
+    "semantic_hash": "8b497da20ccc42f624a3db7d6a437108"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docker-compose.yml": {
+    "mtime": 1778596590.899789,
+    "ast_hash": "ae0c164d85c560ed8005690691b37781",
+    "semantic_hash": "ae0c164d85c560ed8005690691b37781"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\FEATURE_AUDIT_ACTION_PLAN.md": {
+    "mtime": 1779374830.713022,
+    "ast_hash": "dedf296fec0ac611bcf053dddc1fb4b3",
+    "semantic_hash": "dedf296fec0ac611bcf053dddc1fb4b3"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\IMPLEMENTATION_SUMMARY.md": {
+    "mtime": 1778596570.6809542,
+    "ast_hash": "ed3301ce7704e5bb20028cfbb57a6542",
+    "semantic_hash": "ed3301ce7704e5bb20028cfbb57a6542"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\PIPELINE_FIX_SUMMARY.md": {
+    "mtime": 1778596570.6819544,
+    "ast_hash": "01369b15a6841cfa3c5cb9eb21332fcb",
+    "semantic_hash": "01369b15a6841cfa3c5cb9eb21332fcb"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\PIPELINE_TESTING_PLAN.md": {
+    "mtime": 1778596570.6829522,
+    "ast_hash": "ad8ee0ce94a90ff61240baa046970d9a",
+    "semantic_hash": "ad8ee0ce94a90ff61240baa046970d9a"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\replit.md": {
+    "mtime": 1779393242.1076205,
+    "ast_hash": "057dc119215196a85842c9f73ee7e9d0",
+    "semantic_hash": "057dc119215196a85842c9f73ee7e9d0"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\ROBUST_INDICATORS_IMPLEMENTATION.md": {
+    "mtime": 1778596570.684462,
+    "ast_hash": "a3f2b8baa0beaff5b5519a4a6f4214be",
+    "semantic_hash": "a3f2b8baa0beaff5b5519a4a6f4214be"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\.agents\\skills\\alembic-migration-guardrails\\SKILL.md": {
+    "mtime": 1778596570.5146298,
+    "ast_hash": "697ad6fbd066cc13d475465c0713b69c",
+    "semantic_hash": "697ad6fbd066cc13d475465c0713b69c"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\.agents\\skills\\frontend-design\\LICENSE.txt": {
+    "mtime": 1778596570.5166473,
+    "ast_hash": "29256199be2a609aac596980ffc11996",
+    "semantic_hash": "29256199be2a609aac596980ffc11996"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\.agents\\skills\\frontend-design\\SKILL.md": {
+    "mtime": 1778596570.5176477,
+    "ast_hash": "400c8b8231420f30b48aed0a6f37df9f",
+    "semantic_hash": "400c8b8231420f30b48aed0a6f37df9f"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\.agents\\skills\\ui-ux-pro-max\\SKILL.md": {
+    "mtime": 1778596570.5186465,
+    "ast_hash": "9e67626a0013e85287078d475bdf105f",
+    "semantic_hash": "9e67626a0013e85287078d475bdf105f"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\.emergent\\emergent.yml": {
+    "mtime": 1778596570.6568973,
+    "ast_hash": "eab707a0390251f42169536ea0152ce1",
+    "semantic_hash": "eab707a0390251f42169536ea0152ce1"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\.emergent\\summary.txt": {
+    "mtime": 1778596570.6578968,
+    "ast_hash": "24703232cd5caa3a901f1622a5779726",
+    "semantic_hash": "24703232cd5caa3a901f1622a5779726"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\.github\\agents\\my-agent.agent.md": {
+    "mtime": 1778596570.6628978,
+    "ast_hash": "6005eda6789ff955c7baa80b3c9dfc8a",
+    "semantic_hash": "6005eda6789ff955c7baa80b3c9dfc8a"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\.github\\workflows\\deploy-backend.yml": {
+    "mtime": 1778596570.6644053,
+    "ast_hash": "76daf4eb5864ef6e1e49399404b26e9a",
+    "semantic_hash": "76daf4eb5864ef6e1e49399404b26e9a"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\.github\\workflows\\deploy-frontend.yml": {
+    "mtime": 1778596570.6654158,
+    "ast_hash": "62df16301bb54774d2b9ee5fb9e0ff00",
+    "semantic_hash": "62df16301bb54774d2b9ee5fb9e0ff00"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\.github\\workflows\\deploy.yml": {
+    "mtime": 1778596570.6664152,
+    "ast_hash": "c80a66f5f16d09ab757988f6bde72062",
+    "semantic_hash": "c80a66f5f16d09ab757988f6bde72062"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\BOOTSTRAP_SIMULATION_JOB.md": {
+    "mtime": 1778596590.9027874,
+    "ast_hash": "3b2187d4291ef80993cbe51adc89eb53",
+    "semantic_hash": "3b2187d4291ef80993cbe51adc89eb53"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\CONFIDENCE_SCORING_DEPLOYMENT.md": {
+    "mtime": 1778596590.9063084,
+    "ast_hash": "124ab368b7ce008de6546739ef7190fd",
+    "semantic_hash": "124ab368b7ce008de6546739ef7190fd"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\db-pool-budget.md": {
+    "mtime": 1778596591.0731912,
+    "ast_hash": "f74ce64e52bbdff0f7a8fd9c1aa35a36",
+    "semantic_hash": "f74ce64e52bbdff0f7a8fd9c1aa35a36"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\ML_PIPELINE.md": {
+    "mtime": 1778596590.908308,
+    "ast_hash": "368ee167faf99b25a483b3b5597966e6",
+    "semantic_hash": "368ee167faf99b25a483b3b5597966e6"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\README.md": {
+    "mtime": 1778596590.908308,
+    "ast_hash": "4cea89cd114a3de8bd8a16e59efc1194",
+    "semantic_hash": "4cea89cd114a3de8bd8a16e59efc1194"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\robust_indicators_phase2_playbook.md": {
+    "mtime": 1778596591.1568773,
+    "ast_hash": "f1f10537e95d62fe4569e5b8a563260d",
+    "semantic_hash": "f1f10537e95d62fe4569e5b8a563260d"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\SIMULATION_AUTOMATION.md": {
+    "mtime": 1778596590.9093082,
+    "ast_hash": "015b6f13db4b9a8ca030fd22c4c1013f",
+    "semantic_hash": "015b6f13db4b9a8ca030fd22c4c1013f"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\SIMULATION_ENGINE.md": {
+    "mtime": 1778596590.911308,
+    "ast_hash": "ed3fcbf0bd3985346903a0642599f69f",
+    "semantic_hash": "ed3fcbf0bd3985346903a0642599f69f"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\XRP_USDT_IMPLEMENTATION_COMPLETE.md": {
+    "mtime": 1778596590.9123068,
+    "ast_hash": "43115a9d96d63a83e346352eadd09eb2",
+    "semantic_hash": "43115a9d96d63a83e346352eadd09eb2"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\analysis\\alpha-score-watchlist-audit.md": {
+    "mtime": 1778596590.915827,
+    "ast_hash": "74739ce0aed369f7c458de00e5d82776",
+    "semantic_hash": "74739ce0aed369f7c458de00e5d82776"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\api-integration\\gate-io-v4-mapping.md": {
+    "mtime": 1778596590.918833,
+    "ast_hash": "b817c2a49dbad78b375c817fbc44f554",
+    "semantic_hash": "b817c2a49dbad78b375c817fbc44f554"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\architecture\\01-score-driven-framework.md": {
+    "mtime": 1778596590.9228325,
+    "ast_hash": "eebabe0ead18842fbaa865a2145ccc74",
+    "semantic_hash": "eebabe0ead18842fbaa865a2145ccc74"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\architecture\\02-futures-leveraged-framework.md": {
+    "mtime": 1778596590.9348595,
+    "ast_hash": "f58f4eccbb82a7ebf3068aad7f46549c",
+    "semantic_hash": "f58f4eccbb82a7ebf3068aad7f46549c"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\architecture\\03-trading-desk-navigation.md": {
+    "mtime": 1778596590.9378734,
+    "ast_hash": "1f241061dd1e76291934007e6126870a",
+    "semantic_hash": "1f241061dd1e76291934007e6126870a"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\architecture\\04-sell-flow-improvements.md": {
+    "mtime": 1778596590.9388733,
+    "ast_hash": "22ce1c1705ba9a9e452afffd5a06ac85",
+    "semantic_hash": "22ce1c1705ba9a9e452afffd5a06ac85"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\audits\\trading-engine-pos-migracao-2026-05-06.md": {
+    "mtime": 1778596591.0731912,
+    "ast_hash": "6c33083c047083de2f07447097d63e13",
+    "semantic_hash": "6c33083c047083de2f07447097d63e13"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\grafana\\alert-rules.yaml": {
+    "mtime": 1778596591.1132784,
+    "ast_hash": "be767640526bf443f20c8c7b6028915c",
+    "semantic_hash": "be767640526bf443f20c8c7b6028915c"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\grafana\\queries.md": {
+    "mtime": 1778596591.114785,
+    "ast_hash": "ecdf41f22a65581fd70b735dfef715b0",
+    "semantic_hash": "ecdf41f22a65581fd70b735dfef715b0"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\grafana\\README.md": {
+    "mtime": 1778596591.1112802,
+    "ast_hash": "d568c646b4486208bdc3a89832eb26cd",
+    "semantic_hash": "d568c646b4486208bdc3a89832eb26cd"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\implementation\\ROADMAP.md": {
+    "mtime": 1778596591.1177976,
+    "ast_hash": "6baa7ff89cf43d4a2450ad317c9bd5b4",
+    "semantic_hash": "6baa7ff89cf43d4a2450ad317c9bd5b4"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\ml-deploy\\CLAUDE_CODE_PROMPT.md": {
+    "mtime": 1778683683.107802,
+    "ast_hash": "dc1f57cb3901fde8816fb0cee66ab509",
+    "semantic_hash": "dc1f57cb3901fde8816fb0cee66ab509"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\ml-deploy\\README.md": {
+    "mtime": 1778684123.1087205,
+    "ast_hash": "7d4fd05f5b4b911aacf306c50d5071c0",
+    "semantic_hash": "7d4fd05f5b4b911aacf306c50d5071c0"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\ml-deploy\\STEP2_trainer_job.md": {
+    "mtime": 1778681807.7192655,
+    "ast_hash": "b341daae8b85c25ec1e3aa6cd2e80d73",
+    "semantic_hash": "b341daae8b85c25ec1e3aa6cd2e80d73"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\ml-deploy\\STEP3_mlflow_ui.md": {
+    "mtime": 1778684123.061804,
+    "ast_hash": "01dfc25196f8524075a2338747f9c2ff",
+    "semantic_hash": "01dfc25196f8524075a2338747f9c2ff"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\ml-deploy\\STEP5_prediction_service_gcp.md": {
+    "mtime": 1778681807.75128,
+    "ast_hash": "f33e6a9a43c594aa60b31d657928e844",
+    "semantic_hash": "f33e6a9a43c594aa60b31d657928e844"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\obsidian\\00-INDEX.md": {
+    "mtime": 1778596591.1197965,
+    "ast_hash": "6c7024022358edec7e7db6f389186d1d",
+    "semantic_hash": "6c7024022358edec7e7db6f389186d1d"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\obsidian\\10-backend-api.md": {
+    "mtime": 1778596591.1217985,
+    "ast_hash": "a555620694306e54f609efcd733664ac",
+    "semantic_hash": "a555620694306e54f609efcd733664ac"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\obsidian\\11-services.md": {
+    "mtime": 1778596591.122799,
+    "ast_hash": "c338aa6d693751b3f40e2bbf32ac7f81",
+    "semantic_hash": "c338aa6d693751b3f40e2bbf32ac7f81"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\obsidian\\12-engines.md": {
+    "mtime": 1778596591.122799,
+    "ast_hash": "8ef226bfb9e58c4adeca528d5ec88d9c",
+    "semantic_hash": "8ef226bfb9e58c4adeca528d5ec88d9c"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\obsidian\\13-scoring-ml.md": {
+    "mtime": 1778596591.1243043,
+    "ast_hash": "9c2b255f7c5ae9e3294553866f7cdb95",
+    "semantic_hash": "9c2b255f7c5ae9e3294553866f7cdb95"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\obsidian\\14-models-database.md": {
+    "mtime": 1778596591.1253102,
+    "ast_hash": "3a4e26e7c957f7f73c3fa34e126f88c5",
+    "semantic_hash": "3a4e26e7c957f7f73c3fa34e126f88c5"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\obsidian\\15-exchange-integration.md": {
+    "mtime": 1778596591.1263163,
+    "ast_hash": "3072fc0025e52062483904bf3d862c08",
+    "semantic_hash": "3072fc0025e52062483904bf3d862c08"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\obsidian\\20-celery-topology.md": {
+    "mtime": 1778596591.1493533,
+    "ast_hash": "6b63c887c74c389ca52e0a94d464bf5a",
+    "semantic_hash": "6b63c887c74c389ca52e0a94d464bf5a"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\obsidian\\21-tasks-catalog.md": {
+    "mtime": 1778596591.1513534,
+    "ast_hash": "787f51213632e87c87bf684d7fa5991d",
+    "semantic_hash": "787f51213632e87c87bf684d7fa5991d"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\obsidian\\30-frontend.md": {
+    "mtime": 1778596591.1523533,
+    "ast_hash": "d271a82553225eaa90246df0161e01e3",
+    "semantic_hash": "d271a82553225eaa90246df0161e01e3"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\obsidian\\40-infra-cloudrun.md": {
+    "mtime": 1778596591.153353,
+    "ast_hash": "cac8efe828899fa68906f6ed26c3253f",
+    "semantic_hash": "cac8efe828899fa68906f6ed26c3253f"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\obsidian\\41-deploy-cloudbuild.md": {
+    "mtime": 1778596591.153353,
+    "ast_hash": "7825d8977be40c2147e3a81d0b7e5f3a",
+    "semantic_hash": "7825d8977be40c2147e3a81d0b7e5f3a"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\obsidian\\42-observability.md": {
+    "mtime": 1778596591.1548612,
+    "ast_hash": "7cd5329792e210b88dbe1eb49fe2342e",
+    "semantic_hash": "7cd5329792e210b88dbe1eb49fe2342e"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\obsidian\\50-data-flow.md": {
+    "mtime": 1778596591.1558714,
+    "ast_hash": "821e094bee94daf5f26685495be6b7f5",
+    "semantic_hash": "821e094bee94daf5f26685495be6b7f5"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\runbooks\\celery-queue-topology.md": {
+    "mtime": 1778596591.157878,
+    "ast_hash": "3fd69011675f0e096468a8828b072c36",
+    "semantic_hash": "3fd69011675f0e096468a8828b072c36"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\runbooks\\scheduler-group-drift.md": {
+    "mtime": 1778596591.1588767,
+    "ast_hash": "68437b008f7092143be7a09db4bcdda3",
+    "semantic_hash": "68437b008f7092143be7a09db4bcdda3"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\docs\\runbooks\\symbol-health-diagnostics.md": {
+    "mtime": 1778596591.1598797,
+    "ast_hash": "cf529f9c6188e6b8399131d0758cda9a",
+    "semantic_hash": "cf529f9c6188e6b8399131d0758cda9a"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\exports\\database_run_db_task_L346.txt": {
+    "mtime": 1778596591.2946804,
+    "ast_hash": "304a2de1ac7a9bb59e896ce89a465427",
+    "semantic_hash": "304a2de1ac7a9bb59e896ce89a465427"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\files\\ROADMAP.md": {
+    "mtime": 1778596591.299695,
+    "ast_hash": "6baa7ff89cf43d4a2450ad317c9bd5b4",
+    "semantic_hash": "6baa7ff89cf43d4a2450ad317c9bd5b4"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\grafana\\cloudbuild-grafana.yaml": {
+    "mtime": 1778596596.5756693,
+    "ast_hash": "5b8acd83d72419340721a3f88e7ed03e",
+    "semantic_hash": "5b8acd83d72419340721a3f88e7ed03e"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\grafana\\provisioning\\dashboards\\dashboards.yaml": {
+    "mtime": 1778596597.5694418,
+    "ast_hash": "b2ccd950f073c1f84408ac19b2aa743e",
+    "semantic_hash": "b2ccd950f073c1f84408ac19b2aa743e"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\grafana\\provisioning\\datasources\\datasources.yaml": {
+    "mtime": 1778596597.570442,
+    "ast_hash": "13f9e6154f7c91ce286fc1833cac4937",
+    "semantic_hash": "13f9e6154f7c91ce286fc1833cac4937"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\memory\\PRD.md": {
+    "mtime": 1778596597.571442,
+    "ast_hash": "103cc9761e3e7231d10efab60781a975",
+    "semantic_hash": "103cc9761e3e7231d10efab60781a975"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\ml_trainer\\requirements_trainer.txt": {
+    "mtime": 1779465763.8389745,
+    "ast_hash": "9a59bc9a0f52d330d15ed882808c0d4b",
+    "semantic_hash": "9a59bc9a0f52d330d15ed882808c0d4b"
   }
 }
