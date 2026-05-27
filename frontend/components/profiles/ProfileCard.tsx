@@ -35,11 +35,16 @@ export function ProfileCard({
   const toggleAutoPilot = async () => {
     setIsTogglingAutoPilot(true);
     try {
-      await fetch(`/api/profiles/${profile.id}/autopilot/toggle`, {
+      const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+      const res = await fetch(`/api/profiles/${profile.id}/autopilot/toggle`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ enabled: !profile.autopilot_enabled }),
       });
+      if (!res.ok) console.error("Auto-Pilot toggle failed:", res.status, await res.text());
       onUpdate?.();
     } catch (error) {
       console.error("Erro ao alternar Auto-Pilot:", error);
