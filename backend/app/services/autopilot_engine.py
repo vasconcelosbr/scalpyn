@@ -33,6 +33,7 @@ Rollback:
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -302,7 +303,7 @@ async def save_profile_version(
         "id":        version_id,
         "profile_id": profile_id,
         "ver_num":   ver_num,
-        "config":    __import__("json").dumps(config),
+        "config":    json.dumps(config),
         "regime":    regime,
         "ev":        perf.get("approved_ev"),
         "wr":        perf.get("approved_win_rate"),
@@ -325,7 +326,6 @@ async def log_audit(
     version_id: Optional[str] = None,
 ) -> None:
     """Insere registro em autopilot_audit_logs."""
-    import json
     await db.execute(text("""
         INSERT INTO autopilot_audit_logs (
             id, profile_id, action, reason, regime,
@@ -562,8 +562,6 @@ async def rollback_to_version(
     Restaura profile.config para um snapshot anterior de profile_versions.
     Loga a ação em autopilot_audit_logs.
     """
-    import json
-
     ver_result = await db.execute(text("""
         SELECT id, version_number, config, regime, ev_at_snapshot
         FROM profile_versions
