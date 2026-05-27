@@ -35,6 +35,42 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/futures-engine", tags=["Futures Engine"])
 
+_REDIS_ENGINE_KEY = "scalpyn:engine:futures:running:{uid}"
+
+
+async def _set_engine_flag(uid: str) -> None:
+    """Persist 'engine should run' flag in Redis so it survives container restarts."""
+    try:
+        from ..services.redis_client import get_async_redis
+        rc = await get_async_redis()
+        if rc:
+            await rc.set(_REDIS_ENGINE_KEY.format(uid=uid), "1")
+    except Exception:
+        pass
+
+
+async def _clear_engine_flag(uid: str) -> None:
+    """Remove the engine flag from Redis when explicitly stopped."""
+    try:
+        from ..services.redis_client import get_async_redis
+        rc = await get_async_redis()
+        if rc:
+            await rc.delete(_REDIS_ENGINE_KEY.format(uid=uid))
+    except Exception:
+        pass
+
+
+async def _engine_flag_exists(uid: str) -> bool:
+    """Check if the engine should-run flag is set in Redis."""
+    try:
+        from ..services.redis_client import get_async_redis
+        rc = await get_async_redis()
+        if rc:
+            return bool(await rc.exists(_REDIS_ENGINE_KEY.format(uid=uid)))
+    except Exception:
+        pass
+    return False
+
 
 @router.post("/start")
 async def start_engine(
@@ -61,6 +97,7 @@ async def start_engine(
         raise HTTPException(status_code=500, detail=f"Failed to initialize futures engine: {e}")
 
     scanner.start()
+    await _set_engine_flag(uid)
     logger.info("[futures-engine] /start scanner running for user=%s", uid)
     return {"status": "started", "engine": scanner.status()}
 
@@ -88,7 +125,9 @@ async def resume_engine(user_id: UUID = Depends(get_current_user_id)):
 @router.post("/stop")
 async def stop_engine(user_id: UUID = Depends(get_current_user_id)):
     """Gracefully stop the futures engine and release resources."""
-    scanner = get_engine(str(user_id))
+    uid = str(user_id)
+    await _clear_engine_flag(uid)
+    scanner = get_engine(uid)
     if not scanner:
         return {"status": "not_running"}
     await scanner.stop()
@@ -106,6 +145,17 @@ async def engine_status(
     """
     uid     = str(user_id)
     scanner = get_engine(uid)
+
+    # Auto-restart: if Redis flag says the engine should be running but it's not
+    # in memory (container restart / deployment), rebuild and start transparently.
+    if scanner is None and await _engine_flag_exists(uid):
+        logger.info("[futures-engine] /status: engine gone after restart — auto-resuming for user=%s", uid)
+        try:
+            scanner = await build_futures_scanner(uid)
+            scanner.start()
+        except Exception as exc:
+            logger.warning("[futures-engine] auto-restart failed for user=%s: %s", uid, exc)
+            scanner = None
 
     engine_info = scanner.status() if scanner else {
         "running": False, "paused": False, "cycle": 0,
