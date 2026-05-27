@@ -1,7 +1,9 @@
 'use client';
 
+import { useState, useEffect, useCallback } from 'react';
 import { useTradingConfig } from '@/hooks/useTradingConfig';
 import { EngineStatusBar } from '@/components/trading-desk/shared/EngineStatusBar';
+import { apiGet } from '@/lib/api';
 import { ConfigSection } from '@/components/trading-desk/shared/ConfigSection';
 import { SliderWithValue } from '@/components/trading-desk/shared/SliderWithValue';
 import { SaveConfigBar } from '@/components/trading-desk/shared/SaveConfigBar';
@@ -506,9 +508,43 @@ function RiskPreviewPanel({ config }: { config: Record<string, any> }) {
 // Page
 // ─────────────────────────────────────────────────────────────────────────────
 
+type AuditItem = {
+  trace_id: string | null;
+  symbol: string;
+  status: string;
+  reason: string | null;
+  rule_details: Record<string, unknown> | null;
+  trade_id: string | null;
+  decided_at: string | null;
+};
+
 export default function FuturesTradingPage() {
   const { config, updateConfig, saveConfig, resetConfig, isDirty, isSaving, isLoading } =
     useTradingConfig('futures');
+
+  const [activeTab, setActiveTab] = useState<'config' | 'audit'>('config');
+  const [auditItems, setAuditItems] = useState<AuditItem[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+
+  const fetchAudit = useCallback(async () => {
+    setAuditLoading(true);
+    try {
+      const data = await apiGet('/futures-engine/audit?limit=100');
+      setAuditItems(data?.items ?? []);
+    } catch {
+      // ignore
+    } finally {
+      setAuditLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'audit') {
+      fetchAudit();
+      const id = setInterval(fetchAudit, 60_000);
+      return () => clearInterval(id);
+    }
+  }, [activeTab, fetchAudit]);
 
   // ── Macro weights sum ──────────────────────────────────────────────────────
   const macroWeights = config?.macro_gate?.regime_weights ?? {};
@@ -563,6 +599,130 @@ export default function FuturesTradingPage() {
 
       {/* ── Engine Status ─────────────────────────────────────────────────── */}
       <EngineStatusBar profile="futures" />
+
+      {/* Tab Navigation */}
+      <div style={{ display: 'flex', gap: '4px', borderBottom: '1px solid var(--border-default)', marginTop: '16px' }}>
+        {(['config', 'audit'] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            style={{
+              padding: '8px 16px',
+              fontSize: '13px',
+              fontWeight: activeTab === tab ? 600 : 400,
+              color: activeTab === tab ? 'var(--accent-primary)' : 'var(--text-secondary)',
+              background: 'none',
+              border: 'none',
+              borderBottom: activeTab === tab ? '2px solid var(--accent-primary)' : '2px solid transparent',
+              cursor: 'pointer',
+              marginBottom: '-1px',
+            }}
+          >
+            {tab === 'config' ? 'Configuration' : 'Audit Trail'}
+          </button>
+        ))}
+      </div>
+
+      {/* Audit Tab */}
+      {activeTab === 'audit' && (
+        <div style={{ marginTop: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0 }}>
+              Futures execution attempts — updated every 60s
+            </p>
+            <button
+              onClick={fetchAudit}
+              disabled={auditLoading}
+              style={{
+                fontSize: '12px',
+                padding: '4px 12px',
+                background: 'var(--bg-secondary)',
+                border: '1px solid var(--border-default)',
+                borderRadius: 'var(--radius-sm)',
+                color: 'var(--text-primary)',
+                cursor: 'pointer',
+              }}
+            >
+              {auditLoading ? 'Loading…' : 'Refresh'}
+            </button>
+          </div>
+
+          {auditItems.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-tertiary)', fontSize: '13px' }}>
+              {auditLoading ? 'Loading audit records…' : 'No execution records yet. Start the engine to see activity.'}
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--border-default)' }}>
+                    {['Time', 'Symbol', 'Status', 'Reason', 'Size (USDT)', 'Trade ID'].map((h) => (
+                      <th
+                        key={h}
+                        style={{
+                          padding: '8px 10px',
+                          textAlign: 'left',
+                          color: 'var(--text-tertiary)',
+                          fontWeight: 500,
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {auditItems.map((item, i) => {
+                    const isApproved = item.status === 'APPROVED';
+                    const details = item.rule_details as Record<string, unknown> | null;
+                    return (
+                      <tr
+                        key={item.trace_id ?? i}
+                        style={{
+                          borderBottom: '1px solid var(--border-subtle)',
+                          background: i % 2 === 0 ? 'transparent' : 'var(--bg-hover)',
+                        }}
+                      >
+                        <td style={{ padding: '8px 10px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                          {item.decided_at ? new Date(item.decided_at).toLocaleString() : '—'}
+                        </td>
+                        <td style={{ padding: '8px 10px', color: 'var(--text-primary)', fontWeight: 500 }}>
+                          {item.symbol}
+                        </td>
+                        <td style={{ padding: '8px 10px' }}>
+                          <span style={{
+                            padding: '2px 8px',
+                            borderRadius: '99px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            background: isApproved ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+                            color: isApproved ? '#22c55e' : '#ef4444',
+                          }}>
+                            {item.status}
+                          </span>
+                        </td>
+                        <td style={{ padding: '8px 10px', color: 'var(--text-secondary)', maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {item.reason ?? '—'}
+                        </td>
+                        <td style={{ padding: '8px 10px', color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>
+                          {details?.trade_size != null ? `$${Number(details.trade_size).toFixed(2)}` : '—'}
+                        </td>
+                        <td style={{ padding: '8px 10px', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)', fontSize: '11px' }}>
+                          {item.trade_id ? item.trade_id.slice(0, 8) + '…' : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Config Tab */}
+      {activeTab === 'config' && (<>
 
       {/* ── SECTION 1: Scanner & 5-Layer Scoring ─────────────────────────── */}
       <ConfigSection
@@ -1612,6 +1772,7 @@ export default function FuturesTradingPage() {
         onSave={saveConfig}
         onReset={resetConfig}
       />
+      </>)}
     </div>
   );
 }

@@ -79,28 +79,38 @@ async def log_stream(
     caller_str = str(caller_id)
 
     async def event_gen() -> AsyncGenerator[bytes, None]:
-        last_emit = time.monotonic()
-        # Wrap the Redis subscriber generator in a task-friendly poll
-        # loop so we can interleave heartbeats with message delivery.
-        # Using ``__anext__`` + ``wait_for`` gives us a per-iteration
-        # timeout; if the broker is silent we still emit keep-alives.
-        stream = redis_event_stream()
+        # Use a background pump task to drain the Redis generator into a
+        # local queue. This decouples the timeout on queue.get() from the
+        # generator's internal coroutine — cancelling queue.get() does NOT
+        # send CancelledError into the generator, so the Redis reconnect
+        # sleep is never interrupted and the stream stays alive.
+        queue: asyncio.Queue = asyncio.Queue(maxsize=200)
+
+        async def _pump() -> None:
+            async for event in redis_event_stream():
+                try:
+                    queue.put_nowait(event)
+                except asyncio.QueueFull:
+                    try:
+                        queue.get_nowait()       # drop oldest
+                        queue.put_nowait(event)
+                    except Exception:
+                        pass
+
+        pump_task = asyncio.create_task(_pump())
         try:
             yield b": connected\n\n"
+            last_emit = time.monotonic()
             while True:
                 try:
                     event: Dict[str, Any] = await asyncio.wait_for(
-                        stream.__anext__(), timeout=_QUEUE_POLL_TIMEOUT_S
+                        queue.get(), timeout=_QUEUE_POLL_TIMEOUT_S
                     )
                 except asyncio.TimeoutError:
                     if time.monotonic() - last_emit >= _HEARTBEAT_INTERVAL_S:
                         yield b": heartbeat\n\n"
                         last_emit = time.monotonic()
                     continue
-                except StopAsyncIteration:
-                    # Subscriber generator exited (shouldn't happen
-                    # without cancellation, but be defensive).
-                    break
 
                 # ── tenancy (HARD): drop events without user_id and
                 # events for any other tenant. We never forward
@@ -120,9 +130,10 @@ async def log_stream(
         except asyncio.CancelledError:
             raise
         finally:
+            pump_task.cancel()
             try:
-                await stream.aclose()
-            except Exception:
+                await asyncio.wait_for(pump_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
                 pass
 
     return StreamingResponse(

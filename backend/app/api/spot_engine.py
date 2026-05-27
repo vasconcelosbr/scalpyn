@@ -29,11 +29,47 @@ from ..engines.spot_capital_manager import SpotCapitalManager
 from ..engines.spot_position_manager import SpotPositionManager
 from ..utils.encryption import decrypt
 from ..utils.exchange_names import exchange_name_matches
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/spot-engine", tags=["Spot Engine"])
+
+_REDIS_ENGINE_KEY = "scalpyn:engine:spot:running:{uid}"
+
+
+async def _set_engine_flag(uid: str) -> None:
+    """Persist 'engine should run' flag in Redis so it survives container restarts."""
+    try:
+        from ..services.redis_client import get_async_redis
+        rc = await get_async_redis()
+        if rc:
+            await rc.set(_REDIS_ENGINE_KEY.format(uid=uid), "1")
+    except Exception:
+        pass
+
+
+async def _clear_engine_flag(uid: str) -> None:
+    """Remove the engine flag from Redis when explicitly stopped."""
+    try:
+        from ..services.redis_client import get_async_redis
+        rc = await get_async_redis()
+        if rc:
+            await rc.delete(_REDIS_ENGINE_KEY.format(uid=uid))
+    except Exception:
+        pass
+
+
+async def _engine_flag_exists(uid: str) -> bool:
+    """Check if the engine should-run flag is set in Redis."""
+    try:
+        from ..services.redis_client import get_async_redis
+        rc = await get_async_redis()
+        if rc:
+            return bool(await rc.exists(_REDIS_ENGINE_KEY.format(uid=uid)))
+    except Exception:
+        pass
+    return False
 
 
 @router.post("/start")
@@ -61,6 +97,7 @@ async def start_engine(
         raise HTTPException(status_code=500, detail=f"Failed to initialize engine: {e}")
 
     scanner.start()
+    await _set_engine_flag(uid)
     logger.info("[spot-engine] /start scanner running for user=%s", uid)
     return {"status": "started", "engine": scanner.status()}
 
@@ -88,7 +125,9 @@ async def resume_engine(user_id: UUID = Depends(get_current_user_id)):
 @router.post("/stop")
 async def stop_engine(user_id: UUID = Depends(get_current_user_id)):
     """Gracefully stop the engine and release resources."""
-    scanner = get_engine(str(user_id))
+    uid = str(user_id)
+    await _clear_engine_flag(uid)
+    scanner = get_engine(uid)
     if not scanner:
         return {"status": "not_running"}
     await scanner.stop()
@@ -106,6 +145,17 @@ async def engine_status(
     """
     uid     = str(user_id)
     scanner = get_engine(uid)
+
+    # Auto-restart: if Redis flag says the engine should be running but it's not
+    # in memory (container restart / deployment), rebuild and start transparently.
+    if scanner is None and await _engine_flag_exists(uid):
+        logger.info("[spot-engine] /status: engine gone after restart — auto-resuming for user=%s", uid)
+        try:
+            scanner = await build_scanner_from_db(uid)
+            scanner.start()
+        except Exception as exc:
+            logger.warning("[spot-engine] auto-restart failed for user=%s: %s", uid, exc)
+            scanner = None
 
     engine_info = scanner.status() if scanner else {
         "running": False, "paused": False, "cycle": 0,
@@ -171,6 +221,46 @@ async def engine_status(
         "positions": positions_summary,
         "config":    spot_cfg.model_dump() if cfg_row else None,
     }
+
+
+@router.get("/audit")
+async def get_spot_audit(
+    limit: int = 100,
+    user_id: UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the last N execution-level audit records for spot buys/sells."""
+    uid = str(user_id)
+    rows = await db.execute(
+        text("""
+            SELECT trace_id, symbol, status, stage, reason, blocking_rule,
+                   rule_details, score_breakdown, trade_id, decided_at
+              FROM trade_decisions
+             WHERE user_id = :uid
+               AND market_type = 'spot'
+               AND stage = 'EXECUTION'
+             ORDER BY decided_at DESC
+             LIMIT :lim
+        """),
+        {"uid": uid, "lim": limit},
+    )
+
+    items = []
+    for r in rows.mappings().all():
+        items.append({
+            "trace_id":       str(r["trace_id"]) if r["trace_id"] else None,
+            "symbol":         r["symbol"],
+            "status":         r["status"],
+            "stage":          r["stage"],
+            "reason":         r["reason"],
+            "blocking_rule":  r["blocking_rule"],
+            "rule_details":   r["rule_details"],
+            "score_breakdown": r["score_breakdown"],
+            "trade_id":       str(r["trade_id"]) if r["trade_id"] else None,
+            "decided_at":     r["decided_at"].isoformat() if r["decided_at"] else None,
+        })
+
+    return {"items": items, "count": len(items)}
 
 
 @router.get("/config/default")

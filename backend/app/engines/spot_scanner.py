@@ -353,9 +353,35 @@ class SpotScanner:
             )
         except InsufficientBalanceError as e:
             logger.warning("Buy rejected (insufficient balance): %s", e)
+            from ..services.decision_audit_service import safe_record_decision
+            await safe_record_decision(
+                trace_id=str(uuid.uuid4()),
+                user_id=self.user_id,
+                pool_id=None,
+                symbol=symbol,
+                market_type="spot",
+                exchange="gate.io",
+                status="REJECTED",
+                stage="EXECUTION",
+                reason=f"INSUFFICIENT_BALANCE: {e}",
+                rule_details={"trade_size": trade_size, "score": score},
+            )
             return
         except Exception as e:
             logger.exception("Buy order failed for %s: %s", symbol, e)
+            from ..services.decision_audit_service import safe_record_decision
+            await safe_record_decision(
+                trace_id=str(uuid.uuid4()),
+                user_id=self.user_id,
+                pool_id=None,
+                symbol=symbol,
+                market_type="spot",
+                exchange="gate.io",
+                status="REJECTED",
+                stage="EXECUTION",
+                reason=f"EXCHANGE_ERROR: {e}",
+                rule_details={"trade_size": trade_size, "score": score},
+            )
             return
 
         # Record position in DB
@@ -390,6 +416,29 @@ class SpotScanner:
         )
         db.add(trade)
         await db.commit()
+
+        # Audit: record successful buy
+        from ..services.decision_audit_service import safe_record_decision
+        await safe_record_decision(
+            trace_id=str(uuid.uuid4()),
+            user_id=self.user_id,
+            pool_id=None,
+            symbol=symbol,
+            market_type="spot",
+            exchange="gate.io",
+            status="APPROVED",
+            stage="EXECUTION",
+            reason="BUY_EXECUTED",
+            trade_id=str(trade.id),
+            score_breakdown=opp.get("score_meta"),
+            rule_details={
+                "trade_size": trade_size,
+                "score": score,
+                "fill_price": fill_price,
+                "quantity": qty,
+                "order_id": order.get("id"),
+            },
+        )
 
         # Mark cooldown
         self._last_buy[symbol] = datetime.now(timezone.utc).timestamp()

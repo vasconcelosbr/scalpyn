@@ -14,7 +14,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from ..database import get_db
 from ..api.config import get_current_user_id
@@ -223,6 +223,46 @@ async def engine_status(
         "positions": positions_summary,
         "config":    fut_cfg.model_dump() if cfg_row else None,
     }
+
+
+@router.get("/audit")
+async def get_futures_audit(
+    limit: int = 100,
+    user_id: UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the last N execution-level audit records for futures entries/exits."""
+    uid = str(user_id)
+    rows = await db.execute(
+        text("""
+            SELECT trace_id, symbol, status, stage, reason, blocking_rule,
+                   rule_details, score_breakdown, trade_id, decided_at
+              FROM trade_decisions
+             WHERE user_id = :uid
+               AND market_type = 'futures'
+               AND stage = 'EXECUTION'
+             ORDER BY decided_at DESC
+             LIMIT :lim
+        """),
+        {"uid": uid, "lim": limit},
+    )
+
+    items = []
+    for r in rows.mappings().all():
+        items.append({
+            "trace_id":       str(r["trace_id"]) if r["trace_id"] else None,
+            "symbol":         r["symbol"],
+            "status":         r["status"],
+            "stage":          r["stage"],
+            "reason":         r["reason"],
+            "blocking_rule":  r["blocking_rule"],
+            "rule_details":   r["rule_details"],
+            "score_breakdown": r["score_breakdown"],
+            "trade_id":       str(r["trade_id"]) if r["trade_id"] else None,
+            "decided_at":     r["decided_at"].isoformat() if r["decided_at"] else None,
+        })
+
+    return {"items": items, "count": len(items)}
 
 
 @router.get("/config/default")
