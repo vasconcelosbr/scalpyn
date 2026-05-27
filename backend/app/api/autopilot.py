@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models.profile import Profile
-from ..utils.auth import get_current_user_id
+from .config import get_current_user_id
 
 logger = logging.getLogger("scalpyn.api.autopilot")
 
