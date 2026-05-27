@@ -2744,12 +2744,119 @@ async def _run_pipeline_scan():
                                 ),
                                 "created_at": datetime.now(timezone.utc),
                             })
+                    # ── ML Gate (pós-L3) ─────────────────────────────────────────────────
+                    # Runs the XGBoost WIN_FAST model on every ALLOW decision and overrides
+                    # to BLOCK when the model rejects the signal.
+                    #
+                    # Activation: env ML_GATE_ENABLED=true (default false — model needs
+                    # enough labeled shadow data before gating real signals).
+                    #
+                    # Design contracts:
+                    # * Never blocks the pipeline on failure — any exception falls through
+                    #   with model_approved=True (safe default).
+                    # * Stores win_fast_probability in decision["metrics"] so it flows
+                    #   into decisions_log.metrics for downstream analysis.
+                    # * ML-blocked decisions become BLOCK with reason "ml_gate" and are
+                    #   treated as L3_REJECTED by the edge trigger below (ML data capture).
+                    # * ml_predictions rows are written post-persist (after decision IDs
+                    #   are known) via _ml_gate_log_predictions().
+                    import os as _os
+                    _ml_gate_enabled = _os.getenv("ML_GATE_ENABLED", "false").lower() == "true"
+                    # Dict[symbol → {"probability": float|None, "approved": bool}]
+                    # populated here, consumed post-persist to write ml_predictions rows.
+                    _ml_gate_scores: dict = {}
+
+                    if _ml_gate_enabled:
+                        _ml_allow_decisions = [
+                            d for d in decisions if d.get("decision") == "ALLOW"
+                        ]
+                        if _ml_allow_decisions:
+                            try:
+                                from ..ml.prediction_service import predictor as _ml_predictor
+
+                                async def _ml_predict_one(d: dict) -> dict:
+                                    try:
+                                        return await _ml_predictor.predict(
+                                            metrics=d.get("metrics") or {},
+                                            db=db,
+                                            symbol=d.get("symbol"),
+                                            # decision_id not yet known — ml_predictions
+                                            # row written post-persist below.
+                                            decision_id=None,
+                                        )
+                                    except Exception as _exc:
+                                        logger.warning(
+                                            "[MLGate] predict failed for %s: %s",
+                                            d.get("symbol"), _exc,
+                                        )
+                                        return {
+                                            "model_approved": True,
+                                            "win_fast_probability": None,
+                                            "threshold_used": None,
+                                        }
+
+                                _ml_preds = await asyncio.gather(
+                                    *[_ml_predict_one(d) for d in _ml_allow_decisions]
+                                )
+                                _ml_blocked_count = 0
+                                for _d, _ml in zip(_ml_allow_decisions, _ml_preds):
+                                    _sym = _d.get("symbol")
+                                    _prob = _ml.get("win_fast_probability")
+                                    _approved = _ml.get("model_approved", True)
+                                    _ml_gate_scores[_sym] = {
+                                        "probability": _prob,
+                                        "approved": _approved,
+                                        "threshold": _ml.get("threshold_used"),
+                                    }
+                                    # Embed probability in metrics so it reaches decisions_log
+                                    if isinstance(_d.get("metrics"), dict):
+                                        _d["metrics"]["win_fast_probability"] = _prob
+                                        _d["metrics"]["ml_threshold"] = _ml.get("threshold_used")
+                                    if not _approved:
+                                        _d["decision"] = "BLOCK"
+                                        _d["l3_pass"] = False
+                                        _d.setdefault("reasons", {})["ml_gate"] = (
+                                            f"ML rejected "
+                                            f"(p={_prob:.3f} < {_ml.get('threshold_used', '?')})"
+                                            if _prob is not None
+                                            else "ML rejected (model unavailable)"
+                                        )
+                                        _ml_blocked_count += 1
+                                if _ml_blocked_count:
+                                    logger.info(
+                                        "[MLGate] wl=%s: %d/%d ALLOW blocked by ML gate",
+                                        wl.name, _ml_blocked_count, len(_ml_allow_decisions),
+                                    )
+                                else:
+                                    logger.info(
+                                        "[MLGate] wl=%s: all %d ALLOW passed ML gate "
+                                        "(avg_prob=%.3f)",
+                                        wl.name, len(_ml_allow_decisions),
+                                        sum(
+                                            s["probability"] for s in _ml_gate_scores.values()
+                                            if s["probability"] is not None
+                                        ) / max(
+                                            sum(
+                                                1 for s in _ml_gate_scores.values()
+                                                if s["probability"] is not None
+                                            ), 1
+                                        ),
+                                    )
+                            except Exception as _ml_gate_exc:
+                                logger.warning(
+                                    "[MLGate] ML gate setup failed for wl=%s, "
+                                    "falling through: %s",
+                                    wl.name, _ml_gate_exc,
+                                )
+
                     # ── L3_VISIBLE diagnostic (TEMP) — remove once root cause confirmed ──
                     _allow_count = sum(1 for d in decisions if d.get("decision") == "ALLOW")
                     _block_count = sum(1 for d in decisions if d.get("decision") == "BLOCK")
                     logger.info(
-                        "[L3_DIAG] wl=%s decisions=%d ALLOW=%d BLOCK=%d profile_passed=%d",
+                        "[L3_DIAG] wl=%s decisions=%d ALLOW=%d BLOCK=%d profile_passed=%d"
+                        "%s",
                         wl.name, len(decisions), _allow_count, _block_count, len(profile_passed),
+                        " [ML_GATE_ON]" if _ml_gate_enabled else "",
                     )
                     signals = [
                         {
@@ -2963,6 +3070,77 @@ async def _run_pipeline_scan():
                             await create_shadows_for_rejected_decisions(
                                 wl.user_id, _rejected_decision_ids
                             )
+
+                        # ML Gate — write ml_predictions rows now that we have decision IDs.
+                        # Only fires when ML gate was active AND produced scores.
+                        if _ml_gate_enabled and _ml_gate_scores:
+                            try:
+                                from sqlalchemy import text as _sql_text
+                                _active_model_id: str | None = None
+                                try:
+                                    _ml_model_row = (await db.execute(
+                                        _sql_text(
+                                            "SELECT id FROM ml_models "
+                                            "WHERE status='active' "
+                                            "ORDER BY activated_at DESC LIMIT 1"
+                                        )
+                                    )).fetchone()
+                                    if _ml_model_row:
+                                        _active_model_id = str(_ml_model_row.id)
+                                except Exception:
+                                    pass
+
+                                if _active_model_id:
+                                    _ml_pred_rows = []
+                                    for _p in decision_payloads:
+                                        _pid = _p.get("id")
+                                        _psym = _p.get("symbol")
+                                        _pgate = _ml_gate_scores.get(_psym)
+                                        if not _pid or not _psym or not _pgate:
+                                            continue
+                                        _pprob = _pgate.get("probability")
+                                        if _pprob is None:
+                                            continue
+                                        _ml_pred_rows.append({
+                                            "model_id":   _active_model_id,
+                                            "decision_id": _pid,
+                                            "symbol":      _psym,
+                                            "probability": _pprob,
+                                            "approved":    _pgate.get("approved", True),
+                                            "threshold":   _pgate.get("threshold"),
+                                        })
+                                    if _ml_pred_rows:
+                                        async with db.begin_nested():
+                                            await db.execute(
+                                                _sql_text("""
+                                                    INSERT INTO ml_predictions
+                                                        (model_id, decision_id, symbol,
+                                                         win_fast_probability,
+                                                         model_approved, threshold_used)
+                                                    SELECT
+                                                        CAST(r.model_id AS UUID),
+                                                        r.decision_id,
+                                                        r.symbol,
+                                                        r.probability,
+                                                        r.approved,
+                                                        r.threshold
+                                                    FROM jsonb_to_recordset(CAST(:rows AS jsonb))
+                                                        AS r(model_id text, decision_id int,
+                                                             symbol text, probability float,
+                                                             approved bool, threshold float)
+                                                    ON CONFLICT DO NOTHING
+                                                """),
+                                                {"rows": __import__("json").dumps(_ml_pred_rows)},
+                                            )
+                                        logger.info(
+                                            "[MLGate] logged %d ml_predictions rows for wl=%s",
+                                            len(_ml_pred_rows), wl.name,
+                                        )
+                            except Exception as _ml_log_exc:
+                                logger.warning(
+                                    "[MLGate] ml_predictions write failed for wl=%s: %s",
+                                    wl.name, _ml_log_exc,
+                                )
 
                     if new_syms:
                         stats["new_signals"] += len(new_syms)
