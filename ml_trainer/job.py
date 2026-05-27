@@ -5,6 +5,12 @@ import json
 import logging
 from datetime import datetime, timezone
 
+# AUDIT_MODE — run deep audit instead of training when env var is set.
+if os.getenv("AUDIT_MODE", "false").lower() == "true":
+    from ml_trainer.audit import main as _audit_main
+    _audit_main()
+    sys.exit(0)
+
 import mlflow
 import mlflow.xgboost
 import optuna
