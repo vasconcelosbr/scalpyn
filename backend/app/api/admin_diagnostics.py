@@ -823,3 +823,224 @@ async def ml_models_status(authorization: Optional[str] = Header(default=None)) 
             for r in rows
         ]
     }
+
+
+@router.get("/diagnostics/ml-label-inversion", include_in_schema=False)
+async def ml_label_inversion_diagnostic(
+    days: int = 90,
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Diagnose whether the XGBoost model has inverted predictions.
+
+    AUC < 0.5 means the model scores LOSSes higher than WINs. This endpoint
+    runs the active model against all labeled decisions_log records in-process
+    and computes:
+
+    - ``auc_normal``:   roc_auc with current proba vs is_win_fast labels
+    - ``auc_inverted``: roc_auc with (1-proba) vs labels  — if this > auc_normal
+                        the model is inverted and predictions should be flipped
+    - ``mean_pnl_approved``:  mean pnl_pct for records where proba >= threshold
+    - ``mean_pnl_rejected``:  mean pnl_pct for records where proba < threshold
+    - ``mean_pnl_inv_approved``: same for inverted threshold
+    - ``score_pnl_buckets``: L3 score decile vs mean pnl (L3 signal quality)
+    - ``ml_predictions_count``: rows in ml_predictions (0 = table not populated)
+    - ``label_distribution``: WIN / LOSS counts and base win rate
+
+    Auth: same ADMIN_DIAGNOSTICS_TOKEN as other admin endpoints.
+    """
+    _enforce_auth(authorization)
+
+    import json as _json
+    import numpy as np
+    from sklearn.metrics import roc_auc_score
+
+    from ..database import AsyncSessionLocal
+    from ..ml.feature_extractor import FEATURE_COLUMNS, build_training_dataframe
+    from ..ml.gcs_model_loader import get_model
+    from sqlalchemy import text as _text
+
+    out: Dict[str, Any] = {
+        "days_lookback": days,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    async with AsyncSessionLocal() as db:
+        # ── 1. ml_predictions table status ───────────────────────────────────
+        try:
+            mp_row = (await db.execute(_text(
+                "SELECT COUNT(*) AS n FROM ml_predictions"
+            ))).fetchone()
+            out["ml_predictions_count"] = int(mp_row.n) if mp_row else 0
+        except Exception as exc:
+            out["ml_predictions_count"] = f"error: {exc}"
+
+        # ── 2. ml_predictions × decisions_log (if populated) ─────────────────
+        if isinstance(out["ml_predictions_count"], int) and out["ml_predictions_count"] > 0:
+            try:
+                mp_rows = (await db.execute(_text("""
+                    SELECT mp.win_fast_probability,
+                           mp.threshold_used,
+                           dl.pnl_pct,
+                           dl.outcome
+                    FROM ml_predictions mp
+                    JOIN decisions_log dl ON dl.id = mp.decision_id
+                    WHERE dl.pnl_pct IS NOT NULL
+                      AND dl.outcome IN ('tp', 'sl')
+                    ORDER BY mp.created_at DESC
+                    LIMIT 2000
+                """))).mappings().all()
+                out["ml_predictions_labeled"] = len(mp_rows)
+                if mp_rows:
+                    from ..ml.feature_extractor import _WIN_THRESHOLD
+                    probas = np.array([float(r["win_fast_probability"]) for r in mp_rows], dtype="float32")
+                    pnls   = np.array([float(r["pnl_pct"]) for r in mp_rows], dtype="float32")
+                    labels = (pnls > _WIN_THRESHOLD).astype(int)
+                    thresh = float(mp_rows[0]["threshold_used"] or 0.5)
+                    approved = probas >= thresh
+                    inv_approved = (1 - probas) >= thresh
+                    if len(np.unique(labels)) >= 2:
+                        out["auc_from_ml_predictions"] = {
+                            "auc_normal":   round(float(roc_auc_score(labels, probas)), 4),
+                            "auc_inverted": round(float(roc_auc_score(labels, 1 - probas)), 4),
+                        }
+                    out["pnl_from_ml_predictions"] = {
+                        "mean_pnl_approved":     round(float(pnls[approved].mean()), 6) if approved.sum() > 0 else None,
+                        "mean_pnl_rejected":     round(float(pnls[~approved].mean()), 6) if (~approved).sum() > 0 else None,
+                        "mean_pnl_inv_approved": round(float(pnls[inv_approved].mean()), 6) if inv_approved.sum() > 0 else None,
+                        "n_approved": int(approved.sum()),
+                        "n_inv_approved": int(inv_approved.sum()),
+                    }
+            except Exception as exc:
+                out["ml_predictions_join_error"] = str(exc)
+
+        # ── 3. In-process model scoring on labeled decisions_log ─────────────
+        try:
+            records_rows = (await db.execute(_text(f"""
+                SELECT DISTINCT ON (symbol, DATE(created_at))
+                    id, symbol, created_at, metrics, score,
+                    pnl_pct, holding_seconds, outcome, decision
+                FROM decisions_log
+                WHERE l3_pass = true
+                  AND decision = 'ALLOW'
+                  AND outcome IN ('tp', 'sl')
+                  AND pnl_pct IS NOT NULL
+                  AND created_at >= NOW() - INTERVAL '{days} days'
+                ORDER BY symbol, DATE(created_at), created_at ASC
+            """))).mappings().all()
+            records = []
+            for r in records_rows:
+                rec = dict(r)
+                if isinstance(rec.get("metrics"), str):
+                    try:
+                        rec["metrics"] = _json.loads(rec["metrics"])
+                    except Exception:
+                        rec["metrics"] = {}
+                records.append(rec)
+            out["labeled_decisions_found"] = len(records)
+        except Exception as exc:
+            out["labeled_decisions_error"] = str(exc)
+            records = []
+
+        # ── 4. Label distribution ─────────────────────────────────────────────
+        if records:
+            try:
+                from ..ml.feature_extractor import _WIN_THRESHOLD, _MIN_WIN_PNL_PCT, _FEE_ROUND_TRIP_PCT
+                pnl_arr = np.array([float(r["pnl_pct"]) for r in records], dtype="float32")
+                labels_arr = (pnl_arr > _WIN_THRESHOLD).astype(int)
+                out["label_distribution"] = {
+                    "win_threshold": round(_WIN_THRESHOLD, 4),
+                    "min_win_pnl_pct": _MIN_WIN_PNL_PCT,
+                    "fee_round_trip_pct": _FEE_ROUND_TRIP_PCT,
+                    "n_total": len(labels_arr),
+                    "n_wins": int(labels_arr.sum()),
+                    "n_losses": int((labels_arr == 0).sum()),
+                    "base_win_rate": round(float(labels_arr.mean()), 4),
+                    "mean_pnl": round(float(pnl_arr.mean()), 6),
+                    "p25_pnl": round(float(np.percentile(pnl_arr, 25)), 6),
+                    "p50_pnl": round(float(np.percentile(pnl_arr, 50)), 6),
+                    "p75_pnl": round(float(np.percentile(pnl_arr, 75)), 6),
+                }
+            except Exception as exc:
+                out["label_distribution_error"] = str(exc)
+
+        # ── 5. L3 score decile vs mean PnL (L3 signal quality) ───────────────
+        if records:
+            try:
+                score_arr = np.array(
+                    [float(r["score"]) if r.get("score") is not None else float("nan")
+                     for r in records],
+                    dtype="float32",
+                )
+                pnl_arr2 = np.array([float(r["pnl_pct"]) for r in records], dtype="float32")
+                valid = ~np.isnan(score_arr)
+                if valid.sum() >= 20:
+                    deciles = np.percentile(score_arr[valid], np.arange(0, 110, 10))
+                    buckets = []
+                    for i in range(len(deciles) - 1):
+                        mask = valid & (score_arr >= deciles[i]) & (score_arr < deciles[i + 1])
+                        if mask.sum() == 0:
+                            continue
+                        buckets.append({
+                            "score_min": round(float(deciles[i]), 2),
+                            "score_max": round(float(deciles[i + 1]), 2),
+                            "n": int(mask.sum()),
+                            "mean_pnl": round(float(pnl_arr2[mask].mean()), 6),
+                            "win_rate": round(float((pnl_arr2[mask] > _WIN_THRESHOLD).mean()), 4),
+                        })
+                    out["l3_score_vs_pnl"] = buckets
+                else:
+                    out["l3_score_vs_pnl"] = "not_enough_scored_records"
+            except Exception as exc:
+                out["l3_score_vs_pnl_error"] = str(exc)
+
+        # ── 6. In-process AUC (model scored against labeled data) ─────────────
+        if records:
+            try:
+                df = build_training_dataframe(records)
+                model = get_model()
+                feature_cols = [c for c in FEATURE_COLUMNS if c in df.columns]
+                X = df[feature_cols].astype("float32").to_numpy()
+                expected = getattr(model, "n_features_in_", None)
+                if expected and X.shape[1] > expected:
+                    X = X[:, :expected]
+                probas = model.predict_proba(X)[:, 1]
+                labels_df = df["is_win_fast"].to_numpy(dtype=int)
+                pnls_df = df["_pnl_pct"].to_numpy(dtype="float32")
+
+                threshold_row = (await db.execute(_text("""
+                    SELECT decision_threshold FROM ml_models
+                    WHERE status = 'active' ORDER BY activated_at DESC LIMIT 1
+                """))).fetchone()
+                threshold = float(threshold_row.decision_threshold) if threshold_row else 0.5
+
+                approved = probas >= threshold
+                inv_approved = (1 - probas) >= threshold
+
+                auc_n = float(roc_auc_score(labels_df, probas)) if len(np.unique(labels_df)) >= 2 else None
+                auc_i = float(roc_auc_score(labels_df, 1 - probas)) if len(np.unique(labels_df)) >= 2 else None
+
+                out["in_process_scoring"] = {
+                    "n_records": len(df),
+                    "n_features": X.shape[1],
+                    "threshold": threshold,
+                    "auc_normal":             round(auc_n, 4) if auc_n is not None else None,
+                    "auc_inverted":           round(auc_i, 4) if auc_i is not None else None,
+                    "verdict": (
+                        "INVERTED — flip prediction" if (auc_i is not None and auc_n is not None and auc_i > auc_n)
+                        else ("OK — model is not inverted" if (auc_n is not None and auc_n >= 0.5)
+                              else "WEAK — AUC < 0.5 but not clearly inverted")
+                    ),
+                    "mean_pnl_approved":     round(float(pnls_df[approved].mean()), 6) if approved.sum() > 0 else None,
+                    "mean_pnl_rejected":     round(float(pnls_df[~approved].mean()), 6) if (~approved).sum() > 0 else None,
+                    "mean_pnl_inv_approved": round(float(pnls_df[inv_approved].mean()), 6) if inv_approved.sum() > 0 else None,
+                    "n_approved": int(approved.sum()),
+                    "n_inv_approved": int(inv_approved.sum()),
+                    "proba_mean": round(float(probas.mean()), 4),
+                    "proba_p10":  round(float(np.percentile(probas, 10)), 4),
+                    "proba_p50":  round(float(np.percentile(probas, 50)), 4),
+                    "proba_p90":  round(float(np.percentile(probas, 90)), 4),
+                }
+            except Exception as exc:
+                out["in_process_scoring_error"] = str(exc)
+
+    return out
