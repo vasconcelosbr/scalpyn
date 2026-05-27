@@ -31,6 +31,11 @@ MIN_RECORDS              = int(os.getenv("MIN_RECORDS", "200"))
 # Set INCLUDE_REJECTED_IN_TRAIN=true to add L3_REJECTED (decision='BLOCK')
 # records to the training set. Requires enough rejected shadows with pnl_pct.
 INCLUDE_REJECTED         = os.getenv("INCLUDE_REJECTED_IN_TRAIN", "false").lower() == "true"
+# Optional: exclude a date range with known bad indicators from training.
+# Set TRAIN_EXCLUDE_FROM=YYYY-MM-DD and TRAIN_EXCLUDE_TO=YYYY-MM-DD to skip
+# a period where indicators were absent or miscalculated.
+TRAIN_EXCLUDE_FROM       = os.getenv("TRAIN_EXCLUDE_FROM", "")   # e.g. "2026-05-01"
+TRAIN_EXCLUDE_TO         = os.getenv("TRAIN_EXCLUDE_TO", "")     # e.g. "2026-05-20"
 
 # MLflow aponta para o serviço scalpyn-mlflow-ui (Cloud Run) que mantém
 # seu próprio banco — sem colisão com o alembic_version do backend.
@@ -52,7 +57,10 @@ def main():
     # 1. Extrai dados da decisions_log
     # ---------------------------------------------------------
     logger.info(
-        "Extraindo dados da decisions_log... (include_rejected=%s)", INCLUDE_REJECTED
+        "Extraindo dados da decisions_log... (include_rejected=%s, exclude_period=%s→%s)",
+        INCLUDE_REJECTED,
+        TRAIN_EXCLUDE_FROM or "none",
+        TRAIN_EXCLUDE_TO or "none",
     )
     # Deduplication: DISTINCT ON (symbol, DATE(created_at)) — one row per
     # symbol per calendar day. This removes edge-trigger amplification
@@ -66,6 +74,17 @@ def main():
         if INCLUDE_REJECTED
         else "decision = 'ALLOW'"
     )
+    # Build optional exclusion clause for periods with known bad indicators.
+    exclude_clause = ""
+    exclude_params: dict = {}
+    if TRAIN_EXCLUDE_FROM and TRAIN_EXCLUDE_TO:
+        exclude_clause = (
+            "AND NOT (created_at >= :excl_from AND created_at <= :excl_to)"
+        )
+        exclude_params = {
+            "excl_from": TRAIN_EXCLUDE_FROM,
+            "excl_to": f"{TRAIN_EXCLUDE_TO} 23:59:59",
+        }
     with engine.connect() as conn:
         result = conn.execute(text(f"""
             SELECT id, symbol, created_at, metrics, score,
@@ -80,10 +99,11 @@ def main():
                   AND outcome IN ('tp', 'sl')
                   AND pnl_pct IS NOT NULL
                   AND created_at >= NOW() - INTERVAL :days
+                  {exclude_clause}
                 ORDER BY symbol, DATE(created_at), created_at ASC
             ) AS deduped
             ORDER BY created_at ASC
-        """), {"days": f"{DAYS_LOOKBACK} days"})
+        """), {"days": f"{DAYS_LOOKBACK} days", **exclude_params})
         records = [dict(row._mapping) for row in result.fetchall()]
 
     total = len(records)
