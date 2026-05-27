@@ -31,13 +31,16 @@ def _calibrate_threshold(
     y_true: np.ndarray,
     proba: np.ndarray,
     default: float = 0.5,
+    pnl_values: np.ndarray | None = None,
 ) -> float:
-    """Pick the decision threshold that maximises F1 on the test set.
+    """Pick the decision threshold on the test set.
 
-    Task #324 — replaces the hardcoded 0.500 literal in job.py. Strategy is
-    selectable via the ``THRESHOLD_CALIBRATION`` env var:
+    Strategy is selectable via the ``THRESHOLD_CALIBRATION`` env var:
 
-    * ``f1_max`` (default): argmax of F1 across the precision-recall curve.
+    * ``pnl_max`` (default): argmax of mean PnL among approved trades at each
+      threshold. Economically optimal — directly maximises expected return.
+      Requires ``pnl_values`` array; falls back to ``f1_max`` when absent.
+    * ``f1_max``: argmax of F1 across the precision-recall curve.
     * ``max_precision_at_recall``: highest precision threshold whose recall
       is >= ``MIN_RECALL`` (env, default 0.30).
 
@@ -46,7 +49,31 @@ def _calibrate_threshold(
     if len(y_true) == 0 or len(np.unique(y_true)) < 2:
         return default
 
-    strategy = os.getenv("THRESHOLD_CALIBRATION", "f1_max").lower()
+    strategy = os.getenv("THRESHOLD_CALIBRATION", "pnl_max").lower()
+
+    # pnl_max — maximise expected PnL of approved trades across all thresholds.
+    if strategy == "pnl_max" and pnl_values is not None and len(pnl_values) == len(proba):
+        # Evaluate a grid of candidate thresholds (quantiles of score distribution
+        # for efficiency; avoids iterating all N unique values).
+        candidates = np.unique(np.percentile(proba, np.arange(10, 95, 2)))
+        min_approved = int(os.getenv("THRESHOLD_MIN_APPROVED", "10"))
+        best_thresh = default
+        best_pnl = -np.inf
+        for t in candidates:
+            mask = proba >= t
+            if mask.sum() < min_approved:
+                continue
+            mean_pnl = float(np.mean(pnl_values[mask]))
+            if mean_pnl > best_pnl:
+                best_pnl = mean_pnl
+                best_thresh = float(t)
+        logger.info(
+            "pnl_max calibration: threshold=%.4f expected_pnl=%.4f%% approved=%d/%d",
+            best_thresh, best_pnl * 100, int((proba >= best_thresh).sum()), len(proba),
+        )
+        if math.isnan(best_thresh) or best_thresh <= 0.0 or best_thresh >= 1.0:
+            return default
+        return best_thresh
 
     precision, recall, thresholds = precision_recall_curve(y_true, proba)
     # precision_recall_curve returns N points but only N-1 thresholds.
@@ -63,7 +90,7 @@ def _calibrate_threshold(
             return float(thresholds[best_idx])
         # No threshold meets the recall floor — fall through to F1.
 
-    # F1-max default
+    # F1-max
     denom = precision + recall
     f1 = np.where(denom > 0, 2 * precision * recall / np.where(denom > 0, denom, 1), 0.0)
     best_idx = int(np.argmax(f1))
@@ -99,6 +126,17 @@ class WinFastTrainer:
                        n_train, n_val, n_test
         """
         feature_cols = [c for c in FEATURE_COLUMNS if c in df.columns]
+
+        # When INCLUDE_REJECTED_IN_TRAIN=true, inject was_rejected as a feature
+        # so the model can learn separate class distributions for approved vs
+        # rejected assets. The flag is stored as _was_rejected (private) in
+        # build_training_dataframe; promote it here only when the env is set.
+        if os.getenv("INCLUDE_REJECTED_IN_TRAIN", "false").lower() == "true":
+            if "_was_rejected" in df.columns and "was_rejected" not in feature_cols:
+                df = df.copy()
+                df["was_rejected"] = df["_was_rejected"].fillna(0).astype("float32")
+                feature_cols = feature_cols + ["was_rejected"]
+                logger.info("INCLUDE_REJECTED_IN_TRAIN: added 'was_rejected' feature")
 
         # ML_EXCLUDED_FIELDS — guardrail no entry-point do treino. Nenhum
         # desses campos pode entrar em X_train/X_val/X_test (leakage circular
@@ -234,11 +272,14 @@ class WinFastTrainer:
 
             proba_test = self.model.predict_proba(X_test)[:, 1]
 
-            # Task #324 — calibrate decision_threshold via PR curve on the
-            # test set. Maximises F1 by default; switch to "max_precision"
-            # to gate at a minimum recall floor instead.
+            # Calibrate threshold on the test set.
+            # Default strategy "pnl_max" maximises expected PnL of approved trades
+            # using _pnl_pct from the test set (economically optimal).
+            pnl_test: np.ndarray | None = None
+            if "_pnl_pct" in test_df.columns:
+                pnl_test = test_df["_pnl_pct"].to_numpy(dtype="float32")
             calibrated_threshold = _calibrate_threshold(
-                y_test.to_numpy(), proba_test
+                y_test.to_numpy(), proba_test, pnl_values=pnl_test
             )
             pred_test = (proba_test >= calibrated_threshold).astype(int)
 

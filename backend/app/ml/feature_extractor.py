@@ -238,6 +238,11 @@ def extract_features(metrics: dict) -> Dict[str, float]:
 
 
 _MIN_WIN_PNL_PCT = float(os.getenv("MIN_WIN_PNL_PCT", "0.008"))
+# Fee round-trip (taker buy + taker sell). Gate.io default: 0.08% * 2 = 0.16%.
+# Added to the gross PnL threshold so WIN = profitable AFTER fees.
+# Override via env: FEE_ROUND_TRIP_PCT=0.002 for exchanges with higher fees.
+_FEE_ROUND_TRIP_PCT = float(os.getenv("FEE_ROUND_TRIP_PCT", "0.0016"))
+_WIN_THRESHOLD = _MIN_WIN_PNL_PCT + _FEE_ROUND_TRIP_PCT  # effective label threshold
 
 
 def build_training_dataframe(records: list) -> pd.DataFrame:
@@ -253,8 +258,9 @@ def build_training_dataframe(records: list) -> pd.DataFrame:
         DataFrame with FEATURE_COLUMNS + is_win_fast + _created_at columns.
 
     Label semantics (Task #324):
-        is_win_fast = 1 when pnl_pct > MIN_WIN_PNL_PCT (env, default 0.008 = 0.8%),
-        else 0. Rows with pnl_pct IS NULL are DROPPED — we cannot label them.
+        is_win_fast = 1 when pnl_pct > _WIN_THRESHOLD = MIN_WIN_PNL_PCT + FEE_ROUND_TRIP_PCT
+        (defaults: 0.008 + 0.0016 = 0.0096, i.e. 0.96% gross = profitable after fees).
+        Rows with pnl_pct IS NULL are DROPPED — we cannot label them.
 
         Vocabulário canônico de ``decisions_log.outcome`` é lowercase
         ``tp``/``sl`` (regime pós-14/05; timeout foi descontinuado — trades
@@ -290,13 +296,18 @@ def build_training_dataframe(records: list) -> pd.DataFrame:
             dropped_null_pnl += 1
             continue
 
-        # Target: WIN_FAST = trade with PnL > MIN_WIN_PNL_PCT (default 0).
-        features["is_win_fast"] = 1 if pnl_val > _MIN_WIN_PNL_PCT else 0
+        # Target: WIN_FAST = trade with net-of-fees PnL > threshold.
+        # _WIN_THRESHOLD = MIN_WIN_PNL_PCT + FEE_ROUND_TRIP_PCT (see constants above).
+        features["is_win_fast"] = 1 if pnl_val > _WIN_THRESHOLD else 0
 
         # Metadata for time-based split — NOT model features
         features["_created_at"] = r.get("created_at")
         features["_outcome"] = r.get("outcome")
         features["_pnl_pct"] = pnl_val
+        # was_rejected=1 for L3_REJECTED (decision='BLOCK') records.
+        # Included as a feature only when INCLUDE_REJECTED_IN_TRAIN=true so
+        # the model can learn separate distributions for approved vs rejected.
+        features["_was_rejected"] = 1 if r.get("decision") == "BLOCK" else 0
 
         rows.append(features)
 
@@ -320,7 +331,12 @@ def build_training_dataframe(records: list) -> pd.DataFrame:
 
     if len(df) > 0:
         win_rate = df["is_win_fast"].mean() * 100
-        logger.info(f"Base WIN rate: {win_rate:.1f}%")
+        n_rejected = int(df["_was_rejected"].sum()) if "_was_rejected" in df.columns else 0
+        logger.info(
+            "Base WIN rate: %.1f%% (threshold=%.4f = MIN_WIN_PNL_PCT %.4f + FEE %.4f)"
+            " | rejected_in_set=%d",
+            win_rate, _WIN_THRESHOLD, _MIN_WIN_PNL_PCT, _FEE_ROUND_TRIP_PCT, n_rejected,
+        )
 
     return df
 

@@ -25,9 +25,12 @@ logger = logging.getLogger("scalpyn.trainer")
 DB_URL            = os.environ["DB_URL"]          # Cloud SQL via unix socket
 BUCKET_NAME       = os.environ["BUCKET_NAME"]     # scalpyn-mlflow
 GCS_ARTIFACT_ROOT = f"gs://{BUCKET_NAME}/artifacts"
-DAYS_LOOKBACK     = int(os.getenv("DAYS_LOOKBACK", "90"))
-N_TRIALS          = int(os.getenv("N_TRIALS", "50"))
-MIN_RECORDS       = int(os.getenv("MIN_RECORDS", "200"))
+DAYS_LOOKBACK            = int(os.getenv("DAYS_LOOKBACK", "90"))
+N_TRIALS                 = int(os.getenv("N_TRIALS", "50"))
+MIN_RECORDS              = int(os.getenv("MIN_RECORDS", "200"))
+# Set INCLUDE_REJECTED_IN_TRAIN=true to add L3_REJECTED (decision='BLOCK')
+# records to the training set. Requires enough rejected shadows with pnl_pct.
+INCLUDE_REJECTED         = os.getenv("INCLUDE_REJECTED_IN_TRAIN", "false").lower() == "true"
 
 # MLflow aponta para o serviço scalpyn-mlflow-ui (Cloud Run) que mantém
 # seu próprio banco — sem colisão com o alembic_version do backend.
@@ -48,34 +51,48 @@ def main():
     # ---------------------------------------------------------
     # 1. Extrai dados da decisions_log
     # ---------------------------------------------------------
-    logger.info("Extraindo dados da decisions_log...")
-    # Task #324 — DISTINCT ON (symbol, pnl_pct) dedupes the massive
-    # NEW_SIGNAL/SIGNAL_EVOLVED/visibility-tick amplification (up to 88× per
-    # unique trade in the 90d audit). Keep the earliest row per (symbol,
-    # pnl_pct) so the outer ORDER BY preserves temporal split integrity.
-    # pnl_pct IS NULL rows are dropped — we cannot label an unrealised trade.
+    logger.info(
+        "Extraindo dados da decisions_log... (include_rejected=%s)", INCLUDE_REJECTED
+    )
+    # Deduplication: DISTINCT ON (symbol, DATE(created_at)) — one row per
+    # symbol per calendar day. This removes edge-trigger amplification
+    # (NEW_SIGNAL/SIGNAL_EVOLVED emitted multiple times per trade) while
+    # keeping genuinely distinct trading days for the same symbol.
+    # Previous strategy DISTINCT ON (symbol, pnl_pct) silently kept near-
+    # duplicate float values (e.g. 0.01200001 ≠ 0.01200002) and could
+    # amplify scarce WIN rows.
+    decision_filter = (
+        "decision IN ('ALLOW', 'BLOCK')"
+        if INCLUDE_REJECTED
+        else "decision = 'ALLOW'"
+    )
     with engine.connect() as conn:
-        result = conn.execute(text("""
+        result = conn.execute(text(f"""
             SELECT id, symbol, created_at, metrics, score,
-                   pnl_pct, holding_seconds, outcome
+                   pnl_pct, holding_seconds, outcome, decision
             FROM (
-                SELECT DISTINCT ON (symbol, pnl_pct)
+                SELECT DISTINCT ON (symbol, DATE(created_at))
                     id, symbol, created_at, metrics, score,
-                    pnl_pct, holding_seconds, outcome
+                    pnl_pct, holding_seconds, outcome, decision
                 FROM decisions_log
                 WHERE l3_pass = true
-                  AND decision = 'ALLOW'
+                  AND {decision_filter}
                   AND outcome IN ('tp', 'sl')
                   AND pnl_pct IS NOT NULL
                   AND created_at >= NOW() - INTERVAL :days
-                ORDER BY symbol, pnl_pct, created_at ASC
+                ORDER BY symbol, DATE(created_at), created_at ASC
             ) AS deduped
             ORDER BY created_at ASC
         """), {"days": f"{DAYS_LOOKBACK} days"})
         records = [dict(row._mapping) for row in result.fetchall()]
 
     total = len(records)
-    logger.info(f"Registros encontrados (pós-dedup): {total}")
+    n_allow = sum(1 for r in records if r.get("decision") == "ALLOW")
+    n_block = sum(1 for r in records if r.get("decision") == "BLOCK")
+    logger.info(
+        "Registros encontrados (pós-dedup): %d (ALLOW=%d BLOCK=%d)",
+        total, n_allow, n_block,
+    )
 
     if total < MIN_RECORDS:
         # Task #324 — exit 0 (não 1) durante acumulação de dataset. Dataset
