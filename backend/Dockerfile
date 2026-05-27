@@ -42,7 +42,8 @@ COPY --from=builder /install /usr/local
 
 COPY . .
 
-RUN chown -R appuser:appgroup /app \
+RUN sed -i 's/\r$//' /app/start.sh \
+    && chown -R appuser:appgroup /app \
     && chmod +x /app/start.sh
 
 USER appuser
