@@ -56,6 +56,52 @@ CIRCUIT_BREAKER_PAUSE_HOURS = 168 # 7 dias
 PERFORMANCE_DAYS = 30             # janela de análise (dias)
 
 
+# ── Guardrails (lidos de config_profiles JSONB — Zero Hardcode) ───────────────
+# Defaults seguros usados quando nenhum registro 'autopilot_guardrails' existe.
+# dry_run_mode=True por padrão: o sistema nunca escreve sem config explícita no DB.
+_GUARDRAILS_DEFAULTS: Dict[str, Any] = {
+    "ev_min_threshold_pct":           -0.30,   # fallback = comportamento atual
+    "fpr_max_threshold":               0.65,
+    "selection_inversion_delta_pct":   0.50,
+    "rule_max_delta_per_cycle":        1,
+    "rule_points_min":                -10,
+    "rule_points_max":                 10,
+    "weight_max_delta_per_cycle":      5,
+    "threshold_max_delta_per_cycle":   2,
+    "min_samples_per_rule":           15,
+    "circuit_breaker_threshold":       3,
+    "circuit_breaker_pause_hours":   168,
+    "kill_switch":                  False,
+    "dry_run_mode":                  True,   # SAFE DEFAULT: nunca escreve sem config explícita
+    "scope_profile_id":             None,    # None = sem restrição de escopo
+}
+
+
+async def _load_guardrails(db: AsyncSession, user_id: str) -> Dict[str, Any]:
+    """
+    Carrega guardrails do autopilot a partir de config_profiles (config_type='autopilot_guardrails').
+    Mescla com _GUARDRAILS_DEFAULTS (DB prevalece sobre defaults).
+    Fail-safe: retorna defaults se o registro não existir ou se a query falhar.
+    """
+    try:
+        result = await db.execute(text("""
+            SELECT config_json
+            FROM config_profiles
+            WHERE user_id = CAST(:uid AS uuid)
+              AND config_type = 'autopilot_guardrails'
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """), {"uid": str(user_id)})
+        row = result.fetchone()
+        if row and row[0] and isinstance(row[0], dict):
+            merged = dict(_GUARDRAILS_DEFAULTS)
+            merged.update(row[0])
+            return merged
+    except Exception as e:
+        logger.warning("[Autopilot] Falha ao carregar guardrails (usando defaults): %s", e)
+    return dict(_GUARDRAILS_DEFAULTS)
+
+
 # ── Performance Analysis ──────────────────────────────────────────────────────
 
 async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, Any]:
@@ -99,14 +145,17 @@ async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, A
     fpr = n_sl / n_allowed if n_allowed > 0 else 0.0
 
     # ── REJECTED performance from shadow_trades ───────────────────────────────
+    # NOTE: shadow_trades.outcome uses 'TP_HIT'/'SL_HIT'/'TIMEOUT' vocabulary
+    # (set by shadow_trade_monitor). decisions_log uses 'tp'/'sl'/'timeout'.
+    # These are different tables with different vocabularies — do NOT confuse.
     rejected_result = await db.execute(text("""
         SELECT
-            COUNT(*)                                              AS n,
-            AVG(pnl_pct)                                          AS ev,
-            AVG(CASE WHEN outcome = 'tp' THEN 1.0 ELSE 0.0 END)  AS win_rate
+            COUNT(*)                                                   AS n,
+            AVG(pnl_pct)                                               AS ev,
+            AVG(CASE WHEN outcome = 'TP_HIT' THEN 1.0 ELSE 0.0 END)  AS win_rate
         FROM shadow_trades
         WHERE source = 'L3_REJECTED'
-          AND outcome IN ('tp', 'sl')
+          AND outcome IN ('TP_HIT', 'SL_HIT')
           AND pnl_pct IS NOT NULL
           AND created_at >= :cutoff
     """), {"cutoff": cutoff})
@@ -221,9 +270,13 @@ def _check_regression(auto_pilot_config: dict, new_ev: float) -> int:
 def should_mutate(
     perf: Dict[str, Any],
     auto_pilot_config: dict,
+    ev_threshold: float = EV_MIN_THRESHOLD,
 ) -> Tuple[bool, str]:
     """
     Decide se a config do profile deve ser mutada.
+
+    ev_threshold: threshold de EV lido dos guardrails (JSONB). Defaults para
+    EV_MIN_THRESHOLD para backward-compat quando chamado sem guardrails.
 
     Returns: (should_mutate: bool, reason: str)
     """
@@ -247,8 +300,8 @@ def should_mutate(
     fpr = perf["fpr"]
     inversion = perf["selection_inversion"]
 
-    if ev < EV_MIN_THRESHOLD:
-        return True, f"ev_below_threshold (ev={ev:.3f}% < {EV_MIN_THRESHOLD}%)"
+    if ev < ev_threshold:
+        return True, f"ev_below_threshold (ev={ev:.3f}% < {ev_threshold}%)"
 
     if fpr > FPR_MAX_THRESHOLD:
         return True, f"fpr_too_high (fpr={fpr:.2f} > {FPR_MAX_THRESHOLD})"
@@ -584,11 +637,23 @@ async def apply_rule_adjustments(
     perf: dict,
     regime: str,
     db: AsyncSession,
+    dry_run: bool = False,
+    scope_profile_id: Optional[str] = None,
 ) -> dict:
     """
     Load scoring rules from config_profiles, compute per-rule insights,
-    adjust points, persist, and return a summary.
+    adjust points, persist (or simulate if dry_run=True), and return a summary.
+
+    dry_run=True: executa todo o cálculo mas NÃO persiste alterações.
+    scope_profile_id: se definido, bloqueia escrita para qualquer profile_id diferente.
     """
+    # Scope check — nunca escreve fora do profile autorizado
+    if scope_profile_id and str(profile_id) != str(scope_profile_id):
+        msg = f"profile_id={profile_id} fora de scope_profile_id={scope_profile_id}"
+        logger.warning("[Autopilot] SCOPE_VIOLATION_BLOCKED (rules): %s", msg)
+        await log_audit(profile_id=profile_id, action="SCOPE_VIOLATION_BLOCKED",
+                        reason=msg, regime=regime, perf=perf, db=db)
+        return {"action": "SCOPE_VIOLATION_BLOCKED", "reason": msg}
     from uuid import UUID
     from sqlalchemy import select
     from ..models.config_profile import ConfigProfile
@@ -618,6 +683,27 @@ async def apply_rule_adjustments(
 
         if n_changed == 0:
             return {"action": "RULES_ANALYZED", "reason": "no_adjustment_needed", "insights_n": len(insights) - 1}
+
+        if dry_run:
+            # DRY RUN — calcula mas NÃO persiste. Loga o que SERIA feito.
+            await log_audit(
+                profile_id=profile_id,
+                action="DRY_RUN_RULES_ADJUSTED",
+                reason=f"[DRY RUN] {n_changed} scoring rules WOULD be adjusted (not persisted)",
+                regime=regime,
+                perf=perf,
+                db=db,
+            )
+            logger.info(
+                "[Autopilot][DRY RUN] %d scoring rules WOULD be adjusted for profile=%s user=%s (not persisted)",
+                n_changed, profile_id, user_id,
+            )
+            return {
+                "action": "DRY_RUN_RULES_ADJUSTED",
+                "dry_run": True,
+                "n_changed": n_changed,
+                "insights_n": len(insights) - 1,
+            }
 
         new_config = dict(cp.config_json)
         new_config["scoring_rules"] = adjusted_rules
@@ -658,6 +744,37 @@ async def run_autopilot_cycle(
 
     Retorna um dict com action, reason, regime, perf (para logging pelo caller).
     """
+    # 0. Carregar guardrails de config_profiles (fail-safe: defaults se ausente)
+    guardrails = await _load_guardrails(db, user_id)
+    dry_run = bool(guardrails.get("dry_run_mode", True))  # safe default
+    ev_threshold = float(guardrails.get("ev_min_threshold_pct", EV_MIN_THRESHOLD))
+    scope_id = guardrails.get("scope_profile_id")
+
+    # 0a. Kill-switch — aborta todo o ciclo imediatamente
+    if guardrails.get("kill_switch", False):
+        logger.warning("[Autopilot] KILL SWITCH ativo — profile=%s abortado.", profile_id)
+        await log_audit(
+            profile_id=profile_id, action="KILLED",
+            reason="kill_switch=true in autopilot_guardrails",
+            regime="UNKNOWN", perf=None, db=db,
+        )
+        await db.commit()
+        return {"action": "KILLED", "reason": "kill_switch=true"}
+
+    # 0b. Scope validation — só permite escrita no profile autorizado
+    if scope_id and str(profile_id) != str(scope_id):
+        msg = f"profile_id={profile_id} fora de scope_profile_id={scope_id}"
+        logger.warning("[Autopilot] SCOPE_VIOLATION_BLOCKED: %s", msg)
+        await log_audit(
+            profile_id=profile_id, action="SCOPE_VIOLATION_BLOCKED",
+            reason=msg, regime="UNKNOWN", perf=None, db=db,
+        )
+        await db.commit()
+        return {"action": "SCOPE_VIOLATION_BLOCKED", "reason": msg}
+
+    if dry_run:
+        logger.info("[Autopilot][DRY RUN] Ciclo em modo dry-run para profile=%s — nenhuma config será persistida.", profile_id)
+
     # 1. Verificar circuit breaker
     if _is_circuit_broken(auto_pilot_config):
         paused_at = auto_pilot_config.get("circuit_breaker_paused_at", "")
@@ -702,14 +819,17 @@ async def run_autopilot_cycle(
         perf=perf,
         regime=regime,
         db=db,
+        dry_run=dry_run,
+        scope_profile_id=scope_id,
     )
 
-    # 6. Decidir se deve mutar config principal
-    mutate, reason = should_mutate(perf, updated_ap_config)
+    # 6. Decidir se deve mutar config principal (usa ev_threshold dos guardrails)
+    mutate, reason = should_mutate(perf, updated_ap_config, ev_threshold=ev_threshold)
     if not mutate:
+        action = "DRY_RUN_ANALYZED" if dry_run else "ANALYZED"
         await log_audit(
             profile_id=profile_id,
-            action="ANALYZED",
+            action=action,
             reason=reason,
             regime=regime,
             perf=perf,
@@ -717,28 +837,15 @@ async def run_autopilot_cycle(
         )
         await db.commit()
         return {
-            "action": "ANALYZED",
+            "action": action,
+            "dry_run": dry_run,
             "reason": reason,
             "regime": regime,
             "perf": perf,
             "rule_adjustment": rule_result,
         }
 
-    # 7. Salvar versão atual (snapshot pré-mutação)
-    try:
-        version_id = await save_profile_version(
-            profile_id=profile_id,
-            config=current_config,
-            perf=perf,
-            regime=regime,
-            mutation_reason=reason,
-            db=db,
-        )
-    except Exception as e:
-        logger.error(f"[Autopilot] Erro ao salvar versão para {profile_id}: {e}")
-        version_id = None
-
-    # 8. Gerar nova config
+    # 7–8. Gerar nova config (necessário mesmo em dry-run — simulamos o resultado)
     try:
         result = await generate_mutated_config(
             profile_id=profile_id,
@@ -761,6 +868,51 @@ async def run_autopilot_cycle(
         )
         await db.commit()
         return {"action": "ERROR", "reason": str(e)}
+
+    if dry_run:
+        # DRY RUN — loga o que SERIA feito sem persistir nada
+        logger.info(
+            "[Autopilot][DRY RUN] Mutação SIMULADA para profile=%s reason=%s regime=%s (não persistida)",
+            profile_id, reason, result["regime"],
+        )
+        await log_audit(
+            profile_id=profile_id,
+            action="DRY_RUN_MUTATED",
+            reason=f"[DRY RUN] WOULD mutate: {reason}",
+            regime=result["regime"],
+            perf=perf,
+            db=db,
+            config_before=current_config,
+            config_after=result["config"],
+            version_id=None,
+        )
+        await db.commit()
+        return {
+            "action":           "DRY_RUN_MUTATED",
+            "dry_run":          True,
+            "reason":           reason,
+            "regime":           result["regime"],
+            "perf":             perf,
+            "analysis_summary": result.get("analysis_summary"),
+            "proposed_config":  result["config"],  # config PROPOSTA, não aplicada
+            "rule_adjustment":  rule_result,
+        }
+
+    # ── Escrita real (dry_run=False) ─────────────────────────────────────────
+
+    # 7. Salvar versão atual (snapshot pré-mutação)
+    try:
+        version_id = await save_profile_version(
+            profile_id=profile_id,
+            config=current_config,
+            perf=perf,
+            regime=regime,
+            mutation_reason=reason,
+            db=db,
+        )
+    except Exception as e:
+        logger.error(f"[Autopilot] Erro ao salvar versão para {profile_id}: {e}")
+        version_id = None
 
     # 9. Montar auto_pilot_config atualizado
     updated_ap_config.update({
@@ -791,6 +943,7 @@ async def run_autopilot_cycle(
 
     return {
         "action":           "MUTATED",
+        "dry_run":          False,
         "reason":           reason,
         "regime":           result["regime"],
         "perf":             perf,

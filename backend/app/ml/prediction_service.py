@@ -127,6 +127,9 @@ class WinFastPredictor:
             "model_approved":       approved,
             "threshold_used":       threshold,
             "model_id":             model_id,
+            # Macro context returned so callers can persist it to decisions_log.metrics
+            # for future ML training without re-fetching. Internal flags stripped.
+            "macro_context": {k: v for k, v in macro.items() if k != "macro_context_available"},
         }
 
         # Log assíncrono — não bloqueia o pipeline

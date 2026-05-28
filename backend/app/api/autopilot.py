@@ -233,11 +233,13 @@ async def run_autopilot_now(
         "status":           "success",
         "profile_id":       profile_id,
         "action":           cycle_result.get("action"),
+        "dry_run":          cycle_result.get("dry_run", True),
         "reason":           cycle_result.get("reason"),
         "regime":           cycle_result.get("regime"),
         "analysis_summary": cycle_result.get("analysis_summary"),
         "performance":      cycle_result.get("perf"),
         "rule_adjustment":  cycle_result.get("rule_adjustment"),
+        "proposed_config":  cycle_result.get("proposed_config"),  # apenas em DRY_RUN_MUTATED
     }
 
 
