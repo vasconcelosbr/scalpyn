@@ -55,6 +55,28 @@ CIRCUIT_BREAKER_THRESHOLD = 3     # regressões consecutivas
 CIRCUIT_BREAKER_PAUSE_HOURS = 168 # 7 dias
 PERFORMANCE_DAYS = 30             # janela de análise (dias)
 
+# ── Outcome vocabulary constants ──────────────────────────────────────────────
+# ATENÇÃO: dois vocabulários distintos para o mesmo conceito — NUNCA misturar.
+#
+#   decisions_log.outcome  → 'tp' / 'sl' / 'timeout'     (lowercase)
+#                            gravado por pipeline_scan.py
+#
+#   shadow_trades.outcome  → 'TP_HIT' / 'SL_HIT' / 'TIMEOUT'  (uppercase)
+#                            gravado por shadow_trade_monitor.py
+#
+# Mapeamento canônico (admin_diagnostics.py:695): TP_HIT→tp, SL_HIT→sl
+#
+# Se você alterar estes valores, atualize também:
+#   backend/app/tasks/pipeline_scan.py      (grava decisions_log.outcome)
+#   backend/app/services/shadow_trade_monitor.py  (grava shadow_trades.outcome)
+_DL_TP = "tp"
+_DL_SL = "sl"
+_DL_OUTCOMES_SQL = "('tp', 'sl')"          # pronto para IN (...) em raw SQL
+
+_ST_TP = "TP_HIT"
+_ST_SL = "SL_HIT"
+_ST_OUTCOMES_SQL = "('TP_HIT', 'SL_HIT')"  # pronto para IN (...) em raw SQL
+
 
 # ── Guardrails (lidos de config_profiles JSONB — Zero Hardcode) ───────────────
 # Defaults seguros usados quando nenhum registro 'autopilot_guardrails' existe.
@@ -121,17 +143,18 @@ async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, A
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
     # ── ALLOWED performance from decisions_log ────────────────────────────────
-    allowed_result = await db.execute(text("""
+    # decisions_log vocabulary: _DL_TP='tp', _DL_SL='sl'  (lowercase)
+    allowed_result = await db.execute(text(f"""
         SELECT
-            COUNT(*)                                     AS n,
-            AVG(pnl_pct)                                 AS ev,
-            AVG(CASE WHEN outcome = 'tp' THEN 1.0 ELSE 0.0 END) AS win_rate,
-            SUM(CASE WHEN outcome = 'sl' THEN 1 ELSE 0 END)     AS n_sl,
-            SUM(CASE WHEN outcome = 'tp' THEN 1 ELSE 0 END)     AS n_tp
+            COUNT(*)                                             AS n,
+            AVG(pnl_pct)                                         AS ev,
+            AVG(CASE WHEN outcome = '{_DL_TP}' THEN 1.0 ELSE 0.0 END) AS win_rate,
+            SUM(CASE WHEN outcome = '{_DL_SL}' THEN 1 ELSE 0 END)     AS n_sl,
+            SUM(CASE WHEN outcome = '{_DL_TP}' THEN 1 ELSE 0 END)     AS n_tp
         FROM decisions_log
         WHERE l3_pass = true
           AND decision = 'ALLOW'
-          AND outcome IN ('tp', 'sl')
+          AND outcome IN {_DL_OUTCOMES_SQL}
           AND pnl_pct IS NOT NULL
           AND created_at >= :cutoff
     """), {"cutoff": cutoff})
@@ -145,17 +168,16 @@ async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, A
     fpr = n_sl / n_allowed if n_allowed > 0 else 0.0
 
     # ── REJECTED performance from shadow_trades ───────────────────────────────
-    # NOTE: shadow_trades.outcome uses 'TP_HIT'/'SL_HIT'/'TIMEOUT' vocabulary
-    # (set by shadow_trade_monitor). decisions_log uses 'tp'/'sl'/'timeout'.
-    # These are different tables with different vocabularies — do NOT confuse.
-    rejected_result = await db.execute(text("""
+    # shadow_trades vocabulary: _ST_TP='TP_HIT', _ST_SL='SL_HIT'  (UPPERCASE)
+    # NÃO confundir com decisions_log — vocabulários diferentes por design.
+    rejected_result = await db.execute(text(f"""
         SELECT
-            COUNT(*)                                                   AS n,
-            AVG(pnl_pct)                                               AS ev,
-            AVG(CASE WHEN outcome = 'TP_HIT' THEN 1.0 ELSE 0.0 END)  AS win_rate
+            COUNT(*)                                                      AS n,
+            AVG(pnl_pct)                                                  AS ev,
+            AVG(CASE WHEN outcome = '{_ST_TP}' THEN 1.0 ELSE 0.0 END)   AS win_rate
         FROM shadow_trades
         WHERE source = 'L3_REJECTED'
-          AND outcome IN ('TP_HIT', 'SL_HIT')
+          AND outcome IN {_ST_OUTCOMES_SQL}
           AND pnl_pct IS NOT NULL
           AND created_at >= :cutoff
     """), {"cutoff": cutoff})
@@ -164,6 +186,28 @@ async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, A
     n_rejected = int(rejected_row["n"] or 0)
     rejected_ev = float(rejected_row["ev"] or 0.0)
     rejected_win_rate = float(rejected_row["win_rate"] or 0.0)
+
+    # ── Sanity guard: vocabulary mismatch detector ────────────────────────────
+    # Se rejected_count=0 mas existem shadow_trades concluídos, o vocabulário
+    # da query provavelmente não bate com o que o shadow_trade_monitor gravou.
+    # Ação: inspecione `SELECT DISTINCT outcome FROM shadow_trades WHERE source='L3_REJECTED'`
+    if n_rejected == 0:
+        _vocab_check = await db.execute(
+            text(
+                "SELECT COUNT(*) AS n FROM shadow_trades "
+                "WHERE source = 'L3_REJECTED' AND pnl_pct IS NOT NULL AND created_at >= :cutoff"
+            ),
+            {"cutoff": cutoff},
+        )
+        _n_raw = int(_vocab_check.scalar() or 0)
+        if _n_raw > 0:
+            logger.warning(
+                "[Autopilot] VOCAB_MISMATCH_SUSPECTED: rejected_count=0 "
+                "mas %d shadow_trades L3_REJECTED com pnl_pct existem na janela de %d dias. "
+                "Vocabulário esperado: outcome IN %s. "
+                "Verifique: SELECT DISTINCT outcome FROM shadow_trades WHERE source='L3_REJECTED';",
+                _n_raw, days, _ST_OUTCOMES_SQL,
+            )
 
     selection_inversion = rejected_ev - approved_ev
 
@@ -198,15 +242,15 @@ async def detect_regime(db: AsyncSession) -> str:
     """
     try:
         cutoff_7d = datetime.now(timezone.utc) - timedelta(days=7)
-        result = await db.execute(text("""
+        result = await db.execute(text(f"""
             SELECT
-                AVG(pnl_pct)                                         AS ev_7d,
-                AVG(CASE WHEN outcome = 'tp' THEN 1.0 ELSE 0.0 END) AS wr_7d,
-                COUNT(*)                                             AS n_7d
+                AVG(pnl_pct)                                               AS ev_7d,
+                AVG(CASE WHEN outcome = '{_DL_TP}' THEN 1.0 ELSE 0.0 END) AS wr_7d,
+                COUNT(*)                                                   AS n_7d
             FROM decisions_log
             WHERE l3_pass = true
               AND decision = 'ALLOW'
-              AND outcome IN ('tp', 'sl')
+              AND outcome IN {_DL_OUTCOMES_SQL}
               AND pnl_pct IS NOT NULL
               AND created_at >= :cutoff
         """), {"cutoff": cutoff_7d})
@@ -527,12 +571,12 @@ async def compute_rule_insights(
     Excludes rules with < MIN_RULE_SAMPLES matching trades.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    result = await db.execute(text("""
+    result = await db.execute(text(f"""
         SELECT metrics, outcome, pnl_pct
         FROM decisions_log
         WHERE l3_pass = true
           AND decision = 'ALLOW'
-          AND outcome IN ('tp', 'sl')
+          AND outcome IN {_DL_OUTCOMES_SQL}
           AND pnl_pct IS NOT NULL
           AND user_id = :uid
           AND created_at >= :cutoff
@@ -543,7 +587,7 @@ async def compute_rule_insights(
         return {}
 
     total = len(rows)
-    overall_wins = sum(1 for r in rows if r["outcome"] == "tp")
+    overall_wins = sum(1 for r in rows if r["outcome"] == _DL_TP)
     overall_wr = overall_wins / total
 
     insights: dict = {"_overall": {"n": total, "win_rate": overall_wr}}
@@ -572,7 +616,7 @@ async def compute_rule_insights(
             except (TypeError, ValueError):
                 continue
             if _rule_matches(operator, val, rule):
-                matching.append((row["outcome"] == "tp", float(row["pnl_pct"])))
+                matching.append((row["outcome"] == _DL_TP, float(row["pnl_pct"])))
 
         n = len(matching)
         if n < MIN_RULE_SAMPLES:
