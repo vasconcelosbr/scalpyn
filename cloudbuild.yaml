@@ -186,7 +186,7 @@ steps:
       # contract is preserved. /api/health/schema is the public signal while
       # the gate is in flight. Workers/beat keep the synchronous gate.
       - '--update-env-vars'
-      - 'FORCE_RESTART=2026-05-08T12:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=0,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1,ASYNC_MIGRATIONS=1'
+      - 'FORCE_RESTART=2026-05-08T12:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=0,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1,ASYNC_MIGRATIONS=1,TTT_ENABLED=true,TTT_TP_PCT=1.0,TTT_TIMEOUT_MINUTES=180'
 
   # ── Task #216: Celery worker — microstructure queue ─────────────────
   # Bursty 5-minute cadence (collect_5m → compute_5m). Sized to absorb
@@ -263,7 +263,7 @@ steps:
       - '--update-secrets'
       - 'REDIS_URL=redis-url:latest'
       - '--update-env-vars'
-      - 'FORCE_RESTART=2026-05-08T18:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=structural,RUN_BEAT=0,CELERY_CONCURRENCY=2,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
+      - 'FORCE_RESTART=2026-05-08T18:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=structural,RUN_BEAT=0,CELERY_CONCURRENCY=2,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1,TTT_ENABLED=true,TTT_TP_PCT=1.0,TTT_TIMEOUT_MINUTES=180,TTT_ANALYZER_BATCH_SIZE=100'
 
   # ── Task #216: Celery worker — execution queue ──────────────────────
   # Latency-sensitive trading critical path (evaluate, execute_buy,
@@ -302,7 +302,7 @@ steps:
       - '--update-secrets'
       - 'REDIS_URL=redis-url:latest'
       - '--update-env-vars'
-      - 'FORCE_RESTART=2026-05-08T18:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=execution,RUN_BEAT=0,CELERY_CONCURRENCY=2,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
+      - 'FORCE_RESTART=2026-05-08T18:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=execution,RUN_BEAT=0,CELERY_CONCURRENCY=2,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1,TTT_ENABLED=true,TTT_TP_PCT=1.0,TTT_TIMEOUT_MINUTES=180'
 
   # ── Task #216: Celery beat — sole owner of the periodic schedule ────
   # MUST be a single revision (max-instances=1) so periodic schedules
@@ -340,7 +340,7 @@ steps:
       - '--update-secrets'
       - 'REDIS_URL=redis-url:latest'
       - '--update-env-vars'
-      - 'FORCE_RESTART=2026-05-08T18:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=1,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1'
+      - 'FORCE_RESTART=2026-05-08T18:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=1,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1,TTT_ANALYZER_INTERVAL_S=3600'
 
   # ── Task #239: Topology validation — fail loudly if any of the 5
   # ── expected Cloud Run services is missing after the deploy steps.
