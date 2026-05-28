@@ -77,6 +77,19 @@ _ST_TP = "TP_HIT"
 _ST_SL = "SL_HIT"
 _ST_OUTCOMES_SQL = "('TP_HIT', 'SL_HIT')"  # pronto para IN (...) em raw SQL
 
+# ── TTT outcome vocabulary (shadow_trades.ttt_outcome — migration 065) ────────
+# Coluna SEPARADA de shadow_trades.outcome — nunca misturar.
+#
+#   shadow_trades.ttt_outcome  → 'FAST_WIN' | 'TIMEOUT'
+#                                gravado por shadow_trade_monitor._compute_ttt_outcome
+#                                ou por ttt_analyzer.py (post-analysis)
+#
+# LOSS_FUTURE_RESERVED: arquitetura preparada — ainda não usado.
+# Quando SL real for implementado: SL_HIT + mfe < ttt_tp_pct → 'LOSS'
+_ST_TTT_FAST_WIN = "FAST_WIN"
+_ST_TTT_TIMEOUT  = "TIMEOUT"   # mesmo string que outcome TIMEOUT, coluna diferente
+_ST_TTT_OUTCOMES_SQL = "('FAST_WIN', 'TIMEOUT')"  # IN (...) para ttt_outcome
+
 
 # ── Guardrails (lidos de config_profiles JSONB — Zero Hardcode) ───────────────
 # Defaults seguros usados quando nenhum registro 'autopilot_guardrails' existe.

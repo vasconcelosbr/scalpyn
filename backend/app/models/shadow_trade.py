@@ -166,4 +166,40 @@ class ShadowTrade(Base):
     # Flag de controle: TRUE quando o analyzer terminou de processar.
     timeout_post_analysis_done = Column(Boolean, nullable=True, default=False)
 
+    # ── TTT (Time-To-Target) Policy — migration 065 ───────────────────────
+    # Camada de labeling de ML para eficiência temporal. Classifica trades
+    # como FAST_WIN (atingiu ttt_tp_pct dentro de ttt_timeout_minutes) ou
+    # TIMEOUT. NÃO altera outcome/pnl/TP/SL. Sem lookahead bias: campos
+    # TTT são preenchidos post-trade (analytics + ML label only).
+    #
+    # Snapshot da política (gravado na criação — imutável por shadow):
+    ttt_enabled = Column(Boolean, nullable=True, default=False)
+    ttt_tp_pct = Column(Float, nullable=True)           # ex: 1.0 (%)
+    ttt_timeout_minutes = Column(Integer, nullable=True) # ex: 180 (3h)
+    #
+    # Label ML — resultado do post-analysis:
+    #   'FAST_WIN' | 'TIMEOUT'
+    ttt_outcome = Column(String(20), nullable=True)
+    #   'TP_HIT_IN_WINDOW' | 'HARD_TIMEOUT'
+    ttt_close_reason = Column(String(30), nullable=True)
+    #   'WIN_0_15M' | 'WIN_15_30M' | 'WIN_30_60M' | 'WIN_60_180M'
+    ttt_fast_win_bucket = Column(String(20), nullable=True)
+    # TRUE = análise concluída; idempotência do ttt_analyzer.
+    ttt_analysis_done = Column(Boolean, nullable=True, default=False)
+    #
+    # Métricas temporais (preenchidas ao fechar + pelo ttt_analyzer):
+    elapsed_minutes = Column(Float, nullable=True)            # duração total em min
+    time_to_tp_minutes = Column(Float, nullable=True)         # min até atingir ttt_tp_pct
+    profit_velocity = Column(Float, nullable=True)            # max_profit_pct / elapsed_min
+    profit_velocity_per_hour = Column(Float, nullable=True)   # normalizado por hora
+    #
+    # Lucro máximo por janela temporal (inline monitor ou ttt_analyzer):
+    max_profit_first_15m = Column(Float, nullable=True)
+    max_profit_first_30m = Column(Float, nullable=True)
+    max_profit_first_60m = Column(Float, nullable=True)
+    #
+    # Contadores de candles (ANALYTICS ONLY — nunca feature de entrada ML):
+    candles_to_peak = Column(Integer, nullable=True)
+    candles_to_first_positive = Column(Integer, nullable=True)
+
     decision = relationship("DecisionLog", foreign_keys=[decision_id])

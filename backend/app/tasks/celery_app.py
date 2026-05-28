@@ -89,6 +89,7 @@ celery_app = Celery(
         "app.tasks.health_checks",
         "app.tasks.shadow_trade_monitor",
         "app.tasks.shadow_timeout_analyzer",
+        "app.tasks.ttt_analyzer",
         "app.tasks.autopilot",
     ],
 )
@@ -165,6 +166,10 @@ TASK_ROUTES = {
     # Structural queue: carga moderada (OHLCV lookup por trade × batch),
     # cadência horária, sem latência crítica.
     "app.tasks.shadow_timeout_analyzer.analyze":    {"queue": QUEUE_STRUCTURAL},
+
+    # TTT Analyzer (migration 065) — post-analysis de labels TTT.
+    # Structural queue: OHLCV window queries × batch, sem latência crítica.
+    "app.tasks.ttt_analyzer.analyze":               {"queue": QUEUE_STRUCTURAL},
 
     # Auto-Pilot Engine — autonomous profile mutation, every 6h.
     # Structural queue: calls Claude API + DB reads, moderate load.
@@ -326,6 +331,14 @@ TASK_ANNOTATIONS = {
     # SHADOW_ANALYZER_BATCH_SIZE=100 trades. Budget maior que o monitor
     # de execução (OHLCV window queries × 24h de candles).
     "app.tasks.shadow_timeout_analyzer.analyze":    {
+        **_STRUCTURAL_GUARDS,
+        "rate_limit": "4/h",
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
+
+    # TTT Analyzer (migration 065) — idempotente + beat-driven → opt-out acks_late.
+    # Budget maior que timeout_analyzer (OHLCV scan mais longo pela janela 3h).
+    "app.tasks.ttt_analyzer.analyze": {
         **_STRUCTURAL_GUARDS,
         "rate_limit": "4/h",
         **_NO_REQUEUE_ON_WORKER_LOSS,
@@ -515,6 +528,15 @@ celery_app.conf.beat_schedule = {
     "shadow_timeout_analyzer": {
         "task": "app.tasks.shadow_timeout_analyzer.analyze",
         "schedule": float(os.environ.get("SHADOW_ANALYZER_INTERVAL_S", 3600)),
+        "options": {"queue": QUEUE_STRUCTURAL},
+    },
+
+    # TTT Analyzer (migration 065) — post-analysis de labels FAST_WIN/TIMEOUT.
+    # Beat default 1h (override via TTT_ANALYZER_INTERVAL_S env).
+    # Structural queue: OHLCV window queries × batch.
+    "ttt_analyzer": {
+        "task": "app.tasks.ttt_analyzer.analyze",
+        "schedule": float(os.environ.get("TTT_ANALYZER_INTERVAL_S", 3600)),
         "options": {"queue": QUEUE_STRUCTURAL},
     },
 

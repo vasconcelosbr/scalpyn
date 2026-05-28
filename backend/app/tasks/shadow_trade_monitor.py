@@ -222,6 +222,109 @@ async def _ensure_entry(db, shadow: ShadowTrade) -> bool:
     return True
 
 
+def _set_ttt_fast_win_bucket(shadow: ShadowTrade) -> None:
+    """Classifica um FAST_WIN em bucket temporal baseado em time_to_tp_minutes."""
+    t = shadow.time_to_tp_minutes or 0.0
+    if t < 15.0:
+        shadow.ttt_fast_win_bucket = "WIN_0_15M"
+    elif t < 30.0:
+        shadow.ttt_fast_win_bucket = "WIN_15_30M"
+    elif t < 60.0:
+        shadow.ttt_fast_win_bucket = "WIN_30_60M"
+    else:
+        shadow.ttt_fast_win_bucket = "WIN_60_180M"
+
+
+def _compute_ttt_outcome(shadow: ShadowTrade) -> None:
+    """Computa o label TTT (FAST_WIN | TIMEOUT) ao fechar o shadow.
+
+    Chamado por _finalize_outcome após preencher holding_seconds e
+    max_profit_pct. Requer que shadow.ttt_enabled = TRUE.
+
+    Lógica
+    ------
+    Se time_to_tp_minutes foi rastreado inline no scan de candles:
+      - <= ttt_timeout_minutes → FAST_WIN (ttt_analysis_done=True)
+      - >  ttt_timeout_minutes → TIMEOUT  (ttt_analysis_done=True)
+
+    Se time_to_tp_minutes é None mas max_profit_pct >= ttt_tp_pct:
+      - O TTT threshold foi atingido mas o tempo não foi capturado
+        (caminho live-close ou sem candles 1m) → ttt_analysis_done=False
+        para que ttt_analyzer.py preencha via OHLCV.
+
+    Se max_profit_pct < ttt_tp_pct:
+      - Nunca atingiu o threshold → TIMEOUT (ttt_analysis_done=True).
+
+    Métricas computadas sempre (se dados disponíveis):
+      elapsed_minutes, profit_velocity, profit_velocity_per_hour.
+    """
+    if not shadow.ttt_enabled:
+        return
+
+    # ── elapsed_minutes ──────────────────────────────────────────────────
+    if shadow.holding_seconds is not None:
+        shadow.elapsed_minutes = round(shadow.holding_seconds / 60.0, 4)
+
+    # ── profit_velocity ───────────────────────────────────────────────────
+    if shadow.max_profit_pct is not None and shadow.elapsed_minutes is not None:
+        elapsed_safe_min = max(shadow.elapsed_minutes, 1.0)
+        elapsed_safe_h = max(shadow.elapsed_minutes / 60.0, 1.0 / 60.0)
+        shadow.profit_velocity = round(
+            float(shadow.max_profit_pct) / elapsed_safe_min, 6
+        )
+        shadow.profit_velocity_per_hour = round(
+            float(shadow.max_profit_pct) / elapsed_safe_h, 4
+        )
+
+    ttt_tp_pct = float(shadow.ttt_tp_pct) if shadow.ttt_tp_pct is not None else 1.0
+    ttt_timeout_m = float(shadow.ttt_timeout_minutes) if shadow.ttt_timeout_minutes is not None else 180.0
+
+    if shadow.time_to_tp_minutes is not None:
+        # Caminho normal: tempo rastreado inline no scan de candles 1m.
+        if shadow.time_to_tp_minutes <= ttt_timeout_m:
+            shadow.ttt_outcome = "FAST_WIN"
+            shadow.ttt_close_reason = "TP_HIT_IN_WINDOW"
+            _set_ttt_fast_win_bucket(shadow)
+            logger.info(
+                "[ttt] shadow_id=%s symbol=%s FAST_WIN bucket=%s "
+                "time_to_tp=%.1fmin elapsed=%.1fmin velocity=%.4f%%/h",
+                shadow.id, shadow.symbol, shadow.ttt_fast_win_bucket,
+                shadow.time_to_tp_minutes, shadow.elapsed_minutes or 0,
+                shadow.profit_velocity_per_hour or 0,
+            )
+        else:
+            shadow.ttt_outcome = "TIMEOUT"
+            shadow.ttt_close_reason = "HARD_TIMEOUT"
+            logger.info(
+                "[ttt] shadow_id=%s symbol=%s TIMEOUT "
+                "time_to_tp=%.1fmin > limit=%.0fmin",
+                shadow.id, shadow.symbol,
+                shadow.time_to_tp_minutes, ttt_timeout_m,
+            )
+        shadow.ttt_analysis_done = True
+        return
+
+    mfe = float(shadow.max_profit_pct) if shadow.max_profit_pct is not None else 0.0
+    if mfe >= ttt_tp_pct:
+        # TTT threshold atingido mas tempo não capturado (live-close / sem 1m).
+        # ttt_analyzer.py preenche time_to_tp_minutes via OHLCV.
+        shadow.ttt_analysis_done = False
+        logger.debug(
+            "[ttt] shadow_id=%s symbol=%s mfe=%.4f >= ttt_tp=%.2f%% "
+            "mas time_to_tp não capturado — enviando para ttt_analyzer",
+            shadow.id, shadow.symbol, mfe, ttt_tp_pct,
+        )
+    else:
+        # max_profit nunca atingiu o threshold → TIMEOUT definitivo.
+        shadow.ttt_outcome = "TIMEOUT"
+        shadow.ttt_close_reason = "HARD_TIMEOUT"
+        shadow.ttt_analysis_done = True
+        logger.info(
+            "[ttt] shadow_id=%s symbol=%s TIMEOUT mfe=%.4f < ttt_tp=%.2f%%",
+            shadow.id, shadow.symbol, mfe, ttt_tp_pct,
+        )
+
+
 def _finalize_outcome(
     shadow: ShadowTrade,
     outcome: str,
@@ -264,6 +367,16 @@ def _finalize_outcome(
     shadow.status = "COMPLETED"
     shadow.completed_at = datetime.now(timezone.utc)
     shadow.last_processed_time = exit_ts
+    # ── TTT label computation (migration 065) ────────────────────────────
+    # Chamado após max_profit_pct e holding_seconds estarem preenchidos.
+    # Nunca propaga exceção: falha em TTT não cancela o fechamento do shadow.
+    try:
+        _compute_ttt_outcome(shadow)
+    except Exception as exc:
+        logger.warning(
+            "[shadow-monitor] _compute_ttt_outcome failed for shadow_id=%s: %s",
+            shadow.id, exc,
+        )
 
 
 def _build_exit_metrics_json(
@@ -781,6 +894,14 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
     exit_ts: Optional[datetime] = None
     last_seen_ts: Optional[datetime] = None
 
+    # ── TTT: parâmetros para rastreamento inline (migration 065) ─────────
+    # Só ativo quando shadow foi criado com ttt_enabled=TRUE.
+    # Computamos o preço-alvo TTT (pode ser < tp) uma vez antes do loop.
+    ttt_active = bool(shadow.ttt_enabled)
+    ttt_tp_price_inline: Optional[float] = None
+    if ttt_active and shadow.ttt_tp_pct is not None and entry_price > 0:
+        ttt_tp_price_inline = entry_price * (1.0 + float(shadow.ttt_tp_pct) / 100.0)
+
     for idx, c in enumerate(candles, start=1):
         last_seen_ts = c["time"]
         if c["high"] is None or c["low"] is None:
@@ -794,6 +915,63 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
             shadow.min_price_post_entry = _cl
         if shadow.max_price_post_entry is None or _ch > shadow.max_price_post_entry:
             shadow.max_price_post_entry = _ch
+            # candles_to_peak: atualizado toda vez que registramos novo máximo.
+            if ttt_active:
+                shadow.candles_to_peak = candles_seen_before + idx
+
+        # ── TTT inline tracking (migration 065) ──────────────────────────
+        # Executa APÓS atualizar max_price_post_entry mas ANTES de checar
+        # SL/TP — garante que milestones são registrados mesmo quando o TP
+        # regular coincide com a candle de milestone.
+        if ttt_active:
+            candle_abs = candles_seen_before + idx
+            c_close = c.get("close")
+
+            # Milestones de lucro máximo por janela temporal.
+            # Definição: MAX(high) desde entry até esse candle.
+            # Só setamos quando o candle_abs EXATAMENTE cruza o milestone
+            # (dentro deste tick). Se o milestone ficou em tick anterior,
+            # max_profit_first_Xm permanece NULL para o ttt_analyzer preencher.
+            if candle_abs == 15 and shadow.max_profit_first_15m is None and entry_price > 0:
+                if shadow.max_price_post_entry is not None:
+                    shadow.max_profit_first_15m = round(
+                        (shadow.max_price_post_entry - entry_price) / entry_price * 100.0, 6
+                    )
+            if candle_abs == 30 and shadow.max_profit_first_30m is None and entry_price > 0:
+                if shadow.max_price_post_entry is not None:
+                    shadow.max_profit_first_30m = round(
+                        (shadow.max_price_post_entry - entry_price) / entry_price * 100.0, 6
+                    )
+            if candle_abs == 60 and shadow.max_profit_first_60m is None and entry_price > 0:
+                if shadow.max_price_post_entry is not None:
+                    shadow.max_profit_first_60m = round(
+                        (shadow.max_price_post_entry - entry_price) / entry_price * 100.0, 6
+                    )
+
+            # candles_to_first_positive: primeira candle onde close > entry.
+            if shadow.candles_to_first_positive is None and c_close is not None:
+                if c_close > entry_price:
+                    shadow.candles_to_first_positive = candle_abs
+
+            # time_to_tp_minutes: primeira vez que high >= ttt_tp_price.
+            # Registrado UMA VEZ (campo imutável após ser setado).
+            if (
+                ttt_tp_price_inline is not None
+                and shadow.time_to_tp_minutes is None
+                and _ch >= ttt_tp_price_inline
+            ):
+                c_ts = c["time"]
+                if c_ts is not None and shadow.entry_timestamp is not None:
+                    try:
+                        entry_aware = shadow.entry_timestamp
+                        c_ts_aware = c_ts
+                        # Guard naive vs aware — mesma lógica do FIX C2 do monitor.
+                        delta_s = (c_ts_aware - entry_aware).total_seconds()
+                        shadow.time_to_tp_minutes = round(max(delta_s / 60.0, 0.0), 4)
+                    except TypeError:
+                        # Mismatch tz — deixa para ttt_analyzer resolver via OHLCV.
+                        pass
+
         # SL antes de TP na mesma candle — regra conservadora.
         if c["low"] <= sl:
             outcome = "SL_HIT"

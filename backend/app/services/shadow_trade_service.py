@@ -75,6 +75,13 @@ SHADOW_TRADE_AMOUNT_USDT = float(os.environ.get("SHADOW_TRADE_AMOUNT_USDT", "100
 SHADOW_TIMEOUT_CANDLES = int(os.environ.get("SHADOW_TIMEOUT_CANDLES", "1440"))  # 24h de 1m
 SHADOW_LOOKBACK_MINUTES = int(os.environ.get("SHADOW_LOOKBACK_MINUTES", "10"))
 
+# ── TTT Policy defaults (Zero Hardcode — override via Cloud Run env vars) ─────
+# Valores de negócio definidos em config_profiles (config_type='ttt_policy').
+# Env vars são usados como fallback quando DB não está disponível na criação.
+TTT_ENABLED_DEFAULT = os.environ.get("TTT_ENABLED", "true").lower() == "true"
+TTT_TP_PCT_DEFAULT = float(os.environ.get("TTT_TP_PCT", "1.0"))
+TTT_TIMEOUT_MINUTES_DEFAULT = int(os.environ.get("TTT_TIMEOUT_MINUTES", "180"))
+
 # Task #321: identificação canônica da watchlist Arrow (custom).
 # ``ARROW_WATCHLIST_NAME`` é o ``pipeline_watchlists.name`` esperado; um
 # único helper centraliza a string mágica para o resto da codebase nunca
@@ -526,7 +533,8 @@ _INSERT_SHADOW_SQL = text("""
         amount_usdt, entry_price, entry_timestamp,
         tp_price, sl_price, tp_pct, sl_pct, timeout_candles,
         status, skip_reason, source, config_snapshot, features_snapshot,
-        last_processed_time
+        last_processed_time,
+        ttt_enabled, ttt_tp_pct, ttt_timeout_minutes
     ) VALUES (
         :decision_id, :user_id, :symbol, :strategy, :direction,
         :amount_usdt, :entry_price, :entry_timestamp,
@@ -534,7 +542,8 @@ _INSERT_SHADOW_SQL = text("""
         :status, :skip_reason, :source,
         CAST(:config_snapshot AS JSONB),
         CAST(:features_snapshot AS JSONB),
-        :last_processed_time
+        :last_processed_time,
+        :ttt_enabled, :ttt_tp_pct, :ttt_timeout_minutes
     )
     ON CONFLICT (user_id, symbol) WHERE status = 'RUNNING' DO NOTHING
     RETURNING id
@@ -563,6 +572,10 @@ async def _create_from_decision(
     tp_pct = float(user_config.get("tp_pct") or 0.0)
     sl_pct = float(user_config.get("sl_pct") or 0.0)
     timeout_candles = int(user_config.get("timeout_candles") or SHADOW_TIMEOUT_CANDLES)
+    # TTT policy snapshot — lê do user_config (propagado do caller) ou usa defaults.
+    ttt_enabled = bool(user_config.get("ttt_enabled", TTT_ENABLED_DEFAULT))
+    ttt_tp_pct = float(user_config.get("ttt_tp_pct") or TTT_TP_PCT_DEFAULT)
+    ttt_timeout_minutes = int(user_config.get("ttt_timeout_minutes") or TTT_TIMEOUT_MINUTES_DEFAULT)
 
     # Entry-at-decision-time (Task 2026-05-13): preço corrente no
     # instante da decisão ALLOW vira entry_price imediatamente.
@@ -592,6 +605,10 @@ async def _create_from_decision(
         "sl_pct": sl_pct,
         "timeout_candles": timeout_candles,
         "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
+        # TTT policy snapshot (migration 065)
+        "ttt_enabled": ttt_enabled,
+        "ttt_tp_pct": ttt_tp_pct,
+        "ttt_timeout_minutes": ttt_timeout_minutes,
     }
     features_snap = _build_features_snapshot(decision)
 
@@ -619,6 +636,10 @@ async def _create_from_decision(
             "tp_pct": tp_pct or None,
             "sl_pct": sl_pct or None,
             "timeout_candles": timeout_candles,
+            # TTT policy snapshot (migration 065)
+            "ttt_enabled": ttt_enabled,
+            "ttt_tp_pct": ttt_tp_pct,
+            "ttt_timeout_minutes": ttt_timeout_minutes,
             "status": initial_status,
             # skip_reason intencionalmente NULL: textos como NOT_TRADABLE/COOLDOWN
             # poluem o dataset do XGBoost (categórica de alta cardinalidade e
