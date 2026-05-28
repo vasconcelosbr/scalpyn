@@ -67,7 +67,6 @@ export const BACKOFFICE_ITEMS: NavItem[] = [
   { name: "Decision Log", href: "/decisions", icon: ClipboardList },
   { name: "Data Monitor", href: "/data", icon: Database },
   { name: "Alert Center", href: "/alerts", icon: AlertTriangle },
-  { name: "Replay", href: "/replay", icon: PlayCircle },
   { name: "Admin", href: "/admin", icon: Users },
 ];
 
@@ -75,7 +74,6 @@ export const CONFIG_ITEMS: NavItem[] = [
   { name: "General", href: "/settings/general", icon: Settings },
   { name: "Score Engine", href: "/settings/score", icon: Target },
   { name: "Signal Rules", href: "/settings/signal", icon: Zap },
-  { name: "Block Rules", href: "/settings/block", icon: ShieldOff },
   { name: "Risk Management", href: "/settings/risk", icon: Shield },
   { name: "Strategies", href: "/settings/strategies", icon: Brain },
   { name: "AI Skills", href: "/settings/skills", icon: Sparkles },

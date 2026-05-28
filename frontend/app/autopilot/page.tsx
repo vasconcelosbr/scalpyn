@@ -86,8 +86,20 @@ function fmtPct(v: number | null) {
 function actionBadge(action: string) {
   if (action === "MUTATED")
     return <span className="badge bullish text-[10px]">MUTATED</span>;
+  if (action === "DRY_RUN_MUTATED")
+    return <span className="badge bullish text-[10px] opacity-70">[DRY RUN] MUTATED</span>;
+  if (action === "DRY_RUN_RULES_ADJUSTED")
+    return <span className="badge range text-[10px] opacity-80">[DRY RUN] RULES ADJUSTED</span>;
+  if (action === "DRY_RUN_ANALYZED")
+    return <span className="badge range text-[10px] opacity-70">[DRY RUN] ANALYZED</span>;
+  if (action === "RULES_ADJUSTED")
+    return <span className="badge bullish text-[10px]">RULES ADJUSTED</span>;
   if (action === "CIRCUIT_BREAKER")
     return <span className="badge bearish text-[10px]">CIRCUIT BREAKER</span>;
+  if (action === "KILLED")
+    return <span className="badge bearish text-[10px]">KILLED</span>;
+  if (action === "SCOPE_VIOLATION_BLOCKED")
+    return <span className="badge bearish text-[10px]">SCOPE BLOCKED</span>;
   return <span className="badge range text-[10px]">{action}</span>;
 }
 
@@ -434,15 +446,78 @@ export default function AutopilotPage() {
                       </span>
                     </button>
                     {expandedLog === log.id && log.perf_snapshot && (
-                      <div className="px-10 pb-3 pt-1 grid grid-cols-2 md:grid-cols-4 gap-2">
-                        {Object.entries(log.perf_snapshot).map(([k, v]) => (
-                          <div key={k} className="bg-[var(--bg-secondary)] rounded p-2">
-                            <div className="text-[10px] text-[var(--text-tertiary)] mb-0.5">{k}</div>
-                            <div className="text-[11px] font-medium text-[var(--text-primary)]">
-                              {typeof v === "number" ? v.toFixed(4) : String(v)}
+                      <div className="px-10 pb-4 pt-1 space-y-3">
+                        {/* Flat perf metrics (excluding rule_changes) */}
+                        {Object.keys(log.perf_snapshot).some((k) => k !== "rule_changes") && (
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                            {Object.entries(log.perf_snapshot)
+                              .filter(([k]) => k !== "rule_changes")
+                              .map(([k, v]) => (
+                                <div key={k} className="bg-[var(--bg-secondary)] rounded p-2">
+                                  <div className="text-[10px] text-[var(--text-tertiary)] mb-0.5">{k}</div>
+                                  <div className="text-[11px] font-medium text-[var(--text-primary)]">
+                                    {typeof v === "number" ? v.toFixed(4) : String(v)}
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        )}
+                        {/* Rule changes detail table */}
+                        {Array.isArray(log.perf_snapshot.rule_changes) && log.perf_snapshot.rule_changes.length > 0 && (
+                          <div>
+                            <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-1.5">
+                              Regras ajustadas ({log.perf_snapshot.rule_changes.length})
+                            </div>
+                            <div className="overflow-x-auto rounded border border-[var(--border-subtle)]">
+                              <table className="w-full text-[11px]">
+                                <thead>
+                                  <tr className="border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+                                    {["Indicador", "Operador", "Range / Valor", "Pontos Antes → Depois", "Edge %", "Win Rate %", "N"].map((h) => (
+                                      <th key={h} className="px-3 py-1.5 text-left text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap">
+                                        {h}
+                                      </th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-[var(--border-subtle)]">
+                                  {log.perf_snapshot.rule_changes.map((rc: any, i: number) => {
+                                    const range =
+                                      rc.min != null && rc.max != null
+                                        ? `${rc.min} – ${rc.max}`
+                                        : rc.value != null
+                                        ? String(rc.value)
+                                        : "—";
+                                    const delta = rc.points_after - rc.points_before;
+                                    return (
+                                      <tr key={i} className="hover:bg-[var(--bg-elevated)] transition-colors">
+                                        <td className="px-3 py-1.5 font-mono text-[var(--text-primary)] whitespace-nowrap">{rc.indicator ?? "—"}</td>
+                                        <td className="px-3 py-1.5 text-[var(--text-secondary)] whitespace-nowrap">{rc.operator ?? "—"}</td>
+                                        <td className="px-3 py-1.5 text-[var(--text-secondary)] font-mono whitespace-nowrap">{range}</td>
+                                        <td className="px-3 py-1.5 whitespace-nowrap">
+                                          <span className="text-[var(--text-tertiary)]">{rc.points_before}</span>
+                                          <span className="mx-1 text-[var(--text-tertiary)]">→</span>
+                                          <span className={`font-semibold ${delta > 0 ? "text-green-400" : "text-red-400"}`}>
+                                            {rc.points_after}
+                                          </span>
+                                          <span className={`ml-1 text-[10px] ${delta > 0 ? "text-green-400" : "text-red-400"}`}>
+                                            ({delta > 0 ? "+" : ""}{delta})
+                                          </span>
+                                        </td>
+                                        <td className={`px-3 py-1.5 font-medium whitespace-nowrap ${(rc.edge_pct ?? 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
+                                          {rc.edge_pct != null ? `${rc.edge_pct > 0 ? "+" : ""}${rc.edge_pct.toFixed(2)}%` : "—"}
+                                        </td>
+                                        <td className="px-3 py-1.5 text-[var(--text-primary)] whitespace-nowrap">
+                                          {rc.win_rate_pct != null ? `${rc.win_rate_pct.toFixed(1)}%` : "—"}
+                                        </td>
+                                        <td className="px-3 py-1.5 text-[var(--text-secondary)]">{rc.n_samples ?? "—"}</td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
                             </div>
                           </div>
-                        ))}
+                        )}
                       </div>
                     )}
                   </div>

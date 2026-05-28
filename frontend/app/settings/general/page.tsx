@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Save, RefreshCw, Settings, BarChart2, Eye, EyeOff, CheckCircle2, XCircle, AlertCircle, ExternalLink, Plus, Trash2 } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Save, RefreshCw, Settings, BarChart2, Eye, EyeOff, CheckCircle2, XCircle, AlertCircle, ExternalLink, Plus, Trash2, Bot, ChevronDown, ChevronRight } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
 import AIProviderSection from "@/components/settings/AIProviderSection";
+import { apiGet } from "@/lib/api";
 
 function authHeaders(): HeadersInit {
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
@@ -240,6 +241,192 @@ function CMCProviderCard() {
   );
 }
 
+// ── DryRun Trail Logs ─────────────────────────────────────────────────────────
+
+const AUTOPILOT_PROFILE_ID = "29155eda-6d8f-4abf-9f58-b3999ba9c878";
+const DRY_RUN_ACTIONS = new Set(["DRY_RUN_MUTATED", "DRY_RUN_RULES_ADJUSTED", "DRY_RUN_ANALYZED"]);
+
+function fmtDate(iso: string | null) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("pt-BR", {
+    day: "2-digit", month: "2-digit", year: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
+interface DryRunLog {
+  id: string;
+  action: string;
+  reason: string | null;
+  regime: string | null;
+  perf_snapshot: Record<string, unknown> | null;
+  created_at: string;
+}
+
+function DryRunActionBadge({ action }: { action: string }) {
+  const colors: Record<string, string> = {
+    DRY_RUN_MUTATED: "bg-blue-500/15 text-blue-400 border-blue-500/30",
+    DRY_RUN_RULES_ADJUSTED: "bg-purple-500/15 text-purple-400 border-purple-500/30",
+    DRY_RUN_ANALYZED: "bg-gray-500/15 text-gray-400 border-gray-500/25",
+  };
+  const cls = colors[action] ?? "bg-gray-500/10 text-gray-400 border-gray-500/20";
+  return (
+    <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 20, border: "1px solid", display: "inline-flex", alignItems: "center" }} className={cls}>
+      {action.replace("DRY_RUN_", "[DR] ")}
+    </span>
+  );
+}
+
+function DryRunTrailLogs() {
+  const [logs, setLogs] = useState<DryRunLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const fetchLogs = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await apiGet(`/autopilot/${AUTOPILOT_PROFILE_ID}/history?limit=50`);
+      const allLogs: DryRunLog[] = data.audit_logs ?? [];
+      setLogs(allLogs.filter((l) => DRY_RUN_ACTIONS.has(l.action)));
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Erro ao carregar logs.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchLogs(); }, [fetchLogs]);
+
+  return (
+    <div className="card">
+      <div className="card-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Bot size={15} color="var(--accent-primary)" />
+          <h3 style={{ margin: 0 }}>DryRun Trail Logs</h3>
+        </div>
+        <button
+          onClick={fetchLogs}
+          disabled={loading}
+          style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, background: "transparent", border: "1px solid var(--border-default)", cursor: loading ? "wait" : "pointer", color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 5 }}
+        >
+          <RefreshCw size={11} style={loading ? { animation: "spin 1s linear infinite" } : {}} />
+          {loading ? "Carregando…" : "Atualizar"}
+        </button>
+      </div>
+      <div className="card-body" style={{ padding: 0 }}>
+        {error && (
+          <div style={{ padding: "12px 20px", fontSize: 12, color: "var(--color-loss)", background: "var(--color-loss-muted)" }}>{error}</div>
+        )}
+        {!loading && !error && logs.length === 0 && (
+          <div style={{ padding: "32px 20px", textAlign: "center", fontSize: 12, color: "var(--text-tertiary)" }}>
+            Nenhum ciclo DryRun registrado ainda. O beat Celery gera logs a cada 6h.
+          </div>
+        )}
+        {logs.length > 0 && (
+          <div style={{ borderTop: "1px solid var(--border-subtle)" }}>
+            {logs.map((log) => (
+              <div key={log.id} style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+                <button
+                  onClick={() => setExpandedId(expandedId === log.id ? null : log.id)}
+                  style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "10px 20px", textAlign: "left", background: "none", border: "none", cursor: "pointer" }}
+                  className="hover:bg-[var(--bg-elevated)]"
+                >
+                  {expandedId === log.id
+                    ? <ChevronDown size={13} color="var(--text-tertiary)" />
+                    : <ChevronRight size={13} color="var(--text-tertiary)" />}
+                  <span style={{ flex: 1, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
+                    <DryRunActionBadge action={log.action} />
+                    {log.regime && (
+                      <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 20, background: "var(--bg-secondary)", color: "var(--text-tertiary)", border: "1px solid var(--border-subtle)" }}>
+                        {log.regime}
+                      </span>
+                    )}
+                    <span style={{ fontSize: 11, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {log.reason ?? "—"}
+                    </span>
+                  </span>
+                  <span style={{ fontSize: 10, color: "var(--text-tertiary)", fontFamily: "var(--font-mono)", flexShrink: 0 }}>
+                    {fmtDate(log.created_at)}
+                  </span>
+                </button>
+                {expandedId === log.id && log.perf_snapshot && (
+                  <div style={{ padding: "8px 20px 12px 44px" }}>
+                    {/* Perf metrics */}
+                    {Object.keys(log.perf_snapshot).some((k) => k !== "rule_changes") && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                        {Object.entries(log.perf_snapshot)
+                          .filter(([k]) => k !== "rule_changes")
+                          .map(([k, v]) => (
+                            <div key={k} style={{ background: "var(--bg-secondary)", border: "1px solid var(--border-subtle)", borderRadius: 6, padding: "4px 10px" }}>
+                              <div style={{ fontSize: 9, color: "var(--text-tertiary)", marginBottom: 1 }}>{k}</div>
+                              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-primary)" }}>
+                                {typeof v === "number" ? v.toFixed(4) : String(v)}
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                    {/* Rule changes */}
+                    {Array.isArray(log.perf_snapshot.rule_changes) && log.perf_snapshot.rule_changes.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: 9, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>
+                          Regras que seriam ajustadas ({(log.perf_snapshot.rule_changes as unknown[]).length})
+                        </div>
+                        <div style={{ overflowX: "auto" }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                            <thead>
+                              <tr style={{ borderBottom: "1px solid var(--border-subtle)", background: "var(--bg-secondary)" }}>
+                                {["Indicador", "Operador", "Range / Valor", "Pontos Antes → Depois", "Edge %", "Win Rate %", "N"].map((h) => (
+                                  <th key={h} style={{ padding: "4px 10px", textAlign: "left", fontSize: 9, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(log.perf_snapshot.rule_changes as Array<Record<string, unknown>>).map((rc, i) => {
+                                const range = rc.min != null && rc.max != null ? `${rc.min} – ${rc.max}` : rc.value != null ? String(rc.value) : "—";
+                                const delta = (rc.points_after as number) - (rc.points_before as number);
+                                return (
+                                  <tr key={i} style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+                                    <td style={{ padding: "4px 10px", fontFamily: "var(--font-mono)", color: "var(--text-primary)", whiteSpace: "nowrap" }}>{String(rc.indicator ?? "—")}</td>
+                                    <td style={{ padding: "4px 10px", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{String(rc.operator ?? "—")}</td>
+                                    <td style={{ padding: "4px 10px", fontFamily: "var(--font-mono)", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{range}</td>
+                                    <td style={{ padding: "4px 10px", whiteSpace: "nowrap" }}>
+                                      <span style={{ color: "var(--text-tertiary)" }}>{String(rc.points_before)}</span>
+                                      <span style={{ margin: "0 4px", color: "var(--text-tertiary)" }}>→</span>
+                                      <span style={{ fontWeight: 600, color: delta > 0 ? "var(--color-profit)" : "var(--color-loss)" }}>{String(rc.points_after)}</span>
+                                      <span style={{ marginLeft: 4, fontSize: 10, color: delta > 0 ? "var(--color-profit)" : "var(--color-loss)" }}>({delta > 0 ? "+" : ""}{delta})</span>
+                                    </td>
+                                    <td style={{ padding: "4px 10px", fontWeight: 500, color: (rc.edge_pct as number) >= 0 ? "var(--color-profit)" : "var(--color-loss)", whiteSpace: "nowrap" }}>
+                                      {rc.edge_pct != null ? `${(rc.edge_pct as number) > 0 ? "+" : ""}${(rc.edge_pct as number).toFixed(2)}%` : "—"}
+                                    </td>
+                                    <td style={{ padding: "4px 10px", color: "var(--text-primary)", whiteSpace: "nowrap" }}>
+                                      {rc.win_rate_pct != null ? `${(rc.win_rate_pct as number).toFixed(1)}%` : "—"}
+                                    </td>
+                                    <td style={{ padding: "4px 10px", color: "var(--text-secondary)" }}>{String(rc.n_samples ?? "—")}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <style>{`@keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }`}</style>
+    </div>
+  );
+}
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
+
 export default function GeneralSettings() {
   const { config, updateConfig, isLoading } = useConfig("universe");
   const [local, setLocal] = useState({
@@ -347,6 +534,9 @@ export default function GeneralSettings() {
           <AIProviderSection />
         </div>
       </div>
+
+      {/* DryRun Trail Logs */}
+      <DryRunTrailLogs />
     </div>
   );
 }

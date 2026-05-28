@@ -951,6 +951,8 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
   const [hideNeutral, setHideNeutral] = useState(false);
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [loadingRejected, setLoadingRejected] = useState(false);
+  const [assetsError, setAssetsError] = useState<string | null>(null);
+  const [rejectedError, setRejectedError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -980,7 +982,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
     // manual refresh, and parent-triggered reloads do not race each other.
     if (assetsRequestInFlight.current) return;
     assetsRequestInFlight.current = true;
-    if (!silent) setLoadingAssets(true);
+    if (!silent) { setLoadingAssets(true); setAssetsError(null); }
     try {
       const assetsUrl = isFutures && hn
         ? `/watchlists/${wl.id}/assets?hide_neutral=true`
@@ -996,11 +998,12 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
       setApprovedItems(data.approved_items ?? []);
       setFuturesAssets(data.assets ?? []);
       setApprovedCols(data.profile_indicators ?? []);
+      if (!silent) setAssetsError(null);
       if (triggerParentRefresh && ((data.approved_items?.length ?? 0) > 0 || (data.assets?.length ?? 0) > 0)) {
         onRefreshed();
       }
-    } catch {
-      // ignore
+    } catch (err: unknown) {
+      if (!silent) setAssetsError(err instanceof Error ? err.message : 'Falha ao carregar ativos. Tente novamente.');
     } finally {
       assetsRequestInFlight.current = false;
       if (!silent) setLoadingAssets(false);
@@ -1011,7 +1014,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
   const loadRejected = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     if (rejectedRequestInFlight.current) return;
     rejectedRequestInFlight.current = true;
-    if (!silent) setLoadingRejected(true);
+    if (!silent) { setLoadingRejected(true); setRejectedError(null); }
     try {
       const rejected = await apiFetch<{
         items: RejectedAssetItem[];
@@ -1020,8 +1023,9 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
       setRejectedItems(rejected.items ?? []);
       setRejectedCols(rejected.profile_indicators ?? approvedCols);
       rejectedLoaded.current = true;
-    } catch {
-      // ignore
+      if (!silent) setRejectedError(null);
+    } catch (err: unknown) {
+      if (!silent) setRejectedError(err instanceof Error ? err.message : 'Falha ao carregar rejeitados. Tente novamente.');
     } finally {
       rejectedRequestInFlight.current = false;
       if (!silent) setLoadingRejected(false);
@@ -1203,7 +1207,18 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
               Refresh error: {refreshError}
             </div>
           )}
-          {detailTab === 'approved' && isFutures ? (
+          {detailTab === 'approved' && assetsError ? (
+            <div className="px-4 py-5 flex items-center gap-3">
+              <span className="text-xs text-red-400 flex-1">{assetsError}</span>
+              <button
+                onClick={() => loadApproved()}
+                className="text-[11px] px-3 py-1.5 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors flex items-center gap-1.5"
+              >
+                <RefreshCw size={11} />
+                Tentar novamente
+              </button>
+            </div>
+          ) : detailTab === 'approved' && isFutures ? (
             <FuturesAssetTable
               assets={futuresAssets}
               loading={loadingAssets}
@@ -1213,20 +1228,31 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
           ) : detailTab === 'approved' && loadingAssets ? (
             <div className="px-4 py-6 text-center text-sm text-[#4B5563] flex items-center justify-center gap-2">
               <RefreshCw size={13} className="animate-spin" />
-              Loading approved decisions…
+              Carregando ativos aprovados…
             </div>
           ) : detailTab === 'approved' ? (
             <WatchlistDecisionTable
               items={approvedItems}
               loading={loadingAssets}
-              emptyMessage="No approved assets for the current filters."
+              emptyMessage="Nenhum ativo aprovado para os filtros atuais."
               indicatorCols={approvedCols}
             />
+          ) : rejectedError ? (
+            <div className="px-4 py-5 flex items-center gap-3">
+              <span className="text-xs text-red-400 flex-1">{rejectedError}</span>
+              <button
+                onClick={() => loadRejected()}
+                className="text-[11px] px-3 py-1.5 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors flex items-center gap-1.5"
+              >
+                <RefreshCw size={11} />
+                Tentar novamente
+              </button>
+            </div>
           ) : (
             <WatchlistDecisionTable
               items={rejectedItems}
               loading={loadingRejected}
-              emptyMessage="No rejected assets for the current filters."
+              emptyMessage="Nenhum ativo rejeitado para os filtros atuais."
               indicatorCols={rejectedCols}
             />
           )}

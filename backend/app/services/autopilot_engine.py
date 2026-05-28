@@ -593,14 +593,16 @@ async def compute_rule_insights(
 def adjust_rule_points(
     scoring_rules: list,
     insights: dict,
-) -> tuple[list, int]:
+) -> tuple[list, int, list]:
     """
     Apply conservative ±1 point adjustment to rules with strong edge.
 
-    Returns: (adjusted_rules, n_changed)
+    Returns: (adjusted_rules, n_changed, rule_changes)
+    rule_changes is a list of dicts with before/after detail for audit logging.
     """
     adjusted = []
     n_changed = 0
+    rule_changes: list = []
 
     for rule in scoring_rules:
         rule = dict(rule)
@@ -623,12 +625,25 @@ def adjust_rule_points(
                     rule.get("id"), rule.get("indicator"), rule.get("operator"),
                     current, new_pts, edge * 100, info["n"],
                 )
+                rule_changes.append({
+                    "rule_id":       rule.get("id"),
+                    "indicator":     rule.get("indicator"),
+                    "operator":      rule.get("operator"),
+                    "min":           rule.get("min"),
+                    "max":           rule.get("max"),
+                    "value":         rule.get("value"),
+                    "points_before": current,
+                    "points_after":  new_pts,
+                    "edge_pct":      round(edge * 100, 2),
+                    "win_rate_pct":  round(info.get("win_rate", 0) * 100, 2),
+                    "n_samples":     info["n"],
+                })
                 rule["points"] = new_pts
                 n_changed += 1
 
         adjusted.append(rule)
 
-    return adjusted, n_changed
+    return adjusted, n_changed, rule_changes
 
 
 async def apply_rule_adjustments(
@@ -679,10 +694,12 @@ async def apply_rule_adjustments(
         if not insights or "_overall" not in insights:
             return {"action": "RULES_SKIPPED", "reason": "insufficient_data"}
 
-        adjusted_rules, n_changed = adjust_rule_points(scoring_rules, insights)
+        adjusted_rules, n_changed, rule_changes = adjust_rule_points(scoring_rules, insights)
 
         if n_changed == 0:
             return {"action": "RULES_ANALYZED", "reason": "no_adjustment_needed", "insights_n": len(insights) - 1}
+
+        perf_with_changes = {**perf, "rule_changes": rule_changes}
 
         if dry_run:
             # DRY RUN — calcula mas NÃO persiste. Loga o que SERIA feito.
@@ -691,7 +708,7 @@ async def apply_rule_adjustments(
                 action="DRY_RUN_RULES_ADJUSTED",
                 reason=f"[DRY RUN] {n_changed} scoring rules WOULD be adjusted (not persisted)",
                 regime=regime,
-                perf=perf,
+                perf=perf_with_changes,
                 db=db,
             )
             logger.info(
@@ -703,6 +720,7 @@ async def apply_rule_adjustments(
                 "dry_run": True,
                 "n_changed": n_changed,
                 "insights_n": len(insights) - 1,
+                "rule_changes": rule_changes,
             }
 
         new_config = dict(cp.config_json)
@@ -714,7 +732,7 @@ async def apply_rule_adjustments(
             action="RULES_ADJUSTED",
             reason=f"{n_changed} scoring rules adjusted via ML win-rate analysis",
             regime=regime,
-            perf=perf,
+            perf=perf_with_changes,
             db=db,
         )
 
@@ -722,7 +740,7 @@ async def apply_rule_adjustments(
             "[Autopilot] %d scoring rules adjusted for profile=%s user=%s",
             n_changed, profile_id, user_id,
         )
-        return {"action": "RULES_ADJUSTED", "n_changed": n_changed, "insights_n": len(insights) - 1}
+        return {"action": "RULES_ADJUSTED", "n_changed": n_changed, "insights_n": len(insights) - 1, "rule_changes": rule_changes}
 
     except Exception as exc:
         logger.warning("[Autopilot] Rule adjustment failed for profile=%s: %s", profile_id, exc)

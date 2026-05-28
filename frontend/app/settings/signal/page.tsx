@@ -11,7 +11,7 @@ export default function SignalRedirect() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace("/settings/block?tab=entry_triggers");
+    router.replace("/profiles");
   }, [router]);
 
   return (

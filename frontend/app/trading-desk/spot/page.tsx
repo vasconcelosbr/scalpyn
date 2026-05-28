@@ -144,12 +144,33 @@ export default function SpotTradingPage() {
   const [activeTab, setActiveTab] = useState<'config' | 'audit'>('config');
   const [auditItems, setAuditItems] = useState<AuditItem[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
+  const [auditLastUpdated, setAuditLastUpdated] = useState<Date | null>(null);
+  const [balance, setBalance] = useState<{
+    available_usdt: number;
+    in_positions: number;
+    total: number;
+    source: string;
+  } | null>(null);
+  const [balanceLoading, setBalanceLoading] = useState(false);
+
+  const fetchBalance = useCallback(async () => {
+    setBalanceLoading(true);
+    try {
+      const data = await apiGet('/live/balance');
+      setBalance(data);
+    } catch {
+      // ignore
+    } finally {
+      setBalanceLoading(false);
+    }
+  }, []);
 
   const fetchAudit = useCallback(async () => {
     setAuditLoading(true);
     try {
       const data = await apiGet('/spot-engine/audit?limit=100');
       setAuditItems(data?.items ?? []);
+      setAuditLastUpdated(new Date());
     } catch {
       // ignore
     } finally {
@@ -160,10 +181,13 @@ export default function SpotTradingPage() {
   useEffect(() => {
     if (activeTab === 'audit') {
       fetchAudit();
-      const id = setInterval(fetchAudit, 60_000);
-      return () => clearInterval(id);
+      fetchBalance();
+      // Audit refreshes every 60s; balance only every 5 min (it calls exchange API)
+      const auditId = setInterval(fetchAudit, 60_000);
+      const balanceId = setInterval(fetchBalance, 5 * 60_000);
+      return () => { clearInterval(auditId); clearInterval(balanceId); };
     }
-  }, [activeTab, fetchAudit]);
+  }, [activeTab, fetchAudit, fetchBalance]);
 
   const capital: number = config?.account?.capital ?? 10000;
 
@@ -292,9 +316,50 @@ export default function SpotTradingPage() {
       {/* Audit Tab */}
       {activeTab === 'audit' && (
         <div style={{ marginTop: '16px' }}>
+
+          {/* Capital Total card */}
+          <div style={{
+            display: 'flex', gap: '12px', marginBottom: '16px', flexWrap: 'wrap',
+          }}>
+            <div style={{
+              flex: 1, minWidth: 160, padding: '12px 16px',
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border-default)',
+              borderRadius: 'var(--radius-md)',
+            }}>
+              <div style={{ fontSize: '10px', color: 'var(--text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+                Capital Total (USDT)
+              </div>
+              <div style={{ fontSize: '22px', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
+                {balanceLoading && !balance ? '…' : balance ? `$${balance.total.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : '—'}
+              </div>
+              {balance && (
+                <div style={{ display: 'flex', gap: '12px', marginTop: '6px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                    Disponível: <strong style={{ color: 'var(--text-primary)' }}>${balance.available_usdt.toFixed(2)}</strong>
+                  </span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                    Em posições: <strong style={{ color: 'var(--text-primary)' }}>${balance.in_positions.toFixed(2)}</strong>
+                  </span>
+                </div>
+              )}
+              {balance?.source === 'exchange_error' && (
+                <div style={{ fontSize: '10px', color: '#ef4444', marginTop: 4 }}>Erro ao buscar saldo da corretora</div>
+              )}
+              {balance?.source === 'no_connection' && (
+                <div style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginTop: 4 }}>Sem conexão com corretora configurada</div>
+              )}
+            </div>
+          </div>
+
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
             <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0 }}>
-              Buy attempts — updated every 60s
+              Últimas 100 tentativas de compra
+              {auditLastUpdated && (
+                <span style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginLeft: '8px' }}>
+                  · atualizado {auditLastUpdated.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              )}
             </p>
             <button
               onClick={fetchAudit}
@@ -315,7 +380,7 @@ export default function SpotTradingPage() {
 
           {auditItems.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-tertiary)', fontSize: '13px' }}>
-              {auditLoading ? 'Loading audit records…' : 'No execution records yet. Start the engine to see activity.'}
+              {auditLoading ? 'Carregando registros…' : 'Nenhuma tentativa registrada. Inicie o engine para ver atividade.'}
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
