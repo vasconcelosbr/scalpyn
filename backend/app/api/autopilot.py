@@ -237,6 +237,7 @@ async def run_autopilot_now(
         "regime":           cycle_result.get("regime"),
         "analysis_summary": cycle_result.get("analysis_summary"),
         "performance":      cycle_result.get("perf"),
+        "rule_adjustment":  cycle_result.get("rule_adjustment"),
     }
 
 

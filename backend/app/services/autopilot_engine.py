@@ -408,6 +408,241 @@ async def generate_mutated_config(
     }
 
 
+# ── ML-Driven Rule Adjustment ────────────────────────────────────────────────
+
+# Maps scoring rule indicator names → metrics keys in decisions_log.metrics
+_INDICATOR_FIELD_MAP: dict[str, str] = {
+    "volume_24h":       "volume_24h_usdt",
+    "ema_trend":        "ema50_gt_ema200",   # boolean
+    "vwap_distance_pct": "vwap_distance_pct",
+}
+
+# Min samples required to trust per-rule stats
+MIN_RULE_SAMPLES = 15
+# Win-rate edge required to trigger a point adjustment
+RULE_EDGE_THRESHOLD = 0.10   # 10 percentage points
+# Max point delta per autopilot cycle (conservative)
+RULE_MAX_DELTA = 1
+# Absolute bounds for rule points
+RULE_POINTS_MIN = -10
+RULE_POINTS_MAX = 10
+
+
+def _resolve_indicator_key(indicator: str) -> str:
+    """Return the metrics dict key for a scoring rule indicator name."""
+    return _INDICATOR_FIELD_MAP.get(indicator, indicator)
+
+
+def _rule_matches(operator: str, val: float, rule: dict) -> bool:
+    """Return True if val satisfies the rule condition."""
+    try:
+        if operator == "between":
+            lo = rule.get("min")
+            hi = rule.get("max")
+            return lo is not None and hi is not None and float(lo) <= val <= float(hi)
+        threshold = rule.get("value")
+        if threshold is None:
+            return False
+        threshold = float(threshold)
+        if operator in (">", "gt"):
+            return val > threshold
+        if operator in (">=", "gte"):
+            return val >= threshold
+        if operator in ("<", "lt"):
+            return val < threshold
+        if operator in ("<=", "lte"):
+            return val <= threshold
+    except (TypeError, ValueError):
+        pass
+    return False
+
+
+async def compute_rule_insights(
+    user_id: str,
+    scoring_rules: list,
+    db: AsyncSession,
+    days: int = PERFORMANCE_DAYS,
+) -> dict:
+    """
+    For each numeric scoring rule compute win-rate and EV from decisions_log.metrics.
+
+    Returns:
+        {
+          rule_id: { n, win_rate, ev, edge }   ← edge = rule_wr - overall_wr
+          "_overall": { n, win_rate }
+        }
+    Excludes rules with < MIN_RULE_SAMPLES matching trades.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    result = await db.execute(text("""
+        SELECT metrics, outcome, pnl_pct
+        FROM decisions_log
+        WHERE l3_pass = true
+          AND decision = 'ALLOW'
+          AND outcome IN ('tp', 'sl')
+          AND pnl_pct IS NOT NULL
+          AND user_id = :uid
+          AND created_at >= :cutoff
+    """), {"uid": user_id, "cutoff": cutoff})
+    rows = result.mappings().all()
+
+    if not rows:
+        return {}
+
+    total = len(rows)
+    overall_wins = sum(1 for r in rows if r["outcome"] == "tp")
+    overall_wr = overall_wins / total
+
+    insights: dict = {"_overall": {"n": total, "win_rate": overall_wr}}
+
+    for rule in scoring_rules:
+        rule_id = rule.get("id")
+        indicator = rule.get("indicator", "")
+        operator = rule.get("operator", "")
+
+        # Skip boolean-type indicators (ema_trend, ema50>ema200, etc.)
+        if ">" in operator and indicator == "ema_trend":
+            continue
+        if operator in ("is_true", "is_false", "ema50>ema200", "ema9>ema50"):
+            continue
+
+        metrics_key = _resolve_indicator_key(indicator)
+        matching: list[tuple[bool, float]] = []
+
+        for row in rows:
+            metrics = row["metrics"] or {}
+            raw = metrics.get(metrics_key)
+            if raw is None:
+                continue
+            try:
+                val = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if _rule_matches(operator, val, rule):
+                matching.append((row["outcome"] == "tp", float(row["pnl_pct"])))
+
+        n = len(matching)
+        if n < MIN_RULE_SAMPLES:
+            continue
+
+        wr = sum(1 for w, _ in matching if w) / n
+        ev = sum(p for _, p in matching) / n
+        insights[rule_id] = {
+            "n":        n,
+            "win_rate": wr,
+            "ev":       ev,
+            "edge":     wr - overall_wr,
+        }
+
+    return insights
+
+
+def adjust_rule_points(
+    scoring_rules: list,
+    insights: dict,
+) -> tuple[list, int]:
+    """
+    Apply conservative ±1 point adjustment to rules with strong edge.
+
+    Returns: (adjusted_rules, n_changed)
+    """
+    adjusted = []
+    n_changed = 0
+
+    for rule in scoring_rules:
+        rule = dict(rule)
+        info = insights.get(rule.get("id", ""))
+
+        if info and info["n"] >= MIN_RULE_SAMPLES:
+            edge = info["edge"]
+            current = rule.get("points", 0)
+
+            if edge > RULE_EDGE_THRESHOLD:
+                new_pts = min(current + RULE_MAX_DELTA, RULE_POINTS_MAX)
+            elif edge < -RULE_EDGE_THRESHOLD:
+                new_pts = max(current - RULE_MAX_DELTA, RULE_POINTS_MIN)
+            else:
+                new_pts = current
+
+            if new_pts != current:
+                logger.info(
+                    "[Autopilot] Rule %s (%s %s): %+d→%+d  edge=%.1f%%  n=%d",
+                    rule.get("id"), rule.get("indicator"), rule.get("operator"),
+                    current, new_pts, edge * 100, info["n"],
+                )
+                rule["points"] = new_pts
+                n_changed += 1
+
+        adjusted.append(rule)
+
+    return adjusted, n_changed
+
+
+async def apply_rule_adjustments(
+    profile_id: str,
+    user_id: str,
+    perf: dict,
+    regime: str,
+    db: AsyncSession,
+) -> dict:
+    """
+    Load scoring rules from config_profiles, compute per-rule insights,
+    adjust points, persist, and return a summary.
+    """
+    from uuid import UUID
+    from sqlalchemy import select
+    from ..models.config_profile import ConfigProfile
+
+    try:
+        uid = UUID(str(user_id))
+        result = await db.execute(
+            select(ConfigProfile).where(
+                ConfigProfile.user_id == uid,
+                ConfigProfile.pool_id.is_(None),
+                ConfigProfile.config_type == "score",
+            ).order_by(ConfigProfile.updated_at.desc()).limit(1)
+        )
+        cp = result.scalars().first()
+        if cp is None or not cp.config_json:
+            return {"action": "RULES_SKIPPED", "reason": "no_score_config"}
+
+        scoring_rules: list = list(cp.config_json.get("scoring_rules") or cp.config_json.get("rules") or [])
+        if not scoring_rules:
+            return {"action": "RULES_SKIPPED", "reason": "no_rules_defined"}
+
+        insights = await compute_rule_insights(user_id, scoring_rules, db)
+        if not insights or "_overall" not in insights:
+            return {"action": "RULES_SKIPPED", "reason": "insufficient_data"}
+
+        adjusted_rules, n_changed = adjust_rule_points(scoring_rules, insights)
+
+        if n_changed == 0:
+            return {"action": "RULES_ANALYZED", "reason": "no_adjustment_needed", "insights_n": len(insights) - 1}
+
+        new_config = dict(cp.config_json)
+        new_config["scoring_rules"] = adjusted_rules
+        cp.config_json = new_config
+
+        await log_audit(
+            profile_id=profile_id,
+            action="RULES_ADJUSTED",
+            reason=f"{n_changed} scoring rules adjusted via ML win-rate analysis",
+            regime=regime,
+            perf=perf,
+            db=db,
+        )
+
+        logger.info(
+            "[Autopilot] %d scoring rules adjusted for profile=%s user=%s",
+            n_changed, profile_id, user_id,
+        )
+        return {"action": "RULES_ADJUSTED", "n_changed": n_changed, "insights_n": len(insights) - 1}
+
+    except Exception as exc:
+        logger.warning("[Autopilot] Rule adjustment failed for profile=%s: %s", profile_id, exc)
+        return {"action": "RULES_ERROR", "reason": str(exc)}
+
+
 # ── Main Cycle ───────────────────────────────────────────────────────────────
 
 async def run_autopilot_cycle(
@@ -460,7 +695,16 @@ async def run_autopilot_cycle(
                 f"{new_consec} regressões consecutivas."
             )
 
-    # 5. Decidir se deve mutar
+    # 5. Ajustar scoring rules via win-rate por faixa (roda sempre, independente de mutação)
+    rule_result = await apply_rule_adjustments(
+        profile_id=profile_id,
+        user_id=user_id,
+        perf=perf,
+        regime=regime,
+        db=db,
+    )
+
+    # 6. Decidir se deve mutar config principal
     mutate, reason = should_mutate(perf, updated_ap_config)
     if not mutate:
         await log_audit(
@@ -472,9 +716,15 @@ async def run_autopilot_cycle(
             db=db,
         )
         await db.commit()
-        return {"action": "ANALYZED", "reason": reason, "regime": regime, "perf": perf}
+        return {
+            "action": "ANALYZED",
+            "reason": reason,
+            "regime": regime,
+            "perf": perf,
+            "rule_adjustment": rule_result,
+        }
 
-    # 6. Salvar versão atual (snapshot pré-mutação)
+    # 7. Salvar versão atual (snapshot pré-mutação)
     try:
         version_id = await save_profile_version(
             profile_id=profile_id,
@@ -488,7 +738,7 @@ async def run_autopilot_cycle(
         logger.error(f"[Autopilot] Erro ao salvar versão para {profile_id}: {e}")
         version_id = None
 
-    # 7. Gerar nova config
+    # 8. Gerar nova config
     try:
         result = await generate_mutated_config(
             profile_id=profile_id,
@@ -512,7 +762,7 @@ async def run_autopilot_cycle(
         await db.commit()
         return {"action": "ERROR", "reason": str(e)}
 
-    # 8. Montar auto_pilot_config atualizado
+    # 9. Montar auto_pilot_config atualizado
     updated_ap_config.update({
         "last_mutation_at":        datetime.now(timezone.utc).isoformat(),
         "last_regime":             result["regime"],
@@ -524,7 +774,7 @@ async def run_autopilot_cycle(
         "analysis_summary":        result.get("analysis_summary"),
     })
 
-    # 9. Log de audit
+    # 10. Log de audit
     await log_audit(
         profile_id=profile_id,
         action="MUTATED",
@@ -548,6 +798,7 @@ async def run_autopilot_cycle(
         "new_config":       result["config"],
         "updated_ap_config": updated_ap_config,
         "version_id":       version_id,
+        "rule_adjustment":  rule_result,
     }
 
 
