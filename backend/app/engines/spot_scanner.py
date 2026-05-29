@@ -21,9 +21,8 @@ from decimal import Decimal
 from typing import Dict, List, Optional
 
 import pandas as pd
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import AsyncSessionLocal
 from ..models.trade import Trade
@@ -146,41 +145,28 @@ class SpotScanner:
                 self._cycle += 1
                 logger.debug("SpotScanner cycle %d — user %s", self._cycle, self.user_id)
 
-                async with AsyncSessionLocal() as db:
-                    await self._run_cycle(db)
+                # No outer DB session — _run_cycle opens short-lived sessions
+                # only around fast DB operations so exchange I/O never holds
+                # a connection open (Cloud SQL idle-timeout killed long cycles).
+                await self._run_cycle()
 
                 self._last_error = None
 
             except asyncio.CancelledError:
                 break
-            except (InterfaceError, OperationalError) as exc:
-                # The cycle holds a DB session check-out across hundreds of
-                # exchange HTTP calls (``_score_universe`` → ``get_klines``
-                # per symbol). When the cycle stretches past the Cloud SQL
-                # idle timeout, asyncpg closes the underlying connection
-                # and SQLAlchemy's exit-path rollback raises
-                # ``cannot call Transaction.rollback(): the underlying
-                # connection is closed``. The cycle's per-statement work
-                # already committed (no ``async with db.begin()`` wraps the
-                # whole cycle), so the rollback failure is cosmetic.
-                #
-                # Downgrade to WARNING so this shows up as ops noise without
-                # masking real failures (which still hit the generic Exception
-                # handler below). Structural fix tracked in
-                # ``.local/tasks/refactor-spot-scanner-io-out-of-session.md``.
-                logger.warning(
-                    "SpotScanner cycle %d (user %s): stale DB connection on session exit "
-                    "(Cloud SQL idle timeout during long cycle) — %s",
-                    self._cycle, self.user_id, exc,
-                )
-                self._last_error = None
             except Exception as e:
                 self._last_error = str(e)
                 logger.exception("SpotScanner cycle error (user %s): %s", self.user_id, e)
 
             await asyncio.sleep(self.cfg.scanner.scan_interval_seconds)
 
-    async def _run_cycle(self, db: AsyncSession) -> None:
+    async def _run_cycle(self) -> None:
+        # ═══════════════════════════════════════════════════════════════════════
+        # PHASE 1 — Exchange I/O.  NO DB session open during this phase.
+        # Holding a session across hundreds of HTTP calls caused the Cloud SQL
+        # idle-timeout to close the underlying asyncpg connection mid-cycle.
+        # ═══════════════════════════════════════════════════════════════════════
+
         # ── 1. Fetch tickers ─────────────────────────────────────────────────
         tickers = await self.adapter.get_tickers(market="spot")
         prices  = {t["currency_pair"]: float(t.get("last", 0)) for t in tickers if t.get("last")}
@@ -189,40 +175,53 @@ class SpotScanner:
             logger.warning("No ticker data received — skipping cycle")
             return
 
-        # ── 2. Update position statuses ──────────────────────────────────────
-        transitions = await self._position_mgr.update_position_statuses(
-            db, self.user_id, prices
-        )
-        for trade, old_s, new_s in transitions:
-            logger.info("Position status change: %s %s → %s", trade.symbol, old_s, new_s)
-
-        # ── 3. Evaluate sell layers for ACTIVE positions ──────────────────────
-        await self._process_sells(db, prices)
-
-        # ── 4. Macro filter check ─────────────────────────────────────────────
+        # ── 2. Macro filter (exchange I/O — BTC EMA check) ───────────────────
+        risk_off = False
         if self.cfg.macro_filter.enabled and self.cfg.macro_filter.block_in_risk_off:
-            if await self._is_risk_off(prices):
-                logger.info("Macro filter: risk-off detected — skipping buys")
-                return
+            risk_off = await self._is_risk_off(prices)
+            if risk_off:
+                logger.info("Macro filter: risk-off detected — skipping buys this cycle")
 
-        # ── 5. Score universe ─────────────────────────────────────────────────
+        # ── 3. Score universe (heavy — one HTTP call per symbol) ──────────────
         scored = await self._score_universe(tickers)
-        if not scored:
-            return
 
-        # ── 6. Get capital state ──────────────────────────────────────────────
+        # ── 4. Get balance ────────────────────────────────────────────────────
         balance_data = await self.adapter.get_spot_balance()
         usdt_balance = next(
             (float(a["available"]) for a in balance_data if a.get("currency") == "USDT"), 0.0
         )
-        capital_state = await self._capital_mgr.get_state(usdt_balance, db, self.user_id)
 
-        # ── 7. Process DCA on underwater positions ────────────────────────────
-        scores_map = {s["symbol"]: s["score"] for s in scored}
-        await self._position_mgr.process_dca(
-            db, self.user_id, prices, scores_map,
-            capital_state.available, self.adapter,
-        )
+        # ═══════════════════════════════════════════════════════════════════════
+        # PHASE 2 — DB operations.  Each block uses its own short-lived session;
+        # no exchange I/O may occur while a session is open (except inside
+        # process_dca / execute_sell which are brief single-order calls).
+        # ═══════════════════════════════════════════════════════════════════════
+
+        # ── 5. Update position statuses ──────────────────────────────────────
+        async with AsyncSessionLocal() as db:
+            transitions = await self._position_mgr.update_position_statuses(
+                db, self.user_id, prices
+            )
+            await db.commit()
+        for trade, old_s, new_s in transitions:
+            logger.info("Position status change: %s %s → %s", trade.symbol, old_s, new_s)
+
+        # ── 6. Evaluate + execute sell layers ────────────────────────────────
+        # _process_sells manages its own short sessions internally.
+        await self._process_sells(prices)
+
+        if risk_off or not scored:
+            return
+
+        # ── 7. Capital state + DCA ────────────────────────────────────────────
+        async with AsyncSessionLocal() as db:
+            capital_state = await self._capital_mgr.get_state(usdt_balance, db, self.user_id)
+            scores_map    = {s["symbol"]: s["score"] for s in scored}
+            await self._position_mgr.process_dca(
+                db, self.user_id, prices, scores_map,
+                capital_state.available, self.adapter,
+            )
+            await db.commit()
 
         # ── 8. Buy top-N opportunities ────────────────────────────────────────
         opportunities = [
@@ -231,46 +230,83 @@ class SpotScanner:
         ][: self.cfg.scanner.max_opportunities_per_scan]
 
         for opp in opportunities:
+            # Re-read capital state so each buy reflects preceding buys.
+            async with AsyncSessionLocal() as db:
+                capital_state = await self._capital_mgr.get_state(usdt_balance, db, self.user_id)
+
             allowed, reason = self._capital_mgr.can_open_new_position(capital_state)
             if not allowed:
                 logger.info("Buy blocked (global): %s", reason)
                 break
 
-            await self._try_buy(opp, capital_state, prices, db)
+            # _try_buy manages its own short sessions internally.
+            await self._try_buy(opp, capital_state, prices)
 
     # ── Sell processing ───────────────────────────────────────────────────────
 
-    async def _process_sells(self, db: AsyncSession, prices: dict) -> None:
-        from sqlalchemy import select
-        q = select(Trade).where(
-            Trade.user_id == self.user_id,
-            Trade.market_type == "spot",
-            Trade.status == "ACTIVE",
-        )
-        result  = await db.execute(q)
-        actives = result.scalars().all()
+    async def _process_sells(self, prices: dict) -> None:
+        # Step 1: load active positions snapshot (short session, no exchange I/O).
+        async with AsyncSessionLocal() as db:
+            q = select(Trade).where(
+                Trade.user_id == self.user_id,
+                Trade.market_type == "spot",
+                Trade.status == "ACTIVE",
+            )
+            result  = await db.execute(q)
+            actives = result.scalars().all()
+            # Snapshot the fields we need; ORM objects become detached after
+            # session close so we store only plain values.
+            active_snap = [
+                {
+                    "id":           pos.id,
+                    "symbol":       pos.symbol,
+                    "entry_price":  pos.entry_price,
+                    "quantity":     pos.quantity,
+                    "invested_value": pos.invested_value,
+                    "dca_layers":   pos.dca_layers,
+                }
+                for pos in actives
+            ]
 
-        for pos in actives:
-            current_price = prices.get(pos.symbol)
+        # Step 2: for each position, fetch indicators (exchange I/O, no session).
+        pending_sells = []
+        for snap in active_snap:
+            symbol        = snap["symbol"]
+            current_price = prices.get(symbol)
             if not current_price:
                 continue
 
-            # Get fresh indicators for this symbol
-            indicators = await self._get_indicators(pos.symbol, market="spot")
-            score_result = self._score_engine.compute_score(indicators)
+            indicators    = await self._get_indicators(symbol, market="spot")
+            score_result  = self._score_engine.compute_score(indicators)
             current_score = score_result["total_score"]
 
-            decision = self._sell_mgr.evaluate(pos, current_price, indicators, current_score)
+            # evaluate() only reads position fields — safe on plain-dict proxy.
+            # We pass a lightweight proxy object so evaluate() can read attrs.
+            class _PosProxy:
+                pass
+            proxy = _PosProxy()
+            for k, v in snap.items():
+                setattr(proxy, k, v)
 
+            decision = self._sell_mgr.evaluate(proxy, current_price, indicators, current_score)
             if decision.should_sell:
-                try:
-                    await self._sell_mgr.execute_sell(pos, self.adapter, decision, db)
-                    logger.info(
-                        "SOLD %s via layer %s  profit=%.2f%%",
-                        pos.symbol, decision.layer, decision.profit_pct,
-                    )
-                except Exception as e:
-                    logger.exception("Sell execution failed for %s: %s", pos.symbol, e)
+                pending_sells.append((snap["id"], symbol, decision))
+
+        # Step 3: execute each sell in its own short session (exchange call +
+        # DB write are both fast; session is only open for this one trade).
+        for pos_id, symbol, decision in pending_sells:
+            try:
+                async with AsyncSessionLocal() as db:
+                    pos_fresh = await db.get(Trade, pos_id)
+                    if pos_fresh is None or pos_fresh.status != "ACTIVE":
+                        continue  # already closed by a concurrent operation
+                    await self._sell_mgr.execute_sell(pos_fresh, self.adapter, decision, db)
+                logger.info(
+                    "SOLD %s via layer %s  profit=%.2f%%",
+                    symbol, decision.layer, decision.profit_pct,
+                )
+            except Exception as e:
+                logger.exception("Sell execution failed for %s: %s", symbol, e)
 
     # ── Score universe ────────────────────────────────────────────────────────
 
@@ -311,12 +347,11 @@ class SpotScanner:
         opp: dict,
         capital_state,
         prices: dict,
-        db: AsyncSession,
     ) -> None:
         symbol = opp["symbol"]
         score  = opp["score"]
 
-        # Symbol cooldown check
+        # Symbol cooldown check (in-memory, no DB needed)
         if self._is_in_cooldown(symbol):
             logger.debug("Symbol %s in cooldown — skipping", symbol)
             return
@@ -325,16 +360,17 @@ class SpotScanner:
         if trade_size <= 0:
             return
 
-        # Per-asset check
-        ok, reason = await self._capital_mgr.can_trade_asset(
-            symbol, trade_size, capital_state, db, self.user_id
-        )
-        if not ok:
-            logger.info("Buy blocked (asset %s): %s", symbol, reason)
-            return
-
         current_price = prices.get(symbol, 0)
         if not current_price:
+            return
+
+        # Per-asset exposure check (short DB read — no exchange I/O inside).
+        async with AsyncSessionLocal() as db:
+            ok, reason = await self._capital_mgr.can_trade_asset(
+                symbol, trade_size, capital_state, db, self.user_id
+            )
+        if not ok:
+            logger.info("Buy blocked (asset %s): %s", symbol, reason)
             return
 
         logger.info(
@@ -342,6 +378,7 @@ class SpotScanner:
             symbol, score, trade_size, current_price,
         )
 
+        # Exchange call — no DB session open.
         try:
             order_type = self.cfg.buying.order_type
             order = await self.adapter.place_spot_order(
@@ -349,7 +386,7 @@ class SpotScanner:
                 side="buy",
                 order_type=order_type,
                 amount=str(trade_size),
-                text=f"t-scalpyn-spot",
+                text="t-scalpyn-spot",
             )
         except InsufficientBalanceError as e:
             logger.warning("Buy rejected (insufficient balance): %s", e)
@@ -384,14 +421,15 @@ class SpotScanner:
             )
             return
 
-        # Record position in DB
+        # Persist position (short DB write — no exchange I/O inside).
         fill_price = float(
             order.get("avg_deal_price") or order.get("price") or current_price
         )
-        qty = trade_size / fill_price if fill_price > 0 else 0
+        qty      = trade_size / fill_price if fill_price > 0 else 0
+        trade_id = uuid.uuid4()
 
         trade = Trade(
-            id=uuid.uuid4(),
+            id=trade_id,
             user_id=self.user_id,
             symbol=symbol,
             side="buy",
@@ -408,16 +446,17 @@ class SpotScanner:
             alpha_score_at_entry=Decimal(str(round(score, 2))),
             indicators_at_entry=opp["indicators"],
             engine_meta={
-                "order_id":        order.get("id"),
-                "score_at_entry":  score,
-                "score_meta":      opp["score_meta"],
-                "buy_layer":       "scanner",
+                "order_id":       order.get("id"),
+                "score_at_entry": score,
+                "score_meta":     opp["score_meta"],
+                "buy_layer":      "scanner",
             },
         )
-        db.add(trade)
-        await db.commit()
+        async with AsyncSessionLocal() as db:
+            db.add(trade)
+            await db.commit()
 
-        # Audit: record successful buy
+        # Audit (fire-and-forget, no session dependency).
         from ..services.decision_audit_service import safe_record_decision
         await safe_record_decision(
             trace_id=str(uuid.uuid4()),
@@ -429,14 +468,14 @@ class SpotScanner:
             status="APPROVED",
             stage="EXECUTION",
             reason="BUY_EXECUTED",
-            trade_id=str(trade.id),
+            trade_id=str(trade_id),
             score_breakdown=opp.get("score_meta"),
             rule_details={
                 "trade_size": trade_size,
-                "score": score,
+                "score":      score,
                 "fill_price": fill_price,
-                "quantity": qty,
-                "order_id": order.get("id"),
+                "quantity":   qty,
+                "order_id":   order.get("id"),
             },
         )
 
@@ -445,7 +484,7 @@ class SpotScanner:
 
         logger.info(
             "Position opened: %s  qty=%.6f @ %.6f  id=%s",
-            symbol, qty, fill_price, trade.id,
+            symbol, qty, fill_price, trade_id,
         )
 
     # ── Macro filter ──────────────────────────────────────────────────────────
