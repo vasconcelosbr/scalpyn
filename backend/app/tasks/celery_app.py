@@ -2,24 +2,29 @@
 
 Queue topology (Task #216, operator spec parts 4-6):
 
-    microstructure  — 5-minute cadence, latency-tolerant pipeline:
-                      collect_5m → compute_5m. Bursty by design (one
-                      tick every 5 min).
-    structural      — Hourly+ cadence, heavy TA + universe maintenance:
-                      collect_all → compute → score, plus discover,
-                      fetch_market_caps, macro_regime, simulation,
-                      symbol_health_audit, robust_alerts, daily_summary,
-                      ohlcv_backfill, and pipeline_scan.scan (the
-                      cadence-locked safety-net scan that walks the L1/L2/L3
-                      watchlists; per operator spec it stays on the
-                      structural queue so a microstructure burst cannot
-                      delay the scan and a slow scan cannot starve the
-                      5m chain).
-    execution       — Latency-sensitive trading critical path:
-                      evaluate → execute_buy_cycle, plus anti_liq_monitor.
-                      Workers for this queue MUST be deployed isolated
-                      from microstructure/structural so a slow indicator
-                      compute can never starve a force-close decision.
+    microstructure      — 5-minute cadence, latency-tolerant pipeline:
+                          collect_5m → compute_5m. Bursty by design (one
+                          tick every 5 min).
+    structural          — Hourly+ cadence, universe maintenance + ops:
+                          collect_all, collect_structural_30m, pipeline_scan,
+                          discover, fetch_market_caps, macro_regime,
+                          simulation, symbol_health_audit, robust_alerts,
+                          daily_summary, decision_log_enricher,
+                          trade_reconciliation, health_checks,
+                          shadow_timeout_analyzer, ttt_analyzer, autopilot.
+                          pipeline_scan.scan stays here so a microstructure
+                          burst cannot delay the scan and a slow scan cannot
+                          starve the 5m chain.
+    structural_compute  — Dedicated compute worker for heavy TA + scoring:
+                          compute_30m, compute_structural_5m, compute_scores,
+                          ohlcv_backfill. Isolated so a slow indicator pass
+                          cannot delay lighter structural ops (pipeline_scan,
+                          reconciliation, alerts) and vice-versa.
+    execution           — Latency-sensitive trading critical path:
+                          evaluate → execute_buy_cycle, plus anti_liq_monitor.
+                          Workers for this queue MUST be deployed isolated
+                          from microstructure/structural so a slow indicator
+                          compute can never starve a force-close decision.
 
 Architectural invariants enforced at lint level
 (``backend/tests/test_celery_routing_invariants.py``):
@@ -57,9 +62,10 @@ from ..config import settings
 # ── Queue names (single source of truth) ─────────────────────────────────────
 QUEUE_MICROSTRUCTURE = "microstructure"
 QUEUE_STRUCTURAL = "structural"
+QUEUE_STRUCTURAL_COMPUTE = "structural_compute"
 QUEUE_EXECUTION = "execution"
 
-ALL_QUEUES = (QUEUE_MICROSTRUCTURE, QUEUE_STRUCTURAL, QUEUE_EXECUTION)
+ALL_QUEUES = (QUEUE_MICROSTRUCTURE, QUEUE_STRUCTURAL, QUEUE_STRUCTURAL_COMPUTE, QUEUE_EXECUTION)
 
 celery_app = Celery(
     "scalpyn_tasks",
@@ -105,16 +111,21 @@ TASK_ROUTES = {
 
     # Structural (hourly+ cadence, heavier work)
     "app.tasks.collect_market_data.collect_all":         {"queue": QUEUE_STRUCTURAL},
-    # Task #262 — structural 30m pipeline (replaces OHLCV 1h em collect_all + compute 1h).
+    # Task #262 — structural 30m pipeline collector (stays structural so the
+    # collect beat is never starved by a slow compute run on compute worker).
     "app.tasks.collect_structural_30m.run":              {"queue": QUEUE_STRUCTURAL},
-    "app.tasks.compute_indicators.compute_30m":          {"queue": QUEUE_STRUCTURAL},
-    # Structural-on-5m (close gap entre cadência 30m e leitor estrutural).
-    # Roteada para QUEUE_STRUCTURAL (não competir com worker-micro).
-    "app.tasks.compute_indicators.compute_structural_5m": {"queue": QUEUE_STRUCTURAL},
-    # compute (1h) permanece como stub deprecated — invariant #4 exige
-    # rota para toda task registrada. Remover na limpeza pós-estabilização.
-    "app.tasks.compute_indicators.compute":              {"queue": QUEUE_STRUCTURAL},
-    "app.tasks.compute_scores.score":                    {"queue": QUEUE_STRUCTURAL},
+
+    # Heavy TA + scoring → dedicated structural_compute worker so a slow
+    # indicator pass cannot delay lighter structural ops (pipeline_scan,
+    # reconciliation, alerts) and vice-versa.
+    "app.tasks.compute_indicators.compute_30m":          {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    # Structural-on-5m: chain-driven after collect_5m. Dedicated compute
+    # worker isolates it from the lighter structural queue.
+    "app.tasks.compute_indicators.compute_structural_5m": {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    # compute (1h) — deprecated stub. Invariant #4 requires a route for
+    # every registered task. Remove after post-stabilisation clean-up.
+    "app.tasks.compute_indicators.compute":              {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.compute_scores.score":                    {"queue": QUEUE_STRUCTURAL_COMPUTE},
     # pipeline_scan.scan: structural per operator spec (cadence-locked
     # safety-net, must not compete with the bursty 5m chain).
     "app.tasks.pipeline_scan.scan":                      {"queue": QUEUE_STRUCTURAL},
@@ -128,7 +139,9 @@ TASK_ROUTES = {
     "app.tasks.simulation.get_simulation_stats":         {"queue": QUEUE_STRUCTURAL},
     "app.tasks.robust_alerts.evaluate":                  {"queue": QUEUE_STRUCTURAL},
     "app.tasks.daily_summary.send":                      {"queue": QUEUE_STRUCTURAL},
-    "app.tasks.ohlcv_backfill.backfill":                 {"queue": QUEUE_STRUCTURAL},
+    # ohlcv_backfill: heavy 1800s budget → compute worker; status query is
+    # lightweight so it stays on structural to avoid blocking the compute queue.
+    "app.tasks.ohlcv_backfill.backfill":                 {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.ohlcv_backfill.get_status":               {"queue": QUEUE_STRUCTURAL},
 
     # Decision Log Enricher (Module 1)
@@ -252,12 +265,15 @@ TASK_ANNOTATIONS = {
     "app.tasks.collect_market_data.collect_5m":  {**_MICRO_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.compute_indicators.compute_5m":   {**_MICRO_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
 
-    # Structural — most tasks (Task #245: idempotent + beat-driven → opt-out of acks_late)
+    # Structural — collectors + ops (Task #245: idempotent + beat-driven → opt-out of acks_late)
     "app.tasks.collect_market_data.collect_all":         {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
-    # Task #262 — structural 30m pipeline. rate_limit="4/h" permite até 4
-    # execuções/hora (beat dispara 2/h); a folga extra evita que um deploy
-    # que mata o task em andamento bloqueie o slot seguinte por 30 min.
+    # Task #262 — structural 30m pipeline collector. rate_limit="4/h" allows up
+    # to 4 runs/hour (beat fires 2/h); headroom prevents a mid-deploy kill from
+    # blocking the next slot for 30 min.
     "app.tasks.collect_structural_30m.run":              {**_STRUCTURAL_GUARDS, "rate_limit": "4/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+
+    # Structural compute (structural_compute queue) — heavy TA + scoring.
+    # Same time budgets as structural; isolated worker prevents cross-queue starvation.
     "app.tasks.compute_indicators.compute_30m":          {**_STRUCTURAL_GUARDS, "rate_limit": "4/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     # Structural-on-5m: idempotente + chain-driven a cada 5min → opt-out acks_late.
     # rate_limit "12/m" alinhado com cadência do collect_5m (1 disparo / 5min,

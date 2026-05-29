@@ -164,7 +164,7 @@ steps:
       # Task #216: this `scalpyn` service is API-only — the embedded
       # Celery worker is disabled here (`WORKER_QUEUES=`, `RUN_BEAT=0`)
       # so HTTP latency is never co-tenant with task execution. The
-      # three worker queues run as independent Cloud Run services
+      # four worker queues run as independent Cloud Run services
       # (deploy steps below); the dedicated beat-only service owns the
       # periodic schedule so it cannot double-fire.
       #
@@ -173,6 +173,7 @@ steps:
       #   scalpyn (this file)        | (empty — API only)                       | 0        | 1 / 4
       #   scalpyn-worker-micro       | microstructure                           | 0        | 1 / 5
       #   scalpyn-worker-structural  | structural                               | 0        | 1 / 3
+      #   scalpyn-worker-compute     | structural_compute                       | 0        | 1 / 3
       #   scalpyn-worker-execution   | execution                                | 0        | 1 / 2
       #   scalpyn-beat               | (none — `RUN_BEAT=1` only, no worker)    | 1        | 1 / 1
       #
@@ -265,6 +266,46 @@ steps:
       - '--update-env-vars'
       - 'FORCE_RESTART=2026-05-08T18:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=structural,RUN_BEAT=0,CELERY_CONCURRENCY=2,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1,TTT_ENABLED=true,TTT_TP_PCT=1.0,TTT_TIMEOUT_MINUTES=180,TTT_ANALYZER_BATCH_SIZE=100'
 
+  # ── Celery worker — structural_compute queue ────────────────────────
+  # Heavy TA + scoring: compute_30m, compute_structural_5m, compute_scores,
+  # ohlcv_backfill. Isolated from lighter structural ops so a slow indicator
+  # pass cannot delay pipeline_scan / reconciliation / alerts and vice-versa.
+  # CELERY_CONCURRENCY=2 matches structural worker; bump to 4 if CPU allows.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - '--quiet'
+      - 'scalpyn-worker-compute'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_SERVICE}:${SHORT_SHA}'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--no-allow-unauthenticated'
+      - '--ingress'
+      - 'internal'
+      - '--port'
+      - '8080'
+      - '--timeout'
+      - '300'
+      - '--min-instances'
+      - '1'
+      - '--max-instances'
+      - '3'
+      - '--no-cpu-throttling'
+      - '--cpu-boost'
+      - '--memory'
+      - '2Gi'
+      - '--add-cloudsql-instances'
+      - 'clickrate-477217:us-central1:scalpyn'
+      - '--update-secrets'
+      - 'REDIS_URL=redis-url:latest'
+      - '--update-env-vars'
+      - 'FORCE_RESTART=2026-05-29T00:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=structural_compute,RUN_BEAT=0,CELERY_CONCURRENCY=2,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1,TTT_ENABLED=true,TTT_TP_PCT=1.0,TTT_TIMEOUT_MINUTES=180'
+
   # ── Task #216: Celery worker — execution queue ──────────────────────
   # Latency-sensitive trading critical path (evaluate, execute_buy,
   # anti_liq). Isolated so a slow indicator compute can never starve a
@@ -342,12 +383,13 @@ steps:
       - '--update-env-vars'
       - 'FORCE_RESTART=2026-05-08T18:00:00Z,ENABLE_GATE_WS=1,WORKER_QUEUES=,RUN_BEAT=1,SKIP_STRUCTURAL_SCHEDULER=1,SKIP_MICROSTRUCTURE_SCHEDULER=1,SKIP_PIPELINE_SCHEDULER=1,TTT_ANALYZER_INTERVAL_S=3600'
 
-  # ── Task #239: Topology validation — fail loudly if any of the 5
+  # ── Task #239: Topology validation — fail loudly if any of the 6
   # ── expected Cloud Run services is missing after the deploy steps.
   #
   # Why this exists: in May-2026 the deploy of `scalpyn` (API) succeeded
   # while `scalpyn-worker-micro`, `scalpyn-worker-structural`,
-  # `scalpyn-worker-execution` and `scalpyn-beat` were absent from prod
+  # `scalpyn-worker-compute`, `scalpyn-worker-execution` and `scalpyn-beat`
+  # were absent from prod
   # (deleted manually OR deploy steps silently skipped). Result: no Celery
   # worker consumed `microstructure`/`structural`/`execution` queues and no
   # beat scheduled `collect_5m`/`collect_all` — pipeline went silent for 2
@@ -363,8 +405,8 @@ steps:
       - '-c'
       - |
         set -euo pipefail
-        EXPECTED="scalpyn scalpyn-worker-micro scalpyn-worker-structural scalpyn-worker-execution scalpyn-beat"
-        echo "==> [topology-check] Verifying all 5 Cloud Run services exist in ${_REGION}..."
+        EXPECTED="scalpyn scalpyn-worker-micro scalpyn-worker-structural scalpyn-worker-compute scalpyn-worker-execution scalpyn-beat"
+        echo "==> [topology-check] Verifying all 6 Cloud Run services exist in ${_REGION}..."
         # Task #244: no server-side --filter here. The previous filter
         # `metadata.name=(A OR B OR ...)` was a known foot-gun: depending
         # on gcloud SDK version it could silently return success with an
@@ -414,7 +456,7 @@ steps:
           echo "==> See backend/docs/runbooks/cloud-run-celery-topology.md" >&2
           exit 1
         fi
-        echo "==> [topology-check] OK: all 5 Cloud Run services present and Ready."
+        echo "==> [topology-check] OK: all 6 Cloud Run services present and Ready."
 
 substitutions:
   # _REPO matches the Artifact Registry repository created by the
