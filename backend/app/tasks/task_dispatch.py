@@ -174,11 +174,52 @@ def _on_task_postrun(
     _release_dedup_lock(headers)
 
 
+def _on_task_prerun(
+    sender=None,
+    task_id=None,
+    task=None,
+    args=None,
+    kwargs=None,
+    **_kw: Any,
+) -> None:
+    """Signal handler: log queue wait time (enqueue → start).
+
+    P0.2 — reads the ``x-scalpyn-enqueued-at`` header stamped by
+    :func:`enqueue` at dispatch time and emits a structured log line::
+
+        [QUEUE_WAIT] task=<name> task_id=<id> queue_wait_s=<float>
+
+    Use this to diagnose queue congestion: high ``queue_wait_s`` on
+    ``compute_structural_5m`` or ``compute_30m`` indicates that the
+    structural queue is saturated.
+    """
+    if task is None:
+        return
+    try:
+        request = getattr(task, "request", None)
+        if request is None:
+            return
+        headers = getattr(request, "headers", None) or {}
+        enqueued_at_str = headers.get(_ENQUEUED_AT_HEADER)
+        if not enqueued_at_str:
+            return
+        enqueued_at = datetime.fromisoformat(enqueued_at_str)
+        queue_wait_s = (datetime.now(timezone.utc) - enqueued_at).total_seconds()
+        task_name = getattr(task, "name", "unknown")
+        logger.info(
+            "[QUEUE_WAIT] task=%s task_id=%s queue_wait_s=%.2f",
+            task_name, task_id, queue_wait_s,
+        )
+    except Exception as exc:
+        logger.debug("[dispatch] task_prerun queue_wait logging failed: %s", exc)
+
+
 def install_signal_handlers() -> None:
-    """Wire ``celery.signals.task_postrun`` so locks release on completion.
+    """Wire Celery signals for dedup lock release and queue-wait logging.
 
     Idempotent — Celery's signal connect deduplicates by ``(receiver, sender)``
     when ``weak=False`` is paired with the same callable identity.
     """
-    from celery.signals import task_postrun
+    from celery.signals import task_postrun, task_prerun
     task_postrun.connect(_on_task_postrun, weak=False)
+    task_prerun.connect(_on_task_prerun, weak=False)

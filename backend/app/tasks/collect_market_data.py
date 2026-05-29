@@ -572,8 +572,18 @@ async def _collect_5m_async():
     async def _inner(db, queue_mode: bool = False) -> int:
         from ..services.market_data_service import market_data_service
         import sqlalchemy.exc as _sqla_exc
+        # P0.0: SoftTimeLimitExceeded is a BaseException — the per-symbol
+        # ``except Exception`` below never catches it, so it used to bubble
+        # all the way out and prevent compute_5m from being dispatched.
+        # Importing here (not at module level) avoids a hard billiard dep in
+        # non-Celery contexts (tests, scripts).
+        try:
+            from billiard.exceptions import SoftTimeLimitExceeded as _STLE
+        except ImportError:  # pragma: no cover
+            from celery.exceptions import SoftTimeLimitExceeded as _STLE  # type: ignore[assignment]
         collected = 0
         failures = 0
+        _soft_limit_hit = False
 
         # Health guard: queue-mode sessions have no outer ``session.begin()``.
         if queue_mode and db.in_transaction():
@@ -760,6 +770,18 @@ async def _collect_5m_async():
                 collected += 1
                 logger.info(f"[PERSIST] success symbol={symbol}")
                 logger.info(f"[COLLECT][OK] symbol={symbol} timeframe=5m")
+            except _STLE:
+                # P0.0: soft_time_limit fired mid-symbol-loop. Any in-progress
+                # SAVEPOINT was rolled back by begin_nested.__aexit__. The outer
+                # transaction is still active. Break gracefully so the caller
+                # returns ``collected`` (> 0) and compute_5m is dispatched.
+                _soft_limit_hit = True
+                logger.warning(
+                    "[COLLECT-5m] soft_time_limit reached at symbol=%s — "
+                    "collected=%d/%d; compute chain will still fire",
+                    symbol, collected, len(symbols),
+                )
+                break
             except Exception as e:
                 # PendingRollbackError: asyncpg connection is in a failed-tx
                 # state. Must rollback explicitly before any further operation.
@@ -807,6 +829,21 @@ async def _collect_5m_async():
                     )
                     break
                 continue
+
+        # P0.0: if soft_time_limit fired, skip the backup ticker / stale-fallback
+        # paths (we are already near the hard time_limit=480s). Return the partial
+        # count so collect_5m() dispatches compute_5m and compute_structural_5m.
+        if _soft_limit_hit:
+            logger.info(
+                "[OHLCV-COMMIT] cycle_done flow=5m success=%d fail=%d total=%d "
+                "(partial — soft_limit_hit)",
+                collected, failures, len(symbols),
+            )
+            if collected == 0:
+                raise RuntimeError(
+                    "zero success — all symbols failed (soft_time_limit)"
+                )
+            return collected
 
         # ── Backup metadata pathway: fetch tickers for volume_24h + spread ───
         # Ensures pool coins get volume_24h populated even when collect_all's
@@ -988,9 +1025,17 @@ def collect_5m():
         # cadência 30m do compute_30m e o leitor estrutural canônico
         # (indicators_provider.get_merged_indicators). Dedup-key próprio
         # para nunca colidir com o slot do compute_5m micro.
+        #
+        # P0.1 — TTL bumped 210 → 1800s:
+        # QUEUE_STRUCTURAL tem wait ≈ 25 min. Com TTL=210s o lock expirava
+        # antes de a task começar → cada collect_5m (5 min) enfileirava outra
+        # instância → pile-up progressivo → fila travada → structural-5m parou
+        # de produzir indicadores. TTL=1800s (30 min) garante que só uma
+        # instância vive na fila por vez; a próxima dispatch só ocorre após o
+        # task_postrun liberar o lock OU o TTL expirar (safety cap).
         task_dispatch.enqueue(
             "app.tasks.compute_indicators.compute_structural_5m",
             dedup_key="compute_structural_5m",
-            ttl_seconds=210,
+            ttl_seconds=1800,
         )
     return f"Collected 5m data for {count} symbols"
