@@ -58,10 +58,16 @@ def _spot_channel_payloads(spot_pairs: list[str]) -> list[tuple[str, list]]:
     ``spot.trades`` (Task #171) feeds the Redis trade buffer that backs
     real-time order-flow ingestion, replacing the per-symbol REST polling
     loop in ``order_flow_service.get_order_flow_data``.
+
+    ``spot.orders`` uses ``["!all"]`` (subscribe to all currency pairs)
+    instead of the explicit symbol list so the subscription succeeds
+    regardless of any pair-authorisation whitelist configured on the
+    Gate.io API key.  The handler already filters by the ``t-scalpyn``
+    order text tag, so receiving all-pair events is safe.
     """
     return [
         ("spot.tickers", spot_pairs),
-        ("spot.orders", spot_pairs),
+        ("spot.orders", ["!all"]),   # "!all" = all pairs, avoids pair-whitelist restrictions
         ("spot.trades", spot_pairs),
     ]
 
@@ -504,7 +510,8 @@ class GateWSClient:
             # — those subscriptions cover all contracts already and must
             # not be re-sent on diff.
             def _is_universe_channel(payload: list) -> bool:
-                return payload == ["-1"]
+                # ["-1"] = futures all-contracts; ["!all"] = spot all-pairs
+                return payload in (["-1"], ["!all"])
 
             if spot_added:
                 for channel, payload in _spot_channel_payloads(spot_added):
@@ -557,7 +564,10 @@ class GateWSClient:
                 if result.get("status") == "success":
                     logger.info("Subscription confirmed: channel='%s'", channel)
                 else:
-                    logger.warning("Subscription failed: channel='%s', result=%s", channel, result)
+                    logger.warning(
+                        "Subscription failed: channel='%s' result=%s error=%s",
+                        channel, result, message.get("error"),
+                    )
             return
 
         # Pong response
