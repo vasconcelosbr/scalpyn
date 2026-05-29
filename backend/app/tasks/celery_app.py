@@ -254,10 +254,11 @@ TASK_ANNOTATIONS = {
 
     # Structural — most tasks (Task #245: idempotent + beat-driven → opt-out of acks_late)
     "app.tasks.collect_market_data.collect_all":         {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
-    # Task #262 — structural 30m pipeline. rate_limit="2/h" alinha com
-    # crontab(minute="0,30"); idempotente + beat-driven → opt-out acks_late.
-    "app.tasks.collect_structural_30m.run":              {**_STRUCTURAL_GUARDS, "rate_limit": "2/h", **_NO_REQUEUE_ON_WORKER_LOSS},
-    "app.tasks.compute_indicators.compute_30m":          {**_STRUCTURAL_GUARDS, "rate_limit": "2/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    # Task #262 — structural 30m pipeline. rate_limit="4/h" permite até 4
+    # execuções/hora (beat dispara 2/h); a folga extra evita que um deploy
+    # que mata o task em andamento bloqueie o slot seguinte por 30 min.
+    "app.tasks.collect_structural_30m.run":              {**_STRUCTURAL_GUARDS, "rate_limit": "4/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.compute_indicators.compute_30m":          {**_STRUCTURAL_GUARDS, "rate_limit": "4/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     # Structural-on-5m: idempotente + chain-driven a cada 5min → opt-out acks_late.
     # rate_limit "12/m" alinhado com cadência do collect_5m (1 disparo / 5min,
     # ad-hoc dispatch fica com folga).
