@@ -28,6 +28,7 @@ class ScannerConfig(BaseModel):
 class BuyingConfig(BaseModel):
     capital_per_trade_pct: float = Field(10.0, ge=0, le=100)
     capital_per_trade_min_usdt: float = Field(20.0, ge=0)
+    capital_per_trade_max_usdt: float = Field(0.0, ge=0)  # 0 = no cap
     capital_reserve_pct: float = Field(10.0, ge=0, le=100)
     max_capital_in_use_pct: float = Field(80.0, ge=0, le=100)
     max_positions_total: int = Field(20, ge=1, le=500)
@@ -161,6 +162,26 @@ class SpotEngineConfig(BaseModel):
     @classmethod
     def from_config_json(cls, config_json: dict) -> "SpotEngineConfig":
         data = dict(config_json)
+        # Backward compat: migrate old capital.* and limits.* keys to buying.*
+        # (saved by the frontend before the schema was aligned).
+        if "capital" in data or "limits" in data:
+            buying = dict(data.get("buying") or {})
+            cap = data.pop("capital", {})
+            lim = data.pop("limits", {})
+            _compat = [
+                (cap, "per_trade_pct",           "capital_per_trade_pct"),
+                (cap, "min_per_trade",            "capital_per_trade_min_usdt"),
+                (cap, "max_per_trade",            "capital_per_trade_max_usdt"),
+                (cap, "reserve_pct",              "capital_reserve_pct"),
+                (cap, "max_in_use_pct",           "max_capital_in_use_pct"),
+                (lim, "max_positions_total",      "max_positions_total"),
+                (lim, "max_per_asset",            "max_positions_per_asset"),
+                (lim, "max_exposure_per_asset_pct", "max_exposure_per_asset_pct"),
+            ]
+            for src, old_k, new_k in _compat:
+                if old_k in src and new_k not in buying:
+                    buying[new_k] = src[old_k]
+            data["buying"] = buying
         if "sell_flow" in data and isinstance(data["sell_flow"], dict):
             data["sell_flow"] = SellFlowConfig.from_dict(data["sell_flow"])
         return cls(**data)

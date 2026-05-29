@@ -198,15 +198,15 @@ export default function SpotTradingPage() {
   const strongBuyScore = config?.buying?.strong_buy_score ?? 85;
   const maxOpportunitiesPerScan = config?.scanner?.max_opportunities ?? 5;
 
-  const perTradePct = config?.capital?.per_trade_pct ?? 10;
-  const minPerTrade = config?.capital?.min_per_trade ?? 50;
-  const maxPerTrade = config?.capital?.max_per_trade ?? 500;
-  const capitalReservePct = config?.capital?.reserve_pct ?? 10;
-  const maxCapitalInUsePct = config?.capital?.max_in_use_pct ?? 80;
+  const perTradePct = config?.buying?.capital_per_trade_pct ?? 10;
+  const minPerTrade = config?.buying?.capital_per_trade_min_usdt ?? 20;
+  const maxPerTrade = config?.buying?.capital_per_trade_max_usdt ?? 500;
+  const capitalReservePct = config?.buying?.capital_reserve_pct ?? 10;
+  const maxCapitalInUsePct = config?.buying?.max_capital_in_use_pct ?? 80;
 
-  const maxPositionsTotal = config?.limits?.max_positions_total ?? 5;
-  const maxPerAsset = config?.limits?.max_per_asset ?? 2;
-  const maxExposurePerAssetPct = config?.limits?.max_exposure_per_asset_pct ?? 20;
+  const maxPositionsTotal = config?.buying?.max_positions_total ?? 20;
+  const maxPerAsset = config?.buying?.max_positions_per_asset ?? 5;
+  const maxExposurePerAssetPct = config?.buying?.max_exposure_per_asset_pct ?? 25;
 
   const orderType: 'market' | 'limit' = config?.orders?.type ?? 'market';
   const limitOrderTimeout = config?.orders?.limit_timeout_seconds ?? 30;
@@ -501,7 +501,7 @@ export default function SpotTradingPage() {
           <SliderWithValue
             label="Per Trade %"
             value={perTradePct}
-            onChange={(v) => updateConfig('capital.per_trade_pct', v)}
+            onChange={(v) => updateConfig('buying.capital_per_trade_pct', v)}
             min={0}
             max={100}
             unit="%"
@@ -523,7 +523,7 @@ export default function SpotTradingPage() {
               <input
                 type="number"
                 value={minPerTrade}
-                onChange={(e) => updateConfig('capital.min_per_trade', Number(e.target.value))}
+                onChange={(e) => updateConfig('buying.capital_per_trade_min_usdt', Number(e.target.value))}
                 style={numInputStyle}
                 min={1}
               />
@@ -542,7 +542,7 @@ export default function SpotTradingPage() {
               <input
                 type="number"
                 value={maxPerTrade}
-                onChange={(e) => updateConfig('capital.max_per_trade', Number(e.target.value))}
+                onChange={(e) => updateConfig('buying.capital_per_trade_max_usdt', Number(e.target.value))}
                 style={numInputStyle}
                 min={1}
               />
@@ -552,7 +552,7 @@ export default function SpotTradingPage() {
           <SliderWithValue
             label="Capital Reserve %"
             value={capitalReservePct}
-            onChange={(v) => updateConfig('capital.reserve_pct', v)}
+            onChange={(v) => updateConfig('buying.capital_reserve_pct', v)}
             min={0}
             max={100}
             unit="%"
@@ -561,7 +561,7 @@ export default function SpotTradingPage() {
           <SliderWithValue
             label="Max Capital in Use %"
             value={maxCapitalInUsePct}
-            onChange={(v) => updateConfig('capital.max_in_use_pct', v)}
+            onChange={(v) => updateConfig('buying.max_capital_in_use_pct', v)}
             min={0}
             max={100}
             unit="%"
@@ -586,7 +586,7 @@ export default function SpotTradingPage() {
                 type="number"
                 value={maxPositionsTotal}
                 onChange={(e) =>
-                  updateConfig('limits.max_positions_total', Number(e.target.value))
+                  updateConfig('buying.max_positions_total', Number(e.target.value))
                 }
                 style={numInputStyle}
                 min={1}
@@ -606,7 +606,7 @@ export default function SpotTradingPage() {
               <input
                 type="number"
                 value={maxPerAsset}
-                onChange={(e) => updateConfig('limits.max_per_asset', Number(e.target.value))}
+                onChange={(e) => updateConfig('buying.max_positions_per_asset', Number(e.target.value))}
                 style={numInputStyle}
                 min={1}
               />
@@ -616,7 +616,7 @@ export default function SpotTradingPage() {
           <SliderWithValue
             label="Max Exposure per Asset %"
             value={maxExposurePerAssetPct}
-            onChange={(v) => updateConfig('limits.max_exposure_per_asset_pct', v)}
+            onChange={(v) => updateConfig('buying.max_exposure_per_asset_pct', v)}
             min={0}
             max={100}
             unit="%"

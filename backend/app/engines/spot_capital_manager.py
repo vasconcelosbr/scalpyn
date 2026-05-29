@@ -125,6 +125,9 @@ class SpotCapitalManager:
         trade_size = state.total_capital * (self.cfg.capital_per_trade_pct / 100)
         trade_size = min(trade_size, state.available)
 
+        if self.cfg.capital_per_trade_max_usdt > 0:
+            trade_size = min(trade_size, self.cfg.capital_per_trade_max_usdt)
+
         if trade_size < self.cfg.capital_per_trade_min_usdt:
             return 0.0
 
