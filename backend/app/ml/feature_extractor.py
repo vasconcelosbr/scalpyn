@@ -297,9 +297,26 @@ def build_training_dataframe(records: list) -> pd.DataFrame:
             dropped_null_pnl += 1
             continue
 
-        # Target: WIN_FAST = trade with net-of-fees PnL > threshold.
-        # _WIN_THRESHOLD = MIN_WIN_PNL_PCT + FEE_ROUND_TRIP_PCT (see constants above).
-        features["is_win_fast"] = 1 if pnl_val > _WIN_THRESHOLD else 0
+        # Target: is_win_fast label — TTT-aware two-tier strategy.
+        #
+        # Tier 1 (preferred): when a shadow_trade has ttt_outcome resolved by
+        # the ttt_analyzer, use FAST_WIN/TIMEOUT directly. This is the
+        # temporally-efficient target: TP >= ttt_tp_pct (1%) within
+        # ttt_timeout_minutes (180 min). Eliminates eventual-profitability
+        # bias from trades that slowly drifted to TP hours later.
+        #
+        # Tier 2 (fallback): older records without TTT data fall back to the
+        # pnl threshold. This keeps historical pre-TTT samples usable during
+        # the label migration period. Coverage is logged at training time.
+        ttt_outcome = r.get("ttt_outcome")
+        if ttt_outcome is not None:
+            features["is_win_fast"] = 1 if ttt_outcome == "FAST_WIN" else 0
+            features["_has_ttt_label"] = 1
+        else:
+            # Fallback: net-of-fees PnL threshold (pre-TTT data).
+            # _WIN_THRESHOLD = MIN_WIN_PNL_PCT + FEE_ROUND_TRIP_PCT.
+            features["is_win_fast"] = 1 if pnl_val > _WIN_THRESHOLD else 0
+            features["_has_ttt_label"] = 0
 
         # Metadata for time-based split — NOT model features
         features["_created_at"] = r.get("created_at")

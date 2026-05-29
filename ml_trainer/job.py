@@ -93,8 +93,17 @@ def main():
         }
     with engine.connect() as conn:
         result = conn.execute(text(f"""
-            SELECT id, symbol, created_at, metrics, score,
-                   pnl_pct, holding_seconds, outcome, decision
+            SELECT
+                deduped.id, deduped.symbol, deduped.created_at,
+                deduped.metrics, deduped.score,
+                deduped.pnl_pct, deduped.holding_seconds,
+                deduped.outcome, deduped.decision,
+                -- TTT labels from shadow_trades (NULL for trades without TTT analysis)
+                st.ttt_outcome,
+                st.ttt_fast_win_bucket,
+                st.time_to_tp_minutes,
+                st.elapsed_minutes,
+                st.profit_velocity
             FROM (
                 SELECT DISTINCT ON (symbol, DATE(created_at))
                     id, symbol, created_at, metrics, score,
@@ -108,16 +117,25 @@ def main():
                   {exclude_clause}
                 ORDER BY symbol, DATE(created_at), created_at ASC
             ) AS deduped
-            ORDER BY created_at ASC
+            LEFT JOIN shadow_trades st
+                ON  st.decision_id    = deduped.id
+                AND st.ttt_enabled    = TRUE
+                AND st.ttt_analysis_done = TRUE
+                AND st.ttt_outcome    IS NOT NULL
+            ORDER BY deduped.created_at ASC
         """), {"days": f"{DAYS_LOOKBACK} days", **exclude_params})
         records = [dict(row._mapping) for row in result.fetchall()]
 
     total = len(records)
     n_allow = sum(1 for r in records if r.get("decision") == "ALLOW")
     n_block = sum(1 for r in records if r.get("decision") == "BLOCK")
+    n_ttt   = sum(1 for r in records if r.get("ttt_outcome") is not None)
+    n_fast_win = sum(1 for r in records if r.get("ttt_outcome") == "FAST_WIN")
     logger.info(
-        "Registros encontrados (pós-dedup): %d (ALLOW=%d BLOCK=%d)",
+        "Registros encontrados (pós-dedup): %d (ALLOW=%d BLOCK=%d) | "
+        "TTT labels: %d/%d (%.1f%%) FAST_WIN=%d",
         total, n_allow, n_block,
+        n_ttt, total, 100 * n_ttt / max(total, 1), n_fast_win,
     )
 
     if total < MIN_RECORDS:
