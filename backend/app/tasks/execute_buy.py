@@ -477,7 +477,7 @@ async def _execute_buy_cycle_async() -> dict:
                     continue
 
                 # 6. Load entry-trigger + block config from the L3 pipeline watchlist profile
-                # Chain: Pool → L1 pipeline watchlist (source_pool_id) → L2 → L3
+                # Chain: Pool → POOL watchlist (source_pool_id) → L1 (source_watchlist_id) → L2 → L3
                 from ..models.pipeline_watchlist import PipelineWatchlist, PipelineWatchlistAsset
                 from ..models.profile import Profile as UserProfile
 
@@ -491,18 +491,38 @@ async def _execute_buy_cycle_async() -> dict:
                 # selection (and never spurious NO_L3_CHAIN). The model
                 # carries a ``level`` column ("POOL"/"L1"/"L2"/"L3");
                 # we anchor each hop to its expected level.
+                #
+                # Fix: real chain is Pool → POOL watchlist → L1 → L2 → L3.
+                # L1 references the POOL watchlist via source_watchlist_id,
+                # NOT the Pool directly via source_pool_id.
                 try:
-                    l1_res = await db.execute(
+                    # Step 0 — find the POOL-level watchlist anchored to this pool
+                    pool_wl_res = await db.execute(
                         select(PipelineWatchlist).where(
                             PipelineWatchlist.source_pool_id == pool.id,
                             PipelineWatchlist.user_id == user_id,
-                            PipelineWatchlist.level == "L1",
+                            PipelineWatchlist.level == "POOL",
                         ).order_by(
                             PipelineWatchlist.created_at.asc(),
                             PipelineWatchlist.id.asc(),
                         ).limit(1)
                     )
-                    l1_wl = l1_res.scalars().first()
+                    pool_wl = pool_wl_res.scalars().first()
+
+                    # Step 1 — find L1 anchored to the POOL watchlist
+                    l1_wl = None
+                    if pool_wl:
+                        l1_res = await db.execute(
+                            select(PipelineWatchlist).where(
+                                PipelineWatchlist.source_watchlist_id == pool_wl.id,
+                                PipelineWatchlist.user_id == user_id,
+                                PipelineWatchlist.level == "L1",
+                            ).order_by(
+                                PipelineWatchlist.created_at.asc(),
+                                PipelineWatchlist.id.asc(),
+                            ).limit(1)
+                        )
+                        l1_wl = l1_res.scalars().first()
 
                     if l1_wl:
                         l2_res = await db.execute(
