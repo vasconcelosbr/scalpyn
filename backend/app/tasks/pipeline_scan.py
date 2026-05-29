@@ -14,6 +14,7 @@ For each active user:
 import asyncio
 import json
 import logging
+import os
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -38,7 +39,12 @@ _REDIS_PREFIX = "spe:pipeline:"   # Redis key prefix per watchlist
 # Default staleness threshold (minutes).  Assets not re-confirmed within this
 # window are automatically marked 'down'.  Override per-watchlist via
 # filters_json.staleness_minutes (GUI-editable).
-_DEFAULT_STALENESS_MINUTES = 30
+# Override globally via env var PIPELINE_SCAN_STALENESS_MINUTES (default 60).
+# 60 min gives the sequential compute_30m loop (up to ~25 min) + scan delay
+# enough headroom before valid symbols are evicted from L3.
+_DEFAULT_STALENESS_MINUTES: int = int(
+    os.environ.get("PIPELINE_SCAN_STALENESS_MINUTES", "60")
+)
 _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY = False
 _PIPELINE_EXECUTION_TRACKING_SCHEMA_LOCK = asyncio.Lock()
 

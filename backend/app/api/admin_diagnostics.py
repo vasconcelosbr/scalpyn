@@ -1044,3 +1044,136 @@ async def ml_label_inversion_diagnostic(
                 out["in_process_scoring_error"] = str(exc)
 
     return out
+
+
+@router.get("/quarantine-status", include_in_schema=False)
+async def quarantine_status(
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Real-time L3 quarantine metrics.
+
+    Reports how many L3 symbols are currently blocked by ``is_complete()``
+    (missing or stale ``REQUIRED_CORE_INDICATORS``: adx, rsi, macd_histogram).
+
+    Auth: same ``ADMIN_DIAGNOSTICS_TOKEN`` as other admin endpoints.
+
+    Returns::
+
+        {
+          "checked_at": "2026-05-29T13:00:00Z",
+          "stale_threshold_seconds": 1800,
+          "l3_total_symbols": 42,
+          "quarantined": 7,
+          "quarantine_rate_pct": 16.7,
+          "by_reason": {
+            "rsi_absent": 2,
+            "adx_absent": 1,
+            "macd_histogram_absent": 0,
+            "stale_structural": 4,
+            "no_indicator_row": 0
+          },
+          "oldest_quarantine_age_seconds": 1823,
+          "symbols_quarantined": ["AAVE_USDT", ...]
+        }
+    """
+    _enforce_auth(authorization)
+
+    from ..database import AsyncSessionLocal
+    from ..utils.indicator_merge import STRUCTURAL_STALE_SECONDS
+
+    checked_at = datetime.now(timezone.utc)
+
+    async with AsyncSessionLocal() as db:
+        # L3 symbols currently active (not marked down)
+        l3_rows = (await db.execute(text("""
+            SELECT DISTINCT pwa.symbol
+            FROM pipeline_watchlist_assets pwa
+            JOIN pipeline_watchlists pw ON pw.id = pwa.watchlist_id
+            WHERE pw.level = 'L3'
+              AND pwa.level_direction IS DISTINCT FROM 'down'
+        """))).fetchall()
+        l3_symbols = [r.symbol for r in l3_rows]
+
+        if not l3_symbols:
+            return {
+                "checked_at": checked_at.isoformat(),
+                "stale_threshold_seconds": STRUCTURAL_STALE_SECONDS,
+                "l3_total_symbols": 0,
+                "quarantined": 0,
+                "quarantine_rate_pct": 0.0,
+                "by_reason": {
+                    "rsi_absent": 0,
+                    "adx_absent": 0,
+                    "macd_histogram_absent": 0,
+                    "stale_structural": 0,
+                    "no_indicator_row": 0,
+                },
+                "oldest_quarantine_age_seconds": None,
+                "symbols_quarantined": [],
+            }
+
+        # Latest structural indicator row per L3 symbol
+        ind_rows = (await db.execute(text("""
+            SELECT DISTINCT ON (symbol)
+                symbol,
+                time,
+                EXTRACT(EPOCH FROM (NOW() - time))        AS age_s,
+                indicators_json->>'rsi'                   AS rsi,
+                indicators_json->>'adx'                   AS adx,
+                indicators_json->>'macd_histogram'        AS macd_h
+            FROM indicators
+            WHERE symbol = ANY(:syms)
+              AND scheduler_group = 'structural'
+            ORDER BY symbol, time DESC
+        """), {"syms": l3_symbols})).fetchall()
+
+        ind_by_sym = {r.symbol: r for r in ind_rows}
+
+        quarantined_syms = []
+        by_reason: Dict[str, int] = {
+            "rsi_absent": 0,
+            "adx_absent": 0,
+            "macd_histogram_absent": 0,
+            "stale_structural": 0,
+            "no_indicator_row": 0,
+        }
+        oldest_age: Optional[float] = None
+
+        for sym in l3_symbols:
+            row = ind_by_sym.get(sym)
+            if row is None:
+                quarantined_syms.append(sym)
+                by_reason["no_indicator_row"] += 1
+                continue
+
+            age_s = float(row.age_s) if row.age_s is not None else float("inf")
+            is_stale = age_s > STRUCTURAL_STALE_SECONDS
+            rsi_absent = row.rsi is None
+            adx_absent = row.adx is None
+            macd_absent = row.macd_h is None
+
+            if is_stale or rsi_absent or adx_absent or macd_absent:
+                quarantined_syms.append(sym)
+                if is_stale:
+                    by_reason["stale_structural"] += 1
+                if rsi_absent:
+                    by_reason["rsi_absent"] += 1
+                if adx_absent:
+                    by_reason["adx_absent"] += 1
+                if macd_absent:
+                    by_reason["macd_histogram_absent"] += 1
+                if oldest_age is None or age_s > oldest_age:
+                    oldest_age = age_s
+
+    total = len(l3_symbols)
+    n_quarantined = len(quarantined_syms)
+    return {
+        "checked_at": checked_at.isoformat(),
+        "stale_threshold_seconds": STRUCTURAL_STALE_SECONDS,
+        "l3_total_symbols": total,
+        "quarantined": n_quarantined,
+        "quarantine_rate_pct": round(100.0 * n_quarantined / total, 1) if total else 0.0,
+        "by_reason": by_reason,
+        "oldest_quarantine_age_seconds": round(oldest_age, 0) if oldest_age is not None else None,
+        "symbols_quarantined": sorted(quarantined_syms),
+    }

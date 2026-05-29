@@ -3,6 +3,8 @@
 import asyncio
 import json
 import logging
+import os
+import time
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -100,6 +102,12 @@ def _compute_score_fields(results: dict) -> dict:
 # Source/confidence map for order-flow keys fetched from real trades.
 # Technical indicators from FeatureEngine use the default "candle_computed"/0.80.
 _COMPUTE_KEY_SOURCE_MAP: dict = {k: ("gate_trades", 1.00) for k in _ORDER_FLOW_KEYS}
+
+# Maximum number of symbols processed concurrently in _compute_30m_async().
+# Each concurrent slot opens its own DB session. Default 10 keeps connection
+# pool pressure low while reducing the sequential-loop wall time by ~10×.
+# Raise via env var COMPUTE_30M_BATCH_SIZE if the pool allows more connections.
+COMPUTE_30M_BATCH_SIZE: int = int(os.environ.get("COMPUTE_30M_BATCH_SIZE", "10"))
 
 
 def _merge_order_flow_into_results(results: dict, of_data: dict) -> None:
@@ -521,6 +529,130 @@ def compute():
     return "DEPRECATED — use compute_30m"
 
 
+async def _process_one_symbol_30m(
+    symbol: str,
+    engine,
+    metadata_map: dict,
+    min_candles_30m: int,
+    query_limit_30m: int,
+) -> int:
+    """Compute and persist 30m structural indicators for one symbol.
+
+    Opens a dedicated DB session so this coroutine is safe for concurrent
+    execution via ``asyncio.gather``.  Returns 1 if indicators were written,
+    0 if the symbol was skipped or failed.  Per-symbol failure is isolated —
+    one bad symbol does not abort the rest of the batch.
+    """
+    from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
+    from ..services.market_data_service import market_data_service
+    from ..services.order_flow_service import get_order_flow_data
+
+    try:
+        async with AsyncSessionLocal() as db:
+            ohlcv_result = await db.execute(text("""
+                SELECT time, open, high, low, close, volume, quote_volume
+                FROM ohlcv
+                WHERE symbol = :symbol AND timeframe = '30m'
+                ORDER BY time DESC
+                LIMIT :limit
+            """), {"symbol": symbol, "limit": query_limit_30m})
+            rows = ohlcv_result.fetchall()
+
+            if len(rows) < min_candles_30m:
+                logger.debug(
+                    "[COMPUTE-30m] Skipping %s: only %d candles (need ≥%d)",
+                    symbol, len(rows), min_candles_30m,
+                )
+                return 0
+
+            df = pd.DataFrame([{
+                "time": r.time, "open": float(r.open), "high": float(r.high),
+                "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
+                "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
+            } for r in reversed(rows)])
+
+            market_data = await market_data_service.fetch_indicator_fallbacks(
+                symbol,
+                existing_data=metadata_map.get(symbol),
+            )
+            results = engine.calculate(df, market_data=market_data)
+            if not results:
+                return 0
+
+            of_data = await get_order_flow_data(
+                symbol, window_seconds=300, market_type="spot"
+            )
+            _merge_order_flow_into_results(results, of_data)
+            results.update(_compute_score_fields(results))
+
+            now = datetime.now(timezone.utc)
+            payload_json = json.dumps(envelop_results(
+                results,
+                default_source="candle_computed",
+                default_confidence=0.80,
+                key_source_map=_COMPUTE_KEY_SOURCE_MAP,
+            ))
+
+            if _pq.is_enabled():
+                await _pq.enqueue_or_log(
+                    producer="compute-30m",
+                    msg=_pq.IndicatorsUpsert(
+                        category="scheduler",
+                        enqueued_at=_pq.now_monotonic(),
+                        symbol=symbol,
+                        timeframe="30m",
+                        market_type="spot",
+                        scheduler_group="structural",
+                        time=now,
+                        payload_json=payload_json,
+                        mode="upsert",
+                    ),
+                )
+                if (
+                    results.get("price") is not None
+                    or results.get("spread_pct") is not None
+                    or results.get("orderbook_depth_usdt") is not None
+                ):
+                    await _pq.enqueue_or_log(
+                        producer="compute-30m",
+                        msg=_pq.MarketMetadataUpsert(
+                            category="scheduler",
+                            enqueued_at=_pq.now_monotonic(),
+                            symbol=symbol,
+                            last_updated=now,
+                            price=results.get("price"),
+                            spread_pct=results.get("spread_pct"),
+                            orderbook_depth_usdt=results.get("orderbook_depth_usdt"),
+                        ),
+                    )
+            else:
+                async with db.begin_nested():
+                    await _upsert_market_metadata_snapshot(db, symbol, results, now)
+                    await db.execute(text("""
+                        INSERT INTO indicators
+                            (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
+                        VALUES
+                            (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
+                    """), {
+                        "time": now,
+                        "symbol": symbol,
+                        "timeframe": "30m",
+                        "market_type": "spot",
+                        "scheduler_group": "structural",
+                        "indicators": payload_json,
+                    })
+
+            await db.commit()
+            return 1
+
+    except Exception as e:
+        logger.error(
+            "[COMPUTE-30m] SYMBOL_ERROR|symbol=%s|error=%s",
+            symbol, e,
+        )
+        return 0
+
+
 async def _compute_30m_async():
     """Compute structural indicators on 30m OHLCV candles (Task #262).
 
@@ -530,22 +662,24 @@ async def _compute_30m_async():
         * scheduler_group remains ``"structural"`` (Option A — reuse the
           existing structural tag so ``indicator_merge`` keeps merging
           structural+microstructure rows by group with zero changes).
+
+    Symbols are processed in parallel batches of ``COMPUTE_30M_BATCH_SIZE``
+    (env ``COMPUTE_30M_BATCH_SIZE``, default 10). Each symbol opens its own
+    DB session via ``_process_one_symbol_30m`` so sessions are never shared
+    between concurrent coroutines.
     """
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
     from ..services.feature_engine import FeatureEngine
-    from ..services.market_data_service import market_data_service
     from ..services.seed_service import DEFAULT_INDICATORS
-    from ..services.order_flow_service import get_order_flow_data
 
-    import sqlalchemy.exc as _sqla_exc
     logger.info("[COMPUTE-30m] Starting 30m indicator computation…")
 
     indicators_config = DEFAULT_INDICATORS
     engine = FeatureEngine(indicators_config)
     min_candles_30m = _derive_min_candles(indicators_config, "30m")
     query_limit_30m = max(200, min_candles_30m)
-    computed = 0
 
+    # Phase 1 — fetch symbol list + metadata in one short-lived session (reads only).
     async with AsyncSessionLocal() as db:
         try:
             symbols_result = await db.execute(text("""
@@ -557,135 +691,33 @@ async def _compute_30m_async():
                   AND o.timeframe = '30m'
                   AND o.time > now() - interval '7 days'
             """))
-            # Task #273: deterministic sort — see ``_compute_async`` above.
+            # Task #273: deterministic sort — invariante anti-deadlock 40P01.
             symbols = sorted(row.symbol for row in symbols_result.fetchall())
             metadata_map = await _load_market_metadata_map(db)
-
-            for symbol in symbols:
-                try:
-                    ohlcv_result = await db.execute(text("""
-                        SELECT time, open, high, low, close, volume, quote_volume
-                        FROM ohlcv
-                        WHERE symbol = :symbol AND timeframe = '30m'
-                        ORDER BY time DESC
-                        LIMIT :limit
-                    """), {"symbol": symbol, "limit": query_limit_30m})
-                    rows = ohlcv_result.fetchall()
-
-                    if len(rows) < min_candles_30m:
-                        logger.debug(
-                            "[COMPUTE-30m] Skipping %s: only %d candles (need ≥%d)",
-                            symbol, len(rows), min_candles_30m,
-                        )
-                        continue
-
-                    df = pd.DataFrame([{
-                        "time": r.time, "open": float(r.open), "high": float(r.high),
-                        "low": float(r.low), "close": float(r.close), "volume": float(r.volume),
-                        "quote_volume": float(r.quote_volume) if r.quote_volume is not None else None,
-                    } for r in reversed(rows)])
-
-                    market_data = await market_data_service.fetch_indicator_fallbacks(
-                        symbol,
-                        existing_data=metadata_map.get(symbol),
-                    )
-                    results = engine.calculate(df, market_data=market_data)
-                    if not results:
-                        continue
-
-                    of_data = await get_order_flow_data(
-                        symbol, window_seconds=300, market_type="spot"
-                    )
-                    _merge_order_flow_into_results(results, of_data)
-                    results.update(_compute_score_fields(results))
-
-                    now = datetime.now(timezone.utc)
-                    payload_json = json.dumps(envelop_results(
-                        results,
-                        default_source="candle_computed",
-                        default_confidence=0.80,
-                        key_source_map=_COMPUTE_KEY_SOURCE_MAP,
-                    ))
-
-                    if _pq.is_enabled():
-                        await _pq.enqueue_or_log(
-                            producer="compute-30m",
-                            msg=_pq.IndicatorsUpsert(
-                                category="scheduler",
-                                enqueued_at=_pq.now_monotonic(),
-                                symbol=symbol,
-                                timeframe="30m",
-                                market_type="spot",
-                                scheduler_group="structural",
-                                time=now,
-                                payload_json=payload_json,
-                                mode="upsert",
-                            ),
-                        )
-                        if (
-                            results.get("price") is not None
-                            or results.get("spread_pct") is not None
-                            or results.get("orderbook_depth_usdt") is not None
-                        ):
-                            await _pq.enqueue_or_log(
-                                producer="compute-30m",
-                                msg=_pq.MarketMetadataUpsert(
-                                    category="scheduler",
-                                    enqueued_at=_pq.now_monotonic(),
-                                    symbol=symbol,
-                                    last_updated=now,
-                                    price=results.get("price"),
-                                    spread_pct=results.get("spread_pct"),
-                                    orderbook_depth_usdt=results.get("orderbook_depth_usdt"),
-                                ),
-                            )
-                    else:
-                        try:
-                            async with db.begin_nested():
-                                await _upsert_market_metadata_snapshot(db, symbol, results, now)
-                                await db.execute(text("""
-                                    INSERT INTO indicators
-                                        (time, symbol, timeframe, market_type, scheduler_group, indicators_json)
-                                    VALUES
-                                        (:time, :symbol, :timeframe, :market_type, :scheduler_group, :indicators)
-                                """), {
-                                    "time": now,
-                                    "symbol": symbol,
-                                    "timeframe": "30m",
-                                    "market_type": "spot",
-                                    "scheduler_group": "structural",
-                                    "indicators": payload_json,
-                                })
-                        except Exception as _sp_exc:
-                            logger.error(
-                                "[COMPUTE-30m] SAVEPOINT failed for %s — savepoint rolled back: %s",
-                                symbol, _sp_exc,
-                            )
-                            raise
-
-                    computed += 1
-
-                except Exception as e:
-                    if isinstance(e, _sqla_exc.PendingRollbackError):
-                        await db.rollback()
-                        logger.error(
-                            "[COMPUTE-30m] PendingRollbackError for %s — session rolled back, stopping: %s",
-                            symbol, e,
-                        )
-                        break
-                    logger.warning("[COMPUTE-30m] Failed to compute for %s: %s", symbol, e)
-                    if not db.is_active:
-                        logger.error("[COMPUTE-30m] Session inactive after %s — stopping", symbol)
-                        break
-                    continue
-
-            await db.commit()
         except Exception as e:
             logger.error("[COMPUTE-30m] computation failed: %s", e)
-            await db.rollback()
             raise
 
-    logger.info("[COMPUTE-30m] complete: %d symbols", computed)
+    # Phase 2 — parallel per-symbol compute. Each coroutine opens its own
+    # session so DB state is never shared between concurrent coroutines.
+    # Semaphore caps concurrent open sessions at COMPUTE_30M_BATCH_SIZE.
+    sem = asyncio.Semaphore(COMPUTE_30M_BATCH_SIZE)
+    _t_start = time.monotonic()
+
+    async def _bounded(sym: str) -> int:
+        async with sem:
+            return await _process_one_symbol_30m(
+                sym, engine, metadata_map, min_candles_30m, query_limit_30m
+            )
+
+    counts = await asyncio.gather(*[_bounded(s) for s in symbols], return_exceptions=True)
+    computed = sum(c for c in counts if isinstance(c, int))
+
+    elapsed = time.monotonic() - _t_start
+    logger.info(
+        "[COMPUTE-30m] COMPLETE|total_symbols=%d|computed=%d|duration_s=%.1f|batch_size=%d",
+        len(symbols), computed, elapsed, COMPUTE_30M_BATCH_SIZE,
+    )
     return computed
 
 
