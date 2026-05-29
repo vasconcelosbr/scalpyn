@@ -668,6 +668,15 @@ async def _execute_buy_cycle_async() -> dict:
 
                     if current_price <= 0:
                         logger.debug("Skipping %s — missing close price", symbol)
+                        await safe_record_decision(
+                            db=db, trace_id=get_trace(),
+                            user_id=str(user_id),
+                            pool_id=str(pool.id) if pool else None,
+                            symbol=symbol, market_type="spot", exchange="gate",
+                            status="SKIPPED", stage="L3",
+                            reason="MISSING_PRICE",
+                            blocking_rule="PriceValidation",
+                        )
                         stats["skipped"] += 1
                         continue
 
@@ -676,6 +685,15 @@ async def _execute_buy_cycle_async() -> dict:
                     # is skipped rather than back-filled from legacy.
                     resolved = _compute_robust_score(symbol, indicators)
                     if resolved is None:
+                        await safe_record_decision(
+                            db=db, trace_id=get_trace(),
+                            user_id=str(user_id),
+                            pool_id=str(pool.id) if pool else None,
+                            symbol=symbol, market_type="spot", exchange="gate",
+                            status="SKIPPED", stage="L3",
+                            reason="SCORE_UNAVAILABLE",
+                            blocking_rule="ScoreEngine",
+                        )
                         stats["skipped"] += 1
                         continue
                     alpha_score = resolved
@@ -683,6 +701,19 @@ async def _execute_buy_cycle_async() -> dict:
                     # Apply the operator-configured threshold against the
                     # authoritative robust score.
                     if alpha_score < threshold:
+                        await safe_record_decision(
+                            db=db, trace_id=get_trace(),
+                            user_id=str(user_id),
+                            pool_id=str(pool.id) if pool else None,
+                            symbol=symbol, market_type="spot", exchange="gate",
+                            status="SKIPPED", stage="L3",
+                            reason="BELOW_THRESHOLD",
+                            blocking_rule="ScoreThreshold",
+                            score_breakdown={
+                                "alpha_score": alpha_score,
+                                "threshold": threshold,
+                            },
+                        )
                         stats["skipped"] += 1
                         continue
 
@@ -724,6 +755,16 @@ async def _execute_buy_cycle_async() -> dict:
                                 "Profile filters not met for %s (user %s) — market_cap=%.0f",
                                 symbol, user_id, candidate_market_cap or 0,
                             )
+                            await safe_record_decision(
+                                db=db, trace_id=get_trace(),
+                                user_id=str(user_id),
+                                pool_id=str(pool.id) if pool else None,
+                                symbol=symbol, market_type="spot", exchange="gate",
+                                status="SKIPPED", stage="L3",
+                                reason="PROFILE_FILTER",
+                                blocking_rule="ProfileFilterConditions",
+                                rule_details={"logic": profile_filter_logic},
+                            )
                             stats["skipped"] += 1
                             continue
 
@@ -734,6 +775,17 @@ async def _execute_buy_cycle_async() -> dict:
                             logger.debug(
                                 "Entry triggers not met for %s (user %s): failed=%s",
                                 symbol, user_id, signal_result.get("failed_required"),
+                            )
+                            await safe_record_decision(
+                                db=db, trace_id=get_trace(),
+                                user_id=str(user_id),
+                                pool_id=str(pool.id) if pool else None,
+                                symbol=symbol, market_type="spot", exchange="gate",
+                                status="SKIPPED", stage="L3",
+                                reason="SIGNAL_FILTER",
+                                blocking_rule="SignalEngine",
+                                rule_details={"failed_required": signal_result.get("failed_required")},
+                                score_breakdown={"alpha_score": alpha_score, "threshold": threshold},
                             )
                             stats["skipped"] += 1
                             continue
@@ -746,6 +798,17 @@ async def _execute_buy_cycle_async() -> dict:
                                 "Buy for %s blocked (user %s): %s",
                                 symbol, user_id, block_result.get("triggered_blocks"),
                                 extra=get_log_extra(),
+                            )
+                            await safe_record_decision(
+                                db=db, trace_id=get_trace(),
+                                user_id=str(user_id),
+                                pool_id=str(pool.id) if pool else None,
+                                symbol=symbol, market_type="spot", exchange="gate",
+                                status="SKIPPED", stage="L3",
+                                reason="BLOCK_RULE",
+                                blocking_rule="BlockEngine",
+                                rule_details={"triggered_blocks": block_result.get("triggered_blocks")},
+                                score_breakdown={"alpha_score": alpha_score, "threshold": threshold},
                             )
                             stats["skipped"] += 1
                             continue
