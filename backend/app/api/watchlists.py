@@ -2162,7 +2162,11 @@ async def get_watchlist_assets(
                     )
                 await db.commit()
         except Exception as _e:
-            logger.debug("[Pipeline] On-demand scoring error: %s", _e)
+            logger.warning("[Pipeline] On-demand scoring error: %s", _e)
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
     # ── ML-enhanced ranking for L3 (if enabled) ──────────────────────────────────
     # Apply ML predictions to calculate final_score and optionally block trades
