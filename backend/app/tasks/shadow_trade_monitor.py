@@ -1018,9 +1018,14 @@ async def _monitor_async() -> Dict[str, int]:
     # FIX D1 (2026-05-15): IDs dos shadows fechados neste tick — gravação de
     # simulação em sessão isolada APÓS o commit da tx principal.
     sim_targets: List[Any] = []
-    # L3_REJECTED shadows que completaram neste tick — (symbol, user_id).
+    # Shadows que completaram neste tick — (symbol, user_id).
     # Usados para remover o símbolo do prior_rejected_visibility no Redis
     # e reativar o edge trigger imediatamente no próximo pipeline scan.
+    # Inclui TODOS os sources (L3, L3_REJECTED, ARROW): quando um shadow L3
+    # (ALLOW) ainda RUNNING bloqueia a criação do shadow L3_REJECTED via
+    # ON CONFLICT, o edge trigger foi consumido mas nenhum rejected shadow
+    # foi criado. Ao completar o L3 shadow, limpamos o Redis para reativar.
+    # SREM é idempotente — no-op se o símbolo não está no rejected set.
     rejected_completions: List[Dict[str, str]] = []
 
     async with CeleryAsyncSessionLocal() as db:
@@ -1051,12 +1056,14 @@ async def _monitor_async() -> Dict[str, int]:
                         # FIX D1: coleta ID antes do commit para gravação
                         # de simulação em sessão isolada pós-commit.
                         sim_targets.append(shadow.id)
-                        # Captura L3_REJECTED completions para reativar edge trigger.
-                        if shadow.source == "L3_REJECTED":
-                            rejected_completions.append({
-                                "symbol": shadow.symbol,
-                                "user_id": str(shadow.user_id),
-                            })
+                        # Captura completions para reativar edge trigger L3_REJECTED.
+                        # Inclui todos os sources: um shadow L3 (ALLOW) RUNNING bloqueia
+                        # a criação de shadow L3_REJECTED via ON CONFLICT — ao resolver,
+                        # limpamos o Redis para que o próximo scan reative o trigger.
+                        rejected_completions.append({
+                            "symbol": shadow.symbol,
+                            "user_id": str(shadow.user_id),
+                        })
                 except Exception:
                     summary["errors"] += 1
                     logger.exception(
@@ -1177,7 +1184,7 @@ async def _clear_l3_rejected_from_redis(completions: List[Dict[str, str]]) -> No
                         key = f"spe:pipeline:{wl_id}:l3_rejected_visibility"
                         pipe.srem(key, *symbols)
                     pipe.execute()
-                    logger.info(
+                    logger.debug(
                         "[shadow-monitor] L3_REJECTED edge trigger reset: "
                         "symbols=%s user=%s watchlists=%s",
                         symbols, user_id, wl_ids,
