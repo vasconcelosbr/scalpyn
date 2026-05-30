@@ -2228,7 +2228,7 @@ async def get_watchlist_assets(
                         }
 
                     except Exception as pred_err:
-                        logger.debug(f"[ML] Prediction failed for {a.symbol}: {pred_err}")
+                        logger.warning(f"[ML] Prediction failed for {a.symbol}: {pred_err}")
 
                 logger.info(f"[ML] Generated {len(ml_predictions)} predictions for L3")
         except Exception as ml_err:
