@@ -117,6 +117,17 @@ class WinFastPredictor:
                 expected_features, X.shape[1],
             )
             X = X[:, :expected_features]
+        elif expected_features is not None and X.shape[1] < expected_features:
+            # Forward-compat: model was trained with INCLUDE_REJECTED_IN_TRAIN=true,
+            # which appends 'was_rejected' as the last feature column in trainer.py.
+            # During live inference all L3 candidates are non-rejected (was_rejected=0).
+            n_pad = expected_features - X.shape[1]
+            X = np.concatenate([X, np.zeros((1, n_pad), dtype="float32")], axis=1)
+            logger.info(
+                "[ML] Padded %d feature(s) with 0.0 (was_rejected=0 for L3 inference) "
+                "to match model's %d expected features.",
+                n_pad, expected_features,
+            )
 
         # Predição
         proba = float(model.predict_proba(X)[0][1])
