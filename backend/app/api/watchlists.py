@@ -2508,6 +2508,12 @@ async def get_watchlist_assets(
         )
         normalized["current_values"] = {**normalized["current_values"], **{k: v for k, v in live_vals.items() if v is not None}}
         normalized["details"]["current_values"] = dict(normalized["current_values"])
+        # Inject observational Shadow Mode indicators (not profile-gated — always included).
+        _obs = ind_map.get(asset.symbol) or {}
+        _exh = _obs.get("entry_exhaustion_score")
+        if _exh is not None:
+            normalized["current_values"]["entry_exhaustion_score"] = float(_exh)
+            normalized["details"]["current_values"]["entry_exhaustion_score"] = float(_exh)
         # Inject ML prediction fields so the approved table can show the ML column
         _ml = ml_predictions.get(asset.symbol)
         if _ml:

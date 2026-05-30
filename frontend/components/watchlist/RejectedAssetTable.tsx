@@ -446,6 +446,37 @@ export function WatchlistDecisionTable({
                               items={item.details.evaluation_trace.filter((trace) => trace.type === "signal")}
                             />
                           </div>
+                          {/* Entry Exhaustion Score — Fase 1 Shadow Mode (observacional) */}
+                          {(() => {
+                            const raw = item.current_values?.entry_exhaustion_score;
+                            if (raw == null) return null;
+                            const score = typeof raw === 'number' ? raw : Number(raw);
+                            if (!isFinite(score)) return null;
+                            const color = score >= 75 ? '#F87171' : score >= 50 ? '#FBBF24' : '#34D399';
+                            const label = score >= 75 ? 'ALTO' : score >= 50 ? 'MÉDIO' : 'BAIXO';
+                            return (
+                              <div className="mt-4 rounded-xl border border-[#1E2433] bg-[#0A0B10] p-4">
+                                <div className="mb-2 flex items-center justify-between">
+                                  <span className="text-[11px] font-semibold uppercase tracking-wider text-[#4B5563]">
+                                    Exaustão de Entrada{' '}
+                                    <span className="ml-1 rounded bg-[#0F1825] px-1 py-px text-[9px] text-[#334155]">SHADOW</span>
+                                  </span>
+                                  <span className="font-mono text-xs" style={{ color }}>
+                                    {score.toFixed(1)} / 100 · {label}
+                                  </span>
+                                </div>
+                                <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#1A2035]">
+                                  <div
+                                    className="h-full rounded-full transition-all"
+                                    style={{ width: `${Math.min(100, Math.max(0, score))}%`, backgroundColor: color }}
+                                  />
+                                </div>
+                                <div className="mt-1.5 text-[10px] text-[#4B5563]">
+                                  Observacional — não bloqueia trades. 0 = sem exaustão · 100 = máxima exaustão de entrada.
+                                </div>
+                              </div>
+                            );
+                          })()}
                           <div className="mt-4">
                             <ScoreBreakdownSection
                               rules={item.score_rules ?? []}
