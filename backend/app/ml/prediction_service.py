@@ -123,7 +123,7 @@ class WinFastPredictor:
             # During live inference all L3 candidates are non-rejected (was_rejected=0).
             n_pad = expected_features - X.shape[1]
             X = np.concatenate([X, np.zeros((1, n_pad), dtype="float32")], axis=1)
-            logger.info(
+            logger.debug(
                 "[ML] Padded %d feature(s) with 0.0 (was_rejected=0 for L3 inference) "
                 "to match model's %d expected features.",
                 n_pad, expected_features,
