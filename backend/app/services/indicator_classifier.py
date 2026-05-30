@@ -130,6 +130,9 @@ _STRUCT_EXPLICIT: frozenset[str] = frozenset({
     # Close / price (from 1h OHLCV structural candle)
     "close",
     "price",
+    # Entry Exhaustion Score — observational Shadow Mode metric (Fase 1)
+    # Separado de "exhaustion" do spot_sell_manager (exit-side concept).
+    "entry_exhaustion_score",
 })
 
 # ── Structural-hybrid indicators (structural group, subtype="hybrid") ─────────
@@ -162,13 +165,14 @@ _HYBRID_INDICATORS: frozenset[str] = frozenset({
 STRUCTURAL_CALC_KEYS: frozenset[str] = frozenset({
     "rsi",
     "adx",
-    "ema",           # runs _calc_ema; structural filters keep only EMA50/200
+    "ema",              # runs _calc_ema; structural filters keep only EMA50/200
     "atr",
     "macd",
     "bollinger",
     "parabolic_sar",
     "zscore",
     "obv",
+    "entry_exhaustion", # Shadow Mode observational score (Fase 1)
 })
 
 MICROSTRUCTURE_CALC_KEYS: frozenset[str] = frozenset({

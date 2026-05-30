@@ -58,7 +58,11 @@ DEFAULT_INDICATORS = {
     },
     "orderbook_imbalance": {"enabled": False, "depth_levels": 10},
     "funding_rate": {"enabled": True},
-    "btc_dominance": {"enabled": False}
+    "btc_dominance": {"enabled": False},
+    # Entry Exhaustion Score — Fase 1 Shadow Mode (observacional, não bloqueia trades)
+    # Computed by FeatureEngine._calc_entry_exhaustion() on 5m structural candles.
+    # 0 = sem exaustão, 100 = máxima exaustão de entrada.
+    "entry_exhaustion": {"enabled": True},
 }
 
 DEFAULT_SCORE = {

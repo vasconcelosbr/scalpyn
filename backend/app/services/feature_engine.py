@@ -147,6 +147,12 @@ class FeatureEngine:
             except Exception as e:
                 logger.exception("taker_ratio calculation failed: %s", e)
 
+        if _want("entry_exhaustion") and self.config.get("entry_exhaustion", {}).get("enabled", True):
+            try:
+                results.update(self._calc_entry_exhaustion(df))
+            except Exception as e:
+                logger.exception("entry_exhaustion calculation failed: %s", e)
+
         try:
             # ── Post-compute: EMA period filtering by group ────────────────────
             # "ema" calc key runs in both groups but each stores only its subset:
@@ -741,6 +747,93 @@ class FeatureEngine:
         instead of producing a misleading proxy.
         """
         return {"taker_ratio": None}
+
+    def _calc_entry_exhaustion(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Entry Exhaustion Score — observational Shadow Mode metric (Fase 1).
+
+        Detects potential overextension at entry by combining 5 sub-scores:
+          1. acceleration_5  (20%): 5-candle price ROC — fast momentum
+          2. acceleration_20 (20%): 20-candle price ROC — broad momentum
+          3. distance_from_local_high_50 (30%): proximity to 50-candle high
+          4. candle_expansion_ratio (15%): current range vs ATR(14)
+          5. volume_percentile (15%): volume rank in 50-candle window
+
+        Returns entry_exhaustion_score in [0, 100]:
+          0  = no exhaustion (price cooling, far from high, normal volume)
+          100 = maximum exhaustion (fast rise, at the high, expanding candle, high volume)
+
+        Returns None when insufficient candles (< 50).
+        Naming: "entry_exhaustion" (not "exhaustion") to differentiate from
+        spot_sell_manager._check_exhaustion (exit-side concept).
+        """
+        MIN_CANDLES = 50
+        if len(df) < MIN_CANDLES:
+            return {"entry_exhaustion_score": None}
+
+        close = pd.to_numeric(df["close"], errors="coerce")
+        high  = pd.to_numeric(df["high"],  errors="coerce")
+        low   = pd.to_numeric(df["low"],   errors="coerce")
+        vol   = self._base_volume(df)
+
+        c_last = float(close.iloc[-1])
+        if not np.isfinite(c_last) or c_last <= 0:
+            return {"entry_exhaustion_score": None}
+
+        # 1. acceleration_5 — 5-candle ROC capped at ±20%
+        # Higher ROC → higher score (faster rise = more exhausted)
+        acc5_score = 50.0  # neutral default
+        if len(df) >= 6:
+            c_5 = float(close.iloc[-6])
+            if np.isfinite(c_5) and c_5 > 0:
+                acc5 = max(-20.0, min(20.0, (c_last - c_5) / c_5 * 100))
+                acc5_score = (acc5 + 20.0) / 40.0 * 100
+
+        # 2. acceleration_20 — 20-candle ROC capped at ±50%
+        acc20_score = 50.0
+        if len(df) >= 21:
+            c_20 = float(close.iloc[-21])
+            if np.isfinite(c_20) and c_20 > 0:
+                acc20 = max(-50.0, min(50.0, (c_last - c_20) / c_20 * 100))
+                acc20_score = (acc20 + 50.0) / 100.0 * 100
+
+        # 3. distance_from_local_high_50 — proximity to 50-candle rolling high
+        # dist_pct ≤ 0: at the high → score=100; -20% below → score=0
+        rolling_high = float(high.iloc[-50:].max())
+        if np.isfinite(rolling_high) and rolling_high > 0:
+            dist_pct = max(-20.0, min(0.0, (c_last - rolling_high) / rolling_high * 100))
+            dist_score = (dist_pct + 20.0) / 20.0 * 100
+        else:
+            dist_score = 50.0
+
+        # 4. candle_expansion_ratio — current H-L range vs ATR(14)
+        # Larger candle relative to ATR → more exhaustion
+        atr_period = max(1, int(self.config.get("atr", {}).get("period", 14)))
+        range_series = (high - low).clip(lower=0)
+        current_range = float(range_series.iloc[-1])
+        atr_val = float(range_series.rolling(window=min(atr_period, len(df))).mean().iloc[-1])
+        if np.isfinite(atr_val) and atr_val > 0:
+            expansion = max(0.0, min(5.0, current_range / atr_val))
+            expansion_score = expansion / 5.0 * 100
+        else:
+            expansion_score = 50.0
+
+        # 5. volume_percentile — rank of current volume in 50-candle window
+        vol_window = vol.iloc[-50:].values
+        v_current = float(vol.iloc[-1])
+        if len(vol_window) > 0 and np.isfinite(v_current):
+            vol_pct_score = float(np.mean(vol_window <= v_current)) * 100
+        else:
+            vol_pct_score = 50.0
+
+        # Weighted composite: dist=30%, acc5=20%, acc20=20%, expansion=15%, vol=15%
+        score = (
+            0.30 * dist_score +
+            0.20 * acc5_score +
+            0.20 * acc20_score +
+            0.15 * expansion_score +
+            0.15 * vol_pct_score
+        )
+        return {"entry_exhaustion_score": round(score, 1)}
 
     def _apply_market_data_overrides(self, market_data: Dict[str, Any]) -> Dict[str, Any]:
         # Canonical ticker values from MarketDataService override candle sums.

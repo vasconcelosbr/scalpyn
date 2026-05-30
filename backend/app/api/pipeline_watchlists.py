@@ -95,6 +95,7 @@ _INDICATOR_LABELS: Dict[str, str] = {
     "signal_score":           "Sig Score",
     "spread_pct":             "Spread%",
     "atr_pct":                "ATR% (legacy)",
+    "entry_exhaustion_score": "Exaustão",
 }
 
 
