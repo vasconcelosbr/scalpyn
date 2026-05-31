@@ -965,11 +965,15 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
                     try:
                         entry_aware = shadow.entry_timestamp
                         c_ts_aware = c_ts
-                        # Guard naive vs aware — mesma lógica do FIX C2 do monitor.
+                        # Normalize naive → UTC so subtraction never raises TypeError.
+                        if getattr(entry_aware, "tzinfo", None) is None:
+                            entry_aware = entry_aware.replace(tzinfo=timezone.utc)
+                        if getattr(c_ts_aware, "tzinfo", None) is None:
+                            c_ts_aware = c_ts_aware.replace(tzinfo=timezone.utc)
                         delta_s = (c_ts_aware - entry_aware).total_seconds()
                         shadow.time_to_tp_minutes = round(max(delta_s / 60.0, 0.0), 4)
                     except TypeError:
-                        # Mismatch tz — deixa para ttt_analyzer resolver via OHLCV.
+                        # Fallback — ttt_analyzer resolverá via OHLCV.
                         pass
 
         # SL antes de TP na mesma candle — regra conservadora.

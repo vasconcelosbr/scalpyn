@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import Any, Callable
 
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
@@ -315,6 +316,20 @@ _celery_engine = create_async_engine(
     poolclass=NullPool,
 )
 CeleryAsyncSessionLocal = async_sessionmaker(_celery_engine, expire_on_commit=False)
+
+
+@asynccontextmanager
+async def get_celery_session():
+    """Async context manager yielding a NullPool session for Celery tasks.
+
+    Use instead of CeleryAsyncSessionLocal() directly so that
+    ttt_analyzer, shadow_timeout_analyzer and similar tasks share a
+    single canonical entry point.  Caller is responsible for commit();
+    rollback is automatic on exception via the session's __aexit__.
+    """
+    async with CeleryAsyncSessionLocal() as session:
+        yield session
+
 
 # ── Task #256 — dedicated admin engine for the orphan-TX watchdog ────────────
 # Spec requirement: separate read/admin path that opens at most ONE connection

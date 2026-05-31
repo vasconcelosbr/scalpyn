@@ -91,7 +91,7 @@ def main():
                 time_to_tp_minutes, elapsed_minutes, profit_velocity
             FROM shadow_trades
             WHERE source = 'L3'
-              AND outcome IN ('TP_HIT', 'SL_HIT')
+              AND outcome IN ('TP_HIT', 'SL_HIT', 'TIMEOUT')
               AND pnl_pct IS NOT NULL
               AND features_snapshot IS NOT NULL
               AND created_at >= NOW() - INTERVAL :days
