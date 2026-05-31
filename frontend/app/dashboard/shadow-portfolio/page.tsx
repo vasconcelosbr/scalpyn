@@ -1828,9 +1828,8 @@ function DetailModal({
 const MAX_LOCAL_FETCH = 200; // = _MAX_PAGE_SIZE em backend/app/api/shadow_trades.py
 const CLIENT_PAGE_SIZE = 50;
 
-// Task #321: origem da promoção (L3 canônico vs ArrowL1 custom). Filtra
-// `shadow_trades.source` no backend (default 'L3' nas linhas pré-migration 060).
-type SourceTab = "L3" | "ARROW" | "L3_REJECTED";
+// Origem da promoção: L3 (aprovados) ou L3_REJECTED (bloqueados, dados ML).
+type SourceTab = "L3" | "L3_REJECTED";
 
 function buildBaseQuery(
   filter: FilterState,
@@ -1868,8 +1867,6 @@ export default function ShadowPortfolioPage() {
   const [tick, setTick] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
-  // Task #321: tab de origem (L3 canônico vs Arrow custom). Default 'L3'
-  // preserva o comportamento histórico do painel.
   const [sourceTab, setSourceTab] = useState<SourceTab>("L3");
 
   // Reset paginação ao trocar de aba — evita "page 7 vazia" se a aba
@@ -2091,11 +2088,9 @@ export default function ShadowPortfolioPage() {
           </p>
         </div>
 
-        {/* Task #321: tabs L3 vs Arrow. Cada aba refaz fetch propagando
-            `source=` ao backend; agregados (P&L, win rate) são recalculados
-            por aba — a UI nunca mistura origens.
-            L3_REJECTED: ativos bloqueados na L3, capturados para dados ML.
-            Segregados por source para nunca contaminar métricas de aprovados. */}
+        {/* Tabs: L3 (aprovados) e L3_REJECTED (bloqueados para dados ML).
+            Cada aba refaz fetch propagando `source=` ao backend;
+            agregados são recalculados por aba — nunca mistura origens. */}
         <div
           style={{
             display: "flex",
@@ -2104,7 +2099,7 @@ export default function ShadowPortfolioPage() {
             marginBottom: -4,
           }}
         >
-          {(["L3", "ARROW", "L3_REJECTED"] as SourceTab[]).map((tab) => {
+          {(["L3", "L3_REJECTED"] as SourceTab[]).map((tab) => {
             const active = tab === sourceTab;
             const isRejected = tab === "L3_REJECTED";
             const activeColor = isRejected ? C.amber : C.blue;
@@ -2125,7 +2120,7 @@ export default function ShadowPortfolioPage() {
                   marginBottom: -1,
                 }}
               >
-                {tab === "L3" ? "L3" : tab === "ARROW" ? "Arrow" : "L3 Rejeitados"}
+                {tab === "L3" ? "L3" : "L3 Rejeitados"}
               </button>
             );
           })}

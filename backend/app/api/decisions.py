@@ -374,20 +374,12 @@ def _build_snapshot_item(
     }
 
 
-_VALID_SNAPSHOT_SCOPES = {"l3", "arrow"}
-# Task #321: nome canônico da watchlist Arrow (custom). Override por env
-# caso o usuário renomeie em prod. Espelha shadow_trade_service.ARROW_WATCHLIST_NAME.
-import os as _os  # noqa: E402 - local-scope import para não poluir top-level
-_ARROW_WATCHLIST_NAME = _os.environ.get("ARROW_WATCHLIST_NAME", "ArrowL1")
+_VALID_SNAPSHOT_SCOPES = {"l3"}
 
 
 def _apply_scope_filter(conditions: list, scope: str) -> None:
-    """Anexa o predicado de watchlist (L3 canônico vs Arrow custom)."""
-    if scope == "arrow":
-        conditions.append(func.lower(PipelineWatchlist.level) == "custom")
-        conditions.append(PipelineWatchlist.name == _ARROW_WATCHLIST_NAME)
-    else:
-        conditions.append(func.upper(PipelineWatchlist.level) == "L3")
+    """Anexa o predicado de watchlist (L3 canônico)."""
+    conditions.append(func.upper(PipelineWatchlist.level) == "L3")
 
 
 @router.get("/approved-snapshot")

@@ -51,9 +51,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/shadow-trades", tags=["Shadow Trades"])
 
 _VALID_STATUSES = {"PENDING", "RUNNING", "COMPLETED", "ERROR"}
-# Task #321: filtro de origem da promoção. ``None`` = todos (default —
-# preserva o comportamento legado da UI).
-_VALID_SOURCES = {"L3", "ARROW", "L3_REJECTED"}
+# Filtro de origem da promoção. ``None`` = todos (default).
+_VALID_SOURCES = {"L3", "L3_REJECTED"}
 _DEFAULT_PAGE_SIZE = 50
 _MAX_PAGE_SIZE = 200
 
@@ -104,7 +103,7 @@ def _sanitize_status(status: Optional[str]) -> Optional[str]:
 
 
 def _sanitize_source(source: Optional[str]) -> Optional[str]:
-    """Valida o filtro ``?source=l3|arrow``. ``None`` = sem filtro."""
+    """Valida o filtro ``?source=l3|l3_rejected``. ``None`` = sem filtro."""
     if not source:
         return None
     cleaned = source.strip().upper()

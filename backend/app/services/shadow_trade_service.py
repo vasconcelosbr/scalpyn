@@ -82,17 +82,11 @@ TTT_ENABLED_DEFAULT = os.environ.get("TTT_ENABLED", "true").lower() == "true"
 TTT_TP_PCT_DEFAULT = float(os.environ.get("TTT_TP_PCT", "1.0"))
 TTT_TIMEOUT_MINUTES_DEFAULT = int(os.environ.get("TTT_TIMEOUT_MINUTES", "180"))
 
-# Task #321: identificação canônica da watchlist Arrow (custom).
-# ``ARROW_WATCHLIST_NAME`` é o ``pipeline_watchlists.name`` esperado; um
-# único helper centraliza a string mágica para o resto da codebase nunca
-# precisar repeti-la. Override por env caso o usuário renomeie em prod.
-ARROW_WATCHLIST_NAME = os.environ.get("ARROW_WATCHLIST_NAME", "ArrowL1")
 SHADOW_SOURCE_L3 = "L3"
-SHADOW_SOURCE_ARROW = "ARROW"
 # Shadows de ativos rejeitados na L3 — usados exclusivamente para dados ML.
 # Segregados por source para nunca contaminar métricas de aprovados.
 SHADOW_SOURCE_L3_REJECTED = "L3_REJECTED"
-_VALID_SHADOW_SOURCES = (SHADOW_SOURCE_L3, SHADOW_SOURCE_ARROW, SHADOW_SOURCE_L3_REJECTED)
+_VALID_SHADOW_SOURCES = (SHADOW_SOURCE_L3, SHADOW_SOURCE_L3_REJECTED)
 
 
 # ── helpers internos ─────────────────────────────────────────────────────────
@@ -818,24 +812,7 @@ async def get_currently_approved_l3(
     ``SHORT`` e cuidar do ``market_mode='futures'`` upstream.
     """
     return await _get_currently_approved(
-        db, user_id, scope=SHADOW_SOURCE_L3, direction=direction
-    )
-
-
-async def get_currently_approved_arrow(
-    db: AsyncSession,
-    user_id,
-    direction: str = "SPOT",
-) -> List[Dict[str, Any]]:
-    """Espelha ``get_currently_approved_l3`` para a watchlist custom Arrow.
-
-    Task #321: lê ``pipeline_watchlist_assets`` filtrando pelas
-    watchlists de ``level='custom'`` com ``name = ARROW_WATCHLIST_NAME``
-    (default ``ArrowL1``). Mesma forma de payload — a UI Arrow reusa
-    100% dos componentes da L3.
-    """
-    return await _get_currently_approved(
-        db, user_id, scope=SHADOW_SOURCE_ARROW, direction=direction
+        db, user_id, direction=direction
     )
 
 
@@ -843,31 +820,14 @@ async def _get_currently_approved(
     db: AsyncSession,
     user_id,
     *,
-    scope: str,
     direction: str = "SPOT",
 ) -> List[Dict[str, Any]]:
-    """Backend compartilhado de ``get_currently_approved_l3``/``_arrow``.
-
-    Mantemos uma só SQL — varia apenas o predicado de seleção da
-    watchlist (``WHERE`` por scope). Qualquer ajuste de schema/snapshot
-    se reflete simétrico nas duas abas.
-    """
+    """Backend para ``get_currently_approved_l3``: retorna ativos aprovados em L3."""
     direction_norm = (direction or "SPOT").upper()
     market_mode = "futures" if direction_norm in {"LONG", "SHORT"} else "spot"
 
-    scope_norm = (scope or SHADOW_SOURCE_L3).upper()
-    if scope_norm == SHADOW_SOURCE_ARROW:
-        watchlist_predicate = (
-            "LOWER(pw.level) = 'custom' AND pw.name = :arrow_name"
-        )
-        params: Dict[str, Any] = {
-            "uid": str(user_id),
-            "market_mode": market_mode,
-            "arrow_name": ARROW_WATCHLIST_NAME,
-        }
-    else:
-        watchlist_predicate = "UPPER(pw.level) = 'L3'"
-        params = {"uid": str(user_id), "market_mode": market_mode}
+    watchlist_predicate = "UPPER(pw.level) = 'L3'"
+    params: Dict[str, Any] = {"uid": str(user_id), "market_mode": market_mode}
 
     sql = text(
         f"""
@@ -1193,21 +1153,12 @@ async def safe_backfill_watchlist_shadows(
     """
     from ..database import CeleryAsyncSessionLocal
 
-    # ── Snapshot vivo das duas origens (L3 canônico + Arrow custom) ───────
-    # Task #321: o backfill agora cobre ambas. ``running_set`` é
-    # compartilhado: a UNIQUE parcial ``(user_id, symbol) WHERE
-    # status='RUNNING'`` não distingue source, então se um símbolo já
-    # estiver RUNNING (não importa de qual origem) o outro sweep
-    # naturalmente pula.
+    # ── Snapshot vivo da origem L3 ───────────────────────────────────────
     snapshot_l3: List[Dict[str, Any]] = []
-    snapshot_arrow: List[Dict[str, Any]] = []
     running_set: set = set()
     try:
         async with CeleryAsyncSessionLocal() as read_db:
             snapshot_l3 = await get_currently_approved_l3(
-                read_db, user_id, direction="SPOT"
-            )
-            snapshot_arrow = await get_currently_approved_arrow(
                 read_db, user_id, direction="SPOT"
             )
             # Tratar PENDING como aberto: shadows sintéticas (decision_id NULL)
@@ -1234,72 +1185,57 @@ async def safe_backfill_watchlist_shadows(
     counts_by_source: Dict[str, int] = {
         "recent_log": 0, "stale_log": 0, "live_l3": 0
     }
-    counts_by_origin: Dict[str, int] = {SHADOW_SOURCE_L3: 0, SHADOW_SOURCE_ARROW: 0}
     created_count = 0
 
-    # Ordem: L3 primeiro, depois Arrow. Se um símbolo aparece nos dois,
-    # L3 vence (mais conservador — preserva o vocabulário histórico).
-    sweeps = (
-        (SHADOW_SOURCE_L3, snapshot_l3),
-        (SHADOW_SOURCE_ARROW, snapshot_arrow),
+    snapshot_by_symbol: Dict[str, Dict[str, Any]] = {
+        item["symbol"]: item for item in snapshot_l3
+    }
+    # Ordenação determinística antes do loop UPSERT — gotcha #251/#273/#310
+    # (deadlock 40P01 quando dois workers iteram o mesmo set de
+    # símbolos em ordens diferentes).
+    eligible_symbols = sorted(
+        s for s in snapshot_by_symbol.keys() if s not in running_set
     )
-    for origin, snapshot in sweeps:
-        snapshot_by_symbol: Dict[str, Dict[str, Any]] = {
-            item["symbol"]: item for item in snapshot
-        }
-        # Ordenação determinística antes do loop UPSERT — gotcha #251/#273/#310
-        # (deadlock 40P01 quando dois workers iteram o mesmo set de
-        # símbolos em ordens diferentes).
-        eligible_symbols = sorted(
-            s for s in snapshot_by_symbol.keys() if s not in running_set
-        )
-        if not eligible_symbols:
-            continue
 
-        for symbol in eligible_symbols:
-            snap_item = snapshot_by_symbol[symbol]
-            try:
-                async with CeleryAsyncSessionLocal() as own_db:
-                    async with own_db.begin():
-                        decision, source = await _resolve_decision_with_fallback(
-                            own_db, user_id, symbol, snap_item, cutoff
+    for symbol in eligible_symbols:
+        snap_item = snapshot_by_symbol[symbol]
+        try:
+            async with CeleryAsyncSessionLocal() as own_db:
+                async with own_db.begin():
+                    decision, source = await _resolve_decision_with_fallback(
+                        own_db, user_id, symbol, snap_item, cutoff
+                    )
+                    if decision is None:
+                        logger.debug(
+                            "[shadow] backfill: no resolution path for "
+                            "user=%s symbol=%s",
+                            user_id, symbol,
                         )
-                        if decision is None:
-                            logger.debug(
-                                "[shadow] backfill: no resolution path for "
-                                "user=%s symbol=%s origin=%s",
-                                user_id, symbol, origin,
-                            )
-                            continue
-                        new_id = await _create_from_decision(
-                            own_db, decision, "NOT_TRADABLE", user_config,
-                            source=origin,
+                        continue
+                    new_id = await _create_from_decision(
+                        own_db, decision, "NOT_TRADABLE", user_config,
+                        source=SHADOW_SOURCE_L3,
+                    )
+                    if new_id is not None:
+                        created_count += 1
+                        counts_by_source[source] = counts_by_source.get(source, 0) + 1
+                        shadow_metrics.record_resolved_source(source)
+                        running_set.add(symbol)
+                        logger.info(
+                            "[shadow] backfill created id=%s symbol=%s "
+                            "decision_id=%s source=%s",
+                            new_id, symbol,
+                            getattr(decision, "id", None), source,
                         )
-                        if new_id is not None:
-                            created_count += 1
-                            counts_by_source[source] = counts_by_source.get(source, 0) + 1
-                            counts_by_origin[origin] = counts_by_origin.get(origin, 0) + 1
-                            shadow_metrics.record_resolved_source(source)
-                            # Reserva o símbolo para os sweeps seguintes
-                            # (impede que Arrow recrie um shadow recém-
-                            # promovido pelo L3 dentro do mesmo ciclo).
-                            running_set.add(symbol)
-                            logger.info(
-                                "[shadow] backfill created id=%s symbol=%s "
-                                "decision_id=%s source=%s origin=%s",
-                                new_id, symbol,
-                                getattr(decision, "id", None), source, origin,
-                            )
-            except Exception:
-                logger.exception(
-                    "[shadow] backfill failed for user=%s symbol=%s origin=%s",
-                    user_id, symbol, origin,
-                )
+        except Exception:
+            logger.exception(
+                "[shadow] backfill failed for user=%s symbol=%s",
+                user_id, symbol,
+            )
     if created_count:
         logger.info(
-            "[shadow] backfill total=%d new shadow(s) for user=%s "
-            "by_source=%s by_origin=%s",
-            created_count, user_id, counts_by_source, counts_by_origin,
+            "[shadow] backfill total=%d new shadow(s) for user=%s by_source=%s",
+            created_count, user_id, counts_by_source,
         )
     return created_count
 

@@ -1021,7 +1021,7 @@ async def _monitor_async() -> Dict[str, int]:
     # Shadows que completaram neste tick — (symbol, user_id).
     # Usados para remover o símbolo do prior_rejected_visibility no Redis
     # e reativar o edge trigger imediatamente no próximo pipeline scan.
-    # Inclui TODOS os sources (L3, L3_REJECTED, ARROW): quando um shadow L3
+    # Inclui todos os sources (L3, L3_REJECTED): quando um shadow L3
     # (ALLOW) ainda RUNNING bloqueia a criação do shadow L3_REJECTED via
     # ON CONFLICT, o edge trigger foi consumido mas nenhum rejected shadow
     # foi criado. Ao completar o L3 shadow, limpamos o Redis para reativar.

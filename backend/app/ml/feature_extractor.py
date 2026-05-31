@@ -248,27 +248,24 @@ _WIN_THRESHOLD = _MIN_WIN_PNL_PCT + _FEE_ROUND_TRIP_PCT  # 0.96% effective
 
 def build_training_dataframe(records: list) -> pd.DataFrame:
     """
-    Build training DataFrame from decisions_log records.
+    Build training DataFrame from shadow_trades records (fonte canônica — Bloco B).
 
     Args:
-        records: List of dicts from decisions_log query.
-                 Expected fields: id, symbol, created_at, metrics (JSONB),
-                 score, pnl_pct, holding_seconds, outcome.
+        records: List of dicts from shadow_trades query.
+                 Expected fields: symbol, source, created_at,
+                 features_snapshot (JSONB flat — indicadores na entrada),
+                 pnl_pct, holding_seconds, outcome, ttt_outcome.
 
     Returns:
         DataFrame with FEATURE_COLUMNS + is_win_fast + _created_at columns.
 
-    Label semantics (Task #324):
-        is_win_fast = 1 when pnl_pct > _WIN_THRESHOLD = MIN_WIN_PNL_PCT + FEE_ROUND_TRIP_PCT
-        (defaults: 0.008 + 0.0016 = 0.0096, i.e. 0.96% gross = profitable after fees).
-        Rows with pnl_pct IS NULL are DROPPED — we cannot label them.
+    Label semantics:
+        Tier 1 (TTT): ttt_outcome == 'FAST_WIN' → 1; 'TIMEOUT' → 0.
+        Tier 2 (fallback): pnl_pct > _WIN_THRESHOLD (0.96% net-of-fees).
+        Rows with pnl_pct IS NULL are DROPPED.
 
-        Vocabulário canônico de ``decisions_log.outcome`` é lowercase
-        ``tp``/``sl`` (regime pós-14/05; timeout foi descontinuado — trades
-        agora ficam abertos até TP ou SL). NÃO usar `outcome == "WIN"` para
-        derivar o label: esse vocabulário uppercase nunca existiu em prod,
-        produzia 0% de positivos e colapsava o treino (scale_pos_weight=1.0,
-        Optuna AUC=0 silencioso).
+        Vocabulário de shadow_trades.outcome: 'TP_HIT' / 'SL_HIT' (uppercase).
+        NÃO usar outcome para derivar o label — usar ttt_outcome + pnl_pct.
     """
     rows = []
     dropped_null_pnl = 0
@@ -278,7 +275,7 @@ def build_training_dataframe(records: list) -> pd.DataFrame:
             dropped_null_pnl += 1
             continue
 
-        metrics = r.get("metrics") or {}
+        metrics = r.get("features_snapshot") or {}
         if isinstance(metrics, str):
             try:
                 metrics = json.loads(metrics)
@@ -322,10 +319,9 @@ def build_training_dataframe(records: list) -> pd.DataFrame:
         features["_created_at"] = r.get("created_at")
         features["_outcome"] = r.get("outcome")
         features["_pnl_pct"] = pnl_val
-        # was_rejected=1 for L3_REJECTED (decision='BLOCK') records.
-        # Included as a feature only when INCLUDE_REJECTED_IN_TRAIN=true so
-        # the model can learn separate distributions for approved vs rejected.
-        features["_was_rejected"] = 1 if r.get("decision") == "BLOCK" else 0
+        # was_rejected=1 for L3_REJECTED records (fonte: shadow_trades.source).
+        # Sempre 0 no dataset L3-only; mantido para compatibilidade semântica.
+        features["_was_rejected"] = 1 if r.get("source") == "L3_REJECTED" else 0
 
         rows.append(features)
 
@@ -385,6 +381,13 @@ def train_val_test_split(
     test_df = df.iloc[val_end:].copy()
 
     logger.info(
-        f"Time split: train={len(train_df)} val={len(val_df)} test={len(test_df)}"
+        "TEMPORAL_SPLIT|train=%d(%s→%s)|val=%d|test=%d(%s→%s)",
+        len(train_df),
+        str(train_df["_created_at"].min())[:10] if len(train_df) else "n/a",
+        str(train_df["_created_at"].max())[:10] if len(train_df) else "n/a",
+        len(val_df),
+        len(test_df),
+        str(test_df["_created_at"].min())[:10] if len(test_df) else "n/a",
+        str(test_df["_created_at"].max())[:10] if len(test_df) else "n/a",
     )
     return train_df, val_df, test_df

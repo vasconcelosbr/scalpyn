@@ -34,12 +34,9 @@ GCS_ARTIFACT_ROOT = f"gs://{BUCKET_NAME}/artifacts"
 DAYS_LOOKBACK            = int(os.getenv("DAYS_LOOKBACK", "90"))
 N_TRIALS                 = int(os.getenv("N_TRIALS", "50"))
 MIN_RECORDS              = int(os.getenv("MIN_RECORDS", "200"))
-# Set INCLUDE_REJECTED_IN_TRAIN=true to add L3_REJECTED (decision='BLOCK')
-# records to the training set. Requires enough rejected shadows with pnl_pct.
-INCLUDE_REJECTED         = os.getenv("INCLUDE_REJECTED_IN_TRAIN", "false").lower() == "true"
 # Optional: exclude a date range with known bad indicators from training.
 # Set TRAIN_EXCLUDE_FROM=YYYY-MM-DD and TRAIN_EXCLUDE_TO=YYYY-MM-DD to skip
-# a period where indicators were absent or miscalculated.
+# a period where features_snapshot contained absent/miscalculated indicators.
 TRAIN_EXCLUDE_FROM       = os.getenv("TRAIN_EXCLUDE_FROM", "")   # e.g. "2026-05-01"
 TRAIN_EXCLUDE_TO         = os.getenv("TRAIN_EXCLUDE_TO", "")     # e.g. "2026-05-20"
 
@@ -60,27 +57,21 @@ def main():
     engine = create_engine(DB_URL, pool_pre_ping=True)
 
     # ---------------------------------------------------------
-    # 1. Extrai dados da decisions_log
+    # 1. Extrai dados de shadow_trades (fonte canônica — Bloco B)
+    #
+    # Migrado de decisions_log (DISTINCT ON) para shadow_trades:
+    # cada row = 1 trade simulado real (sem deduplicação necessária).
+    # features_snapshot = indicadores flat no momento da entrada,
+    # copiado de decisions_log.metrics["indicators_snapshot"] pelo
+    # shadow_trade_service — mesma fonte, sem DISTINCT ON bottleneck.
     # ---------------------------------------------------------
     logger.info(
-        "Extraindo dados da decisions_log... (include_rejected=%s, exclude_period=%s→%s)",
-        INCLUDE_REJECTED,
+        "Extraindo dados de shadow_trades... (days=%d, exclude_period=%s→%s)",
+        DAYS_LOOKBACK,
         TRAIN_EXCLUDE_FROM or "none",
         TRAIN_EXCLUDE_TO or "none",
     )
-    # Deduplication: DISTINCT ON (symbol, DATE(created_at)) — one row per
-    # symbol per calendar day. This removes edge-trigger amplification
-    # (NEW_SIGNAL/SIGNAL_EVOLVED emitted multiple times per trade) while
-    # keeping genuinely distinct trading days for the same symbol.
-    # Previous strategy DISTINCT ON (symbol, pnl_pct) silently kept near-
-    # duplicate float values (e.g. 0.01200001 ≠ 0.01200002) and could
-    # amplify scarce WIN rows.
-    decision_filter = (
-        "decision IN ('ALLOW', 'BLOCK')"
-        if INCLUDE_REJECTED
-        else "decision = 'ALLOW'"
-    )
-    # Build optional exclusion clause for periods with known bad indicators.
+    # Optional exclusion clause for periods with known bad features_snapshot.
     exclude_clause = ""
     exclude_params: dict = {}
     if TRAIN_EXCLUDE_FROM and TRAIN_EXCLUDE_TO:
@@ -94,47 +85,28 @@ def main():
     with engine.connect() as conn:
         result = conn.execute(text(f"""
             SELECT
-                deduped.id, deduped.symbol, deduped.created_at,
-                deduped.metrics, deduped.score,
-                deduped.pnl_pct, deduped.holding_seconds,
-                deduped.outcome, deduped.decision,
-                -- TTT labels from shadow_trades (NULL for trades without TTT analysis)
-                st.ttt_outcome,
-                st.ttt_fast_win_bucket,
-                st.time_to_tp_minutes,
-                st.elapsed_minutes,
-                st.profit_velocity
-            FROM (
-                SELECT DISTINCT ON (symbol, DATE(created_at))
-                    id, symbol, created_at, metrics, score,
-                    pnl_pct, holding_seconds, outcome, decision
-                FROM decisions_log
-                WHERE l3_pass = true
-                  AND {decision_filter}
-                  AND outcome IN ('tp', 'sl')
-                  AND pnl_pct IS NOT NULL
-                  AND created_at >= NOW() - INTERVAL :days
-                  {exclude_clause}
-                ORDER BY symbol, DATE(created_at), created_at ASC
-            ) AS deduped
-            LEFT JOIN shadow_trades st
-                ON  st.decision_id    = deduped.id
-                AND st.ttt_enabled    = TRUE
-                AND st.ttt_analysis_done = TRUE
-                AND st.ttt_outcome    IS NOT NULL
-            ORDER BY deduped.created_at ASC
+                symbol, source, pnl_pct, holding_seconds, outcome,
+                features_snapshot, created_at,
+                ttt_outcome, ttt_fast_win_bucket,
+                time_to_tp_minutes, elapsed_minutes, profit_velocity
+            FROM shadow_trades
+            WHERE source = 'L3'
+              AND outcome IN ('TP_HIT', 'SL_HIT')
+              AND pnl_pct IS NOT NULL
+              AND features_snapshot IS NOT NULL
+              AND created_at >= NOW() - INTERVAL :days
+              {exclude_clause}
+            ORDER BY created_at ASC
         """), {"days": f"{DAYS_LOOKBACK} days", **exclude_params})
         records = [dict(row._mapping) for row in result.fetchall()]
 
     total = len(records)
-    n_allow = sum(1 for r in records if r.get("decision") == "ALLOW")
-    n_block = sum(1 for r in records if r.get("decision") == "BLOCK")
-    n_ttt   = sum(1 for r in records if r.get("ttt_outcome") is not None)
+    n_ttt      = sum(1 for r in records if r.get("ttt_outcome") is not None)
     n_fast_win = sum(1 for r in records if r.get("ttt_outcome") == "FAST_WIN")
     logger.info(
-        "Registros encontrados (pós-dedup): %d (ALLOW=%d BLOCK=%d) | "
+        "shadow_trades L3 finalizados: %d | "
         "TTT labels: %d/%d (%.1f%%) FAST_WIN=%d",
-        total, n_allow, n_block,
+        total,
         n_ttt, total, 100 * n_ttt / max(total, 1), n_fast_win,
     )
 
@@ -268,9 +240,11 @@ def main():
             "threshold":    float(result.get("decision_threshold", 0.5)),
             "notes":        (
                 f"MLflow run_id: {result['run_id']} | GCS: {gcs_model_uri} | "
+                f"source=shadow_trades_L3 | "
                 f"winrate_base={result.get('winrate_base', 0):.2f}% | "
                 f"n_pos={result.get('n_pos', 0)} n_neg={result.get('n_neg', 0)} | "
-                f"threshold={float(result.get('decision_threshold', 0.5)):.4f}"
+                f"threshold={float(result.get('decision_threshold', 0.5)):.4f} | "
+                f"shap_top5={result.get('shap_bad_approval_drivers', [])[:5]}"
             ),
         })
 

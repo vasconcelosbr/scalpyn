@@ -6,7 +6,7 @@ Auto-Pilot Engine — autonomous strategy evolution for Strategy Profiles.
 Fluxo por ciclo (a cada 6h via Celery beat):
   1. Carrega todos os profiles com auto_pilot_enabled=True
   2. Para cada profile:
-     a. Computa métricas de performance (decisions_log + shadow_trades, últimos 30 dias)
+     a. Computa métricas de performance (shadow_trades L3 + L3_REJECTED, últimos 30 dias)
      b. Verifica circuit breaker (3 regressões consecutivas → pausa 7 dias)
      c. Detecta regime de mercado atual
      d. Decide se mutação é necessária (triggers configuráveis)
@@ -25,7 +25,18 @@ Safe Mode (circuit breaker):
   - Se consecutive_regressions >= 3 → pausa por CIRCUIT_BREAKER_PAUSE_HOURS (default 168h = 7 dias)
   - Regressão = EV pós-mutação < EV pré-mutação - 0.10%
 
-Rollback:
+Behavioral Circuit Breaker (D):
+  - Monitoramento de salto súbito na taxa de aprovação L3 (7d vs 30d).
+  - Se approval_rate_7d > approval_rate_30d + threshold → BEHAVIORAL_CB_PAUSED.
+  - Habilitado por guardrails.behavioral_cb_enabled (default=False — safe).
+
+Performance Auto-Rollback (D):
+  - Se consecutive_regressions >= performance_rollback_cycles → restaura último snapshot.
+  - Usa profile_versions salvo antes de cada mutação/ajuste.
+  - Habilitado por guardrails.performance_rollback_enabled (default=False — safe).
+  - Em dry_run: loga DRY_RUN_AUTO_ROLLBACK sem restaurar.
+
+Rollback (manual):
   - API POST /autopilot/{profile_id}/rollback/{version_id}
   - Restaura config de profile_versions para profile.config
   - Loga em autopilot_audit_logs com action='ROLLED_BACK'
@@ -109,6 +120,35 @@ _GUARDRAILS_DEFAULTS: Dict[str, Any] = {
     "kill_switch":                  False,
     "dry_run_mode":                  True,   # SAFE DEFAULT: nunca escreve sem config explícita
     "scope_profile_id":             None,    # None = sem restrição de escopo
+    # C.4 — Autoridade expandida: autopilot pode ajustar todas as dimensões da config.
+    # Sem floor/ceiling por decisão do operador — amplitude livre dentro dos guardrails.
+    # autopilot_full_authority=True: habilita apply_full_adjustments (block_rules, entry_triggers,
+    #   filters, minimum_score além de scoring_rules).
+    # autopilot_can_adjust: lista de dimensões permitidas (granular). Ignorada se
+    #   autopilot_full_authority=False.
+    "autopilot_full_authority":     False,   # SAFE DEFAULT: só scoring_rules (comportamento anterior)
+    "autopilot_can_adjust": [               # dimensões permitidas quando full_authority=True
+        "scoring_rules",
+        "minimum_score",
+        "block_rules",
+        "entry_triggers",
+        "filters",
+    ],
+    # minimum_score: sem floor/ceiling — o autopilot ajusta ±1 baseado em FPR e EV
+    "min_score_delta_per_cycle":     1,
+    # D — Behavioral circuit breaker + performance auto-rollback.
+    # SAFE DEFAULT: rollback desabilitado até validação em dry_run.
+    #
+    # behavioral_cb_enabled: monitora salto súbito na taxa de aprovação.
+    #   approval_rate = n_L3 / (n_L3 + n_L3_REJECTED) — últimos 7d vs últimos 30d.
+    #   Se taxa recente > taxa baseline + approval_rate_jump_threshold → pause.
+    # performance_rollback_enabled: se consecutive_regressions >= rollback_cycles,
+    #   restaura automaticamente o último profile_versions snapshot salvo.
+    "behavioral_cb_enabled":           False,   # SAFE DEFAULT: desabilitado
+    "approval_rate_jump_threshold":    0.30,    # salto de 30 pp na taxa de aprovação
+    "approval_rate_min_samples":       20,      # amostras mínimas para calcular taxa
+    "performance_rollback_enabled":    False,   # SAFE DEFAULT: desabilitado até validação
+    "performance_rollback_cycles":     3,       # ciclos consecutivos ruins antes de rollback
 }
 
 
@@ -155,19 +195,20 @@ async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, A
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-    # ── ALLOWED performance from decisions_log ────────────────────────────────
-    # decisions_log vocabulary: _DL_TP='tp', _DL_SL='sl'  (lowercase)
+    # ── ALLOWED performance from shadow_trades source='L3' ───────────────────
+    # C.1 — migrado de decisions_log para shadow_trades (fonte canônica pós-Bloco B).
+    # shadow_trades vocabulary: _ST_TP='TP_HIT', _ST_SL='SL_HIT'  (UPPERCASE)
+    # decisions_log permanece como CAPTURA upstream — NÃO removida.
     allowed_result = await db.execute(text(f"""
         SELECT
-            COUNT(*)                                             AS n,
-            AVG(pnl_pct)                                         AS ev,
-            AVG(CASE WHEN outcome = '{_DL_TP}' THEN 1.0 ELSE 0.0 END) AS win_rate,
-            SUM(CASE WHEN outcome = '{_DL_SL}' THEN 1 ELSE 0 END)     AS n_sl,
-            SUM(CASE WHEN outcome = '{_DL_TP}' THEN 1 ELSE 0 END)     AS n_tp
-        FROM decisions_log
-        WHERE l3_pass = true
-          AND decision = 'ALLOW'
-          AND outcome IN {_DL_OUTCOMES_SQL}
+            COUNT(*)                                                      AS n,
+            AVG(pnl_pct)                                                  AS ev,
+            AVG(CASE WHEN outcome = '{_ST_TP}' THEN 1.0 ELSE 0.0 END)   AS win_rate,
+            SUM(CASE WHEN outcome = '{_ST_SL}' THEN 1 ELSE 0 END)        AS n_sl,
+            SUM(CASE WHEN outcome = '{_ST_TP}' THEN 1 ELSE 0 END)        AS n_tp
+        FROM shadow_trades
+        WHERE source = 'L3'
+          AND outcome IN {_ST_OUTCOMES_SQL}
           AND pnl_pct IS NOT NULL
           AND created_at >= :cutoff
     """), {"cutoff": cutoff})
@@ -254,16 +295,16 @@ async def detect_regime(db: AsyncSession) -> str:
     - SIDEWAYS: demais casos
     """
     try:
+        # C.1 — migrado de decisions_log para shadow_trades source='L3'
         cutoff_7d = datetime.now(timezone.utc) - timedelta(days=7)
         result = await db.execute(text(f"""
             SELECT
-                AVG(pnl_pct)                                               AS ev_7d,
-                AVG(CASE WHEN outcome = '{_DL_TP}' THEN 1.0 ELSE 0.0 END) AS wr_7d,
-                COUNT(*)                                                   AS n_7d
-            FROM decisions_log
-            WHERE l3_pass = true
-              AND decision = 'ALLOW'
-              AND outcome IN {_DL_OUTCOMES_SQL}
+                AVG(pnl_pct)                                                      AS ev_7d,
+                AVG(CASE WHEN outcome = '{_ST_TP}' THEN 1.0 ELSE 0.0 END)       AS wr_7d,
+                COUNT(*)                                                           AS n_7d
+            FROM shadow_trades
+            WHERE source = 'L3'
+              AND outcome IN {_ST_OUTCOMES_SQL}
               AND pnl_pct IS NOT NULL
               AND created_at >= :cutoff
         """), {"cutoff": cutoff_7d})
@@ -320,6 +361,208 @@ def _check_regression(auto_pilot_config: dict, new_ev: float) -> int:
     if new_ev < (float(baseline_ev) - EV_REGRESSION_DELTA):
         return consec + 1
     return 0  # reset on non-regression
+
+
+# ── Behavioral Circuit Breaker (D) ───────────────────────────────────────────
+
+
+async def check_behavior_circuit_breaker(
+    db: AsyncSession,
+    perf: Dict[str, Any],
+    guardrails: Dict[str, Any],
+) -> Tuple[bool, str]:
+    """
+    Detecta salto súbito na taxa de aprovação — sinal de que o autopilot pode ter
+    afrouxado filtros/blocos em excesso ou que há bug em alguma mutação.
+
+    Taxa de aprovação = n_L3 / (n_L3 + n_L3_REJECTED) em shadow_trades.
+
+    Lógica:
+      - Calcula taxa nos últimos 7 dias (recente) e últimos 30 dias (baseline).
+      - Se taxa_recente > taxa_baseline + approval_rate_jump_threshold → trigger.
+      - Requer approval_rate_min_samples em cada janela.
+
+    Returns: (triggered: bool, reason: str)
+    """
+    if not guardrails.get("behavioral_cb_enabled", False):
+        return False, "behavioral_cb_disabled"
+
+    jump_threshold = float(guardrails.get("approval_rate_jump_threshold", 0.30))
+    min_samples = int(guardrails.get("approval_rate_min_samples", 20))
+
+    try:
+        cutoff_7d  = datetime.now(timezone.utc) - timedelta(days=7)
+        cutoff_30d = datetime.now(timezone.utc) - timedelta(days=30)
+
+        result = await db.execute(text("""
+            SELECT
+                COUNT(*) FILTER (WHERE source = 'L3'          AND created_at >= :c7d) AS n_l3_7d,
+                COUNT(*) FILTER (WHERE source = 'L3_REJECTED' AND created_at >= :c7d) AS n_rej_7d,
+                COUNT(*) FILTER (WHERE source = 'L3'          AND created_at >= :c30d) AS n_l3_30d,
+                COUNT(*) FILTER (WHERE source = 'L3_REJECTED' AND created_at >= :c30d) AS n_rej_30d
+            FROM shadow_trades
+            WHERE source IN ('L3', 'L3_REJECTED')
+              AND outcome IS NOT NULL
+              AND created_at >= :c30d
+        """), {"c7d": cutoff_7d, "c30d": cutoff_30d})
+        row = dict(result.mappings().one())
+
+        n_l3_7d   = int(row["n_l3_7d"]  or 0)
+        n_rej_7d  = int(row["n_rej_7d"] or 0)
+        n_l3_30d  = int(row["n_l3_30d"] or 0)
+        n_rej_30d = int(row["n_rej_30d"] or 0)
+
+        total_7d  = n_l3_7d + n_rej_7d
+        total_30d = n_l3_30d + n_rej_30d
+
+        if total_7d < min_samples or total_30d < min_samples:
+            return False, f"behavioral_cb_insufficient_samples (7d={total_7d}, 30d={total_30d})"
+
+        rate_7d  = n_l3_7d  / total_7d
+        rate_30d = n_l3_30d / total_30d
+        jump = rate_7d - rate_30d
+
+        logger.info(
+            "[Autopilot] BehavioralCB: approval_rate 7d=%.1f%% 30d=%.1f%% jump=%.1f%% threshold=%.1f%%",
+            rate_7d * 100, rate_30d * 100, jump * 100, jump_threshold * 100,
+        )
+
+        if jump > jump_threshold:
+            reason = (
+                f"BEHAVIORAL_CB_TRIGGERED: approval_rate jumped "
+                f"{rate_30d*100:.1f}%→{rate_7d*100:.1f}% "
+                f"(+{jump*100:.1f}pp > {jump_threshold*100:.1f}pp threshold) "
+                f"n_7d={total_7d} n_30d={total_30d}"
+            )
+            logger.warning("[Autopilot] %s", reason)
+            return True, reason
+
+        return False, f"behavioral_cb_ok (rate_7d={rate_7d*100:.1f}% rate_30d={rate_30d*100:.1f}%)"
+
+    except Exception as exc:
+        logger.warning("[Autopilot] BehavioralCB check failed: %s", exc)
+        return False, f"behavioral_cb_error:{exc}"
+
+
+def check_performance_rollback(
+    auto_pilot_config: Dict[str, Any],
+    guardrails: Dict[str, Any],
+) -> Tuple[bool, str]:
+    """
+    Verifica se o número de regressões consecutivas atingiu o limiar de auto-rollback.
+
+    Difere do circuit breaker: este aciona rollback (restaura config), não apenas pausa.
+    O circuit breaker pausa mutações futuras; este desfaz a última mutação.
+
+    Returns: (should_rollback: bool, reason: str)
+    """
+    if not guardrails.get("performance_rollback_enabled", False):
+        return False, "performance_rollback_disabled"
+
+    rollback_cycles = int(guardrails.get("performance_rollback_cycles", 3))
+    consec = int(auto_pilot_config.get("consecutive_regressions", 0))
+    last_version_id = auto_pilot_config.get("last_version_id")
+
+    if consec < rollback_cycles:
+        return False, f"performance_ok (consec={consec} < {rollback_cycles})"
+
+    if not last_version_id:
+        return False, f"rollback_impossible (no last_version_id, consec={consec})"
+
+    reason = (
+        f"PERFORMANCE_ROLLBACK: {consec} consecutive regressions >= {rollback_cycles} "
+        f"→ restoring version {last_version_id}"
+    )
+    logger.warning("[Autopilot] %s", reason)
+    return True, reason
+
+
+async def rollback_last_adjustment(
+    profile_id: str,
+    user_id: str,
+    version_id: str,
+    perf: Dict[str, Any],
+    regime: str,
+    reason: str,
+    db: AsyncSession,
+) -> Dict[str, Any]:
+    """
+    Restaura atomicamente o snapshot `version_id` de profile_versions para
+    todos os config_type que foram afetados pela última mutação.
+
+    Loga em autopilot_audit_logs com action='AUTO_ROLLED_BACK'.
+    Reseta consecutive_regressions=0 após o rollback.
+
+    Returns: dict com version_number, config restaurado.
+    """
+    from uuid import UUID
+    from ..models.config_profile import ConfigProfile
+
+    # Busca snapshot
+    ver_result = await db.execute(text("""
+        SELECT id, version_number, config, regime, ev_at_snapshot
+        FROM profile_versions
+        WHERE id = :vid AND profile_id = :pid
+    """), {"vid": version_id, "pid": profile_id})
+    ver_row = ver_result.mappings().one_or_none()
+
+    if not ver_row:
+        raise ValueError(
+            f"[AutoRollback] version {version_id} não encontrada para profile {profile_id}"
+        )
+
+    restored_config = ver_row["config"]
+    if isinstance(restored_config, str):
+        restored_config = json.loads(restored_config)
+
+    # O snapshot de profile_versions guarda a config completa do profile principal.
+    # Para config_type='score' (onde scoring_rules e minimum_score vivem):
+    uid = UUID(str(user_id))
+    result = await db.execute(
+        select(ConfigProfile).where(
+            ConfigProfile.user_id == uid,
+            ConfigProfile.pool_id.is_(None),
+            ConfigProfile.config_type == "score",
+        ).order_by(ConfigProfile.updated_at.desc()).limit(1)
+    )
+    cp = result.scalars().first()
+    if cp is not None:
+        cp.config_json = restored_config
+
+    # Salva nova versão como checkpoint pós-rollback (audit trail)
+    checkpoint_id = await save_profile_version(
+        profile_id=profile_id,
+        config=restored_config,
+        perf=perf,
+        regime=regime,
+        mutation_reason=f"AUTO_ROLLED_BACK from version {ver_row['version_number']}",
+        db=db,
+    )
+
+    await log_audit(
+        profile_id=profile_id,
+        action="AUTO_ROLLED_BACK",
+        reason=reason,
+        regime=regime,
+        perf=perf,
+        db=db,
+        config_after=restored_config,
+        version_id=version_id,
+    )
+
+    logger.info(
+        "[Autopilot] AUTO_ROLLED_BACK profile=%s → version %s (ev_at_snapshot=%.3f%%)",
+        profile_id, ver_row["version_number"],
+        float(ver_row.get("ev_at_snapshot") or 0),
+    )
+
+    return {
+        "version_number":   ver_row["version_number"],
+        "ev_at_snapshot":   float(ver_row.get("ev_at_snapshot") or 0),
+        "regime":           ver_row.get("regime"),
+        "config":           restored_config,
+        "checkpoint_id":    checkpoint_id,
+    }
 
 
 # ── Mutation Decision ─────────────────────────────────────────────────────────
@@ -574,7 +817,11 @@ async def compute_rule_insights(
     days: int = PERFORMANCE_DAYS,
 ) -> dict:
     """
-    For each numeric scoring rule compute win-rate and EV from decisions_log.metrics.
+    For each numeric scoring rule compute win-rate and EV from shadow_trades.features_snapshot.
+
+    C.1 — migrado de decisions_log.metrics para shadow_trades.features_snapshot.
+    features_snapshot = dict flat {indicator: value} — mesmo formato de metrics["indicators_snapshot"].
+    decisions_log permanece como CAPTURA upstream — NÃO removida.
 
     Returns:
         {
@@ -585,12 +832,12 @@ async def compute_rule_insights(
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     result = await db.execute(text(f"""
-        SELECT metrics, outcome, pnl_pct
-        FROM decisions_log
-        WHERE l3_pass = true
-          AND decision = 'ALLOW'
-          AND outcome IN {_DL_OUTCOMES_SQL}
+        SELECT features_snapshot, outcome, pnl_pct
+        FROM shadow_trades
+        WHERE source = 'L3'
+          AND outcome IN {_ST_OUTCOMES_SQL}
           AND pnl_pct IS NOT NULL
+          AND features_snapshot IS NOT NULL
           AND user_id = :uid
           AND created_at >= :cutoff
     """), {"uid": user_id, "cutoff": cutoff})
@@ -600,7 +847,7 @@ async def compute_rule_insights(
         return {}
 
     total = len(rows)
-    overall_wins = sum(1 for r in rows if r["outcome"] == _DL_TP)
+    overall_wins = sum(1 for r in rows if r["outcome"] == _ST_TP)
     overall_wr = overall_wins / total
 
     insights: dict = {"_overall": {"n": total, "win_rate": overall_wr}}
@@ -620,7 +867,8 @@ async def compute_rule_insights(
         matching: list[tuple[bool, float]] = []
 
         for row in rows:
-            metrics = row["metrics"] or {}
+            # features_snapshot é o dict flat {indicator: value} de shadow_trades
+            metrics = row["features_snapshot"] or {}
             raw = metrics.get(metrics_key)
             if raw is None:
                 continue
@@ -629,7 +877,7 @@ async def compute_rule_insights(
             except (TypeError, ValueError):
                 continue
             if _rule_matches(operator, val, rule):
-                matching.append((row["outcome"] == _DL_TP, float(row["pnl_pct"])))
+                matching.append((row["outcome"] == _ST_TP, float(row["pnl_pct"])))
 
         n = len(matching)
         if n < MIN_RULE_SAMPLES:
@@ -804,6 +1052,438 @@ async def apply_rule_adjustments(
         return {"action": "RULES_ERROR", "reason": str(exc)}
 
 
+# ── Full Authority Adjustments (C.3) ─────────────────────────────────────────
+#
+# Orquestra ajustes em todas as dimensões da config: scoring_rules, minimum_score,
+# block_rules, entry_triggers, filters.
+#
+# Invariante: salva snapshot em profile_versions ANTES de cada escrita (rollback).
+# Sem floor/ceiling por decisão do operador — amplitude livre nos guardrails.
+# Controlado por guardrails.autopilot_full_authority (default=False → só scoring_rules).
+
+
+async def _adjust_minimum_score(
+    profile_id: str,
+    user_id: str,
+    perf: dict,
+    regime: str,
+    db: AsyncSession,
+    dry_run: bool,
+    scope_profile_id: Optional[str],
+    delta: int = 1,
+) -> dict:
+    """
+    Ajusta minimum_score do config_type='score' baseado em FPR e EV.
+
+    Lógica:
+      FPR > 0.60  → sobe threshold em +delta (menos aprovações, mais qualidade)
+      FPR < 0.30 e approved_ev > 0  → desce threshold em -delta (mais aprovações)
+      Sem floor/ceiling: amplitude livre.
+
+    Salva snapshot (rollback) antes de qualquer escrita.
+    """
+    if scope_profile_id and str(profile_id) != str(scope_profile_id):
+        return {"action": "SCOPE_VIOLATION_BLOCKED", "dimension": "minimum_score"}
+
+    from uuid import UUID
+    from ..models.config_profile import ConfigProfile
+
+    try:
+        uid = UUID(str(user_id))
+        result = await db.execute(
+            select(ConfigProfile).where(
+                ConfigProfile.user_id == uid,
+                ConfigProfile.pool_id.is_(None),
+                ConfigProfile.config_type == "score",
+            ).order_by(ConfigProfile.updated_at.desc()).limit(1)
+        )
+        cp = result.scalars().first()
+        if cp is None or not cp.config_json:
+            return {"action": "SKIPPED", "dimension": "minimum_score", "reason": "no_score_config"}
+
+        current_min = cp.config_json.get("minimum_score")
+        if current_min is None:
+            return {"action": "SKIPPED", "dimension": "minimum_score", "reason": "field_absent"}
+
+        current_min = int(current_min)
+        fpr = perf.get("fpr", 0.0)
+        approved_ev = perf.get("approved_ev", 0.0)
+
+        if fpr > 0.60:
+            new_min = current_min + delta
+            direction = "up"
+            reason_msg = f"fpr_high ({fpr:.2f} > 0.60) → raise minimum_score {current_min}→{new_min}"
+        elif fpr < 0.30 and approved_ev > 0.0:
+            new_min = current_min - delta
+            direction = "down"
+            reason_msg = f"fpr_low ({fpr:.2f} < 0.30) and ev_positive ({approved_ev:.3f}%) → lower minimum_score {current_min}→{new_min}"
+        else:
+            return {
+                "action": "ANALYZED",
+                "dimension": "minimum_score",
+                "reason": f"no_adjustment_needed (fpr={fpr:.2f}, ev={approved_ev:.3f}%)",
+                "current": current_min,
+            }
+
+        if dry_run:
+            logger.info("[Autopilot][DRY RUN] minimum_score WOULD change: %s", reason_msg)
+            await log_audit(
+                profile_id=profile_id, action="DRY_RUN_MIN_SCORE_ADJUSTED",
+                reason=f"[DRY RUN] {reason_msg}", regime=regime, perf=perf, db=db,
+            )
+            return {"action": "DRY_RUN_MIN_SCORE_ADJUSTED", "dry_run": True,
+                    "dimension": "minimum_score", "before": current_min, "after": new_min}
+
+        # Salvar snapshot ANTES da escrita (rollback safety)
+        snapshot_id = await save_profile_version(
+            profile_id=profile_id, config=dict(cp.config_json),
+            perf=perf, regime=regime,
+            mutation_reason=f"pre_min_score_adjustment:{direction}",
+            db=db,
+        )
+
+        new_config = dict(cp.config_json)
+        new_config["minimum_score"] = new_min
+        cp.config_json = new_config
+
+        logger.info("[Autopilot] minimum_score adjusted: %s (snapshot=%s)", reason_msg, snapshot_id)
+        await log_audit(
+            profile_id=profile_id, action="MIN_SCORE_ADJUSTED",
+            reason=reason_msg, regime=regime, perf=perf, db=db,
+            config_before={"minimum_score": current_min},
+            config_after={"minimum_score": new_min},
+            version_id=snapshot_id,
+        )
+        return {"action": "MIN_SCORE_ADJUSTED", "dimension": "minimum_score",
+                "before": current_min, "after": new_min, "snapshot_id": snapshot_id}
+
+    except Exception as exc:
+        logger.warning("[Autopilot] minimum_score adjustment failed for profile=%s: %s", profile_id, exc)
+        return {"action": "ERROR", "dimension": "minimum_score", "reason": str(exc)}
+
+
+async def _adjust_block_rules(
+    profile_id: str,
+    user_id: str,
+    insights: dict,
+    perf: dict,
+    regime: str,
+    db: AsyncSession,
+    dry_run: bool,
+    scope_profile_id: Optional[str],
+) -> dict:
+    """
+    Habilita/desabilita block_rules com base em edge de win-rate por indicador.
+
+    Lógica:
+      Se um block_rule bloqueia trades em um range e o edge desse range é POSITIVO
+      (o range produz wins), desabilita o bloco (estávamos bloqueando ganhos).
+      Se o edge é NEGATIVO (range produz losses), habilita o bloco (bloquear é correto).
+
+    Config lida de config_type='block' → config_json["block_rules"]["blocks"].
+    Salva snapshot ANTES de qualquer escrita.
+    """
+    if scope_profile_id and str(profile_id) != str(scope_profile_id):
+        return {"action": "SCOPE_VIOLATION_BLOCKED", "dimension": "block_rules"}
+
+    overall_wr = insights.get("_overall", {}).get("win_rate", 0.5)
+    if not insights or "_overall" not in insights:
+        return {"action": "SKIPPED", "dimension": "block_rules", "reason": "no_insights"}
+
+    from uuid import UUID
+    from ..models.config_profile import ConfigProfile
+
+    try:
+        uid = UUID(str(user_id))
+        result = await db.execute(
+            select(ConfigProfile).where(
+                ConfigProfile.user_id == uid,
+                ConfigProfile.pool_id.is_(None),
+                ConfigProfile.config_type == "block",
+            ).order_by(ConfigProfile.updated_at.desc()).limit(1)
+        )
+        cp = result.scalars().first()
+        if cp is None or not cp.config_json:
+            return {"action": "SKIPPED", "dimension": "block_rules", "reason": "no_block_config"}
+
+        blocks = list((cp.config_json.get("block_rules") or {}).get("blocks") or [])
+        if not blocks:
+            return {"action": "SKIPPED", "dimension": "block_rules", "reason": "no_blocks_defined"}
+
+        changes = []
+        adjusted = []
+        for block in blocks:
+            block = dict(block)
+            indicator = block.get("field") or block.get("indicator", "")
+            rule_key = _resolve_indicator_key(indicator)
+            info = insights.get(rule_key) or insights.get(indicator)
+            currently_enabled = bool(block.get("enabled", True))
+
+            if info and info["n"] >= MIN_RULE_SAMPLES:
+                edge = info["edge"]   # positive edge = this range wins → should NOT be blocked
+                should_enable = edge < -RULE_EDGE_THRESHOLD  # negative edge → blocking is correct
+                if should_enable != currently_enabled:
+                    changes.append({
+                        "block_id": block.get("id"),
+                        "field": indicator,
+                        "edge_pct": round(edge * 100, 2),
+                        "n_samples": info["n"],
+                        "before_enabled": currently_enabled,
+                        "after_enabled": should_enable,
+                    })
+                    block["enabled"] = should_enable
+                    logger.info(
+                        "[Autopilot] block_rule %s (%s): enabled %s→%s edge=%.1f%%",
+                        block.get("id"), indicator, currently_enabled, should_enable, edge * 100,
+                    )
+            adjusted.append(block)
+
+        if not changes:
+            return {"action": "ANALYZED", "dimension": "block_rules", "reason": "no_adjustment_needed"}
+
+        if dry_run:
+            logger.info("[Autopilot][DRY RUN] block_rules WOULD change: %d toggles", len(changes))
+            await log_audit(
+                profile_id=profile_id, action="DRY_RUN_BLOCK_RULES_ADJUSTED",
+                reason=f"[DRY RUN] {len(changes)} block_rules WOULD be toggled",
+                regime=regime, perf={**perf, "block_changes": changes}, db=db,
+            )
+            return {"action": "DRY_RUN_BLOCK_RULES_ADJUSTED", "dry_run": True,
+                    "dimension": "block_rules", "n_changed": len(changes), "changes": changes}
+
+        # Snapshot ANTES da escrita
+        snapshot_id = await save_profile_version(
+            profile_id=profile_id, config=dict(cp.config_json),
+            perf=perf, regime=regime,
+            mutation_reason=f"pre_block_rules_adjustment:{len(changes)}_toggles",
+            db=db,
+        )
+
+        new_config = dict(cp.config_json)
+        new_config["block_rules"] = dict(new_config.get("block_rules") or {})
+        new_config["block_rules"]["blocks"] = adjusted
+        cp.config_json = new_config
+
+        await log_audit(
+            profile_id=profile_id, action="BLOCK_RULES_ADJUSTED",
+            reason=f"{len(changes)} block_rules toggled via edge analysis",
+            regime=regime, perf={**perf, "block_changes": changes}, db=db,
+            config_after={"block_rules": {"blocks": adjusted}},
+            version_id=snapshot_id,
+        )
+        return {"action": "BLOCK_RULES_ADJUSTED", "dimension": "block_rules",
+                "n_changed": len(changes), "changes": changes, "snapshot_id": snapshot_id}
+
+    except Exception as exc:
+        logger.warning("[Autopilot] block_rules adjustment failed for profile=%s: %s", profile_id, exc)
+        return {"action": "ERROR", "dimension": "block_rules", "reason": str(exc)}
+
+
+async def _adjust_entry_triggers(
+    profile_id: str,
+    user_id: str,
+    insights: dict,
+    perf: dict,
+    regime: str,
+    db: AsyncSession,
+    dry_run: bool,
+    scope_profile_id: Optional[str],
+) -> dict:
+    """
+    Habilita/desabilita entry_triggers com base em edge de win-rate por indicador.
+
+    Condição com edge POSITIVO (range vence) → habilitar (queremos entrar quando esse range).
+    Condição com edge NEGATIVO (range perde) → desabilitar.
+
+    Config lida de config_type='block' → config_json["entry_triggers"]["conditions"].
+    Salva snapshot ANTES de qualquer escrita.
+    """
+    if scope_profile_id and str(profile_id) != str(scope_profile_id):
+        return {"action": "SCOPE_VIOLATION_BLOCKED", "dimension": "entry_triggers"}
+
+    if not insights or "_overall" not in insights:
+        return {"action": "SKIPPED", "dimension": "entry_triggers", "reason": "no_insights"}
+
+    from uuid import UUID
+    from ..models.config_profile import ConfigProfile
+
+    try:
+        uid = UUID(str(user_id))
+        result = await db.execute(
+            select(ConfigProfile).where(
+                ConfigProfile.user_id == uid,
+                ConfigProfile.pool_id.is_(None),
+                ConfigProfile.config_type == "block",
+            ).order_by(ConfigProfile.updated_at.desc()).limit(1)
+        )
+        cp = result.scalars().first()
+        if cp is None or not cp.config_json:
+            return {"action": "SKIPPED", "dimension": "entry_triggers", "reason": "no_block_config"}
+
+        conditions = list((cp.config_json.get("entry_triggers") or {}).get("conditions") or [])
+        if not conditions:
+            return {"action": "SKIPPED", "dimension": "entry_triggers", "reason": "no_conditions_defined"}
+
+        changes = []
+        adjusted = []
+        for cond in conditions:
+            cond = dict(cond)
+            indicator = cond.get("indicator", "")
+            rule_key = _resolve_indicator_key(indicator)
+            info = insights.get(rule_key) or insights.get(indicator)
+            currently_enabled = bool(cond.get("enabled", True))
+
+            if info and info["n"] >= MIN_RULE_SAMPLES:
+                edge = info["edge"]  # positive = this range wins → should be required for entry
+                should_enable = edge > RULE_EDGE_THRESHOLD
+                if should_enable != currently_enabled:
+                    changes.append({
+                        "condition_id": cond.get("id"),
+                        "indicator": indicator,
+                        "edge_pct": round(edge * 100, 2),
+                        "n_samples": info["n"],
+                        "before_enabled": currently_enabled,
+                        "after_enabled": should_enable,
+                    })
+                    cond["enabled"] = should_enable
+                    logger.info(
+                        "[Autopilot] entry_trigger %s (%s): enabled %s→%s edge=%.1f%%",
+                        cond.get("id"), indicator, currently_enabled, should_enable, edge * 100,
+                    )
+            adjusted.append(cond)
+
+        if not changes:
+            return {"action": "ANALYZED", "dimension": "entry_triggers", "reason": "no_adjustment_needed"}
+
+        if dry_run:
+            logger.info("[Autopilot][DRY RUN] entry_triggers WOULD change: %d toggles", len(changes))
+            await log_audit(
+                profile_id=profile_id, action="DRY_RUN_ENTRY_TRIGGERS_ADJUSTED",
+                reason=f"[DRY RUN] {len(changes)} entry_triggers WOULD be toggled",
+                regime=regime, perf={**perf, "trigger_changes": changes}, db=db,
+            )
+            return {"action": "DRY_RUN_ENTRY_TRIGGERS_ADJUSTED", "dry_run": True,
+                    "dimension": "entry_triggers", "n_changed": len(changes), "changes": changes}
+
+        # Snapshot ANTES da escrita
+        snapshot_id = await save_profile_version(
+            profile_id=profile_id, config=dict(cp.config_json),
+            perf=perf, regime=regime,
+            mutation_reason=f"pre_entry_triggers_adjustment:{len(changes)}_toggles",
+            db=db,
+        )
+
+        new_config = dict(cp.config_json)
+        new_config["entry_triggers"] = dict(new_config.get("entry_triggers") or {})
+        new_config["entry_triggers"]["conditions"] = adjusted
+        cp.config_json = new_config
+
+        await log_audit(
+            profile_id=profile_id, action="ENTRY_TRIGGERS_ADJUSTED",
+            reason=f"{len(changes)} entry_triggers toggled via edge analysis",
+            regime=regime, perf={**perf, "trigger_changes": changes}, db=db,
+            config_after={"entry_triggers": {"conditions": adjusted}},
+            version_id=snapshot_id,
+        )
+        return {"action": "ENTRY_TRIGGERS_ADJUSTED", "dimension": "entry_triggers",
+                "n_changed": len(changes), "changes": changes, "snapshot_id": snapshot_id}
+
+    except Exception as exc:
+        logger.warning("[Autopilot] entry_triggers adjustment failed for profile=%s: %s", profile_id, exc)
+        return {"action": "ERROR", "dimension": "entry_triggers", "reason": str(exc)}
+
+
+async def apply_full_adjustments(
+    profile_id: str,
+    user_id: str,
+    perf: dict,
+    regime: str,
+    insights: dict,
+    db: AsyncSession,
+    dry_run: bool = False,
+    scope_profile_id: Optional[str] = None,
+    can_adjust: Optional[list] = None,
+    min_score_delta: int = 1,
+) -> dict:
+    """
+    Orquestra todos os ajustes de config com autoridade expandida (C.3).
+
+    Dimensões controladas por `can_adjust` (lida dos guardrails):
+      - "scoring_rules"   → apply_rule_adjustments (comportamento anterior)
+      - "minimum_score"   → _adjust_minimum_score
+      - "block_rules"     → _adjust_block_rules
+      - "entry_triggers"  → _adjust_entry_triggers
+      - "filters"         → reservado (stub)
+
+    Invariante: cada dimensão que ESCREVE salva snapshot antes (rollback safety).
+    Sem floor/ceiling por decisão do operador.
+
+    Returns: dict com resultado por dimensão.
+    """
+    if can_adjust is None:
+        can_adjust = ["scoring_rules"]
+
+    results: dict = {}
+
+    # ── scoring_rules ─────────────────────────────────────────────────────────
+    if "scoring_rules" in can_adjust:
+        scoring_rules_list = insights.get("_scoring_rules_list", [])
+        results["scoring_rules"] = await apply_rule_adjustments(
+            profile_id=profile_id,
+            user_id=user_id,
+            perf=perf,
+            regime=regime,
+            db=db,
+            dry_run=dry_run,
+            scope_profile_id=scope_profile_id,
+        )
+
+    # ── minimum_score ─────────────────────────────────────────────────────────
+    if "minimum_score" in can_adjust:
+        results["minimum_score"] = await _adjust_minimum_score(
+            profile_id=profile_id,
+            user_id=user_id,
+            perf=perf,
+            regime=regime,
+            db=db,
+            dry_run=dry_run,
+            scope_profile_id=scope_profile_id,
+            delta=min_score_delta,
+        )
+
+    # ── block_rules ───────────────────────────────────────────────────────────
+    if "block_rules" in can_adjust:
+        results["block_rules"] = await _adjust_block_rules(
+            profile_id=profile_id,
+            user_id=user_id,
+            insights=insights,
+            perf=perf,
+            regime=regime,
+            db=db,
+            dry_run=dry_run,
+            scope_profile_id=scope_profile_id,
+        )
+
+    # ── entry_triggers ────────────────────────────────────────────────────────
+    if "entry_triggers" in can_adjust:
+        results["entry_triggers"] = await _adjust_entry_triggers(
+            profile_id=profile_id,
+            user_id=user_id,
+            insights=insights,
+            perf=perf,
+            regime=regime,
+            db=db,
+            dry_run=dry_run,
+            scope_profile_id=scope_profile_id,
+        )
+
+    # ── filters (reservado — stub) ─────────────────────────────────────────
+    if "filters" in can_adjust:
+        results["filters"] = {"action": "SKIPPED", "dimension": "filters", "reason": "not_implemented"}
+
+    return results
+
+
 # ── Main Cycle ───────────────────────────────────────────────────────────────
 
 async def run_autopilot_cycle(
@@ -850,7 +1530,7 @@ async def run_autopilot_cycle(
     if dry_run:
         logger.info("[Autopilot][DRY RUN] Ciclo em modo dry-run para profile=%s — nenhuma config será persistida.", profile_id)
 
-    # 1. Verificar circuit breaker
+    # 1. Verificar circuit breaker de performance (regressões acumuladas — pausa)
     if _is_circuit_broken(auto_pilot_config):
         paused_at = auto_pilot_config.get("circuit_breaker_paused_at", "")
         reason = f"circuit_breaker_active (paused_at={paused_at})"
@@ -887,15 +1567,123 @@ async def run_autopilot_cycle(
                 f"{new_consec} regressões consecutivas."
             )
 
-    # 5. Ajustar scoring rules via win-rate por faixa (roda sempre, independente de mutação)
-    rule_result = await apply_rule_adjustments(
+    # 4a. D — Behavioral circuit breaker (salto súbito na taxa de aprovação)
+    # Roda APÓS ter performance calculada. Independente de dry_run — só pausa, não escreve.
+    beh_triggered, beh_reason = await check_behavior_circuit_breaker(
+        db=db, perf=perf, guardrails=guardrails,
+    )
+    if beh_triggered:
+        await log_audit(
+            profile_id=profile_id,
+            action="BEHAVIORAL_CB_PAUSED",
+            reason=beh_reason,
+            regime=regime,
+            perf=perf,
+            db=db,
+        )
+        await db.commit()
+        return {"action": "BEHAVIORAL_CB_PAUSED", "reason": beh_reason, "perf": perf}
+
+    # 4b. D — Performance auto-rollback (N ciclos ruins consecutivos → restaura última versão)
+    # Roda antes dos ajustes para evitar que ciclo atual piore mais antes de rollback.
+    rollback_needed, rollback_reason = check_performance_rollback(
+        auto_pilot_config=updated_ap_config, guardrails=guardrails,
+    )
+    if rollback_needed:
+        last_version_id = updated_ap_config.get("last_version_id")
+        if dry_run:
+            logger.info(
+                "[Autopilot][DRY RUN] AUTO_ROLLBACK WOULD restore version=%s for profile=%s (not persisted)",
+                last_version_id, profile_id,
+            )
+            await log_audit(
+                profile_id=profile_id,
+                action="DRY_RUN_AUTO_ROLLBACK",
+                reason=f"[DRY RUN] WOULD rollback: {rollback_reason}",
+                regime=regime, perf=perf, db=db,
+            )
+            await db.commit()
+            return {
+                "action": "DRY_RUN_AUTO_ROLLBACK",
+                "dry_run": True,
+                "reason": rollback_reason,
+                "regime": regime,
+                "perf": perf,
+                "would_restore_version": last_version_id,
+            }
+        try:
+            rollback_result = await rollback_last_adjustment(
+                profile_id=profile_id,
+                user_id=user_id,
+                version_id=last_version_id,
+                perf=perf,
+                regime=regime,
+                reason=rollback_reason,
+                db=db,
+            )
+            # Reseta contador de regressões após rollback bem-sucedido
+            updated_ap_config["consecutive_regressions"] = 0
+            updated_ap_config["circuit_breaker_paused_at"] = None
+            await db.commit()
+            return {
+                "action":          "AUTO_ROLLED_BACK",
+                "reason":          rollback_reason,
+                "regime":          regime,
+                "perf":            perf,
+                "version_number":  rollback_result["version_number"],
+                "ev_at_snapshot":  rollback_result["ev_at_snapshot"],
+            }
+        except Exception as exc:
+            logger.error(
+                "[Autopilot] AUTO_ROLLBACK falhou para profile=%s version=%s: %s",
+                profile_id, last_version_id, exc,
+            )
+            # Não aborta o ciclo — loga e continua para evitar que rollback quebrado
+            # impeça análise futura.
+            await log_audit(
+                profile_id=profile_id,
+                action="AUTO_ROLLBACK_FAILED",
+                reason=f"rollback_error: {exc} (version={last_version_id})",
+                regime=regime, perf=perf, db=db,
+            )
+
+    # 5. Ajustar config via full_authority (C.3) — roda sempre, independente de mutação.
+    # Se autopilot_full_authority=False (default), comporta-se como antes: só scoring_rules.
+    full_authority = bool(guardrails.get("autopilot_full_authority", False))
+    can_adjust = list(guardrails.get("autopilot_can_adjust", ["scoring_rules"]))
+    if not full_authority:
+        can_adjust = ["scoring_rules"]   # fallback seguro: só scoring rules
+    min_score_delta = int(guardrails.get("min_score_delta_per_cycle", 1))
+
+    # Carrega insights uma vez para todas as dimensões que precisam deles
+    from uuid import UUID as _UUID
+    from ..models.config_profile import ConfigProfile as _CP
+    _score_result = await db.execute(
+        select(_CP).where(
+            _CP.user_id == _UUID(str(user_id)),
+            _CP.pool_id.is_(None),
+            _CP.config_type == "score",
+        ).order_by(_CP.updated_at.desc()).limit(1)
+    )
+    _score_cp = _score_result.scalars().first()
+    _scoring_rules_list = list(
+        (_score_cp.config_json.get("scoring_rules") or _score_cp.config_json.get("rules") or [])
+        if (_score_cp and _score_cp.config_json) else []
+    )
+    insights = await compute_rule_insights(user_id, _scoring_rules_list, db)
+    insights["_scoring_rules_list"] = _scoring_rules_list  # passa para apply_full_adjustments
+
+    rule_result = await apply_full_adjustments(
         profile_id=profile_id,
         user_id=user_id,
         perf=perf,
         regime=regime,
+        insights=insights,
         db=db,
         dry_run=dry_run,
         scope_profile_id=scope_id,
+        can_adjust=can_adjust,
+        min_score_delta=min_score_delta,
     )
 
     # 6. Decidir se deve mutar config principal (usa ev_threshold dos guardrails)

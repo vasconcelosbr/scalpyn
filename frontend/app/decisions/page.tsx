@@ -58,12 +58,11 @@ interface SnapshotWatchlist {
   market_mode: "spot" | "futures";
 }
 
-// Task #321: tabs de topo da página /decisions.
-// - "audit"         — trilha de auditoria (decisions_log, comportamento legado)
-// - "approved-l3"   — snapshot vivo dos approved da pipeline canônica L3
-// - "approved-arrow"— snapshot vivo dos approved da watchlist custom ArrowL1
-type Tab = "audit" | "approved-l3" | "approved-arrow";
-type SnapshotScope = "l3" | "arrow";
+// Tabs de topo da página /decisions.
+// - "audit"       — trilha de auditoria (decisions_log)
+// - "approved-l3" — snapshot vivo dos approved da pipeline canônica L3
+type Tab = "audit" | "approved-l3";
+type SnapshotScope = "l3";
 
 type Filters = {
   startDate: string;
@@ -212,7 +211,6 @@ function DecisionsPageInner() {
   const tabs: Array<{ id: Tab; label: string; desc: string }> = [
     { id: "audit", label: "Audit Trail", desc: "Real pipeline audit trail — state transitions only" },
     { id: "approved-l3", label: "L3 Approved", desc: "Snapshot vivo dos ativos aprovados na pipeline L3" },
-    { id: "approved-arrow", label: "Arrow Approved", desc: "Snapshot vivo dos ativos aprovados na watchlist ArrowL1" },
   ];
   const active = tabs.find((t) => t.id === tab) ?? tabs[0];
 
@@ -247,10 +245,8 @@ function DecisionsPageInner() {
 
       {tab === "audit" ? (
         <AuditTrailView />
-      ) : tab === "approved-l3" ? (
-        <ApprovedSnapshotView scope="l3" />
       ) : (
-        <ApprovedSnapshotView scope="arrow" />
+        <ApprovedSnapshotView scope="l3" />
       )}
     </div>
   );
@@ -569,9 +565,6 @@ function ApprovedSnapshotView({ scope = "l3" }: { scope?: SnapshotScope }) {
   const [asOf, setAsOf] = useState<string | null>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
-  // Reset state ao trocar de escopo — caso o usuário pule entre L3/Arrow,
-  // o snapshot anterior some imediatamente em vez de ficar "stuck" enquanto
-  // o novo fetch resolve.
   useEffect(() => {
     setItems([]);
     setExpandedKey(null);
@@ -675,7 +668,7 @@ function ApprovedSnapshotView({ scope = "l3" }: { scope?: SnapshotScope }) {
               onChange={(event) => updateFilter("watchlistId", event.target.value)}
               className={INPUT_CLASS}
             >
-              <option value="">{scope === "arrow" ? "All Arrow" : "All L3"}</option>
+              <option value="">All L3</option>
               {watchlists.map((wl) => (
                 <option key={wl.id} value={wl.id}>
                   {wl.name} ({wl.market_mode})
@@ -713,7 +706,7 @@ function ApprovedSnapshotView({ scope = "l3" }: { scope?: SnapshotScope }) {
 
       <div className="card">
         <div className="card-header">
-          <h3>Currently Approved ({scope === "arrow" ? "Arrow" : "L3"})</h3>
+          <h3>Currently Approved (L3)</h3>
           <span className="caption">{items.length} approved</span>
         </div>
         <div className="overflow-x-auto">
@@ -739,7 +732,7 @@ function ApprovedSnapshotView({ scope = "l3" }: { scope?: SnapshotScope }) {
             <div className="py-16 text-center text-[var(--text-tertiary)]">
               <FileText className="mx-auto mb-2 h-8 w-8 opacity-30" />
               <p className="text-[13px]">
-                Nenhuma cripto aprovada em {scope === "arrow" ? "Arrow" : "L3"} no momento.
+                Nenhuma cripto aprovada em L3 no momento.
               </p>
             </div>
           ) : (

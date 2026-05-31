@@ -101,6 +101,41 @@ def _calibrate_threshold(
     return chosen
 
 
+def _report_bad_approval_drivers(
+    model: "xgb.XGBClassifier",
+    X_test: pd.DataFrame,
+    df_test: pd.DataFrame,
+    feature_cols: list,
+) -> list:
+    """SHAP analysis: quais features empurram aprovações ruins (SL_HIT).
+
+    Retorna lista de (feature, mean_abs_shap) ordenada por impacto desc.
+    Loga BAD_APPROVAL_DRIVERS|top5=[...] para Cloud Run + MLflow notes.
+    Falha silenciosa se SHAP não instalado ou dataset insuficiente.
+    """
+    try:
+        import shap  # type: ignore
+        explainer = shap.TreeExplainer(model)
+        sv = explainer.shap_values(X_test)
+        loss_mask = (df_test["is_win_fast"] == 0).values
+        if loss_mask.sum() < 5:
+            logger.info("BAD_APPROVAL_DRIVERS|skipped (n_bad=%d < 5)", loss_mask.sum())
+            return []
+        impact = {
+            col: float(abs(sv[loss_mask, i]).mean())
+            for i, col in enumerate(feature_cols)
+        }
+        ranked = sorted(impact.items(), key=lambda x: x[1], reverse=True)
+        logger.info("BAD_APPROVAL_DRIVERS|top5=%s", ranked[:5])
+        return ranked
+    except ImportError:
+        logger.info("BAD_APPROVAL_DRIVERS|shap not installed — skipping")
+        return []
+    except Exception as exc:
+        logger.warning("BAD_APPROVAL_DRIVERS|error: %s", exc)
+        return []
+
+
 class WinFastTrainer:
     """
     XGBoost trainer with Optuna hyperparameter optimization.
@@ -126,17 +161,6 @@ class WinFastTrainer:
                        n_train, n_val, n_test
         """
         feature_cols = [c for c in FEATURE_COLUMNS if c in df.columns]
-
-        # When INCLUDE_REJECTED_IN_TRAIN=true, inject was_rejected as a feature
-        # so the model can learn separate class distributions for approved vs
-        # rejected assets. The flag is stored as _was_rejected (private) in
-        # build_training_dataframe; promote it here only when the env is set.
-        if os.getenv("INCLUDE_REJECTED_IN_TRAIN", "false").lower() == "true":
-            if "_was_rejected" in df.columns and "was_rejected" not in feature_cols:
-                df = df.copy()
-                df["was_rejected"] = df["_was_rejected"].fillna(0).astype("float32")
-                feature_cols = feature_cols + ["was_rejected"]
-                logger.info("INCLUDE_REJECTED_IN_TRAIN: added 'was_rejected' feature")
 
         # ML_EXCLUDED_FIELDS — guardrail no entry-point do treino. Nenhum
         # desses campos pode entrar em X_train/X_val/X_test (leakage circular
@@ -301,11 +325,15 @@ class WinFastTrainer:
                 float((pred_test[neg_mask] == 1).mean()) if neg_mask.sum() > 0 else 0.0
             )
 
-            # Outcome distribution (lowercase tp/sl regime post-14/05).
+            # Outcome distribution (shadow_trades: 'TP_HIT' / 'SL_HIT').
             outcome_counts: dict[str, int] = {}
             if "_outcome" in df.columns:
                 vc = df["_outcome"].fillna("__null__").value_counts()
                 outcome_counts = {str(k): int(v) for k, v in vc.items()}
+
+            shap_drivers = _report_bad_approval_drivers(
+                self.model, X_test, test_df, feature_cols
+            )
 
             mlflow.log_params(best_params)
             mlflow.log_params({
@@ -314,14 +342,15 @@ class WinFastTrainer:
                 "min_samples_per_class": min_per_class,
             })
             mlflow.set_tags({
-                "label_version": "pnl_gt_0_v1",
-                "dedup_strategy": "distinct_symbol_pnl_v1",
+                "label_version": "ttt_aware_v2",
+                "data_source": "shadow_trades_L3",
                 "nan_handling": "native_xgboost",
-                "n_unique_trades_after_dedup": str(len(df)),
+                "n_unique_trades": str(len(df)),
                 "winrate_base": f"{winrate_base:.4f}",
                 "n_pos": str(n_pos),
                 "n_neg": str(n_neg),
                 "calibrated_threshold": f"{calibrated_threshold:.4f}",
+                "shap_top1": str(shap_drivers[0][0]) if shap_drivers else "n/a",
             })
             mlflow.log_metrics({
                 "precision": precision,
@@ -364,4 +393,5 @@ class WinFastTrainer:
             "winrate_base": winrate_base,
             "decision_threshold": calibrated_threshold,
             "outcome_distribution": outcome_counts,
+            "shap_bad_approval_drivers": shap_drivers[:5] if shap_drivers else [],
         }
