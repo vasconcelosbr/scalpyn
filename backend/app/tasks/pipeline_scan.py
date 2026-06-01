@@ -2521,7 +2521,14 @@ async def _run_pipeline_scan():
                     # training set). Skip scoring entirely for POOL and
                     # explicitly remove any score that _build_pipeline_asset
                     # may have populated from the alpha_scores table.
-                    if effective_level == "POOL":
+                    # L1/L2 watchlists that belong to a score-free pool chain
+                    # can opt out via filters_json.no_score = true — the same
+                    # cleanup is applied so no score leaks into the DB row.
+                    _no_score = (
+                        effective_level == "POOL"
+                        or bool((filters_json or {}).get("no_score"))
+                    )
+                    if _no_score:
                         for asset in assets:
                             asset.pop("score", None)
                             asset.pop("_score", None)
