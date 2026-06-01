@@ -167,6 +167,7 @@ export function WatchlistDecisionTable({
   loading,
   emptyMessage,
   indicatorCols,
+  showScore = true,
 }: {
   items: WatchlistDecisionItem[];
   loading: boolean;
@@ -179,6 +180,8 @@ export function WatchlistDecisionTable({
    * the legacy summary view.
    */
   indicatorCols?: IndicatorColumnSpec[];
+  /** Hide the Score column (e.g. for L1 where scoring is not yet applied). */
+  showScore?: boolean;
 }) {
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -309,9 +312,10 @@ export function WatchlistDecisionTable({
           // only when the watchlist truly has no profile-driven columns.
           const dynCols = indicatorCols ?? [];
           const useDynamic = dynCols.length > 0;
-          // Column count: chevron + Symbol + Score + ML + [dynCols] + Stage + Status + Timestamp
-          //          OR  chevron + Symbol + Score + ML + Stage + Status + Indicators + Conditions + Timestamp
-          const totalCols = useDynamic ? 7 + dynCols.length : 9;
+          // Column count: chevron + Symbol + [Score] + ML + [dynCols] + Stage + Status + Timestamp
+          //          OR  chevron + Symbol + [Score] + ML + Stage + Status + Indicators + Conditions + Timestamp
+          const scoreCol = showScore ? 1 : 0;
+          const totalCols = useDynamic ? 6 + scoreCol + dynCols.length : 8 + scoreCol;
           const minWidth = useDynamic ? Math.max(720, 420 + dynCols.length * 110) : 1040;
           return (
         <div className="overflow-x-auto">
@@ -320,14 +324,16 @@ export function WatchlistDecisionTable({
               <tr className="border-b border-[#1A2035] bg-[#060810]">
                 <th className="w-8 px-2 py-2.5" />
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Symbol</th>
-                <th className="px-3 py-2.5 text-left text-[#4B5563] min-w-[130px]">
-                  <button onClick={() => toggleSort("score")} className="flex items-center gap-1 hover:text-[#94A3B8] transition-colors">
-                    Score
-                    <span className={`text-[9px] ${sortKey === "score" ? "text-[#60A5FA]" : "opacity-30"}`}>
-                      {sortKey === "score" ? (sortDir === "desc" ? "▼" : "▲") : "⇅"}
-                    </span>
-                  </button>
-                </th>
+                {showScore && (
+                  <th className="px-3 py-2.5 text-left text-[#4B5563] min-w-[130px]">
+                    <button onClick={() => toggleSort("score")} className="flex items-center gap-1 hover:text-[#94A3B8] transition-colors">
+                      Score
+                      <span className={`text-[9px] ${sortKey === "score" ? "text-[#60A5FA]" : "opacity-30"}`}>
+                        {sortKey === "score" ? (sortDir === "desc" ? "▼" : "▲") : "⇅"}
+                      </span>
+                    </button>
+                  </th>
+                )}
                 <th className="px-3 py-2.5 text-center text-[#4B5563] whitespace-nowrap">
                   <button onClick={() => toggleSort("ml")} className="flex items-center gap-1 justify-center hover:text-[#94A3B8] transition-colors w-full">
                     ML
@@ -384,7 +390,7 @@ export function WatchlistDecisionTable({
                         {isExpanded ? <ChevronDown size={13} className="text-[#60A5FA]" /> : <ChevronRight size={13} />}
                       </td>
                       <td className="px-3 py-2.5 font-semibold text-[#E2E8F0]">{item.symbol}</td>
-                      <td className="px-3 py-2.5"><ScoreBar value={item.alpha_score} /></td>
+                      {showScore && <td className="px-3 py-2.5"><ScoreBar value={item.alpha_score} /></td>}
                       <td className="px-3 py-2.5 text-center">
                         {item.ml_probability != null ? (
                           <span

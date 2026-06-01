@@ -1236,6 +1236,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
               loading={loadingAssets}
               emptyMessage="Nenhum ativo aprovado para os filtros atuais."
               indicatorCols={approvedCols}
+              showScore={displayLevel !== 'L1'}
             />
           ) : rejectedError ? (
             <div className="px-4 py-5 flex items-center gap-3">
@@ -1254,6 +1255,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
               loading={loadingRejected}
               emptyMessage="Nenhum ativo rejeitado para os filtros atuais."
               indicatorCols={rejectedCols}
+              showScore={displayLevel !== 'L1'}
             />
           )}
         </div>
