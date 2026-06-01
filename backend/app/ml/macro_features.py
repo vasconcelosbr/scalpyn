@@ -153,7 +153,7 @@ def _extract_indices(raw: Optional[Any]) -> Dict[str, Optional[float]]:
 
     for aliases, feature_key in [
         (("SPX", "SP500", "^GSPC", "US500", "S&P500"), "sp500_change_1h"),
-        (("NDX", "NASDAQ", "^NDX", "NAS100", "COMP"), "nasdaq_change_1h"),
+        (("NDX", "NASDAQ", "^NDX", "NAS100", "COMP", "^IXIC"), "nasdaq_change_1h"),
         (("RUT", "RUSSELL2000", "^RUT", "RTY", "R2000"), "russell2000_change_1h"),
     ]:
         for alias in aliases:
@@ -214,7 +214,12 @@ def _extract_forex(raw: Optional[Any]) -> Dict[str, Optional[float]]:
         return out
 
     data = _unwrap(raw)
-    item = _find_by_symbol(data, "DXY") or _find_by_symbol(data, "USDX") or _find_by_symbol(data, "USD")
+    item = (
+        _find_by_symbol(data, "DXY")
+        or _find_by_symbol(data, "DX-Y.NYB")
+        or _find_by_symbol(data, "USDX")
+        or _find_by_symbol(data, "USD")
+    )
     if not item and isinstance(data, dict):
         item = data
 
@@ -275,15 +280,22 @@ def _extract_crypto_global(raw: Optional[Any]) -> Dict[str, Optional[float]]:
     """
     Extract BTC dominance, market cap change, volume change, fear & greed index.
 
-    Expected MDH shape:
+    MDH actual shape (snapshot dict):
       {"data": {
-        "btc_dominance": 59.96,
-        "btc_dominance_change": 0.3,
-        "total_market_cap_change_24h": 1.82,
-        "total_volume_change_24h": 5.3,
-        "fear_greed_index": 65,
+        "crypto_global": {"snapshot_type": "crypto_global", "payload": {
+          "btc_dominance": 56.7,
+          "fear_and_greed": 29,
+          "total_market_cap_usd": 2522407564278.7,
+          "total_volume_24h_usd": 110033452040.6,
+          ...
+        }},
+        "fear_greed": {"snapshot_type": "fear_greed", "payload": {"value": 29, ...}},
+        "btc_dominance": {"snapshot_type": "btc_dominance", "payload": {"value": 56.7}},
         ...
       }}
+
+    Flat shape also supported for backwards compatibility:
+      {"data": {"btc_dominance": 59.96, "fear_greed_index": 65, ...}}
     """
     out: Dict[str, Optional[float]] = {
         "btc_dominance": None,
@@ -299,45 +311,62 @@ def _extract_crypto_global(raw: Optional[Any]) -> Dict[str, Optional[float]]:
     if not isinstance(data, dict):
         return out
 
+    # Detect snapshot structure: values are dicts with "payload" key
+    # Extract the crypto_global payload as primary source
+    cg_payload: Dict = {}
+    fg_payload: Dict = {}
+    if isinstance(data.get("crypto_global"), dict):
+        cg_payload = data["crypto_global"].get("payload") or {}
+    if isinstance(data.get("fear_greed"), dict):
+        fg_payload = data["fear_greed"].get("payload") or {}
+
+    # Merge: snapshot payload takes priority, flat data is fallback
+    flat = data if not cg_payload else {}
+
+    def _get(*dicts: Dict, fields: tuple, allow_negative: bool = True) -> Optional[float]:
+        for d in dicts:
+            for fld in fields:
+                v = _safe_float(d.get(fld), allow_negative=allow_negative)
+                if v is not None:
+                    return v
+        return None
+
     # BTC dominance (must be 0–100)
-    for fld in ("btc_dominance", "bitcoin_dominance", "btcDominance", "btc_market_cap_percentage"):
-        v = _safe_float(data.get(fld), allow_negative=False)
-        if v is not None and v <= 100:
-            out["btc_dominance"] = v
-            break
-
-    # BTC dominance change
-    for fld in ("btc_dominance_change", "bitcoin_dominance_change", "btcDominanceChange",
-                "btc_dominance_change_24h"):
-        v = _safe_float(data.get(fld))
-        if v is not None:
-            out["btc_dominance_change"] = v
-            break
-
-    # Total market cap change %
-    for fld in ("total_market_cap_change_24h", "market_cap_change_percentage_24h",
-                "total_market_cap_change", "marketCapChange24h", "market_cap_change"):
-        v = _safe_float(data.get(fld))
-        if v is not None:
-            out["crypto_market_cap_change"] = v
-            break
-
-    # Total volume change %
-    for fld in ("total_volume_change_24h", "volume_change_24h", "volumeChange24h",
-                "total_volume_change", "volume_change"):
-        v = _safe_float(data.get(fld))
-        if v is not None:
-            out["crypto_volume_change"] = v
-            break
-
-    # Fear & greed index (0–100, non-negative)
-    fg = data.get("fear_greed_index") or data.get("fearGreedIndex") or data.get("fear_and_greed_index")
-    # Sometimes nested: {"fear_greed": {"value": 65}}
-    if isinstance(fg, dict):
-        fg = fg.get("value") or fg.get("score")
-    v = _safe_float(fg, allow_negative=False)
+    v = _get(cg_payload, flat, fields=("btc_dominance", "bitcoin_dominance", "btcDominance",
+                                        "btc_market_cap_percentage"), allow_negative=False)
     if v is not None and v <= 100:
-        out["fear_greed_index"] = v
+        out["btc_dominance"] = v
+
+    # BTC dominance change (not always available)
+    out["btc_dominance_change"] = _get(
+        cg_payload, flat,
+        fields=("btc_dominance_change", "bitcoin_dominance_change", "btcDominanceChange",
+                "btc_dominance_change_24h"),
+    )
+
+    # Total market cap change % (not always available — API may only expose absolute)
+    out["crypto_market_cap_change"] = _get(
+        cg_payload, flat,
+        fields=("total_market_cap_change_24h", "market_cap_change_percentage_24h",
+                "total_market_cap_change", "marketCapChange24h", "market_cap_change"),
+    )
+
+    # Total volume change % (not always available)
+    out["crypto_volume_change"] = _get(
+        cg_payload, flat,
+        fields=("total_volume_change_24h", "volume_change_24h", "volumeChange24h",
+                "total_volume_change", "volume_change"),
+    )
+
+    # Fear & greed index (0–100)
+    # Try fear_greed snapshot payload first, then crypto_global payload, then flat
+    fg_val = (
+        _safe_float(fg_payload.get("value") or fg_payload.get("score"), allow_negative=False)
+        or _safe_float(cg_payload.get("fear_and_greed") or cg_payload.get("fear_greed_index"), allow_negative=False)
+        or _get(flat, flat, fields=("fear_greed_index", "fearGreedIndex", "fear_and_greed_index"), allow_negative=False)
+    )
+    if fg_val is not None and fg_val <= 100:
+        out["fear_greed_index"] = fg_val
 
     return out
 
