@@ -11,6 +11,12 @@ if os.getenv("AUDIT_MODE", "false").lower() == "true":
     _audit_main()
     sys.exit(0)
 
+# PROBA_ANALYSIS_MODE — probability distribution analysis on active model.
+if os.getenv("PROBA_ANALYSIS_MODE", "false").lower() == "true":
+    from ml_trainer.proba_analysis import main as _proba_main
+    _proba_main()
+    sys.exit(0)
+
 import mlflow
 import mlflow.xgboost
 import optuna
