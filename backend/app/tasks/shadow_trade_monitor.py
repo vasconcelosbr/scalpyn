@@ -1181,6 +1181,8 @@ async def _create_watchlist_spot_shadows_for_all_users() -> int:
         TTT_ENABLED_DEFAULT,
         TTT_TP_PCT_DEFAULT,
         TTT_TIMEOUT_MINUTES_DEFAULT,
+        _SHADOW_TP_PCT_OVERRIDE,
+        _SHADOW_SL_PCT_OVERRIDE,
     )
     from sqlalchemy import select
 
@@ -1212,8 +1214,8 @@ async def _create_watchlist_spot_shadows_for_all_users() -> int:
             try:
                 se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
                 user_config = {
-                    "tp_pct": float(se_cfg.selling.take_profit_pct),
-                    "sl_pct": float(
+                    "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(se_cfg.selling.take_profit_pct),
+                    "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
                         se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct
                     ),
                     "timeout_candles": None,
