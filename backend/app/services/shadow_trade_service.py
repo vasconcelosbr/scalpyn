@@ -86,7 +86,16 @@ SHADOW_SOURCE_L3 = "L3"
 # Shadows de ativos rejeitados na L3 — usados exclusivamente para dados ML.
 # Segregados por source para nunca contaminar métricas de aprovados.
 SHADOW_SOURCE_L3_REJECTED = "L3_REJECTED"
-_VALID_SHADOW_SOURCES = (SHADOW_SOURCE_L3, SHADOW_SOURCE_L3_REJECTED)
+# BLOCO B — espectro completo da watchlist L1 spot (nova arquitetura ML).
+# Captura TODOS os símbolos pós-filtro estrutural, não apenas aprovados L3.
+# Isso elimina o viés de seleção que causava winrate ~76% no dataset antigo.
+# WATCHLIST_FUT reservado para fase futures (não criar agora).
+SHADOW_SOURCE_WATCHLIST_SPOT = "WATCHLIST_SPOT"
+_VALID_SHADOW_SOURCES = (
+    SHADOW_SOURCE_L3,
+    SHADOW_SOURCE_L3_REJECTED,
+    SHADOW_SOURCE_WATCHLIST_SPOT,
+)
 
 
 # ── helpers internos ─────────────────────────────────────────────────────────
@@ -1609,3 +1618,161 @@ def map_per_asset_reason(reason_text: str) -> str:
     if "max_exposure" in t:
         return "MAX_EXPOSURE_PER_ASSET"
     return "ASSET_GATE"
+
+
+# ── BLOCO B — espectro completo WATCHLIST_SPOT ────────────────────────────────
+
+
+async def create_watchlist_spot_shadows(
+    user_id,
+    user_config: Dict[str, Any],
+    pool_cfg: Dict[str, Any],
+) -> int:
+    """Cria shadow trades source='WATCHLIST_SPOT' para todos os símbolos da L1 spot.
+
+    Objetivo: capturar outcomes de TODA a watchlist (não apenas aprovados L3),
+    eliminando o viés de seleção que causava winrate ~76% no dataset de treino
+    e impedia o ML de aprender a separar vencedores de perdedores.
+
+    Gated por ``new_arch_capture_enabled`` em pool_cfg — quando False,
+    retorna 0 sem tocar nada (comportamento IDÊNTICO ao atual).
+
+    Regras:
+    - Apenas SPOT (L1 ID via ``shadow_watchlist_l1_spot_id`` em pool_cfg)
+    - Ponto de captura: L1 (pass-through) — antes de qualquer filtro de qualidade
+    - Fidelidade: mesmo TP/SL/timeout que o trade real (de user_config)
+    - Idempotente via ON CONFLICT (user_id, symbol) WHERE status='RUNNING'
+    - Append-only: nunca apaga dados existentes
+    - Captura da fase futures separada (WATCHLIST_FUT reservado — NÃO criar agora)
+    """
+    if not pool_cfg.get("new_arch_capture_enabled", False):
+        # E.2 — flags=false → comportamento idêntico ao atual. Zero impacto.
+        return 0
+
+    l1_id = pool_cfg.get("shadow_watchlist_l1_spot_id")
+    if not l1_id:
+        logger.warning(
+            "[shadow-ws] shadow_watchlist_l1_spot_id não configurado em pool_config — "
+            "WATCHLIST_SPOT shadow não criado"
+        )
+        return 0
+    # E.4 — ponto de captura imutável: a captura DEVE ser na L1 (pass-through),
+    # ANTES de qualquer filtro de qualidade. O ID é lido de config — nunca hardcoded.
+    # Se shadow_watchlist_l1_spot_id apontar para uma watchlist L2/L3, o espectro
+    # completo fica comprometido e o viés de seleção retorna.
+    # O operador é responsável por manter este ID apontando para a L1.
+
+    from ..database import CeleryAsyncSessionLocal
+
+    # ── Lê símbolos aprovados na L1 (pass-through, todos os que chegaram até aqui)
+    watchlist_symbols: List[str] = []
+    running_set: set = set()
+    try:
+        async with CeleryAsyncSessionLocal() as read_db:
+            sym_rows = await read_db.execute(
+                text("""
+                    SELECT DISTINCT symbol
+                    FROM pipeline_watchlist_assets
+                    WHERE watchlist_id = :wid
+                      AND (level_direction IS NULL OR level_direction = 'up')
+                    ORDER BY symbol
+                """),
+                {"wid": str(l1_id)},
+            )
+            watchlist_symbols = [r.symbol for r in sym_rows.fetchall()]
+
+            if not watchlist_symbols:
+                return 0
+
+            # Símbolos com shadow RUNNING (qualquer source) — não duplicar
+            run_rows = await read_db.execute(
+                text("""
+                    SELECT DISTINCT symbol FROM shadow_trades
+                    WHERE user_id = :uid AND status IN ('RUNNING', 'PENDING')
+                """),
+                {"uid": str(user_id)},
+            )
+            running_set = {r.symbol for r in run_rows.fetchall()}
+    except Exception:
+        logger.exception(
+            "[shadow-ws] query L1 symbols/running failed user=%s", user_id
+        )
+        return 0
+
+    eligible = sorted(s for s in watchlist_symbols if s not in running_set)
+    if not eligible:
+        return 0
+
+    # ── Features: lê indicadores via indicators_provider (mesmo merge path do pipeline)
+    features_by_symbol: Dict[str, Dict[str, Any]] = {}
+    try:
+        from ..services.indicators_provider import get_merged_indicators
+        async with CeleryAsyncSessionLocal() as ind_db:
+            merged = await get_merged_indicators(ind_db, eligible)
+            for sym, mi in merged.items():
+                flat = mi.as_flat_dict()
+                # Encapsula no formato que _build_features_snapshot espera:
+                # {"indicators_snapshot": {key: {"value": v}}}
+                features_by_symbol[sym] = {
+                    "indicators_snapshot": {k: {"value": v} for k, v in flat.items()},
+                    "source": "watchlist_spot_l1",
+                }
+    except Exception:
+        logger.exception("[shadow-ws] indicators fetch failed user=%s", user_id)
+        # Continua sem features (features_snapshot vazias) — shadow ainda é criado,
+        # mas sem features ML. Melhor do que não criar.
+
+    created = 0
+    for symbol in eligible:
+        try:
+            async with CeleryAsyncSessionLocal() as own_db:
+                async with own_db.begin():
+                    # Monta _SyntheticDecision com features da L1
+                    synthetic = _SyntheticDecision(
+                        user_id=user_id,
+                        symbol=symbol,
+                        direction="SPOT",
+                        strategy=None,
+                        id=None,
+                        created_at=datetime.now(timezone.utc),
+                        metrics=features_by_symbol.get(symbol, {}),
+                    )
+                    new_id = await _create_from_decision(
+                        own_db,
+                        synthetic,
+                        "WATCHLIST_SPOT_CAPTURE",
+                        user_config,
+                        source=SHADOW_SOURCE_WATCHLIST_SPOT,
+                    )
+                    if new_id is not None:
+                        created += 1
+                        logger.debug(
+                            "[shadow-ws] WATCHLIST_SPOT created id=%s symbol=%s user=%s",
+                            new_id, symbol, user_id,
+                        )
+        except Exception:
+            logger.exception(
+                "[shadow-ws] create failed symbol=%s user=%s", symbol, user_id
+            )
+
+    # E.3 — Carga monitorada: watchlist enxuta pós-filtro estrutural deve
+    # ter ~80-120 símbolos. Se count > 200, o filtro estrutural pode não
+    # estar funcionando (pool bruto vindo sem filtro).
+    _watchlist_size = len(watchlist_symbols)
+    _warn_threshold = 200
+    if _watchlist_size > _warn_threshold:
+        logger.warning(
+            "[shadow-ws] WATCHLIST_SPOT_LOAD_WARNING|user=%s|watchlist_size=%d "
+            "(expected ~80-120 pós-filtro estrutural — verificar pool_structural_filter)",
+            user_id, _watchlist_size,
+        )
+
+    logger.info(
+        "[shadow-ws] WATCHLIST_SPOT|user=%s|watchlist=%d|running_skip=%d|eligible=%d|created=%d",
+        user_id,
+        _watchlist_size,
+        len(watchlist_symbols) - len(eligible),
+        len(eligible),
+        created,
+    )
+    return created

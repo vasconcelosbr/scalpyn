@@ -1016,7 +1016,7 @@ async def _monitor_async() -> Dict[str, int]:
     """Uma execução do monitor — processa até ``BATCH_SIZE`` shadows."""
     from ..database import CeleryAsyncSessionLocal
 
-    summary = {"processed": 0, "completed": 0, "errors": 0, "backfill_created": 0}
+    summary = {"processed": 0, "completed": 0, "errors": 0, "backfill_created": 0, "watchlist_spot_created": 0}
     # Coletados dentro da tx principal e consumidos após o commit — FIX C3/D1.
     enrich_targets: List[Dict[str, Any]] = []
     # FIX D1 (2026-05-15): IDs dos shadows fechados neste tick — gravação de
@@ -1126,6 +1126,11 @@ async def _monitor_async() -> Dict[str, int]:
     # de estado → decisions_log) e execute_buy (janela 10 min). Idempotente
     # via ON CONFLICT (decision_id) DO NOTHING.
     summary["backfill_created"] = await _backfill_shadows_for_all_users()
+
+    # BLOCO B — WATCHLIST_SPOT: captura espectro completo da L1 spot.
+    # Gated por new_arch_capture_enabled — quando False, no-op (zero impacto).
+    # ADITIVO ao backfill L3 existente: não substitui, roda em paralelo.
+    summary["watchlist_spot_created"] = await _create_watchlist_spot_shadows_for_all_users()
 
     # P0 backfill: label decisions_log rows whose pnl_pct is still NULL even
     # though the linked shadow trade has COMPLETED. Catches rows persisted
@@ -1239,6 +1244,76 @@ async def _backfill_shadows_for_all_users() -> int:
         return total
     except Exception:
         logger.exception("[shadow-monitor] _backfill_shadows_for_all_users failed")
+        return 0
+
+
+async def _create_watchlist_spot_shadows_for_all_users() -> int:
+    """BLOCO B — cria shadows WATCHLIST_SPOT para espectro completo da L1 spot.
+
+    Gated por ``new_arch_capture_enabled`` em pool_config. Quando False,
+    retorna 0 sem alterar nada — comportamento IDÊNTICO ao atual.
+
+    Roda como best-effort em paralelo ao backfill L3 existente (ADITIVO).
+    Nunca levanta exceção — falhas são logadas e não propagadas.
+    """
+    from ..database import CeleryAsyncSessionLocal
+    from ..models.config_profile import ConfigProfile
+    from ..schemas.spot_engine_config import SpotEngineConfig
+    from ..services.shadow_trade_service import (
+        create_watchlist_spot_shadows,
+        TTT_ENABLED_DEFAULT,
+        TTT_TP_PCT_DEFAULT,
+        TTT_TIMEOUT_MINUTES_DEFAULT,
+    )
+    from sqlalchemy import select
+
+    try:
+        async with CeleryAsyncSessionLocal() as db:
+            # Carrega spot_engine configs (TP/SL) + pool_config (flags + l1_id)
+            se_res = await db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.config_type == "spot_engine",
+                    ConfigProfile.is_active.is_(True),
+                )
+            )
+            se_rows = se_res.scalars().all()
+
+            pool_res = await db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.config_type == "pool_config",
+                    ConfigProfile.is_active.is_(True),
+                )
+            )
+            pool_rows = {str(r.user_id): r.config_json for r in pool_res.scalars().all()}
+
+        total = 0
+        for cfg_row in se_rows:
+            uid = str(cfg_row.user_id)
+            pool_cfg = pool_rows.get(uid, {})
+            if not pool_cfg.get("new_arch_capture_enabled", False):
+                continue
+            try:
+                se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
+                user_config = {
+                    "tp_pct": float(se_cfg.selling.take_profit_pct),
+                    "sl_pct": float(
+                        se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct
+                    ),
+                    "timeout_candles": None,
+                    "ttt_enabled": TTT_ENABLED_DEFAULT,
+                    "ttt_tp_pct": TTT_TP_PCT_DEFAULT,
+                    "ttt_timeout_minutes": TTT_TIMEOUT_MINUTES_DEFAULT,
+                }
+                total += await create_watchlist_spot_shadows(
+                    cfg_row.user_id, user_config, pool_cfg
+                )
+            except Exception:
+                logger.exception(
+                    "[shadow-monitor] WATCHLIST_SPOT creation failed user=%s", uid
+                )
+        return total
+    except Exception:
+        logger.exception("[shadow-monitor] _create_watchlist_spot_shadows_for_all_users failed")
         return 0
 
 

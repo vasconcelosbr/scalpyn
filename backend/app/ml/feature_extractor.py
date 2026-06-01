@@ -355,6 +355,65 @@ def build_training_dataframe(records: list) -> pd.DataFrame:
     return df
 
 
+def filter_trainable_features(
+    df: pd.DataFrame,
+    feature_cols: list,
+    min_coverage: float = 0.30,
+) -> tuple:
+    """Filter feature columns to those with sufficient coverage and variance.
+
+    Excludes features with:
+    - Coverage (non-NaN fraction) < min_coverage — too sparse to be useful
+    - std == 0 (constant when present) — no discriminative power
+
+    Returns:
+        (kept_cols, excluded_list) where excluded_list is a list of
+        (col, reason) tuples for logging / notes.
+
+    This is the BLOCO C dynamic feature filter from PROMPT_ARQUITETURA_ML_SPOT.
+    Macro features with 0% coverage (MDH not yet live) are silently excluded
+    here and re-enter training automatically once coverage rises above min_coverage.
+    """
+    kept: list = []
+    excluded: list = []
+
+    for col in feature_cols:
+        if col not in df.columns:
+            excluded.append((col, "not_in_df"))
+            continue
+
+        series = df[col]
+        n_total = len(series)
+        if n_total == 0:
+            excluded.append((col, "empty_df"))
+            continue
+
+        coverage = float(series.notna().sum()) / n_total
+        if coverage < min_coverage:
+            excluded.append((col, f"low_coverage_{coverage:.2f}"))
+            continue
+
+        # Check std only on non-NaN values
+        non_null = series.dropna()
+        if len(non_null) > 0 and float(non_null.std()) == 0.0:
+            excluded.append((col, "zero_std"))
+            continue
+
+        kept.append(col)
+
+    if excluded:
+        logger.info(
+            "FEATURE_FILTER|kept=%d|excluded=%d|details=%s",
+            len(kept),
+            len(excluded),
+            excluded[:20],  # cap log length
+        )
+    else:
+        logger.info("FEATURE_FILTER|kept=%d|excluded=0", len(kept))
+
+    return kept, excluded
+
+
 def train_val_test_split(
     df: pd.DataFrame,
     train_ratio: float = 0.70,

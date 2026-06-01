@@ -31,9 +31,19 @@ logger = logging.getLogger("scalpyn.trainer")
 DB_URL            = os.environ["DB_URL"]          # Cloud SQL via unix socket
 BUCKET_NAME       = os.environ["BUCKET_NAME"]     # scalpyn-mlflow
 GCS_ARTIFACT_ROOT = f"gs://{BUCKET_NAME}/artifacts"
-DAYS_LOOKBACK            = int(os.getenv("DAYS_LOOKBACK", "90"))
+# BLOCO C — janela deslizante 30d (regime drift).
+# Substituiu 90d fixos — ajustar via env se necessário.
+DAYS_LOOKBACK            = int(os.getenv("DAYS_LOOKBACK", "30"))
 N_TRIALS                 = int(os.getenv("N_TRIALS", "50"))
 MIN_RECORDS              = int(os.getenv("MIN_RECORDS", "200"))
+# BLOCO C — source filter agnóstico.
+# 'L3' = comportamento atual (fallback seguro).
+# 'WATCHLIST_SPOT' = espectro completo (ativar apenas após dataset acumular).
+# Controlado pelo operador via env var no Cloud Run Job — ZERO HARDCODE.
+ML_SOURCE_FILTER         = os.getenv("ML_SOURCE_FILTER", "L3")
+# BLOCO C — alvo agnóstico (binary | regression).
+# Decisão adiada para após teste de separabilidade do espectro completo.
+ML_TARGET_TYPE           = os.getenv("ML_TARGET_TYPE", "binary")
 # Optional: exclude a date range with known bad indicators from training.
 # Set TRAIN_EXCLUDE_FROM=YYYY-MM-DD and TRAIN_EXCLUDE_TO=YYYY-MM-DD to skip
 # a period where features_snapshot contained absent/miscalculated indicators.
@@ -66,8 +76,10 @@ def main():
     # shadow_trade_service — mesma fonte, sem DISTINCT ON bottleneck.
     # ---------------------------------------------------------
     logger.info(
-        "Extraindo dados de shadow_trades... (days=%d, exclude_period=%s→%s)",
+        "Extraindo dados de shadow_trades... (source=%s, days=%d, target=%s, exclude=%s→%s)",
+        ML_SOURCE_FILTER,
         DAYS_LOOKBACK,
+        ML_TARGET_TYPE,
         TRAIN_EXCLUDE_FROM or "none",
         TRAIN_EXCLUDE_TO or "none",
     )
@@ -90,14 +102,14 @@ def main():
                 ttt_outcome, ttt_fast_win_bucket,
                 time_to_tp_minutes, elapsed_minutes, profit_velocity
             FROM shadow_trades
-            WHERE source = 'L3'
+            WHERE source = :source_filter
               AND outcome IN ('TP_HIT', 'SL_HIT', 'TIMEOUT')
               AND pnl_pct IS NOT NULL
               AND features_snapshot IS NOT NULL
               AND created_at >= NOW() - INTERVAL :days
               {exclude_clause}
             ORDER BY created_at ASC
-        """), {"days": f"{DAYS_LOOKBACK} days", **exclude_params})
+        """), {"days": f"{DAYS_LOOKBACK} days", "source_filter": ML_SOURCE_FILTER, **exclude_params})
         records = [dict(row._mapping) for row in result.fetchall()]
 
     total = len(records)
@@ -144,7 +156,7 @@ def main():
     # not a concern. Best model + metrics are persisted to GCS + ml_models.
     trainer = WinFastTrainer(n_trials=N_TRIALS)
     try:
-        result = trainer.train(df, optuna_storage_url=None)
+        result = trainer.train(df, optuna_storage_url=None, ml_target=ML_TARGET_TYPE)
     except ValueError as exc:
         # Task #324 — degenerate dataset (single-class y_train or < min
         # samples per class). Exit 0: this is "still warming up", not a
@@ -240,10 +252,13 @@ def main():
             "threshold":    float(result.get("decision_threshold", 0.5)),
             "notes":        (
                 f"MLflow run_id: {result['run_id']} | GCS: {gcs_model_uri} | "
-                f"source=shadow_trades_L3 | "
+                f"source={ML_SOURCE_FILTER} | target={ML_TARGET_TYPE} | "
+                f"lookback_days={DAYS_LOOKBACK} | "
                 f"winrate_base={result.get('winrate_base', 0):.2f}% | "
                 f"n_pos={result.get('n_pos', 0)} n_neg={result.get('n_neg', 0)} | "
                 f"threshold={float(result.get('decision_threshold', 0.5)):.4f} | "
+                f"regime_drift={result.get('regime_drift_warning', False)} | "
+                f"features_excluded={result.get('features_excluded', [])} | "
                 f"shap_top5={result.get('shap_bad_approval_drivers', [])[:5]}"
             ),
         })

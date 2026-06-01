@@ -19,7 +19,12 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
-from .feature_extractor import FEATURE_COLUMNS, ML_EXCLUDED_FIELDS, train_val_test_split
+from .feature_extractor import (
+    FEATURE_COLUMNS,
+    ML_EXCLUDED_FIELDS,
+    filter_trainable_features,
+    train_val_test_split,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +141,36 @@ def _report_bad_approval_drivers(
         return []
 
 
+def _compute_psi(
+    train_series: pd.Series,
+    test_series: pd.Series,
+    n_bins: int = 10,
+) -> float:
+    """Population Stability Index between train and test distributions.
+
+    PSI < 0.10  → stable
+    PSI 0.10–0.25 → moderate shift (monitor)
+    PSI > 0.25  → REGIME_DRIFT_WARNING — model may not generalise
+
+    Uses equal-width bins on the union range. NaN values are excluded.
+    Returns 0.0 when either series is empty or single-valued.
+    """
+    a = train_series.dropna().values
+    b = test_series.dropna().values
+    if len(a) == 0 or len(b) == 0:
+        return 0.0
+    _min, _max = min(a.min(), b.min()), max(a.max(), b.max())
+    if _min == _max:
+        return 0.0
+    bins = np.linspace(_min, _max, n_bins + 1)
+    e_counts, _ = np.histogram(a, bins=bins)
+    a_counts, _ = np.histogram(b, bins=bins)
+    # Smooth zeros with 0.5 to avoid log(0)
+    e_pct = (e_counts + 0.5) / (e_counts + 0.5).sum()
+    a_pct = (a_counts + 0.5) / (a_counts + 0.5).sum()
+    return float(np.sum((e_pct - a_pct) * np.log(e_pct / a_pct)))
+
+
 class WinFastTrainer:
     """
     XGBoost trainer with Optuna hyperparameter optimization.
@@ -148,7 +183,12 @@ class WinFastTrainer:
         self.n_trials = n_trials
         self.model: Optional[xgb.XGBClassifier] = None
 
-    def train(self, df: pd.DataFrame, optuna_storage_url: Optional[str] = None) -> dict:
+    def train(
+        self,
+        df: pd.DataFrame,
+        optuna_storage_url: Optional[str] = None,
+        ml_target: str = "binary",
+    ) -> dict:
         """
         Train XGBoost model with Optuna hyperparameter optimization.
 
@@ -180,6 +220,14 @@ class WinFastTrainer:
             )
             df = df.drop(columns=list(_leaked_df))
 
+        # BLOCO C — filtro dinâmico de features (coverage + std).
+        # Exclui macro features com cobertura < 30% ou std=0 (constante quando presente).
+        # Macro features vivas (MDH consertado) entram sozinhas quando coverage subir.
+        _min_cov = float(os.getenv("ML_MIN_FEATURE_COVERAGE", "0.30"))
+        feature_cols, _features_excluded = filter_trainable_features(
+            df, feature_cols, min_coverage=_min_cov
+        )
+
         # Task #324 — drop rows with > MAX_NAN_FRACTION NaN features. They
         # carry too little signal and bias the model toward "all-zero" splits.
         max_nan_fraction = float(os.getenv("MAX_NAN_FRACTION", "0.5"))
@@ -196,46 +244,102 @@ class WinFastTrainer:
 
         train_df, val_df, test_df = train_val_test_split(df)
 
+        # BLOCO C — PSI entre train e test para detecção de regime drift.
+        # Se PSI > 0.25 em qualquer feature-chave, loga REGIME_DRIFT_WARNING.
+        _psi_threshold = float(os.getenv("ML_PSI_THRESHOLD", "0.25"))
+        _regime_drift_warning = False
+        _psi_flagged: list = []
+        for _fc in feature_cols[:10]:  # top-10 features para evitar overhead
+            _psi = _compute_psi(
+                train_df[_fc] if _fc in train_df.columns else pd.Series(dtype=float),
+                test_df[_fc]  if _fc in test_df.columns  else pd.Series(dtype=float),
+            )
+            if _psi > _psi_threshold:
+                _psi_flagged.append((_fc, round(_psi, 4)))
+                _regime_drift_warning = True
+        if _regime_drift_warning:
+            logger.warning(
+                "REGIME_DRIFT_WARNING|psi_threshold=%.2f|flagged=%s",
+                _psi_threshold, _psi_flagged,
+            )
+        else:
+            logger.info("PSI_CHECK|stable|checked_features=%d", min(len(feature_cols), 10))
+
+        # BLOCO C — alvo agnóstico: binary (default) ou regression via ML_TARGET_TYPE.
+        # binary:     is_win_fast (0/1) — classificação, AUC como métrica
+        # regression: _pnl_pct (contínuo) — regressão, RMSE como métrica
+        # Decisão do alvo adiada para após teste de separabilidade WATCHLIST_SPOT.
+        is_regression = (ml_target == "regression")
+
         # Task #324 — preserve NaN. XGBoost handles missing values natively;
         # fillna(0.0) collapses "missing" and "true zero" (e.g. taker_ratio=0
         # = 100% sells) into the same semantic class, sabotaging splits.
         X_train = train_df[feature_cols].astype("float32")
-        y_train = train_df["is_win_fast"].astype(int)
-        X_val = val_df[feature_cols].astype("float32")
-        y_val = val_df["is_win_fast"].astype(int)
-        X_test = test_df[feature_cols].astype("float32")
-        y_test = test_df["is_win_fast"].astype(int)
+        X_val   = val_df[feature_cols].astype("float32")
+        X_test  = test_df[feature_cols].astype("float32")
 
-        n_neg = int((y_train == 0).sum())
-        n_pos = int((y_train == 1).sum())
-        scale_pos_weight = n_neg / n_pos if n_pos > 0 else 1.0
-        winrate_base = (n_pos / max(n_pos + n_neg, 1)) * 100
-        logger.info(
-            f"Class balance: {n_pos} wins / {n_neg} losses "
-            f"(scale_pos_weight={scale_pos_weight:.2f}, "
-            f"winrate_base={winrate_base:.2f}%)"
-        )
+        if is_regression:
+            # Regressão sobre PnL — usa _pnl_pct como target contínuo.
+            # Guarda is_win_fast apenas como metadado para winrate logging.
+            y_train = train_df["_pnl_pct"].astype("float32")
+            y_val   = val_df["_pnl_pct"].astype("float32")
+            y_test  = test_df["_pnl_pct"].astype("float32")
+        else:
+            y_train = train_df["is_win_fast"].astype(int)
+            y_val   = val_df["is_win_fast"].astype(int)
+            y_test  = test_df["is_win_fast"].astype(int)
+
+        # Parâmetros XGBoost dependentes do alvo
+        if is_regression:
+            _xgb_objective = "reg:squarederror"
+            _xgb_eval_metric = "rmse"
+            n_neg = 0
+            n_pos = int(len(y_train))
+            scale_pos_weight = 1.0
+            winrate_base = float(y_train.mean()) if len(y_train) else 0.0
+            logger.info(
+                f"Regression target: n_samples={n_pos} | mean_pnl={winrate_base:.4f}%"
+            )
+        else:
+            _xgb_objective = "binary:logistic"
+            _xgb_eval_metric = "auc"
+            n_neg = int((y_train == 0).sum())
+            n_pos = int((y_train == 1).sum())
+            scale_pos_weight = n_neg / n_pos if n_pos > 0 else 1.0
+            winrate_base = (n_pos / max(n_pos + n_neg, 1)) * 100
+            logger.info(
+                f"Class balance: {n_pos} wins / {n_neg} losses "
+                f"(scale_pos_weight={scale_pos_weight:.2f}, "
+                f"winrate_base={winrate_base:.2f}%)"
+            )
 
         # Task #324 — fail loudly when the dataset is degenerate. Previously a
         # single-class y_train silently returned AUC=0 from Optuna and the job
         # still wrote an "active" ml_models row with garbage metrics.
         min_per_class = int(os.getenv("MIN_SAMPLES_PER_CLASS", "30"))
-        if y_train.nunique() < 2:
-            raise ValueError(
-                f"Degenerate dataset: y_train has a single class "
-                f"(n_pos={n_pos}, n_neg={n_neg}, winrate={winrate_base:.2f}%)"
-            )
-        if n_pos < min_per_class or n_neg < min_per_class:
-            raise ValueError(
-                f"Degenerate dataset: each class needs >= {min_per_class} "
-                f"samples (n_pos={n_pos}, n_neg={n_neg}, "
-                f"winrate={winrate_base:.2f}%)"
-            )
+        if not is_regression:
+            if y_train.nunique() < 2:
+                raise ValueError(
+                    f"Degenerate dataset: y_train has a single class "
+                    f"(n_pos={n_pos}, n_neg={n_neg}, winrate={winrate_base:.2f}%)"
+                )
+            if n_pos < min_per_class or n_neg < min_per_class:
+                raise ValueError(
+                    f"Degenerate dataset: each class needs >= {min_per_class} "
+                    f"samples (n_pos={n_pos}, n_neg={n_neg}, "
+                    f"winrate={winrate_base:.2f}%)"
+                )
+        else:
+            if len(y_train) < min_per_class * 2:
+                raise ValueError(
+                    f"Degenerate dataset: regression needs >= {min_per_class * 2} "
+                    f"samples (got {len(y_train)})"
+                )
 
         def objective(trial: optuna.Trial) -> float:
             params = {
-                "objective": "binary:logistic",
-                "eval_metric": "auc",
+                "objective": _xgb_objective,
+                "eval_metric": _xgb_eval_metric,
                 "tree_method": "hist",
                 "device": "cpu",
                 "random_state": 42,
@@ -272,8 +376,8 @@ class WinFastTrainer:
         study.optimize(objective, n_trials=self.n_trials, show_progress_bar=False)
 
         best_params = {
-            "objective": "binary:logistic",
-            "eval_metric": "auc",
+            "objective": _xgb_objective,
+            "eval_metric": _xgb_eval_metric,
             "tree_method": "hist",
             "device": "cpu",
             "random_state": 42,
@@ -282,48 +386,61 @@ class WinFastTrainer:
             **study.best_params,
         }
         logger.info(
-            f"Best trial: val_auc={study.best_value:.4f} | params={study.best_params}"
+            f"Best trial: val_metric={study.best_value:.4f} | params={study.best_params}"
         )
 
         # Final training with MLflow logging
         with mlflow.start_run() as run:
-            self.model = xgb.XGBClassifier(**best_params, early_stopping_rounds=20)
+            if is_regression:
+                self.model = xgb.XGBRegressor(**best_params, early_stopping_rounds=20)
+            else:
+                self.model = xgb.XGBClassifier(**best_params, early_stopping_rounds=20)
             self.model.fit(
                 X_train, y_train,
                 eval_set=[(X_val, y_val)],
                 verbose=False,
             )
 
-            proba_test = self.model.predict_proba(X_test)[:, 1]
-
-            # Calibrate threshold on the test set.
-            # Default strategy "pnl_max" maximises expected PnL of approved trades
-            # using _pnl_pct from the test set (economically optimal).
-            pnl_test: np.ndarray | None = None
-            if "_pnl_pct" in test_df.columns:
-                pnl_test = test_df["_pnl_pct"].to_numpy(dtype="float32")
-            calibrated_threshold = _calibrate_threshold(
-                y_test.to_numpy(), proba_test, pnl_values=pnl_test
-            )
-            pred_test = (proba_test >= calibrated_threshold).astype(int)
-
-            if y_test.nunique() >= 2:
-                precision = float(precision_score(y_test, pred_test, zero_division=0))
-                recall = float(recall_score(y_test, pred_test, zero_division=0))
-                f1 = float(f1_score(y_test, pred_test, zero_division=0))
-                roc_auc = float(roc_auc_score(y_test, proba_test))
-            else:
-                logger.warning("Test set has only one class — metrics defaulted to 0")
+            if is_regression:
+                # Regressão: score = EV previsto (pnl_pct). Métricas de classificação=0.
+                pred_test_raw = self.model.predict(X_test)
+                proba_test = pred_test_raw  # alias semântico (score contínuo)
+                calibrated_threshold = 0.0  # threshold não aplicável
                 precision = recall = f1 = roc_auc = 0.0
+                win_mask = y_test > 0
+                capture_rate = float(win_mask.mean()) if len(win_mask) else 0.0
+                fpr = 0.0
+            else:
+                proba_test = self.model.predict_proba(X_test)[:, 1]
 
-            win_mask = y_test == 1
-            capture_rate = (
-                float((pred_test[win_mask] == 1).mean()) if win_mask.sum() > 0 else 0.0
-            )
-            neg_mask = y_test == 0
-            fpr = (
-                float((pred_test[neg_mask] == 1).mean()) if neg_mask.sum() > 0 else 0.0
-            )
+                # Calibrate threshold on the test set.
+                # Default strategy "pnl_max" maximises expected PnL of approved trades
+                # using _pnl_pct from the test set (economically optimal).
+                pnl_test: np.ndarray | None = None
+                if "_pnl_pct" in test_df.columns:
+                    pnl_test = test_df["_pnl_pct"].to_numpy(dtype="float32")
+                calibrated_threshold = _calibrate_threshold(
+                    y_test.to_numpy(), proba_test, pnl_values=pnl_test
+                )
+                pred_test = (proba_test >= calibrated_threshold).astype(int)
+
+                if y_test.nunique() >= 2:
+                    precision = float(precision_score(y_test, pred_test, zero_division=0))
+                    recall = float(recall_score(y_test, pred_test, zero_division=0))
+                    f1 = float(f1_score(y_test, pred_test, zero_division=0))
+                    roc_auc = float(roc_auc_score(y_test, proba_test))
+                else:
+                    logger.warning("Test set has only one class — metrics defaulted to 0")
+                    precision = recall = f1 = roc_auc = 0.0
+
+                win_mask = y_test == 1
+                capture_rate = (
+                    float((pred_test[win_mask] == 1).mean()) if win_mask.sum() > 0 else 0.0
+                )
+                neg_mask = y_test == 0
+                fpr = (
+                    float((pred_test[neg_mask] == 1).mean()) if neg_mask.sum() > 0 else 0.0
+                )
 
             # Outcome distribution (shadow_trades: 'TP_HIT' / 'SL_HIT').
             outcome_counts: dict[str, int] = {}
@@ -340,10 +457,13 @@ class WinFastTrainer:
                 "outcome_distribution": str(outcome_counts) if outcome_counts else "{}",
                 "max_nan_fraction": max_nan_fraction,
                 "min_samples_per_class": min_per_class,
+                "ml_target": ml_target,
+                "features_excluded_count": len(_features_excluded),
+                "regime_drift_warning": str(_regime_drift_warning),
             })
             mlflow.set_tags({
                 "label_version": "ttt_aware_v2",
-                "data_source": "shadow_trades_L3",
+                "data_source": f"shadow_trades_{ml_target}",
                 "nan_handling": "native_xgboost",
                 "n_unique_trades": str(len(df)),
                 "winrate_base": f"{winrate_base:.4f}",
@@ -351,6 +471,7 @@ class WinFastTrainer:
                 "n_neg": str(n_neg),
                 "calibrated_threshold": f"{calibrated_threshold:.4f}",
                 "shap_top1": str(shap_drivers[0][0]) if shap_drivers else "n/a",
+                "regime_drift_warning": str(_regime_drift_warning),
             })
             mlflow.log_metrics({
                 "precision": precision,
@@ -369,7 +490,8 @@ class WinFastTrainer:
 
         logger.info(
             f"Metrics: precision={precision:.4f} recall={recall:.4f} "
-            f"f1={f1:.4f} roc_auc={roc_auc:.4f} capture={capture_rate:.4f}"
+            f"f1={f1:.4f} roc_auc={roc_auc:.4f} capture={capture_rate:.4f} "
+            f"regime_drift={_regime_drift_warning} features_excluded={len(_features_excluded)}"
         )
 
         return {
@@ -394,4 +516,6 @@ class WinFastTrainer:
             "decision_threshold": calibrated_threshold,
             "outcome_distribution": outcome_counts,
             "shap_bad_approval_drivers": shap_drivers[:5] if shap_drivers else [],
+            "regime_drift_warning": _regime_drift_warning,
+            "features_excluded": [col for col, _ in _features_excluded],
         }

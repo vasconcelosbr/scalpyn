@@ -20,11 +20,14 @@ so an unmerged caller cannot silently change its symbol universe semantics
 during the transition.
 """
 
+import logging
 import warnings
 
 from sqlalchemy import text
 
 from ..utils.symbol_filters import filter_real_assets
+
+_log = logging.getLogger(__name__)
 
 
 def normalize_pool_symbol(symbol: str) -> str:
@@ -233,3 +236,73 @@ async def get_pool_symbols_with_market_type(db) -> dict[str, str]:
     )).fetchall()
 
     return {normalize_pool_symbol(r.symbol): r.market_type for r in rows}
+
+
+async def apply_structural_pool_filter(
+    symbols: list[str],
+    db,
+    config: dict,
+) -> list[str]:
+    """Filter pool symbols by STRUCTURAL (operability) criteria only.
+
+    Reads volume_24h, spread_pct, and orderbook_depth_usdt from
+    market_metadata.  NEVER filters by setup-quality signals (RSI, ADX,
+    momentum, score) — those would leak signal into the ML training dataset
+    and recreate the constant-target problem the new architecture exists to fix.
+
+    Config keys (all under pool_structural_filter in pool_config):
+        min_volume_24h_usdt       — minimum 24h quote volume
+        max_spread_pct            — maximum bid/ask spread (percent)
+        min_orderbook_depth_usdt  — minimum orderbook depth
+
+    Returns the original list unchanged when:
+    - ``new_arch_capture_enabled`` is False (caller's responsibility)
+    - ``pool_structural_filter`` section is absent or has no thresholds
+    - ``symbols`` is empty
+    """
+    f = config.get("pool_structural_filter", {})
+    min_vol   = f.get("min_volume_24h_usdt")
+    max_sprd  = f.get("max_spread_pct")
+    min_depth = f.get("min_orderbook_depth_usdt")
+
+    if not symbols or not any(v is not None for v in [min_vol, max_sprd, min_depth]):
+        return symbols
+
+    rows = (await db.execute(
+        text("""
+            SELECT symbol,
+                   COALESCE(volume_24h, 0)  AS volume_24h,
+                   spread_pct,
+                   orderbook_depth_usdt
+            FROM market_metadata
+            WHERE symbol = ANY(:symbols)
+        """),
+        {"symbols": list(symbols)},
+    )).fetchall()
+
+    meta_map = {r.symbol: r for r in rows}
+
+    kept: list[str] = []
+    removed: list[tuple[str, list[str]]] = []
+    for s in symbols:
+        meta = meta_map.get(s)
+        reasons: list[str] = []
+        if meta is None:
+            reasons.append("no_metadata")
+        else:
+            if min_vol is not None and (meta.volume_24h or 0) < min_vol:
+                reasons.append("low_volume")
+            if max_sprd is not None and meta.spread_pct is not None and meta.spread_pct > max_sprd:
+                reasons.append("high_spread")
+            if min_depth is not None and meta.orderbook_depth_usdt is not None and meta.orderbook_depth_usdt < min_depth:
+                reasons.append("low_depth")
+        if reasons:
+            removed.append((s, reasons))
+        else:
+            kept.append(s)
+
+    _log.info(
+        "POOL_STRUCTURAL_FILTER|input=%d|kept=%d|removed=%d",
+        len(symbols), len(kept), len(removed),
+    )
+    return kept

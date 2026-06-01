@@ -2410,6 +2410,25 @@ async def _run_pipeline_scan():
                             )
                         )).scalars().all()
                         symbols = filter_real_assets([_normalize_sym(c.symbol) for c in coin_rows])
+                        # BLOCO A — hard structural filter (new_arch_capture_enabled)
+                        # Gated flag: when False leaves behavior IDENTICAL to current.
+                        # Only STRUCTURAL criteria (volume/spread/depth) — never RSI/ADX/score.
+                        try:
+                            from ..services.config_service import config_service
+                            from ..services.pool_service import apply_structural_pool_filter
+                            async with db.begin_nested():
+                                _pool_cfg = await config_service.get_config(
+                                    db, "pool_config", wl.user_id
+                                )
+                            if _pool_cfg.get("new_arch_capture_enabled", False):
+                                symbols = await apply_structural_pool_filter(
+                                    symbols, db, _pool_cfg
+                                )
+                        except Exception as _sf_exc:
+                            logger.warning(
+                                "[PipelineScan] %s: structural pool filter skipped (%s)",
+                                wl.name, _sf_exc,
+                            )
                         upstream_symbols = set(symbols)
                         logger.info(
                             "[PipelineScan] %s (%s): pool %s → %d symbols",
@@ -2768,6 +2787,29 @@ async def _run_pipeline_scan():
                     #   are known) via _ml_gate_log_predictions().
                     import os as _os
                     _ml_gate_enabled = _os.getenv("ML_GATE_ENABLED", "false").lower() == "true"
+                    # BLOCO D — new_arch_l3_uses_ml_score: alternativa DB-based ao env var.
+                    # Permite ativar o ML gate via pool_config sem redeploy.
+                    # Gated: quando false E ML_GATE_ENABLED=false → comportamento IDÊNTICO ao atual.
+                    if not _ml_gate_enabled and effective_level == "L3":
+                        try:
+                            from ..services.config_service import config_service
+                            async with db.begin_nested():
+                                _pool_cfg_l3 = await config_service.get_config(
+                                    db, "pool_config", wl.user_id
+                                )
+                            if _pool_cfg_l3.get("new_arch_l3_uses_ml_score", False):
+                                _ml_gate_enabled = True
+                                logger.info(
+                                    "[MLGate] new_arch_l3_uses_ml_score=true — "
+                                    "ML gate activado via pool_config wl=%s",
+                                    wl.name,
+                                )
+                        except Exception as _dblk_exc:
+                            logger.debug(
+                                "[MLGate] pool_config read failed (%s) — "
+                                "usando ML_GATE_ENABLED env",
+                                _dblk_exc,
+                            )
                     # Dict[symbol → {"probability": float|None, "approved": bool}]
                     # populated here, consumed post-persist to write ml_predictions rows.
                     _ml_gate_scores: dict = {}
