@@ -312,11 +312,11 @@ export function WatchlistDecisionTable({
           // only when the watchlist truly has no profile-driven columns.
           const dynCols = indicatorCols ?? [];
           const useDynamic = dynCols.length > 0;
-          // Column count: chevron + Symbol + [Score] + ML + [dynCols] + Stage + Status + Timestamp
-          //          OR  chevron + Symbol + [Score] + ML + Stage + Status + Indicators + Conditions + Timestamp
+          // Column count: chevron + Symbol + [Score] + ML + [dynCols] + Exaustão + Stage + Status + Timestamp
+          //          OR  chevron + Symbol + [Score] + ML + Exaustão + Stage + Status + Indicators + Conditions + Timestamp
           const scoreCol = showScore ? 1 : 0;
-          const totalCols = useDynamic ? 6 + scoreCol + dynCols.length : 8 + scoreCol;
-          const minWidth = useDynamic ? Math.max(720, 420 + dynCols.length * 110) : 1040;
+          const totalCols = useDynamic ? 7 + scoreCol + dynCols.length : 9 + scoreCol;
+          const minWidth = useDynamic ? Math.max(810, 510 + dynCols.length * 110) : 1130;
           return (
         <div className="overflow-x-auto">
           <table className="w-full text-xs" style={{ minWidth: `${minWidth}px` }}>
@@ -370,6 +370,14 @@ export function WatchlistDecisionTable({
                     <th className="px-3 py-2.5 text-left text-[#4B5563]">Conditions</th>
                   </>
                 )}
+                <th className="px-3 py-2.5 text-right text-[#4B5563] whitespace-nowrap">
+                  <button onClick={() => toggleSort("entry_exhaustion_score")} className="flex items-center gap-1 justify-end hover:text-[#94A3B8] transition-colors w-full">
+                    Exaustão
+                    <span className={`text-[9px] ${sortKey === "entry_exhaustion_score" ? "text-[#60A5FA]" : "opacity-30"}`}>
+                      {sortKey === "entry_exhaustion_score" ? (sortDir === "desc" ? "▼" : "▲") : "⇅"}
+                    </span>
+                  </button>
+                </th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Stage</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Status</th>
                 <th className="px-3 py-2.5 text-left text-[#4B5563]">Timestamp</th>
@@ -423,6 +431,20 @@ export function WatchlistDecisionTable({
                           <td className="px-3 py-2.5 text-[#CBD5E1]">{summarizeConditions(item)}</td>
                         </>
                       )}
+                      <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap">
+                        {(() => {
+                          const raw = item.current_values?.entry_exhaustion_score;
+                          if (raw == null) return <span className="text-[#334155]">—</span>;
+                          const val = typeof raw === 'number' ? raw : Number(raw);
+                          if (!isFinite(val)) return <span className="text-[#334155]">—</span>;
+                          const color = val >= 75 ? '#F87171' : val >= 50 ? '#FBBF24' : '#34D399';
+                          return (
+                            <span className="font-mono text-[10px] font-semibold" style={{ color }} title="Exaustão de Entrada (0=baixa · 100=máxima)">
+                              {val.toFixed(0)}
+                            </span>
+                          );
+                        })()}
+                      </td>
                       <td className="px-3 py-2.5 text-[#94A3B8]">{item.stage ?? "—"}</td>
                       <td className="px-3 py-2.5">
                         <span className={`inline-flex rounded px-2 py-0.5 text-[10px] font-semibold ${palette.badge}`}>
