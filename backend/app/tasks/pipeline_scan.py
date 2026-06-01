@@ -2513,51 +2513,70 @@ async def _run_pipeline_scan():
                     is_futures = getattr(wl, "market_mode", "spot") == "futures"
 
                     # ── Robust authoritative scoring ─────────────────────
-                    # The robust deterministic score becomes the
-                    # authoritative value on the asset dict; downstream
-                    # rejection / upsert / UI all read from the mutated
-                    # dict. For futures the LONG / SHORT split + direction
-                    # tag are derived from the robust direction bias —
-                    # the legacy ``futures_pipeline_scorer`` is no longer
-                    # invoked. When the robust step itself raises we
-                    # fail-closed: every asset score is zeroed and the
-                    # row is tagged ``robust`` so a pre-existing legacy
-                    # number is never persisted under an audited tag.
-                    try:
-                        rollout_counters = await _apply_robust_authoritative_scoring(
-                            assets,
-                            score_config=score_config,
-                            is_futures=is_futures,
-                            db=db,
-                            user_id=getattr(wl, "user_id", None),
-                            watchlist_id=wl_id,
-                        )
-                        if rollout_counters["bucketed"] or rollout_counters["fallbacks"]:
-                            logger.info(
-                                "[PipelineScan] %s (%s): robust scoring — bucketed=%d "
-                                "robust_used=%d fallbacks=%d",
-                                wl.name, effective_level,
-                                rollout_counters["bucketed"],
-                                rollout_counters["robust_used"],
-                                rollout_counters["fallbacks"],
-                            )
-                    except Exception as _rollout_exc:
-                        logger.error(
-                            "[PipelineScan] %s (%s): robust scoring step failed "
-                            "(%s) — failing CLOSED (zeroing scores)",
-                            wl.name, effective_level, _rollout_exc,
-                        )
+                    # POOL-level watchlists have no score config in their
+                    # profile and must never store score data — leaking score
+                    # into POOL assets contaminates the ML pipeline (assets
+                    # flow POOL → L1 → shadow trades, and score values
+                    # bleeding into that path create data-leakage in the
+                    # training set). Skip scoring entirely for POOL and
+                    # explicitly remove any score that _build_pipeline_asset
+                    # may have populated from the alpha_scores table.
+                    if effective_level == "POOL":
                         for asset in assets:
-                            asset["engine_tag"] = "robust"
-                            asset["_score"] = 0.0
-                            asset["score"] = 0.0
-                            asset["alpha_score"] = 0.0
-                            if is_futures:
-                                asset["confidence_score"] = 0.0
-                                if asset.get("score_long") is not None:
-                                    asset["score_long"] = 0.0
-                                if asset.get("score_short") is not None:
-                                    asset["score_short"] = 0.0
+                            asset.pop("score", None)
+                            asset.pop("_score", None)
+                            asset.pop("alpha_score", None)
+                            asset.pop("score_long", None)
+                            asset.pop("score_short", None)
+                            asset.pop("confidence_score", None)
+                            asset.pop("futures_direction", None)
+                            asset.pop("engine_tag", None)
+                    else:
+                        # The robust deterministic score becomes the
+                        # authoritative value on the asset dict; downstream
+                        # rejection / upsert / UI all read from the mutated
+                        # dict. For futures the LONG / SHORT split + direction
+                        # tag are derived from the robust direction bias —
+                        # the legacy ``futures_pipeline_scorer`` is no longer
+                        # invoked. When the robust step itself raises we
+                        # fail-closed: every asset score is zeroed and the
+                        # row is tagged ``robust`` so a pre-existing legacy
+                        # number is never persisted under an audited tag.
+                        try:
+                            rollout_counters = await _apply_robust_authoritative_scoring(
+                                assets,
+                                score_config=score_config,
+                                is_futures=is_futures,
+                                db=db,
+                                user_id=getattr(wl, "user_id", None),
+                                watchlist_id=wl_id,
+                            )
+                            if rollout_counters["bucketed"] or rollout_counters["fallbacks"]:
+                                logger.info(
+                                    "[PipelineScan] %s (%s): robust scoring — bucketed=%d "
+                                    "robust_used=%d fallbacks=%d",
+                                    wl.name, effective_level,
+                                    rollout_counters["bucketed"],
+                                    rollout_counters["robust_used"],
+                                    rollout_counters["fallbacks"],
+                                )
+                        except Exception as _rollout_exc:
+                            logger.error(
+                                "[PipelineScan] %s (%s): robust scoring step failed "
+                                "(%s) — failing CLOSED (zeroing scores)",
+                                wl.name, effective_level, _rollout_exc,
+                            )
+                            for asset in assets:
+                                asset["engine_tag"] = "robust"
+                                asset["_score"] = 0.0
+                                asset["score"] = 0.0
+                                asset["alpha_score"] = 0.0
+                                if is_futures:
+                                    asset["confidence_score"] = 0.0
+                                    if asset.get("score_long") is not None:
+                                        asset["score_long"] = 0.0
+                                    if asset.get("score_short") is not None:
+                                        asset["score_short"] = 0.0
 
                     if effective_level == "custom":
                         existing_symbols = {a.get("symbol") for a in assets}

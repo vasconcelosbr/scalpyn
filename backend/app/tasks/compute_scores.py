@@ -376,6 +376,7 @@ async def _detect_level_transitions(db, scored_rows, rules, cached_scores: dict)
             JOIN pipeline_watchlists pw ON pw.id = pwa.watchlist_id
             LEFT JOIN profiles p ON p.id = pw.profile_id
             WHERE pwa.symbol = ANY(:symbols)
+              AND pw.level != 'POOL'
             ORDER BY pwa.symbol, pwa.id
         """),
         {"symbols": sorted(new_scores.keys())},
