@@ -168,6 +168,63 @@ def main():
     logger.info(f"Treino concluído: {result['metrics']}")
 
     # ---------------------------------------------------------
+    # 3b. Quality guards + Champion/Challenger
+    #     Modelo NÃO é promovido se:
+    #       - roc_auc < 0.50  (pior que aleatório — sinal invertido)
+    #       - fpr >= 0.90     (aprova quase tudo — threshold colapsado)
+    #       - roc_auc < 95% do modelo atual (regressão significativa)
+    # ---------------------------------------------------------
+    new_roc_auc = result["metrics"]["roc_auc"]
+    new_fpr     = result["metrics"]["false_positive_rate"]
+
+    if new_roc_auc < 0.50:
+        logger.warning(
+            "[PROMOTION] REJEITADO — roc_auc=%.4f < 0.50 (pior que aleatório). "
+            "Dataset provavelmente pequeno demais ou regime invertido no test set. "
+            "Modelo NÃO promovido.",
+            new_roc_auc,
+        )
+        sys.exit(0)
+
+    if new_fpr >= 0.90:
+        logger.warning(
+            "[PROMOTION] REJEITADO — fpr=%.4f >= 0.90 (modelo aprova quase tudo). "
+            "Threshold provavelmente colapsado. Modelo NÃO promovido.",
+            new_fpr,
+        )
+        sys.exit(0)
+
+    # Champion/Challenger: só regride até 5% vs modelo ativo atual.
+    # Se não há modelo ativo, ou o atual também é ruim (< 0.50),
+    # ignora a comparação relativa e promove com base nos guards absolutos.
+    with engine.connect() as conn:
+        current_row = conn.execute(text(
+            "SELECT version, roc_auc FROM ml_models WHERE status = 'active' "
+            "ORDER BY version DESC LIMIT 1"
+        )).fetchone()
+
+    if current_row and current_row.roc_auc is not None and float(current_row.roc_auc) >= 0.50:
+        current_roc_auc = float(current_row.roc_auc)
+        min_required    = round(current_roc_auc * 0.95, 4)
+        if new_roc_auc < min_required:
+            logger.warning(
+                "[PROMOTION] REJEITADO — champion/challenger: "
+                "new roc_auc=%.4f < min=%.4f (95%% do atual v%s=%.4f). "
+                "Modelo NÃO promovido — mantendo campeão atual.",
+                new_roc_auc, min_required, current_row.version, current_roc_auc,
+            )
+            sys.exit(0)
+        logger.info(
+            "[PROMOTION] Champion/Challenger OK: new roc_auc=%.4f >= min=%.4f "
+            "(atual v%s=%.4f) — prosseguindo com promoção.",
+            new_roc_auc, min_required, current_row.version, current_roc_auc,
+        )
+    else:
+        logger.info(
+            "[PROMOTION] Sem campeão válido para comparar — promoção via guards absolutos."
+        )
+
+    # ---------------------------------------------------------
     # 4. Salva modelo serializado no GCS
     # ---------------------------------------------------------
     logger.info("Salvando modelo no GCS...")

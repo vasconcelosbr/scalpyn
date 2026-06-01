@@ -365,7 +365,14 @@ class WinFastTrainer:
             if y_val.nunique() < 2:
                 return 0.0
             proba = m.predict_proba(X_val)[:, 1]
-            return float(roc_auc_score(y_val, proba))
+            val_auc = float(roc_auc_score(y_val, proba))
+            # Guard: val_auc >= 0.95 on a small val set strongly indicates
+            # memorisation rather than generalisation — trivially achievable
+            # with max_depth >= 5 and n_estimators >= 200 on < 30 samples.
+            # Penalise to 0.0 so Optuna steers away from overfit configs.
+            if val_auc >= 0.95:
+                return 0.0
+            return val_auc
 
         study_kwargs: dict = {"direction": "maximize", "study_name": "win_fast_study"}
         if optuna_storage_url:
