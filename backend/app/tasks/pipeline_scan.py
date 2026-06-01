@@ -483,45 +483,6 @@ def _save_l3_visibility(redis, watchlist_id: str, symbols: set, ttl: int = _L3_V
         pass
 
 
-# ─── L3 rejected visibility (edge-triggered, ML data collection) ──────────────
-# Análogo ao L3_VISIBLE para aprovados.  Garante que cada ativo rejeitado na
-# L3 receba *pelo menos uma* linha em decisions_log no ciclo atual, sem virar
-# heartbeat.  Pure edge trigger:
-#
-#     not rejected → rejected   ⇒ log once (event_type = 'L3_REJECTED')
-#     rejected → rejected       ⇒ skip
-#     rejected → not rejected   ⇒ remove from set (reset)
-#     not rejected → not reject ⇒ noop
-#
-# TTL igual ao L3_VISIBILITY_TTL — sobrevive a restarts do Redis.
-_L3_REJECTED_TTL = 86400
-
-
-def _prior_l3_rejected_visibility(redis, watchlist_id: str) -> set:
-    """Return the set of symbols already logged in the current L3 rejected cycle."""
-    if not redis:
-        return set()
-    try:
-        raw = redis.smembers(f"{_REDIS_PREFIX}{watchlist_id}:l3_rejected_visibility")
-        return {s.decode() if isinstance(s, bytes) else s for s in (raw or [])}
-    except Exception:
-        return set()
-
-
-def _save_l3_rejected_visibility(redis, watchlist_id: str, symbols: set, ttl: int = _L3_REJECTED_TTL):
-    """Replace the L3 rejected visibility set with the symbols currently BLOCK at L3."""
-    if not redis:
-        return
-    key = f"{_REDIS_PREFIX}{watchlist_id}:l3_rejected_visibility"
-    try:
-        pipe = redis.pipeline()
-        pipe.delete(key)
-        if symbols:
-            pipe.sadd(key, *sorted(symbols))
-            pipe.expire(key, ttl)
-        pipe.execute()
-    except Exception:
-        pass
 
 
 def _should_log_decision(
@@ -3004,10 +2965,8 @@ async def _run_pipeline_scan():
 
                     prior_states = _prior_decision_states(redis, wl_id)
                     prior_visibility = _prior_l3_visibility(redis, wl_id)
-                    prior_rejected_visibility = _prior_l3_rejected_visibility(redis, wl_id)
                     new_states: dict = {}
                     current_l3_visibility: set = set()
-                    current_l3_rejected_visibility: set = set()
                     decisions_to_log: list = []
                     # Task #310: deterministic symbol ordering before DB writes
                     # (decisions_log INSERT downstream).
@@ -3037,17 +2996,6 @@ async def _run_pipeline_scan():
                             if not should_log and sym not in prior_visibility:
                                 should_log = True
                                 event_type = "L3_VISIBLE"
-                        # Edge-triggered L3_REJECTED: log rejected assets on FIRST
-                        # appearance in the current BLOCK cycle (ML data collection).
-                        # Mirrors L3_VISIBLE semantics — one row per presence cycle,
-                        # not a per-cycle heartbeat.  _should_log_decision já cobre
-                        # transições (ALLOW→BLOCK = SIGNAL_LOST); aqui cobrimos os
-                        # cronicamente rejeitados que nunca foram ALLOW.
-                        elif d.get("decision") == "BLOCK":
-                            current_l3_rejected_visibility.add(sym)
-                            if not should_log and sym not in prior_rejected_visibility:
-                                should_log = True
-                                event_type = "L3_REJECTED"
                         new_states[sym] = {
                             "state": d.get("decision"),
                             "score": d.get("score"),
@@ -3128,7 +3076,6 @@ async def _run_pipeline_scan():
                     # must never advance ahead of the DB or symbols get stuck
                     # without a log row in the current presence cycle.
                     _save_l3_visibility(redis, wl_id, current_l3_visibility)
-                    _save_l3_rejected_visibility(redis, wl_id, current_l3_rejected_visibility)
                     await _upsert_assets(db, wl_id, signals, filters_json, execution_id=execution_id)
                     await _update_last_scanned(db, wl_id)
 
@@ -3153,21 +3100,6 @@ async def _run_pipeline_scan():
                             )
                             await create_shadows_for_new_decisions(
                                 wl.user_id, _allow_decision_ids
-                            )
-
-                        # ML data collection: criar shadow trades para rejeitados L3.
-                        # source='L3_REJECTED' garante segregação total das métricas
-                        # de aprovados.  Fire-and-forget — nunca bloqueia o fluxo.
-                        _rejected_decision_ids = [
-                            p["id"] for p in decision_payloads
-                            if p.get("event_type") == "L3_REJECTED" and p.get("id")
-                        ]
-                        if _rejected_decision_ids:
-                            from ..services.shadow_trade_service import (
-                                create_shadows_for_rejected_decisions,
-                            )
-                            await create_shadows_for_rejected_decisions(
-                                wl.user_id, _rejected_decision_ids
                             )
 
                         # ── Shadow Bypass Score Gate ──────────────────────────────────────

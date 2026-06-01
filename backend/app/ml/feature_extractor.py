@@ -319,10 +319,6 @@ def build_training_dataframe(records: list) -> pd.DataFrame:
         features["_created_at"] = r.get("created_at")
         features["_outcome"] = r.get("outcome")
         features["_pnl_pct"] = pnl_val
-        # was_rejected=1 for L3_REJECTED records (fonte: shadow_trades.source).
-        # Sempre 0 no dataset L3-only; mantido para compatibilidade semântica.
-        features["_was_rejected"] = 1 if r.get("source") == "L3_REJECTED" else 0
-
         rows.append(features)
 
     if dropped_null_pnl:
@@ -345,11 +341,9 @@ def build_training_dataframe(records: list) -> pd.DataFrame:
 
     if len(df) > 0:
         win_rate = df["is_win_fast"].mean() * 100
-        n_rejected = int(df["_was_rejected"].sum()) if "_was_rejected" in df.columns else 0
         logger.info(
-            "Base WIN rate: %.1f%% (threshold=%.4f = MIN_WIN_PNL_PCT %.4f + FEE %.4f)"
-            " | rejected_in_set=%d",
-            win_rate, _WIN_THRESHOLD, _MIN_WIN_PNL_PCT, _FEE_ROUND_TRIP_PCT, n_rejected,
+            "Base WIN rate: %.1f%% (threshold=%.4f = MIN_WIN_PNL_PCT %.4f + FEE %.4f)",
+            win_rate, _WIN_THRESHOLD, _MIN_WIN_PNL_PCT, _FEE_ROUND_TRIP_PCT,
         )
 
     return df

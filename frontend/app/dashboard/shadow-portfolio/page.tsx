@@ -1828,8 +1828,7 @@ function DetailModal({
 const MAX_LOCAL_FETCH = 200; // = _MAX_PAGE_SIZE em backend/app/api/shadow_trades.py
 const CLIENT_PAGE_SIZE = 50;
 
-// Origem da promoção: L3 (aprovados) ou L3_REJECTED (bloqueados, dados ML).
-type SourceTab = "L3" | "L3_REJECTED";
+type SourceTab = "L3";
 
 function buildBaseQuery(
   filter: FilterState,
@@ -1867,14 +1866,7 @@ export default function ShadowPortfolioPage() {
   const [tick, setTick] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
-  const [sourceTab, setSourceTab] = useState<SourceTab>("L3");
-
-  // Reset paginação ao trocar de aba — evita "page 7 vazia" se a aba
-  // nova tem menos páginas que a anterior.
-  useEffect(() => {
-    setFilter((prev) => ({ ...prev, page: 1 }));
-    setList(null);
-  }, [sourceTab]);
+  const sourceTab: SourceTab = "L3";
 
   const fetchList = useCallback(() => {
     setLoadingList(true);
@@ -2068,62 +2060,14 @@ export default function ShadowPortfolioPage() {
               maxWidth: 720,
             }}
           >
-            {sourceTab === "L3_REJECTED" ? (
-              <>
-                Trades simulados a partir de decisões <code>BLOCK</code> spot
-                do pipeline — ativos <strong style={{ color: C.amber }}>rejeitados na L3</strong>.
-                Capturados exclusivamente para enriquecer o dataset ML.
-                Segregados por <code>source=L3_REJECTED</code> — nunca
-                contaminam métricas de aprovados.
-              </>
-            ) : (
-              <>
-                Trades simulados a partir de decisões <code>ALLOW</code> spot do
-                pipeline. Cada decisão vira uma row em{" "}
-                <code>shadow_trades</code> com <code>entry_price</code> da próxima
-                candle 1m e é avançada candle-a-candle até TP, SL ou timeout — sem
-                execução real, alimenta o dataset ML.
-              </>
-            )}
+            <>
+              Trades simulados a partir de decisões <code>ALLOW</code> spot do
+              pipeline. Cada decisão vira uma row em{" "}
+              <code>shadow_trades</code> com <code>entry_price</code> da próxima
+              candle 1m e é avançada candle-a-candle até TP, SL ou timeout — sem
+              execução real, alimenta o dataset ML.
+            </>
           </p>
-        </div>
-
-        {/* Tabs: L3 (aprovados) e L3_REJECTED (bloqueados para dados ML).
-            Cada aba refaz fetch propagando `source=` ao backend;
-            agregados são recalculados por aba — nunca mistura origens. */}
-        <div
-          style={{
-            display: "flex",
-            gap: 4,
-            borderBottom: `1px solid ${C.border}`,
-            marginBottom: -4,
-          }}
-        >
-          {(["L3", "L3_REJECTED"] as SourceTab[]).map((tab) => {
-            const active = tab === sourceTab;
-            const isRejected = tab === "L3_REJECTED";
-            const activeColor = isRejected ? C.amber : C.blue;
-            return (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => setSourceTab(tab)}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  borderBottom: `2px solid ${active ? activeColor : "transparent"}`,
-                  color: active ? (isRejected ? C.amber : C.text) : C.muted,
-                  cursor: "pointer",
-                  fontSize: 13,
-                  fontWeight: 500,
-                  padding: "8px 14px",
-                  marginBottom: -1,
-                }}
-              >
-                {tab === "L3" ? "L3" : "L3 Rejeitados"}
-              </button>
-            );
-          })}
         </div>
 
         <FilterBar

@@ -74,6 +74,15 @@ class _SyntheticDecision:
 SHADOW_TRADE_AMOUNT_USDT = float(os.environ.get("SHADOW_TRADE_AMOUNT_USDT", "1000.0"))
 SHADOW_TIMEOUT_CANDLES = int(os.environ.get("SHADOW_TIMEOUT_CANDLES", "1440"))  # 24h de 1m
 SHADOW_LOOKBACK_MINUTES = int(os.environ.get("SHADOW_LOOKBACK_MINUTES", "10"))
+# ── Shadow-specific TP/SL overrides (Zero Hardcode) ──────────────────────────
+# When set, these override the spot engine profile's take_profit_pct /
+# max_drawdown_from_hwm_pct for shadow trade simulations. This decouples
+# the simulation band from the production config — e.g. SHADOW_TP_PCT=1.0
+# and SHADOW_SL_PCT=1.0 create a symmetric ±1% band for ML training while
+# the real profile can use different TP/SL targets.
+# 0.0 means "not overridden; fall back to spot engine config value".
+_SHADOW_TP_PCT_OVERRIDE = float(os.environ.get("SHADOW_TP_PCT", "0.0"))
+_SHADOW_SL_PCT_OVERRIDE = float(os.environ.get("SHADOW_SL_PCT", "0.0"))
 
 # ── TTT Policy defaults (Zero Hardcode — override via Cloud Run env vars) ─────
 # Valores de negócio definidos em config_profiles (config_type='ttt_policy').
@@ -980,8 +989,8 @@ async def create_shadows_for_new_decisions(user_id, decision_ids: List[int]) -> 
             if cfg_row:
                 se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
                 user_config = {
-                    "tp_pct": float(se_cfg.selling.take_profit_pct),
-                    "sl_pct": float(
+                    "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(se_cfg.selling.take_profit_pct),
+                    "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
                         se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct
                     ),
                     "timeout_candles": None,
@@ -1080,8 +1089,8 @@ async def create_shadows_for_rejected_decisions(user_id, decision_ids: List[int]
             if cfg_row:
                 se_cfg = SpotEngineConfig.from_config_json(cfg_row.config_json)
                 user_config = {
-                    "tp_pct": float(se_cfg.selling.take_profit_pct),
-                    "sl_pct": float(
+                    "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(se_cfg.selling.take_profit_pct),
+                    "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
                         se_cfg.sell_flow.kill_switch.max_drawdown_from_hwm_pct
                     ),
                     "timeout_candles": None,
