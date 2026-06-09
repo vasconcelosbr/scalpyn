@@ -9,7 +9,11 @@ The ml_models table is normally created by the Cloud Run ML Trainer job,
 not by init_db or any migration. Without it, GET /api/ml/models returns
 503 Database error.
 
-Idempotent: uses CREATE TABLE IF NOT EXISTS.
+NOTE: This migration was stamped as applied WITHOUT running DDL because
+op.execute() with multiple semicolon-separated statements is rejected by
+asyncpg ("cannot insert multiple commands into a prepared statement").
+The actual table creation is handled by migration 069_ml_models_table_fix
+using separate op.execute() calls (one statement each).
 """
 
 from alembic import op
@@ -22,6 +26,8 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # NOTE: intentionally split into separate op.execute() calls.
+    # asyncpg rejects multi-statement queries in a single execute().
     op.execute(sa.text("""
         CREATE TABLE IF NOT EXISTS ml_models (
             id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -45,15 +51,19 @@ def upgrade() -> None:
             retired_at           TIMESTAMPTZ,
             notes                TEXT,
             created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
+        )
+    """))
 
+    op.execute(sa.text("""
         CREATE INDEX IF NOT EXISTS ix_ml_models_status
-            ON ml_models (status);
+            ON ml_models (status)
+    """))
 
+    op.execute(sa.text("""
         CREATE INDEX IF NOT EXISTS ix_ml_models_version
-            ON ml_models (version);
+            ON ml_models (version)
     """))
 
 
 def downgrade() -> None:
-    op.execute(sa.text("DROP TABLE IF EXISTS ml_models;"))
+    op.execute(sa.text("DROP TABLE IF EXISTS ml_models"))
