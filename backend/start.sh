@@ -172,7 +172,21 @@ MIGRATIONS_DONE_FILE="/tmp/.migrations_done"
 MIGRATIONS_FAILED_FILE="/tmp/.migrations_failed"
 rm -f "$MIGRATIONS_DONE_FILE" "$MIGRATIONS_FAILED_FILE"
 
-if [ "$ASYNC_MIGRATIONS" = "1" ]; then
+# ── SKIP_ALEMBIC (opt-in for worker/beat services) ───────────────────────────
+# When SKIP_ALEMBIC=1, this container trusts that the API service (scalpyn)
+# has already run alembic upgrade head and only validates the critical schema.
+# This eliminates the ShareLock pile-up that occurs when all 6 services race
+# to acquire the alembic_version row lock simultaneously on every deploy.
+#
+# Set SKIP_ALEMBIC=1 on: scalpyn-worker-micro, scalpyn-worker-structural,
+#   scalpyn-worker-compute, scalpyn-worker-execution, scalpyn-beat.
+# Leave unset (defaults to 0) on: scalpyn (the API service owns migrations).
+SKIP_ALEMBIC="${SKIP_ALEMBIC:-0}"
+
+if [ "$SKIP_ALEMBIC" = "1" ]; then
+    echo "==> [migrations] SKIP_ALEMBIC=1 — skipping alembic upgrade (API service owns migrations)"
+    validate_critical_schema
+elif [ "$ASYNC_MIGRATIONS" = "1" ]; then
     # Background path: spawn a subshell that runs the full gate and signals
     # the result via a sentinel file. The watchdog (declared after uvicorn
     # background pieces below) polls the failure file and kills the container
