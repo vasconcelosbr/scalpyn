@@ -1014,11 +1014,18 @@ async def create_shadows_for_new_decisions(user_id, decision_ids: List[int]) -> 
         return 0
 
     if not user_config:
-        logger.warning(
-            "[shadow] inline create: no active spot_engine config for user=%s — skipping",
-            user_id,
+        _se_defaults = SpotEngineConfig()
+        user_config = {
+            "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(_se_defaults.selling.take_profit_pct),
+            "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
+                _se_defaults.sell_flow.kill_switch.max_drawdown_from_hwm_pct
+            ),
+            "timeout_candles": None,
+        }
+        logger.info(
+            "[shadow] inline create: no spot_engine config for user=%s — using schema defaults (tp=%.1f%% sl=%.1f%%)",
+            user_id, user_config["tp_pct"], user_config["sl_pct"],
         )
-        return 0
 
     created = 0
     # Sorted for deadlock safety (same convention as safe_backfill — gotcha #251/#273).
@@ -1114,11 +1121,18 @@ async def create_shadows_for_rejected_decisions(user_id, decision_ids: List[int]
         return 0
 
     if not user_config:
-        logger.warning(
-            "[shadow] rejected create: no active spot_engine config for user=%s — skipping",
-            user_id,
+        _se_defaults = SpotEngineConfig()
+        user_config = {
+            "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(_se_defaults.selling.take_profit_pct),
+            "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
+                _se_defaults.sell_flow.kill_switch.max_drawdown_from_hwm_pct
+            ),
+            "timeout_candles": None,
+        }
+        logger.info(
+            "[shadow] rejected create: no spot_engine config for user=%s — using schema defaults (tp=%.1f%% sl=%.1f%%)",
+            user_id, user_config["tp_pct"], user_config["sl_pct"],
         )
-        return 0
 
     created = 0
     for decision_id in sorted(decision_ids):
