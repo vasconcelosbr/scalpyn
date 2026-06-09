@@ -67,6 +67,10 @@ class GCSModelLoader:
 
         except Exception as e:
             logger.error(f"Erro ao carregar modelo do GCS: {e}")
+            # Cache the failure timestamp so we don't retry GCS on every request.
+            # Without this, _loaded_at stays at 0.0 and _load_from_gcs is called
+            # on every get_model() invocation when running without GCS credentials.
+            self._loaded_at = time.time()
             # Mantém modelo anterior se existir
             if self._model is None:
                 raise

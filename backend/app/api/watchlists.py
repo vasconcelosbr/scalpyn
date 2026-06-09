@@ -1416,6 +1416,38 @@ async def _auto_refresh_watchlist_assets_if_needed(
         return await _load_active_watchlist_assets(wl.id, db)
 
 
+async def _resolve_and_persist_bg(watchlist_id_str: str, user_id_str: str) -> None:
+    """Background-safe wrapper for _resolve_and_persist.
+
+    Creates its own DB session so it can safely run after the HTTP response
+    has already been sent (BackgroundTasks).  Uses the same per-watchlist
+    lock as the inline path to prevent duplicate concurrent refreshes.
+    """
+    lock = _get_watchlist_refresh_lock(watchlist_id_str)
+    if lock.locked():
+        return  # another refresh already running
+    async with AsyncSessionLocal() as db:
+        try:
+            from uuid import UUID as _UUID
+            wl_id = _UUID(watchlist_id_str)
+            uid = _UUID(user_id_str)
+            result = await db.execute(
+                select(PipelineWatchlist).where(
+                    PipelineWatchlist.id == wl_id,
+                    PipelineWatchlist.user_id == uid,
+                )
+            )
+            wl = result.scalars().first()
+            if wl:
+                async with lock:
+                    await _resolve_and_persist(wl, uid, db)
+        except Exception as exc:
+            logger.warning(
+                "[Pipeline] Background refresh failed for wl=%s: %s",
+                watchlist_id_str, exc,
+            )
+
+
 async def _resolve_and_persist(
     wl: PipelineWatchlist,
     user_id: UUID,
@@ -2035,6 +2067,7 @@ async def _resolve_and_persist(
 async def get_watchlist_assets(
     watchlist_id: UUID,
     hide_neutral: bool = Query(False, description="Futures mode: omit assets with no direction assigned (score gap < 5 pts)"),
+    background_tasks: BackgroundTasks,
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -2042,6 +2075,10 @@ async def get_watchlist_assets(
 
     Auto-resolves the pipeline on first access when auto_refresh=True and
     no assets have been persisted yet — this propagates L1→L2→L3 automatically.
+
+    When assets already exist and a refresh is needed (stale / upstream delta),
+    the refresh runs as a background task so the response is returned immediately
+    with the current snapshot instead of blocking until Gate.io calls complete.
     """
     result = await db.execute(
         select(PipelineWatchlist).where(
@@ -2063,13 +2100,23 @@ async def get_watchlist_assets(
 
     if wl.auto_refresh:
         try:
-            assets = await _auto_refresh_watchlist_assets_if_needed(
-                wl,
-                assets,
-                effective_level=effective_level,
-                user_id=user_id,
-                db=db,
-            )
+            if not assets:
+                # Empty snapshot — must resolve inline so there is something to show.
+                assets = await _auto_refresh_watchlist_assets_if_needed(
+                    wl,
+                    assets,
+                    effective_level=effective_level,
+                    user_id=user_id,
+                    db=db,
+                )
+            else:
+                # Assets exist — schedule refresh in background to avoid blocking
+                # the response with Gate.io API calls or heavy indicator computation.
+                background_tasks.add_task(
+                    _resolve_and_persist_bg,
+                    str(watchlist_id),
+                    str(user_id),
+                )
         except Exception as e:
             logger.warning("[Pipeline] Auto-refresh snapshot failed for %s: %s", watchlist_id, e)
 
@@ -2084,32 +2131,12 @@ async def get_watchlist_assets(
     symbols = [a.symbol for a in assets]
     ind_map = await _fetch_indicators_map(db, symbols, include_stale=True) if symbols else {}
 
-    # On-demand computation: if some symbols have no indicators in DB OR are
-    # missing key indicator fields (stale/partial cache), fetch OHLCV and recompute.
-    # We check both *presence* and *non-None value* so that a row with e.g.
-    # rsi=66 but adx=None still triggers a full re-compute.
-    # Values may still arrive as envelope dicts if the merge path failed to
-    # unwrap — treat those as missing too ({"value": None} → missing,
-    # {"value": 0} would already have been unwrapped to 0 by the merge).
-    _KEY_INDICATOR_FIELDS = {"taker_ratio", "ema9_distance_pct", "rsi", "adx", "bb_width", "volume_spike"}
-
-    def _is_indicator_missing(v: Any) -> bool:
-        if v is None:
-            return True
-        if isinstance(v, dict):
-            return v.get("value") is None
-        return False
-
-    if symbols:
-        missing = [
-            s for s in symbols
-            if not ind_map.get(s) or any(
-                _is_indicator_missing(ind_map[s].get(f)) for f in _KEY_INDICATOR_FIELDS
-            )
-        ]
-        if missing:
-            on_demand = await _compute_indicators_on_demand(db, missing)
-            ind_map.update(on_demand)
+    # On-demand indicator computation is intentionally skipped on the read path.
+    # Computing indicators inline requires Gate.io OHLCV calls for up to 40 symbols
+    # and can easily cause 504 timeouts when many symbols lack fresh DB data.
+    # Celery workers (microstructure + structural schedulers) are responsible for
+    # keeping the indicators table fresh.  Symbols without DB indicators will show
+    # null scores until the next worker cycle — acceptable UX trade-off vs 504s.
 
     # ── Compute alpha scores on-demand using global /settings/score config ──────
     # Uses global scoring rules merged with the profile's Alpha Score Weights
