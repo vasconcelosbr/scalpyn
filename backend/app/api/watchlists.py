@@ -2110,13 +2110,24 @@ async def get_watchlist_assets(
                     db=db,
                 )
             else:
-                # Assets exist — schedule refresh in background to avoid blocking
-                # the response with Gate.io API calls or heavy indicator computation.
-                background_tasks.add_task(
-                    _resolve_and_persist_bg,
-                    str(watchlist_id),
-                    str(user_id),
-                )
+                # Assets exist — only schedule a background refresh when the
+                # snapshot is genuinely stale (last_scanned_at is NULL or older
+                # than the threshold).  upstream_delta / upstream_drift are
+                # handled by the Celery beat scheduler; triggering them on every
+                # read request would create a refresh storm.
+                _last_scanned = wl.last_scanned_at
+                _stale = _last_scanned is None
+                if not _stale:
+                    if _last_scanned.tzinfo is None:
+                        _last_scanned = _last_scanned.replace(tzinfo=timezone.utc)
+                    _age_s = (datetime.now(timezone.utc) - _last_scanned).total_seconds()
+                    _stale = _age_s > _pipeline_scan_stale_threshold_seconds()
+                if _stale:
+                    background_tasks.add_task(
+                        _resolve_and_persist_bg,
+                        str(watchlist_id),
+                        str(user_id),
+                    )
         except Exception as e:
             logger.warning("[Pipeline] Auto-refresh snapshot failed for %s: %s", watchlist_id, e)
 

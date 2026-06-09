@@ -39,9 +39,13 @@ class GCSModelLoader:
         return cls._instance
 
     def get_model(self):
-        """Retorna modelo — carrega do GCS se cache expirado."""
+        """Retorna modelo — carrega do GCS se cache expirado.
+
+        Uses AND instead of OR so a cached failure (_model=None but _loaded_at set)
+        does not trigger a retry on every call until MODEL_CACHE_TTL expires.
+        """
         now = time.time()
-        if self._model is None or (now - self._loaded_at) > MODEL_CACHE_TTL:
+        if (now - self._loaded_at) > MODEL_CACHE_TTL:
             self._load_from_gcs()
         return self._model
 
