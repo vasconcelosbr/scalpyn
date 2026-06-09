@@ -1,27 +1,22 @@
 """Add missing unique constraint on pipeline_watchlist_assets(watchlist_id, symbol).
 
-Revision ID: 066_fix_pipeline_assets_unique_constraint
+Revision ID: 066_pipeline_assets_uq
 Revises: 065_ttt_shadow_columns
 Create Date: 2026-06-09
 
-Contexto
---------
-Ao migrar para o Railway com banco fresh, o fluxo foi:
-  1. init_db.py (Base.metadata.create_all) — cria a tabela SEM o unique constraint
-  2. alembic stamp 020 — marca migração 012 como já aplicada (incorreto)
-  3. alembic upgrade head — roda 021+ que adicionam colunas mas não o constraint
+Context: When Railway DB was bootstrapped via init_db + alembic stamp 020,
+migration 012 (which creates uq_pipeline_asset_watchlist_symbol) was skipped.
+The ON CONFLICT upsert in pipeline_scan._upsert_assets requires this constraint
+— without it every pipeline_scan cycle fails with InvalidColumnReferenceError,
+leaving shadow_trades empty.
 
-Resultado: pipeline_scan.scan falha com:
-  asyncpg.exceptions.InvalidColumnReferenceError:
-  there is no unique or exclusion constraint matching the ON CONFLICT specification
-
-Fix: adiciona o constraint IF NOT EXISTS (idempotente em DBs que já têm ele).
+Note: revision ID intentionally short (≤32 chars) to fit alembic_version.version_num VARCHAR(32).
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "066_fix_pipeline_assets_unique_constraint"
+revision = "066_pipeline_assets_uq"
 down_revision = "065_ttt_shadow_columns"
 branch_labels = None
 depends_on = None
