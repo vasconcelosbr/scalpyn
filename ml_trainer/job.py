@@ -229,30 +229,19 @@ def main():
         )
 
     # ---------------------------------------------------------
-    # 4. Salva modelo serializado no Railway Volume
+    # 4. Serializa modelo em memória (salvo no DB na seção 5)
     # ---------------------------------------------------------
     import joblib
-    import shutil
-    import tempfile
+    import io
 
-    os.makedirs(MODEL_DIR, exist_ok=True)
+    logger.info("Serializando modelo (joblib → bytes)...")
+    buf = io.BytesIO()
+    joblib.dump(trainer.model, buf)
+    model_blob = buf.getvalue()
+    logger.info(f"Modelo serializado: {len(model_blob) / 1024:.1f} KB")
 
-    model_filename = f"win_fast_v{result.get('version', 'latest')}.pkl"
-    model_path_versioned = os.path.join(MODEL_DIR, model_filename)
-    latest_path = os.path.join(MODEL_DIR, "win_fast_latest.pkl")
-
-    logger.info(f"Salvando modelo no volume: {model_path_versioned}")
-    with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:
-        joblib.dump(trainer.model, tmp.name)
-        tmp_path = tmp.name
-
-    shutil.copy2(tmp_path, model_path_versioned)
-    shutil.copy2(tmp_path, latest_path)
-    os.unlink(tmp_path)
-
-    gcs_model_uri = model_path_versioned  # mantém nome da variável para a nota no DB
-    logger.info(f"Modelo salvo: {model_path_versioned}")
-    logger.info(f"Latest atualizado: {latest_path}")
+    model_filename = f"win_fast_v{result.get('version', 'latest')}"
+    gcs_model_uri = f"db://ml_models/{model_filename}"  # referência simbólica para nota no DB
 
     # ---------------------------------------------------------
     # 5. Persiste ml_models no Cloud SQL
@@ -278,7 +267,8 @@ def main():
                 win_fast_capture_rate, false_positive_rate,
                 train_from, train_to,
                 model_path, decision_threshold,
-                activated_at, notes
+                activated_at, notes,
+                model_blob
             ) VALUES (
                 :version, 'active', :hyperparams,
                 :n_train, :n_val, :n_test,
@@ -286,7 +276,8 @@ def main():
                 :capture_rate, :fpr,
                 :train_from, :train_to,
                 :model_path, :threshold,
-                NOW(), :notes
+                NOW(), :notes,
+                :model_blob
             )
         """), {
             "version":      ver,
@@ -310,7 +301,7 @@ def main():
             # hardcoded 0.500). See trainer._calibrate_threshold.
             "threshold":    float(result.get("decision_threshold", 0.5)),
             "notes":        (
-                f"MLflow run_id: {result['run_id']} | GCS: {gcs_model_uri} | "
+                f"MLflow run_id: {result['run_id']} | storage: db://ml_models | "
                 f"source={ML_SOURCE_FILTER} | target={ML_TARGET_TYPE} | "
                 f"lookback_days={DAYS_LOOKBACK} | "
                 f"winrate_base={result.get('winrate_base', 0):.2f}% | "
@@ -320,6 +311,7 @@ def main():
                 f"features_excluded={result.get('features_excluded', [])} | "
                 f"shap_top5={result.get('shap_bad_approval_drivers', [])[:5]}"
             ),
+            "model_blob":   model_blob,
         })
 
     logger.info(f"Modelo v{ver} registrado e ativado.")
