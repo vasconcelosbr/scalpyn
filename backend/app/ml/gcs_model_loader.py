@@ -1,29 +1,26 @@
 import os
-import io
 import logging
 import time
 from threading import Lock
 from typing import Optional
 
 import joblib
-import xgboost as xgb
-from google.cloud import storage
 
 logger = logging.getLogger(__name__)
 
-BUCKET_NAME       = os.getenv("BUCKET_NAME", "scalpyn-mlflow")
-MODEL_GCS_PATH    = "models/win_fast_latest.pkl"
-MODEL_CACHE_TTL   = 300  # segundos — recarrega se modelo novo for deployado
+MODEL_DIR      = os.getenv("MODEL_DIR", "/models")
+MODEL_PATH     = os.path.join(MODEL_DIR, "win_fast_latest.pkl")
+MODEL_CACHE_TTL = 300  # segundos — recarrega se modelo novo for treinado
 
 
 class GCSModelLoader:
     """
-    Singleton que carrega e cacheia o modelo XGBoost do GCS.
+    Singleton que carrega e cacheia o modelo XGBoost do Railway Volume.
 
     Comportamento:
-    - Cold start: baixa win_fast_latest.pkl do GCS (~1-2s)
+    - Cold start: lê win_fast_latest.pkl do volume local (~1ms)
     - Requests subsequentes: usa cache em memória (<1ms)
-    - Cache expira em 5min → detecta novo modelo automaticamente
+    - Cache expira em 5min → detecta novo modelo automaticamente após re-treino
     """
 
     _instance: Optional["GCSModelLoader"] = None
@@ -39,41 +36,31 @@ class GCSModelLoader:
         return cls._instance
 
     def get_model(self):
-        """Retorna modelo — carrega do GCS se cache expirado.
+        """Retorna modelo — carrega do volume se cache expirado.
 
-        Uses AND instead of OR so a cached failure (_model=None but _loaded_at set)
-        does not trigger a retry on every call until MODEL_CACHE_TTL expires.
+        Cached failure (_model=None but _loaded_at set) does not retry
+        on every call — only retries after MODEL_CACHE_TTL expires.
         """
         now = time.time()
         if (now - self._loaded_at) > MODEL_CACHE_TTL:
-            self._load_from_gcs()
+            self._load_from_volume()
         return self._model
 
-    def _load_from_gcs(self):
-        """Download e deserialização do modelo do GCS."""
-        logger.info(f"Carregando modelo do GCS: gs://{BUCKET_NAME}/{MODEL_GCS_PATH}")
+    def _load_from_volume(self):
+        """Leitura e deserialização do modelo do Railway Volume."""
+        logger.info(f"Carregando modelo do volume: {MODEL_PATH}")
         t0 = time.time()
 
         try:
-            client = storage.Client()
-            bucket = client.bucket(BUCKET_NAME)
-            blob = bucket.blob(MODEL_GCS_PATH)
-
-            buffer = io.BytesIO()
-            blob.download_to_file(buffer)
-            buffer.seek(0)
-
-            self._model = joblib.load(buffer)
+            self._model = joblib.load(MODEL_PATH)
             self._loaded_at = time.time()
 
             elapsed = round((time.time() - t0) * 1000, 1)
             logger.info(f"Modelo carregado em {elapsed}ms")
 
         except Exception as e:
-            logger.error(f"Erro ao carregar modelo do GCS: {e}")
-            # Cache the failure timestamp so we don't retry GCS on every request.
-            # Without this, _loaded_at stays at 0.0 and _load_from_gcs is called
-            # on every get_model() invocation when running without GCS credentials.
+            logger.error(f"Erro ao carregar modelo do volume: {e}")
+            # Cache the failure timestamp so we don't retry on every request.
             self._loaded_at = time.time()
             # Mantém modelo anterior se existir
             if self._model is None:

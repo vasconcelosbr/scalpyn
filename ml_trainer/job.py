@@ -21,7 +21,6 @@ import mlflow
 import mlflow.xgboost
 import optuna
 from sqlalchemy import create_engine, text
-from google.cloud import storage
 
 # Configuração de logging
 logging.basicConfig(
@@ -32,11 +31,10 @@ logging.basicConfig(
 logger = logging.getLogger("scalpyn.trainer")
 
 # -------------------------------------------------------------
-# Config via env vars (injetadas pelo Cloud Run Job)
+# Config via env vars
 # -------------------------------------------------------------
-DB_URL            = os.environ["DB_URL"]          # Cloud SQL via unix socket
-BUCKET_NAME       = os.environ["BUCKET_NAME"]     # scalpyn-mlflow
-GCS_ARTIFACT_ROOT = f"gs://{BUCKET_NAME}/artifacts"
+DB_URL    = os.environ["DB_URL"]                    # Railway Postgres URL
+MODEL_DIR = os.getenv("MODEL_DIR", "/models")       # Railway Volume mount path
 # BLOCO C — janela deslizante 30d (regime drift).
 # Substituiu 90d fixos — ajustar via env se necessário.
 DAYS_LOOKBACK            = int(os.getenv("DAYS_LOOKBACK", "30"))
@@ -56,11 +54,11 @@ ML_TARGET_TYPE           = os.getenv("ML_TARGET_TYPE", "binary")
 TRAIN_EXCLUDE_FROM       = os.getenv("TRAIN_EXCLUDE_FROM", "")   # e.g. "2026-05-01"
 TRAIN_EXCLUDE_TO         = os.getenv("TRAIN_EXCLUDE_TO", "")     # e.g. "2026-05-20"
 
-# MLflow aponta para o serviço scalpyn-mlflow-ui (Cloud Run) que mantém
-# seu próprio banco — sem colisão com o alembic_version do backend.
+# MLflow — usa volume local por padrão (file://), sem dependência de servidor externo.
+# Para usar um servidor MLflow remoto, setar MLFLOW_TRACKING_URI na env do Railway service.
 _MLFLOW_URI = os.getenv(
     "MLFLOW_TRACKING_URI",
-    "https://scalpyn-mlflow-ui-wm56dfqgta-uc.a.run.app",
+    f"file://{MODEL_DIR}/mlruns",
 )
 os.environ["MLFLOW_TRACKING_URI"] = _MLFLOW_URI
 mlflow.set_tracking_uri(_MLFLOW_URI)
@@ -231,32 +229,30 @@ def main():
         )
 
     # ---------------------------------------------------------
-    # 4. Salva modelo serializado no GCS
+    # 4. Salva modelo serializado no Railway Volume
     # ---------------------------------------------------------
-    logger.info("Salvando modelo no GCS...")
     import joblib
+    import shutil
     import tempfile
 
-    model_filename = f"win_fast_v{result.get('version', 'latest')}.pkl"
-    gcs_path = f"models/{model_filename}"
+    os.makedirs(MODEL_DIR, exist_ok=True)
 
+    model_filename = f"win_fast_v{result.get('version', 'latest')}.pkl"
+    model_path_versioned = os.path.join(MODEL_DIR, model_filename)
+    latest_path = os.path.join(MODEL_DIR, "win_fast_latest.pkl")
+
+    logger.info(f"Salvando modelo no volume: {model_path_versioned}")
     with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as tmp:
         joblib.dump(trainer.model, tmp.name)
         tmp_path = tmp.name
 
-    gcs_client = storage.Client()
-    bucket = gcs_client.bucket(BUCKET_NAME)
-    blob = bucket.blob(gcs_path)
-    blob.upload_from_filename(tmp_path)
+    shutil.copy2(tmp_path, model_path_versioned)
+    shutil.copy2(tmp_path, latest_path)
     os.unlink(tmp_path)
 
-    # Também salva como "latest" para o predictor carregar sempre o mais novo
-    latest_blob = bucket.blob("models/win_fast_latest.pkl")
-    bucket.copy_blob(blob, bucket, "models/win_fast_latest.pkl")
-
-    gcs_model_uri = f"gs://{BUCKET_NAME}/{gcs_path}"
-    logger.info(f"Modelo salvo: {gcs_model_uri}")
-    logger.info(f"Latest atualizado: gs://{BUCKET_NAME}/models/win_fast_latest.pkl")
+    gcs_model_uri = model_path_versioned  # mantém nome da variável para a nota no DB
+    logger.info(f"Modelo salvo: {model_path_versioned}")
+    logger.info(f"Latest atualizado: {latest_path}")
 
     # ---------------------------------------------------------
     # 5. Persiste ml_models no Cloud SQL
