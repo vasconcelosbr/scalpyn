@@ -553,6 +553,7 @@ async def enrich_market_context(
 
 _INSERT_SHADOW_SQL = text("""
     INSERT INTO shadow_trades (
+        id,
         decision_id, user_id, symbol, strategy, direction,
         amount_usdt, entry_price, entry_timestamp,
         tp_price, sl_price, tp_pct, sl_pct, timeout_candles,
@@ -560,6 +561,7 @@ _INSERT_SHADOW_SQL = text("""
         last_processed_time,
         ttt_enabled, ttt_tp_pct, ttt_timeout_minutes
     ) VALUES (
+        gen_random_uuid(),
         :decision_id, :user_id, :symbol, :strategy, :direction,
         :amount_usdt, :entry_price, :entry_timestamp,
         :tp_price, :sl_price, :tp_pct, :sl_pct, :timeout_candles,
