@@ -2066,8 +2066,8 @@ async def _resolve_and_persist(
 @router.get("/{watchlist_id}/assets")
 async def get_watchlist_assets(
     watchlist_id: UUID,
-    hide_neutral: bool = Query(False, description="Futures mode: omit assets with no direction assigned (score gap < 5 pts)"),
     background_tasks: BackgroundTasks,
+    hide_neutral: bool = Query(False, description="Futures mode: omit assets with no direction assigned (score gap < 5 pts)"),
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
