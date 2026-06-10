@@ -639,6 +639,8 @@ async def _create_from_decision(
         "ttt_enabled": ttt_enabled,
         "ttt_tp_pct": ttt_tp_pct,
         "ttt_timeout_minutes": ttt_timeout_minutes,
+        # ML fee key: monitor reads this to compute net_return_pct at close (B1 fix)
+        "ml_fee_roundtrip_pct": user_config.get("ml_fee_roundtrip_pct"),
     }
     features_snap = _build_features_snapshot(decision)
 
@@ -998,6 +1000,7 @@ async def create_shadows_for_new_decisions(user_id, decision_ids: List[int]) -> 
 
     # Load user config once; bail out silently if config is missing.
     user_config: Dict[str, Any] = {}
+    _ml_config: Dict[str, Any] = {}
     try:
         async with CeleryAsyncSessionLocal() as cfg_db:
             cfg_res = await cfg_db.execute(
@@ -1017,6 +1020,17 @@ async def create_shadows_for_new_decisions(user_id, decision_ids: List[int]) -> 
                     ),
                     "timeout_candles": None,
                 }
+            # Load ML config for fee snapshot (B1 fix)
+            ml_res = await cfg_db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "ml",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            ml_row = ml_res.scalar_one_or_none()
+            if ml_row and isinstance(ml_row.config_json, dict):
+                _ml_config = ml_row.config_json
     except Exception:
         logger.exception(
             "[shadow] inline create: config load failed for user=%s", user_id
@@ -1036,6 +1050,8 @@ async def create_shadows_for_new_decisions(user_id, decision_ids: List[int]) -> 
             "[shadow] inline create: no spot_engine config for user=%s — using schema defaults (tp=%.1f%% sl=%.1f%%)",
             user_id, user_config["tp_pct"], user_config["sl_pct"],
         )
+
+    user_config["ml_fee_roundtrip_pct"] = _ml_config.get("ml_fee_roundtrip_pct")
 
     created = 0
     # Sorted for deadlock safety (same convention as safe_backfill — gotcha #251/#273).
@@ -1105,6 +1121,7 @@ async def create_shadows_for_rejected_decisions(user_id, decision_ids: List[int]
     from ..schemas.spot_engine_config import SpotEngineConfig
 
     user_config: Dict[str, Any] = {}
+    _ml_config: Dict[str, Any] = {}
     try:
         async with CeleryAsyncSessionLocal() as cfg_db:
             cfg_res = await cfg_db.execute(
@@ -1124,6 +1141,17 @@ async def create_shadows_for_rejected_decisions(user_id, decision_ids: List[int]
                     ),
                     "timeout_candles": None,
                 }
+            # Load ML config for fee snapshot (B1 fix)
+            ml_res = await cfg_db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "ml",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            ml_row = ml_res.scalar_one_or_none()
+            if ml_row and isinstance(ml_row.config_json, dict):
+                _ml_config = ml_row.config_json
     except Exception:
         logger.exception(
             "[shadow] rejected create: config load failed for user=%s", user_id
@@ -1143,6 +1171,8 @@ async def create_shadows_for_rejected_decisions(user_id, decision_ids: List[int]
             "[shadow] rejected create: no spot_engine config for user=%s — using schema defaults (tp=%.1f%% sl=%.1f%%)",
             user_id, user_config["tp_pct"], user_config["sl_pct"],
         )
+
+    user_config["ml_fee_roundtrip_pct"] = _ml_config.get("ml_fee_roundtrip_pct")
 
     created = 0
     for decision_id in sorted(decision_ids):
@@ -1389,7 +1419,11 @@ _INSERT_SIM_SQL = text("""
         mae_at, mfe_at,
         barrier_touched, barrier_touched_at, intrabar_convention,
         final_return_pct, net_return_pct, fee_roundtrip_pct_applied,
-        barrier_mode, tp_pct_applied, sl_pct_applied, atr_pct_at_entry
+        barrier_mode, tp_pct_applied, sl_pct_applied, atr_pct_at_entry,
+        min_price_post_entry, max_price_post_entry,
+        max_drawdown_pct, max_profit_pct,
+        mae_pct, mfe_pct,
+        exit_metrics_json
     ) VALUES (
         gen_random_uuid(), :symbol, :timestamp_entry, :entry_price,
         :tp_price, :sl_price,
@@ -1403,7 +1437,11 @@ _INSERT_SIM_SQL = text("""
         :mae_at, :mfe_at,
         :barrier_touched, :barrier_touched_at, :intrabar_convention,
         :final_return_pct, :net_return_pct, :fee_roundtrip_pct_applied,
-        :barrier_mode, :tp_pct_applied, :sl_pct_applied, :atr_pct_at_entry
+        :barrier_mode, :tp_pct_applied, :sl_pct_applied, :atr_pct_at_entry,
+        :min_price_post_entry, :max_price_post_entry,
+        :max_drawdown_pct, :max_profit_pct,
+        :mae_pct, :mfe_pct,
+        CAST(:exit_metrics_json AS JSONB)
     )
     ON CONFLICT (decision_id) WHERE source = 'SHADOW'
         AND decision_id IS NOT NULL DO NOTHING
@@ -1518,6 +1556,15 @@ async def record_as_simulation(
             "tp_pct_applied": shadow.tp_pct_applied,
             "sl_pct_applied": shadow.sl_pct_applied,
             "atr_pct_at_entry": shadow.atr_pct_at_entry,
+            # Espelho das colunas MAE/MFE (migration 062 drift — fixed in 072).
+            "min_price_post_entry": shadow.min_price_post_entry,
+            "max_price_post_entry": shadow.max_price_post_entry,
+            "max_drawdown_pct": shadow.max_drawdown_pct,
+            "max_profit_pct": shadow.max_profit_pct,
+            "mae_pct": shadow.mae_pct,
+            "mfe_pct": shadow.mfe_pct,
+            "exit_metrics_json": json.dumps(shadow.exit_metrics_json, default=str)
+            if shadow.exit_metrics_json is not None else None,
         },
     )
     row = res.fetchone()

@@ -4,7 +4,7 @@ import json
 import logging
 import math
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import pandas as pd
 
@@ -246,7 +246,11 @@ _FEE_ROUND_TRIP_PCT = float(os.getenv("FEE_ROUND_TRIP_PCT", "0.16"))  # 0.16%
 _WIN_THRESHOLD = _MIN_WIN_PNL_PCT + _FEE_ROUND_TRIP_PCT  # 0.96% effective
 
 
-def build_training_dataframe(records: list) -> pd.DataFrame:
+def build_training_dataframe(
+    records: list,
+    fee_roundtrip_pct: Optional[float] = None,
+    label_net_of_fees: bool = False,
+) -> pd.DataFrame:
     """
     Build training DataFrame from shadow_trades records (fonte canônica — Bloco B).
 
@@ -254,14 +258,22 @@ def build_training_dataframe(records: list) -> pd.DataFrame:
         records: List of dicts from shadow_trades query.
                  Expected fields: symbol, source, created_at,
                  features_snapshot (JSONB flat — indicadores na entrada),
-                 pnl_pct, holding_seconds, outcome, ttt_outcome.
+                 pnl_pct, net_return_pct (optional), holding_seconds,
+                 outcome, ttt_outcome.
+        fee_roundtrip_pct: Round-trip fee (%) to apply in Tier 2 label when
+                 net_return_pct is NULL. Only used when label_net_of_fees=True.
+        label_net_of_fees: When True, Tier 2 label uses net-of-fees return
+                 (net_return_pct if persisted, else gross - fee_roundtrip_pct).
 
     Returns:
         DataFrame with FEATURE_COLUMNS + is_win_fast + _created_at columns.
 
     Label semantics:
         Tier 1 (TTT): ttt_outcome == 'FAST_WIN' → 1; 'TIMEOUT' → 0.
-        Tier 2 (fallback): pnl_pct > _WIN_THRESHOLD (0.96% net-of-fees).
+        Tier 2 (fallback): when label_net_of_fees=True and net_return_pct is
+            available, use net_return_pct > _MIN_WIN_PNL_PCT; when
+            net_return_pct is NULL and fee_roundtrip_pct given, compute
+            net = pnl_pct - fee; else use pnl_pct > _WIN_THRESHOLD (legacy).
         Rows with pnl_pct IS NULL are DROPPED.
 
         Vocabulário de shadow_trades.outcome: 'TP_HIT' / 'SL_HIT' (uppercase).
@@ -310,9 +322,24 @@ def build_training_dataframe(records: list) -> pd.DataFrame:
             features["is_win_fast"] = 1 if ttt_outcome == "FAST_WIN" else 0
             features["_has_ttt_label"] = 1
         else:
-            # Fallback: net-of-fees PnL threshold (pre-TTT data).
-            # _WIN_THRESHOLD = MIN_WIN_PNL_PCT + FEE_ROUND_TRIP_PCT.
-            features["is_win_fast"] = 1 if pnl_val > _WIN_THRESHOLD else 0
+            # Tier 2 fallback: net-of-fees label (B1 fix).
+            # Priority: persisted net_return_pct > runtime-computed net > legacy gross.
+            if label_net_of_fees:
+                net_return_pct = r.get("net_return_pct")
+                if net_return_pct is not None:
+                    # Snapshot-persisted net: compare directly vs MIN (fee already in)
+                    net_val = float(net_return_pct)
+                    features["is_win_fast"] = 1 if net_val > _MIN_WIN_PNL_PCT else 0
+                elif fee_roundtrip_pct is not None:
+                    # Runtime-computed net for pre-fix records (ADDITIVE, no UPDATE)
+                    net_val = pnl_val - float(fee_roundtrip_pct)
+                    features["is_win_fast"] = 1 if net_val > _MIN_WIN_PNL_PCT else 0
+                else:
+                    # No fee info available — fall back to legacy gross threshold
+                    features["is_win_fast"] = 1 if pnl_val > _WIN_THRESHOLD else 0
+            else:
+                # Legacy path: gross PnL vs combined threshold
+                features["is_win_fast"] = 1 if pnl_val > _WIN_THRESHOLD else 0
             features["_has_ttt_label"] = 0
 
         # Metadata for time-based split — NOT model features

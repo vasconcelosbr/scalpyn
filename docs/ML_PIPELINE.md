@@ -1,5 +1,35 @@
 # XGBoost ML Pipeline — Trade Outcome Prediction
 
+## Known Data Quirks (read before adding features)
+
+### MAE > 0 in pre-2026-06-10 records (B2 fix)
+
+Records created before commit `FIX_B123` (2026-06-10) may have `mae_pct > 0` in `shadow_trades`.
+This is semantically wrong: MAE (Maximum Adverse Excursion) must be ≤ 0 for long trades.
+The positive value occurs when `min_price_post_entry > entry_price` (gap-up entry where price
+never dipped below entry). The correct interpretation is `mae = 0` (no adverse move), not a gain.
+
+**Impact on training:** If MAE/MFE are added as features, the trainer loader must apply a
+runtime clamp:
+```python
+mae_pct = min(0.0, record["mae_pct"])   # pre-fix records: positive → 0
+mfe_pct = max(0.0, record["mfe_pct"])   # pre-fix records: negative → 0
+```
+New records (post-deploy) will have the correct clamped values from the monitor.
+
+### Source = 'L3' is capture at L3-ALLOW (not L1)
+
+`shadow_trades.source = 'L3'` means the shadow was created AFTER the full L1→L2→L3 filter chain
+passed. The ML model therefore trains on the sub-population of L3-approved signals, not the
+full universe. Two embedded biases:
+1. **Survivorship bias:** the model never sees signals the L3 score gate rejected.
+2. **Symbol cooldown bias:** the `ux_shadow_running_user_symbol` unique constraint means only
+   the *first* ALLOW for a symbol (while no shadow is running) creates a new shadow. ~14% of
+   L3-ALLOWs become shadows — the rest are dropped silently.
+
+This is intentional for the current phase. `source='L3'` is semantically correct.
+Document if comparing to backtest distributions that may not share these filters.
+
 ## Overview
 
 The SCALPYN XGBoost ML Pipeline predicts the probability of Take Profit (TP) being hit before Stop Loss (SL) for trading opportunities. The system uses labeled data from historical simulations to train a binary classification model that enhances L3 ranking with ML-driven probabilities.

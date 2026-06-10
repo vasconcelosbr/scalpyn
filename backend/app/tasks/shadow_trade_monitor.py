@@ -413,11 +413,15 @@ def _finalize_outcome(
     # ── MAE/MFE final computation (Fase Quant 1) ─────────────────────────
     if entry_price > 0:
         if shadow.min_price_post_entry is not None:
-            mae = (shadow.min_price_post_entry - entry_price) / entry_price * 100.0
+            # Clamp to ≤ 0: MAE is adverse excursion; positive value (gap-up entry)
+            # means no adverse move occurred, not a gain — cap at zero.
+            mae = min(0.0, (shadow.min_price_post_entry - entry_price) / entry_price * 100.0)
             shadow.mae_pct = mae
             shadow.max_drawdown_pct = mae
         if shadow.max_price_post_entry is not None:
-            mfe = (shadow.max_price_post_entry - entry_price) / entry_price * 100.0
+            # Clamp to ≥ 0: MFE is favorable excursion; negative value (gap-down
+            # entry) means no favorable move occurred — cap at zero.
+            mfe = max(0.0, (shadow.max_price_post_entry - entry_price) / entry_price * 100.0)
             shadow.mfe_pct = mfe
             shadow.max_profit_pct = mfe
     # ── Shadow Instrumentation (migration 071) ───────────────────────────

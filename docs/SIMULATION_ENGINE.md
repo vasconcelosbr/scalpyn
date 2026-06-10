@@ -1,5 +1,33 @@
 # Trade Simulation Engine
 
+## Shadow → trade_simulations Mirror (record_as_simulation)
+
+`shadow_trade_service.record_as_simulation` replicates each completed `ShadowTrade` into
+`trade_simulations` for use by the ML trainer and analytics.
+
+### Anti-join dedup behavior
+
+The INSERT uses an ON CONFLICT clause:
+```sql
+ON CONFLICT (decision_id) WHERE source = 'SHADOW' AND decision_id IS NOT NULL DO NOTHING
+```
+This is idempotent: re-running the monitor on already-mirrored trades is safe. Side effect:
+if the same `decision_id` was previously inserted with a different `source`, the second insert
+for `source='SHADOW'` succeeds (no conflict — partial index is per-source). The audit found
+~15 records with matching `decision_id` across sources; these are expected and harmless.
+
+Shadows with `decision_id IS NULL` (synthetic/_SyntheticDecision fallback) are not
+deduplicated — each monitor run can insert a new row. These are rare (live_l3 path).
+
+### Schema parity invariant
+
+Every column added to `shadow_trades` MUST be mirrored to `trade_simulations` in the same
+Alembic migration. This invariant was established in migration 071. Migration 072 backfills
+7 columns from migration 062 that were missed (MAE/MFE tracking fields).
+
+Known remaining drift (observational fields, not blocking ML pipeline):
+- migrations 052, 063, 065: price_after_N metrics, ttt_* columns, velocity fields
+
 ## Overview
 
 The Trade Simulation Engine is a production-ready system for generating labeled trade outcomes using historical OHLCV data. This system generates the dataset used to train XGBoost models for the SCALPYN platform.

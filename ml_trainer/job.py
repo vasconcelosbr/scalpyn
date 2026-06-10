@@ -101,7 +101,7 @@ def main():
     with engine.connect() as conn:
         result = conn.execute(text(f"""
             SELECT
-                symbol, source, pnl_pct, holding_seconds, outcome,
+                symbol, source, pnl_pct, net_return_pct, holding_seconds, outcome,
                 features_snapshot, created_at,
                 ttt_outcome, ttt_fast_win_bucket,
                 time_to_tp_minutes, elapsed_minutes, profit_velocity
@@ -115,6 +115,23 @@ def main():
             ORDER BY created_at ASC
         """), {"days": f"{DAYS_LOOKBACK} days", "source_filter": ML_SOURCE_FILTER, **exclude_params})
         records = [dict(row._mapping) for row in result.fetchall()]
+
+    # Load ML config_profile for fee label params (B1 fix).
+    _ml_cfg: dict = {}
+    try:
+        with engine.connect() as conn:
+            ml_cfg_row = conn.execute(text("""
+                SELECT config_json FROM config_profiles
+                WHERE config_type = 'ml' AND is_active = true
+                LIMIT 1
+            """)).fetchone()
+            if ml_cfg_row and ml_cfg_row[0]:
+                _ml_cfg = ml_cfg_row[0] if isinstance(ml_cfg_row[0], dict) else json.loads(ml_cfg_row[0])
+    except Exception as e:
+        logger.warning("Failed to load ML config_profile — using legacy label: %s", e)
+
+    _fee_roundtrip_pct = _ml_cfg.get("ml_fee_roundtrip_pct")
+    _label_net_of_fees = bool(_ml_cfg.get("ml_label_net_of_fees", False))
 
     total = len(records)
     n_ttt      = sum(1 for r in records if r.get("ttt_outcome") is not None)
@@ -143,8 +160,16 @@ def main():
     from app.ml.feature_extractor import build_training_dataframe, train_val_test_split
     from app.ml.trainer import WinFastTrainer
 
-    df = build_training_dataframe(records)
-    logger.info(f"DataFrame: {len(df)} rows, {len(df.columns)} cols")
+    df = build_training_dataframe(
+        records,
+        fee_roundtrip_pct=_fee_roundtrip_pct,
+        label_net_of_fees=_label_net_of_fees,
+    )
+    logger.info(
+        "DataFrame: %d rows, %d cols | label_net_of_fees=%s fee=%.2f%%",
+        len(df), len(df.columns),
+        _label_net_of_fees, _fee_roundtrip_pct or 0.0,
+    )
 
     win_fast_rate = df["is_win_fast"].mean() * 100
     logger.info(f"Taxa base WIN_FAST: {win_fast_rate:.1f}%")

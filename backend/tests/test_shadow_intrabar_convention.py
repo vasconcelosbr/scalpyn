@@ -201,3 +201,130 @@ def test_intrabar_convention_always_sl_first(outcome, exit_price_attr):
     _finalize_outcome(shadow, outcome, exit_price, _EXIT_TS, shadow.entry_price)
 
     assert shadow.intrabar_convention == "SL_FIRST"
+
+
+# ── MAE/MFE clamp (FIX-2 / B2) ───────────────────────────────────────────────
+
+def test_mae_clamped_to_zero_when_min_above_entry():
+    """Gap bullish: min_price > entry → MAE deve ser 0.0, não positivo (B2 fix)."""
+    entry = 100.0
+    shadow = _make_shadow(entry_price=entry, min_price_post_entry=101.0)
+
+    _finalize_outcome(shadow, "TP_HIT", shadow.tp_price, _EXIT_TS, entry)
+
+    assert shadow.mae_pct == pytest.approx(0.0), "MAE must be clamped to 0 when min > entry"
+    assert shadow.max_drawdown_pct == pytest.approx(0.0)
+
+
+def test_mfe_clamped_to_zero_when_max_below_entry():
+    """Gap bearish: max_price < entry → MFE deve ser 0.0, não negativo (B2 fix)."""
+    entry = 100.0
+    shadow = _make_shadow(entry_price=entry, max_price_post_entry=99.0)
+
+    _finalize_outcome(shadow, "SL_HIT", shadow.sl_price, _EXIT_TS, entry)
+
+    assert shadow.mfe_pct == pytest.approx(0.0), "MFE must be clamped to 0 when max < entry"
+    assert shadow.max_profit_pct == pytest.approx(0.0)
+
+
+def test_mae_negative_when_min_below_entry():
+    """Cenário normal: min_price < entry → MAE negativo (sinal correto)."""
+    entry = 100.0
+    shadow = _make_shadow(entry_price=entry, min_price_post_entry=98.0)
+
+    _finalize_outcome(shadow, "SL_HIT", shadow.sl_price, _EXIT_TS, entry)
+
+    assert shadow.mae_pct == pytest.approx(-2.0)
+    assert shadow.max_drawdown_pct == pytest.approx(-2.0)
+
+
+def test_mfe_positive_when_max_above_entry():
+    """Cenário normal: max_price > entry → MFE positivo (sinal correto)."""
+    entry = 100.0
+    shadow = _make_shadow(entry_price=entry, max_price_post_entry=103.0)
+
+    _finalize_outcome(shadow, "TP_HIT", shadow.tp_price, _EXIT_TS, entry)
+
+    assert shadow.mfe_pct == pytest.approx(3.0)
+    assert shadow.max_profit_pct == pytest.approx(3.0)
+
+
+def test_mae_mfe_none_when_no_min_max_price():
+    """Quando min/max_price não coletados → mae_pct/mfe_pct permanecem None."""
+    shadow = _make_shadow()  # min/max_price_post_entry = None by default
+
+    _finalize_outcome(shadow, "TP_HIT", shadow.tp_price, _EXIT_TS, shadow.entry_price)
+
+    assert shadow.mae_pct is None
+    assert shadow.mfe_pct is None
+
+
+# ── Label net-of-fees runtime (FIX-1c / B1) ─────────────────────────────────
+
+def test_label_net_of_fees_with_persisted_net_return():
+    """Quando net_return_pct persistido está disponível, usar ele vs MIN_WIN_PNL_PCT."""
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from app.ml.feature_extractor import build_training_dataframe, _MIN_WIN_PNL_PCT
+
+    # Gross pnl sugere win, net pnl sugere lose → net deve prevalecer
+    fee = 0.20
+    gross = _MIN_WIN_PNL_PCT + fee - 0.01  # just below win after fee
+    net = gross - fee  # = _MIN_WIN_PNL_PCT - 0.01 → LOSE
+
+    records = [{
+        "pnl_pct": gross,
+        "net_return_pct": net,
+        "features_snapshot": {},
+        "created_at": "2026-06-10T00:00:00+00:00",
+        "outcome": "TP_HIT",
+        "ttt_outcome": None,
+    }]
+    df = build_training_dataframe(records, fee_roundtrip_pct=fee, label_net_of_fees=True)
+
+    assert len(df) == 1
+    assert df.iloc[0]["is_win_fast"] == 0, "net_return_pct just below MIN → LOSE"
+
+
+def test_label_net_of_fees_null_net_uses_runtime_fee():
+    """Quando net_return_pct é NULL, computar net = gross - fee em runtime."""
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from app.ml.feature_extractor import build_training_dataframe, _MIN_WIN_PNL_PCT
+
+    fee = 0.20
+    gross = _MIN_WIN_PNL_PCT + fee + 0.05  # net = _MIN_WIN_PNL_PCT + 0.05 → WIN
+
+    records = [{
+        "pnl_pct": gross,
+        "net_return_pct": None,  # not persisted (pre-fix record)
+        "features_snapshot": {},
+        "created_at": "2026-06-10T00:00:00+00:00",
+        "outcome": "TP_HIT",
+        "ttt_outcome": None,
+    }]
+    df = build_training_dataframe(records, fee_roundtrip_pct=fee, label_net_of_fees=True)
+
+    assert len(df) == 1
+    assert df.iloc[0]["is_win_fast"] == 1, "runtime net above MIN → WIN"
+
+
+def test_label_legacy_path_when_not_net_of_fees():
+    """Sem label_net_of_fees, usar gross vs _WIN_THRESHOLD (caminho legado)."""
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from app.ml.feature_extractor import build_training_dataframe, _WIN_THRESHOLD
+
+    gross_win = _WIN_THRESHOLD + 0.1
+    gross_lose = _WIN_THRESHOLD - 0.1
+
+    records = [
+        {"pnl_pct": gross_win, "net_return_pct": None, "features_snapshot": {},
+         "created_at": "2026-06-10T00:00:00", "outcome": "TP_HIT", "ttt_outcome": None},
+        {"pnl_pct": gross_lose, "net_return_pct": None, "features_snapshot": {},
+         "created_at": "2026-06-10T00:00:00", "outcome": "SL_HIT", "ttt_outcome": None},
+    ]
+    df = build_training_dataframe(records)  # label_net_of_fees=False (default)
+
+    assert df.iloc[0]["is_win_fast"] == 1
+    assert df.iloc[1]["is_win_fast"] == 0
