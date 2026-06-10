@@ -17,18 +17,47 @@ mfe_pct = max(0.0, record["mfe_pct"])   # pre-fix records: negative → 0
 ```
 New records (post-deploy) will have the correct clamped values from the monitor.
 
-### Source = 'L3' is capture at L3-ALLOW (not L1)
+### Source = 'L3' is Stream B (policy validation), not ML training
 
 `shadow_trades.source = 'L3'` means the shadow was created AFTER the full L1→L2→L3 filter chain
-passed. The ML model therefore trains on the sub-population of L3-approved signals, not the
-full universe. Two embedded biases:
+passed. **Do NOT use L3 records as ML training data.** They represent what the policy decided to
+execute, not what the market offered. Two embedded biases:
 1. **Survivorship bias:** the model never sees signals the L3 score gate rejected.
-2. **Symbol cooldown bias:** the `ux_shadow_running_user_symbol` unique constraint means only
-   the *first* ALLOW for a symbol (while no shadow is running) creates a new shadow. ~14% of
-   L3-ALLOWs become shadows — the rest are dropped silently.
+2. **Symbol cooldown bias:** the per-source constraint means only the first ALLOW for a symbol
+   (while no L3 shadow is running) creates a shadow. ~14% of L3-ALLOWs become shadows.
 
-This is intentional for the current phase. `source='L3'` is semantically correct.
-Document if comparing to backtest distributions that may not share these filters.
+Stream B (source='L3') continues in production for **policy validation only** — measuring
+whether the L3 filter is selecting good signals.
+
+### Stream A: L1_SPECTRUM (exclusive ML training source)
+
+**Architectural decision (2026-06-10):** The ML model trains exclusively on
+`source='L1_SPECTRUM'` shadows. These are captured at L1 promotion — before any quality
+filter, score gate, or block rule — giving an unbiased sample of what the market offered.
+
+**Invariant of purity:** The code path from L1 promotion to L1_SPECTRUM shadow creation
+contains zero quality conditionals. Only structural discards are permitted:
+- Deterministic hash sampling (reproducible, quality-agnostic)
+- Per-source reentry policy (one RUNNING per symbol per stream)
+- Hard rate ceiling (max_per_hour config)
+
+Each discard is recorded in `shadow_capture_skips` with its reason for auditability.
+
+**Constraint change (migration 073):** `ux_shadow_running_user_source` on
+`(user_id, symbol, source)` WHERE status='RUNNING' replaced the old
+`ux_shadow_running_user_symbol` on `(user_id, symbol)`. L3 and L1_SPECTRUM shadows are
+now independent per symbol — an L3 shadow running for BTC_USDT does NOT block an
+L1_SPECTRUM shadow for BTC_USDT.
+
+**Activation timeline:** Dataset clock starts at `shadow_capture_l1_enabled=true` flip.
+The first ML retrain on L1_SPECTRUM data can happen once ~10K records are accumulated
+(estimate: 2-4 weeks at 10% sample rate = ~749 shadows/day).
+
+| Source | Purpose | `config_type='ml'` filter | Migration |
+|--------|---------|--------------------------|-----------|
+| `L1_SPECTRUM` | ML training (unbiased) | `ML_SOURCE_FILTER=L1_SPECTRUM` | 073+ |
+| `L3` | Policy validation (Stream B) | never train | 060+ |
+| `L3_REJECTED` | Negative examples (deprecated) | never train | 060+ |
 
 ## Overview
 

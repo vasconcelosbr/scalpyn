@@ -100,10 +100,15 @@ SHADOW_SOURCE_L3_REJECTED = "L3_REJECTED"
 # Isso elimina o viés de seleção que causava winrate ~76% no dataset antigo.
 # WATCHLIST_FUT reservado para fase futures (não criar agora).
 SHADOW_SOURCE_WATCHLIST_SPOT = "WATCHLIST_SPOT"
+# L1_SPECTRUM — fonte exclusiva de treino do ML (migration 073+).
+# Capturado na promoção L1, ANTES de qualquer filtro de qualidade.
+# Stream B (L3) continua em paralelo para validação de política.
+SHADOW_SOURCE_L1_SPECTRUM = "L1_SPECTRUM"
 _VALID_SHADOW_SOURCES = (
     SHADOW_SOURCE_L3,
     SHADOW_SOURCE_L3_REJECTED,
     SHADOW_SOURCE_WATCHLIST_SPOT,
+    SHADOW_SOURCE_L1_SPECTRUM,
 )
 
 
@@ -573,7 +578,7 @@ _INSERT_SHADOW_SQL = text("""
         :ttt_enabled, :ttt_tp_pct, :ttt_timeout_minutes,
         :barrier_mode, :tp_pct_applied, :sl_pct_applied
     )
-    ON CONFLICT (user_id, symbol) WHERE status = 'RUNNING' DO NOTHING
+    ON CONFLICT (user_id, symbol, source) WHERE status = 'RUNNING' DO NOTHING
     RETURNING id
 """)
 
@@ -1209,6 +1214,231 @@ async def create_shadows_for_rejected_decisions(user_id, decision_ids: List[int]
         logger.info(
             "[shadow] rejected create: %d shadow(s) created for user=%s",
             created, user_id,
+        )
+    return created
+
+
+async def create_l1_spectrum_shadows(
+    user_id,
+    symbols: List[str],
+    execution_id: str,
+    assets_by_symbol: Dict[str, Dict[str, Any]],
+    promotion_at: "datetime",
+) -> int:
+    """L1_SPECTRUM capture: create sampled shadow trades from L1 stage promotions.
+
+    Called inline by pipeline_scan after _upsert_assets for L1 watchlists.
+    Implements deterministic hash sampling, per-source reentry policy,
+    rate limiting, and skip logging — all from config_type='ml' config.
+
+    Pureza invariant: zero quality conditionals between L1 promotion and
+    shadow creation. Only structural discards: sampling, reentry policy,
+    rate limit. Each discard is recorded in shadow_capture_skips.
+
+    Fire-and-forget: never raises. Returns count of new shadows created.
+    """
+    import hashlib
+
+    if not symbols:
+        return 0
+
+    from ..database import CeleryAsyncSessionLocal
+    from ..models.config_profile import ConfigProfile
+    from ..schemas.spot_engine_config import SpotEngineConfig
+
+    # 1. Load ML + spot_engine configs in one session
+    ml_config: Dict[str, Any] = {}
+    user_config: Dict[str, Any] = {}
+    try:
+        async with CeleryAsyncSessionLocal() as cfg_db:
+            ml_res = await cfg_db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "ml",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            ml_row = ml_res.scalar_one_or_none()
+            if ml_row and isinstance(ml_row.config_json, dict):
+                ml_config = ml_row.config_json
+
+            se_res = await cfg_db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "spot_engine",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            se_row = se_res.scalar_one_or_none()
+            if se_row:
+                _se = SpotEngineConfig.from_config_json(se_row.config_json)
+                user_config = {
+                    "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(_se.selling.take_profit_pct),
+                    "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
+                        _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
+                    ),
+                    "timeout_candles": None,
+                }
+    except Exception:
+        logger.exception("[shadow-l1] config load failed user=%s", user_id)
+        return 0
+
+    if not ml_config.get("shadow_capture_l1_enabled", False):
+        return 0
+
+    sample_rate = float(ml_config.get("shadow_capture_l1_sample_rate", 0.10))
+    source_label = str(ml_config.get("shadow_capture_l1_source_label", SHADOW_SOURCE_L1_SPECTRUM))
+    if source_label not in _VALID_SHADOW_SOURCES:
+        source_label = SHADOW_SOURCE_L1_SPECTRUM
+    max_per_hour = int(ml_config.get("shadow_capture_l1_max_per_hour", 200))
+    skip_log_enabled = bool(ml_config.get("shadow_skip_log_enabled", True))
+
+    if not user_config:
+        _se_defaults = SpotEngineConfig()
+        user_config = {
+            "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(_se_defaults.selling.take_profit_pct),
+            "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
+                _se_defaults.sell_flow.kill_switch.max_drawdown_from_hwm_pct
+            ),
+            "timeout_candles": None,
+        }
+    user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
+
+    # 2. Rate limit: count shadows from this source in the last hour
+    shadows_last_hour = 0
+    try:
+        async with CeleryAsyncSessionLocal() as count_db:
+            cnt_res = await count_db.execute(
+                text("""
+                    SELECT COUNT(*) FROM shadow_trades
+                    WHERE user_id = :uid
+                      AND source = :src
+                      AND created_at > NOW() - INTERVAL '1 hour'
+                """),
+                {"uid": str(user_id), "src": source_label},
+            )
+            shadows_last_hour = cnt_res.scalar_one() or 0
+    except Exception:
+        logger.warning(
+            "[shadow-l1] rate limit count failed user=%s — skipping cycle", user_id
+        )
+        return 0
+
+    # 3. Deterministic hash sampling: hash(symbol:execution_id) % 10000 < rate*10000
+    #    Same input → same decision; reproducible in audit, uniform, quality-agnostic.
+    sampled: List[str] = []
+    sampled_out: List[str] = []
+    for symbol in sorted(symbols):
+        _h = int(hashlib.sha256(f"{symbol}:{execution_id}".encode()).hexdigest(), 16) % 10000
+        if _h < int(sample_rate * 10000):
+            sampled.append(symbol)
+        else:
+            sampled_out.append(symbol)
+
+    # Log SAMPLED_OUT aggregated (one row per cycle, not per symbol — avoids write volume)
+    if sampled_out and skip_log_enabled:
+        try:
+            async with CeleryAsyncSessionLocal() as skip_db:
+                async with skip_db.begin():
+                    await skip_db.execute(
+                        text("""
+                            INSERT INTO shadow_capture_skips
+                                (user_id, symbol, promotion_at, skip_reason, source_path)
+                            VALUES (:uid, :sym, :ts, 'SAMPLED_OUT', :src)
+                        """),
+                        {
+                            "uid": str(user_id),
+                            "sym": f"[{len(sampled_out)} symbols]",
+                            "ts": promotion_at,
+                            "src": source_label,
+                        },
+                    )
+        except Exception:
+            logger.warning("[shadow-l1] SAMPLED_OUT skip log failed user=%s", user_id)
+
+    if not sampled:
+        return 0
+
+    # 4. Create shadows for sampled symbols
+    created = 0
+    rate_limited = 0
+    for symbol in sampled:
+        if shadows_last_hour + created >= max_per_hour:
+            # Hard rate ceiling hit — log per symbol (structural discard, not quality)
+            rate_limited += 1
+            if skip_log_enabled:
+                try:
+                    async with CeleryAsyncSessionLocal() as skip_db:
+                        async with skip_db.begin():
+                            await skip_db.execute(
+                                text("""
+                                    INSERT INTO shadow_capture_skips
+                                        (user_id, symbol, promotion_at, skip_reason, source_path)
+                                    VALUES (:uid, :sym, :ts, 'RATE_LIMITED', :src)
+                                """),
+                                {
+                                    "uid": str(user_id), "sym": symbol,
+                                    "ts": promotion_at, "src": source_label,
+                                },
+                            )
+                except Exception:
+                    pass
+            continue
+
+        # Build SyntheticDecision with features from analysis_snapshot (same as L3 path)
+        asset = assets_by_symbol.get(symbol, {})
+        flat_ind = _flatten_analysis_snapshot(asset.get("analysis_snapshot") or {})
+        metrics = {
+            "indicators_snapshot": {k: {"value": v} for k, v in flat_ind.items()},
+            "source": "l1_spectrum_inline",
+            "current_price": asset.get("current_price") or asset.get("price"),
+        }
+        synthetic = _SyntheticDecision(
+            user_id=user_id,
+            symbol=symbol,
+            direction="SPOT",
+            strategy=None,
+            id=None,
+            created_at=promotion_at,
+            metrics=metrics,
+        )
+
+        try:
+            async with CeleryAsyncSessionLocal() as own_db:
+                async with own_db.begin():
+                    new_id = await _create_from_decision(
+                        own_db, synthetic, "L1_SPECTRUM_CAPTURE", user_config,
+                        source=source_label,
+                    )
+                    if new_id is not None:
+                        created += 1
+                        logger.debug(
+                            "[shadow-l1] created id=%s symbol=%s user=%s",
+                            new_id, symbol, user_id,
+                        )
+                    elif skip_log_enabled:
+                        # ON CONFLICT (user_id, symbol, source) → RUNNING_DUPLICATE
+                        # Must log unitarily: required for ML sample weights (López de Prado)
+                        await own_db.execute(
+                            text("""
+                                INSERT INTO shadow_capture_skips
+                                    (user_id, symbol, promotion_at, skip_reason, source_path)
+                                VALUES (:uid, :sym, :ts, 'RUNNING_DUPLICATE', :src)
+                            """),
+                            {
+                                "uid": str(user_id), "sym": symbol,
+                                "ts": promotion_at, "src": source_label,
+                            },
+                        )
+        except Exception:
+            logger.exception(
+                "[shadow-l1] create failed symbol=%s user=%s", symbol, user_id
+            )
+
+    if created or rate_limited:
+        logger.info(
+            "[shadow-l1] cycle done: created=%d rate_limited=%d sampled=%d eligible=%d user=%s",
+            created, rate_limited, len(sampled), len(symbols), user_id,
         )
     return created
 

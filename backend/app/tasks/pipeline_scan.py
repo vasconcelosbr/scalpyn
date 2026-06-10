@@ -2656,6 +2656,29 @@ async def _run_pipeline_scan():
                         )
                         await _upsert_assets(db, wl_id, passed, filters_json, execution_id=execution_id)
                         await _update_last_scanned(db, wl_id)
+
+                        # L1_SPECTRUM capture — after upsert, before continue.
+                        # Pureza invariant: no quality conditionals between here
+                        # and shadow creation (only structural: sampling + reentry).
+                        if effective_level == "L1":
+                            try:
+                                from ..services.shadow_trade_service import (
+                                    create_l1_spectrum_shadows,
+                                )
+                                await create_l1_spectrum_shadows(
+                                    user_id=wl.user_id,
+                                    symbols=[a["symbol"] for a in passed],
+                                    execution_id=str(execution_id),
+                                    assets_by_symbol={a["symbol"]: a for a in passed},
+                                    promotion_at=datetime.now(timezone.utc),
+                                )
+                            except Exception as _l1cap_exc:
+                                logger.warning(
+                                    "[PipelineScan] L1_SPECTRUM capture failed (%s)"
+                                    " — L3 stream unaffected",
+                                    _l1cap_exc,
+                                )
+
                         continue
 
                     # L3
