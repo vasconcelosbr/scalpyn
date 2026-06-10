@@ -55,6 +55,11 @@ def _env_int(name: str, default: int) -> int:
 SHADOW_MONITOR_BATCH_SIZE = _env_int("SHADOW_MONITOR_BATCH_SIZE", 50)
 SHADOW_MONITOR_MAX_CANDLES_PER_RUN = _env_int("SHADOW_MONITOR_MAX_CANDLES_PER_RUN", 720)
 
+# ATR computation for atr_pct_at_entry (Fase 3 — migration 071).
+# Period/timeframe via env so they are changeable without a deploy.
+_SHADOW_ATR_PERIOD = _env_int("SHADOW_ATR_PERIOD", 14)
+_SHADOW_ATR_TIMEFRAME = os.environ.get("SHADOW_ATR_TIMEFRAME", "5m")
+
 
 def _run_async(coro):
     """Run async coroutine in a sync Celery task.
@@ -161,6 +166,57 @@ async def _fetch_candles(
         }
         for r in res.fetchall()
     ]
+
+
+async def _compute_atr_pct(
+    db,
+    symbol: str,
+    entry_price: float,
+    period: int = _SHADOW_ATR_PERIOD,
+    timeframe: str = _SHADOW_ATR_TIMEFRAME,
+) -> Optional[float]:
+    """ATR% do símbolo no ponto de entrada: ATR(period, timeframe) / entry_price * 100.
+
+    Usa True Range simples (sem Wilder smoothing) para simplicidade e
+    robustez com janelas pequenas. Retorna None se dados insuficientes.
+    Nunca propaga exceção — falha = atr_pct_at_entry fica NULL.
+    """
+    if entry_price <= 0:
+        return None
+    try:
+        res = await db.execute(
+            text(
+                """
+                SELECT high, low, close
+                  FROM ohlcv
+                 WHERE symbol  = :s
+                   AND timeframe = :tf
+                 ORDER BY time DESC
+                 LIMIT :n
+                """
+            ),
+            {"s": symbol, "tf": timeframe, "n": period + 1},
+        )
+        rows = res.fetchall()
+        if len(rows) < 2:
+            return None
+        rows = list(reversed(rows))  # oldest → newest
+        trs: List[float] = []
+        for i in range(1, len(rows)):
+            h = float(rows[i].high)
+            lo = float(rows[i].low)
+            c_prev = float(rows[i - 1].close)
+            trs.append(max(h - lo, abs(h - c_prev), abs(lo - c_prev)))
+        if not trs:
+            return None
+        atr = sum(trs[-period:]) / len(trs[-period:])
+        return round(atr / entry_price * 100.0, 6)
+    except Exception as exc:
+        logger.debug(
+            "[shadow-monitor] _compute_atr_pct failed symbol=%s tf=%s: %s",
+            symbol, timeframe, exc,
+        )
+        return None
 
 
 async def _ensure_entry(db, shadow: ShadowTrade) -> bool:
@@ -364,6 +420,38 @@ def _finalize_outcome(
             mfe = (shadow.max_price_post_entry - entry_price) / entry_price * 100.0
             shadow.mfe_pct = mfe
             shadow.max_profit_pct = mfe
+    # ── Shadow Instrumentation (migration 071) ───────────────────────────
+    # barrier_touched: preserva BOTH_SAME_CANDLE setado pelo loop candle;
+    # preenche TP/SL/NONE para os demais caminhos (live-close, elapsed-timeout).
+    if shadow.barrier_touched is None:
+        if outcome == "TP_HIT":
+            shadow.barrier_touched = "TP"
+        elif outcome == "SL_HIT":
+            shadow.barrier_touched = "SL"
+        else:
+            shadow.barrier_touched = "NONE"
+    # barrier_touched_at: fallback para exit_ts em caminhos sem loop candle.
+    if shadow.barrier_touched_at is None and outcome in ("TP_HIT", "SL_HIT"):
+        shadow.barrier_touched_at = exit_ts
+    # intrabar_convention: sempre SL_FIRST (convenção conservadora única).
+    shadow.intrabar_convention = "SL_FIRST"
+    # final_return_pct: retorno com sinal no close do timeout — nulo para TP/SL.
+    if outcome == "TIMEOUT" and shadow.pnl_pct is not None:
+        shadow.final_return_pct = shadow.pnl_pct
+    # net_return_pct / fee_roundtrip_pct_applied: lê do config_snapshot.
+    # O valor 0.0 é válido (sem fee) — só pula se a chave não existir.
+    _cs = shadow.config_snapshot
+    if isinstance(_cs, dict):
+        _fee_raw = _cs.get("ml_fee_roundtrip_pct")
+        if _fee_raw is not None:
+            try:
+                _fee = float(_fee_raw)
+                shadow.fee_roundtrip_pct_applied = _fee
+                if shadow.pnl_pct is not None:
+                    shadow.net_return_pct = shadow.pnl_pct - _fee
+            except (TypeError, ValueError):
+                pass
+
     shadow.status = "COMPLETED"
     shadow.completed_at = datetime.now(timezone.utc)
     shadow.last_processed_time = exit_ts
@@ -671,6 +759,23 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
         # Sem candle 1m disponível ainda — deixa em PENDING, próximo tick.
         return "pending"
 
+    # ── Shadow Instrumentation: barrier metadata (migration 071) ─────────
+    # barrier_mode / tp_pct_applied / sl_pct_applied: setados uma vez na
+    # primeira resolução de entry_price (fallback para shadows pré-071).
+    if shadow.barrier_mode is None:
+        shadow.barrier_mode = (shadow.config_snapshot or {}).get(
+            "shadow_barrier_mode", "FIXED"
+        )
+    if shadow.tp_pct_applied is None and shadow.tp_pct is not None:
+        shadow.tp_pct_applied = float(shadow.tp_pct)
+    if shadow.sl_pct_applied is None and shadow.sl_pct is not None:
+        shadow.sl_pct_applied = float(shadow.sl_pct)
+    # atr_pct_at_entry: computado uma vez; nunca propaga exceção.
+    if shadow.atr_pct_at_entry is None and shadow.entry_price is not None:
+        shadow.atr_pct_at_entry = await _compute_atr_pct(
+            db, shadow.symbol, float(shadow.entry_price)
+        )
+
     # NOTA: enriquecimento de contexto ML (_enrich_market_context) foi movido
     # para FORA da tx principal — ver _enrich_one_async + _monitor_async.
     # FIX C3 (2026-05-15): SQL error no enrich não deve abortar fechamentos.
@@ -913,8 +1018,10 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
         _ch = c["high"]
         if shadow.min_price_post_entry is None or _cl < shadow.min_price_post_entry:
             shadow.min_price_post_entry = _cl
+            shadow.mae_at = c["time"]  # migration 071: timestamp do pior MAE
         if shadow.max_price_post_entry is None or _ch > shadow.max_price_post_entry:
             shadow.max_price_post_entry = _ch
+            shadow.mfe_at = c["time"]  # migration 071: timestamp do melhor MFE
             # candles_to_peak: atualizado toda vez que registramos novo máximo.
             if ttt_active:
                 shadow.candles_to_peak = candles_seen_before + idx
@@ -976,13 +1083,23 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
                         # Fallback — ttt_analyzer resolverá via OHLCV.
                         pass
 
-        # SL antes de TP na mesma candle — regra conservadora.
-        if c["low"] <= sl:
+        # SL antes de TP na mesma candle — convenção conservadora (SL_FIRST).
+        # Se ambas as barreiras são tocadas no mesmo candle, registra
+        # barrier_touched='BOTH_SAME_CANDLE' e resolve como SL (pior caso).
+        _sl_hit = c["low"] <= sl
+        _tp_hit = c["high"] >= tp
+        if _sl_hit:
+            if _tp_hit:
+                # Ambas barreiras tocadas no mesmo candle 1m.
+                shadow.barrier_touched = "BOTH_SAME_CANDLE"
+            shadow.barrier_touched_at = c["time"]
             outcome = "SL_HIT"
             exit_price = sl
             exit_ts = c["time"]
             break
-        if c["high"] >= tp:
+        if _tp_hit:
+            shadow.barrier_touched = "TP"
+            shadow.barrier_touched_at = c["time"]
             outcome = "TP_HIT"
             exit_price = tp
             exit_ts = c["time"]

@@ -167,6 +167,30 @@ class ShadowTrade(Base):
     # Flag de controle: TRUE quando o analyzer terminou de processar.
     timeout_post_analysis_done = Column(Boolean, nullable=True, default=False)
 
+    # ── Shadow Instrumentation (migration 071, Fases 1/2/3) ──────────────
+    # Fase 1 — MAE/MFE timestamps e barreira intrabar.
+    mae_at = Column(DateTime(timezone=True), nullable=True)
+    mfe_at = Column(DateTime(timezone=True), nullable=True)
+    # 'TP' | 'SL' | 'BOTH_SAME_CANDLE' | 'NONE' (timeout)
+    barrier_touched = Column(String(20), nullable=True)
+    barrier_touched_at = Column(DateTime(timezone=True), nullable=True)
+    # Convenção aplicada quando TP e SL tocam no mesmo candle.
+    intrabar_convention = Column(String(20), nullable=True)
+    # Retorno no close do candle de timeout (com sinal); NULL para TP/SL.
+    final_return_pct = Column(Float, nullable=True)
+    # Fase 2 — Labels líquidos de fees.
+    # Fee lido de config_profiles (config_snapshot["ml_fee_roundtrip_pct"]).
+    net_return_pct = Column(Float, nullable=True)
+    fee_roundtrip_pct_applied = Column(Float, nullable=True)
+    # Fase 3 — Barreiras volatility-adjusted (registro; modo FIXED agora).
+    # 'FIXED' | 'ATR_ADAPTIVE' — vigente na abertura do trade.
+    barrier_mode = Column(String(20), nullable=True)
+    tp_pct_applied = Column(Float, nullable=True)
+    sl_pct_applied = Column(Float, nullable=True)
+    # ATR% no momento da entrada — preenchido pelo monitor na primeira
+    # resolução de entry_price; vira feature mesmo em modo FIXED.
+    atr_pct_at_entry = Column(Float, nullable=True)
+
     # ── TTT (Time-To-Target) Policy — migration 065 ───────────────────────
     # Camada de labeling de ML para eficiência temporal. Classifica trades
     # como FAST_WIN (atingiu ttt_tp_pct dentro de ttt_timeout_minutes) ou

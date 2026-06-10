@@ -1,6 +1,6 @@
 """Trade simulation model for ML dataset generation."""
 
-from sqlalchemy import BigInteger, Column, String, DateTime, Integer, Boolean, Numeric, CheckConstraint, ForeignKey, Index
+from sqlalchemy import BigInteger, Column, Float, String, DateTime, Integer, Boolean, Numeric, CheckConstraint, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 import uuid
 from datetime import datetime, timezone
@@ -49,3 +49,17 @@ class TradeSimulation(Base):
     config_snapshot = Column(JSONB, nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    # ── Shadow Instrumentation mirror (migration 071, Fases 1/2/3) ───────
+    mae_at = Column(DateTime(timezone=True), nullable=True)
+    mfe_at = Column(DateTime(timezone=True), nullable=True)
+    barrier_touched = Column(String(20), nullable=True)
+    barrier_touched_at = Column(DateTime(timezone=True), nullable=True)
+    intrabar_convention = Column(String(20), nullable=True)
+    final_return_pct = Column(Float, nullable=True)
+    net_return_pct = Column(Float, nullable=True)
+    fee_roundtrip_pct_applied = Column(Float, nullable=True)
+    barrier_mode = Column(String(20), nullable=True)
+    tp_pct_applied = Column(Float, nullable=True)
+    sl_pct_applied = Column(Float, nullable=True)
+    atr_pct_at_entry = Column(Float, nullable=True)

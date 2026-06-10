@@ -559,7 +559,8 @@ _INSERT_SHADOW_SQL = text("""
         tp_price, sl_price, tp_pct, sl_pct, timeout_candles,
         status, skip_reason, source, config_snapshot, features_snapshot,
         last_processed_time,
-        ttt_enabled, ttt_tp_pct, ttt_timeout_minutes
+        ttt_enabled, ttt_tp_pct, ttt_timeout_minutes,
+        barrier_mode, tp_pct_applied, sl_pct_applied
     ) VALUES (
         gen_random_uuid(),
         :decision_id, :user_id, :symbol, :strategy, :direction,
@@ -569,7 +570,8 @@ _INSERT_SHADOW_SQL = text("""
         CAST(:config_snapshot AS JSONB),
         CAST(:features_snapshot AS JSONB),
         :last_processed_time,
-        :ttt_enabled, :ttt_tp_pct, :ttt_timeout_minutes
+        :ttt_enabled, :ttt_tp_pct, :ttt_timeout_minutes,
+        :barrier_mode, :tp_pct_applied, :sl_pct_applied
     )
     ON CONFLICT (user_id, symbol) WHERE status = 'RUNNING' DO NOTHING
     RETURNING id
@@ -602,6 +604,8 @@ async def _create_from_decision(
     ttt_enabled = bool(user_config.get("ttt_enabled", TTT_ENABLED_DEFAULT))
     ttt_tp_pct = float(user_config.get("ttt_tp_pct") or TTT_TP_PCT_DEFAULT)
     ttt_timeout_minutes = int(user_config.get("ttt_timeout_minutes") or TTT_TIMEOUT_MINUTES_DEFAULT)
+    # Fase 3 (migration 071) — barreira mode e pcts aplicados (snapshot na abertura).
+    barrier_mode = user_config.get("shadow_barrier_mode", "FIXED")
 
     # Entry-at-decision-time (Task 2026-05-13): preço corrente no
     # instante da decisão ALLOW vira entry_price imediatamente.
@@ -666,6 +670,10 @@ async def _create_from_decision(
             "ttt_enabled": ttt_enabled,
             "ttt_tp_pct": ttt_tp_pct,
             "ttt_timeout_minutes": ttt_timeout_minutes,
+            # Fase 3 barrier metadata (migration 071)
+            "barrier_mode": barrier_mode,
+            "tp_pct_applied": tp_pct or None,
+            "sl_pct_applied": sl_pct or None,
             "status": initial_status,
             # skip_reason intencionalmente NULL: textos como NOT_TRADABLE/COOLDOWN
             # poluem o dataset do XGBoost (categórica de alta cardinalidade e
@@ -1377,7 +1385,11 @@ _INSERT_SIM_SQL = text("""
         direction, is_simulated, source,
         decision_type, decision_id,
         features_snapshot, config_snapshot,
-        created_at
+        created_at,
+        mae_at, mfe_at,
+        barrier_touched, barrier_touched_at, intrabar_convention,
+        final_return_pct, net_return_pct, fee_roundtrip_pct_applied,
+        barrier_mode, tp_pct_applied, sl_pct_applied, atr_pct_at_entry
     ) VALUES (
         gen_random_uuid(), :symbol, :timestamp_entry, :entry_price,
         :tp_price, :sl_price,
@@ -1387,7 +1399,11 @@ _INSERT_SIM_SQL = text("""
         :decision_type, :decision_id,
         CAST(:features_snapshot AS JSONB),
         CAST(:config_snapshot AS JSONB),
-        NOW()
+        NOW(),
+        :mae_at, :mfe_at,
+        :barrier_touched, :barrier_touched_at, :intrabar_convention,
+        :final_return_pct, :net_return_pct, :fee_roundtrip_pct_applied,
+        :barrier_mode, :tp_pct_applied, :sl_pct_applied, :atr_pct_at_entry
     )
     ON CONFLICT (decision_id) WHERE source = 'SHADOW'
         AND decision_id IS NOT NULL DO NOTHING
@@ -1489,6 +1505,19 @@ async def record_as_simulation(
             "decision_id": shadow.decision_id,
             "features_snapshot": json.dumps(features_for_sim, default=str),
             "config_snapshot": json.dumps(shadow.config_snapshot or {}, default=str),
+            # Espelho das colunas de instrumentação (migration 071).
+            "mae_at": shadow.mae_at,
+            "mfe_at": shadow.mfe_at,
+            "barrier_touched": shadow.barrier_touched,
+            "barrier_touched_at": shadow.barrier_touched_at,
+            "intrabar_convention": shadow.intrabar_convention,
+            "final_return_pct": shadow.final_return_pct,
+            "net_return_pct": shadow.net_return_pct,
+            "fee_roundtrip_pct_applied": shadow.fee_roundtrip_pct_applied,
+            "barrier_mode": shadow.barrier_mode,
+            "tp_pct_applied": shadow.tp_pct_applied,
+            "sl_pct_applied": shadow.sl_pct_applied,
+            "atr_pct_at_entry": shadow.atr_pct_at_entry,
         },
     )
     row = res.fetchone()
