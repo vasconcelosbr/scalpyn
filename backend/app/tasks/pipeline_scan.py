@@ -2471,6 +2471,30 @@ async def _run_pipeline_scan():
                         )
                         score_config = DEFAULT_SCORE
 
+                    # Load block_config (block_rules, entry_triggers) from config_profiles.
+                    # Connects Autopilot Caminho B write path to the pipeline read path (L-02, L-03 fix).
+                    # Merges on top of profiles.config so autopilot-managed values take precedence.
+                    if profile_config:
+                        try:
+                            from ..services.config_service import config_service as _block_cs
+                            async with db.begin_nested():
+                                _block_cfg = await _block_cs.get_config(db, "block", wl.user_id)
+                            if _block_cfg:
+                                _overrides = {}
+                                _br = _block_cfg.get("block_rules")
+                                _et = _block_cfg.get("entry_triggers")
+                                if _br is not None:
+                                    _overrides["block_rules"] = _br
+                                if _et is not None:
+                                    _overrides["entry_triggers"] = _et
+                                if _overrides:
+                                    profile_config = {**profile_config, **_overrides}
+                        except Exception as _bc_exc:
+                            logger.warning(
+                                "[PipelineScan] %s: block config read failed (%s) — using profile.config block_rules",
+                                wl.name, _bc_exc,
+                            )
+
                     is_futures = getattr(wl, "market_mode", "spot") == "futures"
 
                     # ── Robust authoritative scoring ─────────────────────
@@ -2558,10 +2582,18 @@ async def _run_pipeline_scan():
                             score_config=score_config,
                             apply_profile_filters=False,
                         )
-                        # Watchlist-level minimum score gate (filters_json.min_alpha_score).
-                        # Applied AFTER scoring so is_approved reflects the user's Score Filter
-                        # setting rather than letting every asset through regardless of score.
-                        _wl_min_score = float((filters_json or {}).get("min_alpha_score") or 0)
+                        # Minimum score gate.
+                        # PRIMARY: score_config.minimum_score (managed by Auto-Pilot via config_profiles).
+                        # DEPRECATED FALLBACK: filters_json.min_alpha_score (watchlist-level override).
+                        _autopilot_min = (score_config or {}).get("minimum_score")
+                        _legacy_min = float((filters_json or {}).get("min_alpha_score") or 0)
+                        if _legacy_min > 0 and _autopilot_min is None:
+                            logger.warning(
+                                "[PipelineScan] %s: min_alpha_score via filters_json is DEPRECATED — "
+                                "migrate to config_profiles(score).minimum_score for autopilot management",
+                                wl.name,
+                            )
+                        _wl_min_score = float(_autopilot_min if _autopilot_min is not None else _legacy_min)
                         if _wl_min_score > 0:
                             _pre = len(monitored)
                             monitored = [
@@ -2688,10 +2720,18 @@ async def _run_pipeline_scan():
                         stage=effective_level,
                         profile_id=str(wl.profile_id) if wl.profile_id else None,
                     )
-                    # Watchlist-level minimum score gate (filters_json.min_alpha_score).
-                    # Applied after profile filter, before L3 decision evaluation so that
-                    # assets below the threshold never get an ALLOW decision or shadow.
-                    _wl_min_score = float((filters_json or {}).get("min_alpha_score") or 0)
+                    # Minimum score gate for L3.
+                    # PRIMARY: score_config.minimum_score (managed by Auto-Pilot via config_profiles).
+                    # DEPRECATED FALLBACK: filters_json.min_alpha_score (watchlist-level override).
+                    _autopilot_min = (score_config or {}).get("minimum_score")
+                    _legacy_min = float((filters_json or {}).get("min_alpha_score") or 0)
+                    if _legacy_min > 0 and _autopilot_min is None:
+                        logger.warning(
+                            "[PipelineScan] %s: min_alpha_score via filters_json is DEPRECATED — "
+                            "migrate to config_profiles(score).minimum_score for autopilot management",
+                            wl.name,
+                        )
+                    _wl_min_score = float(_autopilot_min if _autopilot_min is not None else _legacy_min)
                     # Assets captured here are injected as BLOCK decisions after
                     # _evaluate_l3_decisions so the L3_REJECTED edge trigger logs them
                     # to decisions_log for ML data collection.

@@ -117,5 +117,15 @@ class ConfigService:
 
         return new_json
 
+    async def invalidate_cache(self, config_type: str, user_id: UUID, pool_id: Optional[UUID] = None) -> None:
+        """Invalidate Redis cache for a config key. Call after ORM direct writes that bypass update_config."""
+        if not self.redis:
+            return
+        cache_key = self._get_cache_key(config_type, user_id, pool_id)
+        try:
+            await self.redis.delete(cache_key)
+        except Exception as e:
+            logger.warning("Redis cache invalidation failed (config will expire on TTL): %s", e)
+
 
 config_service = ConfigService()

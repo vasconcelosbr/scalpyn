@@ -123,7 +123,7 @@ _GUARDRAILS_DEFAULTS: Dict[str, Any] = {
     # C.4 — Autoridade expandida: autopilot pode ajustar todas as dimensões da config.
     # Sem floor/ceiling por decisão do operador — amplitude livre dentro dos guardrails.
     # autopilot_full_authority=True: habilita apply_full_adjustments (block_rules, entry_triggers,
-    #   filters, minimum_score além de scoring_rules).
+    #   minimum_score além de scoring_rules). "filters" excluído — stub, ver L-07.
     # autopilot_can_adjust: lista de dimensões permitidas (granular). Ignorada se
     #   autopilot_full_authority=False.
     "autopilot_full_authority":     False,   # SAFE DEFAULT: só scoring_rules (comportamento anterior)
@@ -132,9 +132,10 @@ _GUARDRAILS_DEFAULTS: Dict[str, Any] = {
         "minimum_score",
         "block_rules",
         "entry_triggers",
-        "filters",
+        # "filters" excluído: stub não implementado (L-07) — reintroduzir com clamps em prompt próprio
     ],
-    # minimum_score: sem floor/ceiling — o autopilot ajusta ±1 baseado em FPR e EV
+    "minimum_score_floor":           0,     # minimum_score não pode descer abaixo deste valor
+    "minimum_score_ceiling":        100,    # minimum_score não pode subir acima deste valor
     "min_score_delta_per_cycle":     1,
     # D — Behavioral circuit breaker + performance auto-rollback.
     # SAFE DEFAULT: rollback desabilitado até validação em dry_run.
@@ -172,6 +173,12 @@ async def _load_guardrails(db: AsyncSession, user_id: str) -> Dict[str, Any]:
             merged = dict(_GUARDRAILS_DEFAULTS)
             merged.update(row[0])
             return merged
+        # L-08: warn explicitly when no guardrails record exists so the fallback is visible in logs
+        logger.warning(
+            "[Autopilot] GUARDRAILS_ABSENT: nenhum registro 'autopilot_guardrails' para user_id=%s "
+            "— usando defaults (dry_run=True). Execute backend/sql/seed_autopilot_guardrails.sql.",
+            user_id,
+        )
     except Exception as e:
         logger.warning("[Autopilot] Falha ao carregar guardrails (usando defaults): %s", e)
     return dict(_GUARDRAILS_DEFAULTS)
@@ -515,19 +522,25 @@ async def rollback_last_adjustment(
     if isinstance(restored_config, str):
         restored_config = json.loads(restored_config)
 
-    # O snapshot de profile_versions guarda a config completa do profile principal.
-    # Para config_type='score' (onde scoring_rules e minimum_score vivem):
+    # Determine which config_type this snapshot came from.
+    # New snapshots embed [source=score] or [source=block] in mutation_reason.
+    # Legacy snapshots (without tag) default to 'score' for backward compatibility.
+    _mutation_reason = str(ver_row.get("mutation_reason") or "")
+    _restore_config_type = "block" if "[source=block]" in _mutation_reason else "score"
+
     uid = UUID(str(user_id))
     result = await db.execute(
         select(ConfigProfile).where(
             ConfigProfile.user_id == uid,
             ConfigProfile.pool_id.is_(None),
-            ConfigProfile.config_type == "score",
+            ConfigProfile.config_type == _restore_config_type,
         ).order_by(ConfigProfile.updated_at.desc()).limit(1)
     )
     cp = result.scalars().first()
     if cp is not None:
         cp.config_json = restored_config
+        from ..services.config_service import config_service as _cs
+        await _cs.invalidate_cache(_restore_config_type, uid)
 
     # Salva nova versão como checkpoint pós-rollback (audit trail)
     checkpoint_id = await save_profile_version(
@@ -898,9 +911,15 @@ async def compute_rule_insights(
 def adjust_rule_points(
     scoring_rules: list,
     insights: dict,
+    rule_points_min: int = RULE_POINTS_MIN,
+    rule_points_max: int = RULE_POINTS_MAX,
+    rule_max_delta: int = RULE_MAX_DELTA,
 ) -> tuple[list, int, list]:
     """
     Apply conservative ±1 point adjustment to rules with strong edge.
+
+    Rules outside [rule_points_min, rule_points_max] are skipped (AUTOPILOT_OUT_OF_RANGE_SKIPPED)
+    to prevent the clamp from collapsing pts=40 → 10 in a single cycle.
 
     Returns: (adjusted_rules, n_changed, rule_changes)
     rule_changes is a list of dicts with before/after detail for audit logging.
@@ -917,11 +936,20 @@ def adjust_rule_points(
             edge = info["edge"]
             current = rule.get("points", 0)
 
-            if edge > RULE_EDGE_THRESHOLD:
-                new_pts = min(current + RULE_MAX_DELTA, RULE_POINTS_MAX)
-            elif edge < -RULE_EDGE_THRESHOLD:
-                new_pts = max(current - RULE_MAX_DELTA, RULE_POINTS_MIN)
+            if rule_points_min <= current <= rule_points_max:
+                if edge > RULE_EDGE_THRESHOLD:
+                    new_pts = min(current + rule_max_delta, rule_points_max)
+                elif edge < -RULE_EDGE_THRESHOLD:
+                    new_pts = max(current - rule_max_delta, rule_points_min)
+                else:
+                    new_pts = current
             else:
+                # Out of managed range — skip; manual correction required before autopilot can manage
+                logger.warning(
+                    "[Autopilot] AUTOPILOT_OUT_OF_RANGE_SKIPPED rule=%s current_pts=%d "
+                    "range=[%d,%d] — manual adjustment required",
+                    rule.get("id"), current, rule_points_min, rule_points_max,
+                )
                 new_pts = current
 
             if new_pts != current:
@@ -959,6 +987,7 @@ async def apply_rule_adjustments(
     db: AsyncSession,
     dry_run: bool = False,
     scope_profile_id: Optional[str] = None,
+    guardrails: Optional[dict] = None,
 ) -> dict:
     """
     Load scoring rules from config_profiles, compute per-rule insights,
@@ -999,7 +1028,16 @@ async def apply_rule_adjustments(
         if not insights or "_overall" not in insights:
             return {"action": "RULES_SKIPPED", "reason": "insufficient_data"}
 
-        adjusted_rules, n_changed, rule_changes = adjust_rule_points(scoring_rules, insights)
+        _g = guardrails or {}
+        _rule_pts_min = int(_g.get("rule_points_min", RULE_POINTS_MIN))
+        _rule_pts_max = int(_g.get("rule_points_max", RULE_POINTS_MAX))
+        _rule_max_delta = int(_g.get("rule_max_delta_per_cycle", RULE_MAX_DELTA))
+        adjusted_rules, n_changed, rule_changes = adjust_rule_points(
+            scoring_rules, insights,
+            rule_points_min=_rule_pts_min,
+            rule_points_max=_rule_pts_max,
+            rule_max_delta=_rule_max_delta,
+        )
 
         if n_changed == 0:
             return {"action": "RULES_ANALYZED", "reason": "no_adjustment_needed", "insights_n": len(insights) - 1}
@@ -1031,6 +1069,9 @@ async def apply_rule_adjustments(
         new_config = dict(cp.config_json)
         new_config["scoring_rules"] = adjusted_rules
         cp.config_json = new_config
+        # Invalidate Redis cache after ORM write (L-06)
+        from ..services.config_service import config_service as _cs
+        await _cs.invalidate_cache("score", uid)
 
         await log_audit(
             profile_id=profile_id,
@@ -1071,6 +1112,7 @@ async def _adjust_minimum_score(
     dry_run: bool,
     scope_profile_id: Optional[str],
     delta: int = 1,
+    guardrails: Optional[dict] = None,
 ) -> dict:
     """
     Ajusta minimum_score do config_type='score' baseado em FPR e EV.
@@ -1125,6 +1167,21 @@ async def _adjust_minimum_score(
                 "current": current_min,
             }
 
+        # Guardrail clamps: floor and ceiling come from config, never hardcoded (ZERO HARDCODE)
+        _g = guardrails or {}
+        _floor = int(_g.get("minimum_score_floor", 0))
+        _ceiling = int(_g.get("minimum_score_ceiling", 100))
+        if not (_floor <= new_min <= _ceiling):
+            logger.warning(
+                "[Autopilot] AUTOPILOT_MIN_SCORE_OUT_OF_BOUNDS: new_min=%d not in [%d,%d] — skipping",
+                new_min, _floor, _ceiling,
+            )
+            return {
+                "action": "SKIPPED",
+                "dimension": "minimum_score",
+                "reason": f"out_of_bounds(new_min={new_min} not in [{_floor},{_ceiling}])",
+            }
+
         if dry_run:
             logger.info("[Autopilot][DRY RUN] minimum_score WOULD change: %s", reason_msg)
             await log_audit(
@@ -1135,16 +1192,20 @@ async def _adjust_minimum_score(
                     "dimension": "minimum_score", "before": current_min, "after": new_min}
 
         # Salvar snapshot ANTES da escrita (rollback safety)
+        # [source=score] tag identifies which config_type to restore on auto-rollback (L-05)
         snapshot_id = await save_profile_version(
             profile_id=profile_id, config=dict(cp.config_json),
             perf=perf, regime=regime,
-            mutation_reason=f"pre_min_score_adjustment:{direction}",
+            mutation_reason=f"[source=score] pre_min_score_adjustment:{direction}",
             db=db,
         )
 
         new_config = dict(cp.config_json)
         new_config["minimum_score"] = new_min
         cp.config_json = new_config
+        # Invalidate Redis cache after ORM write (L-06)
+        from ..services.config_service import config_service as _cs
+        await _cs.invalidate_cache("score", uid)
 
         logger.info("[Autopilot] minimum_score adjusted: %s (snapshot=%s)", reason_msg, snapshot_id)
         await log_audit(
@@ -1255,7 +1316,7 @@ async def _adjust_block_rules(
         snapshot_id = await save_profile_version(
             profile_id=profile_id, config=dict(cp.config_json),
             perf=perf, regime=regime,
-            mutation_reason=f"pre_block_rules_adjustment:{len(changes)}_toggles",
+            mutation_reason=f"[source=block] pre_block_rules_adjustment:{len(changes)}_toggles",
             db=db,
         )
 
@@ -1263,6 +1324,11 @@ async def _adjust_block_rules(
         new_config["block_rules"] = dict(new_config.get("block_rules") or {})
         new_config["block_rules"]["blocks"] = adjusted
         cp.config_json = new_config
+        # Invalidate Redis cache after ORM write (L-06)
+        from uuid import UUID as _UUID
+        _uid = _UUID(str(user_id))
+        from ..services.config_service import config_service as _cs
+        await _cs.invalidate_cache("block", _uid)
 
         await log_audit(
             profile_id=profile_id, action="BLOCK_RULES_ADJUSTED",
@@ -1369,7 +1435,7 @@ async def _adjust_entry_triggers(
         snapshot_id = await save_profile_version(
             profile_id=profile_id, config=dict(cp.config_json),
             perf=perf, regime=regime,
-            mutation_reason=f"pre_entry_triggers_adjustment:{len(changes)}_toggles",
+            mutation_reason=f"[source=block] pre_entry_triggers_adjustment:{len(changes)}_toggles",
             db=db,
         )
 
@@ -1377,6 +1443,11 @@ async def _adjust_entry_triggers(
         new_config["entry_triggers"] = dict(new_config.get("entry_triggers") or {})
         new_config["entry_triggers"]["conditions"] = adjusted
         cp.config_json = new_config
+        # Invalidate Redis cache after ORM write (L-06)
+        from uuid import UUID as _UUID
+        _uid = _UUID(str(user_id))
+        from ..services.config_service import config_service as _cs
+        await _cs.invalidate_cache("block", _uid)
 
         await log_audit(
             profile_id=profile_id, action="ENTRY_TRIGGERS_ADJUSTED",
@@ -1404,6 +1475,7 @@ async def apply_full_adjustments(
     scope_profile_id: Optional[str] = None,
     can_adjust: Optional[list] = None,
     min_score_delta: int = 1,
+    guardrails: Optional[dict] = None,
 ) -> dict:
     """
     Orquestra todos os ajustes de config com autoridade expandida (C.3).
@@ -1436,6 +1508,7 @@ async def apply_full_adjustments(
             db=db,
             dry_run=dry_run,
             scope_profile_id=scope_profile_id,
+            guardrails=guardrails,
         )
 
     # ── minimum_score ─────────────────────────────────────────────────────────
@@ -1449,6 +1522,7 @@ async def apply_full_adjustments(
             dry_run=dry_run,
             scope_profile_id=scope_profile_id,
             delta=min_score_delta,
+            guardrails=guardrails,
         )
 
     # ── block_rules ───────────────────────────────────────────────────────────
@@ -1684,6 +1758,7 @@ async def run_autopilot_cycle(
         scope_profile_id=scope_id,
         can_adjust=can_adjust,
         min_score_delta=min_score_delta,
+        guardrails=guardrails,
     )
 
     # 6. Decidir se deve mutar config principal (usa ev_threshold dos guardrails)
