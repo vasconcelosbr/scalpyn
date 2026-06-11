@@ -119,7 +119,7 @@ _GUARDRAILS_DEFAULTS: Dict[str, Any] = {
     "circuit_breaker_pause_hours":   168,
     "kill_switch":                  False,
     "dry_run_mode":                  True,   # SAFE DEFAULT: nunca escreve sem config explícita
-    "scope_profile_id":             None,    # None = sem restrição de escopo
+    "scope_profile_id":             None,    # None = sem escopo; sobrescrito pelo seed do DB
     # C.4 — Autoridade expandida: autopilot pode ajustar todas as dimensões da config.
     # Sem floor/ceiling por decisão do operador — amplitude livre dentro dos guardrails.
     # autopilot_full_authority=True: habilita apply_full_adjustments (block_rules, entry_triggers,

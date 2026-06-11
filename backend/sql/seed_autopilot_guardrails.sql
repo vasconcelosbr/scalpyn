@@ -49,11 +49,11 @@ SELECT
         "autopilot_can_adjust": ["scoring_rules","minimum_score","block_rules","entry_triggers"],
         "kill_switch":                   false,
         "dry_run_mode":                  true,
-        "scope_profile_id":              "29155eda-6d8f-4abf-9f58-b3999ba9c878"
+        "scope_profile_id":              "15b2181b-4a48-4a3d-b8ab-a4f7485999de"
     }'::jsonb,
     true,
     NOW(),
     NOW()
 FROM profiles p
-WHERE p.id = '29155eda-6d8f-4abf-9f58-b3999ba9c878'
+WHERE p.id = '15b2181b-4a48-4a3d-b8ab-a4f7485999de'
 ON CONFLICT DO NOTHING;
