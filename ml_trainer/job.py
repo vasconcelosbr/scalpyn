@@ -70,6 +70,30 @@ def main():
 
     engine = create_engine(DB_URL, pool_pre_ping=True)
 
+    # Load ML config_profile first — needed for dataset validity gate (B4) and fee labels.
+    # Must run BEFORE the shadow_trades query so ml_dataset_valid_from is available.
+    _ml_cfg: dict = {}
+    try:
+        with engine.connect() as conn:
+            ml_cfg_row = conn.execute(text("""
+                SELECT config_json FROM config_profiles
+                WHERE config_type = 'ml' AND is_active = true
+                LIMIT 1
+            """)).fetchone()
+            if ml_cfg_row and ml_cfg_row[0]:
+                _ml_cfg = (
+                    ml_cfg_row[0] if isinstance(ml_cfg_row[0], dict)
+                    else json.loads(ml_cfg_row[0])
+                )
+    except Exception as e:
+        logger.warning("Failed to load ML config_profile — using legacy label: %s", e)
+
+    _fee_roundtrip_pct = _ml_cfg.get("ml_fee_roundtrip_pct")
+    _label_net_of_fees = bool(_ml_cfg.get("ml_label_net_of_fees", False))
+    # B4: dataset validity gate — exclude shadows where features_snapshot was empty (pre-fix).
+    # Set via backend/sql/set_ml_dataset_valid_from.sql after B1 deploy. Only moves forward.
+    _dataset_valid_from = _ml_cfg.get("ml_dataset_valid_from")  # ISO string or None
+
     # ---------------------------------------------------------
     # 1. Extrai dados de shadow_trades (fonte canônica — Bloco B)
     #
@@ -98,6 +122,14 @@ def main():
             "excl_from": TRAIN_EXCLUDE_FROM,
             "excl_to": f"{TRAIN_EXCLUDE_TO} 23:59:59",
         }
+    # B4: ml_dataset_valid_from — exclude pre-fix shadows where features_snapshot was empty.
+    # Value is read from config_profiles (ZERO HARDCODE). Only moves forward.
+    valid_from_clause = ""
+    valid_from_params: dict = {}
+    if _dataset_valid_from:
+        valid_from_clause = "AND created_at >= :valid_from"
+        valid_from_params = {"valid_from": _dataset_valid_from}
+        logger.info("Dataset valid_from filter active: created_at >= %s", _dataset_valid_from)
     with engine.connect() as conn:
         result = conn.execute(text(f"""
             SELECT
@@ -112,26 +144,11 @@ def main():
               AND features_snapshot IS NOT NULL
               AND created_at >= NOW() - INTERVAL :days
               {exclude_clause}
+              {valid_from_clause}
             ORDER BY created_at ASC
-        """), {"days": f"{DAYS_LOOKBACK} days", "source_filter": ML_SOURCE_FILTER, **exclude_params})
+        """), {"days": f"{DAYS_LOOKBACK} days", "source_filter": ML_SOURCE_FILTER,
+               **exclude_params, **valid_from_params})
         records = [dict(row._mapping) for row in result.fetchall()]
-
-    # Load ML config_profile for fee label params (B1 fix).
-    _ml_cfg: dict = {}
-    try:
-        with engine.connect() as conn:
-            ml_cfg_row = conn.execute(text("""
-                SELECT config_json FROM config_profiles
-                WHERE config_type = 'ml' AND is_active = true
-                LIMIT 1
-            """)).fetchone()
-            if ml_cfg_row and ml_cfg_row[0]:
-                _ml_cfg = ml_cfg_row[0] if isinstance(ml_cfg_row[0], dict) else json.loads(ml_cfg_row[0])
-    except Exception as e:
-        logger.warning("Failed to load ML config_profile — using legacy label: %s", e)
-
-    _fee_roundtrip_pct = _ml_cfg.get("ml_fee_roundtrip_pct")
-    _label_net_of_fees = bool(_ml_cfg.get("ml_label_net_of_fees", False))
 
     total = len(records)
     n_ttt      = sum(1 for r in records if r.get("ttt_outcome") is not None)

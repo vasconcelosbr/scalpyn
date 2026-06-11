@@ -770,6 +770,26 @@ async def safe_bulk_create_from_user_skip(
     """
     from ..database import CeleryAsyncSessionLocal
 
+    # B2: load ml_fee_roundtrip_pct so _finalize_outcome can compute net_return_pct.
+    # Identical pattern to create_shadows_for_new_decisions (lines 1029–1038 + 1059).
+    _skip_ml_fee: Any = None
+    try:
+        from ..models.config_profile import ConfigProfile
+        async with CeleryAsyncSessionLocal() as _skp_db:
+            _skp_res = await _skp_db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "ml",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            _skp_row = _skp_res.scalar_one_or_none()
+            if _skp_row and isinstance(_skp_row.config_json, dict):
+                _skip_ml_fee = _skp_row.config_json.get("ml_fee_roundtrip_pct")
+    except Exception:
+        logger.warning("[shadow] bulk_skip: ml fee load failed user=%s", user_id)
+    user_config = {**user_config, "ml_fee_roundtrip_pct": _skip_ml_fee}
+
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
     created_count = 0
     try:
@@ -1362,6 +1382,57 @@ async def create_l1_spectrum_shadows(
     # 4. Create shadows for sampled symbols
     created = 0
     rate_limited = 0
+
+    # B1 — bulk indicators fetch before loop (L1 assets have no analysis_snapshot).
+    # Pureza invariant: low coverage is RECORDED, never a reason to skip shadow creation.
+    _ind_captured_at = promotion_at.isoformat()
+    _expected_n_features = 37
+    features_by_symbol: Dict[str, Dict[str, Any]] = {}
+    try:
+        from .indicators_provider import get_merged_indicators
+        async with CeleryAsyncSessionLocal() as _ind_db:
+            _merged = await get_merged_indicators(_ind_db, sampled, include_stale=True)
+        _now_utc = datetime.now(timezone.utc)
+        for _sym in sampled:
+            _mi = _merged.get(_sym)
+            if _mi is not None:
+                _flat = _mi.as_flat_dict()
+                _n_cap = sum(1 for v in _flat.values() if v is not None)
+                _coverage = _n_cap / max(_expected_n_features, 1)
+                _oldest_age_s = None
+                try:
+                    _ts_list = [
+                        _m.get("timestamp")
+                        for _m in _mi.meta.values()
+                        if _m.get("timestamp") is not None
+                    ]
+                    if _ts_list:
+                        _oldest_ts = min(
+                            t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+                            for t in _ts_list
+                        )
+                        _oldest_age_s = int((_now_utc - _oldest_ts).total_seconds())
+                except Exception:
+                    pass
+                features_by_symbol[_sym] = {
+                    **{k: {"value": v} for k, v in _flat.items()},
+                    "_features_captured_at":   {"value": _ind_captured_at},
+                    "_features_coverage":      {"value": round(_coverage, 3)},
+                    "_oldest_indicator_age_s": {"value": _oldest_age_s},
+                }
+            else:
+                features_by_symbol[_sym] = {
+                    "_features_captured_at":   {"value": _ind_captured_at},
+                    "_features_coverage":      {"value": 0.0},
+                    "_oldest_indicator_age_s": {"value": None},
+                }
+    except Exception as _b1_err:
+        logger.warning(
+            "[shadow-l1] B1: indicators fetch failed (%s) — shadows created with empty features",
+            _b1_err,
+        )
+        features_by_symbol = {}
+
     for symbol in sampled:
         if shadows_last_hour + created >= max_per_hour:
             # Hard rate ceiling hit — log per symbol (structural discard, not quality)
@@ -1385,11 +1456,15 @@ async def create_l1_spectrum_shadows(
                     pass
             continue
 
-        # Build SyntheticDecision with features from analysis_snapshot (same as L3 path)
+        # B1: use pre-fetched live indicators; fallback to empty dict on cache miss.
         asset = assets_by_symbol.get(symbol, {})
-        flat_ind = _flatten_analysis_snapshot(asset.get("analysis_snapshot") or {})
+        _sym_features = features_by_symbol.get(symbol, {
+            "_features_captured_at":   {"value": _ind_captured_at},
+            "_features_coverage":      {"value": 0.0},
+            "_oldest_indicator_age_s": {"value": None},
+        })
         metrics = {
-            "indicators_snapshot": {k: {"value": v} for k, v in flat_ind.items()},
+            "indicators_snapshot": _sym_features,
             "source": "l1_spectrum_inline",
             "current_price": asset.get("current_price") or asset.get("price"),
         }
@@ -1466,6 +1541,26 @@ async def safe_backfill_watchlist_shadows(
     Fire-and-forget: nunca raise. Retorna o número de shadows criados.
     """
     from ..database import CeleryAsyncSessionLocal
+
+    # B2: load ml_fee_roundtrip_pct so _finalize_outcome can compute net_return_pct.
+    # Identical pattern to create_shadows_for_new_decisions (lines 1029–1038 + 1059).
+    _backfill_ml_fee: Any = None
+    try:
+        from ..models.config_profile import ConfigProfile
+        async with CeleryAsyncSessionLocal() as _bcf_db:
+            _bcf_res = await _bcf_db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "ml",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            _bcf_row = _bcf_res.scalar_one_or_none()
+            if _bcf_row and isinstance(_bcf_row.config_json, dict):
+                _backfill_ml_fee = _bcf_row.config_json.get("ml_fee_roundtrip_pct")
+    except Exception:
+        logger.warning("[shadow] backfill: ml fee load failed user=%s", user_id)
+    user_config = {**user_config, "ml_fee_roundtrip_pct": _backfill_ml_fee}
 
     # ── Snapshot vivo da origem L3 ───────────────────────────────────────
     snapshot_l3: List[Dict[str, Any]] = []

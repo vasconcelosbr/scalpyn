@@ -184,6 +184,24 @@ async def _load_guardrails(db: AsyncSession, user_id: str) -> Dict[str, Any]:
     return dict(_GUARDRAILS_DEFAULTS)
 
 
+async def _load_ml_fee_pct(db: AsyncSession) -> float:
+    """Load ml_fee_roundtrip_pct from config_profiles (type='ml').
+    Returns 0.0 on any error or missing config — safe fallback for COALESCE queries.
+    ZERO HARDCODE: fee is never a literal in SQL or Python.
+    """
+    try:
+        row = await db.execute(text(
+            "SELECT config_json->>'ml_fee_roundtrip_pct' AS fee "
+            "FROM config_profiles WHERE config_type = 'ml' AND is_active = true LIMIT 1"
+        ))
+        r = row.one_or_none()
+        if r and r.fee is not None:
+            return float(r.fee)
+    except Exception as _e:
+        logger.warning("[Autopilot] ml fee load failed: %s", _e)
+    return 0.0
+
+
 # ── Performance Analysis ──────────────────────────────────────────────────────
 
 async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, Any]:
@@ -201,6 +219,10 @@ async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, A
         selection_inversion  — rejected_ev - approved_ev (> 0 = inversão confirmada)
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    # B3: EV in net-of-fee terms. COALESCE uses net_return_pct when available
+    # (post-fix shadows), falls back to pnl_pct - fee for pre-fix records.
+    # fee_pct is NEVER a literal — always loaded from config_profiles.
+    fee_pct = await _load_ml_fee_pct(db)
 
     # ── ALLOWED performance from shadow_trades source='L3' ───────────────────
     # C.1 — migrado de decisions_log para shadow_trades (fonte canônica pós-Bloco B).
@@ -208,17 +230,17 @@ async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, A
     # decisions_log permanece como CAPTURA upstream — NÃO removida.
     allowed_result = await db.execute(text(f"""
         SELECT
-            COUNT(*)                                                      AS n,
-            AVG(pnl_pct)                                                  AS ev,
-            AVG(CASE WHEN outcome = '{_ST_TP}' THEN 1.0 ELSE 0.0 END)   AS win_rate,
-            SUM(CASE WHEN outcome = '{_ST_SL}' THEN 1 ELSE 0 END)        AS n_sl,
-            SUM(CASE WHEN outcome = '{_ST_TP}' THEN 1 ELSE 0 END)        AS n_tp
+            COUNT(*)                                                                  AS n,
+            AVG(COALESCE(net_return_pct, pnl_pct - :fee_pct))                        AS ev,
+            AVG(CASE WHEN outcome = '{_ST_TP}' THEN 1.0 ELSE 0.0 END)               AS win_rate,
+            SUM(CASE WHEN outcome = '{_ST_SL}' THEN 1 ELSE 0 END)                    AS n_sl,
+            SUM(CASE WHEN outcome = '{_ST_TP}' THEN 1 ELSE 0 END)                    AS n_tp
         FROM shadow_trades
         WHERE source = 'L3'
           AND outcome IN {_ST_OUTCOMES_SQL}
           AND pnl_pct IS NOT NULL
           AND created_at >= :cutoff
-    """), {"cutoff": cutoff})
+    """), {"cutoff": cutoff, "fee_pct": fee_pct})
     allowed_row = dict(allowed_result.mappings().one())
 
     n_allowed = int(allowed_row["n"] or 0)
@@ -233,15 +255,15 @@ async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, A
     # NÃO confundir com decisions_log — vocabulários diferentes por design.
     rejected_result = await db.execute(text(f"""
         SELECT
-            COUNT(*)                                                      AS n,
-            AVG(pnl_pct)                                                  AS ev,
-            AVG(CASE WHEN outcome = '{_ST_TP}' THEN 1.0 ELSE 0.0 END)   AS win_rate
+            COUNT(*)                                                                  AS n,
+            AVG(COALESCE(net_return_pct, pnl_pct - :fee_pct))                        AS ev,
+            AVG(CASE WHEN outcome = '{_ST_TP}' THEN 1.0 ELSE 0.0 END)               AS win_rate
         FROM shadow_trades
         WHERE source = 'L3_REJECTED'
           AND outcome IN {_ST_OUTCOMES_SQL}
           AND pnl_pct IS NOT NULL
           AND created_at >= :cutoff
-    """), {"cutoff": cutoff})
+    """), {"cutoff": cutoff, "fee_pct": fee_pct})
     rejected_row = dict(rejected_result.mappings().one())
 
     n_rejected = int(rejected_row["n"] or 0)
@@ -303,10 +325,12 @@ async def detect_regime(db: AsyncSession) -> str:
     """
     try:
         # C.1 — migrado de decisions_log para shadow_trades source='L3'
+        # B3: EV in net-of-fee terms (same COALESCE pattern as compute_performance_window).
         cutoff_7d = datetime.now(timezone.utc) - timedelta(days=7)
+        _regime_fee = await _load_ml_fee_pct(db)
         result = await db.execute(text(f"""
             SELECT
-                AVG(pnl_pct)                                                      AS ev_7d,
+                AVG(COALESCE(net_return_pct, pnl_pct - :fee_pct))                AS ev_7d,
                 AVG(CASE WHEN outcome = '{_ST_TP}' THEN 1.0 ELSE 0.0 END)       AS wr_7d,
                 COUNT(*)                                                           AS n_7d
             FROM shadow_trades
@@ -314,7 +338,7 @@ async def detect_regime(db: AsyncSession) -> str:
               AND outcome IN {_ST_OUTCOMES_SQL}
               AND pnl_pct IS NOT NULL
               AND created_at >= :cutoff
-        """), {"cutoff": cutoff_7d})
+        """), {"cutoff": cutoff_7d, "fee_pct": _regime_fee})
         row = dict(result.mappings().one())
         ev = float(row["ev_7d"] or 0.0)
         wr = float(row["wr_7d"] or 0.0)
@@ -844,8 +868,10 @@ async def compute_rule_insights(
     Excludes rules with < MIN_RULE_SAMPLES matching trades.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    # B3: also fetch net_return_pct; Python-side COALESCE below.
+    _insights_fee = await _load_ml_fee_pct(db)
     result = await db.execute(text(f"""
-        SELECT features_snapshot, outcome, pnl_pct
+        SELECT features_snapshot, outcome, pnl_pct, net_return_pct
         FROM shadow_trades
         WHERE source = 'L3'
           AND outcome IN {_ST_OUTCOMES_SQL}
@@ -890,7 +916,11 @@ async def compute_rule_insights(
             except (TypeError, ValueError):
                 continue
             if _rule_matches(operator, val, rule):
-                matching.append((row["outcome"] == _ST_TP, float(row["pnl_pct"])))
+                # B3: net-of-fee EV; COALESCE: net_return_pct when set, else pnl_pct - fee.
+                _pnl = float(row["pnl_pct"])
+                _net = row.get("net_return_pct")
+                _ev_val = float(_net) if _net is not None else (_pnl - _insights_fee)
+                matching.append((row["outcome"] == _ST_TP, _ev_val))
 
         n = len(matching)
         if n < MIN_RULE_SAMPLES:

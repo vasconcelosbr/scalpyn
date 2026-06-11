@@ -1,5 +1,55 @@
 # XGBoost ML Pipeline — Trade Outcome Prediction
 
+## Dataset Validity Gate — `ml_dataset_valid_from`
+
+**Set on:** 2026-06-11 (deployed with B1 fix — features now captured live at L1 promotion).
+
+**Why this exists:**
+
+Before the B1 fix, `create_l1_spectrum_shadows` copied `analysis_snapshot` from the L1 asset,
+which is always empty at the L1 stage (indicators are only computed at L2/L3). This meant every
+`L1_SPECTRUM` shadow had `features_snapshot = {}` — 37 features all absent. Training on those
+records would produce a model with only NaNs as X and no learnable signal.
+
+**The fix (B1):** `create_l1_spectrum_shadows` now calls `get_merged_indicators` to fetch live
+indicator values at the moment of L1 promotion (T0-safe by construction). Coverage metadata is
+recorded in `features_snapshot` itself: `_features_captured_at`, `_features_coverage`,
+`_oldest_indicator_age_s`.
+
+**`ml_dataset_valid_from` rule:**
+- Stored in `config_profiles` where `config_type='ml'`, key `ml_dataset_valid_from` (ISO string).
+- The trainer filters: `AND created_at >= ml_dataset_valid_from` (applied only when set).
+- This field **only moves forward** — never set it to a past value. Moving it back would
+  re-introduce pre-fix empty-feature records into training.
+- To set after deploy:
+  ```sql
+  -- backend/sql/set_ml_dataset_valid_from.sql
+  UPDATE config_profiles
+  SET config_json = config_json || jsonb_build_object(
+      'ml_dataset_valid_from',
+      to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"+00:00"')
+  )
+  WHERE config_type = 'ml' AND is_active = true;
+  ```
+- Verify: `SELECT config_json->>'ml_dataset_valid_from' FROM config_profiles WHERE config_type='ml';`
+
+**Historical shadows (pre-fix):** remain in the DB, untouched. They are filtered out by
+`ml_dataset_valid_from`, not deleted. Zero retroactive updates (additive-only invariant).
+
+**Post-deploy validation (run 24h after B1 deploy):**
+```sql
+SELECT COUNT(*) AS novos,
+       COUNT(*) FILTER (WHERE features_snapshot = '{}'::jsonb
+                          OR features_snapshot IS NULL) AS vazios,
+       AVG((features_snapshot->>'_features_coverage')::float) AS cobertura_media
+FROM shadow_trades
+WHERE source = 'L1_SPECTRUM'
+  AND created_at >= '<ml_dataset_valid_from>';
+-- Expected: vazios=0; cobertura_media >= 0.8 (below 0.8 = investigate bootstrap timing)
+```
+
+---
+
 ## Known Data Quirks (read before adding features)
 
 ### MAE > 0 in pre-2026-06-10 records (B2 fix)
