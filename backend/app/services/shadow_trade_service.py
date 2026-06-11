@@ -1478,6 +1478,7 @@ async def create_l1_spectrum_shadows(
             metrics=metrics,
         )
 
+        _scoring_id = None
         try:
             async with CeleryAsyncSessionLocal() as own_db:
                 async with own_db.begin():
@@ -1487,6 +1488,7 @@ async def create_l1_spectrum_shadows(
                     )
                     if new_id is not None:
                         created += 1
+                        _scoring_id = new_id
                         logger.debug(
                             "[shadow-l1] created id=%s symbol=%s user=%s",
                             new_id, symbol, user_id,
@@ -1509,6 +1511,19 @@ async def create_l1_spectrum_shadows(
             logger.exception(
                 "[shadow-l1] create failed symbol=%s user=%s", symbol, user_id
             )
+
+        # Forward scoring — own session, outside shadow creation transaction.
+        # Passive write to ml_predictions; never influences any decision path.
+        if _scoring_id is not None:
+            try:
+                from ..ml.forward_scorer import safe_score_shadow_trade as _fwd_score
+                await _fwd_score(
+                    _scoring_id,
+                    _build_features_snapshot(synthetic),
+                    symbol,
+                )
+            except Exception as _fwd_exc:
+                logger.debug("[shadow-l1] forward scorer skipped: %s", _fwd_exc)
 
     if created or rate_limited:
         logger.info(

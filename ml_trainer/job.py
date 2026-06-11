@@ -93,6 +93,12 @@ def main():
     # B4: dataset validity gate — exclude shadows where features_snapshot was empty (pre-fix).
     # Set via backend/sql/set_ml_dataset_valid_from.sql after B1 deploy. Only moves forward.
     _dataset_valid_from = _ml_cfg.get("ml_dataset_valid_from")  # ISO string or None
+    # ZERO HARDCODE: propagate DB coverage threshold to trainer's env-var check.
+    # trainer.py reads ML_MIN_FEATURE_COVERAGE; setting it here means the DB value
+    # takes precedence over the Railway service env var.
+    _min_cov_cfg = _ml_cfg.get("ml_feature_min_coverage_pct")
+    if _min_cov_cfg is not None:
+        os.environ["ML_MIN_FEATURE_COVERAGE"] = str(_min_cov_cfg)
 
     # ---------------------------------------------------------
     # 1. Extrai dados de shadow_trades (fonte canônica — Bloco B)

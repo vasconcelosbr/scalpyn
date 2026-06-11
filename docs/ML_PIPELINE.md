@@ -624,6 +624,115 @@ ValueError: Insufficient training data: 87 simulations
 
 ---
 
-**Version:** 1.0.0
-**Last Updated:** 2026-04-29
+## Forward Scoring — Accumulating Genuine Out-of-Sample Predictions
+
+**Added:** 2026-06-11 | **Status:** Active after smoke train
+
+### Purpose
+
+Each day of forward scoring accumulates predictions that are genuinely
+out-of-sample: the score is written at shadow creation time (T0), the
+outcome closes independently hours or days later. When scored shadows close,
+the AUC computed on those predictions is the evidence that will gate future
+ML activation — it cannot be manufactured retroactively.
+
+This means we want forward scoring running NOW, even with a weak smoke-train
+model, because what matters is:
+1. The scoring **plumbing is working** (feature extraction → inference → write)
+2. The **history exists** from the earliest possible date
+
+A model retrain replaces the active `ml_models` row but each prediction row
+retains its `model_id`, keeping version histories distinct. Future AUC
+analysis can filter by `model_id` to isolate each model's out-of-sample
+performance.
+
+### Architecture
+
+```
+L1_SPECTRUM shadow created (shadow_trade_service.py)
+    │
+    └─► safe_score_shadow_trade(shadow_trade_id, features_snapshot, symbol)
+            │
+            ├─ check ml_forward_scoring_enabled (config_profiles type='ml')
+            ├─ load model from ml_models.model_blob (GCSModelLoader singleton)
+            ├─ extract_features(features_snapshot)          ← T0-safe
+            ├─ model.predict_proba(X)
+            └─ INSERT ml_predictions (shadow_trade_id, model_id, probability)
+                        │
+                        └─ AUDIT LOG ONLY — zero reads from this table
+                           in any decision path
+```
+
+### Isolation Invariants
+
+The `ml_predictions` table is **write-only** from any decision-making
+perspective. Verified by grep: no query reads `ml_predictions` to determine
+buy/sell/approve/reject. The only reads are:
+
+- `admin_diagnostics.py` — `SELECT COUNT(*)` for health metrics
+- `watchlists.py` — display-only, never a guard condition
+
+`ML_GATE_ENABLED` controls whether the ML probability influences L3 ordering.
+Forward scoring is independent of this flag and runs regardless.
+
+### Control Flag
+
+```sql
+-- Enable forward scoring after smoke train passes
+UPDATE config_profiles
+SET config_json = config_json || '{"ml_forward_scoring_enabled": true}'::jsonb
+WHERE config_type = 'ml' AND is_active = true;
+
+-- Disable
+UPDATE config_profiles
+SET config_json = config_json || '{"ml_forward_scoring_enabled": false}'::jsonb
+WHERE config_type = 'ml' AND is_active = true;
+```
+
+### Validation Queries
+
+After several hours of forward scoring enabled:
+```sql
+-- Count predictions written in last 24h
+SELECT COUNT(*), MIN(scored_at), MAX(scored_at),
+       ROUND(AVG(win_fast_probability)::numeric, 4) AS avg_prob,
+       ROUND(STDDEV(win_fast_probability)::numeric, 4) AS stddev_prob
+FROM ml_predictions
+WHERE scored_at >= NOW() - INTERVAL '24 hours'
+  AND shadow_trade_id IS NOT NULL;
+-- Expected: >0 rows; avg_prob NOT ~same value (non-degenerate distribution)
+
+-- Distribution check (degenerate = bug)
+SELECT width_bucket(win_fast_probability, 0, 1, 10) AS bucket,
+       COUNT(*) AS n
+FROM ml_predictions
+WHERE shadow_trade_id IS NOT NULL
+GROUP BY 1 ORDER BY 1;
+
+-- Forward AUC (once enough shadows have closed)
+SELECT AVG(CASE WHEN st.outcome = 'TP_HIT' AND
+                     st.holding_seconds <= 10800 THEN 1.0 ELSE 0.0 END) AS win_rate,
+       COUNT(*) AS n_closed,
+       COUNT(*) FILTER (WHERE mp.win_fast_probability >= mp.threshold_used) AS n_approved
+FROM ml_predictions mp
+JOIN shadow_trades st ON st.id = mp.shadow_trade_id
+WHERE mp.shadow_trade_id IS NOT NULL
+  AND st.outcome IS NOT NULL;
+```
+
+### Gate for ML_GATE_ENABLED Activation
+
+The future gate requires ALL of the following on forward-scored shadows:
+- `n_closed >= 500`
+- Win rate between 15% and 85% (balanced classes)
+- Leakage audit clean (all features confirmed T0-safe)
+- Forward AUC with 95% bootstrap CI excluding 0.50
+
+Until then: `ML_GATE_ENABLED=false`. Forward scoring accumulates evidence
+without influencing any trade decision.
+
+---
+
+**Version:** 2.0.0
+**Last Updated:** 2026-06-11
 **Status:** Production Ready
