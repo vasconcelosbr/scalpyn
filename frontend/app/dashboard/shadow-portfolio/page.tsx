@@ -1828,7 +1828,7 @@ function DetailModal({
 const MAX_LOCAL_FETCH = 200; // = _MAX_PAGE_SIZE em backend/app/api/shadow_trades.py
 const CLIENT_PAGE_SIZE = 50;
 
-type SourceTab = "L3";
+type SourceTab = "L3" | "L1_SPECTRUM";
 
 function buildBaseQuery(
   filter: FilterState,
@@ -1866,7 +1866,7 @@ export default function ShadowPortfolioPage() {
   const [tick, setTick] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
-  const sourceTab: SourceTab = "L3";
+  const [sourceTab, setSourceTab] = useState<SourceTab>("L3");
 
   const fetchList = useCallback(() => {
     setLoadingList(true);
@@ -2060,14 +2060,50 @@ export default function ShadowPortfolioPage() {
               maxWidth: 720,
             }}
           >
-            <>
-              Trades simulados a partir de decisões <code>ALLOW</code> spot do
-              pipeline. Cada decisão vira uma row em{" "}
-              <code>shadow_trades</code> com <code>entry_price</code> da próxima
-              candle 1m e é avançada candle-a-candle até TP, SL ou timeout — sem
-              execução real, alimenta o dataset ML.
-            </>
+            {sourceTab === "L3" ? (
+              <>
+                Trades simulados a partir de decisões <code>ALLOW</code> spot do
+                pipeline (L3). Alimentados pelo monitor após cada decisão aprovada.
+              </>
+            ) : (
+              <>
+                Captures do espectro bruto L1 — exatamente o dataset que o ML
+                considera. Sem filtro de score ou regras L3. Win rate esperado ~25%.
+              </>
+            )}
           </p>
+          <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+            {(
+              [
+                { key: "L3", label: "Pipeline (L3)" },
+                { key: "L1_SPECTRUM", label: "Dataset ML (L1)" },
+              ] as { key: SourceTab; label: string }[]
+            ).map(({ key, label }) => {
+              const active = sourceTab === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => {
+                    setSourceTab(key);
+                    setFilter({ ...DEFAULT_FILTER });
+                  }}
+                  style={{
+                    background: active ? C.blue : C.elevated,
+                    color: active ? "#fff" : C.muted,
+                    border: `1px solid ${active ? C.blue : C.border}`,
+                    borderRadius: 6,
+                    padding: "5px 14px",
+                    fontSize: 11.5,
+                    cursor: "pointer",
+                    fontWeight: active ? 600 : 400,
+                    letterSpacing: 0.3,
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <FilterBar
