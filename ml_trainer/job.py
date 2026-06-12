@@ -129,14 +129,18 @@ def main():
             "excl_from": TRAIN_EXCLUDE_FROM,
             "excl_to": f"{TRAIN_EXCLUDE_TO} 23:59:59",
         }
-    # B4: ml_dataset_valid_from — exclude pre-fix shadows where features_snapshot was empty.
-    # Value is read from config_profiles (ZERO HARDCODE). Only moves forward.
+    # B4: ml_dataset_valid_from — exclude pre-fix L3 shadows where features_snapshot was empty.
+    # Only applied for ML_SOURCE_FILTER='L3' (the source that had the snapshot bug).
+    # For other sources (L1_SPECTRUM etc.) the features_snapshot::text <> '{}' filter
+    # already guarantees quality — applying valid_from would only waste valid records.
     valid_from_clause = ""
     valid_from_params: dict = {}
-    if _dataset_valid_from:
+    if _dataset_valid_from and ML_SOURCE_FILTER == "L3":
         valid_from_clause = "AND created_at >= :valid_from"
         valid_from_params = {"valid_from": _dataset_valid_from}
-        logger.info("Dataset valid_from filter active: created_at >= %s", _dataset_valid_from)
+        logger.info("Dataset valid_from filter active (L3): created_at >= %s", _dataset_valid_from)
+    elif _dataset_valid_from:
+        logger.info("Dataset valid_from skipped for source=%s (snapshot quality via <> '{}' filter)", ML_SOURCE_FILTER)
     with engine.connect() as conn:
         result = conn.execute(text(f"""
             SELECT
