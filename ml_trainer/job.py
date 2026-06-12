@@ -40,6 +40,9 @@ MODEL_DIR = os.getenv("MODEL_DIR", "/models")       # Railway Volume mount path
 DAYS_LOOKBACK            = int(os.getenv("DAYS_LOOKBACK", "30"))
 N_TRIALS                 = int(os.getenv("N_TRIALS", "50"))
 MIN_RECORDS              = int(os.getenv("MIN_RECORDS", "200"))
+# Minimum AUC required to promote a trained model. Default 0.50 (better than random).
+# Set MIN_AUC_TO_SAVE=0.0 to bypass for pipeline validation runs.
+MIN_AUC_TO_SAVE          = float(os.getenv("MIN_AUC_TO_SAVE", "0.50"))
 # BLOCO C — source filter agnóstico.
 # 'L3' = comportamento atual (fallback seguro).
 # 'WATCHLIST_SPOT' = espectro completo (ativar apenas após dataset acumular).
@@ -237,12 +240,12 @@ def main():
     new_roc_auc = result["metrics"]["roc_auc"]
     new_fpr     = result["metrics"]["false_positive_rate"]
 
-    if new_roc_auc < 0.50:
+    if new_roc_auc < MIN_AUC_TO_SAVE:
         logger.warning(
-            "[PROMOTION] REJEITADO — roc_auc=%.4f < 0.50 (pior que aleatório). "
+            "[PROMOTION] REJEITADO — roc_auc=%.4f < %.2f (MIN_AUC_TO_SAVE). "
             "Dataset provavelmente pequeno demais ou regime invertido no test set. "
             "Modelo NÃO promovido.",
-            new_roc_auc,
+            new_roc_auc, MIN_AUC_TO_SAVE,
         )
         sys.exit(0)
 
