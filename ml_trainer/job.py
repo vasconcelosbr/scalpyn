@@ -90,6 +90,7 @@ def main():
 
     _fee_roundtrip_pct = _ml_cfg.get("ml_fee_roundtrip_pct")
     _label_net_of_fees = bool(_ml_cfg.get("ml_label_net_of_fees", False))
+    _win_fast_threshold_s = int(_ml_cfg.get("ml_win_fast_threshold_seconds", 1800))
     # B4: dataset validity gate — exclude shadows where features_snapshot was empty (pre-fix).
     # Set via backend/sql/set_ml_dataset_valid_from.sql after B1 deploy. Only moves forward.
     _dataset_valid_from = _ml_cfg.get("ml_dataset_valid_from")  # ISO string or None
@@ -148,6 +149,7 @@ def main():
               AND outcome IN ('TP_HIT', 'SL_HIT', 'TIMEOUT')
               AND pnl_pct IS NOT NULL
               AND features_snapshot IS NOT NULL
+              AND features_snapshot::text <> '{}'
               AND created_at >= NOW() - INTERVAL :days
               {exclude_clause}
               {valid_from_clause}
@@ -160,10 +162,11 @@ def main():
     n_ttt      = sum(1 for r in records if r.get("ttt_outcome") is not None)
     n_fast_win = sum(1 for r in records if r.get("ttt_outcome") == "FAST_WIN")
     logger.info(
-        "shadow_trades L3 finalizados: %d | "
-        "TTT labels: %d/%d (%.1f%%) FAST_WIN=%d",
-        total,
+        "shadow_trades source=%s finalizados: %d | "
+        "ttt_outcome set: %d/%d (%.1f%%) FAST_WIN=%d | win_fast_threshold=%ds",
+        ML_SOURCE_FILTER, total,
         n_ttt, total, 100 * n_ttt / max(total, 1), n_fast_win,
+        _win_fast_threshold_s,
     )
 
     if total < MIN_RECORDS:
@@ -187,6 +190,7 @@ def main():
         records,
         fee_roundtrip_pct=_fee_roundtrip_pct,
         label_net_of_fees=_label_net_of_fees,
+        win_fast_threshold_s=_win_fast_threshold_s,
     )
     logger.info(
         "DataFrame: %d rows, %d cols | label_net_of_fees=%s fee=%.2f%%",
@@ -294,73 +298,91 @@ def main():
     # ---------------------------------------------------------
     # 5. Persiste ml_models no Cloud SQL
     # ---------------------------------------------------------
+    import datetime as _dt
     logger.info("Registrando modelo em ml_models...")
-    with engine.begin() as conn:
-        # Próxima versão
-        ver = conn.execute(
-            text("SELECT COALESCE(MAX(version), 0) + 1 FROM ml_models")
-        ).scalar()
 
-        # Desativa anterior
-        conn.execute(
-            text("UPDATE ml_models SET status = 'retired', retired_at = NOW() WHERE status = 'active'")
-        )
+    def _to_date(v):
+        if v is None:
+            return None
+        if hasattr(v, "date") and callable(v.date):
+            return v.date()
+        if isinstance(v, _dt.datetime):
+            return v.date()
+        return v
 
-        # Insere novo
-        conn.execute(text("""
-            INSERT INTO ml_models (
-                version, status, hyperparams,
-                train_samples, val_samples, test_samples,
-                precision_score, recall_score, f1_score, roc_auc,
-                win_fast_capture_rate, false_positive_rate,
-                train_from, train_to,
-                model_path, decision_threshold,
-                activated_at, notes,
-                model_blob
-            ) VALUES (
-                :version, 'active', :hyperparams,
-                :n_train, :n_val, :n_test,
-                :precision, :recall, :f1, :roc_auc,
-                :capture_rate, :fpr,
-                :train_from, :train_to,
-                :model_path, :threshold,
-                NOW(), :notes,
-                :model_blob
+    try:
+        with engine.begin() as conn:
+            # Próxima versão
+            ver = conn.execute(
+                text("SELECT COALESCE(MAX(version::integer), 0) + 1 FROM ml_models")
+            ).scalar()
+            logger.info("[DB] next_version=%s", ver)
+
+            # Desativa anterior
+            conn.execute(
+                text("UPDATE ml_models SET status = 'retired', retired_at = NOW() WHERE status = 'active'")
             )
-        """), {
-            "version":      ver,
-            "hyperparams":  json.dumps(
-                {k: (None if isinstance(v, float) and math.isnan(v) else v)
-                 for k, v in result["best_params"].items()}
-            ),
-            "n_train":      result["n_train"],
-            "n_val":        result["n_val"],
-            "n_test":       result["n_test"],
-            "precision":    result["metrics"]["precision"],
-            "recall":       result["metrics"]["recall"],
-            "f1":           result["metrics"]["f1"],
-            "roc_auc":      result["metrics"]["roc_auc"],
-            "capture_rate": result["metrics"]["win_fast_capture_rate"],
-            "fpr":          result["metrics"]["false_positive_rate"],
-            "train_from":   result["train_from"],
-            "train_to":     result["train_to"],
-            "model_path":   gcs_model_uri,
-            # Task #324 — calibrated via PR curve on the test set (no more
-            # hardcoded 0.500). See trainer._calibrate_threshold.
-            "threshold":    float(result.get("decision_threshold", 0.5)),
-            "notes":        (
-                f"MLflow run_id: {result['run_id']} | storage: db://ml_models | "
-                f"source={ML_SOURCE_FILTER} | target={ML_TARGET_TYPE} | "
-                f"lookback_days={DAYS_LOOKBACK} | "
-                f"winrate_base={result.get('winrate_base', 0):.2f}% | "
-                f"n_pos={result.get('n_pos', 0)} n_neg={result.get('n_neg', 0)} | "
-                f"threshold={float(result.get('decision_threshold', 0.5)):.4f} | "
-                f"regime_drift={result.get('regime_drift_warning', False)} | "
-                f"features_excluded={result.get('features_excluded', [])} | "
-                f"shap_top5={result.get('shap_bad_approval_drivers', [])[:5]}"
-            ),
-            "model_blob":   model_blob,
-        })
+            logger.info("[DB] UPDATE retired OK")
+
+            # Insere novo
+            conn.execute(text("""
+                INSERT INTO ml_models (
+                    version, status, hyperparams,
+                    train_samples, val_samples, test_samples,
+                    precision_score, recall_score, f1_score, roc_auc,
+                    win_fast_capture_rate, false_positive_rate,
+                    train_from, train_to,
+                    model_path, decision_threshold,
+                    activated_at, notes,
+                    model_blob
+                ) VALUES (
+                    :version, 'active', :hyperparams,
+                    :n_train, :n_val, :n_test,
+                    :precision, :recall, :f1, :roc_auc,
+                    :capture_rate, :fpr,
+                    :train_from, :train_to,
+                    :model_path, :threshold,
+                    NOW(), :notes,
+                    :model_blob
+                )
+            """), {
+                "version":      str(ver),
+                "hyperparams":  json.dumps(
+                    {k: (None if isinstance(v, float) and math.isnan(v) else v)
+                     for k, v in result["best_params"].items()}
+                ),
+                "n_train":      result["n_train"],
+                "n_val":        result["n_val"],
+                "n_test":       result["n_test"],
+                "precision":    result["metrics"]["precision"],
+                "recall":       result["metrics"]["recall"],
+                "f1":           result["metrics"]["f1"],
+                "roc_auc":      result["metrics"]["roc_auc"],
+                "capture_rate": result["metrics"]["win_fast_capture_rate"],
+                "fpr":          result["metrics"]["false_positive_rate"],
+                "train_from":   _to_date(result["train_from"]),
+                "train_to":     _to_date(result["train_to"]),
+                "model_path":   gcs_model_uri,
+                # Task #324 — calibrated via PR curve on the test set (no more
+                # hardcoded 0.500). See trainer._calibrate_threshold.
+                "threshold":    float(result.get("decision_threshold", 0.5)),
+                "notes":        (
+                    f"MLflow run_id: {result['run_id']} | storage: db://ml_models | "
+                    f"source={ML_SOURCE_FILTER} | target={ML_TARGET_TYPE} | "
+                    f"lookback_days={DAYS_LOOKBACK} | "
+                    f"winrate_base={result.get('winrate_base', 0):.2f}% | "
+                    f"n_pos={result.get('n_pos', 0)} n_neg={result.get('n_neg', 0)} | "
+                    f"threshold={float(result.get('decision_threshold', 0.5)):.4f} | "
+                    f"regime_drift={result.get('regime_drift_warning', False)} | "
+                    f"features_excluded={result.get('features_excluded', [])} | "
+                    f"shap_top5={result.get('shap_bad_approval_drivers', [])[:5]}"
+                ),
+                "model_blob":   model_blob,
+            })
+            logger.info("[DB] INSERT OK — modelo salvo")
+    except Exception as exc:
+        logger.error("[DB] FALHA AO SALVAR MODELO: %s", exc, exc_info=True)
+        raise
 
     logger.info(f"Modelo v{ver} registrado e ativado.")
     logger.info("=== Trainer Job concluído com sucesso ===")

@@ -250,6 +250,7 @@ def build_training_dataframe(
     records: list,
     fee_roundtrip_pct: Optional[float] = None,
     label_net_of_fees: bool = False,
+    win_fast_threshold_s: int = 1800,
 ) -> pd.DataFrame:
     """
     Build training DataFrame from shadow_trades records (fonte canônica — Bloco B).
@@ -264,20 +265,24 @@ def build_training_dataframe(
                  net_return_pct is NULL. Only used when label_net_of_fees=True.
         label_net_of_fees: When True, Tier 2 label uses net-of-fees return
                  (net_return_pct if persisted, else gross - fee_roundtrip_pct).
+        win_fast_threshold_s: Holding ceiling (seconds) above which a TP_HIT
+                 is classified as slow win → label 0. Read from config_profiles
+                 (ml_win_fast_threshold_seconds). Default 1800 (30 min).
 
     Returns:
         DataFrame with FEATURE_COLUMNS + is_win_fast + _created_at columns.
 
     Label semantics:
-        Tier 1 (TTT): ttt_outcome == 'FAST_WIN' → 1; 'TIMEOUT' → 0.
-        Tier 2 (fallback): when label_net_of_fees=True and net_return_pct is
-            available, use net_return_pct > _MIN_WIN_PNL_PCT; when
-            net_return_pct is NULL and fee_roundtrip_pct given, compute
-            net = pnl_pct - fee; else use pnl_pct > _WIN_THRESHOLD (legacy).
+        Tier 1 (simulator ground truth): outcome == 'TP_HIT' AND
+            holding_seconds <= win_fast_threshold_s → 1; everything else → 0.
+            Slow wins (TP_HIT but holding > threshold) are labeled 0: a slow win
+            is a bad entry with a lucky exit and must not teach the model to
+            approve prolonged capital exposure.
+        Tier 2 (fallback): records with outcome IS NULL fall back to pnl
+            threshold + holding constraint for coverage during data gap periods.
         Rows with pnl_pct IS NULL are DROPPED.
 
         Vocabulário de shadow_trades.outcome: 'TP_HIT' / 'SL_HIT' (uppercase).
-        NÃO usar outcome para derivar o label — usar ttt_outcome + pnl_pct.
     """
     rows = []
     dropped_null_pnl = 0
@@ -306,40 +311,37 @@ def build_training_dataframe(
             dropped_null_pnl += 1
             continue
 
-        # Target: is_win_fast label — TTT-aware two-tier strategy.
+        # Target: is_win_fast label — simulator-ground-truth two-tier strategy.
         #
-        # Tier 1 (preferred): when a shadow_trade has ttt_outcome resolved by
-        # the ttt_analyzer, use FAST_WIN/TIMEOUT directly. This is the
-        # temporally-efficient target: TP >= ttt_tp_pct (1%) within
-        # ttt_timeout_minutes (180 min). Eliminates eventual-profitability
-        # bias from trades that slowly drifted to TP hours later.
+        # Tier 1 (simulator ground truth): outcome == 'TP_HIT' AND
+        # holding_seconds <= win_fast_threshold_s. The simulator outcome is
+        # proven reliable (zero TP_HIT with negative PnL, zero SL_HIT with
+        # positive PnL). Slow wins (TP_HIT but holding > threshold) are labeled
+        # 0 — a slow win is a bad entry with a lucky exit.
         #
-        # Tier 2 (fallback): older records without TTT data fall back to the
-        # pnl threshold. This keeps historical pre-TTT samples usable during
-        # the label migration period. Coverage is logged at training time.
-        ttt_outcome = r.get("ttt_outcome")
-        if ttt_outcome is not None:
-            features["is_win_fast"] = 1 if ttt_outcome == "FAST_WIN" else 0
-            features["_has_ttt_label"] = 1
+        # Tier 2 (fallback): records with outcome IS NULL (data gap) fall back
+        # to pnl threshold + holding constraint for continuity only.
+        holding_s = r.get("holding_seconds")
+        sim_outcome = r.get("outcome")
+        holding_ok = holding_s is not None and holding_s <= win_fast_threshold_s
+        if sim_outcome is not None:
+            features["is_win_fast"] = 1 if (sim_outcome == "TP_HIT" and holding_ok) else 0
+            features["_has_ttt_label"] = 1  # retained for schema compat — signals sim outcome present
         else:
-            # Tier 2 fallback: net-of-fees label (B1 fix).
+            # Tier 2 fallback: net-of-fees label (B1 fix) + holding constraint.
             # Priority: persisted net_return_pct > runtime-computed net > legacy gross.
             if label_net_of_fees:
                 net_return_pct = r.get("net_return_pct")
                 if net_return_pct is not None:
-                    # Snapshot-persisted net: compare directly vs MIN (fee already in)
                     net_val = float(net_return_pct)
-                    features["is_win_fast"] = 1 if net_val > _MIN_WIN_PNL_PCT else 0
+                    features["is_win_fast"] = 1 if (net_val > _MIN_WIN_PNL_PCT and holding_ok) else 0
                 elif fee_roundtrip_pct is not None:
-                    # Runtime-computed net for pre-fix records (ADDITIVE, no UPDATE)
                     net_val = pnl_val - float(fee_roundtrip_pct)
-                    features["is_win_fast"] = 1 if net_val > _MIN_WIN_PNL_PCT else 0
+                    features["is_win_fast"] = 1 if (net_val > _MIN_WIN_PNL_PCT and holding_ok) else 0
                 else:
-                    # No fee info available — fall back to legacy gross threshold
-                    features["is_win_fast"] = 1 if pnl_val > _WIN_THRESHOLD else 0
+                    features["is_win_fast"] = 1 if (pnl_val > _WIN_THRESHOLD and holding_ok) else 0
             else:
-                # Legacy path: gross PnL vs combined threshold
-                features["is_win_fast"] = 1 if pnl_val > _WIN_THRESHOLD else 0
+                features["is_win_fast"] = 1 if (pnl_val > _WIN_THRESHOLD and holding_ok) else 0
             features["_has_ttt_label"] = 0
 
         # Metadata for time-based split — NOT model features
