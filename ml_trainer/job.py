@@ -149,7 +149,7 @@ def main():
               AND outcome IN ('TP_HIT', 'SL_HIT', 'TIMEOUT')
               AND pnl_pct IS NOT NULL
               AND features_snapshot IS NOT NULL
-              AND features_snapshot::text <> '{}'
+              AND features_snapshot::text <> '{{}}'
               AND created_at >= NOW() - INTERVAL :days
               {exclude_clause}
               {valid_from_clause}
