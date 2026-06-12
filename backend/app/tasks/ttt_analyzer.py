@@ -131,21 +131,22 @@ async def _fetch_ohlcv_window(
     symbol: str,
     t_start: datetime,
     t_end: datetime,
+    timeframe: str = "1m",
 ) -> List[Dict[str, Any]]:
-    """Candles 1m em (t_start, t_end] para o símbolo."""
+    """Candles em (t_start, t_end] para o símbolo no timeframe dado."""
     res = await db.execute(
         text(
             """
             SELECT time, high, low, close
               FROM ohlcv
              WHERE symbol = :s
-               AND timeframe = '1m'
+               AND timeframe = :tf
                AND time > :t_start
                AND time <= :t_end
              ORDER BY time ASC
             """
         ),
-        {"s": symbol, "t_start": t_start, "t_end": t_end},
+        {"s": symbol, "tf": timeframe, "t_start": t_start, "t_end": t_end},
     )
     return [
         {
@@ -156,6 +157,18 @@ async def _fetch_ohlcv_window(
         }
         for r in res.fetchall()
     ]
+
+
+# Timeframes tentados em ordem de preferência. 1m é o mais preciso;
+# 5m é o fallback quando não há candles 1m disponíveis.
+_OHLCV_FALLBACK_TFS = ["1m", "5m"]
+
+# Candle index correspondente às janelas de 15m, 30m e 60m por timeframe.
+# Usado para preencher max_profit_first_Xm com a resolução disponível.
+_MILESTONE_IDX: Dict[str, Dict[str, int]] = {
+    "1m": {"15m": 15, "30m": 30, "60m": 60},
+    "5m": {"15m": 3,  "30m": 6,  "60m": 12},
+}
 
 
 def _set_ttt_fast_win_bucket(shadow: ShadowTrade) -> None:
@@ -197,19 +210,34 @@ async def _analyze_ttt_shadow(db, shadow: ShadowTrade) -> None:
         ttt_tp_price = entry_price * (1.0 + ttt_tp_pct / 100.0)
         window_end = entry_ts + timedelta(minutes=ttt_timeout_m)
 
-        # ── OHLCV da janela TTT ───────────────────────────────────────────
-        candles = await _fetch_ohlcv_window(db, symbol, entry_ts, window_end)
+        # ── OHLCV da janela TTT — tenta 1m, cai para 5m se vazio ─────────
+        candles: List[Dict[str, Any]] = []
+        used_tf = "1m"
+        for tf in _OHLCV_FALLBACK_TFS:
+            candles = await _fetch_ohlcv_window(db, symbol, entry_ts, window_end, tf)
+            if candles:
+                used_tf = tf
+                break
 
         if not candles:
-            # Sem OHLCV 1m disponível — aplica TIMEOUT por ausência de dados.
-            # Não temos como saber se TP foi atingido.
+            # Sem OHLCV em nenhum timeframe — TIMEOUT por ausência de dados.
             shadow.ttt_outcome = "TIMEOUT"
             shadow.ttt_close_reason = "HARD_TIMEOUT"
             logger.debug(
-                "[ttt-analyzer] shadow %s sem OHLCV 1m — TIMEOUT por ausência",
-                shadow_id,
+                "[ttt-analyzer] shadow %s sem OHLCV (%s) — TIMEOUT por ausência",
+                shadow_id, "/".join(_OHLCV_FALLBACK_TFS),
             )
             return
+
+        milestones = _MILESTONE_IDX.get(used_tf, _MILESTONE_IDX["1m"])
+        idx_15m = milestones["15m"]
+        idx_30m = milestones["30m"]
+        idx_60m = milestones["60m"]
+
+        if used_tf != "1m":
+            logger.debug(
+                "[ttt-analyzer] shadow %s usando fallback timeframe=%s", shadow_id, used_tf
+            )
 
         # ── Scan candle-a-candle para métricas TTT ────────────────────────
         running_max_high: Optional[float] = None
@@ -231,15 +259,15 @@ async def _analyze_ttt_shadow(db, shadow: ShadowTrade) -> None:
 
             # Milestones de lucro máximo por janela temporal.
             if entry_price > 0 and running_max_high is not None:
-                if idx == 15 and shadow.max_profit_first_15m is None:
+                if idx == idx_15m and shadow.max_profit_first_15m is None:
                     shadow.max_profit_first_15m = round(
                         (running_max_high - entry_price) / entry_price * 100.0, 6
                     )
-                if idx == 30 and shadow.max_profit_first_30m is None:
+                if idx == idx_30m and shadow.max_profit_first_30m is None:
                     shadow.max_profit_first_30m = round(
                         (running_max_high - entry_price) / entry_price * 100.0, 6
                     )
-                if idx == 60 and shadow.max_profit_first_60m is None:
+                if idx == idx_60m and shadow.max_profit_first_60m is None:
                     shadow.max_profit_first_60m = round(
                         (running_max_high - entry_price) / entry_price * 100.0, 6
                     )
@@ -270,12 +298,11 @@ async def _analyze_ttt_shadow(db, shadow: ShadowTrade) -> None:
             mfe_total = round(
                 (running_max_high - entry_price) / entry_price * 100.0, 6
             )
-            if shadow.max_profit_first_15m is None and len(candles) >= 15:
-                # Candle 15 existia mas high era None — usa fallback do max total.
+            if shadow.max_profit_first_15m is None and len(candles) >= idx_15m:
                 shadow.max_profit_first_15m = mfe_total
-            if shadow.max_profit_first_30m is None and len(candles) >= 30:
+            if shadow.max_profit_first_30m is None and len(candles) >= idx_30m:
                 shadow.max_profit_first_30m = mfe_total
-            if shadow.max_profit_first_60m is None and len(candles) >= 60:
+            if shadow.max_profit_first_60m is None and len(candles) >= idx_60m:
                 shadow.max_profit_first_60m = mfe_total
 
         # ── Determina ttt_outcome ─────────────────────────────────────────
@@ -294,8 +321,8 @@ async def _analyze_ttt_shadow(db, shadow: ShadowTrade) -> None:
             shadow.ttt_close_reason = "HARD_TIMEOUT"
             logger.info(
                 "[ttt-analyzer] shadow %s symbol=%s TIMEOUT — ttt_tp=%.2f%% "
-                "não atingido em %d candles",
-                shadow_id, symbol, ttt_tp_pct, len(candles),
+                "não atingido em %d candles (%s)",
+                shadow_id, symbol, ttt_tp_pct, len(candles), used_tf,
             )
 
         # ── Backfill de métricas de velocidade (se ainda NULL) ────────────
