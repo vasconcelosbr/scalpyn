@@ -84,6 +84,24 @@ SHADOW_LOOKBACK_MINUTES = int(os.environ.get("SHADOW_LOOKBACK_MINUTES", "10"))
 _SHADOW_TP_PCT_OVERRIDE = float(os.environ.get("SHADOW_TP_PCT", "0.0"))
 _SHADOW_SL_PCT_OVERRIDE = float(os.environ.get("SHADOW_SL_PCT", "0.0"))
 
+
+def _apply_barrier_params(user_config: dict, ml_config: dict) -> dict:
+    """Merge ATR barrier parameters from ml_config into user_config.
+
+    When shadow_barrier_mode='ATR_DYNAMIC', _create_from_decision will
+    override sl_pct (and optionally tp_pct) using per-asset atr_percent.
+    FIXED mode (default) preserves existing tp_pct/sl_pct unchanged.
+    """
+    user_config["shadow_barrier_mode"] = ml_config.get("shadow_barrier_mode", "FIXED")
+    user_config["sl_atr_multiplier"]   = ml_config.get("shadow_atr_multiplier_sl", 1.5)
+    user_config["sl_min_pct"]          = ml_config.get("shadow_barrier_min_pct", 0.5)
+    user_config["sl_max_pct"]          = ml_config.get("shadow_barrier_max_pct", 3.0)
+    # shadow_tp_pct: when set, overrides tp_pct for all modes (P0-1 fix: 1.5)
+    _tp_override = ml_config.get("shadow_tp_pct")
+    if _tp_override:
+        user_config["shadow_tp_pct"] = float(_tp_override)
+    return user_config
+
 # ── TTT Policy defaults (Zero Hardcode — override via Cloud Run env vars) ─────
 # Valores de negócio definidos em config_profiles (config_type='ttt_policy').
 # Env vars são usados como fallback quando DB não está disponível na criação.
@@ -617,6 +635,20 @@ async def _create_from_decision(
     # Fase 3 (migration 071) — barreira mode e pcts aplicados (snapshot na abertura).
     barrier_mode = user_config.get("shadow_barrier_mode", "FIXED")
 
+    # P0-1: ATR_DYNAMIC — SL computed per-asset from atr_percent at entry.
+    # TP overridden by shadow_tp_pct when set (reads risk.take_profit_pct via DB update).
+    if barrier_mode == "ATR_DYNAMIC":
+        _feats_early = _build_features_snapshot(decision)
+        _atr_pct = float(_feats_early.get("atr_percent") or 0.0)
+        if _atr_pct > 0.0:
+            _sl_mult = float(user_config.get("sl_atr_multiplier", 1.5))
+            _min_sl  = float(user_config.get("sl_min_pct", 0.5))
+            _max_sl  = float(user_config.get("sl_max_pct", 3.0))
+            sl_pct = max(_min_sl, min(_max_sl, _atr_pct * _sl_mult))
+        _shadow_tp = user_config.get("shadow_tp_pct")
+        if _shadow_tp:
+            tp_pct = float(_shadow_tp)
+
     # Entry-at-decision-time (Task 2026-05-13): preço corrente no
     # instante da decisão ALLOW vira entry_price imediatamente.
     # Fallback para next-1m-open mantém compat caso o pool não tenha
@@ -1086,6 +1118,7 @@ async def create_shadows_for_new_decisions(user_id, decision_ids: List[int]) -> 
             user_id, user_config["tp_pct"], user_config["sl_pct"],
         )
 
+    _apply_barrier_params(user_config, _ml_config)
     user_config["ml_fee_roundtrip_pct"] = _ml_config.get("ml_fee_roundtrip_pct")
 
     created = 0
@@ -1207,6 +1240,7 @@ async def create_shadows_for_rejected_decisions(user_id, decision_ids: List[int]
             user_id, user_config["tp_pct"], user_config["sl_pct"],
         )
 
+    _apply_barrier_params(user_config, _ml_config)
     user_config["ml_fee_roundtrip_pct"] = _ml_config.get("ml_fee_roundtrip_pct")
 
     created = 0
@@ -1327,6 +1361,7 @@ async def create_l3_rejected_inline_shadows(
             ),
             "timeout_candles": None,
         }
+    _apply_barrier_params(user_config, ml_config)
     user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
 
     shadows_last_hour = 0
@@ -1497,6 +1532,7 @@ async def create_l1_spectrum_shadows(
             ),
             "timeout_candles": None,
         }
+    _apply_barrier_params(user_config, ml_config)
     user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
 
     # 2. Rate limit: count shadows from this source in the last hour
@@ -1787,6 +1823,7 @@ async def create_l3_simulated_shadows(
             ),
             "timeout_candles": None,
         }
+    _apply_barrier_params(user_config, ml_config)
     user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
 
     shadows_last_hour = 0
