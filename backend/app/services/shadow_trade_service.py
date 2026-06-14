@@ -1242,6 +1242,166 @@ async def create_shadows_for_rejected_decisions(user_id, decision_ids: List[int]
     return created
 
 
+async def create_l3_rejected_inline_shadows(
+    user_id,
+    decisions: List[Dict[str, Any]],
+    execution_id: str,
+    promotion_at: "datetime",
+) -> int:
+    """L3_REJECTED inline capture: shadow para TODOS os ativos com decision=BLOCK no ciclo L3.
+
+    Diferente de ``create_shadows_for_rejected_decisions`` (que depende de decision_ids
+    da decisions_log), esta função opera diretamente sobre a lista ``decisions`` do ciclo,
+    criando shadows sintéticos (decision_id=NULL) para TODOS os ativos BLOCK — não apenas
+    os que dispararam edge-trigger em decisions_log.
+
+    Por quê: ``_should_log_decision`` é edge-triggered (só loga mudanças de estado).
+    Ativos estáveis em BLOCK por dias nunca entram em decision_payloads, fazendo
+    L3_REJECTED ficar permanentemente vazio com a abordagem via IDs.
+
+    ON CONFLICT (user_id, symbol, source) WHERE status='RUNNING' DO NOTHING garante
+    que ciclos repetidos para o mesmo símbolo em BLOCK não criam duplicatas.
+
+    Always-on: sem feature flag (espelha o comportamento ALLOW). Rate-limited por
+    ML config: shadow_capture_l3_rejected_max_per_hour (default 500).
+
+    Fire-and-forget: nunca levanta exceção. Retorna count de shadows criados.
+    """
+    if not decisions:
+        return 0
+
+    from ..database import CeleryAsyncSessionLocal
+    from ..models.config_profile import ConfigProfile
+    from ..schemas.spot_engine_config import SpotEngineConfig
+
+    ml_config: Dict[str, Any] = {}
+    user_config: Dict[str, Any] = {}
+    try:
+        async with CeleryAsyncSessionLocal() as cfg_db:
+            ml_res = await cfg_db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "ml",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            ml_row = ml_res.scalar_one_or_none()
+            if ml_row and isinstance(ml_row.config_json, dict):
+                ml_config = ml_row.config_json
+
+            se_res = await cfg_db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "spot_engine",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            se_row = se_res.scalar_one_or_none()
+            if se_row:
+                _se = SpotEngineConfig.from_config_json(se_row.config_json)
+                user_config = {
+                    "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(_se.selling.take_profit_pct),
+                    "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
+                        _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
+                    ),
+                    "timeout_candles": None,
+                }
+    except Exception:
+        logger.exception("[shadow-l3rej-inline] config load failed user=%s", user_id)
+        return 0
+
+    max_per_hour = int(ml_config.get("shadow_capture_l3_rejected_max_per_hour", 500))
+
+    if not user_config:
+        _se_defaults = SpotEngineConfig()
+        user_config = {
+            "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(_se_defaults.selling.take_profit_pct),
+            "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
+                _se_defaults.sell_flow.kill_switch.max_drawdown_from_hwm_pct
+            ),
+            "timeout_candles": None,
+        }
+    user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
+
+    shadows_last_hour = 0
+    try:
+        async with CeleryAsyncSessionLocal() as count_db:
+            cnt_res = await count_db.execute(
+                text("""
+                    SELECT COUNT(*) FROM shadow_trades
+                    WHERE user_id = :uid
+                      AND source = :src
+                      AND created_at > NOW() - INTERVAL '1 hour'
+                """),
+                {"uid": str(user_id), "src": SHADOW_SOURCE_L3_REJECTED},
+            )
+            shadows_last_hour = cnt_res.scalar_one() or 0
+    except Exception:
+        logger.warning(
+            "[shadow-l3rej-inline] rate limit count failed user=%s — skipping", user_id
+        )
+        return 0
+
+    created = 0
+    rate_limited = 0
+
+    for d in decisions:
+        if shadows_last_hour + created >= max_per_hour:
+            rate_limited += 1
+            continue
+
+        symbol = d.get("symbol")
+        if not symbol:
+            continue
+
+        metrics: Dict[str, Any] = dict(d.get("metrics") or {})
+        metrics["l3_decision"] = "BLOCK"
+        metrics["l3_score"] = d.get("score")
+        metrics["l3_reasons"] = d.get("reasons")
+        metrics["source"] = "l3_rejected_inline"
+        metrics["execution_id"] = execution_id
+        _asset = d.get("_asset") or {}
+        if isinstance(_asset, dict):
+            _price = _asset.get("current_price") or _asset.get("price")
+            if _price is not None:
+                metrics.setdefault("current_price", _price)
+
+        synthetic = _SyntheticDecision(
+            user_id=user_id,
+            symbol=symbol,
+            direction=d.get("direction", "SPOT"),
+            strategy=d.get("strategy"),
+            id=None,
+            created_at=promotion_at,
+            metrics=metrics,
+        )
+
+        try:
+            async with CeleryAsyncSessionLocal() as own_db:
+                async with own_db.begin():
+                    new_id = await _create_from_decision(
+                        own_db, synthetic, "L3_REJECTED_INLINE", user_config,
+                        source=SHADOW_SOURCE_L3_REJECTED,
+                    )
+                    if new_id is not None:
+                        created += 1
+                        logger.debug(
+                            "[shadow-l3rej-inline] created id=%s symbol=%s user=%s",
+                            new_id, symbol, user_id,
+                        )
+        except Exception:
+            logger.exception(
+                "[shadow-l3rej-inline] create failed symbol=%s user=%s", symbol, user_id
+            )
+
+    if created or rate_limited:
+        logger.info(
+            "[shadow-l3rej-inline] cycle done: created=%d rate_limited=%d block_decisions=%d user=%s",
+            created, rate_limited, len(decisions), user_id,
+        )
+    return created
+
+
 async def create_l1_spectrum_shadows(
     user_id,
     symbols: List[str],
