@@ -1828,7 +1828,7 @@ function DetailModal({
 const MAX_LOCAL_FETCH = 200; // = _MAX_PAGE_SIZE em backend/app/api/shadow_trades.py
 const CLIENT_PAGE_SIZE = 50;
 
-type SourceTab = "L3" | "L1_SPECTRUM";
+type SourceTab = "L3" | "L3_REJECTED" | "L3_SIMULATED" | "L1_SPECTRUM";
 
 function buildBaseQuery(
   filter: FilterState,
@@ -2065,6 +2065,18 @@ export default function ShadowPortfolioPage() {
                 Trades simulados a partir de decisões <code>ALLOW</code> spot do
                 pipeline (L3). Alimentados pelo monitor após cada decisão aprovada.
               </>
+            ) : sourceTab === "L3_REJECTED" ? (
+              <>
+                Trades simulados para ativos <code>BLOCK</code> — o que teria
+                acontecido se os rejeitados pela L3 tivessem sido operados.
+                Usado para medir a qualidade do filtro.
+              </>
+            ) : sourceTab === "L3_SIMULATED" ? (
+              <>
+                Camada contrafactual: shadow para <strong>todos</strong> os ativos
+                que chegaram ao gate L3, independente de ALLOW ou BLOCK.
+                Compara o universo completo com as decisões reais.
+              </>
             ) : (
               <>
                 Captures do espectro bruto L1 — exatamente o dataset que o ML
@@ -2075,10 +2087,12 @@ export default function ShadowPortfolioPage() {
           <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
             {(
               [
-                { key: "L3", label: "Pipeline (L3)" },
-                { key: "L1_SPECTRUM", label: "Dataset ML (L1)" },
-              ] as { key: SourceTab; label: string }[]
-            ).map(({ key, label }) => {
+                { key: "L3",           label: "Aprovados (L3)",    color: C.blue   },
+                { key: "L3_REJECTED",  label: "Rejeitados (L3)",   color: C.amber  },
+                { key: "L3_SIMULATED", label: "Simulados (L3)",    color: C.purple },
+                { key: "L1_SPECTRUM",  label: "Dataset ML (L1)",   color: C.blue   },
+              ] as { key: SourceTab; label: string; color: string }[]
+            ).map(({ key, label, color }) => {
               const active = sourceTab === key;
               return (
                 <button
@@ -2088,9 +2102,9 @@ export default function ShadowPortfolioPage() {
                     setFilter({ ...DEFAULT_FILTER });
                   }}
                   style={{
-                    background: active ? C.blue : C.elevated,
+                    background: active ? color : C.elevated,
                     color: active ? "#fff" : C.muted,
-                    border: `1px solid ${active ? C.blue : C.border}`,
+                    border: `1px solid ${active ? color : C.border}`,
                     borderRadius: 6,
                     padding: "5px 14px",
                     fontSize: 11.5,
