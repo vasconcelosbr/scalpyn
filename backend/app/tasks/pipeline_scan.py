@@ -3165,54 +3165,6 @@ async def _run_pipeline_scan():
                                 wl.user_id, _allow_decision_ids
                             )
 
-                        # ── L3_REJECTED shadows (ML data collection) ──────────────────────
-                        # Captura inline de TODOS os ativos BLOCK no ciclo atual.
-                        # Usa decisions[] direta (não decision_payloads) porque
-                        # _should_log_decision é edge-triggered — ativos estáveis em BLOCK
-                        # nunca entram em decision_payloads, deixando L3_REJECTED vazio.
-                        # ON CONFLICT DO NOTHING previne duplicatas ciclo-a-ciclo.
-                        _all_block_decisions = [
-                            d for d in decisions if d.get("decision") == "BLOCK"
-                        ]
-                        if _all_block_decisions:
-                            try:
-                                from ..services.shadow_trade_service import (
-                                    create_l3_rejected_inline_shadows,
-                                )
-                                await create_l3_rejected_inline_shadows(
-                                    user_id=wl.user_id,
-                                    decisions=_all_block_decisions,
-                                    execution_id=str(execution_id),
-                                    promotion_at=datetime.now(timezone.utc),
-                                )
-                            except Exception as _l3rej_exc:
-                                logger.warning(
-                                    "[PipelineScan] L3_REJECTED capture failed (%s)"
-                                    " — L3 stream unaffected",
-                                    _l3rej_exc,
-                                )
-
-                        # ── L3_SIMULATED shadows (camada contrafactual) ───────────────────
-                        # Cria shadow para TODOS os ativos que chegaram ao gate L3,
-                        # independente de ALLOW/BLOCK. Controlado por ML config:
-                        # shadow_capture_l3_simulated_enabled (default False).
-                        try:
-                            from ..services.shadow_trade_service import (
-                                create_l3_simulated_shadows,
-                            )
-                            await create_l3_simulated_shadows(
-                                user_id=wl.user_id,
-                                decisions=decisions,
-                                execution_id=str(execution_id),
-                                promotion_at=datetime.now(timezone.utc),
-                            )
-                        except Exception as _l3sim_exc:
-                            logger.warning(
-                                "[PipelineScan] L3_SIMULATED capture failed (%s)"
-                                " — L3 stream unaffected",
-                                _l3sim_exc,
-                            )
-
                         # ── Shadow Bypass Score Gate ──────────────────────────────────────
                         # SHADOW_BYPASS_SCORE_GATE=true: passa os assets rejeitados pelo
                         # min_alpha_score gate pelo _evaluate_l3_decisions completo e cria
@@ -3364,6 +3316,51 @@ async def _run_pipeline_scan():
                                     "[MLGate] ml_predictions write failed for wl=%s: %s",
                                     wl.name, _ml_log_exc,
                                 )
+
+                    # ── L3_REJECTED shadows — fora de if decision_payloads ────────────────
+                    # Roda todo ciclo independente de decisions_to_log estar vazio.
+                    # decisions[] contém TODOS os ativos BLOCK, mesmo os estáveis
+                    # que o edge-trigger de decisions_log filtra.
+                    _all_block_decisions = [
+                        d for d in decisions if d.get("decision") == "BLOCK"
+                    ]
+                    if _all_block_decisions:
+                        try:
+                            from ..services.shadow_trade_service import (
+                                create_l3_rejected_inline_shadows,
+                            )
+                            await create_l3_rejected_inline_shadows(
+                                user_id=wl.user_id,
+                                decisions=_all_block_decisions,
+                                execution_id=str(execution_id),
+                                promotion_at=datetime.now(timezone.utc),
+                            )
+                        except Exception as _l3rej_exc:
+                            logger.warning(
+                                "[PipelineScan] L3_REJECTED capture failed (%s)"
+                                " — L3 stream unaffected",
+                                _l3rej_exc,
+                            )
+
+                    # ── L3_SIMULATED shadows — fora de if decision_payloads ───────────────
+                    # Controlado por ML config: shadow_capture_l3_simulated_enabled.
+                    if decisions:
+                        try:
+                            from ..services.shadow_trade_service import (
+                                create_l3_simulated_shadows,
+                            )
+                            await create_l3_simulated_shadows(
+                                user_id=wl.user_id,
+                                decisions=decisions,
+                                execution_id=str(execution_id),
+                                promotion_at=datetime.now(timezone.utc),
+                            )
+                        except Exception as _l3sim_exc:
+                            logger.warning(
+                                "[PipelineScan] L3_SIMULATED capture failed (%s)"
+                                " — L3 stream unaffected",
+                                _l3sim_exc,
+                            )
 
                     if new_syms:
                         stats["new_signals"] += len(new_syms)
