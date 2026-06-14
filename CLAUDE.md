@@ -29,6 +29,35 @@
 ## Docs
 Read docs/ folder for complete architecture specs, Gate.io API mapping, and implementation roadmap.
 
+## Disciplina de Evidência — Anti-Fabricação de Números
+
+**Regra-mãe: EVIDÊNCIA-OU-SILÊNCIO.** Todo número num relatório/análise deve ser:
+1. Um valor **literal copiado** de um output de query/comando colado; ou
+2. Uma **conta cujos insumos são todos valores literais colados**, com a fórmula visível.
+
+Qualquer número fora de (1) ou (2) → escreva `NÃO DISPONÍVEL`. Nunca um número plausível no lugar.
+
+**Regras obrigatórias:**
+- **Cole a fonte, não o resumo.** Para qualquer config/threshold citado, cole o JSON real.
+- **Etiqueta de proveniência em todo número:** `[query]`, `[config: tipo]`, `[calc: fórmula]`, `[ABERTO]`. Número sem etiqueta é inválido.
+- **Cross-check antes de reportar derivados.** Break-even/EV/taxa → confrontar com ao menos uma quantidade independente. Se contradisser, reporte a contradição, não escolha um lado.
+- **Proibido preencher campo ausente por suposição.** Campo em representação diferente da esperada → reporte como está (ex.: SL é `stop_loss_atr_multiplier: 1.5`, não "SL=5%").
+- **Separe LEITURA de INFERÊNCIA.** Leitura: cola o valor. Inferência: marca `[inferência]` e mostra o raciocínio.
+- **Toda taxa carrega N e significância.** Caudas de n≲50 não ancoram conclusão de manchete.
+- **Auditoria é read-only.** Só `SELECT`, `\d`, `EXPLAIN`, `grep`. Achado que exige correção é descrito, não executado.
+
+**Ledger de Evidências obrigatório** ao fim de todo relatório numérico:
+```
+NÚMERO REPORTADO  | ORIGEM              | VALOR LITERAL DA FONTE
+break-even=61,4%  | [calc] WR=TP/(TP+SL)| avg_TP=0,953; SL=-1,0; fee=0,20 [query]
+SL live=1,5×ATR   | [config: risk]      | "stop_loss_atr_multiplier": 1.5
+break-even=80%    | ❌ SEM FONTE         | — PROIBIDO, remover
+```
+
+**Self-check por número antes de emitir:** (1) está num output colado? (2) se config, colei o JSON? (3) se derivado, bate com quantidade independente? (4) tem N e significância? (5) está no Ledger? Se algum "não" → o número não sai.
+
+> Motivo: numa auditoria real, `SL=5%` foi fabricado (config real: `stop_loss_atr_multiplier: 1.5`), gerando break-even de 80% e o veredito "estratégia quase morta". O valor correto era ~49–61%. Uma fabricação inverteu o diagnóstico estratégico.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.

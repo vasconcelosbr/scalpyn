@@ -47,7 +47,7 @@ MIN_AUC_TO_SAVE          = float(os.getenv("MIN_AUC_TO_SAVE", "0.50"))
 # 'L3' = comportamento atual (fallback seguro).
 # 'WATCHLIST_SPOT' = espectro completo (ativar apenas após dataset acumular).
 # Controlado pelo operador via env var no Cloud Run Job — ZERO HARDCODE.
-ML_SOURCE_FILTER         = os.getenv("ML_SOURCE_FILTER", "L3")
+ML_SOURCE_FILTER         = os.getenv("ML_SOURCE_FILTER", "L1_SPECTRUM")
 # BLOCO C — alvo agnóstico (binary | regression).
 # Decisão adiada para após teste de separabilidade do espectro completo.
 ML_TARGET_TYPE           = os.getenv("ML_TARGET_TYPE", "binary")

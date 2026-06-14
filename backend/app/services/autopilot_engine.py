@@ -86,6 +86,7 @@ SELECTION_INVERSION_DELTA = 0.50  # % — rejected_ev - approved_ev threshold
 MIN_HOURS_BETWEEN_MUTATIONS = 48  # horas mínimas entre mutações
 EV_REGRESSION_DELTA = 0.20        # % — degradação para trigger baseado em baseline
 MIN_RECORDS_REQUIRED = 30         # amostras mínimas para trigger
+MIN_SPAN_DAYS = 15                # janela mínima real de dados (dias) antes de mutar
 CIRCUIT_BREAKER_THRESHOLD = 3     # regressões consecutivas
 CIRCUIT_BREAKER_PAUSE_HOURS = 168 # 7 dias
 PERFORMANCE_DAYS = 30             # janela de análise (dias)
@@ -266,9 +267,11 @@ async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, A
         SELECT
             COUNT(*)                                                                  AS n,
             AVG(COALESCE(net_return_pct, pnl_pct - :fee_pct))                        AS ev,
+            AVG(pnl_pct)                                                              AS gross_ev,
             AVG(CASE WHEN outcome = '{_ST_TP}' THEN 1.0 ELSE 0.0 END)               AS win_rate,
             SUM(CASE WHEN outcome = '{_ST_SL}' THEN 1 ELSE 0 END)                    AS n_sl,
-            SUM(CASE WHEN outcome = '{_ST_TP}' THEN 1 ELSE 0 END)                    AS n_tp
+            SUM(CASE WHEN outcome = '{_ST_TP}' THEN 1 ELSE 0 END)                    AS n_tp,
+            EXTRACT(EPOCH FROM (MAX(created_at) - MIN(created_at))) / 86400.0        AS span_days
         FROM shadow_trades
         WHERE source = :source
           AND outcome IN {_ST_OUTCOMES_SQL}
@@ -279,10 +282,12 @@ async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, A
 
     n_allowed = int(allowed_row["n"] or 0)
     approved_ev = float(allowed_row["ev"] or 0.0)
+    approved_gross_ev = float(allowed_row["gross_ev"] or 0.0)
     approved_win_rate = float(allowed_row["win_rate"] or 0.0)
     n_sl = int(allowed_row["n_sl"] or 0)
     n_tp = int(allowed_row["n_tp"] or 0)
     fpr = n_sl / n_allowed if n_allowed > 0 else 0.0
+    span_days = float(allowed_row["span_days"] or 0.0)
 
     logger.info(
         "[Autopilot] compute_performance_window: source=%s n=%d ev=%.3f%% wr=%.1f%% fpr=%.2f days=%d",
@@ -341,11 +346,13 @@ async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, A
 
     return {
         "approved_ev":        approved_ev,
+        "approved_gross_ev":  approved_gross_ev,
         "approved_win_rate":  approved_win_rate,
         "approved_count":     n_allowed,
         "n_tp":               n_tp,
         "n_sl":               n_sl,
         "fpr":                fpr,
+        "span_days":          span_days,
         "rejected_ev":        rejected_ev,
         "rejected_win_rate":  rejected_win_rate,
         "rejected_count":     n_rejected,
@@ -680,6 +687,13 @@ def should_mutate(
     if n < MIN_RECORDS_REQUIRED:
         return False, f"insufficient_data (n={n} < {MIN_RECORDS_REQUIRED})"
 
+    # ── P1-2: Temporal maturity gate ─────────────────────────────────────────
+    # Impede mutação quando a janela de dados real é menor que MIN_SPAN_DAYS.
+    # approved_count ≥ MIN_RECORDS_REQUIRED garante volume mas não maturidade temporal.
+    span_days = float(perf.get("span_days", 0.0))
+    if span_days < MIN_SPAN_DAYS:
+        return False, f"imature_window (span_days={span_days:.1f} < {MIN_SPAN_DAYS})"
+
     # ── Verificar cooldown ────────────────────────────────────────────────────
     last_mutation_str = auto_pilot_config.get("last_mutation_at")
     if last_mutation_str:
@@ -695,6 +709,17 @@ def should_mutate(
     ev = perf["approved_ev"]
     fpr = perf["fpr"]
     inversion = perf["selection_inversion"]
+
+    # ── P1-1: FEE_LIMITED guard ───────────────────────────────────────────────
+    # Se gross_ev > 0 e net_ev < threshold, o problema é custo (fee drag), não filtros.
+    # Mutar entry_triggers/block_rules não resolve fee drag — diagnóstico correto é
+    # "reduzir fee ou aumentar TP". Nunca mutar neste caso.
+    gross_ev = float(perf.get("approved_gross_ev", ev))
+    if gross_ev > 0.0 and ev < ev_threshold:
+        return False, (
+            f"fee_limited (gross_ev={gross_ev:.3f}% > 0 but net_ev={ev:.3f}% < {ev_threshold}% "
+            f"— fee drag, not filter issue)"
+        )
 
     if ev < ev_threshold:
         return True, f"ev_below_threshold (ev={ev:.3f}% < {ev_threshold}%)"
