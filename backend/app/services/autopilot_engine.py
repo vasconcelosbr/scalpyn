@@ -6,7 +6,9 @@ Auto-Pilot Engine — autonomous strategy evolution for Strategy Profiles.
 Fluxo por ciclo (a cada 6h via Celery beat):
   1. Carrega todos os profiles com auto_pilot_enabled=True
   2. Para cada profile:
-     a. Computa métricas de performance (shadow_trades L3 + L3_REJECTED, últimos 30 dias)
+     a. Computa métricas de performance (shadow_trades source=AUTOPILOT_SOURCE, últimos 30 dias)
+        AUTOPILOT_SOURCE=L1_SPECTRUM (default) → desempenho bruto do modelo ML
+        AUTOPILOT_SOURCE=L3 (legado)           → comportamento da camada operacional de filtros
      b. Verifica circuit breaker (3 regressões consecutivas → pausa 7 dias)
      c. Detecta regime de mercado atual
      d. Decide se mutação é necessária (triggers configuráveis)
@@ -26,7 +28,10 @@ Safe Mode (circuit breaker):
   - Regressão = EV pós-mutação < EV pré-mutação - 0.10%
 
 Behavioral Circuit Breaker (D):
-  - Monitoramento de salto súbito na taxa de aprovação L3 (7d vs 30d).
+  - Monitoramento de salto súbito na taxa de aprovação (7d vs 30d).
+  - Aplicável apenas quando AUTOPILOT_SOURCE=L3 (requer contraparte L3_REJECTED).
+  - Quando AUTOPILOT_SOURCE=L1_SPECTRUM: behavioral CB é automaticamente ignorado
+    (L1_SPECTRUM não tem stream _REJECTED para calcular approval_rate).
   - Se approval_rate_7d > approval_rate_30d + threshold → BEHAVIORAL_CB_PAUSED.
   - Habilitado por guardrails.behavioral_cb_enabled (default=False — safe).
 
@@ -46,6 +51,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
@@ -54,6 +60,24 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger("scalpyn.autopilot")
+
+# ── Source configuration (AUTOPILOT_SOURCE env var) ─────────────────────────
+# Controla qual fonte de shadow_trades o Auto-Pilot analisa.
+#
+#   L1_SPECTRUM  — shadow trades capturados no gate L1 (desempenho bruto do modelo ML).
+#                  Todos os trades são "aprovados"; não existe contraparte _REJECTED.
+#                  Win rate observada: ~58.6%. Reflete edge do modelo, não da camada L3.
+#
+#   L3           — comportamento legado: shadow trades promovidos pelo gate L3.
+#                  Possui contraparte L3_REJECTED para cálculo de selection_inversion.
+#                  Win rate observada: ~51.0%.
+#
+# Para rollback, basta setar AUTOPILOT_SOURCE=L3 na env do serviço scalpyn (Railway).
+AUTOPILOT_SOURCE: str = os.getenv("AUTOPILOT_SOURCE", "L1_SPECTRUM")
+
+# Fonte legacy preservada para rollback e behavioral CB legado
+_LEGACY_SOURCE_APPROVED  = "L3"
+_LEGACY_SOURCE_REJECTED  = "L3_REJECTED"
 
 # ── Tuneable constants (override via env if needed) ──────────────────────────
 EV_MIN_THRESHOLD = -0.30          # % — abaixo disso, mutar
@@ -142,6 +166,7 @@ _GUARDRAILS_DEFAULTS: Dict[str, Any] = {
     #
     # behavioral_cb_enabled: monitora salto súbito na taxa de aprovação.
     #   approval_rate = n_L3 / (n_L3 + n_L3_REJECTED) — últimos 7d vs últimos 30d.
+    #   Aplicável apenas quando AUTOPILOT_SOURCE=L3. Ignorado para L1_SPECTRUM.
     #   Se taxa recente > taxa baseline + approval_rate_jump_threshold → pause.
     # performance_rollback_enabled: se consecutive_regressions >= rollback_cycles,
     #   restaura automaticamente o último profile_versions snapshot salvo.
@@ -206,17 +231,25 @@ async def _load_ml_fee_pct(db: AsyncSession) -> float:
 
 async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, Any]:
     """
-    Computa métricas de performance do pipeline L3 nos últimos N dias.
+    Computa métricas de performance do modelo nos últimos N dias.
+
+    Fonte controlada por AUTOPILOT_SOURCE (env var):
+      L1_SPECTRUM (default) — desempenho bruto do modelo ML, capturado no gate L1.
+                               Todos os trades são "aprovados"; sem contraparte _REJECTED.
+                               rejected_ev / rejected_count / selection_inversion = 0.
+      L3 (legado)           — trades aprovados no gate L3 (camada operacional de filtros).
+                               Possui contraparte L3_REJECTED para selection_inversion.
 
     Retorna:
-        approved_ev          — expected value médio dos trades ALLOWED (%)
-        approved_win_rate    — win rate dos trades ALLOWED
-        approved_count       — total de amostras ALLOWED com outcome conhecido
-        rejected_ev          — EV médio dos shadow trades REJECTED com pnl_pct
-        rejected_win_rate    — win rate dos REJECTED
-        rejected_count       — total de amostras REJECTED com outcome
-        fpr                  — false positive rate (ALLOWED com outcome=sl / total ALLOWED com outcome)
-        selection_inversion  — rejected_ev - approved_ev (> 0 = inversão confirmada)
+        approved_ev          — expected value médio dos trades com outcome conhecido (%)
+        approved_win_rate    — win rate dos trades
+        approved_count       — total de amostras com outcome conhecido
+        rejected_ev          — EV médio dos REJECTED (0 quando source=L1_SPECTRUM)
+        rejected_win_rate    — win rate dos REJECTED (0 quando source=L1_SPECTRUM)
+        rejected_count       — total de amostras REJECTED (0 quando source=L1_SPECTRUM)
+        fpr                  — false positive rate (outcome=sl / total com outcome)
+        selection_inversion  — rejected_ev - approved_ev (0 quando source=L1_SPECTRUM)
+        autopilot_source     — fonte usada neste ciclo (para audit trail)
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     # B3: EV in net-of-fee terms. COALESCE uses net_return_pct when available
@@ -224,8 +257,9 @@ async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, A
     # fee_pct is NEVER a literal — always loaded from config_profiles.
     fee_pct = await _load_ml_fee_pct(db)
 
-    # ── ALLOWED performance from shadow_trades source='L3' ───────────────────
-    # C.1 — migrado de decisions_log para shadow_trades (fonte canônica pós-Bloco B).
+    _source = AUTOPILOT_SOURCE  # snapshot local para evitar mudança mid-cycle
+
+    # ── Approved performance from shadow_trades (fonte = AUTOPILOT_SOURCE) ────
     # shadow_trades vocabulary: _ST_TP='TP_HIT', _ST_SL='SL_HIT'  (UPPERCASE)
     # decisions_log permanece como CAPTURA upstream — NÃO removida.
     allowed_result = await db.execute(text(f"""
@@ -236,11 +270,11 @@ async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, A
             SUM(CASE WHEN outcome = '{_ST_SL}' THEN 1 ELSE 0 END)                    AS n_sl,
             SUM(CASE WHEN outcome = '{_ST_TP}' THEN 1 ELSE 0 END)                    AS n_tp
         FROM shadow_trades
-        WHERE source = 'L3'
+        WHERE source = :source
           AND outcome IN {_ST_OUTCOMES_SQL}
           AND pnl_pct IS NOT NULL
           AND created_at >= :cutoff
-    """), {"cutoff": cutoff, "fee_pct": fee_pct})
+    """), {"cutoff": cutoff, "fee_pct": fee_pct, "source": _source})
     allowed_row = dict(allowed_result.mappings().one())
 
     n_allowed = int(allowed_row["n"] or 0)
@@ -250,47 +284,58 @@ async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, A
     n_tp = int(allowed_row["n_tp"] or 0)
     fpr = n_sl / n_allowed if n_allowed > 0 else 0.0
 
-    # ── REJECTED performance from shadow_trades ───────────────────────────────
-    # shadow_trades vocabulary: _ST_TP='TP_HIT', _ST_SL='SL_HIT'  (UPPERCASE)
-    # NÃO confundir com decisions_log — vocabulários diferentes por design.
-    rejected_result = await db.execute(text(f"""
-        SELECT
-            COUNT(*)                                                                  AS n,
-            AVG(COALESCE(net_return_pct, pnl_pct - :fee_pct))                        AS ev,
-            AVG(CASE WHEN outcome = '{_ST_TP}' THEN 1.0 ELSE 0.0 END)               AS win_rate
-        FROM shadow_trades
-        WHERE source = 'L3_REJECTED'
-          AND outcome IN {_ST_OUTCOMES_SQL}
-          AND pnl_pct IS NOT NULL
-          AND created_at >= :cutoff
-    """), {"cutoff": cutoff, "fee_pct": fee_pct})
-    rejected_row = dict(rejected_result.mappings().one())
+    logger.info(
+        "[Autopilot] compute_performance_window: source=%s n=%d ev=%.3f%% wr=%.1f%% fpr=%.2f days=%d",
+        _source, n_allowed, approved_ev, approved_win_rate * 100, fpr, days,
+    )
 
-    n_rejected = int(rejected_row["n"] or 0)
-    rejected_ev = float(rejected_row["ev"] or 0.0)
-    rejected_win_rate = float(rejected_row["win_rate"] or 0.0)
+    # ── Rejected performance (apenas quando source=L3 — L1_SPECTRUM não tem _REJECTED) ─
+    # L1_SPECTRUM captura TODOS os trades no gate L1; não existe contraparte rejeitada.
+    # selection_inversion permanece disponível no legado L3 para fins de rollback.
+    n_rejected = 0
+    rejected_ev = 0.0
+    rejected_win_rate = 0.0
 
-    # ── Sanity guard: vocabulary mismatch detector ────────────────────────────
-    # Se rejected_count=0 mas existem shadow_trades concluídos, o vocabulário
-    # da query provavelmente não bate com o que o shadow_trade_monitor gravou.
-    # Ação: inspecione `SELECT DISTINCT outcome FROM shadow_trades WHERE source='L3_REJECTED'`
-    if n_rejected == 0:
-        _vocab_check = await db.execute(
-            text(
-                "SELECT COUNT(*) AS n FROM shadow_trades "
-                "WHERE source = 'L3_REJECTED' AND pnl_pct IS NOT NULL AND created_at >= :cutoff"
-            ),
-            {"cutoff": cutoff},
-        )
-        _n_raw = int(_vocab_check.scalar() or 0)
-        if _n_raw > 0:
-            logger.warning(
-                "[Autopilot] VOCAB_MISMATCH_SUSPECTED: rejected_count=0 "
-                "mas %d shadow_trades L3_REJECTED com pnl_pct existem na janela de %d dias. "
-                "Vocabulário esperado: outcome IN %s. "
-                "Verifique: SELECT DISTINCT outcome FROM shadow_trades WHERE source='L3_REJECTED';",
-                _n_raw, days, _ST_OUTCOMES_SQL,
+    if _source == _LEGACY_SOURCE_APPROVED:
+        # Comportamento legado L3: calcula rejected e selection_inversion
+        # shadow_trades vocabulary: _ST_TP='TP_HIT', _ST_SL='SL_HIT'  (UPPERCASE)
+        # NÃO confundir com decisions_log — vocabulários diferentes por design.
+        rejected_result = await db.execute(text(f"""
+            SELECT
+                COUNT(*)                                                                  AS n,
+                AVG(COALESCE(net_return_pct, pnl_pct - :fee_pct))                        AS ev,
+                AVG(CASE WHEN outcome = '{_ST_TP}' THEN 1.0 ELSE 0.0 END)               AS win_rate
+            FROM shadow_trades
+            WHERE source = '{_LEGACY_SOURCE_REJECTED}'
+              AND outcome IN {_ST_OUTCOMES_SQL}
+              AND pnl_pct IS NOT NULL
+              AND created_at >= :cutoff
+        """), {"cutoff": cutoff, "fee_pct": fee_pct})
+        rejected_row = dict(rejected_result.mappings().one())
+
+        n_rejected = int(rejected_row["n"] or 0)
+        rejected_ev = float(rejected_row["ev"] or 0.0)
+        rejected_win_rate = float(rejected_row["win_rate"] or 0.0)
+
+        # Sanity guard: vocabulary mismatch detector (legado L3)
+        # Ação: inspecione `SELECT DISTINCT outcome FROM shadow_trades WHERE source='L3_REJECTED'`
+        if n_rejected == 0:
+            _vocab_check = await db.execute(
+                text(
+                    f"SELECT COUNT(*) AS n FROM shadow_trades "
+                    f"WHERE source = '{_LEGACY_SOURCE_REJECTED}' AND pnl_pct IS NOT NULL AND created_at >= :cutoff"
+                ),
+                {"cutoff": cutoff},
             )
+            _n_raw = int(_vocab_check.scalar() or 0)
+            if _n_raw > 0:
+                logger.warning(
+                    "[Autopilot] VOCAB_MISMATCH_SUSPECTED: rejected_count=0 "
+                    "mas %d shadow_trades %s com pnl_pct existem na janela de %d dias. "
+                    "Vocabulário esperado: outcome IN %s. "
+                    "Verifique: SELECT DISTINCT outcome FROM shadow_trades WHERE source='%s';",
+                    _n_raw, _LEGACY_SOURCE_REJECTED, days, _ST_OUTCOMES_SQL, _LEGACY_SOURCE_REJECTED,
+                )
 
     selection_inversion = rejected_ev - approved_ev
 
@@ -306,6 +351,7 @@ async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, A
         "rejected_count":     n_rejected,
         "selection_inversion": selection_inversion,
         "analysis_days":      days,
+        "autopilot_source":   _source,
         "computed_at":        datetime.now(timezone.utc).isoformat(),
     }
 
@@ -324,8 +370,8 @@ async def detect_regime(db: AsyncSession) -> str:
     - SIDEWAYS: demais casos
     """
     try:
-        # C.1 — migrado de decisions_log para shadow_trades source='L3'
         # B3: EV in net-of-fee terms (same COALESCE pattern as compute_performance_window).
+        # Usa AUTOPILOT_SOURCE para consistência com compute_performance_window.
         cutoff_7d = datetime.now(timezone.utc) - timedelta(days=7)
         _regime_fee = await _load_ml_fee_pct(db)
         result = await db.execute(text(f"""
@@ -334,11 +380,11 @@ async def detect_regime(db: AsyncSession) -> str:
                 AVG(CASE WHEN outcome = '{_ST_TP}' THEN 1.0 ELSE 0.0 END)       AS wr_7d,
                 COUNT(*)                                                           AS n_7d
             FROM shadow_trades
-            WHERE source = 'L3'
+            WHERE source = :source
               AND outcome IN {_ST_OUTCOMES_SQL}
               AND pnl_pct IS NOT NULL
               AND created_at >= :cutoff
-        """), {"cutoff": cutoff_7d, "fee_pct": _regime_fee})
+        """), {"cutoff": cutoff_7d, "fee_pct": _regime_fee, "source": AUTOPILOT_SOURCE})
         row = dict(result.mappings().one())
         ev = float(row["ev_7d"] or 0.0)
         wr = float(row["wr_7d"] or 0.0)
@@ -408,7 +454,11 @@ async def check_behavior_circuit_breaker(
 
     Taxa de aprovação = n_L3 / (n_L3 + n_L3_REJECTED) em shadow_trades.
 
-    Lógica:
+    IMPORTANTE: este check é aplicável apenas quando AUTOPILOT_SOURCE=L3.
+    Quando AUTOPILOT_SOURCE=L1_SPECTRUM, não existe stream L3_REJECTED para calcular
+    a approval_rate — o check retorna False imediatamente com razão explicativa.
+
+    Lógica (quando source=L3):
       - Calcula taxa nos últimos 7 dias (recente) e últimos 30 dias (baseline).
       - Se taxa_recente > taxa_baseline + approval_rate_jump_threshold → trigger.
       - Requer approval_rate_min_samples em cada janela.
@@ -418,6 +468,13 @@ async def check_behavior_circuit_breaker(
     if not guardrails.get("behavioral_cb_enabled", False):
         return False, "behavioral_cb_disabled"
 
+    # L1_SPECTRUM não tem contraparte _REJECTED — behavioral CB inaplicável
+    if AUTOPILOT_SOURCE != _LEGACY_SOURCE_APPROVED:
+        return False, (
+            f"behavioral_cb_not_applicable (AUTOPILOT_SOURCE={AUTOPILOT_SOURCE}; "
+            f"behavioral CB requer source={_LEGACY_SOURCE_APPROVED}+{_LEGACY_SOURCE_REJECTED})"
+        )
+
     jump_threshold = float(guardrails.get("approval_rate_jump_threshold", 0.30))
     min_samples = int(guardrails.get("approval_rate_min_samples", 20))
 
@@ -425,14 +482,16 @@ async def check_behavior_circuit_breaker(
         cutoff_7d  = datetime.now(timezone.utc) - timedelta(days=7)
         cutoff_30d = datetime.now(timezone.utc) - timedelta(days=30)
 
-        result = await db.execute(text("""
+        # Legado L3: queries hardcoded em L3/L3_REJECTED pois este bloco só roda quando
+        # AUTOPILOT_SOURCE=L3 (guard acima garante isso).
+        result = await db.execute(text(f"""
             SELECT
-                COUNT(*) FILTER (WHERE source = 'L3'          AND created_at >= :c7d) AS n_l3_7d,
-                COUNT(*) FILTER (WHERE source = 'L3_REJECTED' AND created_at >= :c7d) AS n_rej_7d,
-                COUNT(*) FILTER (WHERE source = 'L3'          AND created_at >= :c30d) AS n_l3_30d,
-                COUNT(*) FILTER (WHERE source = 'L3_REJECTED' AND created_at >= :c30d) AS n_rej_30d
+                COUNT(*) FILTER (WHERE source = '{_LEGACY_SOURCE_APPROVED}'  AND created_at >= :c7d)  AS n_l3_7d,
+                COUNT(*) FILTER (WHERE source = '{_LEGACY_SOURCE_REJECTED}'  AND created_at >= :c7d)  AS n_rej_7d,
+                COUNT(*) FILTER (WHERE source = '{_LEGACY_SOURCE_APPROVED}'  AND created_at >= :c30d) AS n_l3_30d,
+                COUNT(*) FILTER (WHERE source = '{_LEGACY_SOURCE_REJECTED}'  AND created_at >= :c30d) AS n_rej_30d
             FROM shadow_trades
-            WHERE source IN ('L3', 'L3_REJECTED')
+            WHERE source IN ('{_LEGACY_SOURCE_APPROVED}', '{_LEGACY_SOURCE_REJECTED}')
               AND outcome IS NOT NULL
               AND created_at >= :c30d
         """), {"c7d": cutoff_7d, "c30d": cutoff_30d})
@@ -757,6 +816,7 @@ async def generate_mutated_config(
     enriched_config = dict(current_config)
     enriched_config["_autopilot_context"] = {
         "performance_window_days": perf.get("analysis_days", PERFORMANCE_DAYS),
+        "autopilot_source":        perf.get("autopilot_source", AUTOPILOT_SOURCE),
         "approved_ev_pct":         round(perf.get("approved_ev", 0), 4),
         "approved_win_rate":       round(perf.get("approved_win_rate", 0), 4),
         "fpr":                     round(perf.get("fpr", 0), 4),
@@ -869,17 +929,18 @@ async def compute_rule_insights(
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     # B3: also fetch net_return_pct; Python-side COALESCE below.
+    # Usa AUTOPILOT_SOURCE para consistência com compute_performance_window e detect_regime.
     _insights_fee = await _load_ml_fee_pct(db)
     result = await db.execute(text(f"""
         SELECT features_snapshot, outcome, pnl_pct, net_return_pct
         FROM shadow_trades
-        WHERE source = 'L3'
+        WHERE source = :source
           AND outcome IN {_ST_OUTCOMES_SQL}
           AND pnl_pct IS NOT NULL
           AND features_snapshot IS NOT NULL
           AND user_id = :uid
           AND created_at >= :cutoff
-    """), {"uid": user_id, "cutoff": cutoff})
+    """), {"uid": user_id, "cutoff": cutoff, "source": AUTOPILOT_SOURCE})
     rows = result.mappings().all()
 
     if not rows:
