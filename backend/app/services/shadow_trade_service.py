@@ -593,6 +593,7 @@ async def _create_from_decision(
     skip_reason: str,
     user_config: Dict[str, Any],
     source: str = SHADOW_SOURCE_L3,
+    extra_config: Optional[Dict[str, Any]] = None,
 ) -> Optional[UUID]:
     """Insere uma row em ``shadow_trades`` para a ``decision`` informada.
 
@@ -651,6 +652,11 @@ async def _create_from_decision(
         # ML fee key: monitor reads this to compute net_return_pct at close (B1 fix)
         "ml_fee_roundtrip_pct": user_config.get("ml_fee_roundtrip_pct"),
     }
+    # Merge caller-provided metadata (e.g. l3_decision, l3_score, l3_reasons for
+    # L3_REJECTED / L3_SIMULATED) into config_snapshot so outcomes can be correlated
+    # with gate labels after closure.
+    if extra_config:
+        config_snap.update(extra_config)
     features_snap = _build_features_snapshot(decision)
 
     # Task #303: ``decision.id`` é ``None`` para ``_SyntheticDecision``
@@ -1382,6 +1388,11 @@ async def create_l3_rejected_inline_shadows(
                     new_id = await _create_from_decision(
                         own_db, synthetic, "L3_REJECTED_INLINE", user_config,
                         source=SHADOW_SOURCE_L3_REJECTED,
+                        extra_config={
+                            "l3_decision": "BLOCK",
+                            "l3_score": d.get("score"),
+                            "l3_reasons": d.get("reasons"),
+                        },
                     )
                     if new_id is not None:
                         created += 1
@@ -1837,6 +1848,11 @@ async def create_l3_simulated_shadows(
                     new_id = await _create_from_decision(
                         own_db, synthetic, "L3_SIMULATED_CAPTURE", user_config,
                         source=SHADOW_SOURCE_L3_SIMULATED,
+                        extra_config={
+                            "l3_decision": d.get("decision"),
+                            "l3_score": d.get("score"),
+                            "l3_reasons": d.get("reasons"),
+                        },
                     )
                     if new_id is not None:
                         created += 1

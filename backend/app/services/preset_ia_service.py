@@ -485,16 +485,17 @@ async def run_preset_ia(
     """
     from .ai_keys_service import get_anthropic_client
     from ..models.ai_skill import AiSkill
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal
     from sqlalchemy import select, and_
     import uuid as _uuid
 
     # ── Buscar Skill do usuário com sessão própria (não reusar a sessão do endpoint
     # para evitar InterfaceError "another operation is in progress" no asyncpg) ──
+    # CeleryAsyncSessionLocal usa NullPool — segura em qualquer event loop (FastAPI ou Celery).
     system_prompt = None
     try:
         uid = _uuid.UUID(str(user_id))
-        async with AsyncSessionLocal() as own_db:
+        async with CeleryAsyncSessionLocal() as own_db:
             result = await own_db.execute(
                 select(AiSkill).where(
                     and_(
@@ -519,7 +520,7 @@ async def run_preset_ia(
         logger.info(f'[PresetIA] Usando prompt padrão para role={profile_role}')
 
     # Obter client Anthropic com sessão própria (evita conflito de DB)
-    async with AsyncSessionLocal() as own_db2:
+    async with CeleryAsyncSessionLocal() as own_db2:
         client = await get_anthropic_client(db=own_db2, user_id=user_id)
 
     # Coletar mercado
