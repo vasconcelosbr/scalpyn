@@ -104,11 +104,15 @@ SHADOW_SOURCE_WATCHLIST_SPOT = "WATCHLIST_SPOT"
 # Capturado na promoção L1, ANTES de qualquer filtro de qualidade.
 # Stream B (L3) continua em paralelo para validação de política.
 SHADOW_SOURCE_L1_SPECTRUM = "L1_SPECTRUM"
+# Camada contrafactual: shadow para TODOS os ativos que chegaram ao gate L3,
+# independente da decisão ALLOW/BLOCK. Usado para análise de política e ML.
+SHADOW_SOURCE_L3_SIMULATED = "L3_SIMULATED"
 _VALID_SHADOW_SOURCES = (
     SHADOW_SOURCE_L3,
     SHADOW_SOURCE_L3_REJECTED,
     SHADOW_SOURCE_WATCHLIST_SPOT,
     SHADOW_SOURCE_L1_SPECTRUM,
+    SHADOW_SOURCE_L3_SIMULATED,
 )
 
 
@@ -1529,6 +1533,166 @@ async def create_l1_spectrum_shadows(
         logger.info(
             "[shadow-l1] cycle done: created=%d rate_limited=%d sampled=%d eligible=%d user=%s",
             created, rate_limited, len(sampled), len(symbols), user_id,
+        )
+    return created
+
+
+async def create_l3_simulated_shadows(
+    user_id,
+    decisions: List[Dict[str, Any]],
+    execution_id: str,
+    promotion_at: "datetime",
+) -> int:
+    """L3_SIMULATED capture: camada contrafactual para TODOS os ativos avaliados no gate L3.
+
+    Chamado inline pelo pipeline_scan para TODOS os ativos que chegaram à decisão L3,
+    independente de ALLOW ou BLOCK. Permite análise contrafactual: "o que teria acontecido
+    se este ativo tivesse sido operado independente da decisão do filtro L3?"
+
+    Design:
+    * source = 'L3_SIMULATED' — segregado de L3 (ALLOW real) e L3_REJECTED (BLOCK real)
+    * Sem sampling (100% captura — completude contrafactual)
+    * decision_id = NULL — sintético, não vinculado a uma linha decisions_log
+    * metrics contém l3_decision (ALLOW/BLOCK) para rotulagem contrafactual
+    * Controlado por ML config: shadow_capture_l3_simulated_enabled (default False)
+    * Rate limit: shadow_capture_l3_simulated_max_per_hour (default 500)
+
+    Fire-and-forget: nunca levanta exceção. Retorna count de shadows criados.
+    """
+    if not decisions:
+        return 0
+
+    from ..database import CeleryAsyncSessionLocal
+    from ..models.config_profile import ConfigProfile
+    from ..schemas.spot_engine_config import SpotEngineConfig
+
+    ml_config: Dict[str, Any] = {}
+    user_config: Dict[str, Any] = {}
+    try:
+        async with CeleryAsyncSessionLocal() as cfg_db:
+            ml_res = await cfg_db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "ml",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            ml_row = ml_res.scalar_one_or_none()
+            if ml_row and isinstance(ml_row.config_json, dict):
+                ml_config = ml_row.config_json
+
+            se_res = await cfg_db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "spot_engine",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            se_row = se_res.scalar_one_or_none()
+            if se_row:
+                _se = SpotEngineConfig.from_config_json(se_row.config_json)
+                user_config = {
+                    "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(_se.selling.take_profit_pct),
+                    "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
+                        _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
+                    ),
+                    "timeout_candles": None,
+                }
+    except Exception:
+        logger.exception("[shadow-l3sim] config load failed user=%s", user_id)
+        return 0
+
+    if not ml_config.get("shadow_capture_l3_simulated_enabled", False):
+        return 0
+
+    max_per_hour = int(ml_config.get("shadow_capture_l3_simulated_max_per_hour", 500))
+
+    if not user_config:
+        _se_defaults = SpotEngineConfig()
+        user_config = {
+            "tp_pct": _SHADOW_TP_PCT_OVERRIDE or float(_se_defaults.selling.take_profit_pct),
+            "sl_pct": _SHADOW_SL_PCT_OVERRIDE or float(
+                _se_defaults.sell_flow.kill_switch.max_drawdown_from_hwm_pct
+            ),
+            "timeout_candles": None,
+        }
+    user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
+
+    shadows_last_hour = 0
+    try:
+        async with CeleryAsyncSessionLocal() as count_db:
+            cnt_res = await count_db.execute(
+                text("""
+                    SELECT COUNT(*) FROM shadow_trades
+                    WHERE user_id = :uid
+                      AND source = :src
+                      AND created_at > NOW() - INTERVAL '1 hour'
+                """),
+                {"uid": str(user_id), "src": SHADOW_SOURCE_L3_SIMULATED},
+            )
+            shadows_last_hour = cnt_res.scalar_one() or 0
+    except Exception:
+        logger.warning(
+            "[shadow-l3sim] rate limit count failed user=%s — skipping cycle", user_id
+        )
+        return 0
+
+    created = 0
+    rate_limited = 0
+
+    for d in decisions:
+        if shadows_last_hour + created >= max_per_hour:
+            rate_limited += 1
+            continue
+
+        symbol = d.get("symbol")
+        if not symbol:
+            continue
+
+        # Mescla métricas L3 existentes + rótulo contrafactual para rastreabilidade
+        metrics: Dict[str, Any] = dict(d.get("metrics") or {})
+        metrics["l3_decision"] = d.get("decision")  # ALLOW ou BLOCK — label contrafactual
+        metrics["l3_score"] = d.get("score")
+        metrics["source"] = "l3_simulated_inline"
+        metrics["execution_id"] = execution_id
+        _asset = d.get("_asset") or {}
+        if isinstance(_asset, dict):
+            _price = _asset.get("current_price") or _asset.get("price")
+            if _price is not None:
+                metrics.setdefault("current_price", _price)
+
+        synthetic = _SyntheticDecision(
+            user_id=user_id,
+            symbol=symbol,
+            direction=d.get("direction", "SPOT"),
+            strategy=d.get("strategy"),
+            id=None,
+            created_at=promotion_at,
+            metrics=metrics,
+        )
+
+        try:
+            async with CeleryAsyncSessionLocal() as own_db:
+                async with own_db.begin():
+                    new_id = await _create_from_decision(
+                        own_db, synthetic, "L3_SIMULATED_CAPTURE", user_config,
+                        source=SHADOW_SOURCE_L3_SIMULATED,
+                    )
+                    if new_id is not None:
+                        created += 1
+                        logger.debug(
+                            "[shadow-l3sim] created id=%s symbol=%s l3_dec=%s user=%s",
+                            new_id, symbol, d.get("decision"), user_id,
+                        )
+        except Exception:
+            logger.exception(
+                "[shadow-l3sim] create failed symbol=%s user=%s", symbol, user_id
+            )
+
+    if created or rate_limited:
+        logger.info(
+            "[shadow-l3sim] cycle done: created=%d rate_limited=%d total_decisions=%d user=%s",
+            created, rate_limited, len(decisions), user_id,
         )
     return created
 
