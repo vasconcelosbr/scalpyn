@@ -430,7 +430,6 @@ class WinFastTrainer:
                 win_mask = y_test > 0
                 capture_rate = float(win_mask.mean()) if len(win_mask) else 0.0
                 fpr = 0.0
-                ev = float(pred_test_raw.mean()) if len(pred_test_raw) > 0 else 0.0
             else:
                 proba_test = self.model.predict_proba(X_test)[:, 1]
 
@@ -463,12 +462,6 @@ class WinFastTrainer:
                 fpr = (
                     float((pred_test[neg_mask] == 1).mean()) if neg_mask.sum() > 0 else 0.0
                 )
-
-                # EV: mean pnl of approved trades on test set
-                if "_pnl_pct" in test_df.columns and pred_test.sum() > 0:
-                    ev = float(test_df["_pnl_pct"].values[pred_test == 1].mean())
-                else:
-                    ev = 0.0
 
             # Outcome distribution (shadow_trades: 'TP_HIT' / 'SL_HIT').
             outcome_counts: dict[str, int] = {}
@@ -508,7 +501,6 @@ class WinFastTrainer:
                 "roc_auc": roc_auc,
                 "win_fast_capture_rate": capture_rate,
                 "false_positive_rate": fpr,
-                "ev": ev,
                 "decision_threshold": calibrated_threshold,
                 "winrate_base": winrate_base,
                 "n_pos": n_pos,
@@ -532,7 +524,6 @@ class WinFastTrainer:
                 "roc_auc": roc_auc,
                 "win_fast_capture_rate": capture_rate,
                 "false_positive_rate": fpr,
-                "ev": ev,
             },
             "run_id": run_id,
             "train_from": df["_created_at"].min() if "_created_at" in df.columns else None,

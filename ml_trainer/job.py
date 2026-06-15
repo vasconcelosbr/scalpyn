@@ -231,30 +231,65 @@ def main():
     logger.info(f"Treino concluído: {result['metrics']}")
 
     # ---------------------------------------------------------
-    # 3b. Fetch previous active model metrics for comparison.
-    #     No promotion guards — new version is always activated.
+    # 3b. Quality guards + Champion/Challenger
+    #     Modelo NÃO é promovido se:
+    #       - roc_auc < 0.50  (pior que aleatório — sinal invertido)
+    #       - fpr >= 0.90     (aprova quase tudo — threshold colapsado)
+    #       - roc_auc < 95% do modelo atual (regressão significativa)
     # ---------------------------------------------------------
-    with engine.connect() as conn:
-        prev_row = conn.execute(text("""
-            SELECT version, f1_score, roc_auc, precision_score, recall_score,
-                   win_fast_capture_rate, false_positive_rate, ev_score
-            FROM ml_models WHERE status = 'active'
-            ORDER BY version DESC LIMIT 1
-        """)).fetchone()
+    new_roc_auc = result["metrics"]["roc_auc"]
+    new_fpr     = result["metrics"]["false_positive_rate"]
 
-    if prev_row:
+    if new_roc_auc < MIN_AUC_TO_SAVE:
+        logger.warning(
+            "[PROMOTION] REJEITADO — roc_auc=%.4f < %.2f (MIN_AUC_TO_SAVE). "
+            "Dataset provavelmente pequeno demais ou regime invertido no test set. "
+            "Modelo NÃO promovido.",
+            new_roc_auc, MIN_AUC_TO_SAVE,
+        )
+        sys.exit(0)
+
+    if new_fpr >= 0.90:
+        logger.warning(
+            "[PROMOTION] REJEITADO — fpr=%.4f >= 0.90 (modelo aprova quase tudo). "
+            "Threshold provavelmente colapsado. Modelo NÃO promovido.",
+            new_fpr,
+        )
+        sys.exit(0)
+
+    # Champion/Challenger: só regride até 5% vs modelo ativo atual.
+    # Se não há modelo ativo, ou o atual também é ruim (< 0.50),
+    # ignora a comparação relativa e promove com base nos guards absolutos.
+    with engine.connect() as conn:
+        current_row = conn.execute(text(
+            "SELECT version, roc_auc FROM ml_models WHERE status = 'active' "
+            "ORDER BY version DESC LIMIT 1"
+        )).fetchone()
+
+    if current_row and current_row.roc_auc is not None and float(current_row.roc_auc) >= 0.50:
+        current_roc_auc = float(current_row.roc_auc)
+        min_required    = round(current_roc_auc * 0.95, 4)
+        if new_roc_auc < min_required:
+            logger.warning(
+                "[PROMOTION] REJEITADO — champion/challenger: "
+                "new roc_auc=%.4f < min=%.4f (95%% do atual v%s=%.4f). "
+                "Modelo NÃO promovido — mantendo campeão atual.",
+                new_roc_auc, min_required, current_row.version, current_roc_auc,
+            )
+            sys.exit(0)
         logger.info(
-            "[COMPARISON] Versão anterior v%s: f1=%.4f auc=%.4f precision=%.4f "
-            "recall=%.4f ev=%.4f",
-            prev_row.version, prev_row.f1_score or 0, prev_row.roc_auc or 0,
-            prev_row.precision_score or 0, prev_row.recall_score or 0,
-            prev_row.ev_score or 0,
+            "[PROMOTION] Champion/Challenger OK: new roc_auc=%.4f >= min=%.4f "
+            "(atual v%s=%.4f) — prosseguindo com promoção.",
+            new_roc_auc, min_required, current_row.version, current_roc_auc,
+        )
+    else:
+        logger.info(
+            "[PROMOTION] Sem campeão válido para comparar — promoção via guards absolutos."
         )
 
     # ---------------------------------------------------------
     # 4. Serializa modelo em memória (salvo no DB na seção 5)
     # ---------------------------------------------------------
-    import datetime as _dt
     import joblib
     import io
 
@@ -287,6 +322,7 @@ def main():
     # ---------------------------------------------------------
     # 5. Persiste ml_models no Cloud SQL
     # ---------------------------------------------------------
+    import datetime as _dt
     logger.info("Registrando modelo em ml_models...")
 
     def _to_date(v):
@@ -297,47 +333,6 @@ def main():
         if isinstance(v, _dt.datetime):
             return v.date()
         return v
-
-    # Compute comparison_vs_previous block
-    _comparison: dict | None = None
-    if prev_row:
-        _new_m = result["metrics"]
-        _prev = {
-            "f1":           float(prev_row.f1_score or 0),
-            "roc_auc":      float(prev_row.roc_auc or 0),
-            "precision":    float(prev_row.precision_score or 0),
-            "recall":       float(prev_row.recall_score or 0),
-            "ev":           float(prev_row.ev_score or 0),
-            "capture_rate": float(prev_row.win_fast_capture_rate or 0),
-            "fpr":          float(prev_row.false_positive_rate or 0),
-        }
-        _new = {
-            "f1":           _new_m["f1"],
-            "roc_auc":      _new_m["roc_auc"],
-            "precision":    _new_m["precision"],
-            "recall":       _new_m["recall"],
-            "ev":           _new_m.get("ev", 0.0),
-            "capture_rate": _new_m["win_fast_capture_rate"],
-            "fpr":          _new_m["false_positive_rate"],
-        }
-        # fpr: lower is better
-        _lower_is_better = {"fpr"}
-        _deltas, _improved = {}, {}
-        for key in _new:
-            delta = round(_new[key] - _prev[key], 6)
-            _deltas[key] = delta
-            _improved[key] = (delta < 0) if key in _lower_is_better else (delta > 0)
-        _core = ["f1", "roc_auc", "precision", "recall", "ev"]
-        _comparison = {
-            "previous_version":    str(prev_row.version),
-            "deltas":              _deltas,
-            "improved":            _improved,
-            "all_metrics_improved": all(_improved[k] for k in _core),
-        }
-        logger.info(
-            "[COMPARISON] all_improved=%s deltas=%s",
-            _comparison["all_metrics_improved"], _deltas,
-        )
 
     try:
         with engine.begin() as conn:
@@ -363,8 +358,7 @@ def main():
                     train_from, train_to,
                     model_path, decision_threshold,
                     activated_at, notes,
-                    model_blob, ev_score,
-                    comparison_vs_previous
+                    model_blob
                 ) VALUES (
                     :version, 'active', :hyperparams,
                     :n_train, :n_val, :n_test,
@@ -373,8 +367,7 @@ def main():
                     :train_from, :train_to,
                     :model_path, :threshold,
                     NOW(), :notes,
-                    :model_blob, :ev_score,
-                    :comparison
+                    :model_blob
                 )
             """), {
                 "version":      str(ver),
@@ -409,8 +402,6 @@ def main():
                     f"shap_top5={result.get('shap_bad_approval_drivers', [])[:5]}"
                 ),
                 "model_blob":   model_blob,
-                "ev_score":     result["metrics"].get("ev", 0.0),
-                "comparison":   json.dumps(_comparison) if _comparison else None,
             })
             logger.info("[DB] INSERT OK — modelo salvo")
     except Exception as exc:

@@ -2,18 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/api";
-import { Brain, CheckCircle, Archive, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
-
-interface ComparisonMetric {
-  [key: string]: number;
-}
-
-interface ComparisonVsPrevious {
-  previous_version: string;
-  deltas: ComparisonMetric;
-  improved: Record<string, boolean>;
-  all_metrics_improved: boolean;
-}
+import { Brain, CheckCircle, Archive, ChevronDown, ChevronRight } from "lucide-react";
 
 interface MlModel {
   id: string;
@@ -29,8 +18,6 @@ interface MlModel {
   roc_auc: number | null;
   win_fast_capture_rate: number | null;
   false_positive_rate: number | null;
-  ev_score: number | null;
-  comparison_vs_previous: ComparisonVsPrevious | null;
   train_from: string | null;
   train_to: string | null;
   model_path: string | null;
@@ -177,11 +164,6 @@ export default function MlModelsPage() {
                     <Archive size={9} /> RETIRED
                   </span>
                 )}
-                {m.comparison_vs_previous && !m.comparison_vs_previous.all_metrics_improved && (
-                  <span className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-[#F87171]/10 text-[#F87171] border border-[#F87171]/20">
-                    <AlertTriangle size={9} /> REGRESSÃO
-                  </span>
-                )}
               </div>
 
               {/* Quick metrics strip */}
@@ -205,13 +187,12 @@ export default function MlModelsPage() {
                 {/* Metrics full row */}
                 <div>
                   <div className="text-[10px] uppercase tracking-widest text-[#334155] mb-3">Métricas — test set</div>
-                  <div className="grid grid-cols-3 gap-3 sm:grid-cols-7">
+                  <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
                     {[
                       { label: "Precision", value: fmtPct(m.precision_score), good: (m.precision_score ?? 0) >= 0.5 },
                       { label: "Recall",    value: fmtPct(m.recall_score),    good: (m.recall_score ?? 0) >= 0.4 },
                       { label: "F1",        value: fmt(m.f1_score, 4),        good: (m.f1_score ?? 0) >= 0.5 },
                       { label: "ROC AUC",   value: fmt(m.roc_auc, 4),         good: (m.roc_auc ?? 0) >= 0.6 },
-                      { label: "EV",        value: m.ev_score != null ? `${(m.ev_score * 100).toFixed(3)}%` : "—", good: (m.ev_score ?? -1) > 0 },
                       { label: "Capture",   value: fmtPct(m.win_fast_capture_rate), good: (m.win_fast_capture_rate ?? 0) >= 0.5 },
                       { label: "FPR",       value: fmtPct(m.false_positive_rate),   good: (m.false_positive_rate ?? 1) <= 0.4 },
                     ].map((item) => (
@@ -224,39 +205,6 @@ export default function MlModelsPage() {
                     ))}
                   </div>
                 </div>
-
-                {/* Comparison vs previous version */}
-                {m.comparison_vs_previous && (
-                  <div>
-                    <div className="text-[10px] uppercase tracking-widest text-[#334155] mb-3">
-                      Comparação vs v{m.comparison_vs_previous.previous_version}
-                    </div>
-                    <div className="grid grid-cols-3 gap-2 sm:grid-cols-7">
-                      {(
-                        [
-                          { key: "f1",           label: "F1",        fmt: (v: number) => (v >= 0 ? "+" : "") + v.toFixed(4) },
-                          { key: "roc_auc",      label: "AUC",       fmt: (v: number) => (v >= 0 ? "+" : "") + v.toFixed(4) },
-                          { key: "precision",    label: "Precision",  fmt: (v: number) => (v >= 0 ? "+" : "") + (v * 100).toFixed(2) + "pp" },
-                          { key: "recall",       label: "Recall",     fmt: (v: number) => (v >= 0 ? "+" : "") + (v * 100).toFixed(2) + "pp" },
-                          { key: "ev",           label: "EV",         fmt: (v: number) => (v >= 0 ? "+" : "") + (v * 100).toFixed(3) + "pp" },
-                          { key: "capture_rate", label: "Capture",    fmt: (v: number) => (v >= 0 ? "+" : "") + (v * 100).toFixed(2) + "pp" },
-                          { key: "fpr",          label: "FPR",        fmt: (v: number) => (v >= 0 ? "+" : "") + (v * 100).toFixed(2) + "pp" },
-                        ] as const
-                      ).map(({ key, label, fmt: fmtDelta }) => {
-                        const delta = m.comparison_vs_previous!.deltas[key] ?? 0;
-                        const improved = m.comparison_vs_previous!.improved[key] ?? false;
-                        return (
-                          <div key={key} className="bg-[#0A0F1C] rounded-md p-2.5 flex flex-col items-center gap-0.5">
-                            <span className={`text-[13px] font-bold font-mono ${improved ? "text-[#34D399]" : "text-[#F87171]"}`}>
-                              {improved ? "↑" : "↓"} {fmtDelta(delta)}
-                            </span>
-                            <span className="text-[10px] text-[#4B5563] uppercase tracking-wide">{label}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
 
                 {/* Dataset */}
                 <div>
