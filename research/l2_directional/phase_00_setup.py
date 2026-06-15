@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from ._db import connect
@@ -79,18 +80,32 @@ async def main() -> None:
     """)
 
     if existing_row is None:
+        # Buscar user_id do registro ML existente (mesmo owner)
+        ml_row = await conn.fetchrow("""
+            SELECT user_id FROM config_profiles
+            WHERE config_type = 'ml' AND is_active = true LIMIT 1
+        """)
+        if ml_row is None:
+            ml_row = await conn.fetchrow("SELECT id AS user_id FROM users LIMIT 1")
+        if ml_row is None:
+            print("  [!]  Nenhum user_id encontrado — criar usuário primeiro.")
+            await conn.close()
+            return
+        owner_id = ml_row["user_id"]
+
         # Criar novo registro
         new_config = PREREGISTRATION_DEFAULTS.copy()
         await conn.execute("""
-            INSERT INTO config_profiles (config_type, config_json, is_active)
-            VALUES ('ml_research', $1::jsonb, true)
-        """, json.dumps(new_config))
+            INSERT INTO config_profiles (id, user_id, config_type, config_json, is_active)
+            VALUES ($1::uuid, $2, 'ml_research', $3::jsonb, true)
+        """, str(uuid.uuid4()), owner_id, json.dumps(new_config))
         print("  [DB] Criado: config_profiles config_type='ml_research'")
         final_config = new_config
         new_keys = list(new_config.keys())
         kept_keys: list = []
     else:
-        existing_config: dict = dict(existing_row["config_json"])
+        raw = existing_row["config_json"]
+        existing_config: dict = json.loads(raw) if isinstance(raw, str) else dict(raw)
         # Adicionar apenas chaves faltantes (não sobrescrever valores confirmados)
         new_keys = [k for k in PREREGISTRATION_DEFAULTS if k not in existing_config]
         kept_keys = [k for k in PREREGISTRATION_DEFAULTS if k in existing_config]
@@ -109,7 +124,7 @@ async def main() -> None:
 
     locked = final_config.get("ml.preregistration_locked", False)
     lock_date = final_config.get("ml.preregistration_date", "")
-    print(f"\n  Travamento: {'TRAVADO em ' + lock_date if locked else 'NÃO TRAVADO ⚠️  (confirmar valores antes da Fase 4)'}")
+    print(f"\n  Travamento: {'TRAVADO em ' + lock_date if locked else 'NÃO TRAVADO [!]  (confirmar valores antes da Fase 4)'}")
 
     print("\n  Valores de pré-registro [DB: config_type='ml_research']:")
     key_groups = [
@@ -212,7 +227,7 @@ async def main() -> None:
     print(f"  Top 10% efetivo   [calc: n_eff × 0.10]    = {n_eff_top10:.1f}")
 
     gate_passed = n_top10_projected >= min_bucket_n
-    print(f"\n  Gate de saída: Top 10% >= {min_bucket_n}?  {'✅ PASSOU' if gate_passed else '❌ INSUFICIENTE'}")
+    print(f"\n  Gate de saída: Top 10% >= {min_bucket_n}?  {'[OK] PASSOU' if gate_passed else '[FAIL] INSUFICIENTE'}")
 
     if not gate_passed:
         # Estimar quando teremos n suficiente (baseado na taxa diária atual)
@@ -220,7 +235,7 @@ async def main() -> None:
         n_needed = min_bucket_n * 10 - n_outcome  # n total para Top 10% >= min_bucket_n
         days_needed = n_needed / max(trades_per_day, 0.1)
         arrive_date = (datetime.now(timezone.utc) + timedelta(days=days_needed)).date()
-        print(f"\n  ⚠️  PARAR — n insuficiente para treino direcional.")
+        print(f"\n  [!]  PARAR — n insuficiente para treino direcional.")
         print(f"     Taxa atual:   {trades_per_day:.1f} trades fechados/dia [calc: n_outcome/span_days]")
         print(f"     N necessário: {min_bucket_n*10} (para Top 10% = {min_bucket_n})")
         print(f"     Faltam:       {max(0, n_needed):.0f} trades")
@@ -229,7 +244,7 @@ async def main() -> None:
         else:
             print(f"     Estimativa:   NÃO DISPONÍVEL (taxa=0 — L1_SPECTRUM pode não estar capturando)")
     else:
-        print(f"\n  ✅ Prosseguir para Fase 1 (Inventário de features).")
+        print(f"\n  [OK] Prosseguir para Fase 1 (Inventário de features).")
 
     # ── Ledger de Evidências ────────────────────────────────────────────────
     print("\n" + "=" * 70)
