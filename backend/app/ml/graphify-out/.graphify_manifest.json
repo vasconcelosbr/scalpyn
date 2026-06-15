@@ -1,0 +1,67 @@
+{
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\dataset_builder.py": {
+    "mtime": 1778596575.4903345,
+    "ast_hash": "3c2b36ae1219b1929f92e404693d5341",
+    "semantic_hash": "3c2b36ae1219b1929f92e404693d5341"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\evaluation_report.py": {
+    "mtime": 1779846404.5066621,
+    "ast_hash": "26a9bcf8751a48f6455a60db661ab79c",
+    "semantic_hash": "26a9bcf8751a48f6455a60db661ab79c"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\feature_extractor.py": {
+    "mtime": 1781281991.6656246,
+    "ast_hash": "4b462077fef02aa50a20434477b8cb01",
+    "semantic_hash": "4b462077fef02aa50a20434477b8cb01"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\forward_scorer.py": {
+    "mtime": 1781200218.2236824,
+    "ast_hash": "0264660b4a186f9c2cea2a37f3e0dcd0",
+    "semantic_hash": "0264660b4a186f9c2cea2a37f3e0dcd0"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\gcs_model_loader.py": {
+    "mtime": 1781033169.6313365,
+    "ast_hash": "e1327c28b11589b97ac8ee5c2b7fc196",
+    "semantic_hash": "e1327c28b11589b97ac8ee5c2b7fc196"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\macro_client.py": {
+    "mtime": 1779747688.5204182,
+    "ast_hash": "632746b30c18b6ea19d682de37822c6c",
+    "semantic_hash": "632746b30c18b6ea19d682de37822c6c"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\macro_features.py": {
+    "mtime": 1780338488.5714765,
+    "ast_hash": "0d2c43f4cc625cebe0bca3db23f5f0a8",
+    "semantic_hash": "0d2c43f4cc625cebe0bca3db23f5f0a8"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\model_loader.py": {
+    "mtime": 1778596575.4923341,
+    "ast_hash": "56fd57d4721dccc920f8f6439a710866",
+    "semantic_hash": "56fd57d4721dccc920f8f6439a710866"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\prediction_service.py": {
+    "mtime": 1780117715.3155558,
+    "ast_hash": "8796dac3495f26a736bfa8517018c969",
+    "semantic_hash": "8796dac3495f26a736bfa8517018c969"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\predict_service.py": {
+    "mtime": 1778596575.4933343,
+    "ast_hash": "535479b7ea17d6661bca9e68fbb27adc",
+    "semantic_hash": "535479b7ea17d6661bca9e68fbb27adc"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\trainer.py": {
+    "mtime": 1780340205.5745583,
+    "ast_hash": "00d6afca1244b77c6a410ee1b77b9219",
+    "semantic_hash": "00d6afca1244b77c6a410ee1b77b9219"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\train_model.py": {
+    "mtime": 1778596575.4948392,
+    "ast_hash": "a236e0c6d9f25162fd8ddd987ff0f89d",
+    "semantic_hash": "a236e0c6d9f25162fd8ddd987ff0f89d"
+  },
+  "C:\\Users\\ricar\\Default Directory\\ARQUIVOS - Documentos\\SCALPYN\\scalpyn\\scalpyn\\backend\\app\\ml\\__init__.py": {
+    "mtime": 1778596575.489334,
+    "ast_hash": "20dc78a5e2aed2226eb9c4c556451411",
+    "semantic_hash": "20dc78a5e2aed2226eb9c4c556451411"
+  }
+}

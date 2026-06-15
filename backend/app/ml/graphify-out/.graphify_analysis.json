@@ -1,0 +1,366 @@
+{
+  "communities": {
+    "0": [
+      "ml_predict_service_get_predict_service",
+      "ml_predict_service_predictservice",
+      "ml_predict_service_predictservice_batch_predict_for_l3",
+      "ml_predict_service_predictservice_calculate_final_score",
+      "ml_predict_service_predictservice_init",
+      "ml_predict_service_predictservice_initialize",
+      "ml_predict_service_predictservice_is_ready",
+      "ml_predict_service_predictservice_predict_best_direction",
+      "ml_predict_service_predictservice_predict_both_directions",
+      "ml_predict_service_predictservice_predict_for_l3_ranking",
+      "ml_predict_service_predictservice_predict_single_direction",
+      "ml_predict_service_predictservice_prepare_features",
+      "ml_predict_service_predictservice_should_block",
+      "ml_predict_service_rationale_1",
+      "ml_predict_service_rationale_11",
+      "ml_predict_service_rationale_111",
+      "ml_predict_service_rationale_146",
+      "ml_predict_service_rationale_165",
+      "ml_predict_service_rationale_18",
+      "ml_predict_service_rationale_204",
+      "ml_predict_service_rationale_227",
+      "ml_predict_service_rationale_244",
+      "ml_predict_service_rationale_277",
+      "ml_predict_service_rationale_30",
+      "ml_predict_service_rationale_329",
+      "ml_predict_service_rationale_44",
+      "ml_predict_service_rationale_52",
+      "predict_service_py"
+    ],
+    "1": [
+      "feature_extractor_py",
+      "ml_feature_extractor_build_training_dataframe",
+      "ml_feature_extractor_extract_features",
+      "ml_feature_extractor_filter_trainable_features",
+      "ml_feature_extractor_rationale_1",
+      "ml_feature_extractor_rationale_111",
+      "ml_feature_extractor_rationale_255",
+      "ml_feature_extractor_rationale_386",
+      "ml_feature_extractor_rationale_445",
+      "ml_feature_extractor_train_val_test_split",
+      "ml_trainer_calibrate_threshold",
+      "ml_trainer_compute_psi",
+      "ml_trainer_rationale_1",
+      "ml_trainer_rationale_115",
+      "ml_trainer_rationale_149",
+      "ml_trainer_rationale_175",
+      "ml_trainer_rationale_192",
+      "ml_trainer_rationale_41",
+      "ml_trainer_report_bad_approval_drivers",
+      "ml_trainer_winfasttrainer",
+      "ml_trainer_winfasttrainer_init",
+      "ml_trainer_winfasttrainer_train",
+      "trainer_py"
+    ],
+    "2": [
+      "ml_train_model_modeltrainer",
+      "ml_train_model_modeltrainer_analyze_by_probability_bucket",
+      "ml_train_model_modeltrainer_calculate_scale_pos_weight",
+      "ml_train_model_modeltrainer_evaluate",
+      "ml_train_model_modeltrainer_get_feature_importance",
+      "ml_train_model_modeltrainer_init",
+      "ml_train_model_modeltrainer_load",
+      "ml_train_model_modeltrainer_save",
+      "ml_train_model_modeltrainer_train",
+      "ml_train_model_rationale_1",
+      "ml_train_model_rationale_184",
+      "ml_train_model_rationale_23",
+      "ml_train_model_rationale_236",
+      "ml_train_model_rationale_270",
+      "ml_train_model_rationale_30",
+      "ml_train_model_rationale_314",
+      "ml_train_model_rationale_341",
+      "ml_train_model_rationale_365",
+      "ml_train_model_rationale_65",
+      "ml_train_model_rationale_97",
+      "ml_train_model_train_model_pipeline",
+      "train_model_py"
+    ],
+    "3": [
+      "ml_model_loader_get_model_loader",
+      "ml_model_loader_load_model",
+      "ml_model_loader_modelloader",
+      "ml_model_loader_modelloader_get_feature_columns",
+      "ml_model_loader_modelloader_get_metadata",
+      "ml_model_loader_modelloader_init",
+      "ml_model_loader_modelloader_is_loaded",
+      "ml_model_loader_modelloader_load",
+      "ml_model_loader_modelloader_predict",
+      "ml_model_loader_modelloader_predict_batch",
+      "ml_model_loader_rationale_1",
+      "ml_model_loader_rationale_126",
+      "ml_model_loader_rationale_14",
+      "ml_model_loader_rationale_151",
+      "ml_model_loader_rationale_163",
+      "ml_model_loader_rationale_17",
+      "ml_model_loader_rationale_183",
+      "ml_model_loader_rationale_30",
+      "ml_model_loader_rationale_77",
+      "ml_model_loader_rationale_81",
+      "model_loader_py"
+    ],
+    "4": [
+      "dataset_builder_py",
+      "ml_dataset_builder_datasetbuilder",
+      "ml_dataset_builder_datasetbuilder_encode_direction",
+      "ml_dataset_builder_datasetbuilder_engineer_features",
+      "ml_dataset_builder_datasetbuilder_extract_features",
+      "ml_dataset_builder_datasetbuilder_get_feature_columns",
+      "ml_dataset_builder_datasetbuilder_init",
+      "ml_dataset_builder_datasetbuilder_load_simulations",
+      "ml_dataset_builder_datasetbuilder_prepare_dataset",
+      "ml_dataset_builder_datasetbuilder_time_based_split",
+      "ml_dataset_builder_rationale_1",
+      "ml_dataset_builder_rationale_129",
+      "ml_dataset_builder_rationale_16",
+      "ml_dataset_builder_rationale_177",
+      "ml_dataset_builder_rationale_229",
+      "ml_dataset_builder_rationale_250",
+      "ml_dataset_builder_rationale_272",
+      "ml_dataset_builder_rationale_312",
+      "ml_dataset_builder_rationale_58",
+      "ml_dataset_builder_rationale_69"
+    ],
+    "5": [
+      "macro_features_py",
+      "ml_macro_features_extract_bonds",
+      "ml_macro_features_extract_crypto_global",
+      "ml_macro_features_extract_forex",
+      "ml_macro_features_extract_indices",
+      "ml_macro_features_extract_macro_features",
+      "ml_macro_features_extract_volatility",
+      "ml_macro_features_find_by_symbol",
+      "ml_macro_features_rationale_1",
+      "ml_macro_features_rationale_110",
+      "ml_macro_features_rationale_119",
+      "ml_macro_features_rationale_169",
+      "ml_macro_features_rationale_206",
+      "ml_macro_features_rationale_243",
+      "ml_macro_features_rationale_280",
+      "ml_macro_features_rationale_377",
+      "ml_macro_features_rationale_62",
+      "ml_macro_features_rationale_90",
+      "ml_macro_features_safe_float",
+      "ml_macro_features_unwrap"
+    ],
+    "6": [
+      "evaluation_report_py",
+      "ml_evaluation_report_analyze_probability_buckets",
+      "ml_evaluation_report_evaluationreport",
+      "ml_evaluation_report_evaluationreport_generate_report",
+      "ml_evaluation_report_evaluationreport_init",
+      "ml_evaluation_report_generate_evaluation_report",
+      "ml_evaluation_report_load_active_model_and_threshold",
+      "ml_evaluation_report_load_decisions",
+      "ml_evaluation_report_rationale_1",
+      "ml_evaluation_report_rationale_121",
+      "ml_evaluation_report_rationale_149",
+      "ml_evaluation_report_rationale_27",
+      "ml_evaluation_report_rationale_319",
+      "ml_evaluation_report_rationale_61"
+    ],
+    "7": [
+      "gcs_model_loader_py",
+      "ml_gcs_model_loader_gcsmodelloader",
+      "ml_gcs_model_loader_gcsmodelloader_get_model",
+      "ml_gcs_model_loader_gcsmodelloader_invalidate",
+      "ml_gcs_model_loader_gcsmodelloader_load_from_db",
+      "ml_gcs_model_loader_gcsmodelloader_new",
+      "ml_gcs_model_loader_get_model",
+      "ml_gcs_model_loader_invalidate_model_cache",
+      "ml_gcs_model_loader_rationale_1",
+      "ml_gcs_model_loader_rationale_104",
+      "ml_gcs_model_loader_rationale_115",
+      "ml_gcs_model_loader_rationale_24",
+      "ml_gcs_model_loader_rationale_46",
+      "ml_gcs_model_loader_rationale_53"
+    ],
+    "8": [
+      "macro_client_py",
+      "ml_macro_client_fetch_macro_context",
+      "ml_macro_client_get",
+      "ml_macro_client_rationale_1",
+      "ml_macro_client_rationale_55",
+      "ml_macro_client_rationale_72",
+      "ml_prediction_service_rationale_16",
+      "ml_prediction_service_rationale_23",
+      "ml_prediction_service_rationale_42",
+      "ml_prediction_service_winfastpredictor",
+      "ml_prediction_service_winfastpredictor_get_threshold",
+      "ml_prediction_service_winfastpredictor_predict",
+      "prediction_service_py"
+    ],
+    "9": [
+      "forward_scorer_py",
+      "ml_forward_scorer_rationale_1",
+      "ml_forward_scorer_rationale_28",
+      "ml_forward_scorer_safe_score_shadow_trade"
+    ],
+    "10": [
+      "init_py",
+      "ml_init_rationale_1"
+    ]
+  },
+  "cohesion": {
+    "0": 0.10052910052910052,
+    "1": 0.11067193675889328,
+    "2": 0.11688311688311688,
+    "3": 0.12857142857142856,
+    "4": 0.12105263157894737,
+    "5": 0.19473684210526315,
+    "6": 0.18681318681318682,
+    "7": 0.16483516483516483,
+    "8": 0.1794871794871795,
+    "9": 0.5,
+    "10": 1.0
+  },
+  "gods": [
+    {
+      "id": "ml_predict_service_predictservice",
+      "label": "PredictService",
+      "degree": 16
+    },
+    {
+      "id": "ml_dataset_builder_datasetbuilder",
+      "label": "DatasetBuilder",
+      "degree": 14
+    },
+    {
+      "id": "ml_model_loader_modelloader",
+      "label": "ModelLoader",
+      "degree": 12
+    },
+    {
+      "id": "ml_train_model_modeltrainer",
+      "label": "ModelTrainer",
+      "degree": 12
+    },
+    {
+      "id": "ml_macro_features_extract_macro_features",
+      "label": "extract_macro_features()",
+      "degree": 8
+    },
+    {
+      "id": "ml_train_model_train_model_pipeline",
+      "label": "train_model_pipeline()",
+      "degree": 8
+    },
+    {
+      "id": "ml_evaluation_report_generate_evaluation_report",
+      "label": "generate_evaluation_report()",
+      "degree": 7
+    },
+    {
+      "id": "ml_macro_features_unwrap",
+      "label": "_unwrap()",
+      "degree": 7
+    },
+    {
+      "id": "ml_gcs_model_loader_gcsmodelloader",
+      "label": "GCSModelLoader",
+      "degree": 6
+    },
+    {
+      "id": "ml_macro_features_safe_float",
+      "label": "_safe_float()",
+      "degree": 6
+    }
+  ],
+  "surprises": [
+    {
+      "source": "PredictService",
+      "target": "DatasetBuilder",
+      "source_files": [
+        "predict_service.py",
+        "dataset_builder.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "uses",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; bridges separate communities"
+    },
+    {
+      "source": "ModelTrainer",
+      "target": "DatasetBuilder",
+      "source_files": [
+        "train_model.py",
+        "dataset_builder.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "uses",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; bridges separate communities"
+    },
+    {
+      "source": "train_model_pipeline()",
+      "target": "DatasetBuilder",
+      "source_files": [
+        "train_model.py",
+        "dataset_builder.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "calls",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; bridges separate communities"
+    },
+    {
+      "source": "_extract_crypto_global()",
+      "target": "_get()",
+      "source_files": [
+        "macro_features.py",
+        "macro_client.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "calls",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; bridges separate communities"
+    },
+    {
+      "source": "PredictService",
+      "target": "ModelLoader",
+      "source_files": [
+        "predict_service.py",
+        "model_loader.py"
+      ],
+      "confidence": "INFERRED",
+      "relation": "uses",
+      "why": "inferred connection - not explicitly stated in source; connects across different repos/directories; bridges separate communities"
+    }
+  ],
+  "questions": [
+    {
+      "type": "bridge_node",
+      "question": "Why does `PredictService` connect `Community 0` to `Community 3`, `Community 4`?",
+      "why": "High betweenness centrality (0.165) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `DatasetBuilder` connect `Community 4` to `Community 0`, `Community 2`?",
+      "why": "High betweenness centrality (0.159) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `ModelLoader` connect `Community 3` to `Community 0`?",
+      "why": "High betweenness centrality (0.086) - this node is a cross-community bridge."
+    },
+    {
+      "type": "verify_inferred",
+      "question": "Are the 2 inferred relationships involving `PredictService` (e.g. with `ModelLoader` and `DatasetBuilder`) actually correct?",
+      "why": "`PredictService` has 2 INFERRED edges - model-reasoned connections that need verification."
+    },
+    {
+      "type": "verify_inferred",
+      "question": "Are the 4 inferred relationships involving `DatasetBuilder` (e.g. with `PredictService` and `ModelTrainer`) actually correct?",
+      "why": "`DatasetBuilder` has 4 INFERRED edges - model-reasoned connections that need verification."
+    },
+    {
+      "type": "isolated_nodes",
+      "question": "What connects `Dataset Builder — Extract and prepare training data from trade_simulations.`, `Build ML training datasets from trade simulation results.`, `Initialize dataset builder.` to the rest of the system?",
+      "why": "87 weakly-connected nodes found - possible documentation gaps or missing edges."
+    },
+    {
+      "type": "low_cohesion",
+      "question": "Should `Community 0` be split into smaller, more focused modules?",
+      "why": "Cohesion score 0.10052910052910052 - nodes in this community are weakly interconnected."
+    }
+  ]
+}

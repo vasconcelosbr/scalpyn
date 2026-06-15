@@ -1,0 +1,4141 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "label": "dataset_builder.py",
+      "file_type": "code",
+      "source_file": "dataset_builder.py",
+      "source_location": "L1",
+      "id": "dataset_builder_py",
+      "community": 4,
+      "norm_label": "dataset_builder.py"
+    },
+    {
+      "label": "DatasetBuilder",
+      "file_type": "code",
+      "source_file": "dataset_builder.py",
+      "source_location": "L15",
+      "id": "ml_dataset_builder_datasetbuilder",
+      "community": 4,
+      "norm_label": "datasetbuilder"
+    },
+    {
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "dataset_builder.py",
+      "source_location": "L57",
+      "id": "ml_dataset_builder_datasetbuilder_init",
+      "community": 4,
+      "norm_label": ".__init__()"
+    },
+    {
+      "label": ".load_simulations()",
+      "file_type": "code",
+      "source_file": "dataset_builder.py",
+      "source_location": "L61",
+      "id": "ml_dataset_builder_datasetbuilder_load_simulations",
+      "community": 4,
+      "norm_label": ".load_simulations()"
+    },
+    {
+      "label": ".extract_features()",
+      "file_type": "code",
+      "source_file": "dataset_builder.py",
+      "source_location": "L126",
+      "id": "ml_dataset_builder_datasetbuilder_extract_features",
+      "community": 4,
+      "norm_label": ".extract_features()"
+    },
+    {
+      "label": ".engineer_features()",
+      "file_type": "code",
+      "source_file": "dataset_builder.py",
+      "source_location": "L176",
+      "id": "ml_dataset_builder_datasetbuilder_engineer_features",
+      "community": 4,
+      "norm_label": ".engineer_features()"
+    },
+    {
+      "label": ".encode_direction()",
+      "file_type": "code",
+      "source_file": "dataset_builder.py",
+      "source_location": "L228",
+      "id": "ml_dataset_builder_datasetbuilder_encode_direction",
+      "community": 4,
+      "norm_label": ".encode_direction()"
+    },
+    {
+      "label": ".get_feature_columns()",
+      "file_type": "code",
+      "source_file": "dataset_builder.py",
+      "source_location": "L249",
+      "id": "ml_dataset_builder_datasetbuilder_get_feature_columns",
+      "community": 4,
+      "norm_label": ".get_feature_columns()"
+    },
+    {
+      "label": ".prepare_dataset()",
+      "file_type": "code",
+      "source_file": "dataset_builder.py",
+      "source_location": "L267",
+      "id": "ml_dataset_builder_datasetbuilder_prepare_dataset",
+      "community": 4,
+      "norm_label": ".prepare_dataset()"
+    },
+    {
+      "label": ".time_based_split()",
+      "file_type": "code",
+      "source_file": "dataset_builder.py",
+      "source_location": "L306",
+      "id": "ml_dataset_builder_datasetbuilder_time_based_split",
+      "community": 4,
+      "norm_label": ".time_based_split()"
+    },
+    {
+      "label": "Dataset Builder \u2014 Extract and prepare training data from trade_simulations.",
+      "file_type": "rationale",
+      "source_file": "dataset_builder.py",
+      "source_location": "L1",
+      "id": "ml_dataset_builder_rationale_1",
+      "community": 4,
+      "norm_label": "dataset builder \u2014 extract and prepare training data from trade_simulations."
+    },
+    {
+      "label": "Build ML training datasets from trade simulation results.",
+      "file_type": "rationale",
+      "source_file": "dataset_builder.py",
+      "source_location": "L16",
+      "id": "ml_dataset_builder_rationale_16",
+      "community": 4,
+      "norm_label": "build ml training datasets from trade simulation results."
+    },
+    {
+      "label": "Initialize dataset builder.",
+      "file_type": "rationale",
+      "source_file": "dataset_builder.py",
+      "source_location": "L58",
+      "id": "ml_dataset_builder_rationale_58",
+      "community": 4,
+      "norm_label": "initialize dataset builder."
+    },
+    {
+      "label": "Load trade simulations from database.          Args:             db: Database",
+      "file_type": "rationale",
+      "source_file": "dataset_builder.py",
+      "source_location": "L69",
+      "id": "ml_dataset_builder_rationale_69",
+      "community": 4,
+      "norm_label": "load trade simulations from database.          args:             db: database"
+    },
+    {
+      "label": "Extract features from simulations and create training dataset.          Args:",
+      "file_type": "rationale",
+      "source_file": "dataset_builder.py",
+      "source_location": "L129",
+      "id": "ml_dataset_builder_rationale_129",
+      "community": 4,
+      "norm_label": "extract features from simulations and create training dataset.          args:"
+    },
+    {
+      "label": "Create engineered features from base features.          Args:             df:",
+      "file_type": "rationale",
+      "source_file": "dataset_builder.py",
+      "source_location": "L177",
+      "id": "ml_dataset_builder_rationale_177",
+      "community": 4,
+      "norm_label": "create engineered features from base features.          args:             df:"
+    },
+    {
+      "label": "Encode direction as numeric feature.          Args:             df: DataFrame",
+      "file_type": "rationale",
+      "source_file": "dataset_builder.py",
+      "source_location": "L229",
+      "id": "ml_dataset_builder_rationale_229",
+      "community": 4,
+      "norm_label": "encode direction as numeric feature.          args:             df: dataframe"
+    },
+    {
+      "label": "Get list of feature columns for training (excluding metadata).          Args:",
+      "file_type": "rationale",
+      "source_file": "dataset_builder.py",
+      "source_location": "L250",
+      "id": "ml_dataset_builder_rationale_250",
+      "community": 4,
+      "norm_label": "get list of feature columns for training (excluding metadata).          args:"
+    },
+    {
+      "label": "Complete data preparation pipeline.          Args:             simulations: L",
+      "file_type": "rationale",
+      "source_file": "dataset_builder.py",
+      "source_location": "L272",
+      "id": "ml_dataset_builder_rationale_272",
+      "community": 4,
+      "norm_label": "complete data preparation pipeline.          args:             simulations: l"
+    },
+    {
+      "label": "Split data using time-based approach (no shuffle).          Args:",
+      "file_type": "rationale",
+      "source_file": "dataset_builder.py",
+      "source_location": "L312",
+      "id": "ml_dataset_builder_rationale_312",
+      "community": 4,
+      "norm_label": "split data using time-based approach (no shuffle).          args:"
+    },
+    {
+      "label": "evaluation_report.py",
+      "file_type": "code",
+      "source_file": "evaluation_report.py",
+      "source_location": "L1",
+      "id": "evaluation_report_py",
+      "community": 6,
+      "norm_label": "evaluation_report.py"
+    },
+    {
+      "label": "_load_active_model_and_threshold()",
+      "file_type": "code",
+      "source_file": "evaluation_report.py",
+      "source_location": "L26",
+      "id": "ml_evaluation_report_load_active_model_and_threshold",
+      "community": 6,
+      "norm_label": "_load_active_model_and_threshold()"
+    },
+    {
+      "label": "_load_decisions()",
+      "file_type": "code",
+      "source_file": "evaluation_report.py",
+      "source_location": "L54",
+      "id": "ml_evaluation_report_load_decisions",
+      "community": 6,
+      "norm_label": "_load_decisions()"
+    },
+    {
+      "label": "_analyze_probability_buckets()",
+      "file_type": "code",
+      "source_file": "evaluation_report.py",
+      "source_location": "L115",
+      "id": "ml_evaluation_report_analyze_probability_buckets",
+      "community": 6,
+      "norm_label": "_analyze_probability_buckets()"
+    },
+    {
+      "label": "generate_evaluation_report()",
+      "file_type": "code",
+      "source_file": "evaluation_report.py",
+      "source_location": "L141",
+      "id": "ml_evaluation_report_generate_evaluation_report",
+      "community": 6,
+      "norm_label": "generate_evaluation_report()"
+    },
+    {
+      "label": "EvaluationReport",
+      "file_type": "code",
+      "source_file": "evaluation_report.py",
+      "source_location": "L318",
+      "id": "ml_evaluation_report_evaluationreport",
+      "community": 6,
+      "norm_label": "evaluationreport"
+    },
+    {
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "evaluation_report.py",
+      "source_location": "L321",
+      "id": "ml_evaluation_report_evaluationreport_init",
+      "community": 6,
+      "norm_label": ".__init__()"
+    },
+    {
+      "label": ".generate_report()",
+      "file_type": "code",
+      "source_file": "evaluation_report.py",
+      "source_location": "L324",
+      "id": "ml_evaluation_report_evaluationreport_generate_report",
+      "community": 6,
+      "norm_label": ".generate_report()"
+    },
+    {
+      "label": "Evaluation Report \u2014 Generate comprehensive model evaluation metrics.  Rewritten",
+      "file_type": "rationale",
+      "source_file": "evaluation_report.py",
+      "source_location": "L1",
+      "id": "ml_evaluation_report_rationale_1",
+      "community": 6,
+      "norm_label": "evaluation report \u2014 generate comprehensive model evaluation metrics.  rewritten"
+    },
+    {
+      "label": "Return (model, threshold, model_id) from the active ml_models row.      Loads th",
+      "file_type": "rationale",
+      "source_file": "evaluation_report.py",
+      "source_location": "L27",
+      "id": "ml_evaluation_report_rationale_27",
+      "community": 6,
+      "norm_label": "return (model, threshold, model_id) from the active ml_models row.      loads th"
+    },
+    {
+      "label": "Query decisions_log for labeled (pnl_pct IS NOT NULL) records.      Mirrors the",
+      "file_type": "rationale",
+      "source_file": "evaluation_report.py",
+      "source_location": "L61",
+      "id": "ml_evaluation_report_rationale_61",
+      "community": 6,
+      "norm_label": "query decisions_log for labeled (pnl_pct is not null) records.      mirrors the"
+    },
+    {
+      "label": "Win rate and mean PnL by probability bucket.",
+      "file_type": "rationale",
+      "source_file": "evaluation_report.py",
+      "source_location": "L121",
+      "id": "ml_evaluation_report_rationale_121",
+      "community": 6,
+      "norm_label": "win rate and mean pnl by probability bucket."
+    },
+    {
+      "label": "Generate a comprehensive evaluation report for the active XGBoost model.      Us",
+      "file_type": "rationale",
+      "source_file": "evaluation_report.py",
+      "source_location": "L149",
+      "id": "ml_evaluation_report_rationale_149",
+      "community": 6,
+      "norm_label": "generate a comprehensive evaluation report for the active xgboost model.      us"
+    },
+    {
+      "label": "Compatibility wrapper around generate_evaluation_report().",
+      "file_type": "rationale",
+      "source_file": "evaluation_report.py",
+      "source_location": "L319",
+      "id": "ml_evaluation_report_rationale_319",
+      "community": 6,
+      "norm_label": "compatibility wrapper around generate_evaluation_report()."
+    },
+    {
+      "label": "feature_extractor.py",
+      "file_type": "code",
+      "source_file": "feature_extractor.py",
+      "source_location": "L1",
+      "id": "feature_extractor_py",
+      "community": 1,
+      "norm_label": "feature_extractor.py"
+    },
+    {
+      "label": "extract_features()",
+      "file_type": "code",
+      "source_file": "feature_extractor.py",
+      "source_location": "L110",
+      "id": "ml_feature_extractor_extract_features",
+      "community": 1,
+      "norm_label": "extract_features()"
+    },
+    {
+      "label": "build_training_dataframe()",
+      "file_type": "code",
+      "source_file": "feature_extractor.py",
+      "source_location": "L249",
+      "id": "ml_feature_extractor_build_training_dataframe",
+      "community": 1,
+      "norm_label": "build_training_dataframe()"
+    },
+    {
+      "label": "filter_trainable_features()",
+      "file_type": "code",
+      "source_file": "feature_extractor.py",
+      "source_location": "L381",
+      "id": "ml_feature_extractor_filter_trainable_features",
+      "community": 1,
+      "norm_label": "filter_trainable_features()"
+    },
+    {
+      "label": "train_val_test_split()",
+      "file_type": "code",
+      "source_file": "feature_extractor.py",
+      "source_location": "L440",
+      "id": "ml_feature_extractor_train_val_test_split",
+      "community": 1,
+      "norm_label": "train_val_test_split()"
+    },
+    {
+      "label": "Feature Extractor \u2014 Extract and engineer features from decisions_log.metrics JSO",
+      "file_type": "rationale",
+      "source_file": "feature_extractor.py",
+      "source_location": "L1",
+      "id": "ml_feature_extractor_rationale_1",
+      "community": 1,
+      "norm_label": "feature extractor \u2014 extract and engineer features from decisions_log.metrics jso"
+    },
+    {
+      "label": "Extract and engineer features from a metrics dict.      Args:         metrics",
+      "file_type": "rationale",
+      "source_file": "feature_extractor.py",
+      "source_location": "L111",
+      "id": "ml_feature_extractor_rationale_111",
+      "community": 1,
+      "norm_label": "extract and engineer features from a metrics dict.      args:         metrics"
+    },
+    {
+      "label": "Build training DataFrame from shadow_trades records (fonte can\u00f4nica \u2014 Bloco B).",
+      "file_type": "rationale",
+      "source_file": "feature_extractor.py",
+      "source_location": "L255",
+      "id": "ml_feature_extractor_rationale_255",
+      "community": 1,
+      "norm_label": "build training dataframe from shadow_trades records (fonte canonica \u2014 bloco b)."
+    },
+    {
+      "label": "Filter feature columns to those with sufficient coverage and variance.      Ex",
+      "file_type": "rationale",
+      "source_file": "feature_extractor.py",
+      "source_location": "L386",
+      "id": "ml_feature_extractor_rationale_386",
+      "community": 1,
+      "norm_label": "filter feature columns to those with sufficient coverage and variance.      ex"
+    },
+    {
+      "label": "Time-based split \u2014 no shuffle to avoid look-ahead bias.      Args:         df",
+      "file_type": "rationale",
+      "source_file": "feature_extractor.py",
+      "source_location": "L445",
+      "id": "ml_feature_extractor_rationale_445",
+      "community": 1,
+      "norm_label": "time-based split \u2014 no shuffle to avoid look-ahead bias.      args:         df"
+    },
+    {
+      "label": "forward_scorer.py",
+      "file_type": "code",
+      "source_file": "forward_scorer.py",
+      "source_location": "L1",
+      "id": "forward_scorer_py",
+      "community": 9,
+      "norm_label": "forward_scorer.py"
+    },
+    {
+      "label": "safe_score_shadow_trade()",
+      "file_type": "code",
+      "source_file": "forward_scorer.py",
+      "source_location": "L23",
+      "id": "ml_forward_scorer_safe_score_shadow_trade",
+      "community": 9,
+      "norm_label": "safe_score_shadow_trade()"
+    },
+    {
+      "label": "Passive forward scorer \u2014 scores new shadow trades at creation time.  ISOLATION I",
+      "file_type": "rationale",
+      "source_file": "forward_scorer.py",
+      "source_location": "L1",
+      "id": "ml_forward_scorer_rationale_1",
+      "community": 9,
+      "norm_label": "passive forward scorer \u2014 scores new shadow trades at creation time.  isolation i"
+    },
+    {
+      "label": "Score a shadow trade and record the prediction in ml_predictions.      Opens its",
+      "file_type": "rationale",
+      "source_file": "forward_scorer.py",
+      "source_location": "L28",
+      "id": "ml_forward_scorer_rationale_28",
+      "community": 9,
+      "norm_label": "score a shadow trade and record the prediction in ml_predictions.      opens its"
+    },
+    {
+      "label": "gcs_model_loader.py",
+      "file_type": "code",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L1",
+      "id": "gcs_model_loader_py",
+      "community": 7,
+      "norm_label": "gcs_model_loader.py"
+    },
+    {
+      "label": "GCSModelLoader",
+      "file_type": "code",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L23",
+      "id": "ml_gcs_model_loader_gcsmodelloader",
+      "community": 7,
+      "norm_label": "gcsmodelloader"
+    },
+    {
+      "label": ".__new__()",
+      "file_type": "code",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L36",
+      "id": "ml_gcs_model_loader_gcsmodelloader_new",
+      "community": 7,
+      "norm_label": ".__new__()"
+    },
+    {
+      "label": ".get_model()",
+      "file_type": "code",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L45",
+      "id": "ml_gcs_model_loader_gcsmodelloader_get_model",
+      "community": 7,
+      "norm_label": ".get_model()"
+    },
+    {
+      "label": "._load_from_db()",
+      "file_type": "code",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L52",
+      "id": "ml_gcs_model_loader_gcsmodelloader_load_from_db",
+      "community": 7,
+      "norm_label": "._load_from_db()"
+    },
+    {
+      "label": ".invalidate()",
+      "file_type": "code",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L103",
+      "id": "ml_gcs_model_loader_gcsmodelloader_invalidate",
+      "community": 7,
+      "norm_label": ".invalidate()"
+    },
+    {
+      "label": "get_model()",
+      "file_type": "code",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L114",
+      "id": "ml_gcs_model_loader_get_model",
+      "community": 7,
+      "norm_label": "get_model()"
+    },
+    {
+      "label": "invalidate_model_cache()",
+      "file_type": "code",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L119",
+      "id": "ml_gcs_model_loader_invalidate_model_cache",
+      "community": 7,
+      "norm_label": "invalidate_model_cache()"
+    },
+    {
+      "label": "Model loader \u2014 loads the active XGBoost model from the PostgreSQL ml_models tabl",
+      "file_type": "rationale",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L1",
+      "id": "ml_gcs_model_loader_rationale_1",
+      "community": 7,
+      "norm_label": "model loader \u2014 loads the active xgboost model from the postgresql ml_models tabl"
+    },
+    {
+      "label": "Singleton que carrega e cacheia o modelo XGBoost do PostgreSQL (ml_models.model_",
+      "file_type": "rationale",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L24",
+      "id": "ml_gcs_model_loader_rationale_24",
+      "community": 7,
+      "norm_label": "singleton que carrega e cacheia o modelo xgboost do postgresql (ml_models.model_"
+    },
+    {
+      "label": "Retorna modelo \u2014 recarrega do DB se cache expirado.",
+      "file_type": "rationale",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L46",
+      "id": "ml_gcs_model_loader_rationale_46",
+      "community": 7,
+      "norm_label": "retorna modelo \u2014 recarrega do db se cache expirado."
+    },
+    {
+      "label": "L\u00ea model_blob da linha active em ml_models e deserializa.",
+      "file_type": "rationale",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L53",
+      "id": "ml_gcs_model_loader_rationale_53",
+      "community": 7,
+      "norm_label": "le model_blob da linha active em ml_models e deserializa."
+    },
+    {
+      "label": "For\u00e7a reload no pr\u00f3ximo request.",
+      "file_type": "rationale",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L104",
+      "id": "ml_gcs_model_loader_rationale_104",
+      "community": 7,
+      "norm_label": "forca reload no proximo request."
+    },
+    {
+      "label": "Fun\u00e7\u00e3o de conveni\u00eancia \u2014 use em qualquer lugar.",
+      "file_type": "rationale",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L115",
+      "id": "ml_gcs_model_loader_rationale_115",
+      "community": 7,
+      "norm_label": "funcao de conveniencia \u2014 use em qualquer lugar."
+    },
+    {
+      "label": "macro_client.py",
+      "file_type": "code",
+      "source_file": "macro_client.py",
+      "source_location": "L1",
+      "id": "macro_client_py",
+      "community": 8,
+      "norm_label": "macro_client.py"
+    },
+    {
+      "label": "_get()",
+      "file_type": "code",
+      "source_file": "macro_client.py",
+      "source_location": "L54",
+      "id": "ml_macro_client_get",
+      "community": 8,
+      "norm_label": "_get()"
+    },
+    {
+      "label": "fetch_macro_context()",
+      "file_type": "code",
+      "source_file": "macro_client.py",
+      "source_location": "L71",
+      "id": "ml_macro_client_fetch_macro_context",
+      "community": 8,
+      "norm_label": "fetch_macro_context()"
+    },
+    {
+      "label": "Market Data Hub \u2014 async HTTP client.  Fetches macro/intermarket context from t",
+      "file_type": "rationale",
+      "source_file": "macro_client.py",
+      "source_location": "L1",
+      "id": "ml_macro_client_rationale_1",
+      "community": 8,
+      "norm_label": "market data hub \u2014 async http client.  fetches macro/intermarket context from t"
+    },
+    {
+      "label": "GET with 1 retry on timeout / 5xx. Returns parsed JSON or None.",
+      "file_type": "rationale",
+      "source_file": "macro_client.py",
+      "source_location": "L55",
+      "id": "ml_macro_client_rationale_55",
+      "community": 8,
+      "norm_label": "get with 1 retry on timeout / 5xx. returns parsed json or none."
+    },
+    {
+      "label": "Fetch all required macro endpoints concurrently and return a validated     feat",
+      "file_type": "rationale",
+      "source_file": "macro_client.py",
+      "source_location": "L72",
+      "id": "ml_macro_client_rationale_72",
+      "community": 8,
+      "norm_label": "fetch all required macro endpoints concurrently and return a validated     feat"
+    },
+    {
+      "label": "macro_features.py",
+      "file_type": "code",
+      "source_file": "macro_features.py",
+      "source_location": "L1",
+      "id": "macro_features_py",
+      "community": 5,
+      "norm_label": "macro_features.py"
+    },
+    {
+      "label": "_safe_float()",
+      "file_type": "code",
+      "source_file": "macro_features.py",
+      "source_location": "L61",
+      "id": "ml_macro_features_safe_float",
+      "community": 5,
+      "norm_label": "_safe_float()"
+    },
+    {
+      "label": "_find_by_symbol()",
+      "file_type": "code",
+      "source_file": "macro_features.py",
+      "source_location": "L89",
+      "id": "ml_macro_features_find_by_symbol",
+      "community": 5,
+      "norm_label": "_find_by_symbol()"
+    },
+    {
+      "label": "_unwrap()",
+      "file_type": "code",
+      "source_file": "macro_features.py",
+      "source_location": "L109",
+      "id": "ml_macro_features_unwrap",
+      "community": 5,
+      "norm_label": "_unwrap()"
+    },
+    {
+      "label": "_extract_indices()",
+      "file_type": "code",
+      "source_file": "macro_features.py",
+      "source_location": "L118",
+      "id": "ml_macro_features_extract_indices",
+      "community": 5,
+      "norm_label": "_extract_indices()"
+    },
+    {
+      "label": "_extract_volatility()",
+      "file_type": "code",
+      "source_file": "macro_features.py",
+      "source_location": "L168",
+      "id": "ml_macro_features_extract_volatility",
+      "community": 5,
+      "norm_label": "_extract_volatility()"
+    },
+    {
+      "label": "_extract_forex()",
+      "file_type": "code",
+      "source_file": "macro_features.py",
+      "source_location": "L205",
+      "id": "ml_macro_features_extract_forex",
+      "community": 5,
+      "norm_label": "_extract_forex()"
+    },
+    {
+      "label": "_extract_bonds()",
+      "file_type": "code",
+      "source_file": "macro_features.py",
+      "source_location": "L242",
+      "id": "ml_macro_features_extract_bonds",
+      "community": 5,
+      "norm_label": "_extract_bonds()"
+    },
+    {
+      "label": "_extract_crypto_global()",
+      "file_type": "code",
+      "source_file": "macro_features.py",
+      "source_location": "L279",
+      "id": "ml_macro_features_extract_crypto_global",
+      "community": 5,
+      "norm_label": "_extract_crypto_global()"
+    },
+    {
+      "label": "extract_macro_features()",
+      "file_type": "code",
+      "source_file": "macro_features.py",
+      "source_location": "L376",
+      "id": "ml_macro_features_extract_macro_features",
+      "community": 5,
+      "norm_label": "extract_macro_features()"
+    },
+    {
+      "label": "Market Data Hub \u2014 feature extraction and validation.  Converts raw MDH API respo",
+      "file_type": "rationale",
+      "source_file": "macro_features.py",
+      "source_location": "L1",
+      "id": "ml_macro_features_rationale_1",
+      "community": 5,
+      "norm_label": "market data hub \u2014 feature extraction and validation.  converts raw mdh api respo"
+    },
+    {
+      "label": "Convert val to float, enforcing spec rules:     - None stays None (never \u2192 0)",
+      "file_type": "rationale",
+      "source_file": "macro_features.py",
+      "source_location": "L62",
+      "id": "ml_macro_features_rationale_62",
+      "community": 5,
+      "norm_label": "convert val to float, enforcing spec rules:     - none stays none (never \u2192 0)"
+    },
+    {
+      "label": "Find a dict in a list (or a single dict) by matching 'symbol' key.",
+      "file_type": "rationale",
+      "source_file": "macro_features.py",
+      "source_location": "L90",
+      "id": "ml_macro_features_rationale_90",
+      "community": 5,
+      "norm_label": "find a dict in a list (or a single dict) by matching 'symbol' key."
+    },
+    {
+      "label": "Unwrap common envelope shapes: {\"data\": ...} \u2192 ....",
+      "file_type": "rationale",
+      "source_file": "macro_features.py",
+      "source_location": "L110",
+      "id": "ml_macro_features_rationale_110",
+      "community": 5,
+      "norm_label": "unwrap common envelope shapes: {\"data\": ...} \u2192 ...."
+    },
+    {
+      "label": "Extract S&P 500, Nasdaq, Russell 2000 1h change percentages.      Expected MDH s",
+      "file_type": "rationale",
+      "source_file": "macro_features.py",
+      "source_location": "L119",
+      "id": "ml_macro_features_rationale_119",
+      "community": 5,
+      "norm_label": "extract s&p 500, nasdaq, russell 2000 1h change percentages.      expected mdh s"
+    },
+    {
+      "label": "Extract VIX value and 1h change.      Expected MDH shape:       {\"data\": [{\"symb",
+      "file_type": "rationale",
+      "source_file": "macro_features.py",
+      "source_location": "L169",
+      "id": "ml_macro_features_rationale_169",
+      "community": 5,
+      "norm_label": "extract vix value and 1h change.      expected mdh shape:       {\"data\": [{\"symb"
+    },
+    {
+      "label": "Extract DXY (US Dollar Index) value and 1h change.      Expected MDH shape:",
+      "file_type": "rationale",
+      "source_file": "macro_features.py",
+      "source_location": "L206",
+      "id": "ml_macro_features_rationale_206",
+      "community": 5,
+      "norm_label": "extract dxy (us dollar index) value and 1h change.      expected mdh shape:"
+    },
+    {
+      "label": "Extract US 10Y yield and 1h change.      Expected MDH shape:       {\"data\": [{\"s",
+      "file_type": "rationale",
+      "source_file": "macro_features.py",
+      "source_location": "L243",
+      "id": "ml_macro_features_rationale_243",
+      "community": 5,
+      "norm_label": "extract us 10y yield and 1h change.      expected mdh shape:       {\"data\": [{\"s"
+    },
+    {
+      "label": "Extract BTC dominance, market cap change, volume change, fear & greed index.",
+      "file_type": "rationale",
+      "source_file": "macro_features.py",
+      "source_location": "L280",
+      "id": "ml_macro_features_rationale_280",
+      "community": 5,
+      "norm_label": "extract btc dominance, market cap change, volume change, fear & greed index."
+    },
+    {
+      "label": "Convert raw MDH multi-endpoint responses into a validated flat feature dict.",
+      "file_type": "rationale",
+      "source_file": "macro_features.py",
+      "source_location": "L377",
+      "id": "ml_macro_features_rationale_377",
+      "community": 5,
+      "norm_label": "convert raw mdh multi-endpoint responses into a validated flat feature dict."
+    },
+    {
+      "label": "model_loader.py",
+      "file_type": "code",
+      "source_file": "model_loader.py",
+      "source_location": "L1",
+      "id": "model_loader_py",
+      "community": 3,
+      "norm_label": "model_loader.py"
+    },
+    {
+      "label": "ModelLoader",
+      "file_type": "code",
+      "source_file": "model_loader.py",
+      "source_location": "L13",
+      "id": "ml_model_loader_modelloader",
+      "community": 3,
+      "norm_label": "modelloader"
+    },
+    {
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "model_loader.py",
+      "source_location": "L16",
+      "id": "ml_model_loader_modelloader_init",
+      "community": 3,
+      "norm_label": ".__init__()"
+    },
+    {
+      "label": ".load()",
+      "file_type": "code",
+      "source_file": "model_loader.py",
+      "source_location": "L29",
+      "id": "ml_model_loader_modelloader_load",
+      "community": 3,
+      "norm_label": ".load()"
+    },
+    {
+      "label": ".is_loaded()",
+      "file_type": "code",
+      "source_file": "model_loader.py",
+      "source_location": "L76",
+      "id": "ml_model_loader_modelloader_is_loaded",
+      "community": 3,
+      "norm_label": ".is_loaded()"
+    },
+    {
+      "label": ".predict()",
+      "file_type": "code",
+      "source_file": "model_loader.py",
+      "source_location": "L80",
+      "id": "ml_model_loader_modelloader_predict",
+      "community": 3,
+      "norm_label": ".predict()"
+    },
+    {
+      "label": ".predict_batch()",
+      "file_type": "code",
+      "source_file": "model_loader.py",
+      "source_location": "L123",
+      "id": "ml_model_loader_modelloader_predict_batch",
+      "community": 3,
+      "norm_label": ".predict_batch()"
+    },
+    {
+      "label": ".get_metadata()",
+      "file_type": "code",
+      "source_file": "model_loader.py",
+      "source_location": "L146",
+      "id": "ml_model_loader_modelloader_get_metadata",
+      "community": 3,
+      "norm_label": ".get_metadata()"
+    },
+    {
+      "label": ".get_feature_columns()",
+      "file_type": "code",
+      "source_file": "model_loader.py",
+      "source_location": "L150",
+      "id": "ml_model_loader_modelloader_get_feature_columns",
+      "community": 3,
+      "norm_label": ".get_feature_columns()"
+    },
+    {
+      "label": "get_model_loader()",
+      "file_type": "code",
+      "source_file": "model_loader.py",
+      "source_location": "L159",
+      "id": "ml_model_loader_get_model_loader",
+      "community": 3,
+      "norm_label": "get_model_loader()"
+    },
+    {
+      "label": "load_model()",
+      "file_type": "code",
+      "source_file": "model_loader.py",
+      "source_location": "L182",
+      "id": "ml_model_loader_load_model",
+      "community": 3,
+      "norm_label": "load_model()"
+    },
+    {
+      "label": "Model Loader \u2014 Load and manage trained XGBoost models.",
+      "file_type": "rationale",
+      "source_file": "model_loader.py",
+      "source_location": "L1",
+      "id": "ml_model_loader_rationale_1",
+      "community": 3,
+      "norm_label": "model loader \u2014 load and manage trained xgboost models."
+    },
+    {
+      "label": "Load and manage trained models for inference.",
+      "file_type": "rationale",
+      "source_file": "model_loader.py",
+      "source_location": "L14",
+      "id": "ml_model_loader_rationale_14",
+      "community": 3,
+      "norm_label": "load and manage trained models for inference."
+    },
+    {
+      "label": "Initialize model loader.          Args:             model_path: Path to train",
+      "file_type": "rationale",
+      "source_file": "model_loader.py",
+      "source_location": "L17",
+      "id": "ml_model_loader_rationale_17",
+      "community": 3,
+      "norm_label": "initialize model loader.          args:             model_path: path to train"
+    },
+    {
+      "label": "Load model from disk.          Args:             model_path: Path to model fi",
+      "file_type": "rationale",
+      "source_file": "model_loader.py",
+      "source_location": "L30",
+      "id": "ml_model_loader_rationale_30",
+      "community": 3,
+      "norm_label": "load model from disk.          args:             model_path: path to model fi"
+    },
+    {
+      "label": "Check if model is loaded.",
+      "file_type": "rationale",
+      "source_file": "model_loader.py",
+      "source_location": "L77",
+      "id": "ml_model_loader_rationale_77",
+      "community": 3,
+      "norm_label": "check if model is loaded."
+    },
+    {
+      "label": "Predict probability for a single feature vector.          Args:             f",
+      "file_type": "rationale",
+      "source_file": "model_loader.py",
+      "source_location": "L81",
+      "id": "ml_model_loader_rationale_81",
+      "community": 3,
+      "norm_label": "predict probability for a single feature vector.          args:             f"
+    },
+    {
+      "label": "Predict probabilities for multiple feature vectors.          Args:",
+      "file_type": "rationale",
+      "source_file": "model_loader.py",
+      "source_location": "L126",
+      "id": "ml_model_loader_rationale_126",
+      "community": 3,
+      "norm_label": "predict probabilities for multiple feature vectors.          args:"
+    },
+    {
+      "label": "Get list of required feature columns.",
+      "file_type": "rationale",
+      "source_file": "model_loader.py",
+      "source_location": "L151",
+      "id": "ml_model_loader_rationale_151",
+      "community": 3,
+      "norm_label": "get list of required feature columns."
+    },
+    {
+      "label": "Get global model loader instance.      Args:         model_path: Path to mode",
+      "file_type": "rationale",
+      "source_file": "model_loader.py",
+      "source_location": "L163",
+      "id": "ml_model_loader_rationale_163",
+      "community": 3,
+      "norm_label": "get global model loader instance.      args:         model_path: path to mode"
+    },
+    {
+      "label": "Load a model and return loader instance.      Args:         model_path: Path",
+      "file_type": "rationale",
+      "source_file": "model_loader.py",
+      "source_location": "L183",
+      "id": "ml_model_loader_rationale_183",
+      "community": 3,
+      "norm_label": "load a model and return loader instance.      args:         model_path: path"
+    },
+    {
+      "label": "prediction_service.py",
+      "file_type": "code",
+      "source_file": "prediction_service.py",
+      "source_location": "L1",
+      "id": "prediction_service_py",
+      "community": 8,
+      "norm_label": "prediction_service.py"
+    },
+    {
+      "label": "WinFastPredictor",
+      "file_type": "code",
+      "source_file": "prediction_service.py",
+      "source_location": "L15",
+      "id": "ml_prediction_service_winfastpredictor",
+      "community": 8,
+      "norm_label": "winfastpredictor"
+    },
+    {
+      "label": "._get_threshold()",
+      "file_type": "code",
+      "source_file": "prediction_service.py",
+      "source_location": "L22",
+      "id": "ml_prediction_service_winfastpredictor_get_threshold",
+      "community": 8,
+      "norm_label": "._get_threshold()"
+    },
+    {
+      "label": ".predict()",
+      "file_type": "code",
+      "source_file": "prediction_service.py",
+      "source_location": "L35",
+      "id": "ml_prediction_service_winfastpredictor_predict",
+      "community": 8,
+      "norm_label": ".predict()"
+    },
+    {
+      "label": "Preditor stateless \u2014 compat\u00edvel com Cloud Run.     Modelo vive no GCS, carregad",
+      "file_type": "rationale",
+      "source_file": "prediction_service.py",
+      "source_location": "L16",
+      "id": "ml_prediction_service_rationale_16",
+      "community": 8,
+      "norm_label": "preditor stateless \u2014 compativel com cloud run.     modelo vive no gcs, carregad"
+    },
+    {
+      "label": "Busca model_id e threshold do modelo ativo.",
+      "file_type": "rationale",
+      "source_file": "prediction_service.py",
+      "source_location": "L23",
+      "id": "ml_prediction_service_rationale_23",
+      "community": 8,
+      "norm_label": "busca model_id e threshold do modelo ativo."
+    },
+    {
+      "label": "Prediz probabilidade WIN_FAST para um sinal L3.          Returns:",
+      "file_type": "rationale",
+      "source_file": "prediction_service.py",
+      "source_location": "L42",
+      "id": "ml_prediction_service_rationale_42",
+      "community": 8,
+      "norm_label": "prediz probabilidade win_fast para um sinal l3.          returns:"
+    },
+    {
+      "label": "predict_service.py",
+      "file_type": "code",
+      "source_file": "predict_service.py",
+      "source_location": "L1",
+      "id": "predict_service_py",
+      "community": 0,
+      "norm_label": "predict_service.py"
+    },
+    {
+      "label": "PredictService",
+      "file_type": "code",
+      "source_file": "predict_service.py",
+      "source_location": "L10",
+      "id": "ml_predict_service_predictservice",
+      "community": 0,
+      "norm_label": "predictservice"
+    },
+    {
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "predict_service.py",
+      "source_location": "L13",
+      "id": "ml_predict_service_predictservice_init",
+      "community": 0,
+      "norm_label": ".__init__()"
+    },
+    {
+      "label": ".initialize()",
+      "file_type": "code",
+      "source_file": "predict_service.py",
+      "source_location": "L29",
+      "id": "ml_predict_service_predictservice_initialize",
+      "community": 0,
+      "norm_label": ".initialize()"
+    },
+    {
+      "label": ".is_ready()",
+      "file_type": "code",
+      "source_file": "predict_service.py",
+      "source_location": "L43",
+      "id": "ml_predict_service_predictservice_is_ready",
+      "community": 0,
+      "norm_label": ".is_ready()"
+    },
+    {
+      "label": "._prepare_features()",
+      "file_type": "code",
+      "source_file": "predict_service.py",
+      "source_location": "L47",
+      "id": "ml_predict_service_predictservice_prepare_features",
+      "community": 0,
+      "norm_label": "._prepare_features()"
+    },
+    {
+      "label": ".predict_single_direction()",
+      "file_type": "code",
+      "source_file": "predict_service.py",
+      "source_location": "L106",
+      "id": "ml_predict_service_predictservice_predict_single_direction",
+      "community": 0,
+      "norm_label": ".predict_single_direction()"
+    },
+    {
+      "label": ".predict_both_directions()",
+      "file_type": "code",
+      "source_file": "predict_service.py",
+      "source_location": "L142",
+      "id": "ml_predict_service_predictservice_predict_both_directions",
+      "community": 0,
+      "norm_label": ".predict_both_directions()"
+    },
+    {
+      "label": ".predict_best_direction()",
+      "file_type": "code",
+      "source_file": "predict_service.py",
+      "source_location": "L160",
+      "id": "ml_predict_service_predictservice_predict_best_direction",
+      "community": 0,
+      "norm_label": ".predict_best_direction()"
+    },
+    {
+      "label": ".calculate_final_score()",
+      "file_type": "code",
+      "source_file": "predict_service.py",
+      "source_location": "L199",
+      "id": "ml_predict_service_predictservice_calculate_final_score",
+      "community": 0,
+      "norm_label": ".calculate_final_score()"
+    },
+    {
+      "label": ".should_block()",
+      "file_type": "code",
+      "source_file": "predict_service.py",
+      "source_location": "L222",
+      "id": "ml_predict_service_predictservice_should_block",
+      "community": 0,
+      "norm_label": ".should_block()"
+    },
+    {
+      "label": ".predict_for_l3_ranking()",
+      "file_type": "code",
+      "source_file": "predict_service.py",
+      "source_location": "L239",
+      "id": "ml_predict_service_predictservice_predict_for_l3_ranking",
+      "community": 0,
+      "norm_label": ".predict_for_l3_ranking()"
+    },
+    {
+      "label": ".batch_predict_for_l3()",
+      "file_type": "code",
+      "source_file": "predict_service.py",
+      "source_location": "L271",
+      "id": "ml_predict_service_predictservice_batch_predict_for_l3",
+      "community": 0,
+      "norm_label": ".batch_predict_for_l3()"
+    },
+    {
+      "label": "get_predict_service()",
+      "file_type": "code",
+      "source_file": "predict_service.py",
+      "source_location": "L325",
+      "id": "ml_predict_service_get_predict_service",
+      "community": 0,
+      "norm_label": "get_predict_service()"
+    },
+    {
+      "label": "Prediction Service \u2014 Real-time inference for L3 ranking and blocking.",
+      "file_type": "rationale",
+      "source_file": "predict_service.py",
+      "source_location": "L1",
+      "id": "ml_predict_service_rationale_1",
+      "community": 0,
+      "norm_label": "prediction service \u2014 real-time inference for l3 ranking and blocking."
+    },
+    {
+      "label": "Prediction service for real-time trade outcome prediction.",
+      "file_type": "rationale",
+      "source_file": "predict_service.py",
+      "source_location": "L11",
+      "id": "ml_predict_service_rationale_11",
+      "community": 0,
+      "norm_label": "prediction service for real-time trade outcome prediction."
+    },
+    {
+      "label": "Initialize prediction service.          Args:             model_path: Path to",
+      "file_type": "rationale",
+      "source_file": "predict_service.py",
+      "source_location": "L18",
+      "id": "ml_predict_service_rationale_18",
+      "community": 0,
+      "norm_label": "initialize prediction service.          args:             model_path: path to"
+    },
+    {
+      "label": "Initialize and load model.          Returns:             True if successful,",
+      "file_type": "rationale",
+      "source_file": "predict_service.py",
+      "source_location": "L30",
+      "id": "ml_predict_service_rationale_30",
+      "community": 0,
+      "norm_label": "initialize and load model.          returns:             true if successful,"
+    },
+    {
+      "label": "Check if service is ready.",
+      "file_type": "rationale",
+      "source_file": "predict_service.py",
+      "source_location": "L44",
+      "id": "ml_predict_service_rationale_44",
+      "community": 0,
+      "norm_label": "check if service is ready."
+    },
+    {
+      "label": "Prepare feature dictionary with direction encoding.          Args:",
+      "file_type": "rationale",
+      "source_file": "predict_service.py",
+      "source_location": "L52",
+      "id": "ml_predict_service_rationale_52",
+      "community": 0,
+      "norm_label": "prepare feature dictionary with direction encoding.          args:"
+    },
+    {
+      "label": "Predict probability for a single direction.          Args:             featur",
+      "file_type": "rationale",
+      "source_file": "predict_service.py",
+      "source_location": "L111",
+      "id": "ml_predict_service_rationale_111",
+      "community": 0,
+      "norm_label": "predict probability for a single direction.          args:             featur"
+    },
+    {
+      "label": "Predict probabilities for both LONG and SHORT directions.          Args:",
+      "file_type": "rationale",
+      "source_file": "predict_service.py",
+      "source_location": "L146",
+      "id": "ml_predict_service_rationale_146",
+      "community": 0,
+      "norm_label": "predict probabilities for both long and short directions.          args:"
+    },
+    {
+      "label": "Predict best direction and probability.          For SPOT: only predict LONG",
+      "file_type": "rationale",
+      "source_file": "predict_service.py",
+      "source_location": "L165",
+      "id": "ml_predict_service_rationale_165",
+      "community": 0,
+      "norm_label": "predict best direction and probability.          for spot: only predict long"
+    },
+    {
+      "label": "Calculate final score as (score / 100) * probability.          Args:",
+      "file_type": "rationale",
+      "source_file": "predict_service.py",
+      "source_location": "L204",
+      "id": "ml_predict_service_rationale_204",
+      "community": 0,
+      "norm_label": "calculate final score as (score / 100) * probability.          args:"
+    },
+    {
+      "label": "Determine if trade should be blocked based on ML prediction.          Args:",
+      "file_type": "rationale",
+      "source_file": "predict_service.py",
+      "source_location": "L227",
+      "id": "ml_predict_service_rationale_227",
+      "community": 0,
+      "norm_label": "determine if trade should be blocked based on ml prediction.          args:"
+    },
+    {
+      "label": "Complete prediction pipeline for L3 ranking.          Args:             asset",
+      "file_type": "rationale",
+      "source_file": "predict_service.py",
+      "source_location": "L244",
+      "id": "ml_predict_service_rationale_244",
+      "community": 0,
+      "norm_label": "complete prediction pipeline for l3 ranking.          args:             asset"
+    },
+    {
+      "label": "Batch prediction for L3 asset list.          Args:             assets: List o",
+      "file_type": "rationale",
+      "source_file": "predict_service.py",
+      "source_location": "L277",
+      "id": "ml_predict_service_rationale_277",
+      "community": 0,
+      "norm_label": "batch prediction for l3 asset list.          args:             assets: list o"
+    },
+    {
+      "label": "Get global prediction service instance.      Args:         model_path: Path t",
+      "file_type": "rationale",
+      "source_file": "predict_service.py",
+      "source_location": "L329",
+      "id": "ml_predict_service_rationale_329",
+      "community": 0,
+      "norm_label": "get global prediction service instance.      args:         model_path: path t"
+    },
+    {
+      "label": "trainer.py",
+      "file_type": "code",
+      "source_file": "trainer.py",
+      "source_location": "L1",
+      "id": "trainer_py",
+      "community": 1,
+      "norm_label": "trainer.py"
+    },
+    {
+      "label": "_calibrate_threshold()",
+      "file_type": "code",
+      "source_file": "trainer.py",
+      "source_location": "L35",
+      "id": "ml_trainer_calibrate_threshold",
+      "community": 1,
+      "norm_label": "_calibrate_threshold()"
+    },
+    {
+      "label": "_report_bad_approval_drivers()",
+      "file_type": "code",
+      "source_file": "trainer.py",
+      "source_location": "L109",
+      "id": "ml_trainer_report_bad_approval_drivers",
+      "community": 1,
+      "norm_label": "_report_bad_approval_drivers()"
+    },
+    {
+      "label": "_compute_psi()",
+      "file_type": "code",
+      "source_file": "trainer.py",
+      "source_location": "L144",
+      "id": "ml_trainer_compute_psi",
+      "community": 1,
+      "norm_label": "_compute_psi()"
+    },
+    {
+      "label": "WinFastTrainer",
+      "file_type": "code",
+      "source_file": "trainer.py",
+      "source_location": "L174",
+      "id": "ml_trainer_winfasttrainer",
+      "community": 1,
+      "norm_label": "winfasttrainer"
+    },
+    {
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "trainer.py",
+      "source_location": "L182",
+      "id": "ml_trainer_winfasttrainer_init",
+      "community": 1,
+      "norm_label": ".__init__()"
+    },
+    {
+      "label": ".train()",
+      "file_type": "code",
+      "source_file": "trainer.py",
+      "source_location": "L186",
+      "id": "ml_trainer_winfasttrainer_train",
+      "community": 1,
+      "norm_label": ".train()"
+    },
+    {
+      "label": "WinFast Trainer \u2014 XGBoost + Optuna trainer for Cloud Run Job.",
+      "file_type": "rationale",
+      "source_file": "trainer.py",
+      "source_location": "L1",
+      "id": "ml_trainer_rationale_1",
+      "community": 1,
+      "norm_label": "winfast trainer \u2014 xgboost + optuna trainer for cloud run job."
+    },
+    {
+      "label": "Pick the decision threshold on the test set.      Strategy is selectable via t",
+      "file_type": "rationale",
+      "source_file": "trainer.py",
+      "source_location": "L41",
+      "id": "ml_trainer_rationale_41",
+      "community": 1,
+      "norm_label": "pick the decision threshold on the test set.      strategy is selectable via t"
+    },
+    {
+      "label": "SHAP analysis: quais features empurram aprova\u00e7\u00f5es ruins (SL_HIT).      Retorna",
+      "file_type": "rationale",
+      "source_file": "trainer.py",
+      "source_location": "L115",
+      "id": "ml_trainer_rationale_115",
+      "community": 1,
+      "norm_label": "shap analysis: quais features empurram aprovacoes ruins (sl_hit).      retorna"
+    },
+    {
+      "label": "Population Stability Index between train and test distributions.      PSI < 0.",
+      "file_type": "rationale",
+      "source_file": "trainer.py",
+      "source_location": "L149",
+      "id": "ml_trainer_rationale_149",
+      "community": 1,
+      "norm_label": "population stability index between train and test distributions.      psi < 0."
+    },
+    {
+      "label": "XGBoost trainer with Optuna hyperparameter optimization.      Zero Hardcode: a",
+      "file_type": "rationale",
+      "source_file": "trainer.py",
+      "source_location": "L175",
+      "id": "ml_trainer_rationale_175",
+      "community": 1,
+      "norm_label": "xgboost trainer with optuna hyperparameter optimization.      zero hardcode: a"
+    },
+    {
+      "label": "Train XGBoost model with Optuna hyperparameter optimization.          Args:",
+      "file_type": "rationale",
+      "source_file": "trainer.py",
+      "source_location": "L192",
+      "id": "ml_trainer_rationale_192",
+      "community": 1,
+      "norm_label": "train xgboost model with optuna hyperparameter optimization.          args:"
+    },
+    {
+      "label": "train_model.py",
+      "file_type": "code",
+      "source_file": "train_model.py",
+      "source_location": "L1",
+      "id": "train_model_py",
+      "community": 2,
+      "norm_label": "train_model.py"
+    },
+    {
+      "label": "ModelTrainer",
+      "file_type": "code",
+      "source_file": "train_model.py",
+      "source_location": "L22",
+      "id": "ml_train_model_modeltrainer",
+      "community": 2,
+      "norm_label": "modeltrainer"
+    },
+    {
+      "label": ".__init__()",
+      "file_type": "code",
+      "source_file": "train_model.py",
+      "source_location": "L25",
+      "id": "ml_train_model_modeltrainer_init",
+      "community": 2,
+      "norm_label": ".__init__()"
+    },
+    {
+      "label": ".calculate_scale_pos_weight()",
+      "file_type": "code",
+      "source_file": "train_model.py",
+      "source_location": "L62",
+      "id": "ml_train_model_modeltrainer_calculate_scale_pos_weight",
+      "community": 2,
+      "norm_label": ".calculate_scale_pos_weight()"
+    },
+    {
+      "label": ".train()",
+      "file_type": "code",
+      "source_file": "train_model.py",
+      "source_location": "L87",
+      "id": "ml_train_model_modeltrainer_train",
+      "community": 2,
+      "norm_label": ".train()"
+    },
+    {
+      "label": ".evaluate()",
+      "file_type": "code",
+      "source_file": "train_model.py",
+      "source_location": "L177",
+      "id": "ml_train_model_modeltrainer_evaluate",
+      "community": 2,
+      "norm_label": ".evaluate()"
+    },
+    {
+      "label": ".get_feature_importance()",
+      "file_type": "code",
+      "source_file": "train_model.py",
+      "source_location": "L233",
+      "id": "ml_train_model_modeltrainer_get_feature_importance",
+      "community": 2,
+      "norm_label": ".get_feature_importance()"
+    },
+    {
+      "label": ".analyze_by_probability_bucket()",
+      "file_type": "code",
+      "source_file": "train_model.py",
+      "source_location": "L263",
+      "id": "ml_train_model_modeltrainer_analyze_by_probability_bucket",
+      "community": 2,
+      "norm_label": ".analyze_by_probability_bucket()"
+    },
+    {
+      "label": ".save()",
+      "file_type": "code",
+      "source_file": "train_model.py",
+      "source_location": "L313",
+      "id": "ml_train_model_modeltrainer_save",
+      "community": 2,
+      "norm_label": ".save()"
+    },
+    {
+      "label": ".load()",
+      "file_type": "code",
+      "source_file": "train_model.py",
+      "source_location": "L340",
+      "id": "ml_train_model_modeltrainer_load",
+      "community": 2,
+      "norm_label": ".load()"
+    },
+    {
+      "label": "train_model_pipeline()",
+      "file_type": "code",
+      "source_file": "train_model.py",
+      "source_location": "L358",
+      "id": "ml_train_model_train_model_pipeline",
+      "community": 2,
+      "norm_label": "train_model_pipeline()"
+    },
+    {
+      "label": "Model Training \u2014 Train XGBoost model for trade outcome prediction.",
+      "file_type": "rationale",
+      "source_file": "train_model.py",
+      "source_location": "L1",
+      "id": "ml_train_model_rationale_1",
+      "community": 2,
+      "norm_label": "model training \u2014 train xgboost model for trade outcome prediction."
+    },
+    {
+      "label": "Train and manage XGBoost models for trade outcome prediction.",
+      "file_type": "rationale",
+      "source_file": "train_model.py",
+      "source_location": "L23",
+      "id": "ml_train_model_rationale_23",
+      "community": 2,
+      "norm_label": "train and manage xgboost models for trade outcome prediction."
+    },
+    {
+      "label": "Initialize model trainer.          Args:             model_dir: Directory to",
+      "file_type": "rationale",
+      "source_file": "train_model.py",
+      "source_location": "L30",
+      "id": "ml_train_model_rationale_30",
+      "community": 2,
+      "norm_label": "initialize model trainer.          args:             model_dir: directory to"
+    },
+    {
+      "label": "Calculate scale_pos_weight to handle class imbalance.          Args:",
+      "file_type": "rationale",
+      "source_file": "train_model.py",
+      "source_location": "L65",
+      "id": "ml_train_model_rationale_65",
+      "community": 2,
+      "norm_label": "calculate scale_pos_weight to handle class imbalance.          args:"
+    },
+    {
+      "label": "Train XGBoost model.          Args:             X_train: Training features",
+      "file_type": "rationale",
+      "source_file": "train_model.py",
+      "source_location": "L97",
+      "id": "ml_train_model_rationale_97",
+      "community": 2,
+      "norm_label": "train xgboost model.          args:             x_train: training features"
+    },
+    {
+      "label": "Evaluate model performance.          Args:             X: Features",
+      "file_type": "rationale",
+      "source_file": "train_model.py",
+      "source_location": "L184",
+      "id": "ml_train_model_rationale_184",
+      "community": 2,
+      "norm_label": "evaluate model performance.          args:             x: features"
+    },
+    {
+      "label": "Get feature importance scores.          Args:             top_n: Number of to",
+      "file_type": "rationale",
+      "source_file": "train_model.py",
+      "source_location": "L236",
+      "id": "ml_train_model_rationale_236",
+      "community": 2,
+      "norm_label": "get feature importance scores.          args:             top_n: number of to"
+    },
+    {
+      "label": "Analyze win rate by probability bucket.          Args:             X: Feature",
+      "file_type": "rationale",
+      "source_file": "train_model.py",
+      "source_location": "L270",
+      "id": "ml_train_model_rationale_270",
+      "community": 2,
+      "norm_label": "analyze win rate by probability bucket.          args:             x: feature"
+    },
+    {
+      "label": "Save trained model to disk.          Args:             model_name: Name of th",
+      "file_type": "rationale",
+      "source_file": "train_model.py",
+      "source_location": "L314",
+      "id": "ml_train_model_rationale_314",
+      "community": 2,
+      "norm_label": "save trained model to disk.          args:             model_name: name of th"
+    },
+    {
+      "label": "Load trained model from disk.          Args:             model_path: Path to",
+      "file_type": "rationale",
+      "source_file": "train_model.py",
+      "source_location": "L341",
+      "id": "ml_train_model_rationale_341",
+      "community": 2,
+      "norm_label": "load trained model from disk.          args:             model_path: path to"
+    },
+    {
+      "label": "Complete model training pipeline.      Args:         db: Database session",
+      "file_type": "rationale",
+      "source_file": "train_model.py",
+      "source_location": "L365",
+      "id": "ml_train_model_rationale_365",
+      "community": 2,
+      "norm_label": "complete model training pipeline.      args:         db: database session"
+    },
+    {
+      "label": "__init__.py",
+      "file_type": "code",
+      "source_file": "__init__.py",
+      "source_location": "L1",
+      "id": "init_py",
+      "community": 10,
+      "norm_label": "__init__.py"
+    },
+    {
+      "label": "Machine Learning module for SCALPYN trading system.",
+      "file_type": "rationale",
+      "source_file": "__init__.py",
+      "source_location": "L1",
+      "id": "ml_init_rationale_1",
+      "community": 10,
+      "norm_label": "machine learning module for scalpyn trading system."
+    }
+  ],
+  "links": [
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L15",
+      "weight": 1.0,
+      "source": "dataset_builder_py",
+      "target": "ml_dataset_builder_datasetbuilder",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_rationale_1",
+      "target": "dataset_builder_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L57",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_datasetbuilder",
+      "target": "ml_dataset_builder_datasetbuilder_init",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L61",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_datasetbuilder",
+      "target": "ml_dataset_builder_datasetbuilder_load_simulations",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L126",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_datasetbuilder",
+      "target": "ml_dataset_builder_datasetbuilder_extract_features",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L176",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_datasetbuilder",
+      "target": "ml_dataset_builder_datasetbuilder_engineer_features",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L228",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_datasetbuilder",
+      "target": "ml_dataset_builder_datasetbuilder_encode_direction",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L249",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_datasetbuilder",
+      "target": "ml_dataset_builder_datasetbuilder_get_feature_columns",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L267",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_datasetbuilder",
+      "target": "ml_dataset_builder_datasetbuilder_prepare_dataset",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L306",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_datasetbuilder",
+      "target": "ml_dataset_builder_datasetbuilder_time_based_split",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L16",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_rationale_16",
+      "target": "ml_dataset_builder_datasetbuilder",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "predict_service.py",
+      "source_location": "L62",
+      "weight": 0.8,
+      "source": "ml_predict_service_predictservice",
+      "target": "ml_dataset_builder_datasetbuilder",
+      "confidence_score": 0.5
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "train_model.py",
+      "source_location": "L378",
+      "weight": 0.8,
+      "source": "ml_train_model_modeltrainer",
+      "target": "ml_dataset_builder_datasetbuilder",
+      "confidence_score": 0.5
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "predict_service.py",
+      "source_location": "L64",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice_prepare_features",
+      "target": "ml_dataset_builder_datasetbuilder"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "train_model.py",
+      "source_location": "L383",
+      "weight": 1.0,
+      "source": "ml_train_model_train_model_pipeline",
+      "target": "ml_dataset_builder_datasetbuilder"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L58",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_rationale_58",
+      "target": "ml_dataset_builder_datasetbuilder_init",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L69",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_rationale_69",
+      "target": "ml_dataset_builder_datasetbuilder_load_simulations",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L286",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_datasetbuilder_prepare_dataset",
+      "target": "ml_dataset_builder_datasetbuilder_extract_features",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L129",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_rationale_129",
+      "target": "ml_dataset_builder_datasetbuilder_extract_features",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L289",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_datasetbuilder_prepare_dataset",
+      "target": "ml_dataset_builder_datasetbuilder_engineer_features",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L177",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_rationale_177",
+      "target": "ml_dataset_builder_datasetbuilder_engineer_features",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L293",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_datasetbuilder_prepare_dataset",
+      "target": "ml_dataset_builder_datasetbuilder_encode_direction",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L229",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_rationale_229",
+      "target": "ml_dataset_builder_datasetbuilder_encode_direction",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L296",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_datasetbuilder_prepare_dataset",
+      "target": "ml_dataset_builder_datasetbuilder_get_feature_columns",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L250",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_rationale_250",
+      "target": "ml_dataset_builder_datasetbuilder_get_feature_columns",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L272",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_rationale_272",
+      "target": "ml_dataset_builder_datasetbuilder_prepare_dataset",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "dataset_builder.py",
+      "source_location": "L312",
+      "weight": 1.0,
+      "source": "ml_dataset_builder_rationale_312",
+      "target": "ml_dataset_builder_datasetbuilder_time_based_split",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L19",
+      "weight": 1.0,
+      "source": "evaluation_report_py",
+      "target": "feature_extractor_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L26",
+      "weight": 1.0,
+      "source": "evaluation_report_py",
+      "target": "ml_evaluation_report_load_active_model_and_threshold",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L54",
+      "weight": 1.0,
+      "source": "evaluation_report_py",
+      "target": "ml_evaluation_report_load_decisions",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L115",
+      "weight": 1.0,
+      "source": "evaluation_report_py",
+      "target": "ml_evaluation_report_analyze_probability_buckets",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L141",
+      "weight": 1.0,
+      "source": "evaluation_report_py",
+      "target": "ml_evaluation_report_generate_evaluation_report",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L318",
+      "weight": 1.0,
+      "source": "evaluation_report_py",
+      "target": "ml_evaluation_report_evaluationreport",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "ml_evaluation_report_rationale_1",
+      "target": "evaluation_report_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L177",
+      "weight": 1.0,
+      "source": "ml_evaluation_report_generate_evaluation_report",
+      "target": "ml_evaluation_report_load_active_model_and_threshold",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L27",
+      "weight": 1.0,
+      "source": "ml_evaluation_report_rationale_27",
+      "target": "ml_evaluation_report_load_active_model_and_threshold",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L180",
+      "weight": 1.0,
+      "source": "ml_evaluation_report_generate_evaluation_report",
+      "target": "ml_evaluation_report_load_decisions",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L61",
+      "weight": 1.0,
+      "source": "ml_evaluation_report_rationale_61",
+      "target": "ml_evaluation_report_load_decisions",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L262",
+      "weight": 1.0,
+      "source": "ml_evaluation_report_generate_evaluation_report",
+      "target": "ml_evaluation_report_analyze_probability_buckets",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L121",
+      "weight": 1.0,
+      "source": "ml_evaluation_report_rationale_121",
+      "target": "ml_evaluation_report_analyze_probability_buckets",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L331",
+      "weight": 1.0,
+      "source": "ml_evaluation_report_evaluationreport_generate_report",
+      "target": "ml_evaluation_report_generate_evaluation_report",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L149",
+      "weight": 1.0,
+      "source": "ml_evaluation_report_rationale_149",
+      "target": "ml_evaluation_report_generate_evaluation_report",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "evaluation_report.py",
+      "source_location": "L186",
+      "weight": 1.0,
+      "source": "ml_evaluation_report_generate_evaluation_report",
+      "target": "ml_feature_extractor_build_training_dataframe"
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L321",
+      "weight": 1.0,
+      "source": "ml_evaluation_report_evaluationreport",
+      "target": "ml_evaluation_report_evaluationreport_init",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L324",
+      "weight": 1.0,
+      "source": "ml_evaluation_report_evaluationreport",
+      "target": "ml_evaluation_report_evaluationreport_generate_report",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "evaluation_report.py",
+      "source_location": "L319",
+      "weight": 1.0,
+      "source": "ml_evaluation_report_rationale_319",
+      "target": "ml_evaluation_report_evaluationreport",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "feature_extractor.py",
+      "source_location": "L85",
+      "weight": 1.0,
+      "source": "feature_extractor_py",
+      "target": "macro_features_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "feature_extractor.py",
+      "source_location": "L110",
+      "weight": 1.0,
+      "source": "feature_extractor_py",
+      "target": "ml_feature_extractor_extract_features",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "feature_extractor.py",
+      "source_location": "L249",
+      "weight": 1.0,
+      "source": "feature_extractor_py",
+      "target": "ml_feature_extractor_build_training_dataframe",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "feature_extractor.py",
+      "source_location": "L381",
+      "weight": 1.0,
+      "source": "feature_extractor_py",
+      "target": "ml_feature_extractor_filter_trainable_features",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "feature_extractor.py",
+      "source_location": "L440",
+      "weight": 1.0,
+      "source": "feature_extractor_py",
+      "target": "ml_feature_extractor_train_val_test_split",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "feature_extractor.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "ml_feature_extractor_rationale_1",
+      "target": "feature_extractor_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "trainer.py",
+      "source_location": "L22",
+      "weight": 1.0,
+      "source": "trainer_py",
+      "target": "feature_extractor_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "feature_extractor.py",
+      "source_location": "L302",
+      "weight": 1.0,
+      "source": "ml_feature_extractor_build_training_dataframe",
+      "target": "ml_feature_extractor_extract_features",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "feature_extractor.py",
+      "source_location": "L111",
+      "weight": 1.0,
+      "source": "ml_feature_extractor_rationale_111",
+      "target": "ml_feature_extractor_extract_features",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "feature_extractor.py",
+      "source_location": "L255",
+      "weight": 1.0,
+      "source": "ml_feature_extractor_rationale_255",
+      "target": "ml_feature_extractor_build_training_dataframe",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "feature_extractor.py",
+      "source_location": "L386",
+      "weight": 1.0,
+      "source": "ml_feature_extractor_rationale_386",
+      "target": "ml_feature_extractor_filter_trainable_features",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "trainer.py",
+      "source_location": "L227",
+      "weight": 1.0,
+      "source": "ml_trainer_winfasttrainer_train",
+      "target": "ml_feature_extractor_filter_trainable_features"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "feature_extractor.py",
+      "source_location": "L445",
+      "weight": 1.0,
+      "source": "ml_feature_extractor_rationale_445",
+      "target": "ml_feature_extractor_train_val_test_split",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "trainer.py",
+      "source_location": "L245",
+      "weight": 1.0,
+      "source": "ml_trainer_winfasttrainer_train",
+      "target": "ml_feature_extractor_train_val_test_split"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "forward_scorer.py",
+      "source_location": "L23",
+      "weight": 1.0,
+      "source": "forward_scorer_py",
+      "target": "ml_forward_scorer_safe_score_shadow_trade",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "forward_scorer.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "ml_forward_scorer_rationale_1",
+      "target": "forward_scorer_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "forward_scorer.py",
+      "source_location": "L28",
+      "weight": 1.0,
+      "source": "ml_forward_scorer_rationale_28",
+      "target": "ml_forward_scorer_safe_score_shadow_trade",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L23",
+      "weight": 1.0,
+      "source": "gcs_model_loader_py",
+      "target": "ml_gcs_model_loader_gcsmodelloader",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L114",
+      "weight": 1.0,
+      "source": "gcs_model_loader_py",
+      "target": "ml_gcs_model_loader_get_model",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L119",
+      "weight": 1.0,
+      "source": "gcs_model_loader_py",
+      "target": "ml_gcs_model_loader_invalidate_model_cache",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "ml_gcs_model_loader_rationale_1",
+      "target": "gcs_model_loader_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L36",
+      "weight": 1.0,
+      "source": "ml_gcs_model_loader_gcsmodelloader",
+      "target": "ml_gcs_model_loader_gcsmodelloader_new",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L45",
+      "weight": 1.0,
+      "source": "ml_gcs_model_loader_gcsmodelloader",
+      "target": "ml_gcs_model_loader_gcsmodelloader_get_model",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L52",
+      "weight": 1.0,
+      "source": "ml_gcs_model_loader_gcsmodelloader",
+      "target": "ml_gcs_model_loader_gcsmodelloader_load_from_db",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L103",
+      "weight": 1.0,
+      "source": "ml_gcs_model_loader_gcsmodelloader",
+      "target": "ml_gcs_model_loader_gcsmodelloader_invalidate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L24",
+      "weight": 1.0,
+      "source": "ml_gcs_model_loader_rationale_24",
+      "target": "ml_gcs_model_loader_gcsmodelloader",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L49",
+      "weight": 1.0,
+      "source": "ml_gcs_model_loader_gcsmodelloader_get_model",
+      "target": "ml_gcs_model_loader_gcsmodelloader_load_from_db",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L46",
+      "weight": 1.0,
+      "source": "ml_gcs_model_loader_rationale_46",
+      "target": "ml_gcs_model_loader_gcsmodelloader_get_model",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L53",
+      "weight": 1.0,
+      "source": "ml_gcs_model_loader_rationale_53",
+      "target": "ml_gcs_model_loader_gcsmodelloader_load_from_db",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L120",
+      "weight": 1.0,
+      "source": "ml_gcs_model_loader_invalidate_model_cache",
+      "target": "ml_gcs_model_loader_gcsmodelloader_invalidate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L104",
+      "weight": 1.0,
+      "source": "ml_gcs_model_loader_rationale_104",
+      "target": "ml_gcs_model_loader_gcsmodelloader_invalidate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "gcs_model_loader.py",
+      "source_location": "L115",
+      "weight": 1.0,
+      "source": "ml_gcs_model_loader_rationale_115",
+      "target": "ml_gcs_model_loader_get_model",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_client.py",
+      "source_location": "L21",
+      "weight": 1.0,
+      "source": "macro_client_py",
+      "target": "macro_features_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_client.py",
+      "source_location": "L54",
+      "weight": 1.0,
+      "source": "macro_client_py",
+      "target": "ml_macro_client_get",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_client.py",
+      "source_location": "L71",
+      "weight": 1.0,
+      "source": "macro_client_py",
+      "target": "ml_macro_client_fetch_macro_context",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_client.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "ml_macro_client_rationale_1",
+      "target": "macro_client_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_client.py",
+      "source_location": "L87",
+      "weight": 1.0,
+      "source": "ml_macro_client_fetch_macro_context",
+      "target": "ml_macro_client_get",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_client.py",
+      "source_location": "L55",
+      "weight": 1.0,
+      "source": "ml_macro_client_rationale_55",
+      "target": "ml_macro_client_get",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "macro_features.py",
+      "source_location": "L335",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_crypto_global",
+      "target": "ml_macro_client_get"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_client.py",
+      "source_location": "L72",
+      "weight": 1.0,
+      "source": "ml_macro_client_rationale_72",
+      "target": "ml_macro_client_fetch_macro_context",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "macro_client.py",
+      "source_location": "L105",
+      "weight": 1.0,
+      "source": "ml_macro_client_fetch_macro_context",
+      "target": "ml_macro_features_extract_macro_features"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "prediction_service.py",
+      "source_location": "L74",
+      "weight": 1.0,
+      "source": "ml_prediction_service_winfastpredictor_predict",
+      "target": "ml_macro_client_fetch_macro_context"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L61",
+      "weight": 1.0,
+      "source": "macro_features_py",
+      "target": "ml_macro_features_safe_float",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L89",
+      "weight": 1.0,
+      "source": "macro_features_py",
+      "target": "ml_macro_features_find_by_symbol",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L109",
+      "weight": 1.0,
+      "source": "macro_features_py",
+      "target": "ml_macro_features_unwrap",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L118",
+      "weight": 1.0,
+      "source": "macro_features_py",
+      "target": "ml_macro_features_extract_indices",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L168",
+      "weight": 1.0,
+      "source": "macro_features_py",
+      "target": "ml_macro_features_extract_volatility",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L205",
+      "weight": 1.0,
+      "source": "macro_features_py",
+      "target": "ml_macro_features_extract_forex",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L242",
+      "weight": 1.0,
+      "source": "macro_features_py",
+      "target": "ml_macro_features_extract_bonds",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L279",
+      "weight": 1.0,
+      "source": "macro_features_py",
+      "target": "ml_macro_features_extract_crypto_global",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L376",
+      "weight": 1.0,
+      "source": "macro_features_py",
+      "target": "ml_macro_features_extract_macro_features",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "ml_macro_features_rationale_1",
+      "target": "macro_features_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L189",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_volatility",
+      "target": "ml_macro_features_safe_float",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L228",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_forex",
+      "target": "ml_macro_features_safe_float",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L265",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_bonds",
+      "target": "ml_macro_features_safe_float",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L364",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_crypto_global",
+      "target": "ml_macro_features_safe_float",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L62",
+      "weight": 1.0,
+      "source": "ml_macro_features_rationale_62",
+      "target": "ml_macro_features_safe_float",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L160",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_indices",
+      "target": "ml_macro_features_find_by_symbol",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L180",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_volatility",
+      "target": "ml_macro_features_find_by_symbol",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L218",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_forex",
+      "target": "ml_macro_features_find_by_symbol",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L255",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_bonds",
+      "target": "ml_macro_features_find_by_symbol",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L90",
+      "weight": 1.0,
+      "source": "ml_macro_features_rationale_90",
+      "target": "ml_macro_features_find_by_symbol",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L140",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_indices",
+      "target": "ml_macro_features_unwrap",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L179",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_volatility",
+      "target": "ml_macro_features_unwrap",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L216",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_forex",
+      "target": "ml_macro_features_unwrap",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L253",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_bonds",
+      "target": "ml_macro_features_unwrap",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L310",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_crypto_global",
+      "target": "ml_macro_features_unwrap",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L110",
+      "weight": 1.0,
+      "source": "ml_macro_features_rationale_110",
+      "target": "ml_macro_features_unwrap",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L390",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_macro_features",
+      "target": "ml_macro_features_extract_indices",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L119",
+      "weight": 1.0,
+      "source": "ml_macro_features_rationale_119",
+      "target": "ml_macro_features_extract_indices",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L391",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_macro_features",
+      "target": "ml_macro_features_extract_volatility",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L169",
+      "weight": 1.0,
+      "source": "ml_macro_features_rationale_169",
+      "target": "ml_macro_features_extract_volatility",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L392",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_macro_features",
+      "target": "ml_macro_features_extract_forex",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L206",
+      "weight": 1.0,
+      "source": "ml_macro_features_rationale_206",
+      "target": "ml_macro_features_extract_forex",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L393",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_macro_features",
+      "target": "ml_macro_features_extract_bonds",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L243",
+      "weight": 1.0,
+      "source": "ml_macro_features_rationale_243",
+      "target": "ml_macro_features_extract_bonds",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L394",
+      "weight": 1.0,
+      "source": "ml_macro_features_extract_macro_features",
+      "target": "ml_macro_features_extract_crypto_global",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L280",
+      "weight": 1.0,
+      "source": "ml_macro_features_rationale_280",
+      "target": "ml_macro_features_extract_crypto_global",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "macro_features.py",
+      "source_location": "L377",
+      "weight": 1.0,
+      "source": "ml_macro_features_rationale_377",
+      "target": "ml_macro_features_extract_macro_features",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L13",
+      "weight": 1.0,
+      "source": "model_loader_py",
+      "target": "ml_model_loader_modelloader",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L159",
+      "weight": 1.0,
+      "source": "model_loader_py",
+      "target": "ml_model_loader_get_model_loader",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L182",
+      "weight": 1.0,
+      "source": "model_loader_py",
+      "target": "ml_model_loader_load_model",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "ml_model_loader_rationale_1",
+      "target": "model_loader_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "imports_from",
+      "context": "import",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L5",
+      "weight": 1.0,
+      "source": "predict_service_py",
+      "target": "model_loader_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L16",
+      "weight": 1.0,
+      "source": "ml_model_loader_modelloader",
+      "target": "ml_model_loader_modelloader_init",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L29",
+      "weight": 1.0,
+      "source": "ml_model_loader_modelloader",
+      "target": "ml_model_loader_modelloader_load",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L76",
+      "weight": 1.0,
+      "source": "ml_model_loader_modelloader",
+      "target": "ml_model_loader_modelloader_is_loaded",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L80",
+      "weight": 1.0,
+      "source": "ml_model_loader_modelloader",
+      "target": "ml_model_loader_modelloader_predict",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L123",
+      "weight": 1.0,
+      "source": "ml_model_loader_modelloader",
+      "target": "ml_model_loader_modelloader_predict_batch",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L146",
+      "weight": 1.0,
+      "source": "ml_model_loader_modelloader",
+      "target": "ml_model_loader_modelloader_get_metadata",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L150",
+      "weight": 1.0,
+      "source": "ml_model_loader_modelloader",
+      "target": "ml_model_loader_modelloader_get_feature_columns",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L176",
+      "weight": 1.0,
+      "source": "ml_model_loader_get_model_loader",
+      "target": "ml_model_loader_modelloader",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L192",
+      "weight": 1.0,
+      "source": "ml_model_loader_load_model",
+      "target": "ml_model_loader_modelloader",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L14",
+      "weight": 1.0,
+      "source": "ml_model_loader_rationale_14",
+      "target": "ml_model_loader_modelloader",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "uses",
+      "confidence": "INFERRED",
+      "source_file": "predict_service.py",
+      "source_location": "L5",
+      "weight": 0.8,
+      "source": "ml_predict_service_predictservice",
+      "target": "ml_model_loader_modelloader",
+      "confidence_score": 0.5
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L17",
+      "weight": 1.0,
+      "source": "ml_model_loader_rationale_17",
+      "target": "ml_model_loader_modelloader_init",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L177",
+      "weight": 1.0,
+      "source": "ml_model_loader_get_model_loader",
+      "target": "ml_model_loader_modelloader_load",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L193",
+      "weight": 1.0,
+      "source": "ml_model_loader_load_model",
+      "target": "ml_model_loader_modelloader_load",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L30",
+      "weight": 1.0,
+      "source": "ml_model_loader_rationale_30",
+      "target": "ml_model_loader_modelloader_load",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L90",
+      "weight": 1.0,
+      "source": "ml_model_loader_modelloader_predict",
+      "target": "ml_model_loader_modelloader_is_loaded",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L135",
+      "weight": 1.0,
+      "source": "ml_model_loader_modelloader_predict_batch",
+      "target": "ml_model_loader_modelloader_is_loaded",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L77",
+      "weight": 1.0,
+      "source": "ml_model_loader_rationale_77",
+      "target": "ml_model_loader_modelloader_is_loaded",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L141",
+      "weight": 1.0,
+      "source": "ml_model_loader_modelloader_predict_batch",
+      "target": "ml_model_loader_modelloader_predict",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L81",
+      "weight": 1.0,
+      "source": "ml_model_loader_rationale_81",
+      "target": "ml_model_loader_modelloader_predict",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L126",
+      "weight": 1.0,
+      "source": "ml_model_loader_rationale_126",
+      "target": "ml_model_loader_modelloader_predict_batch",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L151",
+      "weight": 1.0,
+      "source": "ml_model_loader_rationale_151",
+      "target": "ml_model_loader_modelloader_get_feature_columns",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L163",
+      "weight": 1.0,
+      "source": "ml_model_loader_rationale_163",
+      "target": "ml_model_loader_get_model_loader",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "predict_service.py",
+      "source_location": "L37",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice_initialize",
+      "target": "ml_model_loader_get_model_loader"
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "model_loader.py",
+      "source_location": "L183",
+      "weight": 1.0,
+      "source": "ml_model_loader_rationale_183",
+      "target": "ml_model_loader_load_model",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "prediction_service.py",
+      "source_location": "L15",
+      "weight": 1.0,
+      "source": "prediction_service_py",
+      "target": "ml_prediction_service_winfastpredictor",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "prediction_service.py",
+      "source_location": "L22",
+      "weight": 1.0,
+      "source": "ml_prediction_service_winfastpredictor",
+      "target": "ml_prediction_service_winfastpredictor_get_threshold",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "prediction_service.py",
+      "source_location": "L35",
+      "weight": 1.0,
+      "source": "ml_prediction_service_winfastpredictor",
+      "target": "ml_prediction_service_winfastpredictor_predict",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "prediction_service.py",
+      "source_location": "L16",
+      "weight": 1.0,
+      "source": "ml_prediction_service_rationale_16",
+      "target": "ml_prediction_service_winfastpredictor",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "prediction_service.py",
+      "source_location": "L67",
+      "weight": 1.0,
+      "source": "ml_prediction_service_winfastpredictor_predict",
+      "target": "ml_prediction_service_winfastpredictor_get_threshold",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "prediction_service.py",
+      "source_location": "L23",
+      "weight": 1.0,
+      "source": "ml_prediction_service_rationale_23",
+      "target": "ml_prediction_service_winfastpredictor_get_threshold",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "prediction_service.py",
+      "source_location": "L42",
+      "weight": 1.0,
+      "source": "ml_prediction_service_rationale_42",
+      "target": "ml_prediction_service_winfastpredictor_predict",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L10",
+      "weight": 1.0,
+      "source": "predict_service_py",
+      "target": "ml_predict_service_predictservice",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L325",
+      "weight": 1.0,
+      "source": "predict_service_py",
+      "target": "ml_predict_service_get_predict_service",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "ml_predict_service_rationale_1",
+      "target": "predict_service_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L13",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice",
+      "target": "ml_predict_service_predictservice_init",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L29",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice",
+      "target": "ml_predict_service_predictservice_initialize",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L43",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice",
+      "target": "ml_predict_service_predictservice_is_ready",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L47",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice",
+      "target": "ml_predict_service_predictservice_prepare_features",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L106",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice",
+      "target": "ml_predict_service_predictservice_predict_single_direction",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L142",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice",
+      "target": "ml_predict_service_predictservice_predict_both_directions",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L160",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice",
+      "target": "ml_predict_service_predictservice_predict_best_direction",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L199",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice",
+      "target": "ml_predict_service_predictservice_calculate_final_score",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L222",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice",
+      "target": "ml_predict_service_predictservice_should_block",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L239",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice",
+      "target": "ml_predict_service_predictservice_predict_for_l3_ranking",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L271",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice",
+      "target": "ml_predict_service_predictservice_batch_predict_for_l3",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L342",
+      "weight": 1.0,
+      "source": "ml_predict_service_get_predict_service",
+      "target": "ml_predict_service_predictservice",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L11",
+      "weight": 1.0,
+      "source": "ml_predict_service_rationale_11",
+      "target": "ml_predict_service_predictservice",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L18",
+      "weight": 1.0,
+      "source": "ml_predict_service_rationale_18",
+      "target": "ml_predict_service_predictservice_init",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L343",
+      "weight": 1.0,
+      "source": "ml_predict_service_get_predict_service",
+      "target": "ml_predict_service_predictservice_initialize",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L30",
+      "weight": 1.0,
+      "source": "ml_predict_service_rationale_30",
+      "target": "ml_predict_service_predictservice_initialize",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L121",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice_predict_single_direction",
+      "target": "ml_predict_service_predictservice_is_ready",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L44",
+      "weight": 1.0,
+      "source": "ml_predict_service_rationale_44",
+      "target": "ml_predict_service_predictservice_is_ready",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L127",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice_predict_single_direction",
+      "target": "ml_predict_service_predictservice_prepare_features",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L52",
+      "weight": 1.0,
+      "source": "ml_predict_service_rationale_52",
+      "target": "ml_predict_service_predictservice_prepare_features",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L155",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice_predict_both_directions",
+      "target": "ml_predict_service_predictservice_predict_single_direction",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L180",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice_predict_best_direction",
+      "target": "ml_predict_service_predictservice_predict_single_direction",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L111",
+      "weight": 1.0,
+      "source": "ml_predict_service_rationale_111",
+      "target": "ml_predict_service_predictservice_predict_single_direction",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L185",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice_predict_best_direction",
+      "target": "ml_predict_service_predictservice_predict_both_directions",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L146",
+      "weight": 1.0,
+      "source": "ml_predict_service_rationale_146",
+      "target": "ml_predict_service_predictservice_predict_both_directions",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L258",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice_predict_for_l3_ranking",
+      "target": "ml_predict_service_predictservice_predict_best_direction",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L165",
+      "weight": 1.0,
+      "source": "ml_predict_service_rationale_165",
+      "target": "ml_predict_service_predictservice_predict_best_direction",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L261",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice_predict_for_l3_ranking",
+      "target": "ml_predict_service_predictservice_calculate_final_score",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L204",
+      "weight": 1.0,
+      "source": "ml_predict_service_rationale_204",
+      "target": "ml_predict_service_predictservice_calculate_final_score",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L295",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice_batch_predict_for_l3",
+      "target": "ml_predict_service_predictservice_should_block",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L227",
+      "weight": 1.0,
+      "source": "ml_predict_service_rationale_227",
+      "target": "ml_predict_service_predictservice_should_block",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L292",
+      "weight": 1.0,
+      "source": "ml_predict_service_predictservice_batch_predict_for_l3",
+      "target": "ml_predict_service_predictservice_predict_for_l3_ranking",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L244",
+      "weight": 1.0,
+      "source": "ml_predict_service_rationale_244",
+      "target": "ml_predict_service_predictservice_predict_for_l3_ranking",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L277",
+      "weight": 1.0,
+      "source": "ml_predict_service_rationale_277",
+      "target": "ml_predict_service_predictservice_batch_predict_for_l3",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "predict_service.py",
+      "source_location": "L329",
+      "weight": 1.0,
+      "source": "ml_predict_service_rationale_329",
+      "target": "ml_predict_service_get_predict_service",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "trainer.py",
+      "source_location": "L35",
+      "weight": 1.0,
+      "source": "trainer_py",
+      "target": "ml_trainer_calibrate_threshold",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "trainer.py",
+      "source_location": "L109",
+      "weight": 1.0,
+      "source": "trainer_py",
+      "target": "ml_trainer_report_bad_approval_drivers",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "trainer.py",
+      "source_location": "L144",
+      "weight": 1.0,
+      "source": "trainer_py",
+      "target": "ml_trainer_compute_psi",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "trainer.py",
+      "source_location": "L174",
+      "weight": 1.0,
+      "source": "trainer_py",
+      "target": "ml_trainer_winfasttrainer",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "trainer.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "ml_trainer_rationale_1",
+      "target": "trainer_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "trainer.py",
+      "source_location": "L429",
+      "weight": 1.0,
+      "source": "ml_trainer_winfasttrainer_train",
+      "target": "ml_trainer_calibrate_threshold",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "trainer.py",
+      "source_location": "L41",
+      "weight": 1.0,
+      "source": "ml_trainer_rationale_41",
+      "target": "ml_trainer_calibrate_threshold",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "trainer.py",
+      "source_location": "L458",
+      "weight": 1.0,
+      "source": "ml_trainer_winfasttrainer_train",
+      "target": "ml_trainer_report_bad_approval_drivers",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "trainer.py",
+      "source_location": "L115",
+      "weight": 1.0,
+      "source": "ml_trainer_rationale_115",
+      "target": "ml_trainer_report_bad_approval_drivers",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "trainer.py",
+      "source_location": "L253",
+      "weight": 1.0,
+      "source": "ml_trainer_winfasttrainer_train",
+      "target": "ml_trainer_compute_psi",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "trainer.py",
+      "source_location": "L149",
+      "weight": 1.0,
+      "source": "ml_trainer_rationale_149",
+      "target": "ml_trainer_compute_psi",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "trainer.py",
+      "source_location": "L182",
+      "weight": 1.0,
+      "source": "ml_trainer_winfasttrainer",
+      "target": "ml_trainer_winfasttrainer_init",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "trainer.py",
+      "source_location": "L186",
+      "weight": 1.0,
+      "source": "ml_trainer_winfasttrainer",
+      "target": "ml_trainer_winfasttrainer_train",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "trainer.py",
+      "source_location": "L175",
+      "weight": 1.0,
+      "source": "ml_trainer_rationale_175",
+      "target": "ml_trainer_winfasttrainer",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "trainer.py",
+      "source_location": "L192",
+      "weight": 1.0,
+      "source": "ml_trainer_rationale_192",
+      "target": "ml_trainer_winfasttrainer_train",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L22",
+      "weight": 1.0,
+      "source": "train_model_py",
+      "target": "ml_train_model_modeltrainer",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L358",
+      "weight": 1.0,
+      "source": "train_model_py",
+      "target": "ml_train_model_train_model_pipeline",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "ml_train_model_rationale_1",
+      "target": "train_model_py",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L25",
+      "weight": 1.0,
+      "source": "ml_train_model_modeltrainer",
+      "target": "ml_train_model_modeltrainer_init",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L62",
+      "weight": 1.0,
+      "source": "ml_train_model_modeltrainer",
+      "target": "ml_train_model_modeltrainer_calculate_scale_pos_weight",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L87",
+      "weight": 1.0,
+      "source": "ml_train_model_modeltrainer",
+      "target": "ml_train_model_modeltrainer_train",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L177",
+      "weight": 1.0,
+      "source": "ml_train_model_modeltrainer",
+      "target": "ml_train_model_modeltrainer_evaluate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L233",
+      "weight": 1.0,
+      "source": "ml_train_model_modeltrainer",
+      "target": "ml_train_model_modeltrainer_get_feature_importance",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L263",
+      "weight": 1.0,
+      "source": "ml_train_model_modeltrainer",
+      "target": "ml_train_model_modeltrainer_analyze_by_probability_bucket",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L313",
+      "weight": 1.0,
+      "source": "ml_train_model_modeltrainer",
+      "target": "ml_train_model_modeltrainer_save",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "method",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L340",
+      "weight": 1.0,
+      "source": "ml_train_model_modeltrainer",
+      "target": "ml_train_model_modeltrainer_load",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L401",
+      "weight": 1.0,
+      "source": "ml_train_model_train_model_pipeline",
+      "target": "ml_train_model_modeltrainer",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L23",
+      "weight": 1.0,
+      "source": "ml_train_model_rationale_23",
+      "target": "ml_train_model_modeltrainer",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L30",
+      "weight": 1.0,
+      "source": "ml_train_model_rationale_30",
+      "target": "ml_train_model_modeltrainer_init",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L123",
+      "weight": 1.0,
+      "source": "ml_train_model_modeltrainer_train",
+      "target": "ml_train_model_modeltrainer_calculate_scale_pos_weight",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L65",
+      "weight": 1.0,
+      "source": "ml_train_model_rationale_65",
+      "target": "ml_train_model_modeltrainer_calculate_scale_pos_weight",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L402",
+      "weight": 1.0,
+      "source": "ml_train_model_train_model_pipeline",
+      "target": "ml_train_model_modeltrainer_train",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L97",
+      "weight": 1.0,
+      "source": "ml_train_model_rationale_97",
+      "target": "ml_train_model_modeltrainer_train",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L184",
+      "weight": 1.0,
+      "source": "ml_train_model_rationale_184",
+      "target": "ml_train_model_modeltrainer_evaluate",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L413",
+      "weight": 1.0,
+      "source": "ml_train_model_train_model_pipeline",
+      "target": "ml_train_model_modeltrainer_get_feature_importance",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L236",
+      "weight": 1.0,
+      "source": "ml_train_model_rationale_236",
+      "target": "ml_train_model_modeltrainer_get_feature_importance",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L418",
+      "weight": 1.0,
+      "source": "ml_train_model_train_model_pipeline",
+      "target": "ml_train_model_modeltrainer_analyze_by_probability_bucket",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L270",
+      "weight": 1.0,
+      "source": "ml_train_model_rationale_270",
+      "target": "ml_train_model_modeltrainer_analyze_by_probability_bucket",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L425",
+      "weight": 1.0,
+      "source": "ml_train_model_train_model_pipeline",
+      "target": "ml_train_model_modeltrainer_save",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L314",
+      "weight": 1.0,
+      "source": "ml_train_model_rationale_314",
+      "target": "ml_train_model_modeltrainer_save",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L341",
+      "weight": 1.0,
+      "source": "ml_train_model_rationale_341",
+      "target": "ml_train_model_modeltrainer_load",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "train_model.py",
+      "source_location": "L365",
+      "weight": 1.0,
+      "source": "ml_train_model_rationale_365",
+      "target": "ml_train_model_train_model_pipeline",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "source_file": "__init__.py",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "ml_init_rationale_1",
+      "target": "init_py",
+      "confidence_score": 1.0
+    }
+  ],
+  "hyperedges": []
+}
