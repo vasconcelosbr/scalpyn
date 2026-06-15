@@ -56,25 +56,41 @@ def _calibrate_threshold(
 
     strategy = os.getenv("THRESHOLD_CALIBRATION", "pnl_max").lower()
 
-    # pnl_max — maximise expected PnL of approved trades across all thresholds.
+    # pnl_max — maximise expected PnL of approved trades across all thresholds,
+    # subject to a minimum recall floor to avoid rejecting too many good trades.
     if strategy == "pnl_max" and pnl_values is not None and len(pnl_values) == len(proba):
         # Evaluate a grid of candidate thresholds (quantiles of score distribution
         # for efficiency; avoids iterating all N unique values).
         candidates = np.unique(np.percentile(proba, np.arange(10, 95, 2)))
         min_approved = int(os.getenv("THRESHOLD_MIN_APPROVED", "10"))
+        # Recall floor: don't let pnl_max push threshold so high that recall
+        # collapses. Default 0.30 = at least 30% of true positives captured.
+        min_recall_floor = float(os.getenv("THRESHOLD_MIN_RECALL", "0.30"))
         best_thresh = default
         best_pnl = -np.inf
+        n_positives = int(y_true.sum())
         for t in candidates:
             mask = proba >= t
             if mask.sum() < min_approved:
                 continue
+            # Recall check: how many actual positives does this threshold capture?
+            if n_positives > 0:
+                tp = int((y_true[mask] == 1).sum())
+                thresh_recall = tp / n_positives
+                if thresh_recall < min_recall_floor:
+                    continue
             mean_pnl = float(np.mean(pnl_values[mask]))
             if mean_pnl > best_pnl:
                 best_pnl = mean_pnl
                 best_thresh = float(t)
+        # Log final choice
+        final_mask = proba >= best_thresh
+        final_recall = int((y_true[final_mask] == 1).sum()) / max(n_positives, 1)
         logger.info(
-            "pnl_max calibration: threshold=%.4f expected_pnl=%.4f%% approved=%d/%d",
-            best_thresh, best_pnl * 100, int((proba >= best_thresh).sum()), len(proba),
+            "pnl_max calibration: threshold=%.4f expected_pnl=%.4f%% "
+            "approved=%d/%d recall=%.2f%% (floor=%.0f%%)",
+            best_thresh, best_pnl * 100, int(final_mask.sum()), len(proba),
+            final_recall * 100, min_recall_floor * 100,
         )
         if math.isnan(best_thresh) or best_thresh <= 0.0 or best_thresh >= 1.0:
             return default
