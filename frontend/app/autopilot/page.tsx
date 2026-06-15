@@ -178,8 +178,8 @@ export default function AutopilotPage() {
     setRunResult(null);
     try {
       const res = await apiPost(`/autopilot/${selectedId}/run`);
-      setRunResult(res);
       await loadDetail(selectedId);
+      setRunResult(res);
     } catch (e: any) {
       setRunResult({ error: e.message });
     } finally {
