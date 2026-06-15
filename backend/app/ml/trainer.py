@@ -355,6 +355,19 @@ class WinFastTrainer:
                 "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 1.0),
                 "reg_lambda": trial.suggest_float("reg_lambda", 0.5, 2.0),
             }
+            # Audit P0-05: Regression branch in Optuna objective — optimise RMSE
+            # instead of AUC when ML_TARGET_TYPE=regression.
+            if is_regression:
+                m = xgb.XGBRegressor(**params, early_stopping_rounds=20)
+                m.fit(
+                    X_train, y_train,
+                    eval_set=[(X_val, y_val)],
+                    verbose=False,
+                )
+                preds = m.predict(X_val)
+                from sklearn.metrics import mean_squared_error
+                rmse = mean_squared_error(y_val, preds, squared=False)
+                return -rmse  # Optuna maximises; negative RMSE → lower is better
             # XGBoost 2.1+: early_stopping_rounds moved from fit() to constructor
             m = xgb.XGBClassifier(**params, early_stopping_rounds=20)
             m.fit(
@@ -420,14 +433,15 @@ class WinFastTrainer:
             else:
                 proba_test = self.model.predict_proba(X_test)[:, 1]
 
-                # Calibrate threshold on the test set.
-                # Default strategy "pnl_max" maximises expected PnL of approved trades
-                # using _pnl_pct from the test set (economically optimal).
-                pnl_test: np.ndarray | None = None
-                if "_pnl_pct" in test_df.columns:
-                    pnl_test = test_df["_pnl_pct"].to_numpy(dtype="float32")
+                # Audit P0-06: Calibrate threshold on VALIDATION set, not test set.
+                # Calibrating on test data causes data leakage — the threshold
+                # would be tuned on the same data used to report final metrics.
+                proba_val = self.model.predict_proba(X_val)[:, 1]
+                pnl_val: np.ndarray | None = None
+                if "_pnl_pct" in val_df.columns:
+                    pnl_val = val_df["_pnl_pct"].to_numpy(dtype="float32")
                 calibrated_threshold = _calibrate_threshold(
-                    y_test.to_numpy(), proba_test, pnl_values=pnl_test
+                    y_val.to_numpy(), proba_val, pnl_values=pnl_val
                 )
                 pred_test = (proba_test >= calibrated_threshold).astype(int)
 

@@ -1,4 +1,11 @@
 """Prediction Service — Real-time inference for L3 ranking and blocking."""
+import warnings
+warnings.warn(
+    "predict_service.py is DEPRECATED. Use prediction_service.py (WinFastPredictor) instead. "
+    "This module will be removed in a future version. See Audit Sprint 4.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import logging
 from typing import Dict, Any, Optional, List, Tuple

@@ -1,4 +1,11 @@
 """Model Training — Train XGBoost model for trade outcome prediction."""
+import warnings
+warnings.warn(
+    "train_model.py is DEPRECATED. Use ml_trainer/job.py (Cloud Run Job) with WinFastTrainer instead. "
+    "This module uses legacy DatasetBuilder with incorrect features. See Audit Sprint 4.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import logging
 from typing import Dict, Any, Optional, List

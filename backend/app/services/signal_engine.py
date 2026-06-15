@@ -133,7 +133,8 @@ class SignalEngine:
         ema_aligned = data.get("ema_full_alignment") or data.get("ema9_gt_ema50")
 
         bullish_signals = 0
-        if rsi is not None and rsi < 50:
+        # Audit P0-07: RSI > 50 = bullish (was inverted)
+        if rsi is not None and rsi > 50:
             bullish_signals += 1
         if macd_signal == "positive":
             bullish_signals += 1

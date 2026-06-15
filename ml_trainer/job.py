@@ -190,7 +190,7 @@ def main():
     # 2. Build DataFrame
     # ---------------------------------------------------------
     sys.path.insert(0, "/app")
-    from app.ml.feature_extractor import build_training_dataframe, train_val_test_split
+    from app.ml.feature_extractor import build_training_dataframe, train_val_test_split, FEATURE_COLUMNS
     from app.ml.trainer import WinFastTrainer
 
     df = build_training_dataframe(
@@ -295,7 +295,24 @@ def main():
 
     logger.info("Serializando modelo (joblib → bytes)...")
     buf = io.BytesIO()
-    joblib.dump(trainer.model, buf)
+    # Audit P0-15: serialize model with feature_columns and metadata
+    # so that model_loader.py (which expects model_data["model"] and
+    # model_data["feature_columns"]) can also load models saved by job.py.
+    # Derive actual feature columns used: FEATURE_COLUMNS minus any excluded
+    _trained_feature_cols = [
+        c for c in FEATURE_COLUMNS
+        if c not in set(result.get("features_excluded", []))
+    ]
+    model_payload = {
+        "model": trainer.model,
+        "feature_columns": _trained_feature_cols,
+        "metadata": {
+            "trained_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            "n_features": len(_trained_feature_cols),
+            "target_type": ML_TARGET_TYPE,
+        },
+    }
+    joblib.dump(model_payload, buf)
     model_blob = buf.getvalue()
     logger.info(f"Modelo serializado: {len(model_blob) / 1024:.1f} KB")
 

@@ -1,4 +1,11 @@
 """Dataset Builder — Extract and prepare training data from trade_simulations."""
+import warnings
+warnings.warn(
+    "dataset_builder.py is DEPRECATED. Use feature_extractor.py (build_training_dataframe) instead. "
+    "This module uses fillna(0), raw EMAs, and incorrect label alignment. See Audit Sprint 4.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import logging
 from typing import Dict, Any, List, Optional, Tuple

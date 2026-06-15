@@ -69,6 +69,34 @@ class ExecutionEngine:
         quantity = risk_params.get("quantity", 0)
         current_price = indicators.get("close", 0)
 
+        # ── Risk Guards (Audit P0-12) ────────────────────────────────
+        MAX_QUANTITY_USDT = float(risk_params.get("max_quantity_usdt", 500))
+        MAX_OPEN_POSITIONS = int(risk_params.get("max_open_positions", 10))
+        invested_value = risk_params.get("invested_value", quantity * current_price)
+        
+        if invested_value > MAX_QUANTITY_USDT:
+            logger.warning(
+                "risk_guard_max_quantity symbol=%s invested=%.2f max=%.2f",
+                symbol, invested_value, MAX_QUANTITY_USDT,
+            )
+            return {"success": False, "error": f"Invested value {invested_value:.2f} exceeds max {MAX_QUANTITY_USDT:.2f} USDT"}
+        
+        # Check open positions count
+        from sqlalchemy import func
+        open_count_result = await db.execute(
+            select(func.count(Trade.id)).where(
+                Trade.user_id == user_id,
+                Trade.status == "open",
+            )
+        )
+        open_count = open_count_result.scalar() or 0
+        if open_count >= MAX_OPEN_POSITIONS:
+            logger.warning(
+                "risk_guard_max_positions symbol=%s open=%d max=%d",
+                symbol, open_count, MAX_OPEN_POSITIONS,
+            )
+            return {"success": False, "error": f"Open positions ({open_count}) at limit ({MAX_OPEN_POSITIONS})"}
+
         if quantity <= 0 or current_price <= 0:
             return {"success": False, "error": "Invalid quantity or price"}
 
@@ -246,6 +274,7 @@ class ExecutionEngine:
         trade.status = "closed"
         trade.exit_at = now
         trade.holding_seconds = holding_seconds
+        trade.exit_reason = exit_reason
 
         await db.commit()
 
@@ -321,30 +350,55 @@ class ExecutionEngine:
                     },
                 },
             )
-            async with httpx.AsyncClient() as client:
-                t_send = time.monotonic()
-                r = await client.post(f"https://{host}{prefix}{endpoint}", headers=headers, content=body)
-                # Parse response defensively so debug log never fails.
+            # Retry with exponential backoff for transient errors (Audit P1-19)
+            import asyncio
+            max_retries = 3
+            for attempt in range(max_retries):
                 try:
-                    data = r.json()
-                except Exception:
-                    data = {"raw": r.text}
-                logger.debug(
-                    "exchange_response",
-                    extra={
-                        **get_log_extra(),
-                        "status_code": r.status_code,
-                        "order_id": data.get("id") if isinstance(data, dict) else None,
-                        "response_body": data,
-                        "latency_ms": round((time.monotonic() - t_send) * 1000),
-                    },
-                )
-                if r.status_code in (200, 201):
-                    if isinstance(data, dict):
-                        return data.get("id", f"GATE-{t}")
-                    return f"GATE-{t}"
-                else:
-                    raise Exception(f"Gate.io order failed: {r.status_code} {r.text}")
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+                        t_send = time.monotonic()
+                        r = await client.post(f"https://{host}{prefix}{endpoint}", headers=headers, content=body)
+                        try:
+                            data = r.json()
+                        except Exception:
+                            data = {"raw": r.text}
+                        logger.debug(
+                            "exchange_response",
+                            extra={
+                                **get_log_extra(),
+                                "status_code": r.status_code,
+                                "order_id": data.get("id") if isinstance(data, dict) else None,
+                                "response_body": data,
+                                "latency_ms": round((time.monotonic() - t_send) * 1000),
+                                "attempt": attempt + 1,
+                            },
+                        )
+                        if r.status_code in (200, 201):
+                            if isinstance(data, dict):
+                                return data.get("id", f"GATE-{t}")
+                            return f"GATE-{t}"
+                        elif r.status_code in (429, 502, 503):
+                            if attempt < max_retries - 1:
+                                wait = 0.5 * (2 ** attempt)
+                                logger.warning(
+                                    "exchange_retry status=%d attempt=%d/%d wait=%.1fs symbol=%s",
+                                    r.status_code, attempt + 1, max_retries, wait, symbol,
+                                )
+                                await asyncio.sleep(wait)
+                                continue
+                            raise Exception(f"Gate.io order failed after {max_retries} retries: {r.status_code} {r.text}")
+                        else:
+                            raise Exception(f"Gate.io order failed: {r.status_code} {r.text}")
+                except httpx.TimeoutException:
+                    if attempt < max_retries - 1:
+                        wait = 0.5 * (2 ** attempt)
+                        logger.warning(
+                            "exchange_timeout attempt=%d/%d wait=%.1fs symbol=%s",
+                            attempt + 1, max_retries, wait, symbol,
+                        )
+                        await asyncio.sleep(wait)
+                        continue
+                    raise Exception(f"Gate.io order timed out after {max_retries} attempts")
 
         raise Exception(f"Exchange adapter not implemented for: {exchange}")
 

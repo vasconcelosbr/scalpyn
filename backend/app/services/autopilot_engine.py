@@ -230,7 +230,7 @@ async def _load_ml_fee_pct(db: AsyncSession) -> float:
 
 # ── Performance Analysis ──────────────────────────────────────────────────────
 
-async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, Any]:
+async def compute_performance_window(days: int, db: AsyncSession, user_id = None) -> Dict[str, Any]:
     """
     Computa métricas de performance do modelo nos últimos N dias.
 
@@ -277,7 +277,8 @@ async def compute_performance_window(days: int, db: AsyncSession) -> Dict[str, A
           AND outcome IN {_ST_OUTCOMES_SQL}
           AND pnl_pct IS NOT NULL
           AND created_at >= :cutoff
-    """), {"cutoff": cutoff, "fee_pct": fee_pct, "source": _source})
+          AND (:uid::text IS NULL OR user_id = :uid)
+    """), {"cutoff": cutoff, "fee_pct": fee_pct, "source": _source, "uid": str(user_id) if user_id else None})
     allowed_row = dict(allowed_result.mappings().one())
 
     n_allowed = int(allowed_row["n"] or 0)
@@ -1742,6 +1743,16 @@ async def run_autopilot_cycle(
         logger.error(f"[Autopilot] Erro ao computar performance para {profile_id}: {e}")
         return {"action": "ERROR", "reason": str(e)}
 
+    # Audit P0-11: populate ev_after_last_mutation from the previous cycle.
+    # On the cycle *after* a mutation, ev_after_last_mutation is None; fill it
+    # with the first observed EV so _check_regression can compare next cycle.
+    if auto_pilot_config.get("ev_after_last_mutation") is None and auto_pilot_config.get("last_mutation_at"):
+        auto_pilot_config["ev_after_last_mutation"] = perf["approved_ev"]
+        logger.info(
+            "[Autopilot] P0-11: populated ev_after_last_mutation=%.4f for profile=%s",
+            perf["approved_ev"], profile_id,
+        )
+
     # 3. Detectar regime
     regime = await detect_regime(db)
 
@@ -1897,6 +1908,7 @@ async def run_autopilot_cycle(
             "regime": regime,
             "perf": perf,
             "rule_adjustment": rule_result,
+            "updated_ap_config": updated_ap_config,  # Audit P0-10: allow caller to persist CB state
         }
 
     # 7–8. Gerar nova config (necessário mesmo em dry-run — simulamos o resultado)

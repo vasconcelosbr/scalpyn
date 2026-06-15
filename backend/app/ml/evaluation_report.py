@@ -107,6 +107,11 @@ async def _load_decisions(
                 rec["metrics"] = json.loads(rec["metrics"])
             except Exception:
                 rec["metrics"] = {}
+        # Audit P0-02: _load_decisions queries decisions_log.metrics, but
+        # build_training_dataframe / feature_extractor expects 'features_snapshot'.
+        # Remap for compatibility.
+        if "metrics" in rec and "features_snapshot" not in rec:
+            rec["features_snapshot"] = rec["metrics"]
         records.append(rec)
     logger.info("Loaded %d labeled decisions for evaluation", len(records))
     return records

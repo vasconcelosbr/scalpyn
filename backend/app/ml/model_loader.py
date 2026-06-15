@@ -1,4 +1,11 @@
 """Model Loader — Load and manage trained XGBoost models."""
+import warnings
+warnings.warn(
+    "model_loader.py is DEPRECATED. Use gcs_model_loader.py (get_model) instead. "
+    "This module loads from local files and uses fillna(0). See Audit Sprint 4.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import logging
 from typing import Optional, Dict, Any, List

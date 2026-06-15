@@ -40,6 +40,7 @@ class GCSModelLoader:
                 cls._instance._model = None
                 cls._instance._loaded_at = 0.0
                 cls._instance._model_version = None
+                cls._instance._feature_columns = None
         return cls._instance
 
     def get_model(self):
@@ -87,7 +88,17 @@ class GCSModelLoader:
             if isinstance(blob_bytes, memoryview):
                 blob_bytes = bytes(blob_bytes)
 
-            self._model = joblib.load(io.BytesIO(blob_bytes))
+            loaded = joblib.load(io.BytesIO(blob_bytes))
+            # Audit P0-15: handle both new dict format (with feature_columns)
+            # and legacy bare XGBoost model object for backward compatibility.
+            if isinstance(loaded, dict) and "model" in loaded:
+                self._model = loaded["model"]
+                self._feature_columns = loaded.get("feature_columns")
+                logger.info("Model loaded from dict format (feature_columns=%d)",
+                            len(self._feature_columns or []))
+            else:
+                self._model = loaded
+                self._feature_columns = None
             self._loaded_at = time.time()
             self._model_version = version
 

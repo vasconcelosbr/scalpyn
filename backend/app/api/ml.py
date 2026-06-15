@@ -117,16 +117,33 @@ async def train_model(
                 detail="ML is disabled in settings",
             )
 
-        from ..ml.train_model import train_model_pipeline
+        # Audit Sprint 4: migrated from legacy train_model.py to production
+        # WinFastTrainer pipeline (same as Cloud Run Job).
+        from ..ml.feature_extractor import build_training_dataframe, FEATURE_COLUMNS
+        from ..ml.trainer import WinFastTrainer
+        from sqlalchemy import text as _text
 
-        # Start training
-        result = await train_model_pipeline(
-            db=db,
-            min_date=request.min_date,
-            max_date=request.max_date,
-            model_name=request.model_name,
-            params=request.params,
-        )
+        # Fetch shadow_trades
+        days_lookback = 30
+        rows = await db.execute(_text("""
+            SELECT symbol, source, pnl_pct, net_return_pct, holding_seconds,
+                   outcome, features_snapshot, created_at
+            FROM shadow_trades
+            WHERE outcome IN ('TP_HIT', 'SL_HIT', 'TIMEOUT')
+              AND pnl_pct IS NOT NULL
+              AND features_snapshot IS NOT NULL
+              AND features_snapshot::text <> '{}'
+              AND created_at >= NOW() - INTERVAL :days
+            ORDER BY created_at ASC
+        """), {"days": f"{days_lookback} days"})
+        records = [dict(r._mapping) for r in rows.fetchall()]
+
+        if len(records) < 100:
+            raise ValueError(f"Insufficient data: {len(records)} records (min 100)")
+
+        df = build_training_dataframe(records)
+        trainer = WinFastTrainer(n_trials=20)  # fewer trials for API-triggered training
+        result = trainer.train(df)
 
         return {
             "status": "success",
@@ -302,18 +319,21 @@ async def reload_model(
     try:
         logger.info(f"Model reload requested by user {user_id}")
 
-        from ..ml.model_loader import get_model_loader
+        # Audit Sprint 4: use production gcs_model_loader
+        from ..ml.gcs_model_loader import invalidate_model_cache, get_model
 
-        # Reload model
-        loader = get_model_loader(model_path=request.model_path, reload=True)
-
-        if not loader.is_loaded():
+        invalidate_model_cache()
+        try:
+            model = get_model()
+            metadata = {
+                "loaded": True,
+                "n_features": getattr(model, 'n_features_in_', None),
+            }
+        except Exception as load_err:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to load model",
+                detail=f"Failed to load model: {load_err}",
             )
-
-        metadata = loader.get_metadata()
 
         return {
             "status": "success",

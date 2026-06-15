@@ -7,6 +7,8 @@ to scoring. This replaces the old Signal conditions as a lightweight gate.
 import logging
 from typing import Dict, Any
 
+from .indicator_validity import unwrap_envelope_value
+
 logger = logging.getLogger(__name__)
 
 OPERATORS = {
@@ -89,7 +91,7 @@ class FilterEngine:
             operator_str = filt.get("operator", ">=")
             threshold = filt.get("value")
 
-            actual = indicators.get(indicator)
+            actual = unwrap_envelope_value(indicators.get(indicator))
             if actual is None:
                 # Missing data — skip (don't fail on missing indicators)
                 continue

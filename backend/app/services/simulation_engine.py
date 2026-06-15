@@ -23,8 +23,13 @@ class SimulationEngine:
         """
         self.config = config
         self.entry_mode = config.get("entry_mode", "next_candle_open")
-        self.tp_pct = float(config.get("tp_pct", 0.012))
-        self.sl_pct = float(config.get("sl_pct", -0.008))
+        # Audit P0-03: Unify TP/SL convention with shadow_trade_service.
+        # Shadow uses percentage (e.g., 1.5 → 1.5%), simulation uses decimal (0.015).
+        # Auto-detect: if |value| > 1, treat as percentage and convert to decimal.
+        raw_tp = float(config.get("tp_pct", 0.012))
+        raw_sl = float(config.get("sl_pct", -0.008))
+        self.tp_pct = raw_tp / 100.0 if abs(raw_tp) > 1.0 else raw_tp
+        self.sl_pct = raw_sl / 100.0 if abs(raw_sl) > 1.0 else raw_sl
         self.timeout_candles = int(config.get("timeout_candles", 10))
 
         logger.info(
@@ -171,16 +176,8 @@ class SimulationEngine:
             low = float(candle["low"])
 
             if direction in ("LONG", "SPOT"):
-                # Check TP first (optimistic)
-                if high >= tp_price:
-                    time_delta = (candle_time - entry_timestamp).total_seconds()
-                    return {
-                        "result": "WIN",
-                        "exit_price": tp_price,
-                        "exit_timestamp": candle_time,
-                        "time_to_result": int(time_delta),
-                    }
-                # Check SL
+                # Audit P0-04: SL_FIRST convention (matches shadow_trade_monitor)
+                # Check SL first (conservative/pessimistic)
                 if low <= sl_price:
                     time_delta = (candle_time - entry_timestamp).total_seconds()
                     return {
@@ -189,9 +186,8 @@ class SimulationEngine:
                         "exit_timestamp": candle_time,
                         "time_to_result": int(time_delta),
                     }
-            else:  # SHORT
-                # Check TP first (price goes down)
-                if low <= tp_price:
+                # Check TP
+                if high >= tp_price:
                     time_delta = (candle_time - entry_timestamp).total_seconds()
                     return {
                         "result": "WIN",
@@ -199,12 +195,22 @@ class SimulationEngine:
                         "exit_timestamp": candle_time,
                         "time_to_result": int(time_delta),
                     }
-                # Check SL (price goes up)
+            else:  # SHORT
+                # SL first for SHORT
                 if high >= sl_price:
                     time_delta = (candle_time - entry_timestamp).total_seconds()
                     return {
                         "result": "LOSS",
                         "exit_price": sl_price,
+                        "exit_timestamp": candle_time,
+                        "time_to_result": int(time_delta),
+                    }
+                # TP for SHORT (price goes down)
+                if low <= tp_price:
+                    time_delta = (candle_time - entry_timestamp).total_seconds()
+                    return {
+                        "result": "WIN",
+                        "exit_price": tp_price,
                         "exit_timestamp": candle_time,
                         "time_to_result": int(time_delta),
                     }
@@ -237,6 +243,7 @@ class SimulationEngine:
             "1m": timedelta(minutes=1),
             "5m": timedelta(minutes=5),
             "15m": timedelta(minutes=15),
+            "30m": timedelta(minutes=30),  # Audit P3-22
             "1h": timedelta(hours=1),
             "4h": timedelta(hours=4),
             "1d": timedelta(days=1),

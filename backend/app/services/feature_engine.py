@@ -331,8 +331,9 @@ class FeatureEngine:
             period = int(cfg.get("period", 14))
             if len(df) >= period + 1:
                 delta = df["close"].diff()
-                gain = delta.where(delta > 0, 0.0).rolling(window=period).mean()
-                loss = (-delta.where(delta < 0, 0.0)).rolling(window=period).mean()
+                # Audit P0-08: Wilder's EMA (industry standard) replaces Cutler's SMA
+                gain = delta.where(delta > 0, 0.0).ewm(alpha=1/period, adjust=False).mean()
+                loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/period, adjust=False).mean()
                 rs = gain / loss.replace(0, np.nan)
                 rsi = 100 - (100 / (1 + rs))
                 val = rsi.iloc[-1]
@@ -356,8 +357,9 @@ class FeatureEngine:
                         result[key] = None
                         continue
                     delta = df["close"].diff()
-                    gain = delta.where(delta > 0, 0.0).rolling(window=p).mean()
-                    loss = (-delta.where(delta < 0, 0.0)).rolling(window=p).mean()
+                    # Audit P0-08: Wilder's EMA for multi-period RSI
+                    gain = delta.where(delta > 0, 0.0).ewm(alpha=1/p, adjust=False).mean()
+                    loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1/p, adjust=False).mean()
                     rs = gain / loss.replace(0, np.nan)
                     rsi = 100 - (100 / (1 + rs))
                     val = rsi.iloc[-1]
@@ -383,12 +385,13 @@ class FeatureEngine:
         tr3 = (low - close.shift()).abs()
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
-        atr = tr.rolling(window=period).mean()
-        plus_di = 100 * (plus_dm.rolling(window=period).mean() / atr.replace(0, np.nan))
-        minus_di = 100 * (minus_dm.rolling(window=period).mean() / atr.replace(0, np.nan))
+        # Audit P0-08: Wilder's EMA for ATR, DI+/DI-, and ADX
+        atr = tr.ewm(alpha=1/period, adjust=False).mean()
+        plus_di = 100 * (plus_dm.ewm(alpha=1/period, adjust=False).mean() / atr.replace(0, np.nan))
+        minus_di = 100 * (minus_dm.ewm(alpha=1/period, adjust=False).mean() / atr.replace(0, np.nan))
 
         dx = 100 * ((plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan))
-        adx = dx.rolling(window=period).mean()
+        adx = dx.ewm(alpha=1/period, adjust=False).mean()
 
         # ADX acceleration (current vs previous)
         adx_prev = adx.iloc[-2] if len(adx) >= 2 and pd.notna(adx.iloc[-2]) else None
@@ -482,10 +485,32 @@ class FeatureEngine:
         }
 
     def _calc_vwap(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """VWAP with daily reset (Audit P1-13).
+
+        Cumulative sums reset at each calendar date boundary so that
+        VWAP reflects intraday accumulation rather than growing
+        unboundedly from the start of the DataFrame.
+        """
         typical_price = (df["high"] + df["low"] + df["close"]) / 3
         volume = self._base_volume(df)
-        cumulative_tp_vol = (typical_price * volume).cumsum()
-        cumulative_vol = volume.cumsum()
+
+        # Audit P1-13: daily reset — group by date.
+        tp_vol = typical_price * volume
+        if isinstance(df.index, pd.DatetimeIndex):
+            date_key = df.index.date
+        else:
+            date_key = pd.to_datetime(df["time"]).dt.date if "time" in df.columns else None
+
+        if date_key is not None:
+            df_tmp = pd.DataFrame({"tp_vol": tp_vol.values, "vol": volume.values}, index=df.index)
+            df_tmp["_date"] = date_key
+            cumulative_tp_vol = df_tmp.groupby("_date")["tp_vol"].cumsum()
+            cumulative_vol = df_tmp.groupby("_date")["vol"].cumsum()
+        else:
+            # Fallback: no date information — use global cumsum.
+            cumulative_tp_vol = tp_vol.cumsum()
+            cumulative_vol = volume.cumsum()
+
         vwap = cumulative_tp_vol / cumulative_vol.replace(0, np.nan)
         val = vwap.iloc[-1]
         close = df["close"].iloc[-1]
@@ -535,7 +560,7 @@ class FeatureEngine:
         deviation = cfg.get("deviation", 2.0)
 
         sma = df["close"].rolling(window=period).mean()
-        std = df["close"].rolling(window=period).std()
+        std = df["close"].rolling(window=period).std(ddof=0)  # Audit P3-11: population std (matches charting platforms)
         upper = sma + deviation * std
         lower = sma - deviation * std
         width = (upper - lower) / sma.replace(0, np.nan)
@@ -716,12 +741,16 @@ class FeatureEngine:
         return {"zscore": round(float(val), 4) if pd.notna(val) else None}
 
     def _calc_volume_delta(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Volume delta requires real taker buy/sell flow.
+        """Volume delta — STUB: requires real-time taker buy/sell data.
 
         Robust-indicators contract: never approximate from candle direction.
         When the primary order-flow source has not provided ``volume_delta``,
         return ``None`` so the envelope tags the indicator as ``NO_DATA``
         instead of producing a fake signal.
+
+        To enable, integrate with exchange websocket for real-time taker
+        buy/sell volumes.
+        See Audit P3-12.
         """
         return {"volume_delta": None}
 
@@ -739,12 +768,16 @@ class FeatureEngine:
         return {"volume_spike": None}
 
     def _calc_taker_ratio(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Taker ratio requires real taker buy/sell flow.
+        """Taker ratio — STUB: requires real-time taker buy/sell data.
 
         Robust-indicators contract: never approximate from candle direction.
         When the primary order-flow source has not provided ``taker_ratio``,
         return ``None`` so the envelope tags the indicator as ``NO_DATA``
         instead of producing a misleading proxy.
+
+        To enable, integrate with exchange websocket for real-time taker
+        buy/sell volumes and compute buy_vol / total_vol.
+        See Audit P3-12.
         """
         return {"taker_ratio": None}
 

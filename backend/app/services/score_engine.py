@@ -405,7 +405,10 @@ class ScoreEngine:
         elif operator_str == "ema50>ema200":
             return bool(get_indicator_value("ema50_gt_ema200") or False)
         elif operator_str == "ema9<ema50":
-            return not bool(get_indicator_value("ema9_gt_ema50") or True)
+            # Audit P0-13: `or True` made this always False. Now correctly
+            # returns True when ema9_gt_ema50 is False (EMA9 IS below EMA50).
+            ema_val = get_indicator_value("ema9_gt_ema50")
+            return not bool(ema_val) if ema_val is not None else False
 
         # DI directional comparison
         if operator_str == "di+>di-":

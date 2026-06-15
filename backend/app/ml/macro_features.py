@@ -359,11 +359,21 @@ def _extract_crypto_global(raw: Optional[Any]) -> Dict[str, Optional[float]]:
     )
 
     # Fear & greed index (0–100)
-    # Try fear_greed snapshot payload first, then crypto_global payload, then flat
-    fg_val = (
-        _safe_float(fg_payload.get("value") or fg_payload.get("score"), allow_negative=False)
-        or _safe_float(cg_payload.get("fear_and_greed") or cg_payload.get("fear_greed_index"), allow_negative=False)
-        or _get(flat, flat, fields=("fear_greed_index", "fearGreedIndex", "fear_and_greed_index"), allow_negative=False)
+    # Try fear_greed snapshot payload first, then crypto_global payload, then flat.
+    # Audit P2-13: `or` chain masked 0.0 (valid extreme-fear value). Use
+    # _first_valid which checks `is not None` instead of truthiness.
+    def _first_valid(*candidates: Any) -> Optional[float]:
+        for c in candidates:
+            if c is not None:
+                return c
+        return None
+
+    fg_val = _first_valid(
+        _safe_float(fg_payload.get("value"), allow_negative=False),
+        _safe_float(fg_payload.get("score"), allow_negative=False),
+        _safe_float(cg_payload.get("fear_and_greed"), allow_negative=False),
+        _safe_float(cg_payload.get("fear_greed_index"), allow_negative=False),
+        _get(flat, flat, fields=("fear_greed_index", "fearGreedIndex", "fear_and_greed_index"), allow_negative=False),
     )
     if fg_val is not None and fg_val <= 100:
         out["fear_greed_index"] = fg_val
@@ -385,6 +395,17 @@ def extract_macro_features(raw: Dict[str, Any]) -> Dict[str, Any]:
         Dict with MACRO_FEATURE_COLUMNS keys + macro_context_available.
         Individual features are None when the value could not be extracted.
     """
+    # Audit P2-27: use _MAX_STALENESS_S to warn on stale data.
+    fetched_at = raw.get("_fetched_at")
+    if fetched_at is not None:
+        age_s = time.time() - fetched_at
+        if age_s > _MAX_STALENESS_S:
+            logger.warning(
+                "Macro data stale: age=%.0fs > max=%ds",
+                age_s, _MAX_STALENESS_S,
+            )
+            # Still use data but downstream consumers can check macro_context_available.
+
     features: Dict[str, Any] = {}
 
     features.update(_extract_indices(raw.get("indices")))

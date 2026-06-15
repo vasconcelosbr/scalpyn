@@ -25,6 +25,7 @@ class WinFastPredictor:
             SELECT id, decision_threshold
             FROM ml_models
             WHERE status = 'active'
+            ORDER BY activated_at DESC
             LIMIT 1
         """))
         row = result.fetchone()
@@ -54,14 +55,25 @@ class WinFastPredictor:
         try:
             model = get_model()
         except Exception as e:
-            logger.warning(f"Modelo indisponível: {e} — aprovando por padrão")
+            logger.warning(f"Modelo indisponível: {e} — BLOQUEANDO por segurança (fail-closed)")
             return {
                 "win_fast_probability": None,
-                "model_approved": True,
+                "model_approved": False,
                 "threshold_used": None,
                 "model_id": None,
-                "reason": "model_unavailable",
+                "reason": "model_unavailable_fail_closed",
             }
+
+        # Verify feature column alignment if model stores feature names (Audit P1-21)
+        model_feature_names = getattr(model, 'feature_names_in_', None)
+        if model_feature_names is not None:
+            expected = list(FEATURE_COLUMNS[:len(model_feature_names)])
+            actual = list(model_feature_names)
+            if expected != actual:
+                logger.error(
+                    "[ML] Feature column order mismatch! Model expects %s but code has %s",
+                    actual[:5], expected[:5],
+                )
 
         # Threshold do banco
         model_id, threshold = await self._get_threshold(db)
@@ -95,10 +107,13 @@ class WinFastPredictor:
             metrics = {k: v for k, v in metrics.items() if k not in ML_EXCLUDED_FIELDS}
         features = extract_features(metrics)
         _nan = float("nan")
-        # Assert defensivo: nenhum campo proibido pode acabar no vetor de inferência.
-        assert not ML_EXCLUDED_FIELDS.intersection(FEATURE_COLUMNS), (
-            "ML_EXCLUDED_FIELDS contaminou FEATURE_COLUMNS — abortar inferência."
-        )
+        # Audit P2-28: assert replaced with RuntimeError (assert is stripped by -O).
+        _leaked = ML_EXCLUDED_FIELDS.intersection(FEATURE_COLUMNS)
+        if _leaked:
+            raise RuntimeError(
+                f"ML_EXCLUDED_FIELDS contaminou FEATURE_COLUMNS — abortar inferência. "
+                f"Campos vazados: {sorted(_leaked)}"
+            )
         X = np.array(
             [[features.get(f, _nan) for f in FEATURE_COLUMNS]],
             dtype="float32",
