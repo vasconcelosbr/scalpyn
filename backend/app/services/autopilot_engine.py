@@ -86,7 +86,7 @@ SELECTION_INVERSION_DELTA = 0.50  # % — rejected_ev - approved_ev threshold
 MIN_HOURS_BETWEEN_MUTATIONS = 48  # horas mínimas entre mutações
 EV_REGRESSION_DELTA = 0.20        # % — degradação para trigger baseado em baseline
 MIN_RECORDS_REQUIRED = 30         # amostras mínimas para trigger
-MIN_SPAN_DAYS = 15                # janela mínima real de dados (dias) antes de mutar
+MIN_SPAN_DAYS = int(os.getenv("AUTOPILOT_MIN_SPAN_DAYS", "5"))  # janela mínima real de dados (dias) antes de mutar
 CIRCUIT_BREAKER_THRESHOLD = 3     # regressões consecutivas
 CIRCUIT_BREAKER_PAUSE_HOURS = 168 # 7 dias
 PERFORMANCE_DAYS = 30             # janela de análise (dias)
@@ -675,6 +675,7 @@ def should_mutate(
     perf: Dict[str, Any],
     auto_pilot_config: dict,
     ev_threshold: float = EV_MIN_THRESHOLD,
+    guardrails: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, str]:
     """
     Decide se a config do profile deve ser mutada.
@@ -689,11 +690,13 @@ def should_mutate(
         return False, f"insufficient_data (n={n} < {MIN_RECORDS_REQUIRED})"
 
     # ── P1-2: Temporal maturity gate ─────────────────────────────────────────
-    # Impede mutação quando a janela de dados real é menor que MIN_SPAN_DAYS.
+    # Impede mutação quando a janela de dados real é menor que min_span_days.
     # approved_count ≥ MIN_RECORDS_REQUIRED garante volume mas não maturidade temporal.
+    # Configurável via guardrails (DB) ou env AUTOPILOT_MIN_SPAN_DAYS.
+    min_span = float(guardrails.get("min_span_days", MIN_SPAN_DAYS)) if guardrails else MIN_SPAN_DAYS
     span_days = float(perf.get("span_days", 0.0))
-    if span_days < MIN_SPAN_DAYS:
-        return False, f"imature_window (span_days={span_days:.1f} < {MIN_SPAN_DAYS})"
+    if span_days < min_span:
+        return False, f"imature_window (span_days={span_days:.1f} < {min_span})"
 
     # ── Verificar cooldown ────────────────────────────────────────────────────
     last_mutation_str = auto_pilot_config.get("last_mutation_at")
@@ -1889,7 +1892,7 @@ async def run_autopilot_cycle(
     )
 
     # 6. Decidir se deve mutar config principal (usa ev_threshold dos guardrails)
-    mutate, reason = should_mutate(perf, updated_ap_config, ev_threshold=ev_threshold)
+    mutate, reason = should_mutate(perf, updated_ap_config, ev_threshold=ev_threshold, guardrails=guardrails)
     if not mutate:
         action = "DRY_RUN_ANALYZED" if dry_run else "ANALYZED"
         await log_audit(
