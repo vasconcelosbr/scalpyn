@@ -380,6 +380,77 @@ class ProfileEngine:
             "timeframes_used": sorted(self._tf_groups.keys()) if self._tf_groups else [self.default_timeframe],
         }
 
+    def process_watchlist_with_skills(
+        self,
+        assets: List[Dict[str, Any]],
+        skill: Optional[Any] = None,
+        regime_signal: Optional[Any] = None,
+        skill_selection: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        Process a watchlist using Market Skills Engine.
+        Falls back to standard process_watchlist if no skill provided.
+        """
+        if skill is None:
+            return self.process_watchlist(assets)
+
+        from .decision_explainer import DecisionExplainer
+
+        self._indicator_cache.clear()
+        total_before = len(assets)
+        explainer = DecisionExplainer()
+
+        results = []
+        blocked_count = 0
+        approved_count = 0
+
+        for asset in assets:
+            self._populate_cache_for_asset(asset)
+            symbol = asset.get("symbol", "?")
+            indicators = asset.get("indicators", {})
+
+            # Use skill-based evaluation
+            explanation = explainer.evaluate(
+                symbol=symbol,
+                indicators=indicators,
+                skill=skill,
+                regime_signal=regime_signal,
+                skill_selection=skill_selection,
+            )
+
+            asset_result = dict(asset)
+            asset_result["skill_evaluation"] = explanation.to_dict()
+            asset_result["alpha_score"] = explanation.total_score
+            asset_result["classification"] = explanation.decision
+            asset_result["skill_used"] = skill.skill_key
+
+            if explanation.decision == "BLOCKED":
+                blocked_count += 1
+                asset_result["blocked"] = True
+                asset_result["block_reason"] = explanation.risk_block_reason
+            elif explanation.decision in ("BUY", "STRONG_BUY"):
+                approved_count += 1
+                asset_result["approved"] = True
+            else:
+                asset_result["approved"] = False
+
+            results.append(asset_result)
+
+        # Sort by score descending
+        results.sort(key=lambda x: x.get("alpha_score", 0), reverse=True)
+
+        return {
+            "assets": results,
+            "total_before_filter": total_before,
+            "total_approved": approved_count,
+            "total_blocked": blocked_count,
+            "total_rejected": total_before - approved_count - blocked_count,
+            "skill_used": skill.skill_key,
+            "skill_name": skill.name,
+            "regime": regime_signal.regime.value if regime_signal else "UNKNOWN",
+            "profile_applied": True,
+        }
+
     def _build_eval_data(self, asset: Dict[str, Any]) -> Dict[str, Any]:
         """Merge asset-level fields with indicators for evaluation."""
         indicators = asset.get("indicators", {})

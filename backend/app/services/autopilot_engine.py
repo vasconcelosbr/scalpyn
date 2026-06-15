@@ -370,49 +370,16 @@ async def compute_performance_window(days: int, db: AsyncSession, user_id = None
 # ── Regime Detection ──────────────────────────────────────────────────────────
 
 async def detect_regime(db: AsyncSession) -> str:
-    """
-    Detecta regime de mercado baseado em comportamento recente dos shadow trades.
-
-    Heurística simples mas objetiva:
-    - Usa win rate e EV dos últimos 7 dias vs últimos 30 dias
-    - HIGH_VOLATILITY: EV > +1.5% ou EV < -2.0% (mercado extremo)
-    - BULL: EV > 0 e win_rate > 55%
-    - BEAR: EV < -0.5% ou win_rate < 35%
-    - SIDEWAYS: demais casos
-    """
+    """Detecta regime de mercado usando MarketRegimeEngine (bridge macro + shadow_trades)."""
     try:
-        # B3: EV in net-of-fee terms (same COALESCE pattern as compute_performance_window).
-        # Usa AUTOPILOT_SOURCE para consistência com compute_performance_window.
-        cutoff_7d = datetime.now(timezone.utc) - timedelta(days=7)
-        _regime_fee = await _load_ml_fee_pct(db)
-        result = await db.execute(text(f"""
-            SELECT
-                AVG(COALESCE(net_return_pct, pnl_pct - :fee_pct))                AS ev_7d,
-                AVG(CASE WHEN outcome = '{_ST_TP}' THEN 1.0 ELSE 0.0 END)       AS wr_7d,
-                COUNT(*)                                                           AS n_7d
-            FROM shadow_trades
-            WHERE source = :source
-              AND outcome IN {_ST_OUTCOMES_SQL}
-              AND pnl_pct IS NOT NULL
-              AND created_at >= :cutoff
-        """), {"cutoff": cutoff_7d, "fee_pct": _regime_fee, "source": AUTOPILOT_SOURCE})
-        row = dict(result.mappings().one())
-        ev = float(row["ev_7d"] or 0.0)
-        wr = float(row["wr_7d"] or 0.0)
-        n = int(row["n_7d"] or 0)
-
-        if n < 5:
-            return "SIDEWAYS"  # sem dados suficientes
-
-        if ev > 1.5 or ev < -2.0:
-            return "HIGH_VOLATILITY"
-        if ev > 0.0 and wr > 0.55:
-            return "BULL"
-        if ev < -0.5 or wr < 0.35:
-            return "BEAR"
-        return "SIDEWAYS"
+        from .market_regime_engine import MarketRegimeEngine
+        engine = MarketRegimeEngine()
+        signal = await engine.detect_global_regime(db)
+        # Log regime detection for history
+        await engine.log_regime(signal, db)
+        return signal.regime.value  # Return string for backward compat
     except Exception as e:
-        logger.warning(f"[Autopilot] Falha ao detectar regime: {e}")
+        logger.warning(f"[Autopilot] Falha ao detectar regime via MarketRegimeEngine: {e}")
         return "SIDEWAYS"
 
 
@@ -1762,6 +1729,31 @@ async def run_autopilot_cycle(
     # 3. Detectar regime
     regime = await detect_regime(db)
 
+    # 3b. Skill Selection (Market Skills Engine)
+    skill_selection = None
+    active_skill = None
+    try:
+        from .market_regime_engine import MarketRegimeEngine, RegimeSignal, MarketRegime
+        from .skill_selector import select_skill_for_regime
+
+        regime_signal = RegimeSignal(
+            regime=MarketRegime.from_string(regime),
+            confidence=0.7,
+            source="autopilot_cycle",
+        )
+        skill_selection = await select_skill_for_regime(
+            regime_signal=regime_signal,
+            db=db,
+            user_id=user_id,
+        )
+        active_skill = skill_selection.selected_skill
+        logger.info(
+            "[Autopilot] Skill selected: %s for regime=%s (confidence=%.2f)",
+            active_skill.skill_key, regime, skill_selection.confidence,
+        )
+    except Exception as exc:
+        logger.warning("[Autopilot] Skill selection failed: %s — continuing without skills", exc)
+
     # 4. Verificar regressão desde última mutação (atualiza circuit breaker)
     new_consec = _check_regression(auto_pilot_config, perf["approved_ev"])
     updated_ap_config = dict(auto_pilot_config)
@@ -1915,6 +1907,7 @@ async def run_autopilot_cycle(
             "perf": perf,
             "rule_adjustment": rule_result,
             "updated_ap_config": updated_ap_config,  # Audit P0-10: allow caller to persist CB state
+            "skill_selection": skill_selection.to_dict() if skill_selection else None,
         }
 
     # 7–8. Gerar nova config (necessário mesmo em dry-run — simulamos o resultado)
@@ -1968,6 +1961,7 @@ async def run_autopilot_cycle(
             "analysis_summary": result.get("analysis_summary"),
             "proposed_config":  result["config"],  # config PROPOSTA, não aplicada
             "rule_adjustment":  rule_result,
+            "skill_selection":  skill_selection.to_dict() if skill_selection else None,
         }
 
     # ── Escrita real (dry_run=False) ─────────────────────────────────────────
@@ -2024,6 +2018,7 @@ async def run_autopilot_cycle(
         "updated_ap_config": updated_ap_config,
         "version_id":       version_id,
         "rule_adjustment":  rule_result,
+        "skill_selection":  skill_selection.to_dict() if skill_selection else None,
     }
 
 

@@ -120,7 +120,7 @@ def _run_async(coro):
 
 async def _update_async() -> dict[str, Any]:
     import redis.asyncio as aioredis
-    from sqlalchemy import select
+    from sqlalchemy import select, text
 
     from ..config import settings
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
@@ -210,6 +210,30 @@ async def _update_async() -> dict[str, Any]:
             )
         except Exception as exc:
             logger.error("Macro regime update: failed to write to Redis: %s", exc)
+
+        # ── 5b. Persist to regime_history table ────────────────────────
+        try:
+            async with AsyncSessionLocal() as hist_db:
+                await hist_db.execute(
+                    text("""
+                        INSERT INTO regime_history (regime, confidence, source, indicators_snapshot, detected_at)
+                        VALUES (:regime, :confidence, 'macro', :snapshot, NOW())
+                    """),
+                    {
+                        "regime": regime,
+                        "confidence": score / 100.0,
+                        "snapshot": json.dumps({
+                            "components": components,
+                            "allows_long": state.allows_long,
+                            "allows_short": state.allows_short,
+                            "size_modifier": state.size_modifier,
+                        }),
+                    },
+                )
+                await hist_db.commit()
+                logger.info("Macro regime update: persisted to regime_history")
+        except Exception as exc:
+            logger.warning("Macro regime update: failed to persist to regime_history: %s", exc)
 
         # ── 6. Broadcast if regime changed ────────────────────────────────────
         changed: bool = regime != previous_regime
