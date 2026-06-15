@@ -171,6 +171,7 @@ _GUARDRAILS_DEFAULTS: Dict[str, Any] = {
     #   Se taxa recente > taxa baseline + approval_rate_jump_threshold → pause.
     # performance_rollback_enabled: se consecutive_regressions >= rollback_cycles,
     #   restaura automaticamente o último profile_versions snapshot salvo.
+    "fee_limited_guard_enabled":        True,    # bloqueia mutação quando gross_ev > 0 mas net_ev < 0 (fee drag)
     "behavioral_cb_enabled":           False,   # SAFE DEFAULT: desabilitado
     "approval_rate_jump_threshold":    0.30,    # salto de 30 pp na taxa de aprovação
     "approval_rate_min_samples":       20,      # amostras mínimas para calcular taxa
@@ -714,12 +715,12 @@ def should_mutate(
     fpr = perf["fpr"]
     inversion = perf["selection_inversion"]
 
-    # ── P1-1: FEE_LIMITED guard ───────────────────────────────────────────────
+    # ── P1-1: FEE_LIMITED guard (configurável via guardrails) ──────────────────
     # Se gross_ev > 0 e net_ev < threshold, o problema é custo (fee drag), não filtros.
-    # Mutar entry_triggers/block_rules não resolve fee drag — diagnóstico correto é
-    # "reduzir fee ou aumentar TP". Nunca mutar neste caso.
+    # Configurável: fee_limited_guard_enabled=false desabilita este guard.
+    fee_guard = guardrails.get("fee_limited_guard_enabled", True) if guardrails else True
     gross_ev = float(perf.get("approved_gross_ev", ev))
-    if gross_ev > 0.0 and ev < ev_threshold:
+    if fee_guard and gross_ev > 0.0 and ev < ev_threshold:
         return False, (
             f"fee_limited (gross_ev={gross_ev:.3f}% > 0 but net_ev={ev:.3f}% < {ev_threshold}% "
             f"— fee drag, not filter issue)"
