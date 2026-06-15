@@ -264,6 +264,8 @@ async def compute_performance_window(days: int, db: AsyncSession, user_id = None
     # ── Approved performance from shadow_trades (fonte = AUTOPILOT_SOURCE) ────
     # shadow_trades vocabulary: _ST_TP='TP_HIT', _ST_SL='SL_HIT'  (UPPERCASE)
     # decisions_log permanece como CAPTURA upstream — NÃO removida.
+    _uid_clause = "AND user_id = :uid" if user_id else ""
+    _uid_params: Dict[str, Any] = {"uid": str(user_id)} if user_id else {}
     allowed_result = await db.execute(text(f"""
         SELECT
             COUNT(*)                                                                  AS n,
@@ -278,8 +280,8 @@ async def compute_performance_window(days: int, db: AsyncSession, user_id = None
           AND outcome IN {_ST_OUTCOMES_SQL}
           AND pnl_pct IS NOT NULL
           AND created_at >= :cutoff
-          AND (:uid::text IS NULL OR user_id = :uid)
-    """), {"cutoff": cutoff, "fee_pct": fee_pct, "source": _source, "uid": str(user_id) if user_id else None})
+          {_uid_clause}
+    """), {"cutoff": cutoff, "fee_pct": fee_pct, "source": _source, **_uid_params})
     allowed_row = dict(allowed_result.mappings().one())
 
     n_allowed = int(allowed_row["n"] or 0)
