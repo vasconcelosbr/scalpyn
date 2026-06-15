@@ -69,7 +69,11 @@ async def main() -> None:
         SELECT config_json FROM config_profiles
         WHERE config_type = 'ml_research' AND is_active = true LIMIT 1
     """)
-    cfg: dict = dict(cfg_row["config_json"]) if cfg_row else {}
+    if cfg_row:
+        raw = cfg_row["config_json"]
+        cfg = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    else:
+        cfg = {}
     lookback_days = int(cfg.get("ml.lookback_days", 90))
     cost_roundtrip = float(cfg.get("ml.cost_roundtrip_pct", 0.0040))
     slippage = float(cfg.get("ml.slippage_pct", 0.0005))
