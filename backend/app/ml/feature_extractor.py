@@ -24,6 +24,7 @@ FEATURE_COLUMNS: List[str] = [
     "volume_spike",
     # Volatility — compression proxy; bb_width is already (upper-lower)/sma, scale-free
     "bb_width",
+    "atr_pct",              # (atr/close)*100 — volatility magnitude; absent pre-audit (2.55σ finding)
     # Trend — booleans only; absolute EMA values removed (P1-2: non-stationary across symbols)
     # P2-6: ema9_gt_ema21 is redundant with ema_distance_pct (sign(ema_distance_pct) = ema9_gt_ema21).
     # Kept both — XGBoost feature importance will confirm if one can be dropped.
