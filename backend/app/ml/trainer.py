@@ -362,14 +362,16 @@ class WinFastTrainer:
                 "scale_pos_weight": scale_pos_weight,
                 # Task #324 — NaN preserved natively. NEVER fillna upstream.
                 "missing": float("nan"),
-                "max_depth": trial.suggest_int("max_depth", 3, 8),
-                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
-                "n_estimators": trial.suggest_int("n_estimators", 100, 600),
-                "subsample": trial.suggest_float("subsample", 0.6, 1.0),
-                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
-                "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
-                "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 1.0),
-                "reg_lambda": trial.suggest_float("reg_lambda", 0.5, 2.0),
+                # Audit: restricted search space to prevent overfitting on small
+                # datasets (~800 samples). Favors shallow, regularized trees.
+                "max_depth": trial.suggest_int("max_depth", 2, 5),
+                "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.08, log=True),
+                "n_estimators": trial.suggest_int("n_estimators", 150, 600),
+                "subsample": trial.suggest_float("subsample", 0.6, 0.9),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 0.9),
+                "min_child_weight": trial.suggest_int("min_child_weight", 3, 15),
+                "reg_alpha": trial.suggest_float("reg_alpha", 0.1, 2.0),
+                "reg_lambda": trial.suggest_float("reg_lambda", 1.0, 5.0),
             }
             # Audit P0-05: Regression branch in Optuna objective — optimise RMSE
             # instead of AUC when ML_TARGET_TYPE=regression.
