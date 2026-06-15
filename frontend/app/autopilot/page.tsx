@@ -8,12 +8,8 @@ import {
   RotateCcw,
   ChevronDown,
   ChevronRight,
-  AlertTriangle,
   CheckCircle,
-  Clock,
   Zap,
-  TrendingUp,
-  TrendingDown,
   Shield,
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
@@ -122,6 +118,7 @@ export default function AutopilotPage() {
   const [loadingProfiles, setLoadingProfiles] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [running, setRunning] = useState(false);
+  const [toggling, setToggling] = useState(false);
   const [rollingBack, setRollingBack] = useState<string | null>(null);
   const [runResult, setRunResult] = useState<any>(null);
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
@@ -170,6 +167,22 @@ export default function AutopilotPage() {
   useEffect(() => {
     if (selectedId) loadDetail(selectedId);
   }, [selectedId, loadDetail]);
+
+  // Toggle Auto-Pilot
+  const handleToggle = async () => {
+    if (!selectedId || !status) return;
+    setToggling(true);
+    try {
+      await apiPost(`/profiles/${selectedId}/autopilot/toggle`, {
+        enabled: !status.auto_pilot_enabled,
+      });
+      await loadDetail(selectedId);
+    } catch (e: any) {
+      alert(`Erro ao alterar Auto-Pilot: ${e.message}`);
+    } finally {
+      setToggling(false);
+    }
+  };
 
   // Manual run
   const handleRun = async () => {
@@ -371,22 +384,33 @@ export default function AutopilotPage() {
             </div>
           )}
 
-          {/* Manual trigger */}
-          <div className="flex items-center gap-3">
+          {/* Manual trigger + toggle */}
+          <div className="flex items-center gap-3 flex-wrap">
             <button
               className="btn btn-primary text-[12px] flex items-center gap-1.5"
               onClick={handleRun}
-              disabled={running}
+              disabled={running || toggling}
             >
               <Play className={`w-3.5 h-3.5 ${running ? "animate-pulse" : ""}`} />
               {running ? "Analisando..." : "Analisar agora"}
             </button>
-            {!status.auto_pilot_enabled && (
-              <span className="text-[11px] text-[var(--text-tertiary)] flex items-center gap-1">
-                <AlertTriangle className="w-3 h-3 text-yellow-400" />
-                Auto-Pilot inativo neste profile — use o toggle na página de Profiles.
-              </span>
-            )}
+
+            <button
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-[12px] font-medium transition-colors ${
+                status.auto_pilot_enabled
+                  ? "bg-green-500/10 border-green-500/30 text-green-400 hover:bg-green-500/20"
+                  : "bg-[var(--bg-elevated)] border-[var(--border-default)] text-[var(--text-tertiary)] hover:border-[var(--border-strong)]"
+              }`}
+              onClick={handleToggle}
+              disabled={toggling || running}
+            >
+              <span className={`w-2 h-2 rounded-full transition-colors ${status.auto_pilot_enabled ? "bg-green-400" : "bg-[var(--text-tertiary)]"}`} />
+              {toggling
+                ? "Aguarde..."
+                : status.auto_pilot_enabled
+                ? "Auto-Pilot ativo"
+                : "Auto-Pilot inativo"}
+            </button>
           </div>
 
           {/* Run result */}
