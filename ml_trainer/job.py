@@ -31,6 +31,45 @@ logging.basicConfig(
 )
 logger = logging.getLogger("scalpyn.trainer")
 
+DIRECTIONAL_FEATURE_COLUMNS = {
+    "rsi_slope_3",
+    "rsi_slope_5",
+    "macd_hist_slope_3",
+    "macd_hist_slope_5",
+    "ema21_ema50_distance_pct",
+    "di_plus_minus_diff",
+    "adx_slope_3",
+    "vwap_reclaim_bool",
+    "higher_highs_5",
+    "higher_lows_5",
+}
+
+
+def _cfg_float(cfg: dict, key: str, default: float) -> float:
+    value = cfg.get(key, default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _cfg_bool(cfg: dict, key: str, default: bool) -> bool:
+    value = cfg.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _ratio(value: float | int | None) -> float:
+    """Normalize percent-like values to a 0..1 ratio."""
+    try:
+        val = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return val / 100.0 if val > 1.0 else val
+
 
 def _ml_dependency_versions() -> dict:
     deps = {
@@ -113,6 +152,23 @@ def main():
     _fee_roundtrip_pct = _ml_cfg.get("ml_fee_roundtrip_pct")
     _label_net_of_fees = bool(_ml_cfg.get("ml_label_net_of_fees", False))
     _win_fast_threshold_s = int(_ml_cfg.get("ml_win_fast_threshold_seconds", 1800))
+    _promotion_min_auc = _cfg_float(_ml_cfg, "ml_promotion_min_auc", MIN_AUC_TO_SAVE)
+    _promotion_min_precision_lift = _cfg_float(
+        _ml_cfg, "ml_promotion_min_precision_lift_relative", 0.10
+    )
+    _promotion_max_fpr = _cfg_float(_ml_cfg, "ml_promotion_max_fpr", 0.20)
+    _promotion_max_fpr_relative_increase = _cfg_float(
+        _ml_cfg, "ml_promotion_max_fpr_relative_increase", 0.25
+    )
+    _promotion_min_precision_vs_champion = _cfg_float(
+        _ml_cfg, "ml_promotion_min_precision_vs_champion", 1.00
+    )
+    _promotion_min_f1_vs_champion = _cfg_float(
+        _ml_cfg, "ml_promotion_min_f1_vs_champion", 1.00
+    )
+    _promotion_require_all_directional_features = _cfg_bool(
+        _ml_cfg, "ml_promotion_require_all_directional_features", True
+    )
     # B4: dataset validity gate — exclude shadows where features_snapshot was empty (pre-fix).
     # Set via backend/sql/set_ml_dataset_valid_from.sql after B1 deploy. Only moves forward.
     _dataset_valid_from = _ml_cfg.get("ml_dataset_valid_from")  # ISO string or None
@@ -267,25 +323,39 @@ def main():
     # ---------------------------------------------------------
     new_roc_auc = result["metrics"]["roc_auc"]
     new_fpr     = result["metrics"]["false_positive_rate"]
+    new_precision = result["metrics"]["precision"]
+    new_f1 = result["metrics"]["f1"]
+    new_capture = result["metrics"]["win_fast_capture_rate"]
+    winrate_base_ratio = _ratio(result.get("winrate_base"))
+    min_precision_vs_base = winrate_base_ratio * (1.0 + _promotion_min_precision_lift)
+    excluded_features = set(result.get("features_excluded") or [])
+    excluded_directional = sorted(DIRECTIONAL_FEATURE_COLUMNS & excluded_features)
     promotion_status = "active"
     rejection_reason = None
     comparison_vs_previous = {
         "promotion_status": promotion_status,
         "rejection_reason": rejection_reason,
+        "new_precision": new_precision,
+        "new_f1": new_f1,
         "new_roc_auc": new_roc_auc,
         "new_false_positive_rate": new_fpr,
-        "min_auc_to_save": MIN_AUC_TO_SAVE,
-        "fpr_reject_threshold": 0.90,
+        "new_capture_rate": new_capture,
+        "winrate_base": winrate_base_ratio,
+        "min_precision_vs_base": min_precision_vs_base,
+        "min_auc_to_save": _promotion_min_auc,
+        "max_fpr_to_promote": _promotion_max_fpr,
+        "max_fpr_relative_increase": _promotion_max_fpr_relative_increase,
+        "excluded_directional_features": excluded_directional,
     }
 
-    if new_roc_auc < MIN_AUC_TO_SAVE:
+    if new_roc_auc < _promotion_min_auc:
         promotion_status = "rejected"
         rejection_reason = "roc_auc_below_min"
         logger.warning(
             "[PROMOTION] REJEITADO — roc_auc=%.4f < %.2f (MIN_AUC_TO_SAVE). "
             "Dataset provavelmente pequeno demais ou regime invertido no test set. "
             "Modelo NÃO promovido.",
-            new_roc_auc, MIN_AUC_TO_SAVE,
+            new_roc_auc, _promotion_min_auc,
         )
         logger.warning("[PROMOTION] Challenger will be stored as rejected; active model unchanged.")
 
@@ -302,19 +372,77 @@ def main():
     # Champion/Challenger: só regride até 5% vs modelo ativo atual.
     # Se não há modelo ativo, ou o atual também é ruim (< 0.50),
     # ignora a comparação relativa e promove com base nos guards absolutos.
+    if promotion_status == "active" and new_precision < min_precision_vs_base:
+        promotion_status = "rejected"
+        rejection_reason = "precision_below_baseline_lift"
+        logger.warning(
+            "[PROMOTION] REJEITADO - precision=%.4f < baseline_lift=%.4f "
+            "(winrate_base=%.4f, lift=%.2f). Modelo NAO promovido.",
+            new_precision, min_precision_vs_base, winrate_base_ratio,
+            _promotion_min_precision_lift,
+        )
+        logger.warning("[PROMOTION] Challenger will be stored as rejected; active model unchanged.")
+
+    if promotion_status == "active" and new_fpr > _promotion_max_fpr:
+        promotion_status = "rejected"
+        rejection_reason = "fpr_above_max"
+        logger.warning(
+            "[PROMOTION] REJEITADO - fpr=%.4f > max_fpr=%.4f. Modelo NAO promovido.",
+            new_fpr, _promotion_max_fpr,
+        )
+        logger.warning("[PROMOTION] Challenger will be stored as rejected; active model unchanged.")
+
+    if (
+        promotion_status == "active"
+        and _promotion_require_all_directional_features
+        and excluded_directional
+    ):
+        promotion_status = "rejected"
+        rejection_reason = "directional_features_excluded"
+        logger.warning(
+            "[PROMOTION] REJEITADO - features direcionais excluidas por baixa cobertura: %s. "
+            "Modelo registrado, mas NAO promovido.",
+            excluded_directional,
+        )
+        logger.warning("[PROMOTION] Challenger will be stored as rejected; active model unchanged.")
+
     with engine.connect() as conn:
         current_row = conn.execute(text(
-            "SELECT version, roc_auc FROM ml_models WHERE status = 'active' "
-            "ORDER BY version DESC LIMIT 1"
+            """
+            SELECT version, roc_auc, precision_score, f1_score,
+                   false_positive_rate, win_fast_capture_rate
+            FROM ml_models
+            WHERE status = 'active'
+            ORDER BY version DESC
+            LIMIT 1
+            """
         )).fetchone()
 
     if promotion_status == "active" and current_row and current_row.roc_auc is not None and float(current_row.roc_auc) >= 0.50:
         current_roc_auc = float(current_row.roc_auc)
+        current_precision = float(current_row.precision_score or 0.0)
+        current_f1 = float(current_row.f1_score or 0.0)
+        current_fpr = float(current_row.false_positive_rate or 0.0)
+        current_capture = float(current_row.win_fast_capture_rate or 0.0)
         min_required    = round(current_roc_auc * 0.95, 4)
+        min_required_precision = current_precision * _promotion_min_precision_vs_champion
+        min_required_f1 = current_f1 * _promotion_min_f1_vs_champion
+        max_allowed_fpr = (
+            current_fpr * (1.0 + _promotion_max_fpr_relative_increase)
+            if current_fpr > 0
+            else _promotion_max_fpr
+        )
         comparison_vs_previous.update({
             "current_version": str(current_row.version),
             "current_roc_auc": current_roc_auc,
+            "current_precision": current_precision,
+            "current_f1": current_f1,
+            "current_false_positive_rate": current_fpr,
+            "current_capture_rate": current_capture,
             "min_required_roc_auc": min_required,
+            "min_required_precision": min_required_precision,
+            "min_required_f1": min_required_f1,
+            "max_allowed_fpr": max_allowed_fpr,
         })
         if new_roc_auc < min_required:
             promotion_status = "rejected"
@@ -324,6 +452,34 @@ def main():
                 "new roc_auc=%.4f < min=%.4f (95%% do atual v%s=%.4f). "
                 "Modelo NÃO promovido — mantendo campeão atual.",
                 new_roc_auc, min_required, current_row.version, current_roc_auc,
+            )
+            logger.warning("[PROMOTION] Challenger will be stored as rejected; active model unchanged.")
+        elif new_precision < min_required_precision:
+            promotion_status = "rejected"
+            rejection_reason = "champion_precision_regression"
+            logger.warning(
+                "[PROMOTION] REJEITADO - new precision=%.4f < champion_min=%.4f "
+                "(atual v%s=%.4f). Modelo NAO promovido.",
+                new_precision, min_required_precision, current_row.version,
+                current_precision,
+            )
+            logger.warning("[PROMOTION] Challenger will be stored as rejected; active model unchanged.")
+        elif new_f1 < min_required_f1:
+            promotion_status = "rejected"
+            rejection_reason = "champion_f1_regression"
+            logger.warning(
+                "[PROMOTION] REJEITADO - new f1=%.4f < champion_min=%.4f "
+                "(atual v%s=%.4f). Modelo NAO promovido.",
+                new_f1, min_required_f1, current_row.version, current_f1,
+            )
+            logger.warning("[PROMOTION] Challenger will be stored as rejected; active model unchanged.")
+        elif new_fpr > max_allowed_fpr:
+            promotion_status = "rejected"
+            rejection_reason = "champion_fpr_regression"
+            logger.warning(
+                "[PROMOTION] REJEITADO - new fpr=%.4f > max_allowed=%.4f "
+                "(atual v%s=%.4f). Modelo NAO promovido.",
+                new_fpr, max_allowed_fpr, current_row.version, current_fpr,
             )
             logger.warning("[PROMOTION] Challenger will be stored as rejected; active model unchanged.")
         else:
