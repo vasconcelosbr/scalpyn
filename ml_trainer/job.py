@@ -267,23 +267,37 @@ def main():
     # ---------------------------------------------------------
     new_roc_auc = result["metrics"]["roc_auc"]
     new_fpr     = result["metrics"]["false_positive_rate"]
+    promotion_status = "active"
+    rejection_reason = None
+    comparison_vs_previous = {
+        "promotion_status": promotion_status,
+        "rejection_reason": rejection_reason,
+        "new_roc_auc": new_roc_auc,
+        "new_false_positive_rate": new_fpr,
+        "min_auc_to_save": MIN_AUC_TO_SAVE,
+        "fpr_reject_threshold": 0.90,
+    }
 
     if new_roc_auc < MIN_AUC_TO_SAVE:
+        promotion_status = "rejected"
+        rejection_reason = "roc_auc_below_min"
         logger.warning(
             "[PROMOTION] REJEITADO — roc_auc=%.4f < %.2f (MIN_AUC_TO_SAVE). "
             "Dataset provavelmente pequeno demais ou regime invertido no test set. "
             "Modelo NÃO promovido.",
             new_roc_auc, MIN_AUC_TO_SAVE,
         )
-        sys.exit(0)
+        logger.warning("[PROMOTION] Challenger will be stored as rejected; active model unchanged.")
 
-    if new_fpr >= 0.90:
+    if promotion_status == "active" and new_fpr >= 0.90:
+        promotion_status = "rejected"
+        rejection_reason = "fpr_too_high"
         logger.warning(
             "[PROMOTION] REJEITADO — fpr=%.4f >= 0.90 (modelo aprova quase tudo). "
             "Threshold provavelmente colapsado. Modelo NÃO promovido.",
             new_fpr,
         )
-        sys.exit(0)
+        logger.warning("[PROMOTION] Challenger will be stored as rejected; active model unchanged.")
 
     # Champion/Challenger: só regride até 5% vs modelo ativo atual.
     # Se não há modelo ativo, ou o atual também é ruim (< 0.50),
@@ -294,23 +308,31 @@ def main():
             "ORDER BY version DESC LIMIT 1"
         )).fetchone()
 
-    if current_row and current_row.roc_auc is not None and float(current_row.roc_auc) >= 0.50:
+    if promotion_status == "active" and current_row and current_row.roc_auc is not None and float(current_row.roc_auc) >= 0.50:
         current_roc_auc = float(current_row.roc_auc)
         min_required    = round(current_roc_auc * 0.95, 4)
+        comparison_vs_previous.update({
+            "current_version": str(current_row.version),
+            "current_roc_auc": current_roc_auc,
+            "min_required_roc_auc": min_required,
+        })
         if new_roc_auc < min_required:
+            promotion_status = "rejected"
+            rejection_reason = "champion_challenger_regression"
             logger.warning(
                 "[PROMOTION] REJEITADO — champion/challenger: "
                 "new roc_auc=%.4f < min=%.4f (95%% do atual v%s=%.4f). "
                 "Modelo NÃO promovido — mantendo campeão atual.",
                 new_roc_auc, min_required, current_row.version, current_roc_auc,
             )
-            sys.exit(0)
-        logger.info(
-            "[PROMOTION] Champion/Challenger OK: new roc_auc=%.4f >= min=%.4f "
+            logger.warning("[PROMOTION] Challenger will be stored as rejected; active model unchanged.")
+        else:
+            logger.info(
+                "[PROMOTION] Champion/Challenger OK: new roc_auc=%.4f >= min=%.4f "
             "(atual v%s=%.4f) — prosseguindo com promoção.",
-            new_roc_auc, min_required, current_row.version, current_roc_auc,
-        )
-    else:
+                new_roc_auc, min_required, current_row.version, current_roc_auc,
+            )
+    elif promotion_status == "active":
         logger.info(
             "[PROMOTION] Sem campeão válido para comparar — promoção via guards absolutos."
         )
@@ -318,6 +340,11 @@ def main():
     # ---------------------------------------------------------
     # 4. Serializa modelo em memória (salvo no DB na seção 5)
     # ---------------------------------------------------------
+    comparison_vs_previous.update({
+        "promotion_status": promotion_status,
+        "rejection_reason": rejection_reason,
+    })
+
     import joblib
     import io
 
@@ -389,7 +416,9 @@ def main():
                 f"feature_columns_hash={_feature_columns_hash}; "
                 f"feature_count={len(_trained_feature_cols)}; "
                 f"feature_schema_version={_feature_schema_version}; "
-                f"dataset_query_cutoff={dataset_query_cutoff}"
+                f"dataset_query_cutoff={dataset_query_cutoff}; "
+                f"promotion_status={promotion_status}; "
+                f"rejection_reason={rejection_reason}"
             ),
         )
     except Exception as exc:
@@ -403,11 +432,14 @@ def main():
             ).scalar()
             logger.info("[DB] next_version=%s", ver)
 
-            # Desativa anterior
-            conn.execute(
-                text("UPDATE ml_models SET status = 'retired', retired_at = NOW() WHERE status = 'active'")
-            )
-            logger.info("[DB] UPDATE retired OK")
+            # Desativa anterior somente se o challenger foi aprovado.
+            if promotion_status == "active":
+                conn.execute(
+                    text("UPDATE ml_models SET status = 'retired', retired_at = NOW() WHERE status = 'active'")
+                )
+                logger.info("[DB] UPDATE retired OK")
+            else:
+                logger.info("[DB] challenger rejected - keeping current active model unchanged")
 
             # Insere novo
             conn.execute(text("""
@@ -422,22 +454,25 @@ def main():
                     feature_columns_json, feature_columns_hash,
                     feature_count, feature_schema_version,
                     dataset_query_cutoff,
+                    comparison_vs_previous,
                     model_blob
                 ) VALUES (
-                    :version, 'active', :hyperparams,
+                    :version, :status, :hyperparams,
                     :n_train, :n_val, :n_test,
                     :precision, :recall, :f1, :roc_auc,
                     :capture_rate, :fpr,
                     :train_from, :train_to,
                     :model_path, :threshold,
-                    NOW(), :notes,
+                    CASE WHEN :status = 'active' THEN NOW() ELSE NULL END, :notes,
                     CAST(:feature_columns_json AS JSONB), :feature_columns_hash,
                     :feature_count, :feature_schema_version,
                     :dataset_query_cutoff,
+                    CAST(:comparison_vs_previous AS JSONB),
                     :model_blob
                 )
             """), {
                 "version":      str(ver),
+                "status":       promotion_status,
                 "hyperparams":  json.dumps(
                     {k: (None if isinstance(v, float) and math.isnan(v) else v)
                      for k, v in result["best_params"].items()}
@@ -471,6 +506,8 @@ def main():
                     f"n_pos={result.get('n_pos', 0)} n_neg={result.get('n_neg', 0)} | "
                     f"threshold={float(result.get('decision_threshold', 0.5)):.4f} | "
                     f"regime_drift={result.get('regime_drift_warning', False)} | "
+                    f"promotion_status={promotion_status} | "
+                    f"rejection_reason={rejection_reason} | "
                     f"features_excluded={result.get('features_excluded', [])} | "
                     f"shap_top5={result.get('shap_bad_approval_drivers', [])[:5]}"
                 ),
@@ -479,14 +516,18 @@ def main():
                 "feature_count": len(_trained_feature_cols),
                 "feature_schema_version": _feature_schema_version,
                 "dataset_query_cutoff": dataset_query_cutoff,
+                "comparison_vs_previous": json.dumps(comparison_vs_previous),
                 "model_blob":   model_blob,
             })
-            logger.info("[DB] INSERT OK — modelo salvo")
+            logger.info("[DB] INSERT OK - modelo salvo status=%s", promotion_status)
     except Exception as exc:
         logger.error("[DB] FALHA AO SALVAR MODELO: %s", exc, exc_info=True)
         raise
 
-    logger.info(f"Modelo v{ver} registrado e ativado.")
+    if promotion_status == "active":
+        logger.info(f"Modelo v{ver} registrado e ativado.")
+    else:
+        logger.info(f"Modelo v{ver} registrado como {promotion_status}; campeao atual preservado.")
     logger.info("=== Trainer Job concluído com sucesso ===")
 
 
