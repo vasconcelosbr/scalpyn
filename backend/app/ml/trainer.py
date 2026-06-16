@@ -21,7 +21,9 @@ from sklearn.metrics import (
 
 from .feature_extractor import (
     FEATURE_COLUMNS,
+    FEATURE_SCHEMA_VERSION,
     ML_EXCLUDED_FIELDS,
+    feature_columns_hash,
     filter_trainable_features,
     train_val_test_split,
 )
@@ -498,6 +500,9 @@ class WinFastTrainer:
                 "min_samples_per_class": min_per_class,
                 "ml_target": ml_target,
                 "features_excluded_count": len(_features_excluded),
+                "feature_count": len(feature_cols),
+                "feature_columns_hash": feature_columns_hash(feature_cols),
+                "feature_schema_version": FEATURE_SCHEMA_VERSION,
                 "regime_drift_warning": str(_regime_drift_warning),
             })
             mlflow.set_tags({
@@ -511,6 +516,8 @@ class WinFastTrainer:
                 "calibrated_threshold": f"{calibrated_threshold:.4f}",
                 "shap_top1": str(shap_drivers[0][0]) if shap_drivers else "n/a",
                 "regime_drift_warning": str(_regime_drift_warning),
+                "feature_columns_hash": feature_columns_hash(feature_cols),
+                "feature_schema_version": FEATURE_SCHEMA_VERSION,
             })
             mlflow.log_metrics({
                 "precision": precision,
@@ -557,4 +564,8 @@ class WinFastTrainer:
             "shap_bad_approval_drivers": shap_drivers[:5] if shap_drivers else [],
             "regime_drift_warning": _regime_drift_warning,
             "features_excluded": [col for col, _ in _features_excluded],
+            "feature_columns": list(feature_cols),
+            "feature_columns_hash": feature_columns_hash(feature_cols),
+            "feature_count": len(feature_cols),
+            "feature_schema_version": FEATURE_SCHEMA_VERSION,
         }

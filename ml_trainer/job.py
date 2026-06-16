@@ -164,6 +164,7 @@ def main():
     elif _dataset_valid_from:
         logger.info("Dataset valid_from skipped for source=%s (snapshot quality via <> '{}' filter)", ML_SOURCE_FILTER)
     with engine.connect() as conn:
+        dataset_query_cutoff = conn.execute(text("SELECT NOW()")).scalar()
         result = conn.execute(text(f"""
             SELECT
                 symbol, source, pnl_pct, net_return_pct, holding_seconds, outcome,
@@ -176,11 +177,13 @@ def main():
               AND pnl_pct IS NOT NULL
               AND features_snapshot IS NOT NULL
               AND features_snapshot::text <> '{{}}'
-              AND created_at >= NOW() - INTERVAL :days
+              AND created_at >= (:dataset_query_cutoff - CAST(:days AS interval))
+              AND created_at <= :dataset_query_cutoff
               {exclude_clause}
               {valid_from_clause}
             ORDER BY created_at ASC
         """), {"days": f"{DAYS_LOOKBACK} days", "source_filter": ML_SOURCE_FILTER,
+               "dataset_query_cutoff": dataset_query_cutoff,
                **exclude_params, **valid_from_params})
         records = [dict(row._mapping) for row in result.fetchall()]
 
@@ -209,7 +212,13 @@ def main():
     # 2. Build DataFrame
     # ---------------------------------------------------------
     sys.path.insert(0, "/app")
-    from app.ml.feature_extractor import build_training_dataframe, train_val_test_split, FEATURE_COLUMNS
+    from app.ml.feature_extractor import (
+        FEATURE_COLUMNS,
+        FEATURE_SCHEMA_VERSION,
+        build_training_dataframe,
+        feature_columns_hash,
+        train_val_test_split,
+    )
     from app.ml.trainer import WinFastTrainer
 
     df = build_training_dataframe(
@@ -318,10 +327,12 @@ def main():
     # so that model_loader.py (which expects model_data["model"] and
     # model_data["feature_columns"]) can also load models saved by job.py.
     # Derive actual feature columns used: FEATURE_COLUMNS minus any excluded
-    _trained_feature_cols = [
+    _trained_feature_cols = list(result.get("feature_columns") or [
         c for c in FEATURE_COLUMNS
         if c not in set(result.get("features_excluded", []))
-    ]
+    ])
+    _feature_columns_hash = result.get("feature_columns_hash") or feature_columns_hash(_trained_feature_cols)
+    _feature_schema_version = result.get("feature_schema_version") or FEATURE_SCHEMA_VERSION
     model_payload = {
         "model": trainer.model,
         "feature_columns": _trained_feature_cols,
@@ -330,6 +341,11 @@ def main():
             "n_features": len(_trained_feature_cols),
             "target_type": ML_TARGET_TYPE,
             "dependency_versions": _ml_dependency_versions(),
+            "feature_columns_hash": _feature_columns_hash,
+            "feature_schema_version": _feature_schema_version,
+            "dataset_query_cutoff": dataset_query_cutoff.isoformat()
+            if hasattr(dataset_query_cutoff, "isoformat")
+            else str(dataset_query_cutoff),
         },
     }
     joblib.dump(model_payload, buf)
@@ -355,6 +371,31 @@ def main():
         return v
 
     try:
+        client = mlflow.tracking.MlflowClient()
+        client.set_tag(result["run_id"], "feature_columns_hash", _feature_columns_hash)
+        client.set_tag(result["run_id"], "feature_schema_version", _feature_schema_version)
+        client.set_tag(result["run_id"], "feature_count", str(len(_trained_feature_cols)))
+        client.set_tag(
+            result["run_id"],
+            "dataset_query_cutoff",
+            dataset_query_cutoff.isoformat()
+            if hasattr(dataset_query_cutoff, "isoformat")
+            else str(dataset_query_cutoff),
+        )
+        client.set_tag(
+            result["run_id"],
+            "mlflow.note.content",
+            (
+                f"feature_columns_hash={_feature_columns_hash}; "
+                f"feature_count={len(_trained_feature_cols)}; "
+                f"feature_schema_version={_feature_schema_version}; "
+                f"dataset_query_cutoff={dataset_query_cutoff}"
+            ),
+        )
+    except Exception as exc:
+        logger.warning("Failed to annotate MLflow run with feature schema metadata: %s", exc)
+
+    try:
         with engine.begin() as conn:
             # Próxima versão
             ver = conn.execute(
@@ -378,6 +419,9 @@ def main():
                     train_from, train_to,
                     model_path, decision_threshold,
                     activated_at, notes,
+                    feature_columns_json, feature_columns_hash,
+                    feature_count, feature_schema_version,
+                    dataset_query_cutoff,
                     model_blob
                 ) VALUES (
                     :version, 'active', :hyperparams,
@@ -387,6 +431,9 @@ def main():
                     :train_from, :train_to,
                     :model_path, :threshold,
                     NOW(), :notes,
+                    CAST(:feature_columns_json AS JSONB), :feature_columns_hash,
+                    :feature_count, :feature_schema_version,
+                    :dataset_query_cutoff,
                     :model_blob
                 )
             """), {
@@ -414,6 +461,12 @@ def main():
                     f"MLflow run_id: {result['run_id']} | storage: db://ml_models | "
                     f"source={ML_SOURCE_FILTER} | target={ML_TARGET_TYPE} | "
                     f"lookback_days={DAYS_LOOKBACK} | "
+                    f"dataset_query_cutoff={dataset_query_cutoff} | "
+                    f"feature_schema_version={_feature_schema_version} | "
+                    f"feature_columns_hash={_feature_columns_hash} | "
+                    f"feature_count={len(_trained_feature_cols)} | "
+                    f"candidate_feature_count={len(FEATURE_COLUMNS)} | "
+                    f"candidate_feature_columns_hash={feature_columns_hash(list(FEATURE_COLUMNS))} | "
                     f"winrate_base={result.get('winrate_base', 0):.2f}% | "
                     f"n_pos={result.get('n_pos', 0)} n_neg={result.get('n_neg', 0)} | "
                     f"threshold={float(result.get('decision_threshold', 0.5)):.4f} | "
@@ -421,6 +474,11 @@ def main():
                     f"features_excluded={result.get('features_excluded', [])} | "
                     f"shap_top5={result.get('shap_bad_approval_drivers', [])[:5]}"
                 ),
+                "feature_columns_json": json.dumps(_trained_feature_cols),
+                "feature_columns_hash": _feature_columns_hash,
+                "feature_count": len(_trained_feature_cols),
+                "feature_schema_version": _feature_schema_version,
+                "dataset_query_cutoff": dataset_query_cutoff,
                 "model_blob":   model_blob,
             })
             logger.info("[DB] INSERT OK — modelo salvo")

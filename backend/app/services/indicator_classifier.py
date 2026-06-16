@@ -84,6 +84,10 @@ _MICRO_EXPLICIT: frozenset[str] = frozenset({
     # Volume 24h from ticker
     "volume_24h_base",
     "volume_24h_usdt",
+    # Short-term directional structure from the latest closed 5m candles.
+    "vwap_reclaim_bool",
+    "higher_highs_5",
+    "higher_lows_5",
 })
 
 # ── Priority 1: Explicit structural indicators ────────────────────────────────
@@ -98,6 +102,8 @@ _STRUCT_EXPLICIT: frozenset[str] = frozenset({
     "di_plus",
     "di_minus",
     "adx_acceleration",
+    "adx_slope_3",
+    "di_plus_minus_diff",
     # Slow EMAs
     "ema50",
     "ema200",
@@ -113,6 +119,8 @@ _STRUCT_EXPLICIT: frozenset[str] = frozenset({
     "macd_signal",
     "macd_histogram_prev",
     "macd_histogram_slope",
+    "macd_hist_slope_3",
+    "macd_hist_slope_5",
     "macd_histogram_mean_10",
     "macd_histogram_std_10",
     # Parabolic SAR (canônicos + extensões: ep, af, distance, signal, reversal)
@@ -133,6 +141,8 @@ _STRUCT_EXPLICIT: frozenset[str] = frozenset({
     # Entry Exhaustion Score — observational Shadow Mode metric (Fase 1)
     # Separado de "exhaustion" do spot_sell_manager (exit-side concept).
     "entry_exhaustion_score",
+    "rsi_slope_3",
+    "rsi_slope_5",
 })
 
 # ── Structural-hybrid indicators (structural group, subtype="hybrid") ─────────
@@ -156,6 +166,7 @@ _STRUCT_HYBRID: frozenset[str] = frozenset({
 _HYBRID_INDICATORS: frozenset[str] = frozenset({
     "ema9_gt_ema50",        # EMA9 (micro) vs EMA50 (structural)
     "ema_full_alignment",   # EMA9 > EMA50 > EMA200 — all three groups
+    "ema21_ema50_distance_pct",
 })
 
 # ── FeatureEngine config key → scheduler group ───────────────────────────────

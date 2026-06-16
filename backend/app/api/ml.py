@@ -366,7 +366,10 @@ async def list_ml_models(
             win_fast_capture_rate, false_positive_rate,
             train_from, train_to,
             model_path, decision_threshold,
-            activated_at, retired_at, notes
+            activated_at, retired_at, notes,
+            feature_columns_json, feature_columns_hash,
+            feature_count, feature_schema_version,
+            dataset_query_cutoff
         FROM ml_models
         ORDER BY version DESC
     """))
@@ -393,6 +396,11 @@ async def list_ml_models(
             "activated_at":         r["activated_at"].isoformat() if r["activated_at"] else None,
             "retired_at":           r["retired_at"].isoformat() if r["retired_at"] else None,
             "notes":                r["notes"],
+            "feature_columns_json":  r["feature_columns_json"],
+            "feature_columns_hash":  r["feature_columns_hash"],
+            "feature_count":         r["feature_count"],
+            "feature_schema_version": r["feature_schema_version"],
+            "dataset_query_cutoff":  r["dataset_query_cutoff"].isoformat() if r["dataset_query_cutoff"] else None,
         })
     return {"models": models}
 

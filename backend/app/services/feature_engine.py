@@ -236,6 +236,8 @@ class FeatureEngine:
                     (_close_for_dist - results["ema9"]) / results["ema9"] * 100, 4
                 )
 
+            results.update(self._calc_directional_features(df))
+
             if market_data:
                 results.update(self._apply_market_data_overrides(market_data))
 
@@ -261,6 +263,140 @@ class FeatureEngine:
         base_volume = FeatureEngine._base_volume(df)
         closes = pd.to_numeric(df["close"], errors="coerce").fillna(0.0)
         return base_volume * closes
+
+    @staticmethod
+    def _last_slope(series: pd.Series, periods: int, divisor: Optional[float] = None) -> Optional[float]:
+        if len(series) <= periods:
+            return None
+        current = series.iloc[-1]
+        previous = series.iloc[-1 - periods]
+        if pd.isna(current) or pd.isna(previous):
+            return None
+        slope = float(current) - float(previous)
+        if divisor is not None:
+            if divisor == 0 or pd.isna(divisor):
+                return None
+            slope = slope / float(divisor) * 100.0
+        else:
+            slope = slope / periods
+        return round(float(slope), 6)
+
+    def _calc_directional_features(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Point-in-time directional features from closed candles only."""
+        result: Dict[str, Any] = {
+            "rsi_slope_3": None,
+            "rsi_slope_5": None,
+            "macd_hist_slope_3": None,
+            "macd_hist_slope_5": None,
+            "ema21_ema50_distance_pct": None,
+            "di_plus_minus_diff": None,
+            "adx_slope_3": None,
+            "vwap_reclaim_bool": None,
+            "higher_highs_5": None,
+            "higher_lows_5": None,
+        }
+
+        if df is None or df.empty:
+            return result
+
+        close = pd.to_numeric(df["close"], errors="coerce")
+        high = pd.to_numeric(df["high"], errors="coerce")
+        low = pd.to_numeric(df["low"], errors="coerce")
+        close_now = close.iloc[-1]
+
+        try:
+            rsi_period = int(self.config.get("rsi", {}).get("period", 14))
+            if len(close) >= rsi_period + 6:
+                delta = close.diff()
+                gain = delta.where(delta > 0, 0.0).ewm(alpha=1 / rsi_period, adjust=False).mean()
+                loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1 / rsi_period, adjust=False).mean()
+                rs = gain / loss.replace(0, np.nan)
+                rsi = 100 - (100 / (1 + rs))
+                result["rsi_slope_3"] = self._last_slope(rsi, 3)
+                result["rsi_slope_5"] = self._last_slope(rsi, 5)
+        except Exception as exc:
+            logger.debug("[FEATURE_ENGINE] directional RSI slopes failed: %s", exc)
+
+        try:
+            cfg = self.config.get("macd", {}) or {}
+            fast, slow, signal_p = cfg.get("fast", 12), cfg.get("slow", 26), cfg.get("signal", 9)
+            if len(close) >= max(fast, slow, signal_p) + 6:
+                ema_fast = close.ewm(span=fast, adjust=False).mean()
+                ema_slow = close.ewm(span=slow, adjust=False).mean()
+                macd_line = ema_fast - ema_slow
+                signal_line = macd_line.ewm(span=signal_p, adjust=False).mean()
+                histogram = macd_line - signal_line
+                result["macd_hist_slope_3"] = self._last_slope(histogram, 3, divisor=close_now)
+                result["macd_hist_slope_5"] = self._last_slope(histogram, 5, divisor=close_now)
+        except Exception as exc:
+            logger.debug("[FEATURE_ENGINE] directional MACD slopes failed: %s", exc)
+
+        try:
+            if len(close) >= 50:
+                ema21 = close.ewm(span=21, adjust=False).mean().iloc[-1]
+                ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
+                if pd.notna(ema21) and pd.notna(ema50) and float(ema50) != 0.0:
+                    result["ema21_ema50_distance_pct"] = round(
+                        (float(ema21) - float(ema50)) / float(ema50) * 100.0,
+                        6,
+                    )
+        except Exception as exc:
+            logger.debug("[FEATURE_ENGINE] EMA21/EMA50 distance failed: %s", exc)
+
+        try:
+            adx_period = int(self.config.get("adx", {}).get("period", 14))
+            if len(df) >= adx_period + 4:
+                plus_dm = high.diff()
+                minus_dm = -low.diff()
+                plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
+                minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
+                tr1 = high - low
+                tr2 = (high - close.shift()).abs()
+                tr3 = (low - close.shift()).abs()
+                tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                atr = tr.ewm(alpha=1 / adx_period, adjust=False).mean()
+                plus_di = 100 * (plus_dm.ewm(alpha=1 / adx_period, adjust=False).mean() / atr.replace(0, np.nan))
+                minus_di = 100 * (minus_dm.ewm(alpha=1 / adx_period, adjust=False).mean() / atr.replace(0, np.nan))
+                dx = 100 * ((plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan))
+                adx = dx.ewm(alpha=1 / adx_period, adjust=False).mean()
+                result["adx_slope_3"] = self._last_slope(adx, 3)
+                if pd.notna(plus_di.iloc[-1]) and pd.notna(minus_di.iloc[-1]):
+                    result["di_plus_minus_diff"] = round(float(plus_di.iloc[-1] - minus_di.iloc[-1]), 6)
+        except Exception as exc:
+            logger.debug("[FEATURE_ENGINE] directional ADX/DI features failed: %s", exc)
+
+        try:
+            typical_price = (high + low + close) / 3
+            volume = self._base_volume(df)
+            tp_vol = typical_price * volume
+            if isinstance(df.index, pd.DatetimeIndex):
+                date_key = df.index.date
+            else:
+                date_key = pd.to_datetime(df["time"]).dt.date if "time" in df.columns else None
+            if date_key is not None:
+                df_tmp = pd.DataFrame({"tp_vol": tp_vol.values, "vol": volume.values}, index=df.index)
+                df_tmp["_date"] = date_key
+                cumulative_tp_vol = df_tmp.groupby("_date")["tp_vol"].cumsum()
+                cumulative_vol = df_tmp.groupby("_date")["vol"].cumsum()
+            else:
+                cumulative_tp_vol = tp_vol.cumsum()
+                cumulative_vol = volume.cumsum()
+            vwap = cumulative_tp_vol / cumulative_vol.replace(0, np.nan)
+            vwap_distance = ((close - vwap) / vwap.replace(0, np.nan)) * 100.0
+            if len(vwap_distance) >= 2 and pd.notna(vwap_distance.iloc[-2]) and pd.notna(vwap_distance.iloc[-1]):
+                result["vwap_reclaim_bool"] = bool(vwap_distance.iloc[-2] < 0 and vwap_distance.iloc[-1] >= 0)
+        except Exception as exc:
+            logger.debug("[FEATURE_ENGINE] VWAP reclaim failed: %s", exc)
+
+        if len(df) >= 5:
+            recent_highs = high.iloc[-5:]
+            recent_lows = low.iloc[-5:]
+            if recent_highs.notna().all():
+                result["higher_highs_5"] = bool(recent_highs.diff().dropna().gt(0).all())
+            if recent_lows.notna().all():
+                result["higher_lows_5"] = bool(recent_lows.diff().dropna().gt(0).all())
+
+        return result
 
     def _calc_volume_metrics(self, df: pd.DataFrame) -> Dict[str, Any]:
         base_volume = self._base_volume(df)

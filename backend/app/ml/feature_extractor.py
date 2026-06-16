@@ -1,5 +1,6 @@
 """Feature Extractor — Extract and engineer features from decisions_log.metrics JSONB."""
 
+import hashlib
 import json
 import logging
 import math
@@ -10,8 +11,10 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+FEATURE_SCHEMA_VERSION = "directional_v1"
+
 # Feature columns for XGBoost model (order must be stable across train/predict)
-FEATURE_COLUMNS: List[str] = [
+BASE_FEATURE_COLUMNS: List[str] = [
     # Core market microstructure
     "taker_ratio",
     "volume_delta",
@@ -46,7 +49,29 @@ FEATURE_COLUMNS: List[str] = [
     "ema_distance_pct",       # (ema9 - ema21) / ema21 * 100
     "ema50_distance_pct",     # (close - ema50) / ema50 * 100  (P1-2)
     "ema200_distance_pct",    # (close - ema200) / ema200 * 100 (P1-2)
+    # Directional features (L2 validation): additive, point-in-time derivatives
+    # emitted by feature_engine.py when candle history is available. For legacy
+    # snapshots the extractor keeps them as NaN rather than fabricating zeros.
+    "rsi_slope_3",             # (rsi[t] - rsi[t-3]) / 3
+    "rsi_slope_5",             # (rsi[t] - rsi[t-5]) / 5
+    "macd_hist_slope_3",       # ((hist[t] - hist[t-3]) / close[t]) * 100
+    "macd_hist_slope_5",       # ((hist[t] - hist[t-5]) / close[t]) * 100
+    "ema21_ema50_distance_pct",  # ((ema21 - ema50) / ema50) * 100
+    "di_plus_minus_diff",      # di_plus - di_minus
+    "adx_slope_3",             # (adx[t] - adx[t-3]) / 3
+    "vwap_reclaim_bool",       # vwap_distance_pct crosses from <0 to >=0
+    "higher_highs_5",          # last 5 closed highs strictly ascending
+    "higher_lows_5",           # last 5 closed lows strictly ascending
 ]
+
+FEATURE_ALIASES: Dict[str, str] = {
+    "ema9_ema21_distance_pct": "ema_distance_pct",
+    "price_vs_vwap_pct": "vwap_distance_pct",
+    "volume_spike_ratio": "volume_spike",
+    "taker_buy_pressure_5m": "taker_ratio",
+    "adx_slope_1": "adx_acceleration",
+    "macd_hist_slope_1": "macd_histogram_slope",
+}
 # ── ML_EXCLUDED_FIELDS — defesa em profundidade ──────────────────────────────
 # Filtro global aplicado ao dict de input em ``extract_features`` E asserts
 # em ``build_training_dataframe`` / ``trainer.train``. Garante que mesmo se
@@ -84,7 +109,13 @@ ML_EXCLUDED_FIELDS: frozenset = frozenset({
 # by truncating X to model.n_features_in_ in prediction_service.py.
 # When the model is retrained with macro data, truncation is removed automatically.
 from .macro_features import MACRO_FEATURE_COLUMNS as _MACRO_COLS  # noqa: E402
-FEATURE_COLUMNS = FEATURE_COLUMNS + _MACRO_COLS
+FEATURE_COLUMNS = BASE_FEATURE_COLUMNS + _MACRO_COLS
+
+
+def feature_columns_hash(feature_columns: List[str]) -> str:
+    """Return a deterministic hash for an ordered feature schema."""
+    payload = json.dumps(list(feature_columns), ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 # FEATURES DELIBERATELY EXCLUDED FROM FEATURE_COLUMNS:
 # "score"             — P0-2: calculated from rsi/ema9_gt_ema21/volume_spike/atr_pct/
@@ -234,6 +265,23 @@ def extract_features(metrics: dict) -> Dict[str, float]:
 
     ema200 = _float("ema200")
     f["ema200_distance_pct"] = (close - ema200) / ema200 * 100 if ema200 > 0 and not math.isnan(close) else _nan
+
+    # Directional feature fallbacks that can be derived from scalar snapshot
+    # fields. Slope/crossing features need prior candles and are therefore
+    # emitted by feature_engine.py; legacy rows remain NaN.
+    f["ema21_ema50_distance_pct"] = (
+        (ema21 - ema50) / ema50 * 100
+        if ema50 > 0 and not math.isnan(ema21)
+        else f.get("ema21_ema50_distance_pct", _nan)
+    )
+
+    di_plus = _float("di_plus")
+    di_minus = _float("di_minus")
+    f["di_plus_minus_diff"] = (
+        di_plus - di_minus
+        if not math.isnan(di_plus) and not math.isnan(di_minus)
+        else f.get("di_plus_minus_diff", _nan)
+    )
 
     return f
 
