@@ -1287,6 +1287,9 @@ async def create_l3_rejected_inline_shadows(
     decisions: List[Dict[str, Any]],
     execution_id: str,
     promotion_at: "datetime",
+    profile_id: Optional[Any] = None,
+    profile_version: Optional[datetime] = None,
+    profile_name: Optional[str] = None,
 ) -> int:
     """L3_REJECTED inline capture: shadow para TODOS os ativos com decision=BLOCK no ciclo L3.
 
@@ -1749,6 +1752,9 @@ async def create_l3_simulated_shadows(
     decisions: List[Dict[str, Any]],
     execution_id: str,
     promotion_at: "datetime",
+    profile_id: Optional[Any] = None,
+    profile_version: Optional[datetime] = None,
+    profile_name: Optional[str] = None,
 ) -> int:
     """L3_SIMULATED capture: camada contrafactual para TODOS os ativos avaliados no gate L3.
 
@@ -2605,4 +2611,383 @@ async def create_watchlist_spot_shadows(
         len(eligible),
         created,
     )
+    return created
+
+
+# ── Strategy Lab: direct profile-attributed shadows ──────────────────────────
+#
+# These functions bypass decisions_log deduplication entirely.
+# Multiple L3 profiles can capture the same symbol in parallel.
+# source='L3' is canonical so the shadow monitor tracks them like real L3 shadows.
+# Idempotency: ON CONFLICT ON CONSTRAINT uq_shadow_lab_profile_symbol_bucket DO NOTHING
+# means two calls for the same (profile_id, symbol, source, hour) are safe.
+
+_INSERT_STRATEGY_LAB_SQL = text("""
+    INSERT INTO shadow_trades (
+        id,
+        decision_id, user_id, symbol, strategy, direction,
+        amount_usdt, entry_price, entry_timestamp,
+        tp_price, sl_price, tp_pct, sl_pct, timeout_candles,
+        status, skip_reason, source, config_snapshot, features_snapshot,
+        last_processed_time,
+        ttt_enabled, ttt_tp_pct, ttt_timeout_minutes,
+        barrier_mode, tp_pct_applied, sl_pct_applied,
+        profile_id, profile_version, profile_name, strategy_type, rules_snapshot
+    ) VALUES (
+        gen_random_uuid(),
+        NULL, :user_id, :symbol, :strategy, :direction,
+        :amount_usdt, :entry_price, :entry_timestamp,
+        :tp_price, :sl_price, :tp_pct, :sl_pct, :timeout_candles,
+        :status, NULL, :source,
+        CAST(:config_snapshot AS JSONB),
+        CAST(:features_snapshot AS JSONB),
+        :last_processed_time,
+        :ttt_enabled, :ttt_tp_pct, :ttt_timeout_minutes,
+        :barrier_mode, :tp_pct_applied, :sl_pct_applied,
+        CAST(:profile_id AS UUID), :profile_version, :profile_name,
+        :strategy_type, CAST(:rules_snapshot AS JSONB)
+    )
+    ON CONFLICT ON CONSTRAINT uq_shadow_lab_profile_symbol_bucket DO NOTHING
+    RETURNING id
+""")
+
+
+async def create_strategy_lab_shadows(
+    user_id,
+    profile_id,
+    profile_version: Optional[datetime],
+    profile_name: str,
+    strategy_type: str,
+    rules_snapshot: Optional[Dict[str, Any]],
+    allow_decisions: List[Dict[str, Any]],
+    assets_by_symbol: Dict[str, Dict[str, Any]],
+    execution_id: str,
+    promotion_at: datetime,
+    db: Any,
+) -> int:
+    """Strategy Lab: create profile-attributed ALLOW shadows bypassing decisions_log dedup.
+
+    Key design points:
+    - decision_id = NULL always (bypasses _persist_decision_logs deduplication)
+    - source = 'L3' (shadow monitor tracks them like real L3 shadows)
+    - profile_id set (distinguishes Strategy Lab from canonical L3)
+    - ON CONFLICT ON CONSTRAINT uq_shadow_lab_profile_symbol_bucket DO NOTHING
+    - Fire-and-forget pattern: logs errors, never raises
+
+    Returns count of new shadow rows inserted.
+    """
+    import json as _json
+
+    if not allow_decisions:
+        return 0
+
+    from ..database import CeleryAsyncSessionLocal
+    from ..models.config_profile import ConfigProfile
+    from ..schemas.spot_engine_config import SpotEngineConfig
+
+    # Load tp_pct / sl_pct from spot engine config
+    tp_pct = 3.0
+    sl_pct = 2.0
+    timeout_candles = SHADOW_TIMEOUT_CANDLES
+    ttt_enabled = TTT_ENABLED_DEFAULT
+    ttt_tp_pct = TTT_TP_PCT_DEFAULT
+    ttt_timeout_minutes = TTT_TIMEOUT_MINUTES_DEFAULT
+
+    try:
+        async with CeleryAsyncSessionLocal() as cfg_db:
+            se_res = await cfg_db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "spot_engine",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            se_row = se_res.scalar_one_or_none()
+            if se_row:
+                try:
+                    _se = SpotEngineConfig.from_config_json(se_row.config_json)
+                    tp_pct = _SHADOW_TP_PCT_OVERRIDE or float(_se.selling.take_profit_pct)
+                    sl_pct = _SHADOW_SL_PCT_OVERRIDE or float(
+                        _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
+                    )
+                except Exception:
+                    pass
+    except Exception:
+        logger.debug("[StrategyLab-allow] config load failed user=%s", user_id)
+
+    created = 0
+    profile_id_str = str(profile_id) if profile_id is not None else None
+    rules_json = _json.dumps(rules_snapshot, default=str) if rules_snapshot else None
+
+    for d in allow_decisions:
+        symbol = d.get("symbol")
+        if not symbol:
+            continue
+
+        # Get current market price from asset dict
+        _asset = assets_by_symbol.get(symbol) or d.get("_asset") or {}
+        entry_price = None
+        if isinstance(_asset, dict):
+            _p = _asset.get("current_price") or _asset.get("price")
+            if _p is not None:
+                try:
+                    entry_price = float(_p)
+                except (TypeError, ValueError):
+                    pass
+
+        if entry_price and entry_price > 0 and tp_pct > 0 and sl_pct > 0:
+            tp_price = entry_price * (1 + tp_pct / 100.0)
+            sl_price = entry_price * (1 - sl_pct / 100.0)
+            initial_status = "RUNNING"
+        else:
+            tp_price = None
+            sl_price = None
+            initial_status = "PENDING"
+
+        # Build features snapshot from decision metrics
+        _metrics = d.get("metrics") or {}
+        _snap = _metrics.get("indicators_snapshot") or {}
+        features_flat: Dict[str, Any] = {}
+        if isinstance(_snap, dict):
+            for key, entry in _snap.items():
+                if isinstance(entry, dict) and "value" in entry:
+                    features_flat[key] = entry.get("value")
+                else:
+                    features_flat[key] = entry
+
+        config_snap = {
+            "tp_pct": tp_pct,
+            "sl_pct": sl_pct,
+            "timeout_candles": timeout_candles,
+            "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
+            "ttt_enabled": ttt_enabled,
+            "ttt_tp_pct": ttt_tp_pct,
+            "ttt_timeout_minutes": ttt_timeout_minutes,
+            "profile_id": profile_id_str,
+            "profile_name": profile_name,
+            "execution_id": execution_id,
+        }
+
+        try:
+            async with CeleryAsyncSessionLocal() as own_db:
+                async with own_db.begin():
+                    res = await own_db.execute(
+                        _INSERT_STRATEGY_LAB_SQL,
+                        {
+                            "user_id": user_id,
+                            "symbol": symbol,
+                            "strategy": d.get("strategy"),
+                            "direction": d.get("direction", "SPOT"),
+                            "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
+                            "entry_price": entry_price,
+                            "entry_timestamp": promotion_at,
+                            "tp_price": tp_price,
+                            "sl_price": sl_price,
+                            "tp_pct": tp_pct or None,
+                            "sl_pct": sl_pct or None,
+                            "timeout_candles": timeout_candles,
+                            "status": initial_status,
+                            "source": SHADOW_SOURCE_L3,
+                            "config_snapshot": _json.dumps(config_snap, default=str),
+                            "features_snapshot": _json.dumps(features_flat, default=str),
+                            "last_processed_time": promotion_at,
+                            "ttt_enabled": ttt_enabled,
+                            "ttt_tp_pct": ttt_tp_pct,
+                            "ttt_timeout_minutes": ttt_timeout_minutes,
+                            "barrier_mode": "FIXED",
+                            "tp_pct_applied": tp_pct or None,
+                            "sl_pct_applied": sl_pct or None,
+                            "profile_id": profile_id_str,
+                            "profile_version": profile_version,
+                            "profile_name": profile_name,
+                            "strategy_type": strategy_type,
+                            "rules_snapshot": rules_json,
+                        },
+                    )
+                    row = res.fetchone()
+                    if row is not None:
+                        created += 1
+                        logger.debug(
+                            "[StrategyLab-allow] created id=%s symbol=%s profile=%s",
+                            row[0], symbol, profile_name,
+                        )
+        except Exception:
+            logger.exception(
+                "[StrategyLab-allow] create failed symbol=%s profile=%s",
+                symbol, profile_name,
+            )
+
+    if created:
+        logger.info(
+            "[StrategyLab-allow] profile=%s created=%d allow_decisions=%d user=%s",
+            profile_name, created, len(allow_decisions), user_id,
+        )
+    return created
+
+
+async def create_strategy_lab_rejected_shadows(
+    user_id,
+    profile_id,
+    profile_version: Optional[datetime],
+    profile_name: str,
+    strategy_type: str,
+    rules_snapshot: Optional[Dict[str, Any]],
+    block_decisions: List[Dict[str, Any]],
+    assets_by_symbol: Dict[str, Dict[str, Any]],
+    execution_id: str,
+    promotion_at: datetime,
+    db: Any,
+) -> int:
+    """Strategy Lab: create profile-attributed BLOCK shadows for counterfactual analysis.
+
+    Same design as create_strategy_lab_shadows but for BLOCK decisions.
+    source='L3' — same monitor tracks them.
+    Uses uq_shadow_lab_profile_symbol_bucket for idempotency.
+    Fire-and-forget: logs errors, never raises.
+    """
+    import json as _json
+
+    if not block_decisions:
+        return 0
+
+    from ..database import CeleryAsyncSessionLocal
+    from ..models.config_profile import ConfigProfile
+    from ..schemas.spot_engine_config import SpotEngineConfig
+
+    tp_pct = 3.0
+    sl_pct = 2.0
+    timeout_candles = SHADOW_TIMEOUT_CANDLES
+    ttt_enabled = TTT_ENABLED_DEFAULT
+    ttt_tp_pct = TTT_TP_PCT_DEFAULT
+    ttt_timeout_minutes = TTT_TIMEOUT_MINUTES_DEFAULT
+
+    try:
+        async with CeleryAsyncSessionLocal() as cfg_db:
+            se_res = await cfg_db.execute(
+                select(ConfigProfile).where(
+                    ConfigProfile.user_id == user_id,
+                    ConfigProfile.config_type == "spot_engine",
+                    ConfigProfile.is_active.is_(True),
+                ).limit(1)
+            )
+            se_row = se_res.scalar_one_or_none()
+            if se_row:
+                try:
+                    _se = SpotEngineConfig.from_config_json(se_row.config_json)
+                    tp_pct = _SHADOW_TP_PCT_OVERRIDE or float(_se.selling.take_profit_pct)
+                    sl_pct = _SHADOW_SL_PCT_OVERRIDE or float(
+                        _se.sell_flow.kill_switch.max_drawdown_from_hwm_pct
+                    )
+                except Exception:
+                    pass
+    except Exception:
+        logger.debug("[StrategyLab-block] config load failed user=%s", user_id)
+
+    created = 0
+    profile_id_str = str(profile_id) if profile_id is not None else None
+    rules_json = _json.dumps(rules_snapshot, default=str) if rules_snapshot else None
+
+    for d in block_decisions:
+        symbol = d.get("symbol")
+        if not symbol:
+            continue
+
+        _asset = assets_by_symbol.get(symbol) or d.get("_asset") or {}
+        entry_price = None
+        if isinstance(_asset, dict):
+            _p = _asset.get("current_price") or _asset.get("price")
+            if _p is not None:
+                try:
+                    entry_price = float(_p)
+                except (TypeError, ValueError):
+                    pass
+
+        if entry_price and entry_price > 0 and tp_pct > 0 and sl_pct > 0:
+            tp_price = entry_price * (1 + tp_pct / 100.0)
+            sl_price = entry_price * (1 - sl_pct / 100.0)
+            initial_status = "RUNNING"
+        else:
+            tp_price = None
+            sl_price = None
+            initial_status = "PENDING"
+
+        _metrics = d.get("metrics") or {}
+        _snap = _metrics.get("indicators_snapshot") or {}
+        features_flat: Dict[str, Any] = {}
+        if isinstance(_snap, dict):
+            for key, entry in _snap.items():
+                if isinstance(entry, dict) and "value" in entry:
+                    features_flat[key] = entry.get("value")
+                else:
+                    features_flat[key] = entry
+
+        config_snap = {
+            "tp_pct": tp_pct,
+            "sl_pct": sl_pct,
+            "timeout_candles": timeout_candles,
+            "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
+            "ttt_enabled": ttt_enabled,
+            "ttt_tp_pct": ttt_tp_pct,
+            "ttt_timeout_minutes": ttt_timeout_minutes,
+            "profile_id": profile_id_str,
+            "profile_name": profile_name,
+            "execution_id": execution_id,
+            "l3_decision": "BLOCK",
+            "l3_score": d.get("score"),
+        }
+
+        try:
+            async with CeleryAsyncSessionLocal() as own_db:
+                async with own_db.begin():
+                    res = await own_db.execute(
+                        _INSERT_STRATEGY_LAB_SQL,
+                        {
+                            "user_id": user_id,
+                            "symbol": symbol,
+                            "strategy": d.get("strategy"),
+                            "direction": d.get("direction", "SPOT"),
+                            "amount_usdt": SHADOW_TRADE_AMOUNT_USDT,
+                            "entry_price": entry_price,
+                            "entry_timestamp": promotion_at,
+                            "tp_price": tp_price,
+                            "sl_price": sl_price,
+                            "tp_pct": tp_pct or None,
+                            "sl_pct": sl_pct or None,
+                            "timeout_candles": timeout_candles,
+                            "status": initial_status,
+                            "source": SHADOW_SOURCE_L3,
+                            "config_snapshot": _json.dumps(config_snap, default=str),
+                            "features_snapshot": _json.dumps(features_flat, default=str),
+                            "last_processed_time": promotion_at,
+                            "ttt_enabled": ttt_enabled,
+                            "ttt_tp_pct": ttt_tp_pct,
+                            "ttt_timeout_minutes": ttt_timeout_minutes,
+                            "barrier_mode": "FIXED",
+                            "tp_pct_applied": tp_pct or None,
+                            "sl_pct_applied": sl_pct or None,
+                            "profile_id": profile_id_str,
+                            "profile_version": profile_version,
+                            "profile_name": profile_name,
+                            "strategy_type": strategy_type,
+                            "rules_snapshot": rules_json,
+                        },
+                    )
+                    row = res.fetchone()
+                    if row is not None:
+                        created += 1
+                        logger.debug(
+                            "[StrategyLab-block] created id=%s symbol=%s profile=%s",
+                            row[0], symbol, profile_name,
+                        )
+        except Exception:
+            logger.exception(
+                "[StrategyLab-block] create failed symbol=%s profile=%s",
+                symbol, profile_name,
+            )
+
+    if created:
+        logger.info(
+            "[StrategyLab-block] profile=%s created=%d block_decisions=%d user=%s",
+            profile_name, created, len(block_decisions), user_id,
+        )
     return created

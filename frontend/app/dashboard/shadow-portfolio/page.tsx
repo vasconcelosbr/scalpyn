@@ -107,6 +107,22 @@ interface ShadowTradeDetail extends ShadowTradeRead {
   // Backend só preenche quando ENABLE_EXIT_METRICS_UI=true.
   entry_metrics: Record<string, unknown> | null;
   exit_metrics: Record<string, unknown> | null;
+  // Strategy Lab fields (migration 077)
+  profile_id: string | null;
+  profile_version: string | null;
+  profile_name: string | null;
+  strategy_type: string | null;
+  rules_snapshot: Record<string, unknown> | null;
+  ml_probability: number | null;
+  ml_model_id: string | null;
+  final_priority_score: number | null;
+}
+
+interface ProfileItem {
+  id: string;
+  name: string;
+  description: string | null;
+  is_active: boolean;
 }
 
 // ── filter shape ─────────────────────────────────────────────────────────────
@@ -1701,6 +1717,32 @@ function DetailModal({
                     label="Decision ID"
                     value={data.decision_id ?? "—"}
                   />
+                  {data.profile_name != null && (
+                    <DetailRow
+                      label="Profile (Lab)"
+                      value={data.profile_name}
+                      color={C.purple}
+                    />
+                  )}
+                  {data.ml_probability != null && (
+                    <DetailRow
+                      label="ML Probability"
+                      value={`${(data.ml_probability * 100).toFixed(1)}%`}
+                      color={data.ml_probability >= 0.5 ? C.green : C.amber}
+                    />
+                  )}
+                  {data.final_priority_score != null && (
+                    <DetailRow
+                      label="Priority Score"
+                      value={data.final_priority_score.toFixed(3)}
+                    />
+                  )}
+                  {data.profile_version != null && (
+                    <DetailRow
+                      label="Profile Version"
+                      value={fmtDateTime(data.profile_version)}
+                    />
+                  )}
                 </div>
 
                 <div>
@@ -1834,6 +1876,7 @@ function buildBaseQuery(
   filter: FilterState,
   overrides: { status?: string; page?: number; page_size?: number } = {},
   source?: SourceTab,
+  profileId?: string | null,
 ): string {
   const params = new URLSearchParams();
   if (overrides.status) params.set("status", overrides.status);
@@ -1841,17 +1884,19 @@ function buildBaseQuery(
   if (filter.minDate) params.set("min_date", filter.minDate);
   if (filter.maxDate) params.set("max_date", filter.maxDate);
   if (source) params.set("source", source);
+  if (profileId) params.set("profile_id", profileId);
   params.set("page", String(overrides.page ?? filter.page));
   params.set("page_size", String(overrides.page_size ?? filter.pageSize));
   return params.toString();
 }
 
-function buildSummaryQuery(filter: FilterState, source?: SourceTab): string {
+function buildSummaryQuery(filter: FilterState, source?: SourceTab, profileId?: string | null): string {
   const params = new URLSearchParams();
   if (filter.symbol.trim()) params.set("symbol", filter.symbol.trim());
   if (filter.minDate) params.set("min_date", filter.minDate);
   if (filter.maxDate) params.set("max_date", filter.maxDate);
   if (source) params.set("source", source);
+  if (profileId) params.set("profile_id", profileId);
   return params.toString();
 }
 
@@ -1867,6 +1912,28 @@ export default function ShadowPortfolioPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const [sourceTab, setSourceTab] = useState<SourceTab>("L3");
+  const [profiles, setProfiles] = useState<ProfileItem[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
+
+  // Fetch profiles on mount for Strategy Lab profile selector
+  useEffect(() => {
+    apiGet<{ items?: ProfileItem[]; profiles?: ProfileItem[] } | ProfileItem[]>("/api/profiles/")
+      .then((res) => {
+        let items: ProfileItem[] = [];
+        if (Array.isArray(res)) {
+          items = res;
+        } else if (res && typeof res === "object") {
+          items = (res as { items?: ProfileItem[]; profiles?: ProfileItem[] }).items
+            ?? (res as { profiles?: ProfileItem[] }).profiles
+            ?? [];
+        }
+        setProfiles(items.filter((p) => p.is_active));
+      })
+      .catch(() => {
+        // Silently fail — profile selector is optional
+        setProfiles([]);
+      });
+  }, []);
 
   const fetchList = useCallback(() => {
     setLoadingList(true);
@@ -1890,7 +1957,7 @@ export default function ShadowPortfolioPage() {
 
     if (filter.status === "ALL") {
       // Server-side pagination puro.
-      const qs = buildBaseQuery(filter, {}, sourceTab);
+      const qs = buildBaseQuery(filter, {}, sourceTab, selectedProfileId);
       apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qs}`)
         .then(setList)
         .catch(handleError)
@@ -1905,12 +1972,12 @@ export default function ShadowPortfolioPage() {
         status: "PENDING",
         page: 1,
         page_size: MAX_LOCAL_FETCH,
-      }, sourceTab);
+      }, sourceTab, selectedProfileId);
       const qsRunning = buildBaseQuery(filter, {
         status: "RUNNING",
         page: 1,
         page_size: MAX_LOCAL_FETCH,
-      }, sourceTab);
+      }, sourceTab, selectedProfileId);
       Promise.all([
         apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qsPending}`),
         apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qsRunning}`),
@@ -1938,23 +2005,23 @@ export default function ShadowPortfolioPage() {
       status: "COMPLETED",
       page: 1,
       page_size: MAX_LOCAL_FETCH,
-    }, sourceTab);
+    }, sourceTab, selectedProfileId);
     apiGet<ShadowTradeListResponse>(`/api/shadow-trades?${qsCompleted}`)
       .then((res) => setList(res))
       .catch(handleError)
       .finally(() => setLoadingList(false));
-  }, [filter, sourceTab]);
+  }, [filter, sourceTab, selectedProfileId]);
 
   const fetchSummary = useCallback(() => {
     setLoadingSummary(true);
-    const qs = buildSummaryQuery(filter, sourceTab);
+    const qs = buildSummaryQuery(filter, sourceTab, selectedProfileId);
     apiGet<ShadowTradeSummary>(
       qs ? `/api/shadow-trades/summary?${qs}` : `/api/shadow-trades/summary`
     )
       .then((res) => setSummary(res))
       .catch(() => setSummary(null))
       .finally(() => setLoadingSummary(false));
-  }, [filter, sourceTab]);
+  }, [filter, sourceTab, selectedProfileId]);
 
   useEffect(() => {
     fetchList();
@@ -2084,6 +2151,56 @@ export default function ShadowPortfolioPage() {
               </>
             )}
           </p>
+          {profiles.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
+              <span style={{ fontSize: 11, color: C.muted, whiteSpace: "nowrap" }}>
+                Strategy Lab:
+              </span>
+              <select
+                value={selectedProfileId ?? ""}
+                onChange={(e) => {
+                  setSelectedProfileId(e.target.value || null);
+                  setFilter({ ...DEFAULT_FILTER });
+                }}
+                style={{
+                  background: C.elevated,
+                  color: C.text,
+                  border: `1px solid ${C.border}`,
+                  borderRadius: 6,
+                  padding: "4px 10px",
+                  fontSize: 11.5,
+                  cursor: "pointer",
+                  outline: "none",
+                }}
+              >
+                <option value="">Todos os profiles</option>
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              {selectedProfileId && (
+                <button
+                  onClick={() => {
+                    setSelectedProfileId(null);
+                    setFilter({ ...DEFAULT_FILTER });
+                  }}
+                  style={{
+                    background: "transparent",
+                    border: `1px solid ${C.border}`,
+                    color: C.muted,
+                    borderRadius: 4,
+                    padding: "3px 8px",
+                    fontSize: 10.5,
+                    cursor: "pointer",
+                  }}
+                >
+                  Limpar
+                </button>
+              )}
+            </div>
+          )}
           <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
             {(
               [

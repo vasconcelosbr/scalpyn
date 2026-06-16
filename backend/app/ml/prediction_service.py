@@ -39,6 +39,7 @@ class WinFastPredictor:
         db: AsyncSession,
         decision_id: int | None = None,
         symbol: str | None = None,
+        profile_id: str | None = None,
     ) -> dict:
         """
         Prediz probabilidade WIN_FAST para um sinal L3.
@@ -51,9 +52,9 @@ class WinFastPredictor:
                 "model_id": "uuid" | None
             }
         """
-        # Carrega modelo (GCS cache)
+        # Carrega modelo (GCS cache) — profile-specific if profile_id provided
         try:
-            model = get_model()
+            model = get_model(profile_id=profile_id)
         except Exception as e:
             logger.warning(f"Modelo indisponível: {e} — BLOQUEANDO por segurança (fail-closed)")
             return {

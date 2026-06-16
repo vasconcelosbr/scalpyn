@@ -3362,6 +3362,76 @@ async def _run_pipeline_scan():
                                 _l3sim_exc,
                             )
 
+                    # ── Strategy Lab: direct profile-attributed shadows ───────────────────
+                    # Bypasses decisions_log dedup — multiple profiles can capture the same
+                    # symbol in parallel. Unique constraint per (profile_id, symbol, source,
+                    # hour bucket) prevents duplicates within a cycle.
+                    if wl.profile_id:
+                        try:
+                            from ..services.shadow_trade_service import (
+                                create_strategy_lab_shadows as _create_lab_allow,
+                                create_strategy_lab_rejected_shadows as _create_lab_rejected,
+                            )
+                            _lab_profile_version = None
+                            _lab_profile_name = wl.name
+                            try:
+                                _pv_row = (await db.execute(
+                                    text("SELECT updated_at, name FROM profiles WHERE id=:pid"),
+                                    {"pid": str(wl.profile_id)}
+                                )).fetchone()
+                                if _pv_row:
+                                    _lab_profile_version = _pv_row.updated_at
+                                    _lab_profile_name = _pv_row.name
+                            except Exception as _pv_exc:
+                                logger.debug(
+                                    "[StrategyLab] profile version fetch failed: %s", _pv_exc
+                                )
+
+                            _lab_assets_by_sym = {a["symbol"]: a for a in assets}
+                            _lab_profile_cfg = profile_config_map.get(wl.profile_id)
+
+                            _allow_decs_lab = [
+                                d for d in decisions if d.get("decision") == "ALLOW"
+                            ]
+                            if _allow_decs_lab:
+                                await _create_lab_allow(
+                                    user_id=wl.user_id,
+                                    profile_id=wl.profile_id,
+                                    profile_version=_lab_profile_version,
+                                    profile_name=_lab_profile_name,
+                                    strategy_type=str(wl.profile_id),
+                                    rules_snapshot=_lab_profile_cfg,
+                                    allow_decisions=_allow_decs_lab,
+                                    assets_by_symbol=_lab_assets_by_sym,
+                                    execution_id=str(execution_id),
+                                    promotion_at=datetime.now(timezone.utc),
+                                    db=db,
+                                )
+
+                            _block_decs_lab = [
+                                d for d in decisions if d.get("decision") == "BLOCK"
+                            ]
+                            if _block_decs_lab:
+                                await _create_lab_rejected(
+                                    user_id=wl.user_id,
+                                    profile_id=wl.profile_id,
+                                    profile_version=_lab_profile_version,
+                                    profile_name=_lab_profile_name,
+                                    strategy_type=str(wl.profile_id),
+                                    rules_snapshot=_lab_profile_cfg,
+                                    block_decisions=_block_decs_lab,
+                                    assets_by_symbol=_lab_assets_by_sym,
+                                    execution_id=str(execution_id),
+                                    promotion_at=datetime.now(timezone.utc),
+                                    db=db,
+                                )
+
+                        except Exception as _lab_exc:
+                            logger.warning(
+                                "[StrategyLab] shadow creation failed wl=%s: %s",
+                                wl.name, _lab_exc,
+                            )
+
                     if new_syms:
                         stats["new_signals"] += len(new_syms)
                         await _broadcast_pipeline_update(

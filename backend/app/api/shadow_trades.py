@@ -125,6 +125,8 @@ def _build_filters(
     min_date: Optional[str],
     max_date: Optional[str],
     source: Optional[str] = None,
+    profile_id: Optional[UUID] = None,
+    profile_version: Optional[datetime] = None,
 ) -> list[Any]:
     conditions: list[Any] = [ShadowTrade.user_id == user_id]
     sanitized_status = _sanitize_status(status)
@@ -142,6 +144,10 @@ def _build_filters(
         conditions.append(ShadowTrade.created_at >= start_dt)
     if end_dt is not None:
         conditions.append(ShadowTrade.created_at <= end_dt)
+    if profile_id is not None:
+        conditions.append(ShadowTrade.profile_id == profile_id)
+    if profile_version is not None:
+        conditions.append(ShadowTrade.profile_version == profile_version)
     return conditions
 
 
@@ -318,6 +324,19 @@ def _to_detail(
         exit_metrics_json=row.exit_metrics_json
         if isinstance(row.exit_metrics_json, dict)
         else None,
+        # Strategy Lab fields (migration 077)
+        profile_id=row.profile_id if hasattr(row, "profile_id") else None,
+        profile_version=row.profile_version if hasattr(row, "profile_version") else None,
+        profile_name=row.profile_name if hasattr(row, "profile_name") else None,
+        strategy_type=row.strategy_type if hasattr(row, "strategy_type") else None,
+        rules_snapshot=row.rules_snapshot
+        if hasattr(row, "rules_snapshot") and isinstance(row.rules_snapshot, dict)
+        else None,
+        ml_probability=float(row.ml_probability)
+        if hasattr(row, "ml_probability") and row.ml_probability is not None else None,
+        ml_model_id=row.ml_model_id if hasattr(row, "ml_model_id") else None,
+        final_priority_score=float(row.final_priority_score)
+        if hasattr(row, "final_priority_score") and row.final_priority_score is not None else None,
     )
 
 
@@ -328,6 +347,8 @@ async def list_shadow_trades(
     min_date: Optional[str] = Query(None),
     max_date: Optional[str] = Query(None),
     source: Optional[str] = Query(None),
+    profile_id: Optional[UUID] = Query(None, description="Filter by Strategy Lab profile"),
+    profile_version: Optional[datetime] = Query(None, description="Filter by profile version"),
     page: int = Query(1, ge=1),
     page_size: int = Query(_DEFAULT_PAGE_SIZE, ge=1, le=_MAX_PAGE_SIZE),
     db: AsyncSession = Depends(get_db),
@@ -342,6 +363,8 @@ async def list_shadow_trades(
             min_date=min_date,
             max_date=max_date,
             source=source,
+            profile_id=profile_id,
+            profile_version=profile_version,
         )
         total_q = select(func.count(ShadowTrade.id)).where(and_(*filters))
         total = int((await db.execute(total_q)).scalar_one() or 0)
@@ -380,6 +403,8 @@ async def shadow_trades_summary(
     min_date: Optional[str] = Query(None),
     max_date: Optional[str] = Query(None),
     source: Optional[str] = Query(None),
+    profile_id: Optional[UUID] = Query(None, description="Filter by Strategy Lab profile"),
+    profile_version: Optional[datetime] = Query(None, description="Filter by profile version"),
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> ShadowTradeSummary:
@@ -392,6 +417,8 @@ async def shadow_trades_summary(
             min_date=min_date,
             max_date=max_date,
             source=source,
+            profile_id=profile_id,
+            profile_version=profile_version,
         )
 
         # Avg de pnl_pct deve considerar APENAS trades com outcome

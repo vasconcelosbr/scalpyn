@@ -101,6 +101,16 @@ class ShadowTradeDetail(ShadowTradeRead):
     max_price_post_entry: Optional[float] = None
     exit_metrics_json: Optional[Dict[str, Any]] = None
 
+    # Strategy Lab fields (migration 077) — null for non-lab shadows.
+    profile_id: Optional[UUID] = None
+    profile_version: Optional[datetime] = None
+    profile_name: Optional[str] = None
+    strategy_type: Optional[str] = None
+    rules_snapshot: Optional[Dict[str, Any]] = None
+    ml_probability: Optional[float] = None
+    ml_model_id: Optional[UUID] = None
+    final_priority_score: Optional[float] = None
+
 
 class ShadowTradeListResponse(BaseModel):
     items: List[ShadowTradeRead]

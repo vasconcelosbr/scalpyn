@@ -227,4 +227,23 @@ class ShadowTrade(Base):
     candles_to_peak = Column(Integer, nullable=True)
     candles_to_first_positive = Column(Integer, nullable=True)
 
+    # ── Strategy Lab columns (migration 077) ─────────────────────────────────
+    # Populated only for Strategy Lab shadows created via create_strategy_lab_shadows/
+    # create_strategy_lab_rejected_shadows. Null for all pre-migration shadows.
+    # profile_id FK uses ON DELETE SET NULL to preserve data if profile deleted.
+    profile_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("profiles.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    profile_version = Column(DateTime(timezone=True), nullable=True)
+    profile_name = Column(String(255), nullable=True)
+    strategy_type = Column(String(64), nullable=True)
+    rules_snapshot = Column(JSONB, nullable=True)
+    profile_status_at_entry = Column(String(32), nullable=True)
+    final_priority_score = Column(Float, nullable=True)
+    ml_probability = Column(Float, nullable=True)
+    ml_model_id = Column(UUID(as_uuid=True), nullable=True)
+
     decision = relationship("DecisionLog", foreign_keys=[decision_id])
