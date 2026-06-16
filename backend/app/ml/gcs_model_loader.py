@@ -9,8 +9,10 @@ import io
 import logging
 import os
 import time
+import sys
+from importlib.metadata import PackageNotFoundError, version as package_version
 from threading import Lock
-from typing import Optional
+from typing import Dict, Optional
 
 import joblib
 import psycopg2
@@ -18,6 +20,24 @@ import psycopg2
 logger = logging.getLogger(__name__)
 
 MODEL_CACHE_TTL = int(os.getenv("MODEL_CACHE_TTL", "300"))  # seconds
+
+
+def _ml_dependency_versions() -> Dict[str, Optional[str]]:
+    deps = {
+        "xgboost": "xgboost",
+        "scikit_learn": "scikit-learn",
+        "numpy": "numpy",
+        "pandas": "pandas",
+        "joblib": "joblib",
+        "scipy": "scipy",
+    }
+    versions: Dict[str, Optional[str]] = {"python": sys.version.split()[0]}
+    for key, package_name in deps.items():
+        try:
+            versions[key] = package_version(package_name)
+        except PackageNotFoundError:
+            versions[key] = None
+    return versions
 
 
 class GCSModelLoader:
@@ -94,6 +114,16 @@ class GCSModelLoader:
             if isinstance(loaded, dict) and "model" in loaded:
                 self._model = loaded["model"]
                 self._feature_columns = loaded.get("feature_columns")
+                metadata = loaded.get("metadata") or {}
+                trained_versions = metadata.get("dependency_versions") or {}
+                runtime_versions = _ml_dependency_versions()
+                mismatches = {
+                    key: {"trained": trained_versions.get(key), "runtime": value}
+                    for key, value in runtime_versions.items()
+                    if trained_versions.get(key) not in (None, value)
+                }
+                if mismatches:
+                    logger.warning("ML runtime differs from trained model: %s", mismatches)
                 logger.info("Model loaded from dict format (feature_columns=%d)",
                             len(self._feature_columns or []))
             else:

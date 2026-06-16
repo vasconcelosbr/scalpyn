@@ -4,6 +4,7 @@ import sys
 import json
 import logging
 from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version as package_version
 
 # AUDIT_MODE — run deep audit instead of training when env var is set.
 if os.getenv("AUDIT_MODE", "false").lower() == "true":
@@ -29,6 +30,24 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger("scalpyn.trainer")
+
+
+def _ml_dependency_versions() -> dict:
+    deps = {
+        "xgboost": "xgboost",
+        "scikit_learn": "scikit-learn",
+        "numpy": "numpy",
+        "pandas": "pandas",
+        "joblib": "joblib",
+        "scipy": "scipy",
+    }
+    versions = {"python": sys.version.split()[0]}
+    for key, package_name in deps.items():
+        try:
+            versions[key] = package_version(package_name)
+        except PackageNotFoundError:
+            versions[key] = None
+    return versions
 
 # -------------------------------------------------------------
 # Config via env vars
@@ -307,9 +326,10 @@ def main():
         "model": trainer.model,
         "feature_columns": _trained_feature_cols,
         "metadata": {
-            "trained_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            "trained_at": datetime.now(timezone.utc).isoformat(),
             "n_features": len(_trained_feature_cols),
             "target_type": ML_TARGET_TYPE,
+            "dependency_versions": _ml_dependency_versions(),
         },
     }
     joblib.dump(model_payload, buf)
