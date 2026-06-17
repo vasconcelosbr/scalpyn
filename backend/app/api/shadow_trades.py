@@ -53,7 +53,7 @@ router = APIRouter(prefix="/api/shadow-trades", tags=["Shadow Trades"])
 
 _VALID_STATUSES = {"PENDING", "RUNNING", "COMPLETED", "ERROR"}
 # Filtro de origem da promoção. ``None`` = todos (default).
-_VALID_SOURCES = {"L3", "L3_REJECTED", "L3_SIMULATED", "L1_SPECTRUM"}
+_VALID_SOURCES = {"L3", "L3_REJECTED", "L3_SIMULATED", "L1_SPECTRUM", "L3_LAB"}
 _DEFAULT_PAGE_SIZE = 50
 _MAX_PAGE_SIZE = 200
 

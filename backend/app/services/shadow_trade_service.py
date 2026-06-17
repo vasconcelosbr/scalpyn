@@ -125,12 +125,17 @@ SHADOW_SOURCE_L1_SPECTRUM = "L1_SPECTRUM"
 # Camada contrafactual: shadow para TODOS os ativos que chegaram ao gate L3,
 # independente da decisão ALLOW/BLOCK. Usado para análise de política e ML.
 SHADOW_SOURCE_L3_SIMULATED = "L3_SIMULATED"
+# Strategy Lab attributed shadows — distinct from canonical L3 so the
+# ux_shadow_running_user_source partial index (profile_id IS NULL) never fires.
+# Multiple profiles can shadow the same symbol simultaneously.
+SHADOW_SOURCE_L3_LAB = "L3_LAB"
 _VALID_SHADOW_SOURCES = (
     SHADOW_SOURCE_L3,
     SHADOW_SOURCE_L3_REJECTED,
     SHADOW_SOURCE_WATCHLIST_SPOT,
     SHADOW_SOURCE_L1_SPECTRUM,
     SHADOW_SOURCE_L3_SIMULATED,
+    SHADOW_SOURCE_L3_LAB,
 )
 
 
@@ -2618,9 +2623,11 @@ async def create_watchlist_spot_shadows(
 #
 # These functions bypass decisions_log deduplication entirely.
 # Multiple L3 profiles can capture the same symbol in parallel.
-# source='L3' is canonical so the shadow monitor tracks them like real L3 shadows.
-# Idempotency: ON CONFLICT ON CONSTRAINT uq_shadow_lab_profile_symbol_bucket DO NOTHING
-# means two calls for the same (profile_id, symbol, source, hour) are safe.
+# source='L3_LAB' keeps lab shadows separate from canonical L3 so that
+# ux_shadow_running_user_source (profile_id IS NULL partial) never fires.
+# Multiple profiles can shadow the same symbol simultaneously.
+# Idempotency: bare ON CONFLICT DO NOTHING catches uq_shadow_lab_profile_symbol_bucket
+# (profile_id, symbol, source, hour_bucket) when the same profile rescans.
 
 _INSERT_STRATEGY_LAB_SQL = text("""
     INSERT INTO shadow_trades (
@@ -2629,7 +2636,7 @@ _INSERT_STRATEGY_LAB_SQL = text("""
         amount_usdt, entry_price, entry_timestamp,
         tp_price, sl_price, tp_pct, sl_pct, timeout_candles,
         status, skip_reason, source, config_snapshot, features_snapshot,
-        last_processed_time, created_at,
+        last_processed_time,
         ttt_enabled, ttt_tp_pct, ttt_timeout_minutes,
         barrier_mode, tp_pct_applied, sl_pct_applied,
         profile_id, profile_version, profile_name, strategy_type, rules_snapshot
@@ -2641,13 +2648,13 @@ _INSERT_STRATEGY_LAB_SQL = text("""
         :status, NULL, :source,
         CAST(:config_snapshot AS JSONB),
         CAST(:features_snapshot AS JSONB),
-        :last_processed_time, :promotion_at,
+        :last_processed_time,
         :ttt_enabled, :ttt_tp_pct, :ttt_timeout_minutes,
         :barrier_mode, :tp_pct_applied, :sl_pct_applied,
         CAST(:profile_id AS UUID), :profile_version, :profile_name,
         :strategy_type, CAST(:rules_snapshot AS JSONB)
     )
-    ON CONFLICT (profile_id, symbol, source, shadow_lab_hour_bucket(created_at)) WHERE profile_id IS NOT NULL DO NOTHING
+    ON CONFLICT DO NOTHING
     RETURNING id
 """)
 
@@ -2669,9 +2676,9 @@ async def create_strategy_lab_shadows(
 
     Key design points:
     - decision_id = NULL always (bypasses _persist_decision_logs deduplication)
-    - source = 'L3' (shadow monitor tracks them like real L3 shadows)
+    - source = 'L3_LAB' (distinct from canonical L3; monitor tracks by status, not source)
     - profile_id set (distinguishes Strategy Lab from canonical L3)
-    - ON CONFLICT ON CONSTRAINT uq_shadow_lab_profile_symbol_bucket DO NOTHING
+    - ON CONFLICT DO NOTHING (catches uq_shadow_lab_profile_symbol_bucket per-hour dedup)
     - Fire-and-forget pattern: logs errors, never raises
 
     Returns count of new shadow rows inserted.
@@ -2787,11 +2794,10 @@ async def create_strategy_lab_shadows(
                             "sl_pct": sl_pct or None,
                             "timeout_candles": timeout_candles,
                             "status": initial_status,
-                            "source": SHADOW_SOURCE_L3,
+                            "source": SHADOW_SOURCE_L3_LAB,
                             "config_snapshot": _json.dumps(config_snap, default=str),
                             "features_snapshot": _json.dumps(features_flat, default=str),
                             "last_processed_time": promotion_at,
-                            "promotion_at": promotion_at,
                             "ttt_enabled": ttt_enabled,
                             "ttt_tp_pct": ttt_tp_pct,
                             "ttt_timeout_minutes": ttt_timeout_minutes,
@@ -2842,7 +2848,7 @@ async def create_strategy_lab_rejected_shadows(
     """Strategy Lab: create profile-attributed BLOCK shadows for counterfactual analysis.
 
     Same design as create_strategy_lab_shadows but for BLOCK decisions.
-    source='L3' — same monitor tracks them.
+    source='L3_LAB' — monitor tracks by status, not source.
     Uses uq_shadow_lab_profile_symbol_bucket for idempotency.
     Fire-and-forget: logs errors, never raises.
     """
@@ -2956,11 +2962,10 @@ async def create_strategy_lab_rejected_shadows(
                             "sl_pct": sl_pct or None,
                             "timeout_candles": timeout_candles,
                             "status": initial_status,
-                            "source": SHADOW_SOURCE_L3,
+                            "source": SHADOW_SOURCE_L3_LAB,
                             "config_snapshot": _json.dumps(config_snap, default=str),
                             "features_snapshot": _json.dumps(features_flat, default=str),
                             "last_processed_time": promotion_at,
-                            "promotion_at": promotion_at,
                             "ttt_enabled": ttt_enabled,
                             "ttt_tp_pct": ttt_tp_pct,
                             "ttt_timeout_minutes": ttt_timeout_minutes,
