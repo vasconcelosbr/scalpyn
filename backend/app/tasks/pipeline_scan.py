@@ -3368,6 +3368,7 @@ async def _run_pipeline_scan():
                     # with its own rules. Live order flow injection is skipped for speed
                     # (lab runs on the same cached snapshot as the main L3 evaluation).
                     try:
+                        import json as _json
                         _lab_rows = (await db.execute(
                             text("""
                                 SELECT id, name, config, updated_at
@@ -3379,6 +3380,10 @@ async def _run_pipeline_scan():
                             """),
                             {"uid": str(wl.user_id)},
                         )).fetchall()
+                        logger.info(
+                            "[StrategyLab] wl=%s assets=%d lab_profiles=%d",
+                            wl.name, len(assets), len(_lab_rows),
+                        )
                         if _lab_rows and assets:
                             from ..services.shadow_trade_service import (
                                 create_strategy_lab_shadows as _create_lab_allow,
@@ -3387,7 +3392,13 @@ async def _run_pipeline_scan():
                             _lab_assets_by_sym = {a["symbol"]: a for a in assets}
                             for _lp in _lab_rows:
                                 try:
-                                    _lp_cfg = _lp.config or {}
+                                    # asyncpg returns JSONB as a string from text() queries
+                                    _raw_cfg = _lp.config
+                                    _lp_cfg = (
+                                        _json.loads(_raw_cfg)
+                                        if isinstance(_raw_cfg, str)
+                                        else (_raw_cfg or {})
+                                    ) or {}
                                     _lp_passed, _ = evaluate_rejections(
                                         assets,
                                         profile_config=_lp_cfg,
@@ -3401,6 +3412,10 @@ async def _run_pipeline_scan():
                                     )
                                     _lp_allow = [d for d in _lp_decs if d.get("decision") == "ALLOW"]
                                     _lp_block = [d for d in _lp_decs if d.get("decision") == "BLOCK"]
+                                    logger.info(
+                                        "[StrategyLab] %s → passed=%d ALLOW=%d BLOCK=%d",
+                                        _lp.name, len(_lp_passed), len(_lp_allow), len(_lp_block),
+                                    )
                                     if _lp_allow:
                                         await _create_lab_allow(
                                             user_id=wl.user_id,
