@@ -2647,7 +2647,7 @@ _INSERT_STRATEGY_LAB_SQL = text("""
         CAST(:profile_id AS UUID), :profile_version, :profile_name,
         :strategy_type, CAST(:rules_snapshot AS JSONB)
     )
-    ON CONFLICT (profile_id, symbol, source, shadow_lab_hour_bucket(created_at)) DO NOTHING
+    ON CONFLICT (profile_id, symbol, source, shadow_lab_hour_bucket(created_at)) WHERE profile_id IS NOT NULL DO NOTHING
     RETURNING id
 """)
 
