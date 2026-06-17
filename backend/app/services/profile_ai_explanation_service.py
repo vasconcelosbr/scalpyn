@@ -125,8 +125,8 @@ Responda:
 
 IMPORTANTE: Não invente métricas. Use apenas os dados fornecidos acima."""
 
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        client = anthropic.AsyncAnthropic(api_key=api_key)
+        response = await client.messages.create(
             model=self.MODEL,
             max_tokens=self.MAX_TOKENS,
             messages=[{"role": "user", "content": prompt}],

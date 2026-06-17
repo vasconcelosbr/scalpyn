@@ -484,29 +484,47 @@ class ProfileIntelligenceService:
         profiles_filter: Optional[list] = None,
         max_combinations: int = 500,
         settings_override: Optional[dict] = None,
+        run_id: Optional[UUID] = None,
     ) -> UUID:
         """
         Runs the full PI Engine. Returns the run_id.
+        If run_id is provided (API path), updates the pre-created run record.
+        If run_id is None (Celery path), creates a new run record.
         Each sub-service is wrapped in try/except so a single failure
         does not abort the whole run.
         """
         now_utc = datetime.now(timezone.utc)
 
         # ------------------------------------------------------------------
-        # 1. Create PIRun row with status='running'
+        # 1. Create or adopt PIRun row with status='running'
         # ------------------------------------------------------------------
-        pi_run = ProfileIntelligenceRun(
-            user_id=user_id,
-            run_at=now_utc,
-            lookback_days=lookback_days,
-            min_closed_trades=min_closed_trades,
-            status="running",
-            engine_version=self.ENGINE_VERSION,
-            settings_json=settings_override,
-        )
-        db.add(pi_run)
-        await db.flush()
-        run_id = pi_run.id
+        if run_id is not None:
+            # API path: a "queued" run was pre-created — update it in-place
+            await db.execute(
+                text("""
+                    UPDATE profile_intelligence_runs SET
+                        status = 'running',
+                        run_at = :now,
+                        updated_at = :now
+                    WHERE id = :run_id AND user_id = :uid
+                """),
+                {"now": now_utc, "run_id": str(run_id), "uid": str(user_id)},
+            )
+            await db.flush()
+        else:
+            # Celery path: create a fresh run record
+            pi_run = ProfileIntelligenceRun(
+                user_id=user_id,
+                run_at=now_utc,
+                lookback_days=lookback_days,
+                min_closed_trades=min_closed_trades,
+                status="running",
+                engine_version=self.ENGINE_VERSION,
+                settings_json=settings_override,
+            )
+            db.add(pi_run)
+            await db.flush()
+            run_id = pi_run.id
 
         logger.info("[PIEngine] Run started: user=%s run_id=%s", user_id, run_id)
 
@@ -846,12 +864,13 @@ class ProfileIntelligenceService:
             try:
                 from .profile_ai_explanation_service import ProfileAIExplanationService
                 ai_svc = ProfileAIExplanationService()
-                await ai_svc.explain(
-                    db=db,
-                    user_id=user_id,
-                    run_id=run_id,
-                    suggestions=suggestions,
-                )
+                for sugg_dict in suggestions:
+                    await ai_svc.explain_suggestion(
+                        db=db,
+                        user_id=user_id,
+                        suggestion_id=sugg_dict["id"],
+                        run_id=run_id,
+                    )
                 await log_pi_event(
                     db, user_id, "ai_explanation_completed",
                     run_id=run_id,
@@ -903,6 +922,7 @@ class ProfileIntelligenceService:
             "[PIEngine] Run complete: run_id=%s status=%s profiles=%d suggestions=%d",
             run_id, final_status, len(profile_results), len(suggestions),
         )
+        await db.commit()
         return run_id
 
     async def get_base_metrics(
