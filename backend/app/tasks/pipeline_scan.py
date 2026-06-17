@@ -3362,75 +3362,83 @@ async def _run_pipeline_scan():
                                 _l3sim_exc,
                             )
 
-                    # ── Strategy Lab: direct profile-attributed shadows ───────────────────
-                    # Bypasses decisions_log dedup — multiple profiles can capture the same
-                    # symbol in parallel. Unique constraint per (profile_id, symbol, source,
-                    # hour bucket) prevents duplicates within a cycle.
-                    if wl.profile_id:
-                        try:
+                    # ── Strategy Lab: evaluate all active lab profiles against L3 assets ──
+                    # Piggybacks on any L3 scan — no separate watchlist per profile needed.
+                    # Each lab profile independently re-evaluates the L2-approved asset pool
+                    # with its own rules. Live order flow injection is skipped for speed
+                    # (lab runs on the same cached snapshot as the main L3 evaluation).
+                    try:
+                        _lab_rows = (await db.execute(
+                            text("""
+                                SELECT id, name, config, updated_at
+                                FROM profiles
+                                WHERE is_active = true
+                                  AND user_id = :uid
+                                  AND name LIKE 'L3!_%' ESCAPE '!'
+                                LIMIT 50
+                            """),
+                            {"uid": str(wl.user_id)},
+                        )).fetchall()
+                        if _lab_rows and assets:
                             from ..services.shadow_trade_service import (
                                 create_strategy_lab_shadows as _create_lab_allow,
                                 create_strategy_lab_rejected_shadows as _create_lab_rejected,
                             )
-                            _lab_profile_version = None
-                            _lab_profile_name = wl.name
-                            try:
-                                _pv_row = (await db.execute(
-                                    text("SELECT updated_at, name FROM profiles WHERE id=:pid"),
-                                    {"pid": str(wl.profile_id)}
-                                )).fetchone()
-                                if _pv_row:
-                                    _lab_profile_version = _pv_row.updated_at
-                                    _lab_profile_name = _pv_row.name
-                            except Exception as _pv_exc:
-                                logger.debug(
-                                    "[StrategyLab] profile version fetch failed: %s", _pv_exc
-                                )
-
                             _lab_assets_by_sym = {a["symbol"]: a for a in assets}
-                            _lab_profile_cfg = profile_config_map.get(wl.profile_id)
-
-                            _allow_decs_lab = [
-                                d for d in decisions if d.get("decision") == "ALLOW"
-                            ]
-                            if _allow_decs_lab:
-                                await _create_lab_allow(
-                                    user_id=wl.user_id,
-                                    profile_id=wl.profile_id,
-                                    profile_version=_lab_profile_version,
-                                    profile_name=_lab_profile_name,
-                                    strategy_type=str(wl.profile_id),
-                                    rules_snapshot=_lab_profile_cfg,
-                                    allow_decisions=_allow_decs_lab,
-                                    assets_by_symbol=_lab_assets_by_sym,
-                                    execution_id=str(execution_id),
-                                    promotion_at=datetime.now(timezone.utc),
-                                    db=db,
-                                )
-
-                            _block_decs_lab = [
-                                d for d in decisions if d.get("decision") == "BLOCK"
-                            ]
-                            if _block_decs_lab:
-                                await _create_lab_rejected(
-                                    user_id=wl.user_id,
-                                    profile_id=wl.profile_id,
-                                    profile_version=_lab_profile_version,
-                                    profile_name=_lab_profile_name,
-                                    strategy_type=str(wl.profile_id),
-                                    rules_snapshot=_lab_profile_cfg,
-                                    block_decisions=_block_decs_lab,
-                                    assets_by_symbol=_lab_assets_by_sym,
-                                    execution_id=str(execution_id),
-                                    promotion_at=datetime.now(timezone.utc),
-                                    db=db,
-                                )
-
-                        except Exception as _lab_exc:
-                            logger.warning(
-                                "[StrategyLab] shadow creation failed wl=%s: %s",
-                                wl.name, _lab_exc,
-                            )
+                            for _lp in _lab_rows:
+                                try:
+                                    _lp_cfg = _lp.config or {}
+                                    _lp_passed, _ = evaluate_rejections(
+                                        assets,
+                                        profile_config=_lp_cfg,
+                                        stage="L3",
+                                        profile_id=str(_lp.id),
+                                    )
+                                    _lp_decs = await _evaluate_l3_decisions(
+                                        _lp_passed,
+                                        _lp_cfg,
+                                        level,
+                                    )
+                                    _lp_allow = [d for d in _lp_decs if d.get("decision") == "ALLOW"]
+                                    _lp_block = [d for d in _lp_decs if d.get("decision") == "BLOCK"]
+                                    if _lp_allow:
+                                        await _create_lab_allow(
+                                            user_id=wl.user_id,
+                                            profile_id=_lp.id,
+                                            profile_version=_lp.updated_at,
+                                            profile_name=_lp.name,
+                                            strategy_type="L3_STRATEGY_LAB",
+                                            rules_snapshot=_lp_cfg,
+                                            allow_decisions=_lp_allow,
+                                            assets_by_symbol=_lab_assets_by_sym,
+                                            execution_id=str(execution_id),
+                                            promotion_at=datetime.now(timezone.utc),
+                                            db=db,
+                                        )
+                                    if _lp_block:
+                                        await _create_lab_rejected(
+                                            user_id=wl.user_id,
+                                            profile_id=_lp.id,
+                                            profile_version=_lp.updated_at,
+                                            profile_name=_lp.name,
+                                            strategy_type="L3_STRATEGY_LAB",
+                                            rules_snapshot=_lp_cfg,
+                                            block_decisions=_lp_block,
+                                            assets_by_symbol=_lab_assets_by_sym,
+                                            execution_id=str(execution_id),
+                                            promotion_at=datetime.now(timezone.utc),
+                                            db=db,
+                                        )
+                                except Exception as _lp_exc:
+                                    logger.warning(
+                                        "[StrategyLab] profile %s failed: %s",
+                                        _lp.name, _lp_exc,
+                                    )
+                    except Exception as _lab_exc:
+                        logger.warning(
+                            "[StrategyLab] multi-profile evaluation failed wl=%s: %s",
+                            wl.name, _lab_exc,
+                        )
 
                     if new_syms:
                         stats["new_signals"] += len(new_syms)
