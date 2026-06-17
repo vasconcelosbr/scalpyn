@@ -74,11 +74,21 @@ def upgrade() -> None:
         ON shadow_trades(profile_id, status, outcome)
     """))
 
+    # IMMUTABLE helper: epoch-based hour bucket (timezone-independent)
+    # DATE_TRUNC on TIMESTAMPTZ is STABLE (not IMMUTABLE) in PostgreSQL,
+    # so it can't be used directly in an index expression.
+    op.execute(sa.text("""
+        CREATE OR REPLACE FUNCTION shadow_lab_hour_bucket(ts timestamptz)
+        RETURNS bigint LANGUAGE SQL IMMUTABLE PARALLEL SAFE AS $$
+            SELECT EXTRACT(EPOCH FROM ts)::bigint / 3600
+        $$
+    """))
+
     # Unique index for Strategy Lab idempotency — only where profile_id is not null
-    # Prevents duplicate shadows for same profile+symbol in the same hour bucket
+    # Prevents duplicate shadows for same profile+symbol in the same UTC hour bucket
     op.execute(sa.text("""
         CREATE UNIQUE INDEX IF NOT EXISTS uq_shadow_lab_profile_symbol_bucket
-        ON shadow_trades(profile_id, symbol, source, DATE_TRUNC('hour', created_at))
+        ON shadow_trades(profile_id, symbol, source, shadow_lab_hour_bucket(created_at))
         WHERE profile_id IS NOT NULL
     """))
 
@@ -86,6 +96,9 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute(sa.text("""
         DROP INDEX IF EXISTS uq_shadow_lab_profile_symbol_bucket
+    """))
+    op.execute(sa.text("""
+        DROP FUNCTION IF EXISTS shadow_lab_hour_bucket(timestamptz)
     """))
     op.execute(sa.text("""
         DROP INDEX IF EXISTS idx_shadow_trades_profile_status
