@@ -162,12 +162,13 @@ class ProfileEngine:
         # Extract config sections
         self.filters_config = self.profile.get("filters", {})
         self.scoring_config = self.profile.get("scoring", {})
-        # Signal conditions may be stored under 'entry_triggers' OR 'signals'
-        self.signals_config = (
-            self.profile.get("entry_triggers") or
-            self.profile.get("signals") or
-            {}
-        )
+        # Signal conditions may be stored under 'entry_triggers' OR 'signals'.
+        # Prefer 'entry_triggers' only when it has non-empty conditions; an
+        # entry_triggers dict with conditions=[] is truthy but has no rules —
+        # fall through to 'signals' in that case so lab profiles work correctly.
+        _et = self.profile.get("entry_triggers") or {}
+        _sig = self.profile.get("signals") or {}
+        self.signals_config = _et if _et.get("conditions") else (_sig or {})
         self.block_rules_config = self.profile.get("block_rules", {})
         self.entry_triggers_config = self.profile.get("entry_triggers", {})
 

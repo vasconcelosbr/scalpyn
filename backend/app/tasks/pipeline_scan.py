@@ -1034,13 +1034,13 @@ def _decision_reason_map(processed: dict, has_signal_conditions: bool) -> dict:
         if isinstance(reason_key, str) and reason_key:
             reasons[reason_key] = "OK"
 
-    signal = processed.get("signal", {})
+    signal = processed.get("signal") or {}
     for matched in signal.get("matched_conditions", []):
         reasons[str(matched)] = "OK"
     for failed in signal.get("failed_required", []):
         reasons[str(failed)] = "FAIL"
 
-    entry = processed.get("entry", {})
+    entry = processed.get("entry") or {}
     for matched in entry.get("matched", []):
         reasons[str(matched)] = "OK"
     for failed in entry.get("failed_required", []):
@@ -1073,7 +1073,7 @@ def _decision_metrics(asset: dict, processed: dict) -> dict:
         "market_cap": asset.get("market_cap"),
         "score_components": score.get("components", {}),
         "score_classification": score.get("classification"),
-        "signal_direction": processed.get("signal", {}).get("direction"),
+        "signal_direction": (processed.get("signal") or {}).get("direction"),
     }
 
     # Task #215 / P0-empty-metrics fix:
@@ -1318,7 +1318,7 @@ async def _evaluate_l3_decisions(
 
         if not processed.get("blocked") and processed.get("passed_filter", False):
             if has_signal_conditions:
-                l3_pass = bool(processed.get("signal", {}).get("triggered"))
+                l3_pass = bool((processed.get("signal") or {}).get("triggered"))
                 decision = "ALLOW" if l3_pass else "BLOCK"
             else:
                 l3_pass = True
