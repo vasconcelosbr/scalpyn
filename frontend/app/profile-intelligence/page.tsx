@@ -1,0 +1,1501 @@
+"use client";
+
+import { useEffect, useState, useCallback } from "react";
+import {
+  Brain, RefreshCw, Play, Settings, ChevronDown, ChevronRight,
+  TrendingUp, TrendingDown, AlertTriangle, CheckCircle, Copy,
+  ExternalLink, X, Zap, BarChart3, Eye,
+} from "lucide-react";
+import { apiGet, apiPost, apiPut } from "@/lib/api";
+
+// ── Types ──────────────────────────────────────────────────────────────────────
+
+interface PIOverview {
+  total_runs?: number;
+  last_run_at?: string | null;
+  last_run_status?: string | null;
+  total_profiles_analyzed?: number;
+  total_closed_trades?: number;
+  total_combinations?: number;
+  total_suggestions_pending?: number;
+  total_suggestions_high_confidence?: number;
+  base_win_rate?: number | null;
+  best_profile_name?: string | null;
+  best_profile_win_rate?: number | null;
+  best_combination_name?: string | null;
+  best_combination_champion_score?: number | null;
+}
+
+interface PIRun {
+  id: string;
+  run_at: string;
+  status: string;
+  lookback_days: number;
+  total_closed_trades?: number;
+  total_combinations?: number;
+  total_suggestions?: number;
+  base_win_rate?: number | null;
+  error_message?: string | null;
+}
+
+interface ProfileRanking {
+  profile_id: string;
+  profile_name: string;
+  total_trades?: number;
+  closed_trades?: number;
+  open_trades?: number;
+  wins?: number;
+  losses?: number;
+  win_rate?: number | null;
+  avg_pnl_pct?: number | null;
+  pnl_total_pct?: number | null;
+  avg_holding_seconds?: number | null;
+  avg_mae_pct?: number | null;
+  avg_mfe_pct?: number | null;
+  tp_15m_rate?: number | null;
+  tp_30m_rate?: number | null;
+  tp_60m_rate?: number | null;
+  confidence_level?: string | null;
+}
+
+interface IndicatorStat {
+  id: string;
+  indicator: string;
+  bucket_label: string;
+  total_cases: number;
+  wins?: number;
+  losses?: number;
+  win_rate?: number | null;
+  loss_rate?: number | null;
+  avg_pnl_pct?: number | null;
+  avg_mae_pct?: number | null;
+  avg_mfe_pct?: number | null;
+  tp_30m_rate?: number | null;
+  avg_holding_seconds?: number | null;
+  lift_vs_base?: number | null;
+  confidence_level?: string | null;
+  role_detected?: string | null;
+  source_profiles?: any;
+  evidence_json?: any;
+}
+
+interface Combination {
+  id: string;
+  combination_type: string;
+  setup_family?: string | null;
+  suggested_name?: string | null;
+  rules_json?: any[];
+  total_cases?: number;
+  wins?: number;
+  losses?: number;
+  win_rate?: number | null;
+  avg_pnl_pct?: number | null;
+  avg_mae_pct?: number | null;
+  avg_mfe_pct?: number | null;
+  tp_30m_rate?: number | null;
+  lift_vs_base?: number | null;
+  champion_score?: number | null;
+  confidence_level?: string | null;
+  overfit_risk?: boolean;
+  status?: string | null;
+  discovery_metrics_json?: any;
+  validation_metrics_json?: any;
+  degradation_pct?: number | null;
+  signals_json?: any;
+  block_rules_json?: any;
+  created_at?: string;
+}
+
+interface Suggestion {
+  id: string;
+  suggested_profile_name: string;
+  suggested_profile_description?: string | null;
+  suggested_profile_family?: string | null;
+  confidence_score?: number | null;
+  confidence_level?: string | null;
+  status: string;
+  evidence_summary_json?: any;
+  quantitative_explanation?: string | null;
+  ai_explanation?: string | null;
+  risk_notes?: string | null;
+  suggested_config_json?: any;
+  suggested_signals_json?: any;
+  suggested_block_rules_json?: any;
+  source_combination_id?: string | null;
+  created_at?: string;
+}
+
+interface AuditEntry {
+  id: string;
+  event_type: string;
+  run_id?: string | null;
+  suggestion_id?: string | null;
+  combination_id?: string | null;
+  event_description?: string | null;
+  model_provider?: string | null;
+  model_name?: string | null;
+  payload_json?: any;
+  result_json?: any;
+  created_at: string;
+}
+
+interface PISettings {
+  min_support?: number;
+  min_closed_trades?: number;
+  min_lift?: number;
+  min_win_rate?: number;
+  max_avg_mae?: number;
+  max_avg_holding_seconds?: number;
+  required_tp_30m_rate?: number;
+  max_combinations_per_run?: number;
+  enable_anthropic_explanations?: boolean;
+  enable_optuna?: boolean;
+  enable_association_rules?: boolean;
+  enable_dynamic_combinations?: boolean;
+  enable_lightgbm?: boolean;
+  enable_catboost?: boolean;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function fmtDate(iso: string | null | undefined) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("pt-BR", {
+    day: "2-digit", month: "2-digit", year: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
+function fmtPct(v: number | null | undefined, decimals = 1) {
+  if (v == null) return "—";
+  const sign = v >= 0 ? "+" : "";
+  return `${sign}${(v * 100).toFixed(decimals)}%`;
+}
+
+function fmtNum(v: number | null | undefined, decimals = 1) {
+  if (v == null) return "—";
+  return v.toFixed(decimals);
+}
+
+function fmtSeconds(s: number | null | undefined) {
+  if (s == null) return "—";
+  if (s < 60) return `${Math.round(s)}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  return `${(s / 3600).toFixed(1)}h`;
+}
+
+function confidenceBadge(level: string | null | undefined) {
+  if (level === "HIGH") return <span className="badge bullish text-[10px]">HIGH</span>;
+  if (level === "MEDIUM") return <span className="badge range text-[10px]">MEDIUM</span>;
+  return <span className="badge bearish text-[10px]">LOW</span>;
+}
+
+function statusBadge(status: string | null | undefined) {
+  if (!status) return <span className="text-[var(--text-tertiary)]">—</span>;
+  const s = status.toLowerCase();
+  if (s === "completed") return <span className="badge bullish text-[10px]">COMPLETED</span>;
+  if (s === "completed_with_errors") return <span className="badge range text-[10px]">COMPLETED*</span>;
+  if (s === "running") return <span className="badge range text-[10px] animate-pulse">RUNNING</span>;
+  if (s === "failed") return <span className="badge bearish text-[10px]">FAILED</span>;
+  if (s === "queued") return <span className="badge range text-[10px]">QUEUED</span>;
+  return <span className="badge range text-[10px]">{status.toUpperCase()}</span>;
+}
+
+function combinationTypeBadge(type: string) {
+  const map: Record<string, string> = {
+    counterfactual_seed: "bullish",
+    counterfactual_dynamic: "range",
+    association_rule: "bullish",
+    optuna: "range",
+    existing_profile: "range",
+    ai_suggested: "bullish",
+  };
+  return (
+    <span className={`badge ${map[type] || "range"} text-[10px]`}>
+      {type.replace(/_/g, " ")}
+    </span>
+  );
+}
+
+function winRateColor(wr: number | null | undefined) {
+  if (wr == null) return "text-[var(--text-tertiary)]";
+  if (wr >= 0.55) return "text-green-400";
+  if (wr >= 0.40) return "text-yellow-400";
+  return "text-red-400";
+}
+
+function pnlColor(v: number | null | undefined) {
+  if (v == null) return "text-[var(--text-tertiary)]";
+  return v >= 0 ? "text-green-400" : "text-red-400";
+}
+
+function ChampionScoreBar({ score }: { score: number | null | undefined }) {
+  if (score == null) return <span className="text-[var(--text-tertiary)]">—</span>;
+  const pct = Math.min(100, Math.max(0, score));
+  const color = pct >= 60 ? "bg-green-500" : pct >= 35 ? "bg-yellow-500" : "bg-red-500";
+  return (
+    <div className="flex items-center gap-2 min-w-[80px]">
+      <div className="flex-1 h-1.5 bg-[var(--bg-hover)] rounded-full overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-[11px] text-[var(--text-secondary)] w-8 text-right">{pct.toFixed(0)}</span>
+    </div>
+  );
+}
+
+const TABS = ["Overview", "Profiles", "Indicators", "Combinations", "Suggestions", "Audit", "Settings"] as const;
+type Tab = typeof TABS[number];
+
+const DEFAULT_RUN_PAYLOAD = {
+  lookback_days: 7,
+  min_closed_trades: 30,
+  include_counterfactual: true,
+  include_dynamic_combinations: true,
+  include_association_rules: true,
+  include_optuna: false,
+  include_ai_explanation: false,
+  max_combinations: 500,
+};
+
+// ── Main Page ──────────────────────────────────────────────────────────────────
+
+export default function ProfileIntelligencePage() {
+  const [activeTab, setActiveTab] = useState<Tab>("Overview");
+
+  // Data state
+  const [overview, setOverview] = useState<PIOverview | null>(null);
+  const [runs, setRuns] = useState<PIRun[]>([]);
+  const [profiles, setProfiles] = useState<ProfileRanking[]>([]);
+  const [winners, setWinners] = useState<IndicatorStat[]>([]);
+  const [losers, setLosers] = useState<IndicatorStat[]>([]);
+  const [combinations, setCombinations] = useState<Combination[]>([]);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [audit, setAudit] = useState<AuditEntry[]>([]);
+  const [settings, setSettings] = useState<PISettings>({});
+
+  // Loading
+  const [loadingOverview, setLoadingOverview] = useState(true);
+  const [loadingTab, setLoadingTab] = useState(false);
+
+  // UI state
+  const [indicatorSubTab, setIndicatorSubTab] = useState<"winners" | "losers">("winners");
+  const [expandedIndicator, setExpandedIndicator] = useState<string | null>(null);
+  const [selectedCombination, setSelectedCombination] = useState<Combination | null>(null);
+  const [selectedSuggestion, setSelectedSuggestion] = useState<Suggestion | null>(null);
+  const [prepareProfileSuggestion, setPrepareProfileSuggestion] = useState<Suggestion | null>(null);
+  const [expandedAudit, setExpandedAudit] = useState<string | null>(null);
+  const [showRunModal, setShowRunModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [runPayload, setRunPayload] = useState({ ...DEFAULT_RUN_PAYLOAD });
+  const [runResult, setRunResult] = useState<any>(null);
+  const [running, setRunning] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [explainingId, setExplainingId] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+
+  // Sort state for profiles table
+  const [profileSort, setProfileSort] = useState<{ col: string; asc: boolean }>({ col: "win_rate", asc: false });
+
+  const showToast = (msg: string, ok = true) => {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 4000);
+  };
+
+  // ── Data fetching ───────────────────────────────────────────────────────────
+
+  const loadOverview = useCallback(async () => {
+    setLoadingOverview(true);
+    try {
+      const [ov, r] = await Promise.all([
+        apiGet("/profile-intelligence/overview").catch(() => apiGet("/profile-intelligence/")),
+        apiGet("/profile-intelligence/runs").catch(() => ({ runs: [] })),
+      ]);
+      setOverview(ov || {});
+      setRuns(r?.runs || r || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingOverview(false);
+    }
+  }, []);
+
+  const loadTab = useCallback(async (tab: Tab) => {
+    if (tab === "Overview") return;
+    setLoadingTab(true);
+    try {
+      if (tab === "Profiles") {
+        const d = await apiGet("/profile-intelligence/profiles/ranking?lookback_days=60&limit=30");
+        setProfiles(d?.profiles || d || []);
+      } else if (tab === "Indicators") {
+        const [w, l] = await Promise.all([
+          apiGet("/profile-intelligence/indicators/top-winners?limit=50"),
+          apiGet("/profile-intelligence/indicators/top-losers?limit=50"),
+        ]);
+        setWinners(w?.indicators || w || []);
+        setLosers(l?.indicators || l || []);
+      } else if (tab === "Combinations") {
+        const d = await apiGet("/profile-intelligence/combinations?limit=100");
+        setCombinations(d?.combinations || d || []);
+      } else if (tab === "Suggestions") {
+        const d = await apiGet("/profile-intelligence/suggestions?limit=50");
+        setSuggestions(d?.suggestions || d || []);
+      } else if (tab === "Audit") {
+        const d = await apiGet("/profile-intelligence/audit?limit=100");
+        setAudit(d?.audit_log || d?.logs || d || []);
+      } else if (tab === "Settings") {
+        const d = await apiGet("/profile-intelligence/settings");
+        setSettings(d?.settings || d || {});
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingTab(false);
+    }
+  }, []);
+
+  useEffect(() => { loadOverview(); }, [loadOverview]);
+  useEffect(() => { loadTab(activeTab); }, [activeTab, loadTab]);
+
+  const handleRefresh = () => {
+    loadOverview();
+    if (activeTab !== "Overview") loadTab(activeTab);
+  };
+
+  // ── Run Analysis ─────────────────────────────────────────────────────────────
+
+  const handleRun = async () => {
+    setRunning(true);
+    setRunResult(null);
+    try {
+      const res = await apiPost("/profile-intelligence/run", runPayload);
+      setRunResult({ ok: true, run_id: res?.run_id, status: res?.status });
+      showToast(`Análise iniciada. Run ID: ${res?.run_id || "—"}`);
+      setTimeout(() => { loadOverview(); }, 2000);
+    } catch (e: any) {
+      setRunResult({ ok: false, error: e.message });
+      showToast(`Erro: ${e.message}`, false);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  // ── Explain with AI ──────────────────────────────────────────────────────────
+
+  const handleExplain = async (suggestionId: string) => {
+    setExplainingId(suggestionId);
+    try {
+      const res = await apiPost(`/profile-intelligence/suggestions/${suggestionId}/explain`);
+      showToast("Explicação gerada com sucesso.");
+      // Refresh suggestion detail
+      if (selectedSuggestion?.id === suggestionId) {
+        const updated = await apiGet(`/profile-intelligence/suggestions/${suggestionId}`);
+        setSelectedSuggestion(updated?.suggestion || updated);
+      }
+      // Refresh list
+      const d = await apiGet("/profile-intelligence/suggestions?limit=50");
+      setSuggestions(d?.suggestions || d || []);
+    } catch (e: any) {
+      showToast(`Erro ao explicar: ${e.message}`, false);
+    } finally {
+      setExplainingId(null);
+    }
+  };
+
+  // ── Save Settings ─────────────────────────────────────────────────────────────
+
+  const handleSaveSettings = async () => {
+    setSavingSettings(true);
+    try {
+      await apiPut("/profile-intelligence/settings", settings);
+      showToast("Configurações salvas.");
+    } catch (e: any) {
+      showToast(`Erro: ${e.message}`, false);
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  // ── Profiles sort ────────────────────────────────────────────────────────────
+
+  const sortedProfiles = [...profiles].sort((a, b) => {
+    const col = profileSort.col as keyof ProfileRanking;
+    const av = (a[col] as number) ?? -Infinity;
+    const bv = (b[col] as number) ?? -Infinity;
+    return profileSort.asc ? av - bv : bv - av;
+  });
+
+  const toggleProfileSort = (col: string) => {
+    setProfileSort(prev => prev.col === col ? { col, asc: !prev.asc } : { col, asc: false });
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  return (
+    <div className="space-y-5 pb-10">
+
+      {/* Toast */}
+      {toast && (
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg text-[13px] font-medium shadow-lg ${toast.ok ? "bg-green-600 text-white" : "bg-red-600 text-white"}`}>
+          {toast.msg}
+        </div>
+      )}
+
+      {/* Header */}
+      <div className="flex justify-between items-start gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-[var(--text-primary)] flex items-center gap-2">
+            <Brain className="w-6 h-6 text-blue-400" />
+            Profile Intelligence
+          </h1>
+          <p className="text-[var(--text-secondary)] mt-1 text-[13px]">
+            Mapa de oportunidades, indicadores campeões e combinações ocultas
+          </p>
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            {overview?.last_run_at && (
+              <span className="text-[11px] text-[var(--text-tertiary)]">
+                Última execução: {fmtDate(overview.last_run_at)}
+              </span>
+            )}
+            {overview?.last_run_status && statusBadge(overview.last_run_status)}
+            {(overview?.total_suggestions_pending ?? 0) > 0 && (
+              <span className="badge range text-[10px]">
+                {overview!.total_suggestions_pending} sugestões pendentes
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            className="btn btn-secondary text-[12px] flex items-center gap-1.5"
+            onClick={handleRefresh}
+            disabled={loadingOverview || loadingTab}
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${(loadingOverview || loadingTab) ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
+          <button
+            className="btn btn-secondary text-[12px] flex items-center gap-1.5"
+            onClick={() => setShowSettingsModal(true)}
+          >
+            <Settings className="w-3.5 h-3.5" />
+            Settings
+          </button>
+          <button
+            className="btn btn-primary text-[12px] flex items-center gap-1.5"
+            onClick={() => { setRunResult(null); setShowRunModal(true); }}
+          >
+            <Play className="w-3.5 h-3.5" />
+            Run Analysis
+          </button>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-[var(--border-default)] overflow-x-auto">
+        {TABS.map(tab => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`px-4 py-2.5 text-[13px] font-medium whitespace-nowrap border-b-2 transition-colors ${
+              activeTab === tab
+                ? "border-[var(--accent-primary)] text-[var(--accent-primary)]"
+                : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            }`}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
+
+      {/* ── TAB: Overview ──────────────────────────────────────────────────────── */}
+      {activeTab === "Overview" && (
+        <div className="space-y-5">
+          {loadingOverview ? (
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              {[...Array(10)].map((_, i) => <div key={i} className="skeleton h-24 rounded-[var(--radius-lg)]" />)}
+            </div>
+          ) : (
+            <>
+              {/* Executive cards */}
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                {[
+                  { label: "Profiles Analisados", value: overview?.total_profiles_analyzed ?? "—", hint: "Profiles com shadow trades no período" },
+                  { label: "Trades Fechados", value: overview?.total_closed_trades ?? "—", hint: "Shadow trades com desfecho (TP/SL/Timeout)" },
+                  { label: "Win Rate Base", value: overview?.base_win_rate != null ? `${(overview.base_win_rate * 100).toFixed(1)}%` : "—", hint: "Win rate geral de todos os trades fechados" },
+                  { label: "Melhor Profile", value: overview?.best_profile_name || "—", sub: overview?.best_profile_win_rate != null ? `${(overview.best_profile_win_rate * 100).toFixed(1)}% WR` : "", hint: "Profile com maior win rate" },
+                  { label: "Melhor Combinação", value: overview?.best_combination_name || "—", sub: overview?.best_combination_champion_score != null ? `Score: ${overview.best_combination_champion_score.toFixed(0)}` : "", hint: "Combinação com maior champion score" },
+                  { label: "Combinações", value: overview?.total_combinations ?? "—", hint: "Combinações de indicadores descobertas" },
+                  { label: "Sugestões Pendentes", value: overview?.total_suggestions_pending ?? "—", hint: "Sugestões aguardando revisão" },
+                  { label: "Alta Confiança", value: overview?.total_suggestions_high_confidence ?? "—", hint: "Sugestões com ≥100 trades de suporte" },
+                  { label: "Total de Runs", value: overview?.total_runs ?? "—", hint: "Execuções do PI Engine" },
+                  { label: "Status", value: overview?.last_run_status ? overview.last_run_status.toUpperCase() : "—", hint: "Status da última execução" },
+                ].map((card, i) => (
+                  <div key={i} className="card p-3 space-y-1" title={card.hint}>
+                    <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">{card.label}</div>
+                    <div className="text-[18px] font-bold text-[var(--text-primary)] truncate">{String(card.value)}</div>
+                    {card.sub && <div className="text-[11px] text-[var(--text-secondary)]">{card.sub}</div>}
+                  </div>
+                ))}
+              </div>
+
+              {/* Runs history */}
+              <div className="card">
+                <div className="p-4 border-b border-[var(--border-default)]">
+                  <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">Histórico de Execuções</h2>
+                </div>
+                {runs.length === 0 ? (
+                  <EmptyState message="Nenhuma execução encontrada. Execute uma análise para começar." onRun={() => setShowRunModal(true)} />
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[12px]">
+                      <thead>
+                        <tr className="border-b border-[var(--border-subtle)]">
+                          {["Data", "Status", "Lookback", "Trades", "Combinações", "Sugestões", "Win Rate", "Erro"].map(h => (
+                            <th key={h} className="px-4 py-2 text-left text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[var(--border-subtle)]">
+                        {runs.map(run => (
+                          <tr key={run.id} className="hover:bg-[var(--bg-elevated)] transition-colors">
+                            <td className="px-4 py-2.5 font-mono text-[var(--text-secondary)] whitespace-nowrap">{fmtDate(run.run_at)}</td>
+                            <td className="px-4 py-2.5">{statusBadge(run.status)}</td>
+                            <td className="px-4 py-2.5 text-[var(--text-secondary)]">{run.lookback_days}d</td>
+                            <td className="px-4 py-2.5 text-[var(--text-primary)]">{run.total_closed_trades ?? "—"}</td>
+                            <td className="px-4 py-2.5 text-[var(--text-primary)]">{run.total_combinations ?? "—"}</td>
+                            <td className="px-4 py-2.5 text-[var(--text-primary)]">{run.total_suggestions ?? "—"}</td>
+                            <td className="px-4 py-2.5">{run.base_win_rate != null ? `${(run.base_win_rate * 100).toFixed(1)}%` : "—"}</td>
+                            <td className="px-4 py-2.5 text-red-400 max-w-[180px] truncate" title={run.error_message || ""}>{run.error_message || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Safety notice */}
+              <div className="card p-4 border-yellow-500/20 bg-yellow-500/5">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-yellow-400 mt-0.5 shrink-0" />
+                  <div className="text-[12px] text-[var(--text-secondary)] space-y-1">
+                    <p><strong className="text-yellow-400">Aviso operacional:</strong> O Profile Intelligence Engine é analítico. Sugestões são <em>hipóteses</em>, não recomendações operacionais.</p>
+                    <p>Nenhum profile será criado ou ativado automaticamente. Live trading permanece desativado. Combinações LOW confidence requerem mais dados antes de qualquer ação.</p>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── TAB: Profiles ──────────────────────────────────────────────────────── */}
+      {activeTab === "Profiles" && (
+        <div className="card">
+          <div className="p-4 border-b border-[var(--border-default)]">
+            <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">Ranking de Profiles</h2>
+            <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">Performance baseada em shadow trades fechados. Clique nas colunas para ordenar.</p>
+          </div>
+          {loadingTab ? <TableSkeleton /> : profiles.length === 0 ? (
+            <EmptyState message="Nenhum profile com dados suficientes. Execute uma análise primeiro." onRun={() => setShowRunModal(true)} />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[12px]">
+                <thead>
+                  <tr className="border-b border-[var(--border-subtle)]">
+                    {[
+                      ["profile_name", "Profile"],
+                      ["closed_trades", "Fechados"],
+                      ["open_trades", "Abertos"],
+                      ["wins", "Wins"],
+                      ["losses", "Losses"],
+                      ["win_rate", "Win Rate"],
+                      ["avg_pnl_pct", "Avg P&L"],
+                      ["tp_30m_rate", "TP ≤30m"],
+                      ["avg_mae_pct", "Avg MAE"],
+                      ["confidence_level", "Confidence"],
+                      ["", "Ações"],
+                    ].map(([col, label]) => (
+                      <th
+                        key={col}
+                        className={`px-4 py-2 text-left text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap ${col ? "cursor-pointer hover:text-[var(--text-primary)]" : ""}`}
+                        onClick={() => col && toggleProfileSort(col)}
+                      >
+                        {label}
+                        {profileSort.col === col && (
+                          <span className="ml-1">{profileSort.asc ? "↑" : "↓"}</span>
+                        )}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--border-subtle)]">
+                  {sortedProfiles.map(p => (
+                    <tr key={p.profile_id} className="hover:bg-[var(--bg-elevated)] transition-colors">
+                      <td className="px-4 py-2.5 font-medium text-[var(--text-primary)] whitespace-nowrap">{p.profile_name}</td>
+                      <td className="px-4 py-2.5 text-[var(--text-secondary)]">{p.closed_trades ?? "—"}</td>
+                      <td className="px-4 py-2.5 text-[var(--text-secondary)]">{p.open_trades ?? "—"}</td>
+                      <td className="px-4 py-2.5 text-green-400">{p.wins ?? "—"}</td>
+                      <td className="px-4 py-2.5 text-red-400">{p.losses ?? "—"}</td>
+                      <td className={`px-4 py-2.5 font-semibold ${winRateColor(p.win_rate)}`}>{fmtPct(p.win_rate)}</td>
+                      <td className={`px-4 py-2.5 font-medium ${pnlColor(p.avg_pnl_pct)}`}>{fmtPct(p.avg_pnl_pct, 2)}</td>
+                      <td className="px-4 py-2.5 text-[var(--text-primary)]">{fmtPct(p.tp_30m_rate)}</td>
+                      <td className={`px-4 py-2.5 ${pnlColor(p.avg_mae_pct)}`}>{fmtPct(p.avg_mae_pct, 2)}</td>
+                      <td className="px-4 py-2.5">{confidenceBadge(p.confidence_level)}</td>
+                      <td className="px-4 py-2.5">
+                        <a href="/profiles" className="btn btn-secondary text-[10px] px-2 py-1 flex items-center gap-1 whitespace-nowrap w-fit">
+                          <ExternalLink className="w-3 h-3" />
+                          Profiles
+                        </a>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── TAB: Indicators ────────────────────────────────────────────────────── */}
+      {activeTab === "Indicators" && (
+        <div className="space-y-4">
+          <div className="flex gap-2">
+            {(["winners", "losers"] as const).map(sub => (
+              <button
+                key={sub}
+                onClick={() => setIndicatorSubTab(sub)}
+                className={`px-4 py-2 rounded-lg text-[12px] font-medium border transition-colors ${
+                  indicatorSubTab === sub
+                    ? "bg-blue-600 border-blue-500 text-white"
+                    : "bg-[var(--bg-elevated)] border-[var(--border-default)] text-[var(--text-secondary)] hover:border-[var(--border-strong)]"
+                }`}
+              >
+                {sub === "winners" ? <span className="flex items-center gap-1.5"><TrendingUp className="w-3.5 h-3.5" /> Top Winners</span> : <span className="flex items-center gap-1.5"><TrendingDown className="w-3.5 h-3.5" /> Top Losers</span>}
+              </button>
+            ))}
+          </div>
+
+          <div className="card">
+            <div className="p-4 border-b border-[var(--border-default)]">
+              <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">
+                {indicatorSubTab === "winners" ? "Indicadores com Melhor Performance" : "Indicadores com Pior Performance"}
+              </h2>
+              <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">
+                {indicatorSubTab === "winners" ? "Candidatos a Signal ou Scoring Rule" : "Candidatos a Block Rule ou redução de score"}
+              </p>
+            </div>
+            {loadingTab ? <TableSkeleton /> : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-[12px]">
+                  <thead>
+                    <tr className="border-b border-[var(--border-subtle)]">
+                      {indicatorSubTab === "winners"
+                        ? ["Indicador / Bucket", "Cases", "W/L", "Win Rate", "Lift vs Base", "Avg P&L", "TP ≤30m", "Avg MAE", "Confidence", "Role", ""].map(h => (
+                          <th key={h} className="px-4 py-2 text-left text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap">{h}</th>
+                        ))
+                        : ["Indicador / Bucket", "Cases", "W/L", "Loss Rate", "Lift", "Avg P&L", "Confidence", "Ação Sugerida", ""].map(h => (
+                          <th key={h} className="px-4 py-2 text-left text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap">{h}</th>
+                        ))
+                      }
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--border-subtle)]">
+                    {(indicatorSubTab === "winners" ? winners : losers).map(stat => (
+                      <>
+                        <tr
+                          key={stat.id}
+                          className="hover:bg-[var(--bg-elevated)] transition-colors cursor-pointer"
+                          onClick={() => setExpandedIndicator(expandedIndicator === stat.id ? null : stat.id)}
+                        >
+                          <td className="px-4 py-2.5">
+                            <div className="font-medium text-[var(--text-primary)] font-mono">{stat.indicator}</div>
+                            <div className="text-[10px] text-[var(--text-tertiary)]">{stat.bucket_label}</div>
+                          </td>
+                          <td className="px-4 py-2.5 text-[var(--text-secondary)]">{stat.total_cases}</td>
+                          <td className="px-4 py-2.5">
+                            <span className="text-green-400">{stat.wins ?? "—"}</span>
+                            <span className="text-[var(--text-tertiary)]">/</span>
+                            <span className="text-red-400">{stat.losses ?? "—"}</span>
+                          </td>
+                          {indicatorSubTab === "winners" ? (
+                            <>
+                              <td className={`px-4 py-2.5 font-semibold ${winRateColor(stat.win_rate)}`}>{fmtPct(stat.win_rate)}</td>
+                              <td className={`px-4 py-2.5 font-medium ${(stat.lift_vs_base ?? 0) >= 1.2 ? "text-green-400" : "text-[var(--text-secondary)]"}`}>
+                                {stat.lift_vs_base != null ? `${stat.lift_vs_base.toFixed(2)}x` : "—"}
+                              </td>
+                              <td className={`px-4 py-2.5 ${pnlColor(stat.avg_pnl_pct)}`}>{fmtPct(stat.avg_pnl_pct, 2)}</td>
+                              <td className="px-4 py-2.5 text-[var(--text-primary)]">{fmtPct(stat.tp_30m_rate)}</td>
+                              <td className={`px-4 py-2.5 ${pnlColor(stat.avg_mae_pct)}`}>{fmtPct(stat.avg_mae_pct, 2)}</td>
+                              <td className="px-4 py-2.5">{confidenceBadge(stat.confidence_level)}</td>
+                              <td className="px-4 py-2.5">
+                                {stat.role_detected && (
+                                  <span className={`badge text-[10px] ${stat.role_detected === "winning_indicator" ? "bullish" : stat.role_detected === "scoring_candidate" ? "range" : "range"}`}>
+                                    {stat.role_detected.replace(/_/g, " ")}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <button className="text-[10px] text-[var(--accent-primary)] hover:underline flex items-center gap-1">
+                                  {expandedIndicator === stat.id ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                                  Evidence
+                                </button>
+                              </td>
+                            </>
+                          ) : (
+                            <>
+                              <td className="px-4 py-2.5 text-red-400 font-semibold">{fmtPct(stat.loss_rate)}</td>
+                              <td className={`px-4 py-2.5 font-medium ${(stat.lift_vs_base ?? 1) < 1 ? "text-red-400" : "text-[var(--text-secondary)]"}`}>
+                                {stat.lift_vs_base != null ? `${stat.lift_vs_base.toFixed(2)}x` : "—"}
+                              </td>
+                              <td className={`px-4 py-2.5 ${pnlColor(stat.avg_pnl_pct)}`}>{fmtPct(stat.avg_pnl_pct, 2)}</td>
+                              <td className="px-4 py-2.5">{confidenceBadge(stat.confidence_level)}</td>
+                              <td className="px-4 py-2.5">
+                                {stat.total_cases < 30
+                                  ? <span className="badge range text-[10px]">Low Sample</span>
+                                  : stat.role_detected === "losing_indicator"
+                                  ? <span className="badge bearish text-[10px]">Block Rule</span>
+                                  : <span className="badge range text-[10px]">Monitor</span>}
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <button className="text-[10px] text-[var(--accent-primary)] hover:underline flex items-center gap-1">
+                                  {expandedIndicator === stat.id ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                                  Evidence
+                                </button>
+                              </td>
+                            </>
+                          )}
+                        </tr>
+                        {expandedIndicator === stat.id && (
+                          <tr key={`${stat.id}-expanded`}>
+                            <td colSpan={indicatorSubTab === "winners" ? 10 : 9} className="px-6 pb-4 pt-2 bg-[var(--bg-elevated)]">
+                              <div className="text-[11px] text-[var(--text-secondary)] space-y-2">
+                                <div className="font-semibold text-[var(--text-primary)] mb-1">Evidence — {stat.bucket_label}</div>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                  {[
+                                    ["Cases", stat.total_cases],
+                                    ["Win Rate", fmtPct(stat.win_rate)],
+                                    ["Lift vs Base", stat.lift_vs_base != null ? `${stat.lift_vs_base.toFixed(2)}x` : "—"],
+                                    ["Avg P&L", fmtPct(stat.avg_pnl_pct, 3)],
+                                    ["TP ≤30m", fmtPct(stat.tp_30m_rate)],
+                                    ["Avg MAE", fmtPct(stat.avg_mae_pct, 3)],
+                                    ["Avg MFE", fmtPct(stat.avg_mfe_pct, 3)],
+                                    ["Avg Holding", fmtSeconds(stat.avg_holding_seconds)],
+                                  ].map(([k, v]) => (
+                                    <div key={String(k)} className="bg-[var(--bg-surface)] rounded p-2">
+                                      <div className="text-[10px] text-[var(--text-tertiary)]">{k}</div>
+                                      <div className="text-[12px] font-medium text-[var(--text-primary)]">{String(v)}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                                {stat.source_profiles && (
+                                  <div className="text-[10px] text-[var(--text-tertiary)]">
+                                    Source profiles: {Array.isArray(stat.source_profiles) ? stat.source_profiles.join(", ") : JSON.stringify(stat.source_profiles)}
+                                  </div>
+                                )}
+                                {stat.total_cases < 30 && (
+                                  <div className="text-[10px] text-yellow-400">⚠️ Evidência insuficiente — não usar como base de decisão operacional.</div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    ))}
+                  </tbody>
+                </table>
+                {(indicatorSubTab === "winners" ? winners : losers).length === 0 && !loadingTab && (
+                  <EmptyState message="Nenhum dado. Execute uma análise para popular os indicadores." onRun={() => setShowRunModal(true)} />
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── TAB: Combinations ──────────────────────────────────────────────────── */}
+      {activeTab === "Combinations" && (
+        <div className="space-y-4">
+          <div className="card">
+            <div className="p-4 border-b border-[var(--border-default)]">
+              <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">Combinações Descobertas</h2>
+              <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">
+                Candidatos — evidência parcial, requerem validação em shadow antes de qualquer uso operacional.
+              </p>
+            </div>
+            {loadingTab ? <TableSkeleton /> : combinations.length === 0 ? (
+              <EmptyState message="Nenhuma combinação descoberta. Execute uma análise com lookback maior ou reduza min_closed_trades." onRun={() => setShowRunModal(true)} />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-[12px]">
+                  <thead>
+                    <tr className="border-b border-[var(--border-subtle)]">
+                      {["Nome / Família", "Tipo", "Cases", "W/L", "Win Rate", "Lift", "Champion Score", "TP ≤30m", "Confidence", "Overfit", ""].map(h => (
+                        <th key={h} className="px-4 py-2 text-left text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--border-subtle)]">
+                    {combinations.map(c => (
+                      <tr key={c.id} className="hover:bg-[var(--bg-elevated)] transition-colors">
+                        <td className="px-4 py-2.5">
+                          <div className="font-medium text-[var(--text-primary)] max-w-[200px] truncate">{c.suggested_name || `combination_${c.id.slice(0, 8)}`}</div>
+                          {c.setup_family && <div className="text-[10px] text-[var(--text-tertiary)]">{c.setup_family}</div>}
+                        </td>
+                        <td className="px-4 py-2.5">{combinationTypeBadge(c.combination_type)}</td>
+                        <td className="px-4 py-2.5 text-[var(--text-secondary)]">{c.total_cases ?? "—"}</td>
+                        <td className="px-4 py-2.5">
+                          <span className="text-green-400">{c.wins ?? "—"}</span>
+                          <span className="text-[var(--text-tertiary)]">/</span>
+                          <span className="text-red-400">{c.losses ?? "—"}</span>
+                        </td>
+                        <td className={`px-4 py-2.5 font-semibold ${winRateColor(c.win_rate)}`}>{fmtPct(c.win_rate)}</td>
+                        <td className="px-4 py-2.5 text-[var(--text-secondary)]">{c.lift_vs_base != null ? `${c.lift_vs_base.toFixed(2)}x` : "—"}</td>
+                        <td className="px-4 py-2.5 min-w-[120px]"><ChampionScoreBar score={c.champion_score} /></td>
+                        <td className="px-4 py-2.5 text-[var(--text-primary)]">{fmtPct(c.tp_30m_rate)}</td>
+                        <td className="px-4 py-2.5">{confidenceBadge(c.confidence_level)}</td>
+                        <td className="px-4 py-2.5">
+                          {c.overfit_risk ? <span className="text-yellow-400 text-[11px]">⚠️ Sim</span> : <span className="text-[var(--text-tertiary)] text-[11px]">—</span>}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <button
+                            className="btn btn-secondary text-[10px] px-2 py-1 whitespace-nowrap"
+                            onClick={() => setSelectedCombination(c)}
+                          >
+                            Detalhes
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── TAB: Suggestions ───────────────────────────────────────────────────── */}
+      {activeTab === "Suggestions" && (
+        <div className="space-y-4">
+          <div className="card p-3 border-yellow-500/20 bg-yellow-500/5">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-yellow-400 mt-0.5 shrink-0" />
+              <p className="text-[11px] text-[var(--text-secondary)]">
+                Sugestões são hipóteses analíticas geradas com base em shadow trades. Requerem validação antes de qualquer uso operacional. <strong className="text-yellow-400">Live trading permanece desativado.</strong>
+              </p>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="p-4 border-b border-[var(--border-default)]">
+              <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">Sugestões de Novos Profiles</h2>
+              <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">Status: pending_user_approval — aguardando revisão humana.</p>
+            </div>
+            {loadingTab ? <TableSkeleton /> : suggestions.length === 0 ? (
+              <EmptyState message="Nenhuma sugestão disponível. Execute uma análise ou aguarde mais shadow trades fechados." onRun={() => setShowRunModal(true)} />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-[12px]">
+                  <thead>
+                    <tr className="border-b border-[var(--border-subtle)]">
+                      {["Nome Sugerido", "Família", "Confidence", "Champion Score", "Status", "Criado em", "Ações"].map(h => (
+                        <th key={h} className="px-4 py-2 text-left text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--border-subtle)]">
+                    {suggestions.map(s => (
+                      <tr key={s.id} className="hover:bg-[var(--bg-elevated)] transition-colors">
+                        <td className="px-4 py-2.5 font-medium text-[var(--text-primary)] max-w-[220px] truncate">{s.suggested_profile_name}</td>
+                        <td className="px-4 py-2.5 text-[var(--text-secondary)]">{s.suggested_profile_family || "—"}</td>
+                        <td className="px-4 py-2.5">{confidenceBadge(s.confidence_level)}</td>
+                        <td className="px-4 py-2.5 min-w-[110px]"><ChampionScoreBar score={s.confidence_score} /></td>
+                        <td className="px-4 py-2.5">
+                          <span className="badge range text-[10px]">{s.status.replace(/_/g, " ")}</span>
+                        </td>
+                        <td className="px-4 py-2.5 text-[var(--text-tertiary)] font-mono whitespace-nowrap">{fmtDate(s.created_at)}</td>
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <button
+                              className="btn btn-secondary text-[10px] px-2 py-1 whitespace-nowrap"
+                              onClick={() => setSelectedSuggestion(s)}
+                            >
+                              <Eye className="w-3 h-3" />
+                            </button>
+                            <button
+                              className="btn btn-secondary text-[10px] px-2 py-1 whitespace-nowrap flex items-center gap-1"
+                              onClick={() => handleExplain(s.id)}
+                              disabled={explainingId === s.id}
+                            >
+                              <Zap className={`w-3 h-3 ${explainingId === s.id ? "animate-pulse" : ""}`} />
+                              {explainingId === s.id ? "..." : "IA"}
+                            </button>
+                            <button
+                              className="btn btn-secondary text-[10px] px-2 py-1 whitespace-nowrap"
+                              onClick={() => setPrepareProfileSuggestion(s)}
+                            >
+                              Draft
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── TAB: Audit ─────────────────────────────────────────────────────────── */}
+      {activeTab === "Audit" && (
+        <div className="card">
+          <div className="p-4 border-b border-[var(--border-default)]">
+            <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">Audit Trail</h2>
+            <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">Log imutável de eventos do Profile Intelligence Engine.</p>
+          </div>
+          {loadingTab ? <TableSkeleton /> : audit.length === 0 ? (
+            <div className="p-8 text-center text-[12px] text-[var(--text-tertiary)]">Nenhum evento registrado ainda.</div>
+          ) : (
+            <div className="divide-y divide-[var(--border-subtle)]">
+              {audit.map(entry => (
+                <div key={entry.id}>
+                  <button
+                    className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[var(--bg-elevated)] transition-colors"
+                    onClick={() => setExpandedAudit(expandedAudit === entry.id ? null : entry.id)}
+                  >
+                    <span className="shrink-0 text-[var(--text-tertiary)]">
+                      {expandedAudit === entry.id ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                    </span>
+                    <span className="flex-1 flex items-center gap-2 min-w-0 flex-wrap">
+                      <span className={`badge text-[10px] ${entry.event_type.includes("error") || entry.event_type.includes("failed") ? "bearish" : entry.event_type.includes("completed") || entry.event_type.includes("finished") ? "bullish" : entry.event_type.includes("anthropic") || entry.event_type.includes("ai_") ? "range" : "range"}`}>
+                        {entry.event_type}
+                      </span>
+                      {entry.event_description && (
+                        <span className="text-[11px] text-[var(--text-secondary)] truncate">{entry.event_description}</span>
+                      )}
+                      {entry.model_provider && (
+                        <span className="text-[10px] text-purple-400">{entry.model_provider}/{entry.model_name}</span>
+                      )}
+                    </span>
+                    <span className="text-[10px] text-[var(--text-tertiary)] shrink-0 font-mono">{fmtDate(entry.created_at)}</span>
+                  </button>
+                  {expandedAudit === entry.id && (
+                    <div className="px-10 pb-4 pt-2 space-y-2">
+                      {entry.run_id && <div className="text-[10px] text-[var(--text-tertiary)]">Run: <span className="font-mono">{entry.run_id}</span></div>}
+                      {entry.suggestion_id && <div className="text-[10px] text-[var(--text-tertiary)]">Suggestion: <span className="font-mono">{entry.suggestion_id}</span></div>}
+                      {entry.result_json && (
+                        <div>
+                          <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">Result</div>
+                          <pre className="text-[10px] text-[var(--text-secondary)] bg-[var(--bg-input)] rounded p-2 overflow-x-auto max-h-40">
+                            {JSON.stringify(entry.result_json, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                      {entry.payload_json && (
+                        <div>
+                          <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">Payload</div>
+                          <pre className="text-[10px] text-[var(--text-secondary)] bg-[var(--bg-input)] rounded p-2 overflow-x-auto max-h-40">
+                            {JSON.stringify(entry.payload_json, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── TAB: Settings ──────────────────────────────────────────────────────── */}
+      {activeTab === "Settings" && (
+        <div className="space-y-4 max-w-2xl">
+          <div className="card p-4 border-blue-500/20 bg-blue-500/5">
+            <div className="flex items-start gap-2">
+              <CheckCircle className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" />
+              <p className="text-[11px] text-[var(--text-secondary)]">
+                Configurações afetam os próximos runs. Sugestões geradas são sempre analíticas e não ativam live trading.
+              </p>
+            </div>
+          </div>
+
+          {loadingTab ? (
+            <div className="skeleton h-64 rounded-[var(--radius-lg)]" />
+          ) : (
+            <div className="card p-5 space-y-4">
+              <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">Parâmetros do Engine</h2>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {[
+                  { key: "min_closed_trades", label: "Min Closed Trades", step: 1 },
+                  { key: "min_lift", label: "Min Lift", step: 0.1 },
+                  { key: "min_win_rate", label: "Min Win Rate", step: 0.01 },
+                  { key: "max_avg_mae", label: "Max Avg MAE", step: 0.1 },
+                  { key: "max_avg_holding_seconds", label: "Max Avg Holding (s)", step: 60 },
+                  { key: "required_tp_30m_rate", label: "Required TP ≤30m Rate", step: 0.01 },
+                  { key: "max_combinations_per_run", label: "Max Combinations per Run", step: 50 },
+                ].map(({ key, label, step }) => (
+                  <div key={key}>
+                    <label className="block text-[11px] font-medium text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{label}</label>
+                    <input
+                      type="number"
+                      step={step}
+                      value={(settings as any)[key] ?? ""}
+                      onChange={e => setSettings(s => ({ ...s, [key]: parseFloat(e.target.value) || 0 }))}
+                      className="w-full bg-[var(--bg-input)] border border-[var(--border-default)] rounded-lg px-3 py-2 text-[13px] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-3 pt-2 border-t border-[var(--border-subtle)]">
+                <h3 className="text-[13px] font-semibold text-[var(--text-primary)]">Features Opcionais</h3>
+                {[
+                  { key: "enable_dynamic_combinations", label: "Dynamic Combinations", hint: "Gera combinações dinâmicas de buckets top-winners" },
+                  { key: "enable_association_rules", label: "Association Rules", hint: "mlxtend apriori para encontrar co-ocorrências" },
+                  { key: "enable_anthropic_explanations", label: "Anthropic AI Explanations", hint: "⚠️ Consome tokens da cota Anthropic" },
+                  { key: "enable_optuna", label: "Optuna Search", hint: "⚠️ Pesado — aumenta tempo de análise significativamente" },
+                  { key: "enable_lightgbm", label: "LightGBM", hint: "Requer pacote instalado no worker" },
+                  { key: "enable_catboost", label: "CatBoost", hint: "Requer pacote instalado no worker" },
+                ].map(({ key, label, hint }) => (
+                  <div key={key} className="flex items-center justify-between">
+                    <div>
+                      <div className="text-[13px] text-[var(--text-primary)]">{label}</div>
+                      <div className="text-[11px] text-[var(--text-tertiary)]">{hint}</div>
+                    </div>
+                    <button
+                      onClick={() => setSettings(s => ({ ...s, [key]: !(s as any)[key] }))}
+                      className={`relative w-11 h-6 rounded-full transition-colors ${(settings as any)[key] ? "bg-[var(--accent-primary)]" : "bg-[var(--bg-hover)]"} border border-[var(--border-strong)]`}
+                    >
+                      <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${(settings as any)[key] ? "translate-x-5" : "translate-x-0"}`} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <button
+                className="btn btn-primary text-[13px] w-full"
+                onClick={handleSaveSettings}
+                disabled={savingSettings}
+              >
+                {savingSettings ? "Salvando..." : "Salvar Configurações"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Combination Detail Drawer ─────────────────────────────────────────── */}
+      {selectedCombination && (
+        <Drawer title={selectedCombination.suggested_name || "Detalhe da Combinação"} onClose={() => setSelectedCombination(null)}>
+          <div className="space-y-4">
+            {/* Alerts */}
+            {selectedCombination.overfit_risk && (
+              <div className="card p-3 border-yellow-500/30 bg-yellow-500/5 text-[11px] text-yellow-400 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" /> <span>⚠️ Risco de overfitting detectado. Resultados de discovery podem não generalizar.</span>
+              </div>
+            )}
+            {selectedCombination.confidence_level === "LOW" && (
+              <div className="card p-3 border-red-500/30 bg-red-500/5 text-[11px] text-red-400 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" /> <span>Evidência insuficiente — não usar como base de decisão operacional (LOW confidence).</span>
+              </div>
+            )}
+
+            {/* Discovery vs Validation */}
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                ["Discovery", selectedCombination.discovery_metrics_json],
+                ["Validation", selectedCombination.validation_metrics_json],
+              ].map(([label, metrics]) => (
+                <div key={String(label)} className="card p-3">
+                  <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase mb-2">{String(label)}</div>
+                  {metrics ? (
+                    <div className="space-y-1">
+                      {Object.entries(metrics as Record<string, any>).map(([k, v]) => (
+                        <div key={k} className="flex justify-between text-[11px]">
+                          <span className="text-[var(--text-tertiary)]">{k}</span>
+                          <span className="text-[var(--text-primary)] font-medium">
+                            {typeof v === "number" ? (k.includes("rate") || k.includes("pnl") || k.includes("mae") || k.includes("mfe") ? fmtPct(v, 2) : v.toFixed(3)) : String(v)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <div className="text-[11px] text-[var(--text-tertiary)]">—</div>}
+                </div>
+              ))}
+            </div>
+
+            {/* Degradation */}
+            {selectedCombination.degradation_pct != null && (
+              <div className="flex justify-between text-[12px]">
+                <span className="text-[var(--text-secondary)]">Degradação discovery → validation</span>
+                <span className={`font-semibold ${Math.abs(selectedCombination.degradation_pct) > 20 ? "text-red-400" : "text-green-400"}`}>
+                  {selectedCombination.degradation_pct.toFixed(1)}%
+                </span>
+              </div>
+            )}
+
+            {/* Rules */}
+            {selectedCombination.rules_json && selectedCombination.rules_json.length > 0 && (
+              <div>
+                <div className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase mb-2">Regras ({selectedCombination.rules_json.length})</div>
+                <div className="space-y-1">
+                  {selectedCombination.rules_json.map((r: any, i: number) => (
+                    <div key={i} className="font-mono text-[11px] bg-[var(--bg-input)] rounded px-3 py-1.5 text-[var(--text-primary)]">
+                      {r.indicator || r.field} {r.operator} {r.value ?? `[${r.range_min}, ${r.range_max}]`}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Prepare Profile button */}
+            <div className="pt-2 border-t border-[var(--border-subtle)]">
+              <p className="text-[11px] text-[var(--text-tertiary)] mb-2">
+                Esta é uma hipótese analítica. Requer validação em shadow antes de ativar.
+              </p>
+              <button disabled className="btn btn-secondary text-[12px] w-full opacity-40 cursor-not-allowed">
+                Create Profile — não disponível nesta fase
+              </button>
+            </div>
+          </div>
+        </Drawer>
+      )}
+
+      {/* ── Suggestion Detail Drawer ──────────────────────────────────────────── */}
+      {selectedSuggestion && (
+        <Drawer title={selectedSuggestion.suggested_profile_name} onClose={() => setSelectedSuggestion(null)}>
+          <div className="space-y-4">
+            {/* Safety */}
+            <div className="card p-3 border-yellow-500/20 bg-yellow-500/5 text-[11px] text-yellow-400 flex items-start gap-2">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <span>Perfis gerados por inteligência devem nascer como SHADOW_ONLY. Live trading permanece desativado.</span>
+            </div>
+
+            {/* Meta */}
+            <div className="grid grid-cols-2 gap-2 text-[11px]">
+              {[
+                ["Família", selectedSuggestion.suggested_profile_family || "—"],
+                ["Confidence", selectedSuggestion.confidence_level || "—"],
+                ["Status", selectedSuggestion.status],
+                ["Score", selectedSuggestion.confidence_score?.toFixed(1) ?? "—"],
+              ].map(([k, v]) => (
+                <div key={k} className="bg-[var(--bg-elevated)] rounded p-2">
+                  <div className="text-[10px] text-[var(--text-tertiary)]">{k}</div>
+                  <div className="text-[var(--text-primary)] font-medium">{v}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Evidence */}
+            {selectedSuggestion.evidence_summary_json && (
+              <div>
+                <div className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase mb-2">Evidence Summary</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {Object.entries(selectedSuggestion.evidence_summary_json).map(([k, v]) => (
+                    <div key={k} className="bg-[var(--bg-elevated)] rounded p-2 text-[11px]">
+                      <div className="text-[10px] text-[var(--text-tertiary)]">{k}</div>
+                      <div className="text-[var(--text-primary)] font-medium">{typeof v === "number" ? v.toFixed(3) : String(v)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Quantitative explanation */}
+            {selectedSuggestion.quantitative_explanation && (
+              <div>
+                <div className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">Explicação Quantitativa</div>
+                <p className="text-[12px] text-[var(--text-secondary)] leading-relaxed">{selectedSuggestion.quantitative_explanation}</p>
+              </div>
+            )}
+
+            {/* AI explanation */}
+            {selectedSuggestion.ai_explanation ? (
+              <div>
+                <div className="text-[11px] font-semibold text-blue-400 uppercase mb-1 flex items-center gap-1"><Zap className="w-3 h-3" /> Explicação IA</div>
+                <div className="bg-blue-500/5 border border-blue-500/20 rounded-lg p-3 text-[12px] text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap">
+                  {selectedSuggestion.ai_explanation}
+                </div>
+              </div>
+            ) : (
+              <div>
+                <button
+                  className="btn btn-secondary text-[12px] flex items-center gap-1.5 w-full"
+                  onClick={() => handleExplain(selectedSuggestion.id)}
+                  disabled={explainingId === selectedSuggestion.id}
+                >
+                  <Zap className={`w-3.5 h-3.5 ${explainingId === selectedSuggestion.id ? "animate-pulse" : ""}`} />
+                  {explainingId === selectedSuggestion.id ? "Gerando explicação..." : "Explicar com IA"}
+                </button>
+                <p className="text-[10px] text-[var(--text-tertiary)] mt-1">Requer chave Anthropic configurada. Usa apenas dados calculados — não inventa métricas.</p>
+              </div>
+            )}
+
+            {/* Risk notes */}
+            {selectedSuggestion.risk_notes && (
+              <div className="card p-3 border-yellow-500/20 bg-yellow-500/5">
+                <div className="text-[10px] font-semibold text-yellow-400 uppercase mb-1">Notas de Risco</div>
+                <p className="text-[11px] text-[var(--text-secondary)]">{selectedSuggestion.risk_notes}</p>
+              </div>
+            )}
+
+            {/* Config JSON */}
+            {selectedSuggestion.suggested_config_json && (
+              <div>
+                <div className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">Config Sugerida</div>
+                <pre className="text-[10px] text-[var(--text-secondary)] bg-[var(--bg-input)] rounded p-3 overflow-x-auto max-h-48">
+                  {JSON.stringify(selectedSuggestion.suggested_config_json, null, 2)}
+                </pre>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex gap-2 pt-2 border-t border-[var(--border-subtle)]">
+              <button
+                className="btn btn-secondary text-[12px] flex items-center gap-1.5 flex-1"
+                onClick={() => { navigator.clipboard.writeText(JSON.stringify(selectedSuggestion.suggested_config_json, null, 2)); showToast("JSON copiado!"); }}
+              >
+                <Copy className="w-3.5 h-3.5" /> Copy JSON
+              </button>
+              <button
+                className="btn btn-secondary text-[12px] flex items-center gap-1.5 flex-1"
+                onClick={() => { setSelectedSuggestion(null); setPrepareProfileSuggestion(selectedSuggestion); }}
+              >
+                <BarChart3 className="w-3.5 h-3.5" /> Prepare Draft
+              </button>
+            </div>
+          </div>
+        </Drawer>
+      )}
+
+      {/* ── Prepare Profile Modal ─────────────────────────────────────────────── */}
+      {prepareProfileSuggestion && (
+        <Modal title="Prepare Profile Draft" onClose={() => setPrepareProfileSuggestion(null)}>
+          <div className="space-y-4">
+            <div className="card p-3 border-yellow-500/20 bg-yellow-500/5">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-yellow-400 shrink-0" />
+                <div className="text-[11px] text-yellow-400 space-y-0.5">
+                  <p><strong>Perfis gerados por inteligência devem nascer como SHADOW_ONLY.</strong></p>
+                  <p>Live trading permanece desativado. Esta é uma visualização do que seria criado.</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-[12px]">
+              <div className="card p-3">
+                <div className="text-[10px] text-[var(--text-tertiary)] uppercase">Nome</div>
+                <div className="text-[var(--text-primary)] font-medium">{prepareProfileSuggestion.suggested_profile_name}</div>
+              </div>
+              <div className="card p-3">
+                <div className="text-[10px] text-[var(--text-tertiary)] uppercase">Status Inicial</div>
+                <div className="text-yellow-400 font-medium">SHADOW_ONLY</div>
+              </div>
+              <div className="card p-3">
+                <div className="text-[10px] text-[var(--text-tertiary)] uppercase">Live Trading</div>
+                <div className="text-red-400 font-medium">DESATIVADO</div>
+              </div>
+              <div className="card p-3">
+                <div className="text-[10px] text-[var(--text-tertiary)] uppercase">Família</div>
+                <div className="text-[var(--text-primary)]">{prepareProfileSuggestion.suggested_profile_family || "—"}</div>
+              </div>
+            </div>
+
+            {prepareProfileSuggestion.suggested_config_json && (
+              <div>
+                <div className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">Config Completa</div>
+                <pre className="text-[10px] text-[var(--text-secondary)] bg-[var(--bg-input)] rounded p-3 overflow-x-auto max-h-56">
+                  {JSON.stringify(prepareProfileSuggestion.suggested_config_json, null, 2)}
+                </pre>
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <button
+                className="btn btn-secondary text-[12px] flex items-center gap-1.5 flex-1"
+                onClick={() => { navigator.clipboard.writeText(JSON.stringify(prepareProfileSuggestion.suggested_config_json, null, 2)); showToast("JSON copiado!"); }}
+              >
+                <Copy className="w-3.5 h-3.5" /> Copy JSON
+              </button>
+              <a href="/profiles" className="btn btn-secondary text-[12px] flex items-center gap-1.5 flex-1 justify-center">
+                <ExternalLink className="w-3.5 h-3.5" /> Open Profiles
+              </a>
+              <button
+                disabled
+                title="Endpoint de criação automática ainda não implementado nesta fase."
+                className="btn btn-primary text-[12px] flex-1 opacity-40 cursor-not-allowed"
+              >
+                Create Profile
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Run Analysis Modal ────────────────────────────────────────────────── */}
+      {showRunModal && (
+        <Modal title="Run Analysis" onClose={() => { setShowRunModal(false); setRunResult(null); }}>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                { key: "lookback_days", label: "Lookback (dias)", step: 1 },
+                { key: "min_closed_trades", label: "Min Closed Trades", step: 1 },
+                { key: "max_combinations", label: "Max Combinations", step: 50 },
+              ].map(({ key, label, step }) => (
+                <div key={key}>
+                  <label className="block text-[11px] font-medium text-[var(--text-tertiary)] uppercase tracking-wider mb-1">{label}</label>
+                  <input
+                    type="number"
+                    step={step}
+                    value={(runPayload as any)[key]}
+                    onChange={e => setRunPayload(p => ({ ...p, [key]: parseInt(e.target.value) || 0 }))}
+                    className="w-full bg-[var(--bg-input)] border border-[var(--border-default)] rounded-lg px-3 py-2 text-[13px] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-2">
+              {[
+                { key: "include_counterfactual", label: "Counterfactual Miner" },
+                { key: "include_dynamic_combinations", label: "Dynamic Combinations" },
+                { key: "include_association_rules", label: "Association Rules" },
+                { key: "include_optuna", label: "Optuna Search (pesado)" },
+                { key: "include_ai_explanation", label: "AI Explanation (consome tokens)" },
+              ].map(({ key, label }) => (
+                <label key={key} className="flex items-center justify-between text-[12px] cursor-pointer">
+                  <span className="text-[var(--text-secondary)]">{label}</span>
+                  <input
+                    type="checkbox"
+                    checked={(runPayload as any)[key]}
+                    onChange={e => setRunPayload(p => ({ ...p, [key]: e.target.checked }))}
+                    className="w-4 h-4 rounded"
+                  />
+                </label>
+              ))}
+            </div>
+
+            {runResult && (
+              <div className={`card p-3 border ${runResult.ok ? "border-green-500/30 bg-green-500/5" : "border-red-500/30 bg-red-500/5"}`}>
+                {runResult.ok ? (
+                  <div className="flex items-center gap-2 text-[12px] text-green-400">
+                    <CheckCircle className="w-4 h-4" />
+                    <div>
+                      <div>Análise iniciada com sucesso.</div>
+                      <div className="text-[10px] font-mono mt-0.5">Run ID: {runResult.run_id}</div>
+                      <div className="text-[10px] text-[var(--text-tertiary)] mt-0.5">Resultados disponíveis em alguns minutos. Use Refresh para atualizar.</div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-[12px] text-red-400 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{runResult.error}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-2">
+              <button
+                className="btn btn-secondary text-[12px] flex-1"
+                onClick={() => { setShowRunModal(false); setRunResult(null); }}
+              >
+                Fechar
+              </button>
+              <button
+                className="btn btn-primary text-[12px] flex-1 flex items-center justify-center gap-1.5"
+                onClick={handleRun}
+                disabled={running}
+              >
+                <Play className={`w-3.5 h-3.5 ${running ? "animate-pulse" : ""}`} />
+                {running ? "Iniciando..." : "Iniciar Análise"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Settings Modal (from header button) ──────────────────────────────── */}
+      {showSettingsModal && (
+        <Modal title="Engine Settings" onClose={() => setShowSettingsModal(false)}>
+          <div className="text-[12px] text-[var(--text-secondary)] space-y-2">
+            <p>Acesse a aba <strong className="text-[var(--text-primary)]">Settings</strong> para configurar o engine.</p>
+            <button
+              className="btn btn-primary text-[12px] w-full"
+              onClick={() => { setShowSettingsModal(false); setActiveTab("Settings"); }}
+            >
+              Ir para Settings
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── Reusable sub-components (inline) ──────────────────────────────────────────
+
+function EmptyState({ message, onRun }: { message: string; onRun?: () => void }) {
+  return (
+    <div className="p-10 text-center">
+      <Brain className="w-10 h-10 text-[var(--text-tertiary)] opacity-30 mx-auto mb-3" />
+      <p className="text-[13px] text-[var(--text-secondary)] max-w-sm mx-auto">{message}</p>
+      {onRun && (
+        <button className="btn btn-primary mt-4 text-[12px] flex items-center gap-1.5 mx-auto" onClick={onRun}>
+          <Play className="w-3.5 h-3.5" /> Executar análise
+        </button>
+      )}
+    </div>
+  );
+}
+
+function TableSkeleton() {
+  return (
+    <div className="p-4 space-y-2">
+      {[...Array(5)].map((_, i) => <div key={i} className="skeleton h-9 rounded" />)}
+    </div>
+  );
+}
+
+function Drawer({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex">
+      <div className="flex-1 bg-black/50" onClick={onClose} />
+      <div className="w-full max-w-xl bg-[var(--bg-surface)] border-l border-[var(--border-default)] flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-default)] shrink-0">
+          <h2 className="text-[14px] font-semibold text-[var(--text-primary)] truncate pr-4">{title}</h2>
+          <button onClick={onClose} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5 space-y-4 custom-scrollbar">
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="relative w-full max-w-lg bg-[var(--bg-elevated)] border border-[var(--border-default)] rounded-[var(--radius-lg)] shadow-2xl flex flex-col max-h-[90vh]">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-default)] shrink-0">
+          <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">{title}</h2>
+          <button onClick={onClose} className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="overflow-y-auto p-5 custom-scrollbar">
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}

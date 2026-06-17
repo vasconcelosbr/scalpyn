@@ -56,6 +56,7 @@ export const TRADING_ITEMS: NavItem[] = [
 export const BACKOFFICE_ITEMS: NavItem[] = [
   { name: "Exec Dashboard", href: "/dashboard", icon: BarChart2 },
   { name: "Auto-Pilot", href: "/autopilot", icon: Bot },
+  { name: "Profile Intelligence", href: "/profile-intelligence", icon: Brain },
   { name: "ML Models", href: "/ml-models", icon: Brain },
   { name: "Performance", href: "/dashboard/performance", icon: Activity },
   { name: "Shadow Portfolio", href: "/dashboard/shadow-portfolio", icon: TestTube2 },
