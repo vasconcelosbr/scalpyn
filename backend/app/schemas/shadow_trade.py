@@ -252,3 +252,18 @@ class TimeoutAnalyticsResponse(BaseModel):
 
     timeout_post_analysis: TimeoutPostAnalysis
     holding_time: HoldingTimeAnalytics
+
+
+class ProfileReportRow(BaseModel):
+    """Uma linha do relatório executivo por perfil do Strategy Lab."""
+
+    profile_id: UUID
+    profile_name: str
+    total: int
+    open_count: int
+    win_count: int
+    decided_count: int
+    win_rate: Optional[float] = None        # win_count / decided_count * 100
+    pnl_total_usdt: float
+    pnl_avg_pct: Optional[float] = None
+    avg_holding_win_seconds: Optional[float] = None  # TP_HIT only

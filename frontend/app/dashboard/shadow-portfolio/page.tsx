@@ -6,6 +6,8 @@ import {
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
+  ChevronDown,
+  ChevronUp,
   Clock,
   Hourglass,
   RefreshCw,
@@ -123,6 +125,19 @@ interface ProfileItem {
   name: string;
   description: string | null;
   is_active: boolean;
+}
+
+interface ProfileReportRow {
+  profile_id: string;
+  profile_name: string;
+  total: number;
+  open_count: number;
+  win_count: number;
+  decided_count: number;
+  win_rate: number | null;
+  pnl_total_usdt: number;
+  pnl_avg_pct: number | null;
+  avg_holding_win_seconds: number | null;
 }
 
 // ── filter shape ─────────────────────────────────────────────────────────────
@@ -1852,6 +1867,189 @@ function DetailModal({
   );
 }
 
+// ── profile report table ─────────────────────────────────────────────────────
+type ReportSortKey =
+  | "profile_name"
+  | "total"
+  | "open_count"
+  | "win_rate"
+  | "pnl_total_usdt"
+  | "pnl_avg_pct"
+  | "avg_holding_win_seconds";
+
+function ProfileReportTable({
+  rows,
+  loading,
+}: {
+  rows: ProfileReportRow[];
+  loading: boolean;
+}) {
+  const [sortKey, setSortKey] = useState<ReportSortKey>("profile_name");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+
+  const sorted = useMemo(() => {
+    return [...rows].sort((a, b) => {
+      const av = a[sortKey] ?? (sortDir === "asc" ? Infinity : -Infinity);
+      const bv = b[sortKey] ?? (sortDir === "asc" ? Infinity : -Infinity);
+      if (typeof av === "string" && typeof bv === "string") {
+        return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+      }
+      return sortDir === "asc"
+        ? (av as number) - (bv as number)
+        : (bv as number) - (av as number);
+    });
+  }, [rows, sortKey, sortDir]);
+
+  const handleSort = (key: ReportSortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  };
+
+  const SortBtn = ({ col }: { col: ReportSortKey }) => {
+    const active = sortKey === col;
+    return (
+      <button
+        onClick={() => handleSort(col)}
+        style={{
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          padding: "0 2px",
+          color: active ? C.blue : C.dim,
+          verticalAlign: "middle",
+          lineHeight: 0,
+        }}
+      >
+        {active && sortDir === "asc" ? (
+          <ChevronUp size={12} />
+        ) : active && sortDir === "desc" ? (
+          <ChevronDown size={12} />
+        ) : (
+          <ChevronDown size={12} style={{ opacity: 0.35 }} />
+        )}
+      </button>
+    );
+  };
+
+  const thStyle: React.CSSProperties = {
+    padding: "8px 12px",
+    fontSize: 11,
+    color: C.muted,
+    fontWeight: 500,
+    textAlign: "left",
+    whiteSpace: "nowrap",
+    borderBottom: `1px solid ${C.border}`,
+    background: C.elevated,
+  };
+  const tdStyle: React.CSSProperties = {
+    padding: "9px 12px",
+    fontSize: 12,
+    borderBottom: `1px solid ${C.border}`,
+    color: C.text,
+  };
+
+  if (loading) {
+    return (
+      <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 12 }}>
+        Carregando relatório...
+      </div>
+    );
+  }
+
+  if (rows.length === 0) {
+    return (
+      <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 12 }}>
+        Nenhum perfil com shadow trades encontrado.
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        background: C.surface,
+        border: `1px solid ${C.border}`,
+        borderRadius: 8,
+        overflow: "hidden",
+      }}
+    >
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={thStyle}>
+              Perfil <SortBtn col="profile_name" />
+            </th>
+            <th style={{ ...thStyle, textAlign: "right" }}>
+              Total <SortBtn col="total" />
+            </th>
+            <th style={{ ...thStyle, textAlign: "right" }}>
+              Em aberto <SortBtn col="open_count" />
+            </th>
+            <th style={{ ...thStyle, textAlign: "right" }}>
+              Win Rate <SortBtn col="win_rate" />
+            </th>
+            <th style={{ ...thStyle, textAlign: "right" }}>
+              P&amp;L Total <SortBtn col="pnl_total_usdt" />
+            </th>
+            <th style={{ ...thStyle, textAlign: "right" }}>
+              P&amp;L Médio <SortBtn col="pnl_avg_pct" />
+            </th>
+            <th style={{ ...thStyle, textAlign: "right" }}>
+              Holding (WIN) <SortBtn col="avg_holding_win_seconds" />
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((row, i) => {
+            const winRateColor =
+              row.win_rate === null
+                ? C.muted
+                : row.win_rate >= 50
+                ? C.green
+                : C.red;
+            const pnlColor =
+              row.pnl_total_usdt > 0 ? C.green : row.pnl_total_usdt < 0 ? C.red : C.muted;
+            const pnlAvgColor =
+              row.pnl_avg_pct === null
+                ? C.muted
+                : row.pnl_avg_pct > 0
+                ? C.green
+                : row.pnl_avg_pct < 0
+                ? C.red
+                : C.muted;
+            return (
+              <tr
+                key={row.profile_id}
+                style={{ background: i % 2 === 0 ? "transparent" : `${C.elevated}66` }}
+              >
+                <td style={tdStyle}>{row.profile_name}</td>
+                <td style={{ ...tdStyle, textAlign: "right" }}>{row.total}</td>
+                <td style={{ ...tdStyle, textAlign: "right" }}>{row.open_count}</td>
+                <td style={{ ...tdStyle, textAlign: "right", color: winRateColor }}>
+                  {row.win_rate !== null ? `${row.win_rate.toFixed(1)}%` : "—"}
+                </td>
+                <td style={{ ...tdStyle, textAlign: "right", color: pnlColor }}>
+                  {fmtUsd(row.pnl_total_usdt)}
+                </td>
+                <td style={{ ...tdStyle, textAlign: "right", color: pnlAvgColor }}>
+                  {row.pnl_avg_pct !== null ? fmtPct(row.pnl_avg_pct) : "—"}
+                </td>
+                <td style={{ ...tdStyle, textAlign: "right", color: C.muted }}>
+                  {fmtHolding(row.avg_holding_win_seconds)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ── data hooks ───────────────────────────────────────────────────────────────
 //
 // Backend limitation: `status` query param só aceita PENDING|RUNNING|
@@ -1914,6 +2112,9 @@ export default function ShadowPortfolioPage() {
   const [sourceTab, setSourceTab] = useState<SourceTab>("L3");
   const [profiles, setProfiles] = useState<ProfileItem[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
+  const [mainTab, setMainTab] = useState<"trades" | "report">("trades");
+  const [profileReport, setProfileReport] = useState<ProfileReportRow[]>([]);
+  const [loadingReport, setLoadingReport] = useState(false);
 
   // Fetch profiles on mount for Strategy Lab profile selector
   useEffect(() => {
@@ -1934,6 +2135,15 @@ export default function ShadowPortfolioPage() {
         setProfiles([]);
       });
   }, []);
+
+  useEffect(() => {
+    if (mainTab !== "report") return;
+    setLoadingReport(true);
+    apiGet<ProfileReportRow[]>("/api/shadow-trades/profile-report")
+      .then(setProfileReport)
+      .catch(() => setProfileReport([]))
+      .finally(() => setLoadingReport(false));
+  }, [mainTab, tick]);
 
   const fetchList = useCallback(() => {
     setLoadingList(true);
@@ -2119,11 +2329,40 @@ export default function ShadowPortfolioPage() {
           >
             Shadow Portfolio
           </h1>
+          <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+            {(
+              [
+                { key: "trades" as const, label: "Shadow Trades" },
+                { key: "report" as const, label: "Relatório Executivo" },
+              ]
+            ).map(({ key, label }) => {
+              const active = mainTab === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => setMainTab(key)}
+                  style={{
+                    background: active ? C.blue : C.elevated,
+                    color: active ? "#fff" : C.muted,
+                    border: `1px solid ${active ? C.blue : C.border}`,
+                    borderRadius: 6,
+                    padding: "5px 16px",
+                    fontSize: 12,
+                    cursor: "pointer",
+                    fontWeight: active ? 600 : 400,
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          {mainTab === "trades" && (
           <p
             style={{
               fontSize: 12,
               color: C.muted,
-              margin: "4px 0 0",
+              margin: "8px 0 0",
               maxWidth: 720,
             }}
           >
@@ -2151,7 +2390,8 @@ export default function ShadowPortfolioPage() {
               </>
             )}
           </p>
-          {profiles.length > 0 && (
+          )}
+          {mainTab === "trades" && profiles.length > 0 && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
               <span style={{ fontSize: 11, color: C.muted, whiteSpace: "nowrap" }}>
                 Strategy Lab:
@@ -2201,6 +2441,7 @@ export default function ShadowPortfolioPage() {
               )}
             </div>
           )}
+          {mainTab === "trades" && (
           <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
             {(
               [
@@ -2235,61 +2476,68 @@ export default function ShadowPortfolioPage() {
               );
             })}
           </div>
+          )}
         </div>
 
-        <FilterBar
-          filter={filter}
-          onChange={setFilter}
-          onRefresh={() => setTick((t) => t + 1)}
-          loading={loadingList || loadingSummary}
-        />
-
-        <SummaryCards data={summary} loading={loadingSummary} />
-
-        {fetchedAtCap ? (
-          <div
-            style={{
-              fontSize: 11,
-              color: C.amber,
-              padding: "8px 12px",
-              background: `${C.amber}11`,
-              border: `1px solid ${C.amber}33`,
-              borderRadius: 6,
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-            }}
-          >
-            <AlertTriangle size={12} />
-            Mostrando os {MAX_LOCAL_FETCH} itens mais recentes desse filtro.
-            Use intervalo de datas ou filtro de símbolo para ver mais.
-          </div>
-        ) : null}
-
-        <TradeTable
-          items={displayItems}
-          loading={loadingList}
-          error={errorList}
-          onRowClick={(id) => setSelectedId(id)}
-        />
-
-        {list ? (
-          isClientPaginated ? (
-            <Pagination
-              page={filter.page}
-              pageSize={CLIENT_PAGE_SIZE}
-              total={clientTotal}
-              onChange={(page) => setFilter({ ...filter, page })}
+        {mainTab === "trades" ? (
+          <>
+            <FilterBar
+              filter={filter}
+              onChange={setFilter}
+              onRefresh={() => setTick((t) => t + 1)}
+              loading={loadingList || loadingSummary}
             />
-          ) : (
-            <Pagination
-              page={list.page}
-              pageSize={list.page_size}
-              total={list.total}
-              onChange={(page) => setFilter({ ...filter, page })}
+
+            <SummaryCards data={summary} loading={loadingSummary} />
+
+            {fetchedAtCap ? (
+              <div
+                style={{
+                  fontSize: 11,
+                  color: C.amber,
+                  padding: "8px 12px",
+                  background: `${C.amber}11`,
+                  border: `1px solid ${C.amber}33`,
+                  borderRadius: 6,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                }}
+              >
+                <AlertTriangle size={12} />
+                Mostrando os {MAX_LOCAL_FETCH} itens mais recentes desse filtro.
+                Use intervalo de datas ou filtro de símbolo para ver mais.
+              </div>
+            ) : null}
+
+            <TradeTable
+              items={displayItems}
+              loading={loadingList}
+              error={errorList}
+              onRowClick={(id) => setSelectedId(id)}
             />
-          )
-        ) : null}
+
+            {list ? (
+              isClientPaginated ? (
+                <Pagination
+                  page={filter.page}
+                  pageSize={CLIENT_PAGE_SIZE}
+                  total={clientTotal}
+                  onChange={(page) => setFilter({ ...filter, page })}
+                />
+              ) : (
+                <Pagination
+                  page={list.page}
+                  pageSize={list.page_size}
+                  total={list.total}
+                  onChange={(page) => setFilter({ ...filter, page })}
+                />
+              )
+            ) : null}
+          </>
+        ) : (
+          <ProfileReportTable rows={profileReport} loading={loadingReport} />
+        )}
       </div>
 
       {selectedId ? (
