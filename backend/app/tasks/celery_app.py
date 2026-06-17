@@ -97,6 +97,7 @@ celery_app = Celery(
         "app.tasks.shadow_timeout_analyzer",
         "app.tasks.ttt_analyzer",
         "app.tasks.autopilot",
+        "app.tasks.profile_intelligence_job",
     ],
 )
 
@@ -187,6 +188,10 @@ TASK_ROUTES = {
     # Auto-Pilot Engine — autonomous profile mutation, every 6h.
     # Structural queue: calls Claude API + DB reads, moderate load.
     "app.tasks.autopilot.run":                      {"queue": QUEUE_STRUCTURAL},
+
+    # Profile Intelligence Engine — indicator lift, rule mining, suggestions.
+    # Structural queue: heavy analysis but no latency requirement.
+    "app.tasks.profile_intelligence_job.run":       {"queue": QUEUE_STRUCTURAL},
 }
 
 # Static queue declarations so beat / dispatch never rely on an "implicit"
@@ -367,6 +372,17 @@ TASK_ANNOTATIONS = {
     "app.tasks.autopilot.run": {
         "time_limit": 1800,
         "soft_time_limit": 1700,
+        "rate_limit": "4/h",
+        "max_retries": 0,
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
+
+    # Profile Intelligence Engine — heavy analysis pipeline (indicator lift +
+    # counterfactual mining + dynamic combinations). time_limit=3600s (1h)
+    # for worst-case full cohort. Beat re-fires every 6h; acks_late=False.
+    "app.tasks.profile_intelligence_job.run": {
+        "time_limit": 3600,
+        "soft_time_limit": 3540,
         "rate_limit": "4/h",
         "max_retries": 0,
         **_NO_REQUEUE_ON_WORKER_LOSS,
@@ -563,6 +579,15 @@ celery_app.conf.beat_schedule = {
     "autopilot_engine": {
         "task": "app.tasks.autopilot.run",
         "schedule": float(os.environ.get("AUTOPILOT_INTERVAL_S", 21600)),
+        "options": {"queue": QUEUE_STRUCTURAL},
+    },
+
+    # Profile Intelligence Engine — análise de indicadores, combinações e sugestões.
+    # Beat default 6h (override via PROFILE_INTELLIGENCE_INTERVAL_S env).
+    # Structural queue: análise pesada, sem latência crítica.
+    "profile_intelligence_engine": {
+        "task": "app.tasks.profile_intelligence_job.run",
+        "schedule": float(os.environ.get("PROFILE_INTELLIGENCE_INTERVAL_S", 21600)),
         "options": {"queue": QUEUE_STRUCTURAL},
     },
 }

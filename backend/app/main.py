@@ -442,6 +442,10 @@ app.include_router(shadow_trades_api.router)
 from .api import autopilot as autopilot_api  # noqa: E402
 app.include_router(autopilot_api.router)
 
+# Profile Intelligence Engine — indicator stats, rule combinations, suggestions.
+from .api import profile_intelligence as profile_intelligence_api  # noqa: E402
+app.include_router(profile_intelligence_api.router)
+
 # WebSocket
 app.include_router(websocket.router)
 

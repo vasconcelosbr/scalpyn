@@ -21,6 +21,13 @@ from .opportunity_snapshot import OpportunitySnapshot
 from .profile_metrics import ProfileMetrics
 from .rule_contribution import RuleContribution
 from .profile_audit_log import ProfileAuditLog
+from .profile_intelligence import (
+    ProfileIntelligenceRun,
+    ProfileIndicatorStats,
+    ProfileRuleCombination,
+    ProfileSuggestion,
+    ProfileIntelligenceAuditLog,
+)
 
 __all__ = [
     "User",
@@ -54,4 +61,9 @@ __all__ = [
     "ProfileMetrics",
     "RuleContribution",
     "ProfileAuditLog",
+    "ProfileIntelligenceRun",
+    "ProfileIndicatorStats",
+    "ProfileRuleCombination",
+    "ProfileSuggestion",
+    "ProfileIntelligenceAuditLog",
 ]

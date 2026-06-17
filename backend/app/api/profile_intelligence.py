@@ -1,0 +1,611 @@
+"""Profile Intelligence Engine API."""
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any, Dict, List, Optional
+from uuid import UUID
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from sqlalchemy import select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..database import get_db
+from ..models.profile_intelligence import (
+    ProfileIntelligenceRun,
+    ProfileIndicatorStats,
+    ProfileRuleCombination,
+    ProfileSuggestion,
+    ProfileIntelligenceAuditLog,
+)
+from .config import get_current_user_id
+from ..schemas.profile_intelligence import RunRequest, RunResponse, PISettingsUpdate
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/profile-intelligence", tags=["profile-intelligence"])
+
+_DEFAULT_SETTINGS = {
+    "min_support": 0.05,
+    "min_closed_trades": 30,
+    "min_lift": 1.1,
+    "min_win_rate": 0.45,
+    "max_avg_mae": -3.0,
+    "max_avg_holding_seconds": 7200,
+    "required_tp_30m_rate": 0.20,
+    "max_combinations_per_run": 500,
+    "enable_anthropic_explanations": False,
+    "enable_optuna": False,
+    "enable_association_rules": False,
+    "enable_dynamic_combinations": True,
+    "enable_lightgbm": False,
+    "enable_catboost": False,
+}
+
+
+# ── 1. Overview ──────────────────────────────────────────────────────────────
+
+@router.get("/overview")
+async def get_overview(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """Returns a summary of the last PI Engine run for the current user."""
+    # Last run
+    run_result = await db.execute(
+        select(ProfileIntelligenceRun)
+        .where(ProfileIntelligenceRun.user_id == user_id)
+        .order_by(ProfileIntelligenceRun.run_at.desc())
+        .limit(1)
+    )
+    last_run = run_result.scalars().first()
+
+    # Pending suggestions count
+    pending_count = (await db.execute(text("""
+        SELECT COUNT(*) FROM profile_suggestions
+        WHERE user_id = :uid AND status = 'pending_user_approval'
+    """), {"uid": str(user_id)})).scalar() or 0
+
+    # Combinations count (not yet shadow-tested)
+    untested_count = (await db.execute(text("""
+        SELECT COUNT(*) FROM profile_rule_combinations
+        WHERE user_id = :uid AND is_tested_live_shadow = false
+    """), {"uid": str(user_id)})).scalar() or 0
+
+    # Best combination
+    best_combo_result = await db.execute(
+        select(ProfileRuleCombination)
+        .where(ProfileRuleCombination.user_id == user_id)
+        .order_by(ProfileRuleCombination.champion_score.desc().nullslast())
+        .limit(1)
+    )
+    best_combo = best_combo_result.scalars().first()
+
+    # ML availability
+    ml_available = {}
+    try:
+        import xgboost; ml_available["xgboost"] = True
+    except ImportError: ml_available["xgboost"] = False
+    try:
+        import lightgbm; ml_available["lightgbm"] = True
+    except ImportError: ml_available["lightgbm"] = False
+    try:
+        import optuna; ml_available["optuna"] = True
+    except ImportError: ml_available["optuna"] = False
+    try:
+        import mlxtend; ml_available["mlxtend"] = True
+    except ImportError: ml_available["mlxtend"] = False
+    try:
+        import shap; ml_available["shap"] = True
+    except ImportError: ml_available["shap"] = False
+    try:
+        import anthropic; ml_available["anthropic_sdk"] = True
+    except ImportError: ml_available["anthropic_sdk"] = False
+
+    return {
+        "last_run": _run_to_dict(last_run) if last_run else None,
+        "pending_suggestions": pending_count,
+        "untested_combinations": untested_count,
+        "best_combination": {
+            "id": str(best_combo.id),
+            "suggested_name": best_combo.suggested_name,
+            "champion_score": float(best_combo.champion_score or 0),
+            "confidence_level": best_combo.confidence_level,
+            "setup_family": best_combo.setup_family,
+        } if best_combo else None,
+        "ml_availability": ml_available,
+    }
+
+
+# ── 2. List runs ──────────────────────────────────────────────────────────────
+
+@router.get("/runs")
+async def list_runs(
+    status: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    q = select(ProfileIntelligenceRun).where(ProfileIntelligenceRun.user_id == user_id)
+    if status:
+        q = q.where(ProfileIntelligenceRun.status == status)
+    q = q.order_by(ProfileIntelligenceRun.run_at.desc()).limit(limit)
+    runs = (await db.execute(q)).scalars().all()
+    return {"runs": [_run_to_dict(r) for r in runs]}
+
+
+# ── 3. Trigger run ────────────────────────────────────────────────────────────
+
+@router.post("/run", response_model=RunResponse)
+async def trigger_run(
+    payload: RunRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> RunResponse:
+    """Trigger a new PI Engine run. Returns run_id immediately; executes in background."""
+    from ..services.profile_intelligence_service import ProfileIntelligenceService
+    svc = ProfileIntelligenceService()
+
+    # Create the run record immediately so we can return the ID
+    run = ProfileIntelligenceRun(
+        user_id=user_id,
+        lookback_days=payload.lookback_days,
+        min_closed_trades=payload.min_closed_trades,
+        status="queued",
+        engine_version=ProfileIntelligenceService.ENGINE_VERSION,
+        settings_json=payload.settings_override or {},
+    )
+    db.add(run)
+    await db.commit()
+    await db.refresh(run)
+    run_id = run.id
+
+    # Queue background execution
+    from ..database import AsyncSessionLocal
+    async def _run_background():
+        async with AsyncSessionLocal() as bg_db:
+            try:
+                await svc.run(
+                    db=bg_db,
+                    user_id=user_id,
+                    run_id=run_id,
+                    lookback_days=payload.lookback_days,
+                    min_closed_trades=payload.min_closed_trades,
+                    include_counterfactual=payload.include_counterfactual,
+                    include_dynamic_combinations=payload.include_dynamic_combinations,
+                    include_association_rules=payload.include_association_rules,
+                    include_optuna=payload.include_optuna,
+                    include_ai_explanation=payload.include_ai_explanation,
+                    profiles_filter=payload.profiles_filter,
+                    max_combinations=payload.max_combinations,
+                    settings_override=payload.settings_override,
+                )
+            except Exception as exc:
+                logger.error("[PI API] Background run %s failed: %s", run_id, exc)
+                try:
+                    await bg_db.execute(
+                        update(ProfileIntelligenceRun)
+                        .where(ProfileIntelligenceRun.id == run_id)
+                        .values(status="failed", error_message=str(exc)[:500])
+                    )
+                    await bg_db.commit()
+                except Exception:
+                    pass
+
+    background_tasks.add_task(_run_background)
+
+    return RunResponse(run_id=str(run_id), status="queued", message="Run queued successfully")
+
+
+# ── 4. Profile ranking ────────────────────────────────────────────────────────
+
+@router.get("/profiles/ranking")
+async def get_profile_ranking(
+    lookback_days: int = Query(default=60, ge=7, le=365),
+    min_closed_trades: int = Query(default=10, ge=1),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    rows = (await db.execute(text(f"""
+        SELECT
+            profile_id,
+            profile_name,
+            source,
+            COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')) as closed_trades,
+            COUNT(*) FILTER (WHERE outcome = 'TP_HIT') as wins,
+            COUNT(*) FILTER (WHERE outcome = 'SL_HIT') as losses,
+            COUNT(*) FILTER (WHERE outcome = 'TIMEOUT') as timeouts,
+            ROUND(AVG(pnl_pct) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT'))::numeric, 4) as avg_pnl_pct,
+            ROUND(AVG(mae_pct)::numeric, 4) as avg_mae_pct,
+            COUNT(*) FILTER (WHERE outcome='TP_HIT' AND holding_seconds <= 1800) as tp_30m,
+            COUNT(*) as total_trades
+        FROM shadow_trades
+        WHERE user_id = :uid
+          AND created_at >= NOW() - INTERVAL '{lookback_days} days'
+          AND profile_id IS NOT NULL
+        GROUP BY profile_id, profile_name, source
+        HAVING COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')) >= :min_ct
+        ORDER BY wins::float / GREATEST(COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')),1) DESC
+        LIMIT :limit
+    """), {"uid": str(user_id), "min_ct": min_closed_trades, "limit": limit})).fetchall()
+
+    profiles = []
+    for r in rows:
+        closed = r.closed_trades or 0
+        wins = r.wins or 0
+        tp30 = r.tp_30m or 0
+        win_rate = wins / max(closed, 1)
+        confidence = "HIGH" if closed >= 100 else ("MEDIUM" if closed >= 30 else "LOW")
+        profiles.append({
+            "profile_id": str(r.profile_id) if r.profile_id else None,
+            "profile_name": r.profile_name,
+            "source": r.source,
+            "total_trades": r.total_trades,
+            "closed_trades": closed,
+            "wins": wins,
+            "losses": r.losses or 0,
+            "timeouts": r.timeouts or 0,
+            "win_rate": round(win_rate, 4),
+            "avg_pnl_pct": float(r.avg_pnl_pct or 0),
+            "avg_mae_pct": float(r.avg_mae_pct or 0),
+            "tp_30m_rate": round(tp30 / max(closed, 1), 4),
+            "confidence_level": confidence,
+        })
+
+    return {"profiles": profiles, "lookback_days": lookback_days}
+
+
+# ── 5 & 6. Top winners / losers ───────────────────────────────────────────────
+
+@router.get("/indicators/top-winners")
+async def get_top_winners(
+    run_id: Optional[str] = None,
+    min_cases: int = Query(default=10, ge=1),
+    confidence_level: Optional[str] = None,
+    indicator: Optional[str] = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    return await _get_indicator_stats(db, user_id, "winning_indicator", run_id, min_cases, confidence_level, indicator, limit)
+
+
+@router.get("/indicators/top-losers")
+async def get_top_losers(
+    run_id: Optional[str] = None,
+    min_cases: int = Query(default=10, ge=1),
+    confidence_level: Optional[str] = None,
+    indicator: Optional[str] = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    return await _get_indicator_stats(db, user_id, "losing_indicator", run_id, min_cases, confidence_level, indicator, limit)
+
+
+async def _get_indicator_stats(db, user_id, role, run_id, min_cases, confidence_level, indicator, limit):
+    q = select(ProfileIndicatorStats).where(
+        ProfileIndicatorStats.user_id == user_id,
+        ProfileIndicatorStats.role_detected == role,
+        ProfileIndicatorStats.total_cases >= min_cases,
+    )
+    if run_id:
+        try:
+            q = q.where(ProfileIndicatorStats.run_id == UUID(run_id))
+        except ValueError:
+            pass
+    if confidence_level:
+        q = q.where(ProfileIndicatorStats.confidence_level == confidence_level)
+    if indicator:
+        q = q.where(ProfileIndicatorStats.indicator == indicator)
+    q = q.order_by(ProfileIndicatorStats.lift_vs_base.desc().nullslast()).limit(limit)
+    stats = (await db.execute(q)).scalars().all()
+    return {"indicators": [_ind_to_dict(s) for s in stats], "role": role}
+
+
+# ── 7. List combinations ──────────────────────────────────────────────────────
+
+@router.get("/combinations")
+async def list_combinations(
+    run_id: Optional[str] = None,
+    confidence_level: Optional[str] = None,
+    combination_type: Optional[str] = None,
+    setup_family: Optional[str] = None,
+    tested: Optional[bool] = None,
+    overfit_risk: Optional[bool] = None,
+    min_champion_score: Optional[float] = None,
+    limit: int = Query(default=20, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    q = select(ProfileRuleCombination).where(ProfileRuleCombination.user_id == user_id)
+    if run_id:
+        try: q = q.where(ProfileRuleCombination.run_id == UUID(run_id))
+        except ValueError: pass
+    if confidence_level:
+        q = q.where(ProfileRuleCombination.confidence_level == confidence_level)
+    if combination_type:
+        q = q.where(ProfileRuleCombination.combination_type == combination_type)
+    if setup_family:
+        q = q.where(ProfileRuleCombination.setup_family == setup_family)
+    if tested is not None:
+        q = q.where(ProfileRuleCombination.is_tested_live_shadow == tested)
+    if overfit_risk is not None:
+        q = q.where(ProfileRuleCombination.overfit_risk == overfit_risk)
+    if min_champion_score is not None:
+        q = q.where(ProfileRuleCombination.champion_score >= min_champion_score)
+    q = q.order_by(ProfileRuleCombination.champion_score.desc().nullslast()).limit(limit)
+    combos = (await db.execute(q)).scalars().all()
+    return {"combinations": [_combo_to_dict(c) for c in combos]}
+
+
+# ── 8. Combination detail ─────────────────────────────────────────────────────
+
+@router.get("/combinations/{combination_id}")
+async def get_combination(
+    combination_id: str,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        cid = UUID(combination_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid combination_id")
+    result = await db.execute(
+        select(ProfileRuleCombination).where(
+            ProfileRuleCombination.id == cid,
+            ProfileRuleCombination.user_id == user_id,
+        )
+    )
+    combo = result.scalars().first()
+    if not combo:
+        raise HTTPException(status_code=404, detail="Combination not found")
+    return _combo_to_dict(combo)
+
+
+# ── 9. List suggestions ───────────────────────────────────────────────────────
+
+@router.get("/suggestions")
+async def list_suggestions(
+    run_id: Optional[str] = None,
+    status: Optional[str] = None,
+    confidence_level: Optional[str] = None,
+    family: Optional[str] = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    q = select(ProfileSuggestion).where(ProfileSuggestion.user_id == user_id)
+    if run_id:
+        try: q = q.where(ProfileSuggestion.run_id == UUID(run_id))
+        except ValueError: pass
+    if status:
+        q = q.where(ProfileSuggestion.status == status)
+    if confidence_level:
+        q = q.where(ProfileSuggestion.confidence_level == confidence_level)
+    if family:
+        q = q.where(ProfileSuggestion.suggested_profile_family == family)
+    q = q.order_by(ProfileSuggestion.confidence_score.desc().nullslast()).limit(limit)
+    suggestions = (await db.execute(q)).scalars().all()
+    return {"suggestions": [_sugg_to_dict(s) for s in suggestions]}
+
+
+# ── 10. Suggestion detail ─────────────────────────────────────────────────────
+
+@router.get("/suggestions/{suggestion_id}")
+async def get_suggestion(
+    suggestion_id: str,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        sid = UUID(suggestion_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid suggestion_id")
+    result = await db.execute(
+        select(ProfileSuggestion).where(
+            ProfileSuggestion.id == sid,
+            ProfileSuggestion.user_id == user_id,
+        )
+    )
+    s = result.scalars().first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    return _sugg_to_dict(s)
+
+
+# ── 11. Generate AI explanation ───────────────────────────────────────────────
+
+@router.post("/suggestions/{suggestion_id}/explain")
+async def explain_suggestion(
+    suggestion_id: str,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    try:
+        sid = UUID(suggestion_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid suggestion_id")
+    from ..services.profile_ai_explanation_service import ProfileAIExplanationService
+    svc = ProfileAIExplanationService()
+    explanation = await svc.explain_suggestion(db=db, user_id=user_id, suggestion_id=sid)
+    await db.commit()
+    return {"suggestion_id": suggestion_id, "explanation": explanation}
+
+
+# ── 12. Audit log ─────────────────────────────────────────────────────────────
+
+@router.get("/audit")
+async def get_audit_log(
+    run_id: Optional[str] = None,
+    suggestion_id: Optional[str] = None,
+    combination_id: Optional[str] = None,
+    event_type: Optional[str] = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    q = select(ProfileIntelligenceAuditLog).where(
+        ProfileIntelligenceAuditLog.user_id == user_id
+    )
+    if run_id:
+        try: q = q.where(ProfileIntelligenceAuditLog.run_id == UUID(run_id))
+        except ValueError: pass
+    if suggestion_id:
+        try: q = q.where(ProfileIntelligenceAuditLog.suggestion_id == UUID(suggestion_id))
+        except ValueError: pass
+    if combination_id:
+        try: q = q.where(ProfileIntelligenceAuditLog.combination_id == UUID(combination_id))
+        except ValueError: pass
+    if event_type:
+        q = q.where(ProfileIntelligenceAuditLog.event_type == event_type)
+    q = q.order_by(ProfileIntelligenceAuditLog.created_at.desc()).limit(limit)
+    rows = (await db.execute(q)).scalars().all()
+    return {"events": [_audit_to_dict(r) for r in rows]}
+
+
+# ── 13 & 14. Settings ─────────────────────────────────────────────────────────
+
+@router.get("/settings")
+async def get_settings(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    from ..services.config_service import config_service
+    try:
+        cfg = await config_service.get_config(db, "profile_intelligence", user_id)
+        settings = {**_DEFAULT_SETTINGS, **(cfg or {})}
+    except Exception:
+        settings = _DEFAULT_SETTINGS.copy()
+    return {"settings": settings}
+
+
+@router.put("/settings")
+async def update_settings(
+    payload: PISettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    from ..services.config_service import config_service
+    try:
+        current = await config_service.get_config(db, "profile_intelligence", user_id) or {}
+    except Exception:
+        current = {}
+
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    new_settings = {**_DEFAULT_SETTINGS, **current, **updates}
+
+    try:
+        await config_service.update_config(
+            db=db,
+            config_type="profile_intelligence",
+            user_id=user_id,
+            new_json=new_settings,
+            changed_by=user_id,
+            change_description="Profile Intelligence settings update",
+        )
+    except Exception as exc:
+        logger.warning("[PI API] config_service.update_config failed (%s), using direct upsert", exc)
+        await db.execute(text("""
+            INSERT INTO config_profiles (user_id, config_type, config_json, is_active, created_at, updated_at)
+            VALUES (:uid, 'profile_intelligence', :cfg::jsonb, true, NOW(), NOW())
+            ON CONFLICT DO NOTHING
+        """), {"uid": str(user_id), "cfg": json.dumps(new_settings)})
+        await db.execute(text("""
+            UPDATE config_profiles SET config_json = :cfg::jsonb, updated_at = NOW()
+            WHERE user_id = :uid AND config_type = 'profile_intelligence' AND is_active = true
+        """), {"uid": str(user_id), "cfg": json.dumps(new_settings)})
+        await db.commit()
+
+    return {"settings": new_settings}
+
+
+# ── Serialization helpers ─────────────────────────────────────────────────────
+
+def _run_to_dict(r: ProfileIntelligenceRun) -> dict:
+    return {
+        "id": str(r.id), "user_id": str(r.user_id),
+        "run_at": r.run_at.isoformat() if r.run_at else None,
+        "lookback_days": r.lookback_days, "min_closed_trades": r.min_closed_trades,
+        "status": r.status, "engine_version": r.engine_version,
+        "total_profiles": r.total_profiles, "total_shadow_trades": r.total_shadow_trades,
+        "total_closed_trades": r.total_closed_trades,
+        "base_win_rate": float(r.base_win_rate or 0),
+        "base_avg_pnl_pct": float(r.base_avg_pnl_pct or 0),
+        "base_tp_30m_rate": float(r.base_tp_30m_rate or 0),
+        "error_message": r.error_message,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    }
+
+
+def _ind_to_dict(s: ProfileIndicatorStats) -> dict:
+    return {
+        "id": str(s.id), "indicator": s.indicator, "bucket_label": s.bucket_label,
+        "total_cases": s.total_cases, "wins": s.wins, "losses": s.losses,
+        "win_rate": float(s.win_rate or 0),
+        "avg_pnl_pct": float(s.avg_pnl_pct or 0),
+        "avg_mae_pct": float(s.avg_mae_pct or 0),
+        "tp_30m_rate": float(s.tp_30m_rate or 0),
+        "lift_vs_base": float(s.lift_vs_base or 0),
+        "winner_presence_pct": float(s.winner_presence_pct or 0),
+        "loser_presence_pct": float(s.loser_presence_pct or 0),
+        "confidence_score": float(s.confidence_score or 0),
+        "confidence_level": s.confidence_level, "role_detected": s.role_detected,
+    }
+
+
+def _combo_to_dict(c: ProfileRuleCombination) -> dict:
+    return {
+        "id": str(c.id), "run_id": str(c.run_id),
+        "combination_hash": c.combination_hash,
+        "combination_type": c.combination_type, "setup_family": c.setup_family,
+        "suggested_name": c.suggested_name, "rules_json": c.rules_json,
+        "total_cases": c.total_cases, "wins": c.wins, "losses": c.losses,
+        "win_rate": float(c.win_rate or 0),
+        "avg_pnl_pct": float(c.avg_pnl_pct or 0),
+        "avg_mae_pct": float(c.avg_mae_pct or 0),
+        "tp_30m_rate": float(c.tp_30m_rate or 0),
+        "lift_vs_base": float(c.lift_vs_base or 0),
+        "champion_score": float(c.champion_score or 0),
+        "confidence_level": c.confidence_level,
+        "overfit_risk": c.overfit_risk,
+        "is_tested_live_shadow": c.is_tested_live_shadow,
+        "degradation_pct": float(c.degradation_pct or 0) if c.degradation_pct else None,
+        "discovery_metrics_json": c.discovery_metrics_json,
+        "validation_metrics_json": c.validation_metrics_json,
+        "status": c.status,
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+    }
+
+
+def _sugg_to_dict(s: ProfileSuggestion) -> dict:
+    return {
+        "id": str(s.id), "run_id": str(s.run_id),
+        "suggested_profile_name": s.suggested_profile_name,
+        "suggested_profile_description": s.suggested_profile_description,
+        "suggested_profile_family": s.suggested_profile_family,
+        "suggested_config_json": s.suggested_config_json,
+        "evidence_summary_json": s.evidence_summary_json,
+        "quantitative_explanation": s.quantitative_explanation,
+        "ai_explanation": s.ai_explanation,
+        "risk_notes": s.risk_notes,
+        "confidence_score": float(s.confidence_score or 0),
+        "confidence_level": s.confidence_level, "status": s.status,
+        "created_profile_id": str(s.created_profile_id) if s.created_profile_id else None,
+        "created_at": s.created_at.isoformat() if s.created_at else None,
+    }
+
+
+def _audit_to_dict(r: ProfileIntelligenceAuditLog) -> dict:
+    return {
+        "id": str(r.id), "event_type": r.event_type,
+        "event_description": r.event_description,
+        "run_id": str(r.run_id) if r.run_id else None,
+        "suggestion_id": str(r.suggestion_id) if r.suggestion_id else None,
+        "model_provider": r.model_provider, "model_name": r.model_name,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+    }
