@@ -40,3 +40,15 @@ class PISettingsUpdate(BaseModel):
     enable_dynamic_combinations: Optional[bool] = None
     enable_lightgbm: Optional[bool] = None
     enable_catboost: Optional[bool] = None
+
+
+class CreateProfileRequest(BaseModel):
+    profile_name: Optional[str] = None
+    profile_description: Optional[str] = None
+    mode: str = "SHADOW_ONLY"
+    confirm_low_confidence: bool = False
+    confirm_overfit_risk: bool = False
+    create_missing_master_rules: bool = True
+    reuse_existing_master_rules: bool = True
+    assign_to_watchlist_id: Optional[str] = None
+    dry_run: bool = False

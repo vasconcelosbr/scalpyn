@@ -139,6 +139,42 @@ interface AuditEntry {
   created_at: string;
 }
 
+interface CreateProfileDryRun {
+  status: "dry_run";
+  profile_payload: {
+    name: string;
+    description: string;
+    profile_type: string;
+    is_shadow_only: boolean;
+    live_trading_enabled: boolean;
+    config: {
+      signals?: { logic: string; conditions: any[] };
+      scoring?: { selected_rule_ids: string[]; weights: any; generated_rules: any[] };
+      block_rules?: { blocks: any[] };
+    };
+  };
+  master_rules_to_create: any[];
+  master_rules_to_reuse: any[];
+  master_rules_missing: any[];
+  selected_rule_ids: string[];
+  warnings: string[];
+  blocked_reasons: string[];
+  overfit_risk: boolean;
+  confidence_level: string | null;
+  confidence_score: number;
+}
+
+interface CreateProfileResult {
+  status: "created" | "already_created";
+  profile_id: string;
+  profile_name: string;
+  profile_url: string;
+  audit_id: string | null;
+  created_master_rules: any[];
+  reused_master_rules: any[];
+  warnings: string[];
+}
+
 interface PISettings {
   min_support?: number;
   min_closed_trades?: number;
@@ -282,7 +318,6 @@ export default function ProfileIntelligencePage() {
   const [expandedIndicator, setExpandedIndicator] = useState<string | null>(null);
   const [selectedCombination, setSelectedCombination] = useState<Combination | null>(null);
   const [selectedSuggestion, setSelectedSuggestion] = useState<Suggestion | null>(null);
-  const [prepareProfileSuggestion, setPrepareProfileSuggestion] = useState<Suggestion | null>(null);
   const [expandedAudit, setExpandedAudit] = useState<string | null>(null);
   const [showRunModal, setShowRunModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -292,6 +327,15 @@ export default function ProfileIntelligencePage() {
   const [savingSettings, setSavingSettings] = useState(false);
   const [explainingId, setExplainingId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+
+  // Create-profile flow
+  const [createProfileSuggestion, setCreateProfileSuggestion] = useState<Suggestion | null>(null);
+  const [createDryRunResult, setCreateDryRunResult] = useState<CreateProfileDryRun | null>(null);
+  const [createDryRunLoading, setCreateDryRunLoading] = useState(false);
+  const [createProfileLoading, setCreateProfileLoading] = useState(false);
+  const [createProfileResult, setCreateProfileResult] = useState<CreateProfileResult | null>(null);
+  const [confirmLowConfidence, setConfirmLowConfidence] = useState(false);
+  const [confirmOverfitRisk, setConfirmOverfitRisk] = useState(false);
 
   // Sort state for profiles table
   const [profileSort, setProfileSort] = useState<{ col: string; asc: boolean }>({ col: "win_rate", asc: false });
@@ -398,6 +442,60 @@ export default function ProfileIntelligencePage() {
       showToast(`Erro ao explicar: ${e.message}`, false);
     } finally {
       setExplainingId(null);
+    }
+  };
+
+  // ── Create Profile from Suggestion ──────────────────────────────────────────
+
+  const handleOpenCreateProfile = async (suggestion: Suggestion) => {
+    setCreateProfileSuggestion(suggestion);
+    setCreateDryRunResult(null);
+    setCreateProfileResult(null);
+    setConfirmLowConfidence(false);
+    setConfirmOverfitRisk(false);
+    setCreateDryRunLoading(true);
+    try {
+      const res = await apiPost(`/profile-intelligence/suggestions/${suggestion.id}/create-profile`, {
+        dry_run: true,
+        mode: "SHADOW_ONLY",
+        confirm_low_confidence: suggestion.confidence_level !== "LOW",
+        confirm_overfit_risk: false,
+        create_missing_master_rules: true,
+        reuse_existing_master_rules: true,
+      });
+      setCreateDryRunResult(res as CreateProfileDryRun);
+    } catch (e: any) {
+      showToast(`Dry-run falhou: ${e.message}`, false);
+      setCreateProfileSuggestion(null);
+    } finally {
+      setCreateDryRunLoading(false);
+    }
+  };
+
+  const handleConfirmCreateProfile = async () => {
+    if (!createProfileSuggestion) return;
+    setCreateProfileLoading(true);
+    try {
+      const res = await apiPost(`/profile-intelligence/suggestions/${createProfileSuggestion.id}/create-profile`, {
+        dry_run: false,
+        mode: "SHADOW_ONLY",
+        confirm_low_confidence: confirmLowConfidence || createProfileSuggestion.confidence_level !== "LOW",
+        confirm_overfit_risk: confirmOverfitRisk || !(createDryRunResult?.overfit_risk),
+        create_missing_master_rules: true,
+        reuse_existing_master_rules: true,
+      });
+      setCreateProfileResult(res as CreateProfileResult);
+      showToast(`Profile criado: ${(res as any).profile_name}`);
+      // Refresh suggestions list
+      const d = await apiGet("/profile-intelligence/suggestions?limit=50");
+      setSuggestions(d?.suggestions || d || []);
+      // Refresh audit
+      const a = await apiGet("/profile-intelligence/audit?limit=100");
+      setAudit(a?.audit_log || a?.logs || a || []);
+    } catch (e: any) {
+      showToast(`Erro ao criar profile: ${e.message}`, false);
+    } finally {
+      setCreateProfileLoading(false);
     }
   };
 
@@ -932,10 +1030,19 @@ export default function ProfileIntelligencePage() {
                               {explainingId === s.id ? "..." : "IA"}
                             </button>
                             <button
-                              className="btn btn-secondary text-[10px] px-2 py-1 whitespace-nowrap"
-                              onClick={() => setPrepareProfileSuggestion(s)}
+                              className={`btn text-[10px] px-2 py-1 whitespace-nowrap flex items-center gap-1 ${
+                                s.status === "created"
+                                  ? "btn-secondary opacity-50 cursor-not-allowed"
+                                  : !["pending_user_approval", "draft"].includes(s.status)
+                                  ? "btn-secondary opacity-40 cursor-not-allowed"
+                                  : "btn-primary"
+                              }`}
+                              onClick={() => ["pending_user_approval", "draft"].includes(s.status) && s.status !== "created" && handleOpenCreateProfile(s)}
+                              disabled={s.status === "created" || !["pending_user_approval", "draft"].includes(s.status)}
+                              title={s.status === "created" ? "Profile já criado" : "Criar profile a partir desta sugestão"}
                             >
-                              Draft
+                              <BarChart3 className="w-3 h-3" />
+                              {s.status === "created" ? "Criado" : "Criar"}
                             </button>
                           </div>
                         </td>
@@ -1263,76 +1370,208 @@ export default function ProfileIntelligencePage() {
                 <Copy className="w-3.5 h-3.5" /> Copy JSON
               </button>
               <button
-                className="btn btn-secondary text-[12px] flex items-center gap-1.5 flex-1"
-                onClick={() => { setSelectedSuggestion(null); setPrepareProfileSuggestion(selectedSuggestion); }}
+                className={`btn text-[12px] flex items-center gap-1.5 flex-1 ${
+                  selectedSuggestion.status === "created" || !["pending_user_approval","draft"].includes(selectedSuggestion.status)
+                    ? "btn-secondary opacity-40 cursor-not-allowed"
+                    : "btn-primary"
+                }`}
+                disabled={selectedSuggestion.status === "created" || !["pending_user_approval","draft"].includes(selectedSuggestion.status)}
+                onClick={() => { setSelectedSuggestion(null); handleOpenCreateProfile(selectedSuggestion); }}
               >
-                <BarChart3 className="w-3.5 h-3.5" /> Prepare Draft
+                <BarChart3 className="w-3.5 h-3.5" />
+                {selectedSuggestion.status === "created" ? "Já criado" : "Criar Profile"}
               </button>
             </div>
           </div>
         </Drawer>
       )}
 
-      {/* ── Prepare Profile Modal ─────────────────────────────────────────────── */}
-      {prepareProfileSuggestion && (
-        <Modal title="Prepare Profile Draft" onClose={() => setPrepareProfileSuggestion(null)}>
+      {/* ── Create Profile Confirmation Modal ────────────────────────────────── */}
+      {createProfileSuggestion && (
+        <Modal
+          title={createProfileResult ? "Profile Criado" : "Confirmar Criação de Profile"}
+          onClose={() => { setCreateProfileSuggestion(null); setCreateDryRunResult(null); setCreateProfileResult(null); }}
+        >
           <div className="space-y-4">
+
+            {/* Safety notice — always shown */}
             <div className="card p-3 border-yellow-500/20 bg-yellow-500/5">
               <div className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-yellow-400 shrink-0" />
+                <AlertTriangle className="w-4 h-4 text-yellow-400 shrink-0 mt-0.5" />
                 <div className="text-[11px] text-yellow-400 space-y-0.5">
-                  <p><strong>Perfis gerados por inteligência devem nascer como SHADOW_ONLY.</strong></p>
-                  <p>Live trading permanece desativado. Esta é uma visualização do que seria criado.</p>
+                  <p><strong>Perfis gerados por inteligência nascem como SHADOW_ONLY.</strong></p>
+                  <p>Live trading permanece desativado. Este perfil é uma hipótese analítica.</p>
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 text-[12px]">
-              <div className="card p-3">
-                <div className="text-[10px] text-[var(--text-tertiary)] uppercase">Nome</div>
-                <div className="text-[var(--text-primary)] font-medium">{prepareProfileSuggestion.suggested_profile_name}</div>
-              </div>
-              <div className="card p-3">
-                <div className="text-[10px] text-[var(--text-tertiary)] uppercase">Status Inicial</div>
-                <div className="text-yellow-400 font-medium">SHADOW_ONLY</div>
-              </div>
-              <div className="card p-3">
-                <div className="text-[10px] text-[var(--text-tertiary)] uppercase">Live Trading</div>
-                <div className="text-red-400 font-medium">DESATIVADO</div>
-              </div>
-              <div className="card p-3">
-                <div className="text-[10px] text-[var(--text-tertiary)] uppercase">Família</div>
-                <div className="text-[var(--text-primary)]">{prepareProfileSuggestion.suggested_profile_family || "—"}</div>
-              </div>
-            </div>
-
-            {prepareProfileSuggestion.suggested_config_json && (
-              <div>
-                <div className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">Config Completa</div>
-                <pre className="text-[10px] text-[var(--text-secondary)] bg-[var(--bg-input)] rounded p-3 overflow-x-auto max-h-56">
-                  {JSON.stringify(prepareProfileSuggestion.suggested_config_json, null, 2)}
-                </pre>
+            {/* Success state */}
+            {createProfileResult && (
+              <div className="space-y-4">
+                <div className="card p-4 border-green-500/30 bg-green-500/5">
+                  <div className="flex items-center gap-2 text-green-400 mb-2">
+                    <CheckCircle className="w-5 h-5" />
+                    <span className="font-semibold text-[13px]">Profile criado com sucesso!</span>
+                  </div>
+                  <div className="text-[11px] text-[var(--text-secondary)] space-y-1">
+                    <div>Nome: <strong className="text-[var(--text-primary)]">{createProfileResult.profile_name}</strong></div>
+                    <div>ID: <span className="font-mono text-[10px]">{createProfileResult.profile_id}</span></div>
+                    {createProfileResult.audit_id && <div>Audit: <span className="font-mono text-[10px]">{createProfileResult.audit_id}</span></div>}
+                    <div className="text-green-400">is_shadow_only: true | live_trading_enabled: false</div>
+                  </div>
+                </div>
+                {createProfileResult.warnings?.length > 0 && (
+                  <div className="text-[11px] text-yellow-400 space-y-1">
+                    {createProfileResult.warnings.map((w, i) => <div key={i}>⚠️ {w}</div>)}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <a href="/profiles" className="btn btn-primary text-[12px] flex items-center gap-1.5 flex-1 justify-center">
+                    <ExternalLink className="w-3.5 h-3.5" /> Abrir em Profiles
+                  </a>
+                  <button
+                    className="btn btn-secondary text-[12px] flex-1"
+                    onClick={() => { setCreateProfileSuggestion(null); setCreateDryRunResult(null); setCreateProfileResult(null); }}
+                  >
+                    Fechar
+                  </button>
+                </div>
               </div>
             )}
 
-            <div className="flex gap-2">
-              <button
-                className="btn btn-secondary text-[12px] flex items-center gap-1.5 flex-1"
-                onClick={() => { navigator.clipboard.writeText(JSON.stringify(prepareProfileSuggestion.suggested_config_json, null, 2)); showToast("JSON copiado!"); }}
-              >
-                <Copy className="w-3.5 h-3.5" /> Copy JSON
-              </button>
-              <a href="/profiles" className="btn btn-secondary text-[12px] flex items-center gap-1.5 flex-1 justify-center">
-                <ExternalLink className="w-3.5 h-3.5" /> Open Profiles
-              </a>
-              <button
-                disabled
-                title="Endpoint de criação automática ainda não implementado nesta fase."
-                className="btn btn-primary text-[12px] flex-1 opacity-40 cursor-not-allowed"
-              >
-                Create Profile
-              </button>
-            </div>
+            {/* Loading dry-run */}
+            {!createProfileResult && createDryRunLoading && (
+              <div className="text-center py-6 text-[12px] text-[var(--text-secondary)]">
+                <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-[var(--accent-primary)]" />
+                Verificando viabilidade da criação...
+              </div>
+            )}
+
+            {/* Dry-run preview */}
+            {!createProfileResult && !createDryRunLoading && createDryRunResult && (
+              <div className="space-y-4">
+                {/* Profile preview */}
+                <div className="grid grid-cols-2 gap-2 text-[11px]">
+                  {[
+                    ["Nome", createDryRunResult.profile_payload?.name || "—"],
+                    ["Tipo", createDryRunResult.profile_payload?.profile_type || "GENERATED"],
+                    ["Shadow Only", "true"],
+                    ["Live Trading", "DESATIVADO"],
+                    ["Confidence", `${createDryRunResult.confidence_level} (${createDryRunResult.confidence_score?.toFixed(1)})`],
+                    ["Overfit Risk", createDryRunResult.overfit_risk ? "⚠️ Sim" : "Não"],
+                  ].map(([k, v]) => (
+                    <div key={k} className="bg-[var(--bg-elevated)] rounded p-2">
+                      <div className="text-[10px] text-[var(--text-tertiary)]">{k}</div>
+                      <div className={`font-medium ${k === "Live Trading" ? "text-red-400" : "text-[var(--text-primary)]"}`}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Signals */}
+                {createDryRunResult.profile_payload?.config?.signals?.conditions?.length > 0 && (
+                  <div>
+                    <div className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">
+                      Signals ({createDryRunResult.profile_payload.config.signals.conditions.length})
+                    </div>
+                    <div className="space-y-1">
+                      {createDryRunResult.profile_payload.config.signals.conditions.map((c: any, i: number) => (
+                        <div key={i} className="font-mono text-[10px] bg-[var(--bg-input)] rounded px-2 py-1.5 text-[var(--text-primary)]">
+                          {c.indicator || c.field} {c.operator} {c.value}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Block rules */}
+                {createDryRunResult.profile_payload?.config?.block_rules?.blocks?.length > 0 && (
+                  <div>
+                    <div className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">
+                      Block Rules ({createDryRunResult.profile_payload.config.block_rules.blocks.length})
+                    </div>
+                    <div className="space-y-1">
+                      {createDryRunResult.profile_payload.config.block_rules.blocks.map((b: any, i: number) => (
+                        <div key={i} className="font-mono text-[10px] bg-[var(--bg-input)] rounded px-2 py-1.5 text-red-400">
+                          BLOCK: {b.indicator || b.field} {b.operator} {b.value}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Master rules */}
+                {(createDryRunResult.master_rules_to_create?.length > 0 || createDryRunResult.master_rules_to_reuse?.length > 0) && (
+                  <div>
+                    <div className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">Scoring Rules Master</div>
+                    <div className="space-y-1">
+                      {createDryRunResult.master_rules_to_create?.map((r: any) => (
+                        <div key={r.id} className="text-[10px] bg-green-500/10 border border-green-500/20 rounded px-2 py-1 text-green-400">
+                          + NOVA: {r.name || r.indicator} ({r.points}pts)
+                        </div>
+                      ))}
+                      {createDryRunResult.master_rules_to_reuse?.map((r: any) => (
+                        <div key={r.id} className="text-[10px] bg-[var(--bg-elevated)] rounded px-2 py-1 text-[var(--text-secondary)]">
+                          ↩ Reutilizar: {r.name || r.indicator}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Warnings */}
+                {createDryRunResult.warnings?.length > 0 && (
+                  <div className="space-y-1">
+                    {createDryRunResult.warnings.map((w, i) => (
+                      <div key={i} className="text-[10px] text-yellow-400 flex items-start gap-1">
+                        <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />{w}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Confirmation toggles for gated cases */}
+                {createDryRunResult.confidence_level === "LOW" && (
+                  <label className="flex items-center gap-2 text-[12px] cursor-pointer">
+                    <input type="checkbox" checked={confirmLowConfidence} onChange={e => setConfirmLowConfidence(e.target.checked)} className="w-4 h-4" />
+                    <span className="text-yellow-400">Confirmo: estou ciente de que esta sugestão tem LOW confidence (menos de 30 trades).</span>
+                  </label>
+                )}
+                {createDryRunResult.overfit_risk && (
+                  <label className="flex items-center gap-2 text-[12px] cursor-pointer">
+                    <input type="checkbox" checked={confirmOverfitRisk} onChange={e => setConfirmOverfitRisk(e.target.checked)} className="w-4 h-4" />
+                    <span className="text-yellow-400">Confirmo: estou ciente do risco de overfitting nesta combinação.</span>
+                  </label>
+                )}
+
+                {/* Final actions */}
+                <div className="flex gap-2 pt-1 border-t border-[var(--border-subtle)]">
+                  <button
+                    className="btn btn-secondary text-[12px] flex-1"
+                    onClick={() => { setCreateProfileSuggestion(null); setCreateDryRunResult(null); }}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    className={`btn btn-primary text-[12px] flex-1 flex items-center justify-center gap-1.5 ${
+                      createProfileLoading ? "opacity-70" : ""
+                    } ${
+                      (createDryRunResult.confidence_level === "LOW" && !confirmLowConfidence) ||
+                      (createDryRunResult.overfit_risk && !confirmOverfitRisk)
+                        ? "opacity-40 cursor-not-allowed" : ""
+                    }`}
+                    disabled={
+                      createProfileLoading ||
+                      (createDryRunResult.confidence_level === "LOW" && !confirmLowConfidence) ||
+                      (createDryRunResult.overfit_risk && !confirmOverfitRisk)
+                    }
+                    onClick={handleConfirmCreateProfile}
+                  >
+                    <BarChart3 className={`w-3.5 h-3.5 ${createProfileLoading ? "animate-pulse" : ""}`} />
+                    {createProfileLoading ? "Criando..." : "Criar Profile SHADOW_ONLY"}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </Modal>
       )}

@@ -19,7 +19,7 @@ from ..models.profile_intelligence import (
     ProfileIntelligenceAuditLog,
 )
 from .config import get_current_user_id
-from ..schemas.profile_intelligence import RunRequest, RunResponse, PISettingsUpdate
+from ..schemas.profile_intelligence import RunRequest, RunResponse, PISettingsUpdate, CreateProfileRequest
 
 logger = logging.getLogger(__name__)
 
@@ -418,7 +418,74 @@ async def get_suggestion(
     return _sugg_to_dict(s)
 
 
-# ── 11. Generate AI explanation ───────────────────────────────────────────────
+# ── 11. Create profile from suggestion ───────────────────────────────────────
+
+@router.post("/suggestions/{suggestion_id}/create-profile")
+async def create_profile_from_suggestion(
+    suggestion_id: str,
+    payload: CreateProfileRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """
+    Transform a suggestion into a new Strategy Profile.
+
+    Security guarantees:
+    - Profile always created with is_shadow_only=True, live_trading_enabled=False.
+    - Only SHADOW_ONLY and DRAFT modes accepted.
+    - Low confidence and overfit risk require explicit confirmation.
+    - Full audit trail regardless of outcome.
+    - Idempotent: same suggestion returns same profile.
+    - dry_run=True previews without writing.
+    """
+    try:
+        sid = UUID(suggestion_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid suggestion_id")
+
+    if payload.mode not in ("SHADOW_ONLY", "DRAFT"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Mode '{payload.mode}' não é suportado. "
+                "Live trading permanece desativado. Use SHADOW_ONLY ou DRAFT."
+            ),
+        )
+
+    from ..services.profile_create_service import ProfileCreateService
+    svc = ProfileCreateService()
+
+    try:
+        result = await svc.create_from_suggestion(
+            db=db,
+            user_id=user_id,
+            suggestion_id=sid,
+            profile_name=payload.profile_name,
+            profile_description=payload.profile_description,
+            mode=payload.mode,
+            confirm_low_confidence=payload.confirm_low_confidence,
+            confirm_overfit_risk=payload.confirm_overfit_risk,
+            create_missing_master_rules=payload.create_missing_master_rules,
+            reuse_existing_master_rules=payload.reuse_existing_master_rules,
+            assign_to_watchlist_id=payload.assign_to_watchlist_id,
+            dry_run=payload.dry_run,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        logger.error("[PI API] create-profile failed for suggestion %s: %s", suggestion_id, exc)
+        raise HTTPException(status_code=500, detail=f"Erro interno ao criar profile: {exc!s:.200}")
+
+    status = result.get("status")
+    if status == "blocked":
+        raise HTTPException(status_code=409, detail=result)
+
+    return result
+
+
+# ── 11b. Generate AI explanation ──────────────────────────────────────────────
 
 @router.post("/suggestions/{suggestion_id}/explain")
 async def explain_suggestion(
