@@ -2647,7 +2647,7 @@ _INSERT_STRATEGY_LAB_SQL = text("""
         CAST(:profile_id AS UUID), :profile_version, :profile_name,
         :strategy_type, CAST(:rules_snapshot AS JSONB)
     )
-    ON CONFLICT ON CONSTRAINT uq_shadow_lab_profile_symbol_bucket DO NOTHING
+    ON CONFLICT DO NOTHING
     RETURNING id
 """)
 
