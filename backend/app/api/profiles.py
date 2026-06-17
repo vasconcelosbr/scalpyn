@@ -55,6 +55,14 @@ def _profile_to_dict(profile: Profile) -> Dict[str, Any]:
             if getattr(profile, 'preset_ia_last_run', None) else None
         ),
         "preset_ia_config": getattr(profile, 'preset_ia_config', None),
+        # Profile Intelligence fields (migration 081)
+        "profile_type":          getattr(profile, 'profile_type', 'STANDARD'),
+        "profile_version": (
+            profile.profile_version.isoformat()
+            if getattr(profile, 'profile_version', None) else None
+        ),
+        "is_shadow_only":        getattr(profile, 'is_shadow_only', False),
+        "live_trading_enabled":  getattr(profile, 'live_trading_enabled', False),
         "created_at": profile.created_at.isoformat() if profile.created_at else None,
         "updated_at": profile.updated_at.isoformat() if profile.updated_at else None,
     }
@@ -134,7 +142,8 @@ async def create_profile(
         name=name,
         description=payload.get("description", ""),
         is_active=payload.get("is_active", True),
-        config=validated_config
+        config=validated_config,
+        profile_type=payload.get("profile_type", "STANDARD"),
     )
     
     db.add(profile)
@@ -158,7 +167,10 @@ async def update_profile(
     
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    
+
+    _prev_config = profile.config
+    _config_changed = False
+
     if "name" in payload:
         profile.name = payload["name"]
     if "description" in payload:
@@ -167,15 +179,34 @@ async def update_profile(
         profile.is_active = payload["is_active"]
     if "config" in payload:
         profile.config = _validate_profile_config(payload["config"])
+        _config_changed = True
     # Salvar papel do profile no pipeline
     if "profile_role" in payload:
         profile.profile_role = payload["profile_role"]
     if "pipeline_order" in payload:
         profile.pipeline_order = str(payload["pipeline_order"]) if payload["pipeline_order"] is not None else "99"
-    
+
+    if _config_changed:
+        from datetime import datetime, timezone as _tz
+        from ..models.profile_audit_log import ProfileAuditLog
+        _old_version = getattr(profile, 'profile_version', None)
+        _new_version = datetime.now(_tz.utc)
+        profile.profile_version = _new_version
+        db.add(ProfileAuditLog(
+            user_id=user_id,
+            profile_id=profile.id,
+            changed_by=user_id,
+            change_source="api",
+            change_description="config updated via PUT /profiles/{id}",
+            previous_config=_prev_config,
+            new_config=profile.config,
+            previous_profile_version=_old_version,
+            new_profile_version=_new_version,
+        ))
+
     await db.commit()
     await db.refresh(profile)
-    
+
     return _profile_to_dict(profile)
 
 

@@ -1456,6 +1456,9 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             event_type=decision.get("event_type"),
             user_id=user_id,
             created_at=decision.get("created_at"),
+            profile_id=decision.get("_profile_id"),
+            profile_name=decision.get("_profile_name"),
+            profile_version=decision.get("_profile_version"),
         ))
     db.add_all(rows)
     await db.flush()
@@ -2228,11 +2231,19 @@ async def _run_pipeline_scan():
 
         profile_ids = {wl.profile_id for wl in wl_snapshots if wl.profile_id}
         profile_config_map = {}
+        profile_meta_map: dict = {}
         if profile_ids:
             profile_rows = (await db.execute(
                 select(Profile).where(Profile.id.in_(profile_ids))
             )).scalars().all()
             profile_config_map = {row.id: row.config for row in profile_rows}
+            profile_meta_map   = {
+                row.id: {
+                    "name":    row.name,
+                    "version": getattr(row, "profile_version", None),
+                }
+                for row in profile_rows
+            }
 
         wl_snapshots.sort(
             key=lambda wl: (
@@ -2960,6 +2971,35 @@ async def _run_pipeline_scan():
                         wl.name, len(decisions), _allow_count, _block_count, len(profile_passed),
                         " [ML_GATE_ON]" if _ml_gate_enabled else "",
                     )
+
+                    # ── Opportunity Snapshots — captures every evaluated asset ──
+                    try:
+                        from ..models.opportunity_snapshot import OpportunitySnapshot as _OppSnap
+                        _opp_rows = []
+                        _opp_prof_id = wl.profile_id
+                        for _od in decisions:
+                            _feats = (_od.get("metrics") or {}).get("indicators_snapshot") or {}
+                            _is_allow = _od.get("decision") == "ALLOW"
+                            _opp_rows.append(_OppSnap(
+                                user_id=wl.user_id,
+                                symbol=_od["symbol"],
+                                watchlist_id=wl.id,
+                                execution_id=str(execution_id),
+                                source="L3_GATE",
+                                timeframe=_od.get("timeframe"),
+                                price=(_od.get("_asset") or {}).get("price"),
+                                features_json=_feats,
+                                profiles_evaluated=[_opp_prof_id] if _opp_prof_id else None,
+                                profiles_approved=[_opp_prof_id] if (_opp_prof_id and _is_allow) else None,
+                                profiles_rejected=[_opp_prof_id] if (_opp_prof_id and not _is_allow) else None,
+                                rejection_reasons={"reasons": _od.get("reasons")} if _od.get("reasons") and not _is_allow else None,
+                                active_profiles_result_json={"decision": _od.get("decision"), "score": _od.get("score")},
+                            ))
+                        if _opp_rows:
+                            db.add_all(_opp_rows)
+                    except Exception as _opp_exc:
+                        logger.debug("[OpportunitySnapshot] capture failed: %s", _opp_exc)
+
                     signals = [
                         {
                             "symbol": decision["symbol"],
@@ -3026,6 +3066,11 @@ async def _run_pipeline_scan():
                             wl.name, _dl_cfg_exc,
                         )
 
+                    # Profile attribution for this watchlist's decisions_log rows
+                    _wl_prof_meta = profile_meta_map.get(wl.profile_id) if wl.profile_id else {}
+                    _wl_profile_name    = (_wl_prof_meta or {}).get("name")
+                    _wl_profile_version = (_wl_prof_meta or {}).get("version")
+
                     prior_states = _prior_decision_states(redis, wl_id)
                     prior_visibility = _prior_l3_visibility(redis, wl_id)
                     new_states: dict = {}
@@ -3069,6 +3114,9 @@ async def _run_pipeline_scan():
                         }
                         if should_log:
                             d["event_type"] = event_type
+                            d["_profile_id"]      = wl.profile_id
+                            d["_profile_name"]    = _wl_profile_name
+                            d["_profile_version"] = _wl_profile_version
                             decisions_to_log.append(d)
                     # ── L3_VISIBLE diagnostic (TEMP) — remove once root cause confirmed ──
                     _event_breakdown: dict = {}

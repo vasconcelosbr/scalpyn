@@ -1,5 +1,6 @@
 from sqlalchemy import BigInteger, Column, String, Boolean, DateTime, Float, Integer, Text, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.types import TIMESTAMP
 import uuid
 from datetime import datetime, timezone
 from ..database import Base
@@ -43,6 +44,11 @@ class DecisionLog(Base):
     outcome = Column(String(20), nullable=True)        # 'tp' | 'sl' | 'timeout'
     pnl_pct = Column(Float, nullable=True)
     holding_seconds = Column(Integer, nullable=True)
+
+    # Profile attribution (migration 082) — NULL = legacy global decision
+    profile_id      = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True)
+    profile_name    = Column(String(255),          nullable=True)
+    profile_version = Column(TIMESTAMP(timezone=True), nullable=True)
 
 
 class AssetTrace(Base):

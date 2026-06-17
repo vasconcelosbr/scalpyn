@@ -2,6 +2,7 @@
 
 from sqlalchemy import Column, String, Boolean, DateTime, Text, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.types import TIMESTAMP
 import uuid
 from datetime import datetime, timezone
 from ..database import Base
@@ -72,6 +73,14 @@ class Profile(Base):
     auto_pilot_config  = Column(JSONB,    nullable=False, default=dict)
     preset_ia_last_run = Column(DateTime(timezone=True), nullable=True)
     preset_ia_config   = Column(JSONB,    nullable=True)
+
+    # ── Profile Intelligence fields (migration 081) ───────────────────────────
+    profile_type                 = Column(String(20),              nullable=False, default="STANDARD")
+    profile_version              = Column(TIMESTAMP(timezone=True), nullable=True)
+    generated_by                 = Column(String(100),             nullable=True)
+    generated_from_suggestion_id = Column(UUID(as_uuid=True),      nullable=True)
+    is_shadow_only               = Column(Boolean,                 nullable=False, default=False)
+    live_trading_enabled         = Column(Boolean,                 nullable=False, default=False)
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

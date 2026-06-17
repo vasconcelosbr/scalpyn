@@ -17,6 +17,10 @@ from .trade_tracking import TradeTracking
 from .exchange_execution import ExchangeExecution
 from .position_lifecycle import PositionLifecycle
 from .shadow_trade import ShadowTrade
+from .opportunity_snapshot import OpportunitySnapshot
+from .profile_metrics import ProfileMetrics
+from .rule_contribution import RuleContribution
+from .profile_audit_log import ProfileAuditLog
 
 __all__ = [
     "User",
@@ -46,4 +50,8 @@ __all__ = [
     "ExchangeExecution",
     "PositionLifecycle",
     "ShadowTrade",
+    "OpportunitySnapshot",
+    "ProfileMetrics",
+    "RuleContribution",
+    "ProfileAuditLog",
 ]
