@@ -337,6 +337,33 @@ def _build_combination_hash(name: str, user_id: UUID) -> str:
     return hashlib.sha256(f"{name}|{user_id}".encode()).hexdigest()[:32]
 
 
+def _normalize_rule_value(v: Any) -> str:
+    """Canonical string for a rule value — floats stripped of trailing zeros."""
+    if isinstance(v, float):
+        return f"{v:.8f}".rstrip("0").rstrip(".")
+    if isinstance(v, int):
+        return str(v)
+    return str(v) if v is not None else ""
+
+
+def _canonical_rule_str(rule: dict) -> str:
+    indicator = rule.get("indicator") or rule.get("field") or rule.get("item") or ""
+    operator = str(rule.get("operator") or "")
+    value = _normalize_rule_value(rule.get("value"))
+    return f"{indicator}|{operator}|{value}"
+
+
+def _build_canonical_rules_hash(rules: list, user_id: UUID) -> str:
+    """Stable hash based on sorted, normalised rules — independent of run_id.
+
+    Sorting ensures {A ∧ B} and {B ∧ A} produce the same hash.
+    Normalisation ensures 0.2 and 0.20 produce the same hash.
+    """
+    canonical = sorted(_canonical_rule_str(r) for r in rules)
+    payload = "||".join(canonical) + f"|{user_id}"
+    return hashlib.sha256(payload.encode()).hexdigest()[:32]
+
+
 def _confidence_level_from_count(n: int) -> str:
     if n == 0:
         return "NO_DATA"
@@ -543,6 +570,8 @@ class DynamicCombinationGenerator:
 
         saved = 0
         results = []
+        # In-memory dedup guard: same canonical rules within this run → skip
+        _seen_hashes: set = set()
 
         # Generate combinations of size 2, 3, 4
         for size in (2, 3, 4):
@@ -560,9 +589,11 @@ class DynamicCombinationGenerator:
                 rules = _build_rules_from_buckets(combo)
 
                 combo_name = "_AND_".join(b["bucket_label"] for b in combo)
-                combination_hash = _build_combination_hash(
-                    f"DYN|{run_id}|{combo_name}", user_id
-                )
+                # Canonical hash: stable across runs, based on sorted+normalised rules
+                combination_hash = _build_canonical_rules_hash(rules, user_id)
+                if combination_hash in _seen_hashes:
+                    continue
+                _seen_hashes.add(combination_hash)
 
                 matching = [t for t in disc_trades if _evaluate_rules(t["features"], rules)]
                 m = _compute_metrics_from_trades(matching)

@@ -351,6 +351,9 @@ export default function ProfileIntelligencePage() {
   // Duplicate profile group drawer
   const [selectedDuplicateGroup, setSelectedDuplicateGroup] = useState<ProfileRanking[] | null>(null);
 
+  // Combination dedup toggle
+  const [hideComboDuplicates, setHideComboDuplicates] = useState(true);
+
   // Generate suggestion from combination
   const [generatingSuggestion, setGeneratingSuggestion] = useState(false);
   const [lastGeneratedSuggestionId, setLastGeneratedSuggestionId] = useState<string | null>(null);
@@ -592,6 +595,39 @@ export default function ProfileIntelligencePage() {
       _count: items.length,
     };
   }
+
+  // ── Combination deduplication ────────────────────────────────────────────────
+
+  function buildComboCanonicalKey(rules_json: any[] | null | undefined): string {
+    if (!rules_json?.length) return "";
+    return rules_json
+      .map(r => {
+        const indicator = r.indicator || r.field || r.item || "";
+        const operator = r.operator || "";
+        const raw = r.value;
+        const value = typeof raw === "number"
+          ? raw.toFixed(8).replace(/\.?0+$/, "")
+          : String(raw ?? "");
+        return `${indicator}|${operator}|${value}`;
+      })
+      .sort()
+      .join("||");
+  }
+
+  const displayedCombinations = useMemo(() => {
+    if (!hideComboDuplicates) return combinations;
+    const best = new Map<string, Combination>();
+    for (const c of combinations) {
+      const key = buildComboCanonicalKey(c.rules_json) || c.id;
+      const existing = best.get(key);
+      if (!existing || (c.champion_score ?? 0) > (existing.champion_score ?? 0)) {
+        best.set(key, c);
+      }
+    }
+    return [...best.values()].sort((a, b) => (b.champion_score ?? 0) - (a.champion_score ?? 0));
+  }, [combinations, hideComboDuplicates]);
+
+  const hiddenComboCount = combinations.length - displayedCombinations.length;
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -1017,10 +1053,28 @@ export default function ProfileIntelligencePage() {
         <div className="space-y-4">
           <div className="card">
             <div className="p-4 border-b border-[var(--border-default)]">
-              <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">Combinações Descobertas</h2>
-              <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">
-                Candidatos — evidência parcial, requerem validação em shadow antes de qualquer uso operacional.
-              </p>
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div>
+                  <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">Combinações Descobertas</h2>
+                  <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">
+                    Candidatos — evidência parcial, requerem validação em shadow antes de qualquer uso operacional.
+                  </p>
+                </div>
+                <label className="flex items-center gap-2 text-[12px] cursor-pointer select-none shrink-0">
+                  <div
+                    className={`relative w-8 h-4 rounded-full transition-colors ${hideComboDuplicates ? "bg-blue-600" : "bg-[var(--bg-hover)]"}`}
+                    onClick={() => setHideComboDuplicates(v => !v)}
+                  >
+                    <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${hideComboDuplicates ? "translate-x-4" : "translate-x-0.5"}`} />
+                  </div>
+                  <span className="text-[var(--text-secondary)]">
+                    Ocultar duplicatas
+                    {hideComboDuplicates && hiddenComboCount > 0 && (
+                      <span className="ml-1 text-[10px] text-[var(--text-tertiary)]">({hiddenComboCount} ocultadas)</span>
+                    )}
+                  </span>
+                </label>
+              </div>
             </div>
             {loadingTab ? <TableSkeleton /> : combinations.length === 0 ? (
               <EmptyState message="Nenhuma combinação descoberta. Execute uma análise com lookback maior ou reduza min_closed_trades." onRun={() => setShowRunModal(true)} />
@@ -1035,7 +1089,7 @@ export default function ProfileIntelligencePage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[var(--border-subtle)]">
-                    {combinations.map(c => (
+                    {displayedCombinations.map(c => (
                       <tr key={c.id} className="hover:bg-[var(--bg-elevated)] transition-colors">
                         <td className="px-4 py-2.5">
                           <div className="font-medium text-[var(--text-primary)] max-w-[200px] truncate">{c.suggested_name || `combination_${c.id.slice(0, 8)}`}</div>
