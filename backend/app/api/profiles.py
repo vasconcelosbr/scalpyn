@@ -163,7 +163,10 @@ async def create_profile(
 
     # Validate config structure
     config = payload.get("config", {})
-    validated_config = _validate_profile_config(config)
+    try:
+        validated_config = _validate_profile_config(config)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     profile = Profile(
         user_id=user_id,
@@ -219,7 +222,10 @@ async def update_profile(
     if "is_active" in payload:
         profile.is_active = payload["is_active"]
     if "config" in payload:
-        profile.config = _validate_profile_config(payload["config"])
+        try:
+            profile.config = _validate_profile_config(payload["config"])
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
         _config_changed = True
     # Salvar papel do profile no pipeline
     if "profile_role" in payload:
@@ -513,8 +519,11 @@ def _validate_profile_config(config: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     for cond in validated["filters"]["conditions"]:
-        if "field" not in cond:
+        field = cond.get("field") or cond.get("indicator")
+        if not field:
             raise ValueError("Filter condition missing 'field'")
+        cond["field"] = field
+        cond.pop("indicator", None)
         if "operator" not in cond:
             cond["operator"] = "=="
 
@@ -548,8 +557,11 @@ def _validate_profile_config(config: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     for cond in validated["signals"]["conditions"]:
-        if "field" not in cond:
+        field = cond.get("field") or cond.get("indicator")
+        if not field:
             raise ValueError("Signal condition missing 'field'")
+        cond["field"] = field
+        cond.pop("indicator", None)
         if "operator" not in cond:
             cond["operator"] = "=="
 

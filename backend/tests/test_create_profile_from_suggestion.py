@@ -20,7 +20,9 @@ import pytest
 from app.services.profile_create_service import (
     ProfileCreateService,
     _check_forbidden,
+    _build_profile_config,
     _normalize_rule,
+    _normalize_signal_condition,
     _normalize_value,
     _stable_rule_id,
     ensure_master_scoring_rules,
@@ -157,6 +159,32 @@ class TestNormalization:
     def test_normalize_rule_keeps_indicator(self):
         r = _normalize_rule({"indicator": "adx", "operator": ">=", "value": 25})
         assert r["indicator"] == "adx"
+
+    def test_normalize_signal_condition_uses_field_contract(self):
+        r = _normalize_signal_condition(
+            {"indicator": "volume_spike", "operator": ">=", "value": 1.2}
+        )
+        assert r["field"] == "volume_spike"
+        assert "indicator" not in r
+
+    def test_build_profile_config_preserves_distinct_signal_indicators(self):
+        suggestion = _make_suggestion(signals={
+            "logic": "AND",
+            "conditions": [
+                {"field": "rsi", "operator": ">=", "value": 72},
+                {"field": "volume_spike", "operator": ">=", "value": 1.2},
+                {"field": "orderbook_depth_usdt", "operator": ">=", "value": 20000},
+            ],
+        })
+
+        config = _build_profile_config(suggestion, [], [], "SHADOW_ONLY")
+
+        assert [c["field"] for c in config["signals"]["conditions"]] == [
+            "rsi",
+            "volume_spike",
+            "orderbook_depth_usdt",
+        ]
+        assert config["entry_triggers"]["conditions"] == config["signals"]["conditions"]
 
     def test_check_forbidden_detects_outcome(self):
         conds = [{"field": "outcome", "operator": "=", "value": "TP_HIT"}]

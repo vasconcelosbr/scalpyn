@@ -79,6 +79,13 @@ def _normalize_rule(rule: dict) -> dict:
     return r
 
 
+def _normalize_signal_condition(rule: dict) -> dict:
+    """Normalize a profile signal using the canonical ``field`` key."""
+    r = _normalize_rule(rule)
+    r["field"] = r.pop("indicator", "")
+    return r
+
+
 def _check_forbidden(conditions: List[dict]) -> List[str]:
     """Return list of forbidden field names found in conditions."""
     bad = []
@@ -282,7 +289,7 @@ def _build_profile_config(
     )
     signals = {
         "logic": signals_logic,
-        "conditions": [_normalize_rule(c) for c in signals_conditions],
+        "conditions": [_normalize_signal_condition(c) for c in signals_conditions],
     }
 
     # Block rules

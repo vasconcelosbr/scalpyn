@@ -305,13 +305,24 @@ function normalizeEntryTrigger(raw: any): EntryTrigger {
   };
 }
 
+function normalizeBuilderCondition(raw: any, index: number) {
+  const { indicator, ...condition } = raw || {};
+  return {
+    ...condition,
+    id: condition.id || `cond_loaded_${index}`,
+    field: condition.field || indicator || "rsi",
+    operator: condition.operator || "==",
+    value: condition.value,
+  };
+}
+
 function normalizeProfileConfig(rawConfig: any) {
   return {
     ...DEFAULT_CONFIG,
     ...(rawConfig || {}),
     signals: {
       logic: rawConfig?.signals?.logic || "AND",
-      conditions: rawConfig?.signals?.conditions || [],
+      conditions: (rawConfig?.signals?.conditions || []).map(normalizeBuilderCondition),
       scoring: rawConfig?.signals?.scoring ?? { ...DEFAULT_SCORING_CONFIG },
     },
     block_rules: {
