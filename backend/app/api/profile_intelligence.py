@@ -52,6 +52,8 @@ async def get_overview(
     user_id: UUID = Depends(get_current_user_id),
 ) -> Dict[str, Any]:
     """Returns a summary of the last PI Engine run for the current user."""
+    uid_str = str(user_id)
+
     # Last run
     run_result = await db.execute(
         select(ProfileIntelligenceRun)
@@ -61,17 +63,34 @@ async def get_overview(
     )
     last_run = run_result.scalars().first()
 
+    # Total runs
+    total_runs_count = (await db.execute(text(
+        "SELECT COUNT(*) FROM profile_intelligence_runs WHERE user_id = :uid"
+    ), {"uid": uid_str})).scalar() or 0
+
     # Pending suggestions count
     pending_count = (await db.execute(text("""
         SELECT COUNT(*) FROM profile_suggestions
         WHERE user_id = :uid AND status = 'pending_user_approval'
-    """), {"uid": str(user_id)})).scalar() or 0
+    """), {"uid": uid_str})).scalar() or 0
+
+    # High-confidence suggestions
+    high_conf_count = (await db.execute(text("""
+        SELECT COUNT(*) FROM profile_suggestions
+        WHERE user_id = :uid AND confidence_level = 'HIGH'
+          AND status NOT IN ('rejected', 'archived')
+    """), {"uid": uid_str})).scalar() or 0
+
+    # Total combinations (all-time)
+    total_combos_count = (await db.execute(text(
+        "SELECT COUNT(*) FROM profile_rule_combinations WHERE user_id = :uid"
+    ), {"uid": uid_str})).scalar() or 0
 
     # Combinations count (not yet shadow-tested)
     untested_count = (await db.execute(text("""
         SELECT COUNT(*) FROM profile_rule_combinations
         WHERE user_id = :uid AND is_tested_live_shadow = false
-    """), {"uid": str(user_id)})).scalar() or 0
+    """), {"uid": uid_str})).scalar() or 0
 
     # Best combination
     best_combo_result = await db.execute(
@@ -81,6 +100,24 @@ async def get_overview(
         .limit(1)
     )
     best_combo = best_combo_result.scalars().first()
+
+    # Best profile (top win rate, min 30 closed trades, last 60 days)
+    best_profile_row = (await db.execute(text("""
+        SELECT
+            profile_name,
+            COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')) AS closed,
+            COUNT(*) FILTER (WHERE outcome = 'TP_HIT') AS wins
+        FROM shadow_trades
+        WHERE user_id = :uid
+          AND profile_id IS NOT NULL
+          AND created_at >= NOW() - INTERVAL '60 days'
+        GROUP BY profile_name
+        HAVING COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')) >= 30
+        ORDER BY
+            COUNT(*) FILTER (WHERE outcome = 'TP_HIT')::float /
+            GREATEST(COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')),1) DESC
+        LIMIT 1
+    """), {"uid": uid_str})).fetchone()
 
     # ML availability
     ml_available = {}
@@ -103,7 +140,27 @@ async def get_overview(
         import anthropic; ml_available["anthropic_sdk"] = True
     except ImportError: ml_available["anthropic_sdk"] = False
 
+    best_profile_wr = (
+        float(best_profile_row.wins) / max(int(best_profile_row.closed), 1)
+        if best_profile_row else None
+    )
+
     return {
+        # Flat fields for PIOverview interface
+        "total_runs": total_runs_count,
+        "last_run_at": last_run.run_at.isoformat() if last_run else None,
+        "last_run_status": last_run.status if last_run else None,
+        "total_profiles_analyzed": last_run.total_profiles if last_run else 0,
+        "total_closed_trades": last_run.total_closed_trades if last_run else 0,
+        "total_combinations": total_combos_count,
+        "total_suggestions_pending": pending_count,
+        "total_suggestions_high_confidence": high_conf_count,
+        "base_win_rate": float(last_run.base_win_rate or 0) if last_run else None,
+        "best_profile_name": best_profile_row.profile_name if best_profile_row else None,
+        "best_profile_win_rate": round(best_profile_wr, 4) if best_profile_wr is not None else None,
+        "best_combination_name": best_combo.suggested_name if best_combo else None,
+        "best_combination_champion_score": float(best_combo.champion_score or 0) if best_combo else None,
+        # Nested data kept for backward compat
         "last_run": _run_to_dict(last_run) if last_run else None,
         "pending_suggestions": pending_count,
         "untested_combinations": untested_count,
@@ -735,14 +792,19 @@ def _ind_to_dict(s: ProfileIndicatorStats) -> dict:
         "id": str(s.id), "indicator": s.indicator, "bucket_label": s.bucket_label,
         "total_cases": s.total_cases, "wins": s.wins, "losses": s.losses,
         "win_rate": float(s.win_rate or 0),
+        "loss_rate": float(s.loss_rate or 0) if s.loss_rate is not None else None,
         "avg_pnl_pct": float(s.avg_pnl_pct or 0),
-        "avg_mae_pct": float(s.avg_mae_pct or 0),
-        "tp_30m_rate": float(s.tp_30m_rate or 0),
+        "avg_mae_pct": float(s.avg_mae_pct or 0) if s.avg_mae_pct is not None else None,
+        "avg_mfe_pct": float(s.avg_mfe_pct or 0) if s.avg_mfe_pct is not None else None,
+        "avg_holding_seconds": float(s.avg_holding_seconds or 0) if s.avg_holding_seconds is not None else None,
+        "tp_30m_rate": float(s.tp_30m_rate or 0) if s.tp_30m_rate is not None else None,
         "lift_vs_base": float(s.lift_vs_base or 0),
         "winner_presence_pct": float(s.winner_presence_pct or 0),
         "loser_presence_pct": float(s.loser_presence_pct or 0),
         "confidence_score": float(s.confidence_score or 0),
         "confidence_level": s.confidence_level, "role_detected": s.role_detected,
+        "source_profiles": s.source_profiles,
+        "evidence_json": s.evidence_json,
     }
 
 
@@ -752,10 +814,14 @@ def _combo_to_dict(c: ProfileRuleCombination) -> dict:
         "combination_hash": c.combination_hash,
         "combination_type": c.combination_type, "setup_family": c.setup_family,
         "suggested_name": c.suggested_name, "rules_json": c.rules_json,
+        "signals_json": c.signals_json,
+        "block_rules_json": c.block_rules_json,
+        "source_profiles": c.source_profiles,
         "total_cases": c.total_cases, "wins": c.wins, "losses": c.losses,
         "win_rate": float(c.win_rate or 0),
         "avg_pnl_pct": float(c.avg_pnl_pct or 0),
-        "avg_mae_pct": float(c.avg_mae_pct or 0),
+        "avg_mae_pct": float(c.avg_mae_pct or 0) if c.avg_mae_pct is not None else None,
+        "avg_mfe_pct": float(c.avg_mfe_pct or 0) if c.avg_mfe_pct is not None else None,
         "tp_30m_rate": float(c.tp_30m_rate or 0),
         "lift_vs_base": float(c.lift_vs_base or 0),
         "champion_score": float(c.champion_score or 0),
@@ -778,6 +844,8 @@ def _sugg_to_dict(s: ProfileSuggestion) -> dict:
         "suggested_profile_description": s.suggested_profile_description,
         "suggested_profile_family": s.suggested_profile_family,
         "suggested_config_json": s.suggested_config_json,
+        "suggested_signals_json": s.suggested_signals_json,
+        "suggested_block_rules_json": s.suggested_block_rules_json,
         "evidence_summary_json": s.evidence_summary_json,
         "quantitative_explanation": s.quantitative_explanation,
         "ai_explanation": s.ai_explanation,
@@ -795,6 +863,9 @@ def _audit_to_dict(r: ProfileIntelligenceAuditLog) -> dict:
         "event_description": r.event_description,
         "run_id": str(r.run_id) if r.run_id else None,
         "suggestion_id": str(r.suggestion_id) if r.suggestion_id else None,
+        "combination_id": str(r.combination_id) if r.combination_id else None,
         "model_provider": r.model_provider, "model_name": r.model_name,
+        "payload_json": r.payload_json,
+        "result_json": r.result_json,
         "created_at": r.created_at.isoformat() if r.created_at else None,
     }

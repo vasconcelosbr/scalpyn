@@ -220,6 +220,14 @@ function fmtNum(v: number | null | undefined, decimals = 1) {
   return v.toFixed(decimals);
 }
 
+function safeVal(v: unknown): string {
+  if (v == null) return "—";
+  if (typeof v === "number") return v.toFixed(3);
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
 function fmtSeconds(s: number | null | undefined) {
   if (s == null) return "—";
   if (s < 60) return `${Math.round(s)}s`;
@@ -419,7 +427,7 @@ export default function ProfileIntelligencePage() {
         setSuggestions(d?.suggestions || d || []);
       } else if (tab === "Audit") {
         const d = await apiGet("/profile-intelligence/audit?limit=100");
-        setAudit(d?.audit_log || d?.logs || d || []);
+        setAudit(d?.events || d?.audit_log || d?.logs || []);
       } else if (tab === "Settings") {
         const d = await apiGet("/profile-intelligence/settings");
         setSettings(d?.settings || d || {});
@@ -525,7 +533,7 @@ export default function ProfileIntelligencePage() {
       setSuggestions(d?.suggestions || d || []);
       // Refresh audit
       const a = await apiGet("/profile-intelligence/audit?limit=100");
-      setAudit(a?.audit_log || a?.logs || a || []);
+      setAudit(a?.events || []);
     } catch (e: any) {
       showToast(`Erro ao criar profile: ${e.message}`, false);
     } finally {
@@ -1377,11 +1385,13 @@ export default function ProfileIntelligencePage() {
                   <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase mb-2">{String(label)}</div>
                   {metrics ? (
                     <div className="space-y-1">
-                      {Object.entries(metrics as Record<string, any>).map(([k, v]) => (
+                      {Object.entries(metrics as Record<string, unknown>).map(([k, v]) => (
                         <div key={k} className="flex justify-between text-[11px]">
                           <span className="text-[var(--text-tertiary)]">{k}</span>
                           <span className="text-[var(--text-primary)] font-medium">
-                            {typeof v === "number" ? (k.includes("rate") ? fmtPct(v, 2) : k.includes("pnl") || k.includes("mae") || k.includes("mfe") ? fmtPctRaw(v, 2) : v.toFixed(3)) : String(v)}
+                            {typeof v === "number"
+                              ? (k.includes("rate") ? fmtPct(v, 2) : k.includes("pnl") || k.includes("mae") || k.includes("mfe") ? fmtPctRaw(v, 2) : v.toFixed(3))
+                              : safeVal(v)}
                           </span>
                         </div>
                       ))}
@@ -1470,10 +1480,14 @@ export default function ProfileIntelligencePage() {
               <div>
                 <div className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase mb-2">Evidence Summary</div>
                 <div className="grid grid-cols-2 gap-2">
-                  {Object.entries(selectedSuggestion.evidence_summary_json).map(([k, v]) => (
+                  {Object.entries(selectedSuggestion.evidence_summary_json as Record<string, unknown>).map(([k, v]) => (
                     <div key={k} className="bg-[var(--bg-elevated)] rounded p-2 text-[11px]">
                       <div className="text-[10px] text-[var(--text-tertiary)]">{k}</div>
-                      <div className="text-[var(--text-primary)] font-medium">{typeof v === "number" ? v.toFixed(3) : String(v)}</div>
+                      <div className="text-[var(--text-primary)] font-medium">
+                        {typeof v === "number"
+                          ? (k.includes("rate") || k.includes("win") ? fmtPct(v, 3) : k.includes("pnl") || k.includes("mae") || k.includes("mfe") ? fmtPctRaw(v, 3) : v.toFixed(3))
+                          : safeVal(v)}
+                      </div>
                     </div>
                   ))}
                 </div>
