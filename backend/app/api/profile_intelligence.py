@@ -346,23 +346,43 @@ async def get_top_losers(
 
 
 async def _get_indicator_stats(db, user_id, role, run_id, min_cases, confidence_level, indicator, limit):
+    selected_run_id: Optional[UUID] = None
+    if run_id:
+        try:
+            selected_run_id = UUID(run_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid run_id")
+    else:
+        selected_run_id = await db.scalar(
+            select(ProfileIntelligenceRun.id)
+            .where(
+                ProfileIntelligenceRun.user_id == user_id,
+                ProfileIntelligenceRun.status.in_(("completed", "completed_with_errors")),
+            )
+            .order_by(ProfileIntelligenceRun.run_at.desc())
+            .limit(1)
+        )
+
+    if selected_run_id is None:
+        return {"indicators": [], "role": role, "run_id": None}
+
     q = select(ProfileIndicatorStats).where(
         ProfileIndicatorStats.user_id == user_id,
+        ProfileIndicatorStats.run_id == selected_run_id,
         ProfileIndicatorStats.role_detected == role,
         ProfileIndicatorStats.total_cases >= min_cases,
     )
-    if run_id:
-        try:
-            q = q.where(ProfileIndicatorStats.run_id == UUID(run_id))
-        except ValueError:
-            pass
     if confidence_level:
         q = q.where(ProfileIndicatorStats.confidence_level == confidence_level)
     if indicator:
         q = q.where(ProfileIndicatorStats.indicator == indicator)
     q = q.order_by(ProfileIndicatorStats.lift_vs_base.desc().nullslast()).limit(limit)
     stats = (await db.execute(q)).scalars().all()
-    return {"indicators": [_ind_to_dict(s) for s in stats], "role": role}
+    return {
+        "indicators": [_ind_to_dict(s) for s in stats],
+        "role": role,
+        "run_id": str(selected_run_id),
+    }
 
 
 # ── 7. List combinations ──────────────────────────────────────────────────────
