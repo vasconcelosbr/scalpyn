@@ -1649,13 +1649,13 @@ export default function ProfileIntelligencePage() {
                 </div>
 
                 {/* Signals */}
-                {createDryRunResult.profile_payload?.config?.signals?.conditions?.length > 0 && (
+                {(createDryRunResult.profile_payload?.config?.signals?.conditions?.length ?? 0) > 0 && (
                   <div>
                     <div className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">
-                      Signals ({createDryRunResult.profile_payload.config.signals.conditions.length})
+                      Signals ({createDryRunResult.profile_payload.config.signals?.conditions?.length ?? 0})
                     </div>
                     <div className="space-y-1">
-                      {createDryRunResult.profile_payload.config.signals.conditions.map((c: any, i: number) => (
+                      {createDryRunResult.profile_payload.config.signals?.conditions?.map((c: any, i: number) => (
                         <div key={i} className="font-mono text-[10px] bg-[var(--bg-input)] rounded px-2 py-1.5 text-[var(--text-primary)]">
                           {c.indicator || c.field} {c.operator} {c.value}
                         </div>
@@ -1665,13 +1665,13 @@ export default function ProfileIntelligencePage() {
                 )}
 
                 {/* Block rules */}
-                {createDryRunResult.profile_payload?.config?.block_rules?.blocks?.length > 0 && (
+                {(createDryRunResult.profile_payload?.config?.block_rules?.blocks?.length ?? 0) > 0 && (
                   <div>
                     <div className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">
-                      Block Rules ({createDryRunResult.profile_payload.config.block_rules.blocks.length})
+                      Block Rules ({createDryRunResult.profile_payload.config.block_rules?.blocks?.length ?? 0})
                     </div>
                     <div className="space-y-1">
-                      {createDryRunResult.profile_payload.config.block_rules.blocks.map((b: any, i: number) => (
+                      {createDryRunResult.profile_payload.config.block_rules?.blocks?.map((b: any, i: number) => (
                         <div key={i} className="font-mono text-[10px] bg-[var(--bg-input)] rounded px-2 py-1.5 text-red-400">
                           BLOCK: {b.indicator || b.field} {b.operator} {b.value}
                         </div>
