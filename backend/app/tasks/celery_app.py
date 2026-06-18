@@ -98,6 +98,7 @@ celery_app = Celery(
         "app.tasks.ttt_analyzer",
         "app.tasks.autopilot",
         "app.tasks.profile_intelligence_job",
+        "app.tasks.opportunity_snapshot_evaluator",
     ],
 )
 
@@ -192,6 +193,10 @@ TASK_ROUTES = {
     # Profile Intelligence Engine — indicator lift, rule mining, suggestions.
     # Structural queue: heavy analysis but no latency requirement.
     "app.tasks.profile_intelligence_job.run":       {"queue": QUEUE_STRUCTURAL},
+
+    # Opportunity Snapshot Evaluator — populates future_outcome on snapshots.
+    # Structural queue: DB-only work (ohlcv table + shadow_trades join), no latency req.
+    "app.tasks.opportunity_snapshot_evaluator.evaluate": {"queue": QUEUE_STRUCTURAL},
 }
 
 # Static queue declarations so beat / dispatch never rely on an "implicit"
@@ -588,6 +593,15 @@ celery_app.conf.beat_schedule = {
     "profile_intelligence_engine": {
         "task": "app.tasks.profile_intelligence_job.run",
         "schedule": float(os.environ.get("PROFILE_INTELLIGENCE_INTERVAL_S", 21600)),
+        "options": {"queue": QUEUE_STRUCTURAL},
+    },
+
+    # Opportunity Snapshot Evaluator — populates future_outcome / future_pnl_pct
+    # on opportunity_snapshots. Beat default 30 min (override via OPP_EVAL_INTERVAL_S).
+    # Structural queue: reads ohlcv table + shadow_trades, no latency requirement.
+    "opportunity_snapshot_evaluator": {
+        "task": "app.tasks.opportunity_snapshot_evaluator.evaluate",
+        "schedule": float(os.environ.get("OPP_EVAL_INTERVAL_S", 1800)),
         "options": {"queue": QUEUE_STRUCTURAL},
     },
 }
