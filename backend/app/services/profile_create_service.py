@@ -534,6 +534,23 @@ class ProfileCreateService:
             mode=mode,
         )
 
+        # ── 9.5 Duplicate name warning (non-blocking) ─────────────────────────
+        from ..models.profile import Profile as _Profile
+        _dup_res = await db.execute(
+            select(_Profile.id, _Profile.name).where(
+                _Profile.user_id == user_id,
+                _Profile.name.ilike(final_name),
+            )
+        )
+        _dups = _dup_res.fetchall()
+        if _dups:
+            _ids = ", ".join(str(r.id)[:8] + "…" for r in _dups[:3])
+            warnings.append(
+                f"Já existe{'m' if len(_dups) > 1 else ''} {len(_dups)} profile(s) "
+                f"com o nome '{final_name}': [{_ids}]. "
+                f"Considere renomear para evitar ambiguidade."
+            )
+
         # ── DRY RUN ───────────────────────────────────────────────────────────
         if dry_run:
             return {

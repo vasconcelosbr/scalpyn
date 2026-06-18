@@ -101,6 +101,23 @@ async def get_profile(
     return _profile_to_dict(profile)
 
 
+async def _find_duplicate_names(
+    db: AsyncSession,
+    user_id: UUID,
+    name: str,
+    exclude_profile_id: Optional[UUID] = None,
+) -> List[Dict[str, Any]]:
+    """Return profiles owned by user_id with the same name (case-insensitive), excluding a given id."""
+    q = select(Profile.id, Profile.name, Profile.created_at).where(
+        Profile.user_id == user_id,
+        Profile.name.ilike(name),
+    )
+    if exclude_profile_id:
+        q = q.where(Profile.id != exclude_profile_id)
+    rows = (await db.execute(q)).fetchall()
+    return [{"id": str(r.id), "name": r.name, "created_at": r.created_at.isoformat() if r.created_at else None} for r in rows]
+
+
 @router.post("/")
 async def create_profile(
     payload: Dict[str, Any],
@@ -109,7 +126,7 @@ async def create_profile(
 ):
     """
     Create a new profile.
-    
+
     Expected payload:
     {
         "name": "High Volume Momentum",
@@ -132,11 +149,22 @@ async def create_profile(
     name = payload.get("name")
     if not name:
         raise HTTPException(status_code=400, detail="Profile name is required")
-    
+
+    # Duplicate name check — non-blocking warning
+    duplicates = await _find_duplicate_names(db, user_id, name)
+    warnings: List[str] = []
+    if duplicates:
+        ids_preview = ", ".join(d["id"][:8] + "…" for d in duplicates[:3])
+        warnings.append(
+            f"Já existe{'m' if len(duplicates) > 1 else ''} {len(duplicates)} profile(s) "
+            f"com o nome '{name}': [{ids_preview}]. "
+            f"Considere renomear para evitar ambiguidade."
+        )
+
     # Validate config structure
     config = payload.get("config", {})
     validated_config = _validate_profile_config(config)
-    
+
     profile = Profile(
         user_id=user_id,
         name=name,
@@ -145,12 +173,15 @@ async def create_profile(
         config=validated_config,
         profile_type=payload.get("profile_type", "STANDARD"),
     )
-    
+
     db.add(profile)
     await db.commit()
     await db.refresh(profile)
-    
-    return _profile_to_dict(profile)
+
+    result = _profile_to_dict(profile)
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 @router.put("/{profile_id}")
@@ -171,8 +202,18 @@ async def update_profile(
     _prev_config = profile.config
     _config_changed = False
 
-    if "name" in payload:
-        profile.name = payload["name"]
+    rename_warnings: List[str] = []
+    if "name" in payload and payload["name"] != profile.name:
+        new_name = payload["name"]
+        duplicates = await _find_duplicate_names(db, user_id, new_name, exclude_profile_id=profile_id)
+        if duplicates:
+            ids_preview = ", ".join(d["id"][:8] + "…" for d in duplicates[:3])
+            rename_warnings.append(
+                f"Já existe{'m' if len(duplicates) > 1 else ''} {len(duplicates)} profile(s) "
+                f"com o nome '{new_name}': [{ids_preview}]. "
+                f"Considere outro nome para evitar ambiguidade."
+            )
+        profile.name = new_name
     if "description" in payload:
         profile.description = payload["description"]
     if "is_active" in payload:
@@ -207,8 +248,10 @@ async def update_profile(
     await db.commit()
     await db.refresh(profile)
 
-    return _profile_to_dict(profile)
-
+    result = _profile_to_dict(profile)
+    if rename_warnings:
+        result["warnings"] = rename_warnings
+    return result
 
 
 @router.delete("/{profile_id}")
