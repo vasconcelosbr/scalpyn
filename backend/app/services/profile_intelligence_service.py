@@ -562,12 +562,28 @@ class ProfileIntelligenceService:
         base_avg_pnl_pct = base_metrics.get("base_avg_pnl_pct", 0.0)
         base_tp_30m_rate = base_metrics.get("base_tp_30m_rate", 0.0)
 
+        # Count opportunity snapshots for this user in the lookback window
+        try:
+            opp_count = (await db.execute(
+                text(f"""
+                    SELECT COUNT(*) FROM opportunity_snapshots
+                    WHERE user_id = :uid
+                      AND created_at >= NOW() - INTERVAL '{lookback_days} days'
+                """),
+                {"uid": str(user_id)},
+            )).scalar()
+            total_opp_snapshots = int(opp_count or 0)
+        except Exception as _opp_exc:
+            logger.warning("[PIEngine] opportunity_snapshots count failed: %s", _opp_exc)
+            total_opp_snapshots = 0
+
         # Update run with base metrics
         await db.execute(
             text("""
                 UPDATE profile_intelligence_runs SET
                     total_shadow_trades = :total_shadow_trades,
                     total_closed_trades = :total_closed_trades,
+                    total_opportunity_snapshots = :total_opp,
                     base_win_rate = :base_win_rate,
                     base_avg_pnl_pct = :base_avg_pnl_pct,
                     base_tp_30m_rate = :base_tp_30m_rate,
@@ -577,6 +593,7 @@ class ProfileIntelligenceService:
             {
                 "total_shadow_trades": total_shadow_trades,
                 "total_closed_trades": total_closed_trades,
+                "total_opp": total_opp_snapshots,
                 "base_win_rate": base_win_rate,
                 "base_avg_pnl_pct": base_avg_pnl_pct,
                 "base_tp_30m_rate": base_tp_30m_rate,

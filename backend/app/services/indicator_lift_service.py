@@ -321,7 +321,9 @@ class IndicatorLiftAnalyzer:
             raw_confidence = min(1.0, total / 100.0) * lift_vs_base
             confidence_score = raw_confidence * 100.0
 
-            if total < min_closed_trades:
+            if total == 0:
+                confidence_level = "NO_DATA"
+            elif total < min_closed_trades:
                 confidence_level = "LOW"
             elif total < 100:
                 confidence_level = "MEDIUM"

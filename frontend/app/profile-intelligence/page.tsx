@@ -208,6 +208,13 @@ function fmtPct(v: number | null | undefined, decimals = 1) {
   return `${sign}${(v * 100).toFixed(decimals)}%`;
 }
 
+// For fields already stored as percentage points (pnl_pct, mae_pct, mfe_pct)
+function fmtPctRaw(v: number | null | undefined, decimals = 2) {
+  if (v == null) return "—";
+  const sign = v >= 0 ? "+" : "";
+  return `${sign}${v.toFixed(decimals)}%`;
+}
+
 function fmtNum(v: number | null | undefined, decimals = 1) {
   if (v == null) return "—";
   return v.toFixed(decimals);
@@ -223,6 +230,7 @@ function fmtSeconds(s: number | null | undefined) {
 function confidenceBadge(level: string | null | undefined) {
   if (level === "HIGH") return <span className="badge bullish text-[10px]">HIGH</span>;
   if (level === "MEDIUM") return <span className="badge range text-[10px]">MEDIUM</span>;
+  if (level === "NO_DATA" || level == null) return <span className="badge text-[10px]" style={{background:"rgba(107,114,128,0.2)",color:"#9ca3af"}}>NO DATA</span>;
   return <span className="badge bearish text-[10px]">LOW</span>;
 }
 
@@ -340,9 +348,29 @@ export default function ProfileIntelligencePage() {
   // Sort state for profiles table
   const [profileSort, setProfileSort] = useState<{ col: string; asc: boolean }>({ col: "win_rate", asc: false });
 
+  // Generate suggestion from combination
+  const [generatingSuggestion, setGeneratingSuggestion] = useState(false);
+  const [lastGeneratedSuggestionId, setLastGeneratedSuggestionId] = useState<string | null>(null);
+
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
     setTimeout(() => setToast(null), 4000);
+  };
+
+  const handleGenerateSuggestion = async (combinationId: string) => {
+    setGeneratingSuggestion(true);
+    setLastGeneratedSuggestionId(null);
+    try {
+      const res = await apiPost(`/api/profile-intelligence/combinations/${combinationId}/create-suggestion`, {});
+      showToast(res.created ? "Suggestion gerada com sucesso" : "Suggestion já existia — abrindo", true);
+      setLastGeneratedSuggestionId(res.suggestion?.id || null);
+      const data = await apiGet("/api/profile-intelligence/suggestions?limit=50");
+      setSuggestions(data.suggestions || []);
+    } catch (e: any) {
+      showToast(`Erro ao gerar suggestion: ${e.message || "unknown"}`, false);
+    } finally {
+      setGeneratingSuggestion(false);
+    }
   };
 
   // ── Data fetching ───────────────────────────────────────────────────────────
@@ -736,9 +764,9 @@ export default function ProfileIntelligencePage() {
                       <td className="px-4 py-2.5 text-green-400">{p.wins ?? "—"}</td>
                       <td className="px-4 py-2.5 text-red-400">{p.losses ?? "—"}</td>
                       <td className={`px-4 py-2.5 font-semibold ${winRateColor(p.win_rate)}`}>{fmtPct(p.win_rate)}</td>
-                      <td className={`px-4 py-2.5 font-medium ${pnlColor(p.avg_pnl_pct)}`}>{fmtPct(p.avg_pnl_pct, 2)}</td>
+                      <td className={`px-4 py-2.5 font-medium ${pnlColor(p.avg_pnl_pct)}`}>{fmtPctRaw(p.avg_pnl_pct, 2)}</td>
                       <td className="px-4 py-2.5 text-[var(--text-primary)]">{fmtPct(p.tp_30m_rate)}</td>
-                      <td className={`px-4 py-2.5 ${pnlColor(p.avg_mae_pct)}`}>{fmtPct(p.avg_mae_pct, 2)}</td>
+                      <td className={`px-4 py-2.5 ${pnlColor(p.avg_mae_pct)}`}>{fmtPctRaw(p.avg_mae_pct, 2)}</td>
                       <td className="px-4 py-2.5">{confidenceBadge(p.confidence_level)}</td>
                       <td className="px-4 py-2.5">
                         <a href="/profiles" className="btn btn-secondary text-[10px] px-2 py-1 flex items-center gap-1 whitespace-nowrap w-fit">
@@ -822,9 +850,9 @@ export default function ProfileIntelligencePage() {
                               <td className={`px-4 py-2.5 font-medium ${(stat.lift_vs_base ?? 0) >= 1.2 ? "text-green-400" : "text-[var(--text-secondary)]"}`}>
                                 {stat.lift_vs_base != null ? `${stat.lift_vs_base.toFixed(2)}x` : "—"}
                               </td>
-                              <td className={`px-4 py-2.5 ${pnlColor(stat.avg_pnl_pct)}`}>{fmtPct(stat.avg_pnl_pct, 2)}</td>
+                              <td className={`px-4 py-2.5 ${pnlColor(stat.avg_pnl_pct)}`}>{fmtPctRaw(stat.avg_pnl_pct, 2)}</td>
                               <td className="px-4 py-2.5 text-[var(--text-primary)]">{fmtPct(stat.tp_30m_rate)}</td>
-                              <td className={`px-4 py-2.5 ${pnlColor(stat.avg_mae_pct)}`}>{fmtPct(stat.avg_mae_pct, 2)}</td>
+                              <td className={`px-4 py-2.5 ${pnlColor(stat.avg_mae_pct)}`}>{fmtPctRaw(stat.avg_mae_pct, 2)}</td>
                               <td className="px-4 py-2.5">{confidenceBadge(stat.confidence_level)}</td>
                               <td className="px-4 py-2.5">
                                 {stat.role_detected && (
@@ -846,7 +874,7 @@ export default function ProfileIntelligencePage() {
                               <td className={`px-4 py-2.5 font-medium ${(stat.lift_vs_base ?? 1) < 1 ? "text-red-400" : "text-[var(--text-secondary)]"}`}>
                                 {stat.lift_vs_base != null ? `${stat.lift_vs_base.toFixed(2)}x` : "—"}
                               </td>
-                              <td className={`px-4 py-2.5 ${pnlColor(stat.avg_pnl_pct)}`}>{fmtPct(stat.avg_pnl_pct, 2)}</td>
+                              <td className={`px-4 py-2.5 ${pnlColor(stat.avg_pnl_pct)}`}>{fmtPctRaw(stat.avg_pnl_pct, 2)}</td>
                               <td className="px-4 py-2.5">{confidenceBadge(stat.confidence_level)}</td>
                               <td className="px-4 py-2.5">
                                 {stat.total_cases < 30
@@ -874,10 +902,10 @@ export default function ProfileIntelligencePage() {
                                     ["Cases", stat.total_cases],
                                     ["Win Rate", fmtPct(stat.win_rate)],
                                     ["Lift vs Base", stat.lift_vs_base != null ? `${stat.lift_vs_base.toFixed(2)}x` : "—"],
-                                    ["Avg P&L", fmtPct(stat.avg_pnl_pct, 3)],
+                                    ["Avg P&L", fmtPctRaw(stat.avg_pnl_pct, 3)],
                                     ["TP ≤30m", fmtPct(stat.tp_30m_rate)],
-                                    ["Avg MAE", fmtPct(stat.avg_mae_pct, 3)],
-                                    ["Avg MFE", fmtPct(stat.avg_mfe_pct, 3)],
+                                    ["Avg MAE", fmtPctRaw(stat.avg_mae_pct, 3)],
+                                    ["Avg MFE", fmtPctRaw(stat.avg_mfe_pct, 3)],
                                     ["Avg Holding", fmtSeconds(stat.avg_holding_seconds)],
                                   ].map(([k, v]) => (
                                     <div key={String(k)} className="bg-[var(--bg-surface)] rounded p-2">
@@ -1198,7 +1226,7 @@ export default function ProfileIntelligencePage() {
 
       {/* ── Combination Detail Drawer ─────────────────────────────────────────── */}
       {selectedCombination && (
-        <Drawer title={selectedCombination.suggested_name || "Detalhe da Combinação"} onClose={() => setSelectedCombination(null)}>
+        <Drawer title={selectedCombination.suggested_name || "Detalhe da Combinação"} onClose={() => { setSelectedCombination(null); setLastGeneratedSuggestionId(null); }}>
           <div className="space-y-4">
             {/* Alerts */}
             {selectedCombination.overfit_risk && (
@@ -1226,7 +1254,7 @@ export default function ProfileIntelligencePage() {
                         <div key={k} className="flex justify-between text-[11px]">
                           <span className="text-[var(--text-tertiary)]">{k}</span>
                           <span className="text-[var(--text-primary)] font-medium">
-                            {typeof v === "number" ? (k.includes("rate") || k.includes("pnl") || k.includes("mae") || k.includes("mfe") ? fmtPct(v, 2) : v.toFixed(3)) : String(v)}
+                            {typeof v === "number" ? (k.includes("rate") ? fmtPct(v, 2) : k.includes("pnl") || k.includes("mae") || k.includes("mfe") ? fmtPctRaw(v, 2) : v.toFixed(3)) : String(v)}
                           </span>
                         </div>
                       ))}
@@ -1260,14 +1288,26 @@ export default function ProfileIntelligencePage() {
               </div>
             )}
 
-            {/* Prepare Profile button */}
-            <div className="pt-2 border-t border-[var(--border-subtle)]">
-              <p className="text-[11px] text-[var(--text-tertiary)] mb-2">
-                Esta é uma hipótese analítica. Requer validação em shadow antes de ativar.
+            {/* Generate Suggestion */}
+            <div className="pt-2 border-t border-[var(--border-subtle)] space-y-2">
+              <p className="text-[11px] text-[var(--text-tertiary)]">
+                Esta é uma hipótese analítica. Gere uma Suggestion para validar em shadow antes de ativar.
               </p>
-              <button disabled className="btn btn-secondary text-[12px] w-full opacity-40 cursor-not-allowed">
-                Create Profile — não disponível nesta fase
+              <button
+                onClick={() => handleGenerateSuggestion(selectedCombination.id)}
+                disabled={generatingSuggestion}
+                className="btn btn-secondary text-[12px] w-full"
+              >
+                {generatingSuggestion ? "Gerando..." : "Generate Suggestion"}
               </button>
+              {lastGeneratedSuggestionId && (
+                <button
+                  onClick={() => { setActiveTab("Suggestions"); setSelectedCombination(null); setLastGeneratedSuggestionId(null); }}
+                  className="btn btn-primary text-[12px] w-full"
+                >
+                  Open Suggestion →
+                </button>
+              )}
             </div>
           </div>
         </Drawer>

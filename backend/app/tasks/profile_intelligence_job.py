@@ -11,10 +11,35 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 from .celery_app import celery_app
 
 logger = logging.getLogger("scalpyn.tasks.profile_intelligence_job")
+
+_LOCK_TTL_S = int(os.environ.get("PROFILE_INTELLIGENCE_LOCK_TTL_S", "7200"))
+
+
+def _acquire_pi_lock(user_id) -> tuple:
+    """Try to acquire a per-user Redis lock. Returns (client, acquired)."""
+    try:
+        import redis as _redis_lib
+        from ..config import settings
+        r = _redis_lib.from_url(settings.REDIS_URL, decode_responses=True, socket_connect_timeout=2)
+        key = f"pi_engine:run_lock:{user_id}"
+        acquired = bool(r.set(key, "1", nx=True, ex=_LOCK_TTL_S))
+        return r, acquired, key
+    except Exception as exc:
+        logger.warning("[PIJob] Redis lock unavailable (%s) — proceeding without lock", exc)
+        return None, True, None  # fail open
+
+
+def _release_pi_lock(client, key):
+    if client and key:
+        try:
+            client.delete(key)
+        except Exception:
+            pass
 
 
 def _run_async(coro):
@@ -69,6 +94,11 @@ async def _run_pi_job():
     logger.info("[PIJob] Running analysis for %d users", len(user_ids))
 
     for user_id in user_ids:
+        redis_client, acquired, lock_key = _acquire_pi_lock(user_id)
+        if not acquired:
+            logger.info("[PIJob] Lock exists for user %s — skipping (another run in progress)", user_id)
+            continue
+
         async with AsyncSessionLocal() as db:
             try:
                 run_id = await svc.run(
@@ -85,6 +115,8 @@ async def _run_pi_job():
                 logger.info("[PIJob] Completed run %s for user %s", run_id, user_id)
             except Exception as exc:
                 logger.error("[PIJob] Failed for user %s: %s", user_id, exc)
+            finally:
+                _release_pi_lock(redis_client, lock_key)
 
 
 @celery_app.task(name="app.tasks.profile_intelligence_job.run", bind=True)

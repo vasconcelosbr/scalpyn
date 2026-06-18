@@ -338,6 +338,8 @@ def _build_combination_hash(name: str, user_id: UUID) -> str:
 
 
 def _confidence_level_from_count(n: int) -> str:
+    if n == 0:
+        return "NO_DATA"
     if n < 30:
         return "LOW"
     elif n < 100:

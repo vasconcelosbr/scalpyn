@@ -20,6 +20,7 @@ from ..models.profile_intelligence import (
 )
 from .config import get_current_user_id
 from ..schemas.profile_intelligence import RunRequest, RunResponse, PISettingsUpdate, CreateProfileRequest
+from ..services.profile_intelligence_audit_service import log_pi_event
 
 logger = logging.getLogger(__name__)
 
@@ -367,6 +368,125 @@ async def get_combination(
     return _combo_to_dict(combo)
 
 
+# ── 8b. Create suggestion from combination ────────────────────────────────────
+
+@router.post("/combinations/{combination_id}/create-suggestion")
+async def create_suggestion_from_combination(
+    combination_id: str,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """
+    Generate a ProfileSuggestion from a ProfileRuleCombination.
+    Idempotent: if a suggestion already exists for this combination, returns it.
+    No profile is created — user must call /suggestions/{id}/create-profile separately.
+    """
+    try:
+        cid = UUID(combination_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid combination_id")
+
+    combo_result = await db.execute(
+        select(ProfileRuleCombination).where(
+            ProfileRuleCombination.id == cid,
+            ProfileRuleCombination.user_id == user_id,
+        )
+    )
+    combo = combo_result.scalars().first()
+    if not combo:
+        raise HTTPException(status_code=404, detail="Combination not found")
+
+    # Idempotency: return existing suggestion if one already exists
+    existing_sugg = (await db.execute(
+        select(ProfileSuggestion).where(
+            ProfileSuggestion.user_id == user_id,
+            ProfileSuggestion.source_combination_id == cid,
+        ).limit(1)
+    )).scalars().first()
+    if existing_sugg:
+        await log_pi_event(
+            db, user_id, "suggestion_from_combination_already_exists",
+            run_id=combo.run_id,
+            combination_id=cid,
+            suggestion_id=existing_sugg.id,
+            event_description=f"Suggestion already exists for combination {cid}",
+        )
+        return {"suggestion": _sugg_to_dict(existing_sugg), "created": False}
+
+    # Build suggestion from combination data
+    from ..services.profile_suggestion_service import STANDARD_BLOCK_RULES
+
+    win_rate = float(combo.win_rate or 0)
+    tp30m = float(combo.tp_30m_rate or 0)
+    avg_pnl = float(combo.avg_pnl_pct or 0)
+    avg_mae = float(combo.avg_mae_pct or 0)
+    total_cases = int(combo.total_cases or 0)
+
+    evidence = {
+        "win_rate": round(win_rate, 4),
+        "tp_30m_rate": round(tp30m, 4),
+        "avg_pnl_pct": round(avg_pnl, 4),
+        "avg_mae_pct": round(avg_mae, 4),
+        "total_cases": total_cases,
+        "wins": combo.wins or 0,
+        "losses": combo.losses or 0,
+        "champion_score": float(combo.champion_score or 0),
+        "lift_vs_base": float(combo.lift_vs_base or 0),
+        "combination_type": combo.combination_type,
+        "source_combination_id": str(cid),
+    }
+
+    suggested_signals = {"conditions": []} if not combo.signals_json else combo.signals_json
+    suggested_scoring = combo.scoring_rules_json
+    suggested_blocks = combo.block_rules_json or STANDARD_BLOCK_RULES
+
+    comb_name = combo.suggested_name or f"COMBO_{str(cid)[:8].upper()}"
+    profile_name = f"PI_{comb_name}"[:120]
+    family = combo.setup_family or "unknown"
+
+    confidence_level = combo.confidence_level or "LOW"
+
+    quant_explanation = (
+        f"Combination {comb_name} (type={combo.combination_type}) evaluated on {total_cases} cases. "
+        f"Win rate: {win_rate*100:.1f}% | Avg P&L: {avg_pnl:+.2f}% | TP 30m: {tp30m*100:.1f}% | "
+        f"Lift vs base: {float(combo.lift_vs_base or 0):.2f}x. "
+        f"Confidence: {confidence_level}. "
+        f"Generated via 'Generate Suggestion' from Combinations tab."
+    )
+
+    sugg = ProfileSuggestion(
+        user_id=user_id,
+        run_id=combo.run_id,
+        source_combination_id=cid,
+        suggested_profile_name=profile_name,
+        suggested_profile_description=f"Auto-generated from combination: {comb_name}",
+        suggested_profile_family=family,
+        suggested_config_json={"source": "combination", "combination_id": str(cid)},
+        suggested_signals_json=suggested_signals,
+        suggested_scoring_json=suggested_scoring,
+        suggested_block_rules_json=suggested_blocks,
+        evidence_summary_json=evidence,
+        quantitative_explanation=quant_explanation,
+        confidence_score=float(combo.champion_score or 0),
+        confidence_level=confidence_level,
+        status="pending_user_approval",
+    )
+    db.add(sugg)
+    await db.flush()
+
+    await log_pi_event(
+        db, user_id, "suggestion_created_from_combination",
+        run_id=combo.run_id,
+        combination_id=cid,
+        suggestion_id=sugg.id,
+        event_description=f"Suggestion created from combination {comb_name}",
+        payload_json={"combination_id": str(cid), "combination_name": comb_name},
+    )
+
+    await db.commit()
+    return {"suggestion": _sugg_to_dict(sugg), "created": True}
+
+
 # ── 9. List suggestions ───────────────────────────────────────────────────────
 
 @router.get("/suggestions")
@@ -601,6 +721,7 @@ def _run_to_dict(r: ProfileIntelligenceRun) -> dict:
         "status": r.status, "engine_version": r.engine_version,
         "total_profiles": r.total_profiles, "total_shadow_trades": r.total_shadow_trades,
         "total_closed_trades": r.total_closed_trades,
+        "total_opportunity_snapshots": r.total_opportunity_snapshots or 0,
         "base_win_rate": float(r.base_win_rate or 0),
         "base_avg_pnl_pct": float(r.base_avg_pnl_pct or 0),
         "base_tp_30m_rate": float(r.base_tp_30m_rate or 0),
@@ -652,6 +773,7 @@ def _combo_to_dict(c: ProfileRuleCombination) -> dict:
 def _sugg_to_dict(s: ProfileSuggestion) -> dict:
     return {
         "id": str(s.id), "run_id": str(s.run_id),
+        "source_combination_id": str(s.source_combination_id) if s.source_combination_id else None,
         "suggested_profile_name": s.suggested_profile_name,
         "suggested_profile_description": s.suggested_profile_description,
         "suggested_profile_family": s.suggested_profile_family,
