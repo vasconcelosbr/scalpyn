@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import {
   Brain, RefreshCw, Play, Settings, ChevronDown, ChevronRight,
   TrendingUp, TrendingDown, AlertTriangle, CheckCircle, Copy,
-  ExternalLink, X, Zap, BarChart3, Eye,
+  ExternalLink, X, Zap, BarChart3, Eye, Users,
 } from "lucide-react";
 import { apiGet, apiPost, apiPut } from "@/lib/api";
 
@@ -348,6 +348,9 @@ export default function ProfileIntelligencePage() {
   // Sort state for profiles table
   const [profileSort, setProfileSort] = useState<{ col: string; asc: boolean }>({ col: "win_rate", asc: false });
 
+  // Duplicate profile group drawer
+  const [selectedDuplicateGroup, setSelectedDuplicateGroup] = useState<ProfileRanking[] | null>(null);
+
   // Generate suggestion from combination
   const [generatingSuggestion, setGeneratingSuggestion] = useState(false);
   const [lastGeneratedSuggestionId, setLastGeneratedSuggestionId] = useState<string | null>(null);
@@ -554,6 +557,42 @@ export default function ProfileIntelligencePage() {
     setProfileSort(prev => prev.col === col ? { col, asc: !prev.asc } : { col, asc: false });
   };
 
+  // Group sorted profiles by name — collapses duplicate-named profiles into one row
+  const profileGroups = useMemo(() => {
+    const map = new Map<string, ProfileRanking[]>();
+    for (const p of sortedProfiles) {
+      if (!map.has(p.profile_name)) map.set(p.profile_name, []);
+      map.get(p.profile_name)!.push(p);
+    }
+    return Array.from(map.values());
+  }, [sortedProfiles]);
+
+  function aggregateGroup(items: ProfileRanking[]): ProfileRanking & { _count: number } {
+    const totalClosed = items.reduce((s, p) => s + (p.closed_trades ?? 0), 0);
+    const totalOpen = items.reduce((s, p) => s + (p.open_trades ?? 0), 0);
+    const totalWins = items.reduce((s, p) => s + (p.wins ?? 0), 0);
+    const totalLosses = items.reduce((s, p) => s + (p.losses ?? 0), 0);
+    const withPnl = items.filter(p => p.avg_pnl_pct != null);
+    const withMae = items.filter(p => p.avg_mae_pct != null);
+    const withTp = items.filter(p => p.tp_30m_rate != null);
+    const levels = items.map(p => p.confidence_level);
+    const bestLevel = levels.includes("HIGH") ? "HIGH" : levels.includes("MEDIUM") ? "MEDIUM" : levels.includes("LOW") ? "LOW" : null;
+    return {
+      profile_id: items[0].profile_id,
+      profile_name: items[0].profile_name,
+      closed_trades: totalClosed,
+      open_trades: totalOpen,
+      wins: totalWins,
+      losses: totalLosses,
+      win_rate: totalWins + totalLosses > 0 ? totalWins / (totalWins + totalLosses) : null,
+      avg_pnl_pct: withPnl.length > 0 ? withPnl.reduce((s, p) => s + p.avg_pnl_pct!, 0) / withPnl.length : null,
+      avg_mae_pct: withMae.length > 0 ? withMae.reduce((s, p) => s + p.avg_mae_pct!, 0) / withMae.length : null,
+      tp_30m_rate: withTp.length > 0 ? withTp.reduce((s, p) => s + p.tp_30m_rate!, 0) / withTp.length : null,
+      confidence_level: bestLevel,
+      _count: items.length,
+    };
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
@@ -756,26 +795,60 @@ export default function ProfileIntelligencePage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--border-subtle)]">
-                  {sortedProfiles.map(p => (
-                    <tr key={p.profile_id} className="hover:bg-[var(--bg-elevated)] transition-colors">
-                      <td className="px-4 py-2.5 font-medium text-[var(--text-primary)] whitespace-nowrap">{p.profile_name}</td>
-                      <td className="px-4 py-2.5 text-[var(--text-secondary)]">{p.closed_trades ?? "—"}</td>
-                      <td className="px-4 py-2.5 text-[var(--text-secondary)]">{p.open_trades ?? "—"}</td>
-                      <td className="px-4 py-2.5 text-green-400">{p.wins ?? "—"}</td>
-                      <td className="px-4 py-2.5 text-red-400">{p.losses ?? "—"}</td>
-                      <td className={`px-4 py-2.5 font-semibold ${winRateColor(p.win_rate)}`}>{fmtPct(p.win_rate)}</td>
-                      <td className={`px-4 py-2.5 font-medium ${pnlColor(p.avg_pnl_pct)}`}>{fmtPctRaw(p.avg_pnl_pct, 2)}</td>
-                      <td className="px-4 py-2.5 text-[var(--text-primary)]">{fmtPct(p.tp_30m_rate)}</td>
-                      <td className={`px-4 py-2.5 ${pnlColor(p.avg_mae_pct)}`}>{fmtPctRaw(p.avg_mae_pct, 2)}</td>
-                      <td className="px-4 py-2.5">{confidenceBadge(p.confidence_level)}</td>
-                      <td className="px-4 py-2.5">
-                        <a href="/profiles" className="btn btn-secondary text-[10px] px-2 py-1 flex items-center gap-1 whitespace-nowrap w-fit">
-                          <ExternalLink className="w-3 h-3" />
-                          Profiles
-                        </a>
-                      </td>
-                    </tr>
-                  ))}
+                  {profileGroups.map(group => {
+                    const isDuplicate = group.length > 1;
+                    const agg = isDuplicate ? aggregateGroup(group) : { ...group[0], _count: 1 };
+                    return (
+                      <tr
+                        key={agg.profile_id}
+                        className={`hover:bg-[var(--bg-elevated)] transition-colors ${isDuplicate ? "bg-yellow-500/5" : ""}`}
+                      >
+                        <td className="px-4 py-2.5 font-medium text-[var(--text-primary)] whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <span>{agg.profile_name}</span>
+                            {isDuplicate && (
+                              <span
+                                className="badge text-[9px] px-1.5 py-0.5 flex items-center gap-1 cursor-pointer hover:opacity-80"
+                                style={{ background: "rgba(234,179,8,0.15)", color: "#eab308", border: "1px solid rgba(234,179,8,0.3)" }}
+                                onClick={() => setSelectedDuplicateGroup(group)}
+                                title="Profiles com nome duplicado"
+                              >
+                                <Users className="w-2.5 h-2.5" />
+                                {group.length} IDs
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-2.5 text-[var(--text-secondary)]">{agg.closed_trades ?? "—"}</td>
+                        <td className="px-4 py-2.5 text-[var(--text-secondary)]">{agg.open_trades ?? "—"}</td>
+                        <td className="px-4 py-2.5 text-green-400">{agg.wins ?? "—"}</td>
+                        <td className="px-4 py-2.5 text-red-400">{agg.losses ?? "—"}</td>
+                        <td className={`px-4 py-2.5 font-semibold ${winRateColor(agg.win_rate)}`}>{fmtPct(agg.win_rate)}</td>
+                        <td className={`px-4 py-2.5 font-medium ${pnlColor(agg.avg_pnl_pct)}`}>{fmtPctRaw(agg.avg_pnl_pct, 2)}</td>
+                        <td className="px-4 py-2.5 text-[var(--text-primary)]">{fmtPct(agg.tp_30m_rate)}</td>
+                        <td className={`px-4 py-2.5 ${pnlColor(agg.avg_mae_pct)}`}>{fmtPctRaw(agg.avg_mae_pct, 2)}</td>
+                        <td className="px-4 py-2.5">{confidenceBadge(agg.confidence_level)}</td>
+                        <td className="px-4 py-2.5">
+                          <div className="flex items-center gap-1.5">
+                            {isDuplicate ? (
+                              <button
+                                className="btn btn-secondary text-[10px] px-2 py-1 flex items-center gap-1 whitespace-nowrap"
+                                onClick={() => setSelectedDuplicateGroup(group)}
+                              >
+                                <Users className="w-3 h-3" />
+                                Ver {group.length} IDs
+                              </button>
+                            ) : (
+                              <a href="/profiles" className="btn btn-secondary text-[10px] px-2 py-1 flex items-center gap-1 whitespace-nowrap w-fit">
+                                <ExternalLink className="w-3 h-3" />
+                                Profiles
+                              </a>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1614,6 +1687,70 @@ export default function ProfileIntelligencePage() {
             )}
           </div>
         </Modal>
+      )}
+
+      {/* ── Duplicate Profile Group Drawer ───────────────────────────────────── */}
+      {selectedDuplicateGroup && (
+        <Drawer
+          title={`${selectedDuplicateGroup[0].profile_name} — ${selectedDuplicateGroup.length} UUIDs`}
+          onClose={() => setSelectedDuplicateGroup(null)}
+        >
+          <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 text-[12px] text-yellow-400 flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              Existem <strong>{selectedDuplicateGroup.length} profiles com o mesmo nome</strong>.
+              As métricas abaixo são individuais por UUID. Considere renomear ou consolidar
+              em <a href="/profiles" className="underline hover:opacity-80">/profiles</a>.
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="border-b border-[var(--border-subtle)]">
+                  {["UUID", "Fechados", "Wins", "Loss", "Win Rate", "Avg P&L", "Avg MAE", "Confidence"].map(h => (
+                    <th key={h} className="px-3 py-2 text-left text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--border-subtle)]">
+                {selectedDuplicateGroup.map(p => (
+                  <tr key={p.profile_id} className="hover:bg-[var(--bg-elevated)] transition-colors">
+                    <td className="px-3 py-2.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-[10px] text-[var(--text-secondary)]">{p.profile_id.slice(0, 8)}…</span>
+                        <button
+                          className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
+                          title="Copiar UUID completo"
+                          onClick={() => { navigator.clipboard.writeText(p.profile_id); showToast("UUID copiado", true); }}
+                        >
+                          <Copy className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 text-[var(--text-secondary)]">{p.closed_trades ?? "—"}</td>
+                    <td className="px-3 py-2.5 text-green-400">{p.wins ?? "—"}</td>
+                    <td className="px-3 py-2.5 text-red-400">{p.losses ?? "—"}</td>
+                    <td className={`px-3 py-2.5 font-semibold ${winRateColor(p.win_rate)}`}>{fmtPct(p.win_rate)}</td>
+                    <td className={`px-3 py-2.5 ${pnlColor(p.avg_pnl_pct)}`}>{fmtPctRaw(p.avg_pnl_pct, 2)}</td>
+                    <td className={`px-3 py-2.5 ${pnlColor(p.avg_mae_pct)}`}>{fmtPctRaw(p.avg_mae_pct, 2)}</td>
+                    <td className="px-3 py-2.5">{confidenceBadge(p.confidence_level)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="pt-2 border-t border-[var(--border-subtle)]">
+            <a
+              href="/profiles"
+              className="btn btn-secondary text-[12px] flex items-center gap-1.5 w-full justify-center"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              Gerenciar em /profiles
+            </a>
+          </div>
+        </Drawer>
       )}
 
       {/* ── Run Analysis Modal ────────────────────────────────────────────────── */}
