@@ -605,7 +605,7 @@ _INSERT_SHADOW_SQL = text("""
         :ttt_enabled, :ttt_tp_pct, :ttt_timeout_minutes,
         :barrier_mode, :tp_pct_applied, :sl_pct_applied
     )
-    ON CONFLICT (user_id, symbol, source) WHERE status = 'RUNNING' DO NOTHING
+    ON CONFLICT (user_id, symbol, source) WHERE status = 'RUNNING' AND profile_id IS NULL DO NOTHING
     RETURNING id
 """)
 
