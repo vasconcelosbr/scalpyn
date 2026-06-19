@@ -8,12 +8,54 @@ from fastapi import BackgroundTasks
 from app.api.profile_intelligence import _queue_autopilot_cycle
 from app.services.profile_intelligence_autopilot_service import (
     DEFAULT_AUTOPILOT_SETTINGS,
+    ProfileIntelligenceAutopilotService,
     canonical_signature,
     evaluation_ready,
     promotion_decision,
     rollback_required,
     semantic_rules_equivalent,
 )
+
+
+@pytest.mark.asyncio
+async def test_new_cycle_is_flushed_before_fk_audit():
+    class _StopAfterOrderingCheck(Exception):
+        pass
+
+    class _FakeDB:
+        def __init__(self):
+            self.scalar_calls = 0
+            self.flush_calls = 0
+
+        async def scalar(self, *_args, **_kwargs):
+            self.scalar_calls += 1
+            return True if self.scalar_calls == 1 else None
+
+        def add(self, _value):
+            return None
+
+        async def flush(self):
+            self.flush_calls += 1
+
+        async def execute(self, *_args, **_kwargs):
+            return None
+
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+    class _Service(ProfileIntelligenceAutopilotService):
+        async def get_settings(self, _db, _user_id):
+            return SimpleNamespace(enabled=True), DEFAULT_AUTOPILOT_SETTINGS.copy()
+
+        async def _audit(self, db, **_kwargs):
+            assert db.flush_calls == 1
+            raise _StopAfterOrderingCheck
+
+    with pytest.raises(_StopAfterOrderingCheck):
+        await _Service().run_cycle(_FakeDB(), uuid4(), analysis_run_id=uuid4())
 
 
 @pytest.mark.asyncio

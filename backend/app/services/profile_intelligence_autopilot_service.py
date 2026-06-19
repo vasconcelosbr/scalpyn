@@ -564,6 +564,7 @@ class ProfileIntelligenceAutopilotService:
                 cycle.completed_at = None
                 if analysis_run_id:
                     cycle.analysis_run_id = analysis_run_id
+            await db.flush()
             await self._audit(db, user_id=user_id, cycle_id=cycle.id, event_type="CYCLE_STARTED", decision="RUNNING", thresholds=settings)
             await db.commit()
 
@@ -1016,6 +1017,7 @@ class ProfileIntelligenceAutopilotService:
             previous_profile_version=None,
             new_profile_version=now,
         ))
+        await db.flush()
         await self._audit(
             db, user_id=user_id, cycle_id=cycle.id, candidate_id=candidate.id,
             profile_id=profile.id, profile_version=profile.profile_version,
