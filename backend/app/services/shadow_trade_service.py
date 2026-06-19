@@ -592,7 +592,8 @@ _INSERT_SHADOW_SQL = text("""
         status, skip_reason, source, config_snapshot, features_snapshot,
         last_processed_time,
         ttt_enabled, ttt_tp_pct, ttt_timeout_minutes,
-        barrier_mode, tp_pct_applied, sl_pct_applied
+        barrier_mode, tp_pct_applied, sl_pct_applied,
+        profile_id, profile_version, profile_name, strategy_type
     ) VALUES (
         gen_random_uuid(),
         :decision_id, :user_id, :symbol, :strategy, :direction,
@@ -603,9 +604,10 @@ _INSERT_SHADOW_SQL = text("""
         CAST(:features_snapshot AS JSONB),
         :last_processed_time,
         :ttt_enabled, :ttt_tp_pct, :ttt_timeout_minutes,
-        :barrier_mode, :tp_pct_applied, :sl_pct_applied
+        :barrier_mode, :tp_pct_applied, :sl_pct_applied,
+        :profile_id, :profile_version, :profile_name, :strategy_type
     )
-    ON CONFLICT (user_id, symbol, source) WHERE status = 'RUNNING' AND profile_id IS NULL DO NOTHING
+    ON CONFLICT DO NOTHING
     RETURNING id
 """)
 
@@ -728,6 +730,15 @@ async def _create_from_decision(
             "barrier_mode": barrier_mode,
             "tp_pct_applied": tp_pct or None,
             "sl_pct_applied": sl_pct or None,
+            # Profile attribution follows the decision that opened the shadow.
+            # NULL preserves the canonical/global L3 behavior; non-NULL allows
+            # independent profile simulations for the same symbol.
+            "profile_id": getattr(decision, "profile_id", None),
+            "profile_version": getattr(decision, "profile_version", None),
+            "profile_name": getattr(decision, "profile_name", None),
+            "strategy_type": (
+                "PROFILE_L3" if getattr(decision, "profile_id", None) else None
+            ),
             "status": initial_status,
             # skip_reason intencionalmente NULL: textos como NOT_TRADABLE/COOLDOWN
             # poluem o dataset do XGBoost (categórica de alta cardinalidade e

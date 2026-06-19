@@ -2081,9 +2081,9 @@ function buildBaseQuery(
   if (filter.symbol.trim()) params.set("symbol", filter.symbol.trim());
   if (filter.minDate) params.set("min_date", filter.minDate);
   if (filter.maxDate) params.set("max_date", filter.maxDate);
-  // Strategy Lab profiles store shadows with source='L3_LAB'; override when profile selected.
-  const effectiveSource = profileId ? "L3_LAB" : source;
-  if (effectiveSource) params.set("source", effectiveSource);
+  // A profile can own canonical L3 or Strategy Lab shadows. When selected,
+  // profile_id is the authoritative filter and source must remain unrestricted.
+  if (!profileId && source) params.set("source", source);
   if (profileId) params.set("profile_id", profileId);
   params.set("page", String(overrides.page ?? filter.page));
   params.set("page_size", String(overrides.page_size ?? filter.pageSize));
@@ -2095,9 +2095,8 @@ function buildSummaryQuery(filter: FilterState, source?: SourceTab, profileId?: 
   if (filter.symbol.trim()) params.set("symbol", filter.symbol.trim());
   if (filter.minDate) params.set("min_date", filter.minDate);
   if (filter.maxDate) params.set("max_date", filter.maxDate);
-  // Strategy Lab profiles store shadows with source='L3_LAB'; override when profile selected.
-  const effectiveSource = profileId ? "L3_LAB" : source;
-  if (effectiveSource) params.set("source", effectiveSource);
+  // See buildBaseQuery: profile attribution spans more than one shadow source.
+  if (!profileId && source) params.set("source", source);
   if (profileId) params.set("profile_id", profileId);
   return params.toString();
 }
