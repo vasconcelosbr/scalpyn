@@ -796,6 +796,27 @@ async def update_settings(
 
 # Profile Intelligence Auto-Pilot
 
+async def _queue_autopilot_cycle(
+    background_tasks: BackgroundTasks,
+    user_id: UUID,
+) -> Dict[str, Any]:
+    try:
+        from ..tasks.profile_intelligence_job import run_for_user
+        task = run_for_user.delay(str(user_id), False)
+        return {"cycle_status": "queued", "task_id": task.id}
+    except Exception as exc:
+        logger.warning("[PI API] Auto-Pilot queue dispatch failed, using background task: %s", exc)
+        from ..database import AsyncSessionLocal
+        from ..services.profile_intelligence_autopilot_service import ProfileIntelligenceAutopilotService
+
+        async def _background():
+            async with AsyncSessionLocal() as bg_db:
+                await ProfileIntelligenceAutopilotService().run_cycle(bg_db, user_id)
+
+        background_tasks.add_task(_background)
+        return {"cycle_status": "queued", "task_id": None}
+
+
 @router.get("/autopilot")
 async def get_autopilot_status(
     db: AsyncSession = Depends(get_db),
@@ -849,13 +870,21 @@ async def get_autopilot_status(
 @router.put("/autopilot")
 async def update_autopilot_status(
     payload: AutopilotSettingsUpdate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> Dict[str, Any]:
     from ..services.profile_intelligence_autopilot_service import ProfileIntelligenceAutopilotService
-    return await ProfileIntelligenceAutopilotService().set_enabled(
+
+    service = ProfileIntelligenceAutopilotService()
+    current, _ = await service.get_settings(db, user_id)
+    was_enabled = current.enabled
+    result = await service.set_enabled(
         db, user_id, payload.enabled, payload.settings
     )
+    if payload.enabled and not was_enabled:
+        result.update(await _queue_autopilot_cycle(background_tasks, user_id))
+    return result
 
 
 @router.post("/autopilot/run")
@@ -869,19 +898,8 @@ async def trigger_autopilot_cycle(
     if not row.enabled:
         raise HTTPException(status_code=409, detail="Auto-Pilot global está desligado")
     await db.commit()
-    try:
-        from ..tasks.profile_intelligence_job import run_for_user
-        task = run_for_user.delay(str(user_id), False)
-        return {"status": "queued", "task_id": task.id}
-    except Exception:
-        from ..database import AsyncSessionLocal
-
-        async def _background():
-            async with AsyncSessionLocal() as bg_db:
-                await ProfileIntelligenceAutopilotService().run_cycle(bg_db, user_id)
-
-        background_tasks.add_task(_background)
-        return {"status": "queued", "task_id": None}
+    queued = await _queue_autopilot_cycle(background_tasks, user_id)
+    return {"status": queued["cycle_status"], "task_id": queued["task_id"]}
 
 
 @router.get("/autopilot/candidates")

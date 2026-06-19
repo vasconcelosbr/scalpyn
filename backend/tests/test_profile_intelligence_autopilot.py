@@ -1,3 +1,11 @@
+import sys
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+from fastapi import BackgroundTasks
+
+from app.api.profile_intelligence import _queue_autopilot_cycle
 from app.services.profile_intelligence_autopilot_service import (
     DEFAULT_AUTOPILOT_SETTINGS,
     canonical_signature,
@@ -6,6 +14,49 @@ from app.services.profile_intelligence_autopilot_service import (
     rollback_required,
     semantic_rules_equivalent,
 )
+
+
+@pytest.mark.asyncio
+async def test_queue_autopilot_cycle_dispatches_structural_task(monkeypatch):
+    dispatched = []
+
+    def _delay(user_id, force):
+        dispatched.append((user_id, force))
+        return SimpleNamespace(id="task-123")
+
+    fake_task = SimpleNamespace(delay=_delay)
+    monkeypatch.setitem(
+        sys.modules,
+        "app.tasks.profile_intelligence_job",
+        SimpleNamespace(run_for_user=fake_task),
+    )
+    user_id = uuid4()
+    background_tasks = BackgroundTasks()
+
+    result = await _queue_autopilot_cycle(background_tasks, user_id)
+
+    assert result == {"cycle_status": "queued", "task_id": "task-123"}
+    assert dispatched == [(str(user_id), False)]
+    assert background_tasks.tasks == []
+
+
+@pytest.mark.asyncio
+async def test_queue_autopilot_cycle_falls_back_to_background_task(monkeypatch):
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("broker unavailable")
+
+    fake_task = SimpleNamespace(delay=_raise)
+    monkeypatch.setitem(
+        sys.modules,
+        "app.tasks.profile_intelligence_job",
+        SimpleNamespace(run_for_user=fake_task),
+    )
+    background_tasks = BackgroundTasks()
+
+    result = await _queue_autopilot_cycle(background_tasks, uuid4())
+
+    assert result == {"cycle_status": "queued", "task_id": None}
+    assert len(background_tasks.tasks) == 1
 
 
 def test_semantic_dedup_is_order_independent_and_uses_relative_tolerance():

@@ -504,8 +504,17 @@ export default function ProfileIntelligencePage() {
     try {
       const result = await apiPut("/profile-intelligence/autopilot", { enabled: next });
       setAutopilot(prev => ({ ...(prev || {} as AutopilotStatus), ...result, enabled: next }));
-      showToast(next ? "Auto-Pilot global ligado." : "Auto-Pilot global desligado.");
+      showToast(
+        next && result?.cycle_status === "queued"
+          ? "Auto-Pilot global ligado. Primeiro ciclo enfileirado."
+          : next
+            ? "Auto-Pilot global ligado."
+            : "Auto-Pilot global desligado."
+      );
       await loadOverview();
+      if (next && result?.cycle_status === "queued") {
+        setTimeout(() => { loadOverview(); }, 3000);
+      }
     } catch (e: any) {
       showToast(`Erro ao alterar Auto-Pilot: ${e.message}`, false);
     } finally {
