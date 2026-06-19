@@ -1,8 +1,9 @@
 """
 Celery Task — Profile Intelligence Engine.
 
-Runs every 6 hours (structural queue). Iterates all users who have recent
-closed shadow trades and runs the PI analysis pipeline for each.
+Runs every 24 hours (structural queue). Iterates users with recent closed
+shadow trades or an enabled global Auto-Pilot, runs PI analysis, then executes
+the idempotent Spot Auto-Pilot cycle.
 
 Registered as: ``app.tasks.profile_intelligence_job.run``
 """
@@ -82,9 +83,16 @@ async def _run_pi_job():
         try:
             rows = (await db.execute(text("""
                 SELECT DISTINCT user_id
-                FROM shadow_trades
-                WHERE created_at >= NOW() - INTERVAL '90 days'
-                  AND outcome IN ('TP_HIT','SL_HIT','TIMEOUT')
+                FROM (
+                    SELECT user_id
+                    FROM shadow_trades
+                    WHERE created_at >= NOW() - INTERVAL '90 days'
+                      AND outcome IN ('TP_HIT','SL_HIT','TIMEOUT')
+                    UNION
+                    SELECT user_id
+                    FROM profile_intelligence_autopilot_settings
+                    WHERE enabled IS TRUE
+                ) users_to_process
             """))).fetchall()
         except Exception as exc:
             logger.error("[PIJob] Failed to get user list: %s", exc)
@@ -113,6 +121,15 @@ async def _run_pi_job():
                     include_ai_explanation=False,
                 )
                 logger.info("[PIJob] Completed run %s for user %s", run_id, user_id)
+                from ..services.profile_intelligence_autopilot_service import (
+                    ProfileIntelligenceAutopilotService,
+                )
+                autopilot_result = await ProfileIntelligenceAutopilotService().run_cycle(
+                    db=db,
+                    user_id=user_id,
+                    analysis_run_id=run_id,
+                )
+                logger.info("[PIJob] Auto-Pilot result for user %s: %s", user_id, autopilot_result)
             except Exception as exc:
                 logger.error("[PIJob] Failed for user %s: %s", user_id, exc)
             finally:
@@ -123,3 +140,66 @@ async def _run_pi_job():
 def run(self):
     """Celery entry point for Profile Intelligence Engine."""
     _run_async(_run_pi_job())
+
+
+async def _run_for_user(user_id, force_autopilot: bool = False):
+    from uuid import UUID
+    from ..database import AsyncSessionLocal
+    from ..services.profile_intelligence_service import ProfileIntelligenceService
+    from ..services.profile_intelligence_autopilot_service import ProfileIntelligenceAutopilotService
+
+    uid = UUID(str(user_id))
+    redis_client, acquired, lock_key = _acquire_pi_lock(uid)
+    if not acquired:
+        return {"status": "duplicate"}
+    try:
+        async with AsyncSessionLocal() as db:
+            run_id = await ProfileIntelligenceService().run(
+                db=db,
+                user_id=uid,
+                lookback_days=60,
+                min_closed_trades=30,
+                include_counterfactual=True,
+                include_dynamic_combinations=True,
+                include_association_rules=False,
+                include_optuna=False,
+                include_ai_explanation=False,
+            )
+            return await ProfileIntelligenceAutopilotService().run_cycle(
+                db=db,
+                user_id=uid,
+                analysis_run_id=run_id,
+                force=force_autopilot,
+            )
+    finally:
+        _release_pi_lock(redis_client, lock_key)
+
+
+@celery_app.task(name="app.tasks.profile_intelligence_job.run_for_user", bind=True)
+def run_for_user(self, user_id: str, force_autopilot: bool = False):
+    return _run_async(_run_for_user(user_id, force_autopilot))
+
+
+async def _monitor_autopilot():
+    from ..database import AsyncSessionLocal
+    from ..services.profile_intelligence_autopilot_service import ProfileIntelligenceAutopilotService
+    from sqlalchemy import text
+
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(text("""
+            SELECT user_id
+            FROM profile_intelligence_autopilot_settings
+            WHERE enabled IS TRUE
+        """))).fetchall()
+    service = ProfileIntelligenceAutopilotService()
+    for row in rows:
+        async with AsyncSessionLocal() as db:
+            try:
+                await service.monitor_operational_state(db, row.user_id)
+            except Exception as exc:
+                logger.error("[PIJob] operational monitor failed for user %s: %s", row.user_id, exc)
+
+
+@celery_app.task(name="app.tasks.profile_intelligence_job.monitor", bind=True)
+def monitor(self):
+    return _run_async(_monitor_autopilot())

@@ -28,6 +28,16 @@ from .profile_intelligence import (
     ProfileSuggestion,
     ProfileIntelligenceAuditLog,
 )
+from .profile_intelligence_autopilot import (
+    ProfileIntelligenceAutopilotSettings,
+    ProfileIntelligenceAutopilotCycle,
+    ProfileIntelligenceAutopilotCandidate,
+    ProfileIntelligenceLossFamily,
+    ProfileIntelligenceAutopilotAssociation,
+    ProfileIntelligenceAutopilotReport,
+    ProfileIntelligenceAutopilotCompensation,
+    ProfileIntelligenceAutopilotAudit,
+)
 
 __all__ = [
     "User",
@@ -66,4 +76,12 @@ __all__ = [
     "ProfileRuleCombination",
     "ProfileSuggestion",
     "ProfileIntelligenceAuditLog",
+    "ProfileIntelligenceAutopilotSettings",
+    "ProfileIntelligenceAutopilotCycle",
+    "ProfileIntelligenceAutopilotCandidate",
+    "ProfileIntelligenceLossFamily",
+    "ProfileIntelligenceAutopilotAssociation",
+    "ProfileIntelligenceAutopilotReport",
+    "ProfileIntelligenceAutopilotCompensation",
+    "ProfileIntelligenceAutopilotAudit",
 ]

@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import {
   Brain, RefreshCw, Play, Settings, ChevronDown, ChevronRight,
   TrendingUp, TrendingDown, AlertTriangle, CheckCircle, Copy,
-  ExternalLink, X, Zap, BarChart3, Eye, Users,
+  ExternalLink, X, Zap, BarChart3, Eye, Users, Power, RotateCcw,
 } from "lucide-react";
 import { apiGet, apiPost, apiPut } from "@/lib/api";
 
@@ -192,6 +192,41 @@ interface PISettings {
   enable_catboost?: boolean;
 }
 
+interface AutopilotCandidate {
+  id: string;
+  profile_id: string;
+  profile_name: string;
+  origin_profile_id?: string | null;
+  watchlist_id?: string | null;
+  watchlist_name?: string | null;
+  state: string;
+  version_number: number;
+  observed_trades: number;
+  observed_win_rate?: number | null;
+  observed_avg_pnl_pct?: number | null;
+  reason?: string | null;
+  updated_at: string;
+}
+
+interface AutopilotStatus {
+  enabled: boolean;
+  enabled_at?: string | null;
+  disabled_at?: string | null;
+  last_cycle_at?: string | null;
+  settings: Record<string, number>;
+  candidate_counts: Record<string, number>;
+  latest_cycle?: {
+    id: string;
+    status: string;
+    checkpoint?: string | null;
+    window_start: string;
+    completed_at?: string | null;
+    metrics?: Record<string, number>;
+    errors?: any[];
+  } | null;
+  latest_report?: any;
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function fmtDate(iso: string | null | undefined) {
@@ -295,7 +330,7 @@ function ChampionScoreBar({ score }: { score: number | null | undefined }) {
   );
 }
 
-const TABS = ["Overview", "Profiles", "Indicators", "Combinations", "Suggestions", "Audit", "Settings"] as const;
+const TABS = ["Overview", "Auto-Pilot", "Profiles", "Indicators", "Combinations", "Suggestions", "Audit", "Settings"] as const;
 type Tab = typeof TABS[number];
 
 const DEFAULT_RUN_PAYLOAD = {
@@ -324,6 +359,11 @@ export default function ProfileIntelligencePage() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [settings, setSettings] = useState<PISettings>({});
+  const [autopilot, setAutopilot] = useState<AutopilotStatus | null>(null);
+  const [autopilotCandidates, setAutopilotCandidates] = useState<AutopilotCandidate[]>([]);
+  const [autopilotAudit, setAutopilotAudit] = useState<any[]>([]);
+  const [togglingAutopilot, setTogglingAutopilot] = useState(false);
+  const [runningAutopilot, setRunningAutopilot] = useState(false);
 
   // Loading
   const [loadingOverview, setLoadingOverview] = useState(true);
@@ -392,12 +432,14 @@ export default function ProfileIntelligencePage() {
   const loadOverview = useCallback(async () => {
     setLoadingOverview(true);
     try {
-      const [ov, r] = await Promise.all([
+      const [ov, r, ap] = await Promise.all([
         apiGet("/profile-intelligence/overview").catch(() => apiGet("/profile-intelligence/")),
         apiGet("/profile-intelligence/runs").catch(() => ({ runs: [] })),
+        apiGet("/profile-intelligence/autopilot").catch(() => null),
       ]);
       setOverview(ov || {});
       setRuns(r?.runs || r || []);
+      setAutopilot(ap);
     } catch (e) {
       console.error(e);
     } finally {
@@ -409,7 +451,16 @@ export default function ProfileIntelligencePage() {
     if (tab === "Overview") return;
     setLoadingTab(true);
     try {
-      if (tab === "Profiles") {
+      if (tab === "Auto-Pilot") {
+        const [status, candidates, events] = await Promise.all([
+          apiGet("/profile-intelligence/autopilot"),
+          apiGet("/profile-intelligence/autopilot/candidates?limit=100"),
+          apiGet("/profile-intelligence/autopilot/audit?limit=100"),
+        ]);
+        setAutopilot(status);
+        setAutopilotCandidates(candidates?.candidates || []);
+        setAutopilotAudit(events?.events || []);
+      } else if (tab === "Profiles") {
         const d = await apiGet("/profile-intelligence/profiles/ranking?lookback_days=60&limit=30");
         setProfiles(d?.profiles || d || []);
       } else if (tab === "Indicators") {
@@ -445,6 +496,33 @@ export default function ProfileIntelligencePage() {
   const handleRefresh = () => {
     loadOverview();
     if (activeTab !== "Overview") loadTab(activeTab);
+  };
+
+  const handleToggleAutopilot = async () => {
+    const next = !autopilot?.enabled;
+    setTogglingAutopilot(true);
+    try {
+      const result = await apiPut("/profile-intelligence/autopilot", { enabled: next });
+      setAutopilot(prev => ({ ...(prev || {} as AutopilotStatus), ...result, enabled: next }));
+      showToast(next ? "Auto-Pilot global ligado." : "Auto-Pilot global desligado.");
+      await loadOverview();
+    } catch (e: any) {
+      showToast(`Erro ao alterar Auto-Pilot: ${e.message}`, false);
+    } finally {
+      setTogglingAutopilot(false);
+    }
+  };
+
+  const handleRunAutopilot = async () => {
+    setRunningAutopilot(true);
+    try {
+      await apiPost("/profile-intelligence/autopilot/run", {});
+      showToast("Ciclo do Auto-Pilot enfileirado.");
+    } catch (e: any) {
+      showToast(`Erro ao iniciar ciclo: ${e.message}`, false);
+    } finally {
+      setRunningAutopilot(false);
+    }
   };
 
   // ── Run Analysis ─────────────────────────────────────────────────────────────
@@ -675,6 +753,19 @@ export default function ProfileIntelligencePage() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button
+            className={`btn text-[12px] flex items-center gap-1.5 ${
+              autopilot?.enabled
+                ? "bg-green-600/20 text-green-400 border border-green-500/40"
+                : "btn-secondary"
+            }`}
+            onClick={handleToggleAutopilot}
+            disabled={togglingAutopilot}
+            title="Controle global por conta"
+          >
+            <Power className="w-3.5 h-3.5" />
+            Auto-Pilot {autopilot?.enabled ? "Ligado" : "Desligado"}
+          </button>
+          <button
             className="btn btn-secondary text-[12px] flex items-center gap-1.5"
             onClick={handleRefresh}
             disabled={loadingOverview || loadingTab}
@@ -789,12 +880,143 @@ export default function ProfileIntelligencePage() {
                   <AlertTriangle className="w-4 h-4 text-yellow-400 mt-0.5 shrink-0" />
                   <div className="text-[12px] text-[var(--text-secondary)] space-y-1">
                     <p><strong className="text-yellow-400">Aviso operacional:</strong> O Profile Intelligence Engine é analítico. Sugestões são <em>hipóteses</em>, não recomendações operacionais.</p>
-                    <p>Nenhum profile será criado ou ativado automaticamente. Live trading permanece desativado. Combinações LOW confidence requerem mais dados antes de qualquer ação.</p>
+                    <p>Com o Auto-Pilot desligado, sugestões permanecem manuais. Quando ligado, somente clones Shadow com amostra válida e gates Spot aprovados podem ser promovidos.</p>
                   </div>
                 </div>
               </div>
             </>
           )}
+        </div>
+      )}
+
+      {activeTab === "Auto-Pilot" && (
+        <div className="space-y-5">
+          <div className="card p-4">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Power className={`w-5 h-5 ${autopilot?.enabled ? "text-green-400" : "text-[var(--text-tertiary)]"}`} />
+                  <h2 className="text-[15px] font-semibold text-[var(--text-primary)]">
+                    Auto-Pilot global {autopilot?.enabled ? "ligado" : "desligado"}
+                  </h2>
+                </div>
+                <p className="text-[12px] text-[var(--text-secondary)] mt-1 max-w-3xl">
+                  Calibra clones versionados, testa candidatos em Shadow, promove somente com evidência válida
+                  e executa rollback por degradação. Profiles originais não são alterados.
+                </p>
+                <p className="text-[11px] text-[var(--text-tertiary)] mt-2">
+                  Último ciclo: {fmtDate(autopilot?.last_cycle_at)}
+                  {autopilot?.latest_cycle?.status ? ` · ${autopilot.latest_cycle.status}` : ""}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="btn btn-secondary text-[12px] flex items-center gap-1.5"
+                  onClick={handleRunAutopilot}
+                  disabled={!autopilot?.enabled || runningAutopilot}
+                >
+                  <RotateCcw className={`w-3.5 h-3.5 ${runningAutopilot ? "animate-spin" : ""}`} />
+                  Executar ciclo
+                </button>
+                <button
+                  className={`btn text-[12px] ${autopilot?.enabled ? "btn-secondary" : "btn-primary"}`}
+                  onClick={handleToggleAutopilot}
+                  disabled={togglingAutopilot}
+                >
+                  {autopilot?.enabled ? "Desligar" : "Ligar"}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            {[
+              ["Coletando", autopilot?.candidate_counts?.SHADOW_COLLECTING ?? 0],
+              ["Prontos", autopilot?.candidate_counts?.SHADOW_READY_FOR_REVIEW ?? 0],
+              ["Aguardando live", autopilot?.candidate_counts?.APPROVED_WAITING_LIVE ?? 0],
+              ["Live", autopilot?.candidate_counts?.LIVE ?? 0],
+              ["Rollbacks", autopilot?.candidate_counts?.ROLLED_BACK ?? 0],
+            ].map(([label, value]) => (
+              <div className="card p-3" key={String(label)}>
+                <div className="text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">{label}</div>
+                <div className="text-xl font-bold text-[var(--text-primary)] mt-1">{value}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="card">
+            <div className="p-4 border-b border-[var(--border-default)]">
+              <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">Candidatos e versões</h2>
+              <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">
+                Win Rate inclui a contagem de trades; P&amp;L usa representação decimal canônica.
+              </p>
+            </div>
+            {loadingTab ? <TableSkeleton /> : autopilotCandidates.length === 0 ? (
+              <div className="p-8 text-center text-[12px] text-[var(--text-tertiary)]">Nenhum candidato criado.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-[12px]">
+                  <thead>
+                    <tr className="border-b border-[var(--border-subtle)]">
+                      {["Profile", "Versão", "Estado", "Trades", "Win Rate", "P&L médio", "Watchlist", "Atualizado", "Motivo"].map(h => (
+                        <th key={h} className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] whitespace-nowrap">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--border-subtle)]">
+                    {autopilotCandidates.map(candidate => (
+                      <tr key={candidate.id}>
+                        <td className="px-4 py-2.5 text-[var(--text-primary)]">{candidate.profile_name}</td>
+                        <td className="px-4 py-2.5 font-mono">v{candidate.version_number}</td>
+                        <td className="px-4 py-2.5">{statusBadge(candidate.state)}</td>
+                        <td className="px-4 py-2.5">{candidate.observed_trades}</td>
+                        <td className={`px-4 py-2.5 ${winRateColor(candidate.observed_win_rate)}`}>
+                          {candidate.observed_win_rate == null ? "—" : `${(candidate.observed_win_rate * 100).toFixed(1)}%`}
+                        </td>
+                        <td className={`px-4 py-2.5 ${pnlColor(candidate.observed_avg_pnl_pct)}`}>
+                          {fmtPct(candidate.observed_avg_pnl_pct, 2)}
+                        </td>
+                        <td className="px-4 py-2.5 text-[var(--text-secondary)]">{candidate.watchlist_name || "—"}</td>
+                        <td className="px-4 py-2.5 whitespace-nowrap">{fmtDate(candidate.updated_at)}</td>
+                        <td className="px-4 py-2.5 max-w-[260px] truncate" title={candidate.reason || ""}>{candidate.reason || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="p-4 border-b border-[var(--border-default)]">
+              <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">Relatório Executivo</h2>
+            </div>
+            <pre className="p-4 text-[11px] text-[var(--text-secondary)] overflow-auto max-h-[420px]">
+              {autopilot?.latest_report
+                ? JSON.stringify(autopilot.latest_report, null, 2)
+                : "Nenhum relatório diário disponível."}
+            </pre>
+          </div>
+
+          <div className="card">
+            <div className="p-4 border-b border-[var(--border-default)]">
+              <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">Auditoria imutável</h2>
+            </div>
+            <div className="divide-y divide-[var(--border-subtle)] max-h-[420px] overflow-auto">
+              {autopilotAudit.map(event => (
+                <div key={event.id} className="p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-mono text-[11px] text-[var(--text-primary)]">{event.event_type}</span>
+                    <span className="text-[10px] text-[var(--text-tertiary)]">{fmtDate(event.created_at)}</span>
+                  </div>
+                  <div className="text-[11px] text-[var(--text-secondary)] mt-1">
+                    {event.decision || "—"} · {event.reason || "Sem motivo informado"}
+                  </div>
+                </div>
+              ))}
+              {!autopilotAudit.length && <div className="p-6 text-center text-[12px] text-[var(--text-tertiary)]">Sem eventos.</div>}
+            </div>
+          </div>
         </div>
       )}
 

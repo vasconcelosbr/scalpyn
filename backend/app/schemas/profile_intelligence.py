@@ -52,3 +52,8 @@ class CreateProfileRequest(BaseModel):
     reuse_existing_master_rules: bool = True
     assign_to_watchlist_id: Optional[str] = None
     dry_run: bool = False
+
+
+class AutopilotSettingsUpdate(BaseModel):
+    enabled: bool
+    settings: Optional[Dict[str, Any]] = None

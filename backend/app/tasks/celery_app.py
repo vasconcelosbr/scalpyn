@@ -193,6 +193,8 @@ TASK_ROUTES = {
     # Profile Intelligence Engine — indicator lift, rule mining, suggestions.
     # Structural queue: heavy analysis but no latency requirement.
     "app.tasks.profile_intelligence_job.run":       {"queue": QUEUE_STRUCTURAL},
+    "app.tasks.profile_intelligence_job.run_for_user": {"queue": QUEUE_STRUCTURAL},
+    "app.tasks.profile_intelligence_job.monitor":   {"queue": QUEUE_STRUCTURAL},
 
     # Opportunity Snapshot Evaluator — populates future_outcome on snapshots.
     # Structural queue: DB-only work (ohlcv table + shadow_trades join), no latency req.
@@ -587,12 +589,17 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": QUEUE_STRUCTURAL},
     },
 
-    # Profile Intelligence Engine — análise de indicadores, combinações e sugestões.
-    # Beat default 6h (override via PROFILE_INTELLIGENCE_INTERVAL_S env).
+    # Profile Intelligence Engine + Auto-Pilot Spot.
+    # Beat default 24h (override via PROFILE_INTELLIGENCE_INTERVAL_S env).
     # Structural queue: análise pesada, sem latência crítica.
     "profile_intelligence_engine": {
         "task": "app.tasks.profile_intelligence_job.run",
-        "schedule": float(os.environ.get("PROFILE_INTELLIGENCE_INTERVAL_S", 21600)),
+        "schedule": float(os.environ.get("PROFILE_INTELLIGENCE_INTERVAL_S", 86400)),
+        "options": {"queue": QUEUE_STRUCTURAL},
+    },
+    "profile_intelligence_autopilot_monitor": {
+        "task": "app.tasks.profile_intelligence_job.monitor",
+        "schedule": float(os.environ.get("PROFILE_INTELLIGENCE_MONITOR_INTERVAL_S", 300)),
         "options": {"queue": QUEUE_STRUCTURAL},
     },
 

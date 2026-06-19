@@ -19,7 +19,13 @@ from ..models.profile_intelligence import (
     ProfileIntelligenceAuditLog,
 )
 from .config import get_current_user_id
-from ..schemas.profile_intelligence import RunRequest, RunResponse, PISettingsUpdate, CreateProfileRequest
+from ..schemas.profile_intelligence import (
+    RunRequest,
+    RunResponse,
+    PISettingsUpdate,
+    CreateProfileRequest,
+    AutopilotSettingsUpdate,
+)
 from ..services.profile_intelligence_audit_service import log_pi_event
 
 logger = logging.getLogger(__name__)
@@ -786,6 +792,195 @@ async def update_settings(
         await db.commit()
 
     return {"settings": new_settings}
+
+
+# Profile Intelligence Auto-Pilot
+
+@router.get("/autopilot")
+async def get_autopilot_status(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    from ..models.profile_intelligence_autopilot import (
+        ProfileIntelligenceAutopilotCycle,
+        ProfileIntelligenceAutopilotReport,
+    )
+    from ..services.profile_intelligence_autopilot_service import ProfileIntelligenceAutopilotService
+
+    service = ProfileIntelligenceAutopilotService()
+    row, settings = await service.get_settings(db, user_id)
+    latest_cycle = await db.scalar(
+        select(ProfileIntelligenceAutopilotCycle).where(
+            ProfileIntelligenceAutopilotCycle.user_id == user_id
+        ).order_by(ProfileIntelligenceAutopilotCycle.started_at.desc()).limit(1)
+    )
+    latest_report = await db.scalar(
+        select(ProfileIntelligenceAutopilotReport).where(
+            ProfileIntelligenceAutopilotReport.user_id == user_id
+        ).order_by(ProfileIntelligenceAutopilotReport.created_at.desc()).limit(1)
+    )
+    state_rows = (await db.execute(text("""
+        SELECT state, COUNT(*)::int AS total
+        FROM profile_intelligence_autopilot_candidates
+        WHERE user_id = :uid
+        GROUP BY state
+    """), {"uid": str(user_id)})).fetchall()
+    return {
+        "enabled": row.enabled,
+        "settings": settings,
+        "enabled_at": row.enabled_at.isoformat() if row.enabled_at else None,
+        "disabled_at": row.disabled_at.isoformat() if row.disabled_at else None,
+        "last_cycle_at": row.last_cycle_at.isoformat() if row.last_cycle_at else None,
+        "latest_cycle": {
+            "id": str(latest_cycle.id),
+            "status": latest_cycle.status,
+            "checkpoint": latest_cycle.checkpoint,
+            "window_start": latest_cycle.window_start.isoformat(),
+            "started_at": latest_cycle.started_at.isoformat(),
+            "completed_at": latest_cycle.completed_at.isoformat() if latest_cycle.completed_at else None,
+            "metrics": latest_cycle.metrics_json or {},
+            "errors": latest_cycle.errors_json or [],
+        } if latest_cycle else None,
+        "candidate_counts": {item.state: item.total for item in state_rows},
+        "latest_report": latest_report.report_json if latest_report else None,
+    }
+
+
+@router.put("/autopilot")
+async def update_autopilot_status(
+    payload: AutopilotSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    from ..services.profile_intelligence_autopilot_service import ProfileIntelligenceAutopilotService
+    return await ProfileIntelligenceAutopilotService().set_enabled(
+        db, user_id, payload.enabled, payload.settings
+    )
+
+
+@router.post("/autopilot/run")
+async def trigger_autopilot_cycle(
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    from ..services.profile_intelligence_autopilot_service import ProfileIntelligenceAutopilotService
+    row, _ = await ProfileIntelligenceAutopilotService().get_settings(db, user_id)
+    if not row.enabled:
+        raise HTTPException(status_code=409, detail="Auto-Pilot global está desligado")
+    await db.commit()
+    try:
+        from ..tasks.profile_intelligence_job import run_for_user
+        task = run_for_user.delay(str(user_id), False)
+        return {"status": "queued", "task_id": task.id}
+    except Exception:
+        from ..database import AsyncSessionLocal
+
+        async def _background():
+            async with AsyncSessionLocal() as bg_db:
+                await ProfileIntelligenceAutopilotService().run_cycle(bg_db, user_id)
+
+        background_tasks.add_task(_background)
+        return {"status": "queued", "task_id": None}
+
+
+@router.get("/autopilot/candidates")
+async def list_autopilot_candidates(
+    state: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    from ..models.profile import Profile
+    from ..models.pipeline_watchlist import PipelineWatchlist
+    from ..models.profile_intelligence_autopilot import ProfileIntelligenceAutopilotCandidate
+
+    query = (
+        select(ProfileIntelligenceAutopilotCandidate, Profile.name, PipelineWatchlist.name)
+        .join(Profile, Profile.id == ProfileIntelligenceAutopilotCandidate.profile_id)
+        .outerjoin(PipelineWatchlist, PipelineWatchlist.id == ProfileIntelligenceAutopilotCandidate.shadow_watchlist_id)
+        .where(ProfileIntelligenceAutopilotCandidate.user_id == user_id)
+    )
+    if state:
+        query = query.where(ProfileIntelligenceAutopilotCandidate.state == state)
+    rows = (await db.execute(
+        query.order_by(ProfileIntelligenceAutopilotCandidate.updated_at.desc()).limit(limit)
+    )).all()
+    return {"candidates": [{
+        "id": str(candidate.id),
+        "profile_id": str(candidate.profile_id),
+        "profile_name": profile_name,
+        "origin_profile_id": str(candidate.origin_profile_id) if candidate.origin_profile_id else None,
+        "previous_profile_id": str(candidate.previous_profile_id) if candidate.previous_profile_id else None,
+        "watchlist_id": str(candidate.shadow_watchlist_id) if candidate.shadow_watchlist_id else None,
+        "watchlist_name": watchlist_name,
+        "target_watchlist_id": str(candidate.target_watchlist_id) if candidate.target_watchlist_id else None,
+        "state": candidate.state,
+        "version_number": candidate.version_number,
+        "observed_trades": candidate.observed_trades,
+        "observed_win_rate": float(candidate.observed_win_rate) if candidate.observed_win_rate is not None else None,
+        "observed_avg_pnl_pct": float(candidate.observed_avg_pnl_pct) if candidate.observed_avg_pnl_pct is not None else None,
+        "promotion_win_rate": float(candidate.promotion_win_rate) if candidate.promotion_win_rate is not None else None,
+        "promotion_avg_pnl_pct": float(candidate.promotion_avg_pnl_pct) if candidate.promotion_avg_pnl_pct is not None else None,
+        "reason": candidate.decision_reason,
+        "evidence": candidate.evidence_json or {},
+        "created_at": candidate.created_at.isoformat(),
+        "updated_at": candidate.updated_at.isoformat(),
+    } for candidate, profile_name, watchlist_name in rows]}
+
+
+@router.get("/autopilot/reports")
+async def list_autopilot_reports(
+    limit: int = Query(default=30, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    from ..models.profile_intelligence_autopilot import ProfileIntelligenceAutopilotReport
+    rows = (await db.execute(
+        select(ProfileIntelligenceAutopilotReport).where(
+            ProfileIntelligenceAutopilotReport.user_id == user_id
+        ).order_by(ProfileIntelligenceAutopilotReport.created_at.desc()).limit(limit)
+    )).scalars().all()
+    return {"reports": [{
+        "id": str(row.id),
+        "cycle_id": str(row.cycle_id),
+        "report": row.report_json,
+        "created_at": row.created_at.isoformat(),
+    } for row in rows]}
+
+
+@router.get("/autopilot/audit")
+async def list_autopilot_audit(
+    event_type: Optional[str] = None,
+    limit: int = Query(default=200, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    from ..models.profile_intelligence_autopilot import ProfileIntelligenceAutopilotAudit
+    query = select(ProfileIntelligenceAutopilotAudit).where(
+        ProfileIntelligenceAutopilotAudit.user_id == user_id
+    )
+    if event_type:
+        query = query.where(ProfileIntelligenceAutopilotAudit.event_type == event_type)
+    rows = (await db.execute(
+        query.order_by(ProfileIntelligenceAutopilotAudit.created_at.desc()).limit(limit)
+    )).scalars().all()
+    return {"events": [{
+        "id": str(row.id),
+        "event_type": row.event_type,
+        "cycle_id": str(row.cycle_id) if row.cycle_id else None,
+        "candidate_id": str(row.candidate_id) if row.candidate_id else None,
+        "profile_id": str(row.profile_id) if row.profile_id else None,
+        "watchlist_id": str(row.watchlist_id) if row.watchlist_id else None,
+        "combination_id": str(row.combination_id) if row.combination_id else None,
+        "suggestion_id": str(row.suggestion_id) if row.suggestion_id else None,
+        "input_metrics": row.input_metrics_json or {},
+        "thresholds": row.thresholds_json or {},
+        "decision": row.decision,
+        "reason": row.reason,
+        "result": row.result_json or {},
+        "created_at": row.created_at.isoformat(),
+    } for row in rows]}
 
 
 # ── Serialization helpers ─────────────────────────────────────────────────────
