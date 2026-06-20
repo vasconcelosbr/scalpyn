@@ -1,9 +1,10 @@
 """Profile Intelligence Engine API."""
 from __future__ import annotations
 
+from importlib.util import find_spec
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -11,12 +12,17 @@ from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
+from ..models.profile import Profile
 from ..models.profile_intelligence import (
     ProfileIntelligenceRun,
     ProfileIndicatorStats,
     ProfileRuleCombination,
     ProfileSuggestion,
     ProfileIntelligenceAuditLog,
+    MLModelRegistry,
+    ProductionChampionControl,
+    AlgorithmForwardValidation,
+    AutopilotAutonomyPolicy,
 )
 from .config import get_current_user_id
 from ..schemas.profile_intelligence import (
@@ -25,6 +31,8 @@ from ..schemas.profile_intelligence import (
     PISettingsUpdate,
     CreateProfileRequest,
     AutopilotSettingsUpdate,
+    CandidateApprovalRequest,
+    CandidateRejectionRequest,
 )
 from ..services.profile_intelligence_audit_service import log_pi_event
 
@@ -48,6 +56,44 @@ _DEFAULT_SETTINGS = {
     "enable_lightgbm": False,
     "enable_catboost": False,
 }
+
+_UNIMPLEMENTED_ML_FLAGS = {
+    "enable_lightgbm": "LightGBM is not implemented",
+    "enable_catboost": "CatBoost is not implemented",
+}
+
+
+def _normalize_unimplemented_ml_flags(
+    settings: Optional[Dict[str, Any]],
+) -> tuple[Dict[str, Any], list[str]]:
+    normalized = dict(settings or {})
+    warnings = [
+        message
+        for flag, message in _UNIMPLEMENTED_ML_FLAGS.items()
+        if normalized.get(flag) is True
+    ]
+    for flag in _UNIMPLEMENTED_ML_FLAGS:
+        normalized[flag] = False
+    return normalized, warnings
+
+
+def _ml_challenger_status() -> Dict[str, Dict[str, Any]]:
+    status = {
+        "available": False,
+        "implemented": False,
+        "installed": False,
+        "operational": False,
+        "status": "not_implemented",
+        "effective_contribution": 0,
+        "can_train": False,
+        "can_infer": False,
+        "can_generate_suggestions": False,
+        "influences_autopilot": False,
+    }
+    return {
+        "lightgbm": dict(status),
+        "catboost": dict(status),
+    }
 
 
 # ── 1. Overview ──────────────────────────────────────────────────────────────
@@ -126,25 +172,15 @@ async def get_overview(
     """), {"uid": uid_str})).fetchone()
 
     # ML availability
-    ml_available = {}
-    try:
-        import xgboost; ml_available["xgboost"] = True
-    except ImportError: ml_available["xgboost"] = False
-    try:
-        import lightgbm; ml_available["lightgbm"] = True
-    except ImportError: ml_available["lightgbm"] = False
-    try:
-        import optuna; ml_available["optuna"] = True
-    except ImportError: ml_available["optuna"] = False
-    try:
-        import mlxtend; ml_available["mlxtend"] = True
-    except ImportError: ml_available["mlxtend"] = False
-    try:
-        import shap; ml_available["shap"] = True
-    except ImportError: ml_available["shap"] = False
-    try:
-        import anthropic; ml_available["anthropic_sdk"] = True
-    except ImportError: ml_available["anthropic_sdk"] = False
+    ml_available = {
+        "xgboost": find_spec("xgboost") is not None,
+        "lightgbm": False,
+        "catboost": False,
+        "optuna": find_spec("optuna") is not None,
+        "mlxtend": find_spec("mlxtend") is not None,
+        "shap": find_spec("shap") is not None,
+        "anthropic_sdk": find_spec("anthropic") is not None,
+    }
 
     best_profile_wr = (
         float(best_profile_row.wins) / max(int(best_profile_row.closed), 1)
@@ -178,6 +214,7 @@ async def get_overview(
             "setup_family": best_combo.setup_family,
         } if best_combo else None,
         "ml_availability": ml_available,
+        "ml_challengers": _ml_challenger_status(),
     }
 
 
@@ -212,6 +249,9 @@ async def trigger_run(
     """Trigger a new PI Engine run. Returns run_id immediately; executes in background."""
     from ..services.profile_intelligence_service import ProfileIntelligenceService
     svc = ProfileIntelligenceService()
+    settings_override, _ = _normalize_unimplemented_ml_flags(
+        payload.settings_override
+    )
 
     # Create the run record immediately so we can return the ID
     run = ProfileIntelligenceRun(
@@ -220,7 +260,7 @@ async def trigger_run(
         min_closed_trades=payload.min_closed_trades,
         status="queued",
         engine_version=ProfileIntelligenceService.ENGINE_VERSION,
-        settings_json=payload.settings_override or {},
+        settings_json=settings_override,
     )
     db.add(run)
     await db.commit()
@@ -245,7 +285,7 @@ async def trigger_run(
                     include_ai_explanation=payload.include_ai_explanation,
                     profiles_filter=payload.profiles_filter,
                     max_combinations=payload.max_combinations,
-                    settings_override=payload.settings_override,
+                    settings_override=settings_override,
                 )
             except Exception as exc:
                 logger.error("[PI API] Background run %s failed: %s", run_id, exc)
@@ -479,6 +519,41 @@ async def create_suggestion_from_combination(
     if not combo:
         raise HTTPException(status_code=404, detail="Combination not found")
 
+    from ..services.profile_validation_service import suggestion_actionable
+    validation_metrics = combo.validation_metrics_json or {}
+    actionable, blocked_reason = suggestion_actionable(
+        combo.combination_type,
+        validation_metrics,
+    )
+    if not actionable:
+        await log_pi_event(
+            db,
+            user_id,
+            "suggestion_from_combination_blocked_validation",
+            run_id=combo.run_id,
+            combination_id=cid,
+            event_description=(
+                "Applicable suggestion blocked because out-of-sample "
+                f"validation failed: {blocked_reason}"
+            ),
+            result_json={
+                "source_type": combo.combination_type,
+                "validation_status": validation_metrics.get(
+                    "validation_status"
+                ),
+                "actionability_status": validation_metrics.get(
+                    "actionability_status"
+                ),
+                "blocked_reason": blocked_reason,
+                "mutation_applied": False,
+            },
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=409,
+            detail=f"combination_not_actionable:{blocked_reason}",
+        )
+
     # Idempotency: return existing suggestion if one already exists
     existing_sugg = (await db.execute(
         select(ProfileSuggestion).where(
@@ -517,11 +592,34 @@ async def create_suggestion_from_combination(
         "lift_vs_base": float(combo.lift_vs_base or 0),
         "combination_type": combo.combination_type,
         "source_combination_id": str(cid),
+        "source_type": combo.combination_type,
+        "validation_status": validation_metrics.get("validation_status"),
+        "actionability_status": validation_metrics.get("actionability_status"),
+        "blocked_reason": validation_metrics.get("blocked_reason"),
+        "discovery_trade_count": (
+            (combo.discovery_metrics_json or {}).get("total_cases", 0)
+        ),
+        "validation_trade_count": validation_metrics.get("total_cases", 0),
+        "discovery_lift": (
+            (combo.discovery_metrics_json or {}).get("lift")
+        ),
+        "validation_lift": validation_metrics.get("lift"),
     }
 
     suggested_signals = {"conditions": []} if not combo.signals_json else combo.signals_json
     suggested_scoring = combo.scoring_rules_json
     suggested_blocks = combo.block_rules_json or STANDARD_BLOCK_RULES
+    source_profile_ids = list(combo.source_profile_ids or [])
+    source_profiles = list(combo.source_profiles or [])
+    if not source_profile_ids:
+        raise HTTPException(
+            status_code=409,
+            detail="combination_not_actionable:missing_profile_id",
+        )
+    target_profile_id = UUID(str(source_profile_ids[0]))
+    target_profile_name = (
+        source_profiles[0] if source_profiles else str(target_profile_id)
+    )
 
     comb_name = combo.suggested_name or f"COMBO_{str(cid)[:8].upper()}"
     profile_name = f"PI_{comb_name}"[:120]
@@ -541,18 +639,64 @@ async def create_suggestion_from_combination(
         user_id=user_id,
         run_id=combo.run_id,
         source_combination_id=cid,
+        source_type=combo.combination_type,
+        source_run_id=combo.run_id,
+        profile_id=target_profile_id,
+        profile_name=target_profile_name,
         suggested_profile_name=profile_name,
         suggested_profile_description=f"Auto-generated from combination: {comb_name}",
         suggested_profile_family=family,
+        source_profiles=source_profiles,
+        source_profile_ids=source_profile_ids,
+        target_section="profile",
+        target_field="config",
+        current_value=None,
         suggested_config_json={"source": "combination", "combination_id": str(cid)},
         suggested_signals_json=suggested_signals,
         suggested_scoring_json=suggested_scoring,
         suggested_block_rules_json=suggested_blocks,
+        proposed_value={
+            "signals": suggested_signals,
+            "scoring": suggested_scoring,
+            "block_rules": suggested_blocks,
+        },
+        diff_json={
+            "before": None,
+            "after": {
+                "signals": suggested_signals,
+                "scoring": suggested_scoring,
+                "block_rules": suggested_blocks,
+            },
+            "target": "new_shadow_profile",
+        },
         evidence_summary_json=evidence,
         quantitative_explanation=quant_explanation,
         confidence_score=float(combo.champion_score or 0),
         confidence_level=confidence_level,
-        status="pending_user_approval",
+        confidence=float(combo.champion_score or 0),
+        lift=validation_metrics.get("lift"),
+        evidence_count=validation_metrics.get("total_cases", 0),
+        expected_impact={
+            "validation_expected_pnl": validation_metrics.get("expected_pnl"),
+            "validation_win_rate_lift": (
+                float(validation_metrics.get("win_rate", 0) or 0)
+                - float(validation_metrics.get("base_win_rate", 0) or 0)
+            ),
+        },
+        risk_level="high" if combo.overfit_risk else "medium",
+        validation_status="validated",
+        actionability_status=validation_metrics.get(
+            "actionability_status",
+            "validated",
+        ),
+        rollback_payload={
+            "action": "archive_generated_profile",
+            "source_combination_id": str(cid),
+        },
+        dataset_version=f"pi-run:{combo.run_id}",
+        feature_schema_version="shadow_features_snapshot:v1",
+        label_version="shadow_outcome:v1",
+        status="validated",
     )
     db.add(sugg)
     await db.flush()
@@ -751,7 +895,12 @@ async def get_settings(
         settings = {**_DEFAULT_SETTINGS, **(cfg or {})}
     except Exception:
         settings = _DEFAULT_SETTINGS.copy()
-    return {"settings": settings}
+    settings, warnings = _normalize_unimplemented_ml_flags(settings)
+    return {
+        "settings": settings,
+        "warnings": warnings,
+        "ml_challengers": _ml_challenger_status(),
+    }
 
 
 @router.put("/settings")
@@ -768,6 +917,7 @@ async def update_settings(
 
     updates = {k: v for k, v in payload.model_dump().items() if v is not None}
     new_settings = {**_DEFAULT_SETTINGS, **current, **updates}
+    new_settings, warnings = _normalize_unimplemented_ml_flags(new_settings)
 
     try:
         await config_service.update_config(
@@ -791,7 +941,11 @@ async def update_settings(
         """), {"uid": str(user_id), "cfg": json.dumps(new_settings)})
         await db.commit()
 
-    return {"settings": new_settings}
+    return {
+        "settings": new_settings,
+        "warnings": warnings,
+        "ml_challengers": _ml_challenger_status(),
+    }
 
 
 # Profile Intelligence Auto-Pilot
@@ -940,11 +1094,110 @@ async def list_autopilot_candidates(
         "observed_avg_pnl_pct": float(candidate.observed_avg_pnl_pct) if candidate.observed_avg_pnl_pct is not None else None,
         "promotion_win_rate": float(candidate.promotion_win_rate) if candidate.promotion_win_rate is not None else None,
         "promotion_avg_pnl_pct": float(candidate.promotion_avg_pnl_pct) if candidate.promotion_avg_pnl_pct is not None else None,
+        "approval_status": candidate.approval_status,
+        "approval_required": candidate.approval_required,
+        "approved_by": str(candidate.approved_by) if candidate.approved_by else None,
+        "approved_at": candidate.approved_at.isoformat() if candidate.approved_at else None,
+        "approval_reason": candidate.approval_reason,
+        "approval_source": candidate.approval_source,
+        "promotion_blocked_reason": candidate.promotion_blocked_reason,
+        "rollback_available": bool(candidate.rollback_payload),
+        "rollback_payload": candidate.rollback_payload,
         "reason": candidate.decision_reason,
         "evidence": candidate.evidence_json or {},
         "created_at": candidate.created_at.isoformat(),
         "updated_at": candidate.updated_at.isoformat(),
     } for candidate, profile_name, watchlist_name in rows]}
+
+
+@router.post("/autopilot/candidates/{candidate_id}/approve")
+async def approve_autopilot_candidate(
+    candidate_id: UUID,
+    payload: CandidateApprovalRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    from ..services.profile_intelligence_autopilot_service import (
+        ProfileIntelligenceAutopilotService,
+    )
+
+    result = await ProfileIntelligenceAutopilotService().approve_candidate_for_live(
+        db,
+        user_id,
+        candidate_id,
+        approved_by=payload.approved_by,
+        approval_reason=payload.approval_reason,
+        approval_source=payload.approval_source,
+        confirm_risk=payload.confirm_risk,
+    )
+    if result.get("status") == "blocked":
+        raise HTTPException(status_code=409, detail=result["reason"])
+    return result
+
+
+@router.post("/autopilot/candidates/{candidate_id}/reject")
+async def reject_autopilot_candidate(
+    candidate_id: UUID,
+    payload: CandidateRejectionRequest,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    from ..services.profile_intelligence_autopilot_service import (
+        ProfileIntelligenceAutopilotService,
+    )
+
+    result = await ProfileIntelligenceAutopilotService().reject_candidate(
+        db,
+        user_id,
+        candidate_id,
+        rejected_by=user_id,
+        rejection_reason=payload.rejection_reason,
+    )
+    if result.get("status") == "blocked":
+        raise HTTPException(status_code=409, detail=result["reason"])
+    return result
+
+
+@router.post("/autopilot/candidates/{candidate_id}/activate")
+async def activate_autopilot_candidate(
+    candidate_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    from ..services.profile_intelligence_autopilot_service import (
+        ProfileIntelligenceAutopilotService,
+    )
+
+    result = await ProfileIntelligenceAutopilotService().activate_approved_candidate(
+        db,
+        user_id,
+        candidate_id,
+        activated_by=user_id,
+    )
+    if result.get("status") == "blocked":
+        raise HTTPException(status_code=409, detail=result["reason"])
+    return result
+
+
+@router.post("/autopilot/candidates/{candidate_id}/rollback")
+async def rollback_autopilot_candidate(
+    candidate_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    from ..services.profile_intelligence_autopilot_service import (
+        ProfileIntelligenceAutopilotService,
+    )
+
+    result = await ProfileIntelligenceAutopilotService().rollback_candidate(
+        db,
+        user_id,
+        candidate_id,
+        rolled_back_by=user_id,
+    )
+    if result.get("status") == "blocked":
+        raise HTTPException(status_code=409, detail=result["reason"])
+    return result
 
 
 @router.get("/autopilot/reports")
@@ -1003,6 +1256,133 @@ async def list_autopilot_audit(
 
 # ── Serialization helpers ─────────────────────────────────────────────────────
 
+@router.get("/governance/models")
+async def list_governed_models(
+    status: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    query = (
+        select(MLModelRegistry)
+        .outerjoin(Profile, Profile.id == MLModelRegistry.profile_id)
+        .where(
+            (MLModelRegistry.profile_id.is_(None))
+            | (Profile.user_id == user_id)
+        )
+    )
+    if status:
+        query = query.where(MLModelRegistry.status == status)
+    models = (await db.execute(
+        query.order_by(MLModelRegistry.created_at.desc()).limit(limit)
+    )).scalars().all()
+    champions = (await db.execute(
+        select(ProductionChampionControl)
+        .join(Profile, Profile.id == ProductionChampionControl.profile_id)
+        .where(Profile.user_id == user_id)
+    )).scalars().all()
+    active_ids = {str(row.active_model_id) for row in champions}
+    return {
+        "models": [{
+            "model_id": str(row.model_id),
+            "source_ml_model_id": (
+                str(row.source_ml_model_id) if row.source_ml_model_id else None
+            ),
+            "model_type": row.model_type,
+            "model_version": row.model_version,
+            "profile_id": str(row.profile_id) if row.profile_id else None,
+            "profile_name": row.profile_name,
+            "strategy_skill": row.strategy_skill,
+            "market_regime": row.market_regime,
+            "dataset_version": row.dataset_version,
+            "feature_schema_version": row.feature_schema_version,
+            "label_version": row.label_version,
+            "metrics_json": row.metrics_json or {},
+            "threshold": float(row.threshold) if row.threshold is not None else None,
+            "status": row.status,
+            "is_active_production_champion": str(row.model_id) in active_ids,
+            "artifact_path": row.artifact_path,
+            "promoted_at": row.promoted_at.isoformat() if row.promoted_at else None,
+        } for row in models],
+        "production_champions": [{
+            "profile_id": str(row.profile_id),
+            "market_regime": row.market_regime,
+            "strategy_skill": row.strategy_skill,
+            "active_model_id": str(row.active_model_id),
+            "active_model_type": row.active_model_type,
+            "active_threshold": float(row.active_threshold),
+            "rollback_available": row.rollback_available,
+        } for row in champions],
+        "supported_model_types": {
+            "xgboost": {"implemented": True, "operational": True},
+            "lightgbm": {"implemented": False, "operational": False},
+            "catboost": {"implemented": False, "operational": False},
+        },
+    }
+
+
+@router.get("/governance/forward-validations")
+async def list_forward_validations(
+    profile_id: Optional[UUID] = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    query = (
+        select(AlgorithmForwardValidation)
+        .join(Profile, Profile.id == AlgorithmForwardValidation.profile_id)
+        .where(Profile.user_id == user_id)
+    )
+    if profile_id:
+        query = query.where(AlgorithmForwardValidation.profile_id == profile_id)
+    rows = (await db.execute(
+        query.order_by(AlgorithmForwardValidation.created_at.desc()).limit(limit)
+    )).scalars().all()
+    return {"forward_validations": [{
+        "id": str(row.id),
+        "suggestion_id": str(row.suggestion_id) if row.suggestion_id else None,
+        "model_id": str(row.model_id) if row.model_id else None,
+        "profile_id": str(row.profile_id),
+        "stage": row.stage,
+        "validation_status": row.validation_status,
+        "metrics_json": row.metrics_json or {},
+        "human_approved": bool(row.human_approved_by and row.human_approved_at),
+        "rollback_available": bool(row.rollback_payload),
+        "blocked_reason": row.blocked_reason,
+    } for row in rows]}
+
+
+@router.get("/governance/autonomy-policy")
+async def get_autonomy_policy(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    policy = (await db.execute(
+        select(AutopilotAutonomyPolicy).where(
+            AutopilotAutonomyPolicy.user_id == user_id
+        )
+    )).scalars().first()
+    if policy is None:
+        return {
+            "maximum_level": 2,
+            "state": "suggest_or_shadow_only",
+            "levels_4_5_enabled": False,
+            "auto_rollback_enabled": False,
+            "source": "safe_default",
+        }
+    return {
+        "maximum_level": policy.maximum_level,
+        "impact_limit_json": policy.impact_limit_json or {},
+        "cooldown_seconds": policy.cooldown_seconds,
+        "max_changes_per_day": policy.max_changes_per_day,
+        "risk_budget_json": policy.risk_budget_json or {},
+        "post_change_monitoring": policy.post_change_monitoring,
+        "auto_rollback_enabled": policy.auto_rollback_enabled,
+        "levels_4_5_enabled": False,
+        "source": "database",
+    }
+
+
 def _run_to_dict(r: ProfileIntelligenceRun) -> dict:
     return {
         "id": str(r.id), "user_id": str(r.user_id),
@@ -1037,6 +1417,10 @@ def _ind_to_dict(s: ProfileIndicatorStats) -> dict:
         "confidence_score": float(s.confidence_score or 0),
         "confidence_level": s.confidence_level, "role_detected": s.role_detected,
         "source_profiles": s.source_profiles,
+        "source_profile_ids": s.source_profile_ids,
+        "validation_status": s.validation_status,
+        "actionability_status": s.actionability_status,
+        "target_section": s.target_section,
         "evidence_json": s.evidence_json,
     }
 
@@ -1050,6 +1434,7 @@ def _combo_to_dict(c: ProfileRuleCombination) -> dict:
         "signals_json": c.signals_json,
         "block_rules_json": c.block_rules_json,
         "source_profiles": c.source_profiles,
+        "source_profile_ids": c.source_profile_ids,
         "total_cases": c.total_cases, "wins": c.wins, "losses": c.losses,
         "win_rate": float(c.win_rate or 0),
         "avg_pnl_pct": float(c.avg_pnl_pct or 0),
@@ -1076,6 +1461,19 @@ def _sugg_to_dict(s: ProfileSuggestion) -> dict:
         "suggested_profile_name": s.suggested_profile_name,
         "suggested_profile_description": s.suggested_profile_description,
         "suggested_profile_family": s.suggested_profile_family,
+        "source_type": s.source_type,
+        "source_model_type": s.source_model_type,
+        "source_model_id": str(s.source_model_id) if s.source_model_id else None,
+        "source_run_id": str(s.source_run_id) if s.source_run_id else None,
+        "profile_id": str(s.profile_id) if s.profile_id else None,
+        "profile_name": s.profile_name,
+        "source_profiles": s.source_profiles,
+        "source_profile_ids": s.source_profile_ids,
+        "target_section": s.target_section,
+        "target_field": s.target_field,
+        "current_value": s.current_value,
+        "proposed_value": s.proposed_value,
+        "diff_json": s.diff_json,
         "suggested_config_json": s.suggested_config_json,
         "suggested_signals_json": s.suggested_signals_json,
         "suggested_block_rules_json": s.suggested_block_rules_json,
@@ -1085,6 +1483,22 @@ def _sugg_to_dict(s: ProfileSuggestion) -> dict:
         "risk_notes": s.risk_notes,
         "confidence_score": float(s.confidence_score or 0),
         "confidence_level": s.confidence_level, "status": s.status,
+        "confidence": float(s.confidence or 0) if s.confidence is not None else None,
+        "lift": float(s.lift or 0) if s.lift is not None else None,
+        "evidence_count": s.evidence_count,
+        "expected_impact": s.expected_impact,
+        "risk_level": s.risk_level,
+        "validation_status": s.validation_status,
+        "actionability_status": s.actionability_status,
+        "blocked_reason": s.blocked_reason,
+        "rollback_available": bool(s.rollback_payload),
+        "rollback_payload": s.rollback_payload,
+        "dataset_version": s.dataset_version,
+        "feature_schema_version": s.feature_schema_version,
+        "label_version": s.label_version,
+        "applied_at": s.applied_at.isoformat() if s.applied_at else None,
+        "reverted_at": s.reverted_at.isoformat() if s.reverted_at else None,
+        "reason": s.reason,
         "created_profile_id": str(s.created_profile_id) if s.created_profile_id else None,
         "created_at": s.created_at.isoformat() if s.created_at else None,
     }

@@ -57,6 +57,14 @@ def _make_suggestion(
     s.user_id = USER_ID
     s.run_id = run_id or uuid.uuid4()
     s.source_combination_id = source_combination_id
+    s.source_type = "counterfactual_dynamic"
+    s.source_run_id = s.run_id
+    s.profile_id = PROFILE_ID
+    s.profile_name = "Source Profile"
+    s.validation_status = "validated"
+    s.actionability_status = "validated"
+    s.diff_json = {"before": None, "after": {"profile": "shadow"}}
+    s.rollback_payload = {"action": "archive_generated_profile"}
     s.status = status
     s.confidence_level = confidence_level
     s.confidence_score = confidence_score
@@ -105,7 +113,7 @@ def _make_db(suggestion=None, combo=None, no_suggestion=False) -> AsyncMock:
     db.commit = AsyncMock()
 
     async def _execute(q, *args, **kwargs):
-        result = AsyncMock()
+        result = MagicMock()
 
         # Detect which model is being queried by inspecting the query string
         q_str = str(q)
@@ -357,7 +365,7 @@ class TestCreateProfileService:
         cp_mock.updated_at = datetime.now(timezone.utc)
 
         async def _execute(q, *a, **kw):
-            res = AsyncMock()
+            res = MagicMock()
             res.scalars.return_value.first.return_value = cp_mock
             return res
 
@@ -393,7 +401,7 @@ class TestCreateProfileService:
         cp_mock.updated_at = datetime.now(timezone.utc)
 
         async def _execute(q, *a, **kw):
-            res = AsyncMock()
+            res = MagicMock()
             res.scalars.return_value.first.return_value = cp_mock
             return res
 
@@ -534,8 +542,8 @@ class TestCreateProfileService:
         assert "block_rules" in cfg, "block_rules missing from config"
 
     @pytest.mark.asyncio
-    async def test_15_suggestion_status_becomes_created(self):
-        """Criteria 15 — suggestion.status set to 'created' after commit."""
+    async def test_15_suggestion_status_becomes_applied(self):
+        """Suggestion lifecycle uses the governed applied status."""
         svc = ProfileCreateService()
         suggestion = _make_suggestion()
         db = _make_db(suggestion=suggestion)
@@ -547,7 +555,7 @@ class TestCreateProfileService:
              patch("app.services.profile_create_service.ConfigAuditLog", MagicMock):
             await svc.create_from_suggestion(db=db, user_id=USER_ID, suggestion_id=SUGG_ID)
 
-        assert suggestion.status == "created"
+        assert suggestion.status == "applied"
 
     @pytest.mark.asyncio
     async def test_16_suggestion_created_profile_id_set(self):

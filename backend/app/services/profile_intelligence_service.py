@@ -612,7 +612,7 @@ class ProfileIntelligenceService:
 
         discovery_start = lookback_start
         discovery_end = lookback_start + timedelta(seconds=discovery_span_seconds)
-        validation_start = discovery_end
+        validation_start = discovery_end + timedelta(microseconds=1)
         validation_end = now_utc
 
         # Persist time windows onto the run row
@@ -773,6 +773,8 @@ class ProfileIntelligenceService:
                     indicator_stats=indicator_stats,
                     discovery_start=discovery_start,
                     discovery_end=discovery_end,
+                    validation_start=validation_start,
+                    validation_end=validation_end,
                     max_combinations=max_combinations,
                 )
                 await log_pi_event(
@@ -804,6 +806,8 @@ class ProfileIntelligenceService:
                     base_metrics=base_metrics,
                     discovery_start=discovery_start,
                     discovery_end=discovery_end,
+                    validation_start=validation_start,
+                    validation_end=validation_end,
                 )
                 await log_pi_event(
                     db, user_id, "association_rules_completed",

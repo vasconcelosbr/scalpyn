@@ -24,6 +24,18 @@ from uuid import UUID
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..models.config_profile import ConfigAuditLog, ConfigProfile
+from ..models.profile import Profile
+from ..models.profile_audit_log import ProfileAuditLog
+from ..models.profile_intelligence import (
+    AlgorithmForwardValidation,
+    ProfileIntelligenceAuditLog,
+    ProfileRuleCombination,
+    ProfileSuggestion,
+)
+
+_ConfigProfileModel = ConfigProfile
+
 logger = logging.getLogger("scalpyn.services.profile_create")
 
 # ── Forbidden post-entry fields ────────────────────────────────────────────────
@@ -37,7 +49,12 @@ _FORBIDDEN_FIELDS = frozenset({
 _VALID_MODES = frozenset({"SHADOW_ONLY", "DRAFT"})
 
 # ── Allowed suggestion statuses for promotion ──────────────────────────────────
-_PROMOTABLE_STATUSES = frozenset({"pending_user_approval", "draft"})
+_PROMOTABLE_STATUSES = frozenset({
+    "pending_user_approval",
+    "draft",
+    "validated",
+    "approved",
+})
 
 # ── Operator normalization map ─────────────────────────────────────────────────
 _OP_NORMALIZE = {
@@ -121,13 +138,12 @@ async def _get_or_create_master_score_config(
     db: AsyncSession, user_id: UUID
 ) -> Tuple[Any, dict]:
     """Return (config_profile_orm, config_json_dict). Creates if missing."""
-    from ..models.config_profile import ConfigProfile
     result = await db.execute(
-        select(ConfigProfile).where(
-            ConfigProfile.user_id == user_id,
-            ConfigProfile.config_type == "score",
-            ConfigProfile.is_active == True,
-        ).order_by(ConfigProfile.updated_at.desc()).limit(1)
+        select(_ConfigProfileModel).where(
+            _ConfigProfileModel.user_id == user_id,
+            _ConfigProfileModel.config_type == "score",
+            _ConfigProfileModel.is_active == True,
+        ).order_by(_ConfigProfileModel.updated_at.desc()).limit(1)
     )
     cp = result.scalars().first()
     if cp is None:
@@ -420,7 +436,6 @@ class ProfileCreateService:
             )
 
         # ── 2. Fetch + ownership check ─────────────────────────────────────────
-        from ..models.profile_intelligence import ProfileSuggestion, ProfileRuleCombination
         result = await db.execute(
             select(ProfileSuggestion).where(
                 ProfileSuggestion.id == suggestion_id,
@@ -436,7 +451,7 @@ class ProfileCreateService:
             raise LookupError("Sugestão não encontrada ou não pertence ao usuário.")
 
         # ── 3. Idempotency: already created ───────────────────────────────────
-        if suggestion.status == "created" and suggestion.created_profile_id:
+        if suggestion.status in {"created", "applied"} and suggestion.created_profile_id:
             return {
                 "status": "already_created",
                 "profile_id": str(suggestion.created_profile_id),
@@ -454,6 +469,16 @@ class ProfileCreateService:
             )
 
         # ── 5. Confidence guard ───────────────────────────────────────────────
+        from .algorithm_governance_service import suggestion_registry_block_reasons
+        registry_block_reasons = suggestion_registry_block_reasons(suggestion)
+        if registry_block_reasons:
+            return {
+                "status": "blocked",
+                "blocked_reasons": registry_block_reasons,
+                "warnings": [],
+                "profile_payload": None,
+            }
+
         blocked_reasons = []
         warnings = []
 
@@ -604,7 +629,6 @@ class ProfileCreateService:
             }
 
         # ── 10. Create Profile ────────────────────────────────────────────────
-        from ..models.profile import Profile
         now = _now()
         profile = Profile(
             user_id=user_id,
@@ -627,7 +651,22 @@ class ProfileCreateService:
         profile_id = profile.id
 
         # ── 11. Profile Audit Log ─────────────────────────────────────────────
-        from ..models.profile_audit_log import ProfileAuditLog
+        forward_validation = AlgorithmForwardValidation(
+            suggestion_id=suggestion.id,
+            profile_id=profile_id,
+            stage="shadow_forward",
+            validation_status=suggestion.validation_status,
+            metrics_json={
+                "source_run_id": str(suggestion.source_run_id),
+                "source_type": suggestion.source_type,
+                "evidence_count": suggestion.evidence_count,
+                "expected_impact": suggestion.expected_impact or {},
+            },
+            rollback_payload=suggestion.rollback_payload,
+        )
+        db.add(forward_validation)
+        await db.flush()
+
         pal = ProfileAuditLog(
             user_id=user_id,
             profile_id=profile_id,
@@ -646,7 +685,6 @@ class ProfileCreateService:
         await db.flush()
 
         # ── 12. PI Audit Log ──────────────────────────────────────────────────
-        from ..models.profile_intelligence import ProfileIntelligenceAuditLog
         pi_audit = ProfileIntelligenceAuditLog(
             user_id=user_id,
             run_id=suggestion.run_id,
@@ -685,8 +723,10 @@ class ProfileCreateService:
         pi_audit_id = pi_audit.id
 
         # ── 13. Update suggestion status ──────────────────────────────────────
-        suggestion.status = "created"
+        suggestion.status = "applied"
         suggestion.created_profile_id = profile_id
+        suggestion.applied_at = now
+        suggestion.reason = "human_created_shadow_profile"
         suggestion.updated_at = now
         await db.flush()
 

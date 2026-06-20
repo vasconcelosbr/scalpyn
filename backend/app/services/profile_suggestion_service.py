@@ -208,6 +208,8 @@ class ProfileSuggestionService:
                         confidence_level,
                         degradation_pct,
                         overfit_risk,
+                        source_profiles,
+                        source_profile_ids,
                         discovery_metrics_json,
                         validation_metrics_json
                     FROM profile_rule_combinations
@@ -260,6 +262,30 @@ class ProfileSuggestionService:
                 if isinstance(val_metrics, str):
                     import json as _json
                     val_metrics = _json.loads(val_metrics)
+                from .profile_validation_service import suggestion_actionable
+                actionable, blocked_reason = suggestion_actionable(
+                    row.combination_type,
+                    val_metrics,
+                )
+                if not actionable:
+                    logger.info(
+                        "[SuggestionSvc] Combination %s kept exploratory: %s",
+                        row.id,
+                        blocked_reason,
+                    )
+                    continue
+                source_profile_ids = list(row.source_profile_ids or [])
+                source_profiles = list(row.source_profiles or [])
+                if not source_profile_ids:
+                    logger.info(
+                        "[SuggestionSvc] Combination %s kept exploratory: missing_profile_id",
+                        row.id,
+                    )
+                    continue
+                target_profile_id = UUID(str(source_profile_ids[0]))
+                target_profile_name = (
+                    source_profiles[0] if source_profiles else target_profile_id
+                )
 
                 win_rate = float(row.win_rate or 0.0)
                 avg_pnl_pct = float(row.avg_pnl_pct or 0.0)
@@ -334,7 +360,19 @@ class ProfileSuggestionService:
                     "confidence_level": confidence_level,
                     "discovery": disc_metrics,
                     "validation": val_metrics,
+                    "source_type": row.combination_type,
+                    "validation_status": val_metrics.get("validation_status"),
+                    "actionability_status": val_metrics.get(
+                        "actionability_status"
+                    ),
+                    "blocked_reason": val_metrics.get("blocked_reason"),
+                    "discovery_trade_count": disc_metrics.get("total_cases", 0),
+                    "validation_trade_count": val_metrics.get("total_cases", 0),
+                    "discovery_lift": disc_metrics.get("lift"),
+                    "validation_lift": val_metrics.get("lift"),
                     "degradation_pct": degradation_pct,
+                    "source_profiles": source_profiles,
+                    "source_profile_ids": source_profile_ids,
                 }
 
                 # ------------------------------------------------------------------
@@ -359,9 +397,24 @@ class ProfileSuggestionService:
                     user_id=user_id,
                     run_id=run_id,
                     source_combination_id=row.id,
+                    source_type=row.combination_type,
+                    source_run_id=run_id,
+                    profile_id=target_profile_id,
+                    profile_name=target_profile_name,
                     suggested_profile_name=comb_name[:255],
                     suggested_profile_description=quantitative_explanation,
                     suggested_profile_family=row.setup_family,
+                    source_profiles=source_profiles,
+                    source_profile_ids=source_profile_ids,
+                    target_section="profile",
+                    target_field="config",
+                    current_value=None,
+                    proposed_value=suggested_config_json,
+                    diff_json={
+                        "before": None,
+                        "after": suggested_config_json,
+                        "target": "new_shadow_profile",
+                    },
                     suggested_config_json=suggested_config_json,
                     suggested_signals_json={"logic": "AND", "conditions": signal_conditions},
                     suggested_scoring_json=suggested_config_json["scoring"],
@@ -371,7 +424,30 @@ class ProfileSuggestionService:
                     risk_notes=risk_notes,
                     confidence_score=champion_score,
                     confidence_level=confidence_level,
-                    status="pending_user_approval",
+                    confidence=champion_score,
+                    lift=val_metrics.get("lift"),
+                    evidence_count=val_metrics.get("total_cases", 0),
+                    expected_impact={
+                        "validation_expected_pnl": val_metrics.get("expected_pnl"),
+                        "validation_win_rate_lift": (
+                            float(val_metrics.get("win_rate", 0) or 0)
+                            - float(val_metrics.get("base_win_rate", 0) or 0)
+                        ),
+                    },
+                    risk_level="high" if degradation_pct > 20 else "medium",
+                    validation_status="validated",
+                    actionability_status=val_metrics.get(
+                        "actionability_status",
+                        "validated",
+                    ),
+                    rollback_payload={
+                        "action": "archive_generated_profile",
+                        "source_combination_id": str(row.id),
+                    },
+                    dataset_version=f"pi-run:{run_id}",
+                    feature_schema_version="shadow_features_snapshot:v1",
+                    label_version="shadow_outcome:v1",
+                    status="validated",
                 )
                 db.add(sugg)
                 await db.flush()

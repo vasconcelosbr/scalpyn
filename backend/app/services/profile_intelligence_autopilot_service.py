@@ -51,12 +51,15 @@ logger = logging.getLogger("scalpyn.services.profile_intelligence_autopilot")
 
 SHADOW_STATES = {
     "SHADOW_COLLECTING",
-    "SHADOW_READY_FOR_REVIEW",
-    "APPROVED_WAITING_LIVE",
+    "SHADOW_READY",
+    "PENDING_HUMAN_APPROVAL",
+    "APPROVED_FOR_LIVE",
 }
 TERMINAL_STATES = {
     "REJECTED",
     "ROLLED_BACK",
+    "EXPIRED",
+    "BLOCKED",
     "DISABLED",
     "DUPLICATE_SKIPPED",
     "LOSS_FAMILY_COOLDOWN",
@@ -470,6 +473,713 @@ class ProfileIntelligenceAutopilotService:
         await db.commit()
         return {"enabled": row.enabled, "settings": settings, "updated_at": row.updated_at.isoformat()}
 
+    async def _candidate_for_user(
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+        candidate_id: UUID,
+    ) -> Optional[ProfileIntelligenceAutopilotCandidate]:
+        return await db.scalar(
+            select(ProfileIntelligenceAutopilotCandidate).where(
+                ProfileIntelligenceAutopilotCandidate.id == candidate_id,
+                ProfileIntelligenceAutopilotCandidate.user_id == user_id,
+            )
+        )
+
+    async def _latest_cycle_ref(self, db: AsyncSession, user_id: UUID):
+        cycle = await db.scalar(
+            select(ProfileIntelligenceAutopilotCycle).where(
+                ProfileIntelligenceAutopilotCycle.user_id == user_id
+            ).order_by(ProfileIntelligenceAutopilotCycle.started_at.desc()).limit(1)
+        )
+        return cycle or type("CycleRef", (), {"id": None})()
+
+    async def _build_live_change_plan(
+        self,
+        db: AsyncSession,
+        candidate: ProfileIntelligenceAutopilotCandidate,
+    ) -> Optional[dict]:
+        profile = await db.get(Profile, candidate.profile_id)
+        target = (
+            await db.get(PipelineWatchlist, candidate.target_watchlist_id)
+            if candidate.target_watchlist_id
+            else None
+        )
+        shadow = (
+            await db.get(PipelineWatchlist, candidate.shadow_watchlist_id)
+            if candidate.shadow_watchlist_id
+            else None
+        )
+        live_watchlist = target or shadow
+        if not profile or not live_watchlist:
+            return None
+
+        incumbent_id = live_watchlist.profile_id
+        incumbent = await db.get(Profile, incumbent_id) if incumbent_id else None
+        before = {
+            "watchlist": {
+                "id": str(live_watchlist.id),
+                "profile_id": str(incumbent_id) if incumbent_id else None,
+                "auto_refresh": bool(live_watchlist.auto_refresh),
+            },
+            "candidate_profile": {
+                "id": str(profile.id),
+                "is_active": bool(profile.is_active),
+                "is_shadow_only": bool(profile.is_shadow_only),
+                "live_trading_enabled": bool(profile.live_trading_enabled),
+            },
+            "incumbent_profile": {
+                "id": str(incumbent.id) if incumbent else None,
+                "is_active": bool(incumbent.is_active) if incumbent else None,
+                "is_shadow_only": bool(incumbent.is_shadow_only) if incumbent else None,
+                "live_trading_enabled": bool(incumbent.live_trading_enabled) if incumbent else None,
+            },
+            "shadow_watchlist": {
+                "id": str(shadow.id) if shadow else None,
+                "auto_refresh": bool(shadow.auto_refresh) if shadow else None,
+            },
+        }
+        after = deepcopy(before)
+        after["watchlist"]["profile_id"] = str(profile.id)
+        after["watchlist"]["auto_refresh"] = True
+        after["candidate_profile"].update({
+            "is_active": True,
+            "is_shadow_only": False,
+            "live_trading_enabled": True,
+        })
+        if shadow and target and shadow.id != target.id:
+            after["shadow_watchlist"]["auto_refresh"] = False
+        diff = {
+            key: {"before": before[key], "after": after[key]}
+            for key in before
+            if before[key] != after[key]
+        }
+        return {
+            "profile": profile,
+            "incumbent": incumbent,
+            "live_watchlist": live_watchlist,
+            "shadow_watchlist": shadow,
+            "before_json": before,
+            "after_json": after,
+            "diff_json": diff,
+            "rollback_payload": {
+                "captured_at": utcnow().isoformat(),
+                "watchlist_id": str(live_watchlist.id),
+                "previous_profile_id": str(incumbent_id) if incumbent_id else None,
+                "watchlist_auto_refresh": bool(live_watchlist.auto_refresh),
+                "candidate_profile": before["candidate_profile"],
+                "incumbent_profile": before["incumbent_profile"],
+                "shadow_watchlist": before["shadow_watchlist"],
+            },
+        }
+
+    def _promotion_audit_payload(
+        self,
+        candidate: ProfileIntelligenceAutopilotCandidate,
+        *,
+        before_json: Optional[dict] = None,
+        after_json: Optional[dict] = None,
+        diff_json: Optional[dict] = None,
+        reason_code: str,
+        mutation_applied: bool,
+        rollback_payload: Optional[dict] = None,
+    ) -> dict:
+        evidence = _json(candidate.evidence_json) or {}
+        recommendation = evidence.get("live_promotion_recommendation") or {}
+        return {
+            "candidate_id": str(candidate.id),
+            "incumbent_profile_id": (
+                str(candidate.previous_profile_id)
+                if candidate.previous_profile_id
+                else recommendation.get("incumbent_profile_id")
+            ),
+            "candidate_profile_id": str(candidate.profile_id),
+            "before_json": before_json or {},
+            "after_json": after_json or {},
+            "diff_json": diff_json or {},
+            "shadow_metrics": recommendation.get("shadow_metrics") or {
+                "trades": candidate.observed_trades,
+                "win_rate": _float(candidate.observed_win_rate),
+                "avg_pnl_pct": _float(candidate.observed_avg_pnl_pct),
+            },
+            "comparison_metrics": recommendation.get("comparison_metrics") or {},
+            "reason_code": reason_code,
+            "approval_required": True,
+            "approved_by": str(candidate.approved_by) if candidate.approved_by else None,
+            "approved_at": (
+                candidate.approved_at.isoformat()
+                if candidate.approved_at
+                else None
+            ),
+            "approval_reason": candidate.approval_reason,
+            "rollback_payload": (
+                rollback_payload
+                if rollback_payload is not None
+                else candidate.rollback_payload
+            ),
+            "mutation_applied": mutation_applied,
+        }
+
+    async def _block_candidate_action(
+        self,
+        db: AsyncSession,
+        *,
+        user_id: UUID,
+        candidate: ProfileIntelligenceAutopilotCandidate,
+        actor_user_id: UUID,
+        event_type: str,
+        reason: str,
+        claimed_actor_id: Optional[UUID] = None,
+    ) -> dict:
+        result = self._promotion_audit_payload(
+            candidate,
+            reason_code=reason,
+            mutation_applied=False,
+        )
+        if claimed_actor_id is not None:
+            result["claimed_actor_id"] = str(claimed_actor_id)
+        await self._audit(
+            db,
+            user_id=user_id,
+            actor_user_id=actor_user_id,
+            candidate_id=candidate.id,
+            profile_id=candidate.profile_id,
+            watchlist_id=(
+                candidate.target_watchlist_id
+                or candidate.shadow_watchlist_id
+            ),
+            event_type=event_type,
+            decision="BLOCKED",
+            reason=reason,
+            result=result,
+        )
+        await db.commit()
+        return {"status": "blocked", "reason": reason}
+
+    async def approve_candidate_for_live(
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+        candidate_id: UUID,
+        *,
+        approved_by: UUID,
+        approval_reason: str,
+        approval_source: str,
+        confirm_risk: bool,
+    ) -> dict:
+        candidate = await self._candidate_for_user(db, user_id, candidate_id)
+        if not candidate:
+            return {"status": "blocked", "reason": "candidate_not_found"}
+        if approved_by != user_id:
+            return await self._block_candidate_action(
+                db,
+                user_id=user_id,
+                candidate=candidate,
+                actor_user_id=user_id,
+                claimed_actor_id=approved_by,
+                event_type="CANDIDATE_APPROVAL_BLOCKED",
+                reason="approved_by_must_match_authenticated_user",
+            )
+        if not confirm_risk:
+            return await self._block_candidate_action(
+                db,
+                user_id=user_id,
+                candidate=candidate,
+                actor_user_id=user_id,
+                event_type="CANDIDATE_APPROVAL_BLOCKED",
+                reason="risk_confirmation_required",
+            )
+        if candidate.state != "PENDING_HUMAN_APPROVAL":
+            reason_by_state = {
+                "REJECTED": "candidate_rejected",
+                "EXPIRED": "candidate_expired",
+                "LIVE_ACTIVATED": "candidate_already_live",
+                "ROLLED_BACK": "candidate_already_rolled_back",
+            }
+            reason = reason_by_state.get(
+                candidate.state,
+                "candidate_not_pending_human_approval",
+            )
+            result = await self._block_candidate_action(
+                db,
+                user_id=user_id,
+                candidate=candidate,
+                actor_user_id=user_id,
+                event_type="CANDIDATE_APPROVAL_BLOCKED",
+                reason=reason,
+            )
+            result["state"] = candidate.state
+            return result
+        if not approval_reason.strip():
+            return await self._block_candidate_action(
+                db,
+                user_id=user_id,
+                candidate=candidate,
+                actor_user_id=user_id,
+                event_type="CANDIDATE_APPROVAL_BLOCKED",
+                reason="approval_reason_required",
+            )
+        elapsed_hours = 0.0
+        if isinstance(candidate.shadow_started_at, datetime):
+            elapsed_hours = max(
+                0.0,
+                (utcnow() - candidate.shadow_started_at).total_seconds() / 3600.0,
+            )
+        if (
+            candidate.observed_win_rate is None
+            or candidate.observed_avg_pnl_pct is None
+            or not evaluation_ready(
+                int(candidate.observed_trades or 0),
+                elapsed_hours,
+                DEFAULT_AUTOPILOT_SETTINGS,
+            )
+        ):
+            return await self._block_candidate_action(
+                db,
+                user_id=user_id,
+                candidate=candidate,
+                actor_user_id=user_id,
+                event_type="CANDIDATE_APPROVAL_BLOCKED",
+                reason="insufficient_shadow_metrics",
+            )
+
+        plan = await self._build_live_change_plan(db, candidate)
+        if not plan or not plan.get("rollback_payload"):
+            await self._audit(
+                db,
+                user_id=user_id,
+                actor_user_id=approved_by,
+                candidate_id=candidate.id,
+                profile_id=candidate.profile_id,
+                event_type="LIVE_ACTIVATION_BLOCKED_MISSING_ROLLBACK",
+                decision="BLOCKED",
+                reason="missing_rollback_payload",
+                result=self._promotion_audit_payload(
+                    candidate,
+                    reason_code="missing_rollback_payload",
+                    mutation_applied=False,
+                    rollback_payload=None,
+                ),
+            )
+            await db.commit()
+            return {"status": "blocked", "reason": "missing_rollback_payload"}
+
+        now = utcnow()
+        snapshot = {
+            "shadow_metrics": {
+                "trades": candidate.observed_trades,
+                "win_rate": _float(candidate.observed_win_rate),
+                "avg_pnl_pct": _float(candidate.observed_avg_pnl_pct),
+            },
+            "evidence": _json(candidate.evidence_json) or {},
+            "planned_change": {
+                "before_json": plan["before_json"],
+                "after_json": plan["after_json"],
+                "diff_json": plan["diff_json"],
+            },
+        }
+        candidate.state = "APPROVED_FOR_LIVE"
+        candidate.approval_status = "approved"
+        candidate.approval_required = True
+        candidate.approved_by = approved_by
+        candidate.approved_at = now
+        candidate.approval_reason = approval_reason.strip()
+        candidate.approval_source = approval_source
+        candidate.approval_snapshot_json = snapshot
+        candidate.rollback_payload = plan["rollback_payload"]
+        candidate.promotion_blocked_reason = None
+        candidate.updated_at = now
+        await self._audit(
+            db,
+            user_id=user_id,
+            actor_user_id=approved_by,
+            candidate_id=candidate.id,
+            profile_id=candidate.profile_id,
+            watchlist_id=plan["live_watchlist"].id,
+            event_type="CANDIDATE_APPROVED_FOR_LIVE",
+            input_metrics=snapshot["shadow_metrics"],
+            decision="APPROVED_FOR_LIVE",
+            reason=candidate.approval_reason,
+            result={
+                **self._promotion_audit_payload(
+                    candidate,
+                    before_json=plan["before_json"],
+                    after_json=plan["after_json"],
+                    diff_json=plan["diff_json"],
+                    reason_code="candidate_approved_for_live",
+                    mutation_applied=False,
+                ),
+                "approval_required": True,
+                "approved_by": str(approved_by),
+                "approved_at": now.isoformat(),
+                "approval_source": approval_source,
+                "approval_snapshot": snapshot,
+            },
+        )
+        await db.commit()
+        return {
+            "status": "approved",
+            "state": candidate.state,
+            "candidate_id": str(candidate.id),
+            "live_activation_applied": False,
+        }
+
+    async def reject_candidate(
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+        candidate_id: UUID,
+        *,
+        rejected_by: UUID,
+        rejection_reason: str,
+    ) -> dict:
+        candidate = await self._candidate_for_user(db, user_id, candidate_id)
+        if not candidate:
+            return {"status": "blocked", "reason": "candidate_not_found"}
+        if rejected_by != user_id:
+            return await self._block_candidate_action(
+                db,
+                user_id=user_id,
+                candidate=candidate,
+                actor_user_id=user_id,
+                claimed_actor_id=rejected_by,
+                event_type="CANDIDATE_REJECTION_BLOCKED",
+                reason="rejected_by_must_match_authenticated_user",
+            )
+        if candidate.state in {"LIVE_ACTIVATED", "ROLLED_BACK"}:
+            return await self._block_candidate_action(
+                db,
+                user_id=user_id,
+                candidate=candidate,
+                actor_user_id=user_id,
+                event_type="CANDIDATE_REJECTION_BLOCKED",
+                reason="candidate_already_live_or_rolled_back",
+            )
+        if not rejection_reason.strip():
+            return await self._block_candidate_action(
+                db,
+                user_id=user_id,
+                candidate=candidate,
+                actor_user_id=user_id,
+                event_type="CANDIDATE_REJECTION_BLOCKED",
+                reason="rejection_reason_required",
+            )
+
+        profile = await db.get(Profile, candidate.profile_id)
+        shadow = (
+            await db.get(PipelineWatchlist, candidate.shadow_watchlist_id)
+            if candidate.shadow_watchlist_id
+            else None
+        )
+        now = utcnow()
+        candidate.state = "REJECTED"
+        candidate.approval_status = "rejected"
+        candidate.approval_required = True
+        candidate.rejected_at = now
+        candidate.updated_at = now
+        candidate.decision_reason = rejection_reason.strip()
+        candidate.promotion_blocked_reason = "candidate_rejected"
+        if profile:
+            profile.live_trading_enabled = False
+            profile.is_shadow_only = True
+        if shadow:
+            shadow.auto_refresh = False
+        await self._audit(
+            db,
+            user_id=user_id,
+            actor_user_id=rejected_by,
+            candidate_id=candidate.id,
+            profile_id=candidate.profile_id,
+            watchlist_id=candidate.shadow_watchlist_id,
+            event_type="CANDIDATE_REJECTED",
+            decision="REJECTED",
+            reason=candidate.decision_reason,
+            result={
+                **self._promotion_audit_payload(
+                    candidate,
+                    reason_code="candidate_rejected",
+                    mutation_applied=False,
+                ),
+            },
+        )
+        await db.commit()
+        return {"status": "rejected", "state": candidate.state}
+
+    async def activate_approved_candidate(
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+        candidate_id: UUID,
+        *,
+        activated_by: UUID,
+    ) -> dict:
+        candidate = await self._candidate_for_user(db, user_id, candidate_id)
+        if not candidate:
+            return {"status": "blocked", "reason": "candidate_not_found"}
+        candidate.live_activation_attempted_at = utcnow()
+        if activated_by != user_id:
+            return await self._block_candidate_action(
+                db,
+                user_id=user_id,
+                candidate=candidate,
+                actor_user_id=user_id,
+                claimed_actor_id=activated_by,
+                event_type="LIVE_ACTIVATION_BLOCKED_ACTOR_MISMATCH",
+                reason="activated_by_must_match_authenticated_user",
+            )
+        if candidate.state == "REJECTED":
+            await self._audit(
+                db,
+                user_id=user_id,
+                actor_user_id=activated_by,
+                candidate_id=candidate.id,
+                profile_id=candidate.profile_id,
+                event_type="LIVE_ACTIVATION_BLOCKED_CANDIDATE_REJECTED",
+                decision="BLOCKED",
+                reason="candidate_rejected",
+                result=self._promotion_audit_payload(
+                    candidate,
+                    reason_code="candidate_rejected",
+                    mutation_applied=False,
+                ),
+            )
+            await db.commit()
+            return {"status": "blocked", "reason": "candidate_rejected"}
+        if candidate.state in {"EXPIRED", "LIVE_ACTIVATED", "ROLLED_BACK"}:
+            reason_by_state = {
+                "EXPIRED": "candidate_expired",
+                "LIVE_ACTIVATED": "candidate_already_live",
+                "ROLLED_BACK": "candidate_already_rolled_back",
+            }
+            return await self._block_candidate_action(
+                db,
+                user_id=user_id,
+                candidate=candidate,
+                actor_user_id=user_id,
+                event_type="LIVE_ACTIVATION_BLOCKED_INVALID_STATE",
+                reason=reason_by_state[candidate.state],
+            )
+        if (
+            candidate.state != "APPROVED_FOR_LIVE"
+            or candidate.approval_status != "approved"
+            or not candidate.approved_by
+            or not candidate.approved_at
+            or not candidate.approval_reason
+        ):
+            await self._audit(
+                db,
+                user_id=user_id,
+                actor_user_id=activated_by,
+                candidate_id=candidate.id,
+                profile_id=candidate.profile_id,
+                event_type="LIVE_ACTIVATION_BLOCKED_MISSING_APPROVAL",
+                decision="BLOCKED",
+                reason="missing_human_approval",
+                result=self._promotion_audit_payload(
+                    candidate,
+                    reason_code="missing_human_approval",
+                    mutation_applied=False,
+                ),
+            )
+            await db.commit()
+            return {"status": "blocked", "reason": "missing_human_approval"}
+        if not candidate.rollback_payload:
+            await self._audit(
+                db,
+                user_id=user_id,
+                actor_user_id=activated_by,
+                candidate_id=candidate.id,
+                profile_id=candidate.profile_id,
+                event_type="LIVE_ACTIVATION_BLOCKED_MISSING_ROLLBACK",
+                decision="BLOCKED",
+                reason="missing_rollback_payload",
+                result=self._promotion_audit_payload(
+                    candidate,
+                    reason_code="missing_rollback_payload",
+                    mutation_applied=False,
+                    rollback_payload=None,
+                ),
+            )
+            await db.commit()
+            return {"status": "blocked", "reason": "missing_rollback_payload"}
+
+        safe, gate_details = await self.gate_evaluator.evaluate(db, user_id)
+        if not safe:
+            await self._audit(
+                db,
+                user_id=user_id,
+                actor_user_id=activated_by,
+                candidate_id=candidate.id,
+                profile_id=candidate.profile_id,
+                event_type="LIVE_ACTIVATION_BLOCKED_OPERATIONAL_GATES",
+                input_metrics={"gates": gate_details},
+                decision="BLOCKED",
+                reason="operational_gates_failed",
+                result={
+                    **self._promotion_audit_payload(
+                        candidate,
+                        reason_code="operational_gates_failed",
+                        mutation_applied=False,
+                    ),
+                    "operational_gates": gate_details,
+                },
+            )
+            await db.commit()
+            return {
+                "status": "blocked",
+                "reason": "operational_gates_failed",
+                "gates": gate_details,
+            }
+
+        plan = await self._build_live_change_plan(db, candidate)
+        if not plan:
+            await self._audit(
+                db,
+                user_id=user_id,
+                actor_user_id=activated_by,
+                candidate_id=candidate.id,
+                profile_id=candidate.profile_id,
+                event_type="LIVE_ACTIVATION_BLOCKED_TARGET_MISSING",
+                decision="BLOCKED",
+                reason="activation_target_missing",
+                result=self._promotion_audit_payload(
+                    candidate,
+                    reason_code="activation_target_missing",
+                    mutation_applied=False,
+                ),
+            )
+            await db.commit()
+            return {"status": "blocked", "reason": "activation_target_missing"}
+
+        profile = plan["profile"]
+        incumbent = plan["incumbent"]
+        live_watchlist = plan["live_watchlist"]
+        shadow = plan["shadow_watchlist"]
+        previous_profile_id = live_watchlist.profile_id
+        live_watchlist.profile_id = profile.id
+        live_watchlist.auto_refresh = True
+        if shadow and shadow.id != live_watchlist.id:
+            shadow.auto_refresh = False
+        profile.is_shadow_only = False
+        profile.live_trading_enabled = True
+        profile.is_active = True
+        if incumbent and incumbent.id != profile.id:
+            incumbent.live_trading_enabled = False
+
+        now = utcnow()
+        candidate.previous_profile_id = previous_profile_id
+        candidate.target_watchlist_id = live_watchlist.id
+        candidate.state = "LIVE_ACTIVATED"
+        candidate.promotion_win_rate = candidate.observed_win_rate
+        candidate.promotion_avg_pnl_pct = candidate.observed_avg_pnl_pct
+        candidate.promoted_at = now
+        candidate.live_activated_at = now
+        candidate.updated_at = now
+        candidate.decision_reason = "Ativação live executada após aprovação humana explícita."
+        db.add(ProfileIntelligenceAutopilotAssociation(
+            id=uuid4(),
+            user_id=user_id,
+            candidate_id=candidate.id,
+            watchlist_id=live_watchlist.id,
+            previous_profile_id=previous_profile_id,
+            new_profile_id=profile.id,
+            event_type="PROMOTION",
+            is_active=True,
+        ))
+        await self._audit(
+            db,
+            user_id=user_id,
+            actor_user_id=activated_by,
+            candidate_id=candidate.id,
+            profile_id=profile.id,
+            profile_version=profile.profile_version,
+            watchlist_id=live_watchlist.id,
+            event_type="LIVE_ACTIVATED",
+            input_metrics={
+                "shadow_metrics": {
+                    "trades": candidate.observed_trades,
+                    "win_rate": _float(candidate.observed_win_rate),
+                    "avg_pnl_pct": _float(candidate.observed_avg_pnl_pct),
+                },
+                "gates": gate_details,
+            },
+            decision="LIVE_ACTIVATED",
+            reason=candidate.decision_reason,
+            result={
+                **self._promotion_audit_payload(
+                    candidate,
+                    before_json=plan["before_json"],
+                    after_json=plan["after_json"],
+                    diff_json=plan["diff_json"],
+                    reason_code="human_approved_live_activation",
+                    mutation_applied=True,
+                ),
+                "incumbent_profile_id": (
+                    str(previous_profile_id) if previous_profile_id else None
+                ),
+                "candidate_profile_id": str(profile.id),
+            },
+        )
+        await db.commit()
+        return {
+            "status": "live_activated",
+            "state": candidate.state,
+            "candidate_id": str(candidate.id),
+        }
+
+    async def rollback_candidate(
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+        candidate_id: UUID,
+        *,
+        rolled_back_by: UUID,
+    ) -> dict:
+        candidate = await self._candidate_for_user(db, user_id, candidate_id)
+        if not candidate:
+            return {"status": "blocked", "reason": "candidate_not_found"}
+        if rolled_back_by != user_id:
+            return await self._block_candidate_action(
+                db,
+                user_id=user_id,
+                candidate=candidate,
+                actor_user_id=user_id,
+                claimed_actor_id=rolled_back_by,
+                event_type="CANDIDATE_ROLLBACK_BLOCKED",
+                reason="rolled_back_by_must_match_authenticated_user",
+            )
+        if candidate.state != "LIVE_ACTIVATED":
+            return await self._block_candidate_action(
+                db,
+                user_id=user_id,
+                candidate=candidate,
+                actor_user_id=user_id,
+                event_type="CANDIDATE_ROLLBACK_BLOCKED",
+                reason="candidate_not_live",
+            )
+        if not candidate.rollback_payload:
+            return await self._block_candidate_action(
+                db,
+                user_id=user_id,
+                candidate=candidate,
+                actor_user_id=user_id,
+                event_type="CANDIDATE_ROLLBACK_BLOCKED",
+                reason="missing_rollback_payload",
+            )
+        cycle = await self._latest_cycle_ref(db, user_id)
+        _, settings = await self.get_settings(db, user_id)
+        await self._rollback_candidate(
+            db,
+            user_id,
+            cycle,
+            candidate,
+            settings,
+            {"trigger": "human_requested", "actor": str(rolled_back_by)},
+            actor_user_id=rolled_back_by,
+        )
+        await db.commit()
+        return {"status": "rolled_back", "state": candidate.state}
+
     async def monitor_operational_state(self, db: AsyncSession, user_id: UUID) -> dict:
         """Frequent live degradation/gate monitor, independent from the 24h review."""
         if not await self._is_enabled(db, user_id):
@@ -491,8 +1201,7 @@ class ProfileIntelligenceAutopilotService:
             cycle_ref = latest_cycle or type("CycleRef", (), {"id": None})()
             metrics = {"promoted": 0, "rolled_back": 0, "insufficient_evidence": 0}
             await self._monitor_live(db, user_id, cycle_ref, settings, metrics)
-            if await self._is_enabled(db, user_id):
-                await self._activate_waiting_live(db, user_id, cycle_ref, settings, metrics)
+            await self._block_legacy_waiting_live(db, user_id, cycle_ref)
             await db.commit()
             return {"status": "completed", "metrics": metrics}
         finally:
@@ -594,7 +1303,7 @@ class ProfileIntelligenceAutopilotService:
                 ("REVIEW_SHADOW", self._review_shadow),
                 ("CALIBRATE_L3", self._calibrate_l3_profiles),
                 ("CREATE_DISCOVERED", self._create_discovered_candidates),
-                ("RECHECK_WAITING_LIVE", self._activate_waiting_live),
+                ("BLOCK_LEGACY_WAITING_LIVE", self._block_legacy_waiting_live),
             ):
                 cycle.checkpoint = checkpoint
                 await db.commit()
@@ -1001,6 +1710,8 @@ class ProfileIntelligenceAutopilotService:
             canonical_rules_json=canonical,
             evidence_json=candidate_evidence,
             version_number=version_number,
+            approval_status="pending",
+            approval_required=True,
             shadow_started_at=now,
             review_after=now + timedelta(hours=float(settings["review_after_hours"])),
         )
@@ -1025,7 +1736,50 @@ class ProfileIntelligenceAutopilotService:
             suggestion_id=source_suggestion_id, event_type="CANDIDATE_CREATED",
             input_metrics=evidence or {}, thresholds=settings, decision="SHADOW_COLLECTING",
             reason="Profile e watchlist L3 exclusiva criados atomicamente a partir da L2 vigente.",
-            result={"profile_id": str(profile.id), "watchlist_id": str(watchlist.id), "signature": signature},
+            result={
+                "candidate_id": str(candidate.id),
+                "incumbent_profile_id": (
+                    str(previous_profile_id) if previous_profile_id else None
+                ),
+                "candidate_profile_id": str(profile.id),
+                "profile_id": str(profile.id),
+                "watchlist_id": str(watchlist.id),
+                "signature": signature,
+                "before_json": {},
+                "after_json": {"state": "SHADOW_COLLECTING"},
+                "diff_json": {
+                    "state": {
+                        "before": None,
+                        "after": "SHADOW_COLLECTING",
+                    }
+                },
+                "shadow_metrics": {},
+                "comparison_metrics": {},
+                "reason_code": "candidate_created",
+                "approval_required": True,
+                "approved_by": None,
+                "approved_at": None,
+                "rollback_payload": None,
+                "mutation_applied": False,
+            },
+        )
+        await self._audit(
+            db,
+            user_id=user_id,
+            cycle_id=cycle.id,
+            candidate_id=candidate.id,
+            profile_id=profile.id,
+            profile_version=profile.profile_version,
+            watchlist_id=watchlist.id,
+            event_type="SHADOW_COLLECTING",
+            decision="SHADOW_COLLECTING",
+            reason="Coleta shadow iniciada para o candidato.",
+            result={
+                "candidate_id": str(candidate.id),
+                "candidate_profile_id": str(profile.id),
+                "approval_required": True,
+                "mutation_applied": False,
+            },
         )
         metrics["created"] += 1
         return candidate
@@ -1129,7 +1883,11 @@ class ProfileIntelligenceAutopilotService:
         candidates = list((await db.execute(
             select(ProfileIntelligenceAutopilotCandidate).where(
                 ProfileIntelligenceAutopilotCandidate.user_id == user_id,
-                ProfileIntelligenceAutopilotCandidate.state.in_(("SHADOW_COLLECTING", "SHADOW_READY_FOR_REVIEW")),
+                ProfileIntelligenceAutopilotCandidate.state.in_((
+                    "SHADOW_COLLECTING",
+                    "SHADOW_READY",
+                    "SHADOW_READY_FOR_REVIEW",
+                )),
             ).order_by(ProfileIntelligenceAutopilotCandidate.created_at)
         )).scalars().all())
         for candidate in candidates:
@@ -1144,7 +1902,26 @@ class ProfileIntelligenceAutopilotService:
             candidate.observed_avg_pnl_pct = observed["avg_pnl_pct"]
             candidate.updated_at = utcnow()
             if evaluation_ready(observed["trades"], elapsed_hours, settings):
-                candidate.state = "SHADOW_READY_FOR_REVIEW"
+                became_ready = candidate.state != "SHADOW_READY"
+                candidate.state = "SHADOW_READY"
+                if became_ready:
+                    await self._audit(
+                        db,
+                        user_id=user_id,
+                        cycle_id=cycle.id,
+                        candidate_id=candidate.id,
+                        profile_id=candidate.profile_id,
+                        watchlist_id=candidate.shadow_watchlist_id,
+                        event_type="SHADOW_READY",
+                        input_metrics=observed,
+                        thresholds=settings,
+                        decision="SHADOW_READY",
+                        reason="Amostra shadow atingiu a janela mínima de revisão.",
+                        result={
+                            "approval_required": True,
+                            "mutation_applied": False,
+                        },
+                    )
             incumbent_wr, incumbent_pnl = await self._incumbent_metrics(db, candidate.previous_profile_id)
             decision, reason = promotion_decision(
                 trades=observed["trades"],
@@ -1179,21 +1956,17 @@ class ProfileIntelligenceAutopilotService:
                 metrics["rejected"] += 1
                 continue
             safe, gate_details = await self.gate_evaluator.evaluate(db, user_id)
-            if safe:
-                await self._promote_candidate(db, user_id, cycle, candidate, settings, input_metrics)
-                metrics["promoted"] += 1
-            else:
-                candidate.state = "APPROVED_WAITING_LIVE"
-                candidate.decision_reason = "Aprovado por métricas; aguardando gates operacionais Spot."
-                candidate.updated_at = utcnow()
-                await self._audit(
-                    db, user_id=user_id, cycle_id=cycle.id, candidate_id=candidate.id,
-                    profile_id=candidate.profile_id, watchlist_id=candidate.shadow_watchlist_id,
-                    event_type="APPROVED_WAITING_LIVE", input_metrics=input_metrics,
-                    thresholds=settings, decision="APPROVED_WAITING_LIVE",
-                    reason=candidate.decision_reason, result={"gates": gate_details},
-                )
-                metrics["waiting_live"] += 1
+            await self._mark_pending_human_approval(
+                db,
+                user_id,
+                cycle,
+                candidate,
+                settings,
+                input_metrics,
+                gate_details,
+                gates_passed=safe,
+            )
+            metrics["waiting_live"] += 1
 
     async def _reconcile_manual_changes(self, db, user_id, cycle, candidate) -> bool:
         profile = await db.get(Profile, candidate.profile_id)
@@ -1262,6 +2035,9 @@ class ProfileIntelligenceAutopilotService:
     async def _reject_candidate(self, db, user_id, cycle, candidate, settings, input_metrics, reason):
         now = utcnow()
         candidate.state = "REJECTED"
+        candidate.approval_status = "rejected"
+        candidate.approval_required = True
+        candidate.promotion_blocked_reason = "candidate_rejected"
         candidate.rejected_at = now
         candidate.updated_at = now
         candidate.decision_reason = reason
@@ -1303,66 +2079,102 @@ class ProfileIntelligenceAutopilotService:
             profile_id=candidate.profile_id, watchlist_id=candidate.shadow_watchlist_id,
             event_type="CANDIDATE_REJECTED", input_metrics=input_metrics,
             thresholds=settings, decision="REJECTED", reason=reason,
-            result={"cooldown_until": blocked_until.isoformat()},
+            result={
+                **self._promotion_audit_payload(
+                    candidate,
+                    reason_code="candidate_rejected_by_shadow_metrics",
+                    mutation_applied=False,
+                ),
+                "cooldown_until": blocked_until.isoformat(),
+            },
         )
 
-    async def _promote_candidate(self, db, user_id, cycle, candidate, settings, input_metrics):
-        profile = await db.get(Profile, candidate.profile_id)
-        if not profile:
-            candidate.state = "DISABLED"
-            candidate.decision_reason = "Profile candidato não existe; reconciliação necessária."
-            return
-        target = await db.get(PipelineWatchlist, candidate.target_watchlist_id) if candidate.target_watchlist_id else None
-        shadow = await db.get(PipelineWatchlist, candidate.shadow_watchlist_id) if candidate.shadow_watchlist_id else None
-        if candidate.origin_profile_id and not await db.get(Profile, candidate.origin_profile_id):
-            candidate.state = "DISABLED"
-            candidate.decision_reason = "Profile original excluído durante avaliação; reconciliação necessária."
-            await self._audit(
-                db, user_id=user_id, cycle_id=cycle.id, candidate_id=candidate.id,
-                profile_id=candidate.profile_id, watchlist_id=candidate.shadow_watchlist_id,
-                event_type="ORIGIN_PROFILE_MISSING", decision="DISABLED",
-                reason=candidate.decision_reason,
-            )
-            return
-        live_watchlist = target or shadow
-        if live_watchlist is None:
-            await self._queue_compensation(
-                db, user_id, cycle.id, candidate.id, "PROMOTION_WATCHLIST_MISSING",
-                {"profile_id": str(candidate.profile_id)},
-            )
-            return
-        previous_profile_id = live_watchlist.profile_id
-        live_watchlist.profile_id = profile.id
-        live_watchlist.auto_refresh = True
-        if shadow and target and shadow.id != target.id:
-            shadow.auto_refresh = False
-        profile.is_shadow_only = False
-        profile.live_trading_enabled = True
-        profile.is_active = True
-        now = utcnow()
-        candidate.previous_profile_id = previous_profile_id
-        candidate.target_watchlist_id = live_watchlist.id
-        candidate.state = "LIVE"
-        candidate.promotion_win_rate = candidate.observed_win_rate
-        candidate.promotion_avg_pnl_pct = candidate.observed_avg_pnl_pct
-        candidate.promoted_at = now
-        candidate.updated_at = now
-        candidate.decision_reason = "Promovido automaticamente após evidência válida e gates Spot aprovados."
-        db.add(ProfileIntelligenceAutopilotAssociation(
-            id=uuid4(), user_id=user_id, candidate_id=candidate.id,
-            watchlist_id=live_watchlist.id, previous_profile_id=previous_profile_id,
-            new_profile_id=profile.id, event_type="PROMOTION", is_active=True,
-        ))
+    async def _mark_pending_human_approval(
+        self,
+        db,
+        user_id,
+        cycle,
+        candidate,
+        settings,
+        input_metrics,
+        gate_details,
+        *,
+        gates_passed,
+    ):
+        plan = await self._build_live_change_plan(db, candidate)
+        rollback_payload = plan["rollback_payload"] if plan else None
+        evidence = dict(_json(candidate.evidence_json) or {})
+        evidence["live_promotion_recommendation"] = {
+            "candidate_id": str(candidate.id),
+            "incumbent_profile_id": (
+                rollback_payload.get("previous_profile_id")
+                if rollback_payload
+                else None
+            ),
+            "candidate_profile_id": str(candidate.profile_id),
+            "shadow_metrics": input_metrics,
+            "comparison_metrics": {
+                "incumbent_win_rate": input_metrics.get("incumbent_win_rate"),
+                "incumbent_avg_pnl_pct": input_metrics.get("incumbent_avg_pnl_pct"),
+            },
+            "risk_summary": {
+                "operational_gates_passed": gates_passed,
+                "operational_gates": gate_details,
+                "human_approval_required": True,
+            },
+            "expected_impact": {
+                "win_rate": _float(candidate.observed_win_rate),
+                "avg_pnl_pct": _float(candidate.observed_avg_pnl_pct),
+            },
+            "rollback_payload": rollback_payload,
+            "approval_required": True,
+        }
+        candidate.evidence_json = evidence
+        candidate.rollback_payload = rollback_payload
+        candidate.state = "PENDING_HUMAN_APPROVAL"
+        candidate.approval_status = "pending"
+        candidate.approval_required = True
+        candidate.promotion_blocked_reason = "pending_human_approval"
+        candidate.decision_reason = (
+            "Métricas aprovadas; promoção live bloqueada até aprovação humana explícita."
+        )
+        candidate.updated_at = utcnow()
         await self._audit(
-            db, user_id=user_id, cycle_id=cycle.id, candidate_id=candidate.id,
-            profile_id=profile.id, profile_version=profile.profile_version,
-            watchlist_id=live_watchlist.id, event_type="LIVE_ACTIVATED",
-            input_metrics=input_metrics, thresholds=settings, decision="LIVE",
+            db,
+            user_id=user_id,
+            cycle_id=cycle.id,
+            candidate_id=candidate.id,
+            profile_id=candidate.profile_id,
+            watchlist_id=(
+                plan["live_watchlist"].id
+                if plan
+                else candidate.shadow_watchlist_id
+            ),
+            event_type="LIVE_PROMOTION_BLOCKED_PENDING_APPROVAL",
+            input_metrics=input_metrics,
+            thresholds=settings,
+            decision="PENDING_HUMAN_APPROVAL",
             reason=candidate.decision_reason,
-            result={"previous_profile_id": str(previous_profile_id) if previous_profile_id else None},
+            result={
+                **evidence["live_promotion_recommendation"],
+                "before_json": plan["before_json"] if plan else {},
+                "after_json": plan["after_json"] if plan else {},
+                "diff_json": plan["diff_json"] if plan else {},
+                "reason_code": "pending_human_approval",
+                "approved_by": None,
+                "approved_at": None,
+                "mutation_applied": False,
+            },
         )
 
-    async def _activate_waiting_live(self, db, user_id, cycle, settings, metrics):
+    async def _block_legacy_waiting_live(
+        self,
+        db,
+        user_id,
+        cycle,
+        _settings=None,
+        _metrics=None,
+    ):
         candidates = list((await db.execute(
             select(ProfileIntelligenceAutopilotCandidate).where(
                 ProfileIntelligenceAutopilotCandidate.user_id == user_id,
@@ -1370,19 +2182,27 @@ class ProfileIntelligenceAutopilotService:
             )
         )).scalars().all())
         for candidate in candidates:
-            if not await self._is_enabled(db, user_id):
-                return
-            safe, gates = await self.gate_evaluator.evaluate(db, user_id)
-            if not safe:
-                continue
-            input_metrics = {
-                "trades": candidate.observed_trades,
-                "win_rate": _float(candidate.observed_win_rate),
-                "avg_pnl_pct": _float(candidate.observed_avg_pnl_pct),
-                "gates": gates,
-            }
-            await self._promote_candidate(db, user_id, cycle, candidate, settings, input_metrics)
-            metrics["promoted"] += 1
+            candidate.state = "PENDING_HUMAN_APPROVAL"
+            candidate.approval_status = "pending"
+            candidate.approval_required = True
+            candidate.promotion_blocked_reason = "legacy_waiting_live_requires_human_approval"
+            candidate.updated_at = utcnow()
+            await self._audit(
+                db,
+                user_id=user_id,
+                cycle_id=cycle.id,
+                candidate_id=candidate.id,
+                profile_id=candidate.profile_id,
+                watchlist_id=candidate.shadow_watchlist_id,
+                event_type="LIVE_PROMOTION_BLOCKED_PENDING_APPROVAL",
+                decision="PENDING_HUMAN_APPROVAL",
+                reason=candidate.promotion_blocked_reason,
+                result=self._promotion_audit_payload(
+                    candidate,
+                    reason_code=candidate.promotion_blocked_reason,
+                    mutation_applied=False,
+                ),
+            )
 
     async def _live_metrics(self, db, candidate) -> dict:
         row = (await db.execute(text("""
@@ -1415,7 +2235,10 @@ class ProfileIntelligenceAutopilotService:
         candidates = list((await db.execute(
             select(ProfileIntelligenceAutopilotCandidate).where(
                 ProfileIntelligenceAutopilotCandidate.user_id == user_id,
-                ProfileIntelligenceAutopilotCandidate.state == "LIVE",
+                ProfileIntelligenceAutopilotCandidate.state.in_((
+                    "LIVE",
+                    "LIVE_ACTIVATED",
+                )),
             )
         )).scalars().all())
         for candidate in candidates:
@@ -1440,30 +2263,73 @@ class ProfileIntelligenceAutopilotService:
                 await self._rollback_candidate(db, user_id, cycle, candidate, settings, current)
                 metrics["rolled_back"] += 1
 
-    async def _rollback_candidate(self, db, user_id, cycle, candidate, settings, current):
-        target = await db.get(PipelineWatchlist, candidate.target_watchlist_id) if candidate.target_watchlist_id else None
+    async def _rollback_candidate(
+        self,
+        db,
+        user_id,
+        cycle,
+        candidate,
+        settings,
+        current,
+        actor_user_id=None,
+    ):
+        rollback_payload = _json(candidate.rollback_payload) or {}
+        target_id = rollback_payload.get("watchlist_id") or candidate.target_watchlist_id
+        previous_id = rollback_payload.get("previous_profile_id") or candidate.previous_profile_id
+        target = await db.get(PipelineWatchlist, UUID(str(target_id))) if target_id else None
         profile = await db.get(Profile, candidate.profile_id)
-        previous = await db.get(Profile, candidate.previous_profile_id) if candidate.previous_profile_id else None
+        previous = await db.get(Profile, UUID(str(previous_id))) if previous_id else None
         shadow = await db.get(PipelineWatchlist, candidate.shadow_watchlist_id) if candidate.shadow_watchlist_id else None
         if not target:
             await self._queue_compensation(
                 db, user_id, cycle.id, candidate.id, "ROLLBACK_WATCHLIST_MISSING",
-                {"profile_id": str(candidate.profile_id), "previous_profile_id": str(candidate.previous_profile_id) if candidate.previous_profile_id else None},
+                {
+                    "profile_id": str(candidate.profile_id),
+                    "previous_profile_id": str(previous_id) if previous_id else None,
+                },
             )
             return
+        before_json = {
+            "watchlist": {
+                "id": str(target.id),
+                "profile_id": str(target.profile_id) if target.profile_id else None,
+                "auto_refresh": bool(target.auto_refresh),
+            },
+            "candidate_profile": {
+                "id": str(profile.id) if profile else None,
+                "is_active": bool(profile.is_active) if profile else None,
+                "is_shadow_only": bool(profile.is_shadow_only) if profile else None,
+                "live_trading_enabled": (
+                    bool(profile.live_trading_enabled) if profile else None
+                ),
+            },
+        }
         if previous:
             target.profile_id = previous.id
-            target.auto_refresh = True
-            previous.is_active = True
-            previous.live_trading_enabled = True
-            previous.is_shadow_only = False
+            target.auto_refresh = bool(
+                rollback_payload.get("watchlist_auto_refresh", True)
+            )
+            incumbent_snapshot = rollback_payload.get("incumbent_profile") or {}
+            previous.is_active = bool(incumbent_snapshot.get("is_active", True))
+            previous.live_trading_enabled = bool(
+                incumbent_snapshot.get("live_trading_enabled", True)
+            )
+            previous.is_shadow_only = bool(
+                incumbent_snapshot.get("is_shadow_only", False)
+            )
         else:
             target.auto_refresh = False
             if shadow:
                 shadow.auto_refresh = True
         if profile:
-            profile.live_trading_enabled = False
-            profile.is_shadow_only = True
+            candidate_snapshot = rollback_payload.get("candidate_profile") or {}
+            profile.is_active = bool(candidate_snapshot.get("is_active", True))
+            profile.live_trading_enabled = bool(
+                candidate_snapshot.get("live_trading_enabled", False)
+            )
+            profile.is_shadow_only = bool(
+                candidate_snapshot.get("is_shadow_only", True)
+            )
         candidate.state = "ROLLED_BACK"
         candidate.rollback_at = utcnow()
         candidate.updated_at = candidate.rollback_at
@@ -1474,16 +2340,45 @@ class ProfileIntelligenceAutopilotService:
             new_profile_id=previous.id if previous else None,
             event_type="ROLLBACK", is_active=True,
         ))
+        after_json = {
+            "watchlist": {
+                "id": str(target.id),
+                "profile_id": str(target.profile_id) if target.profile_id else None,
+                "auto_refresh": bool(target.auto_refresh),
+            },
+            "candidate_profile": {
+                "id": str(profile.id) if profile else None,
+                "is_active": bool(profile.is_active) if profile else None,
+                "is_shadow_only": bool(profile.is_shadow_only) if profile else None,
+                "live_trading_enabled": (
+                    bool(profile.live_trading_enabled) if profile else None
+                ),
+            },
+        }
+        diff_json = {
+            key: {"before": before_json[key], "after": after_json[key]}
+            for key in before_json
+            if before_json[key] != after_json[key]
+        }
         await self._audit(
             db, user_id=user_id, cycle_id=cycle.id, candidate_id=candidate.id,
             profile_id=candidate.profile_id, watchlist_id=target.id,
-            event_type="ROLLBACK_EXECUTED", input_metrics={
+            actor_user_id=actor_user_id,
+            event_type="CANDIDATE_ROLLED_BACK", input_metrics={
                 **current,
                 "promotion_win_rate": _float(candidate.promotion_win_rate),
                 "promotion_avg_pnl_pct": _float(candidate.promotion_avg_pnl_pct),
             }, thresholds={"rollback_relative_floor": settings["rollback_relative_floor"]},
             decision="ROLLED_BACK", reason=candidate.decision_reason,
-            result={"restored_profile_id": str(previous.id) if previous else None, "returned_to_shadow": previous is None},
+            result={
+                "restored_profile_id": str(previous.id) if previous else None,
+                "returned_to_shadow": previous is None,
+                "before_json": before_json,
+                "after_json": after_json,
+                "diff_json": diff_json,
+                "rollback_payload": rollback_payload,
+                "mutation_applied": True,
+            },
         )
 
     async def _queue_compensation(self, db, user_id, cycle_id, candidate_id, operation, payload):

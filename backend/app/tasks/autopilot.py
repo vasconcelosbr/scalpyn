@@ -6,7 +6,7 @@ Runs every 6 hours (structural queue).
 Flow:
   1. Load all profiles with auto_pilot_enabled=True
   2. For each profile, run autopilot_engine.run_autopilot_cycle()
-  3. If MUTATED, apply new config + updated auto_pilot_config to profile
+  3. The engine atomically applies valid mutations and writes their audit record
   4. Log results
 
 Registered as: ``app.tasks.autopilot.run``
@@ -86,7 +86,6 @@ def _run_async(coro):
 
 
 async def _run_autopilot() -> dict[str, Any]:
-    from datetime import datetime, timezone
     from sqlalchemy import select
     from sqlalchemy import text
 
@@ -127,40 +126,16 @@ async def _run_autopilot() -> dict[str, Any]:
                     current_config=current_config,
                     auto_pilot_config=ap_config,
                     db=cycle_db,
+                    trigger_source="celery_scheduled",
+                    profile_name=getattr(profile, "name", None),
                 )
 
             # If mutation happened, apply new config to profile
             if cycle_result.get("action") == "MUTATED":
-                async with CeleryAsyncSessionLocal() as apply_db:
-                    # Audit P0-14: optimistic lock — verify config hasn't changed
-                    # since we read it (e.g. user edited profile mid-cycle).
-                    apply_result = await apply_db.execute(
-                        text("""UPDATE config_profiles
-                                   SET config = :cfg,
-                                       auto_pilot_config = :ap,
-                                       updated_at = NOW()
-                                 WHERE id = :pid
-                                   AND updated_at = :expected_updated_at
-                               RETURNING id"""),
-                        {
-                            "pid": str(profile.id),
-                            "cfg": json.dumps(cycle_result["new_config"]),
-                            "ap": json.dumps(cycle_result["updated_ap_config"]),
-                            "expected_updated_at": profile.updated_at,
-                        },
-                    )
-                    if apply_result.rowcount == 0:
-                        logger.warning(
-                            "[autopilot] config changed by user during cycle — skipping mutation for profile %s",
-                            profile_id,
-                        )
-                        await apply_db.rollback()
-                    else:
-                        await apply_db.commit()
-                        logger.info(
-                            f"[Autopilot] Mutation applied to profile {profile_id}: "
-                            f"{cycle_result['reason']}"
-                        )
+                logger.info(
+                    f"[Autopilot] Mutation applied atomically to profile {profile_id}: "
+                    f"{cycle_result['reason']}"
+                )
 
             # ── Always persist updated_ap_config (circuit breaker, regression counter) ──
             # Audit P0-10: previously only persisted on MUTATED, which meant
@@ -170,14 +145,21 @@ async def _run_autopilot() -> dict[str, Any]:
                 try:
                     async with CeleryAsyncSessionLocal() as persist_db:
                         persist_result = await persist_db.execute(
-                            text("SELECT id, auto_pilot_config FROM config_profiles WHERE id = :pid"),
+                            text("SELECT id, auto_pilot_config FROM profiles WHERE id = :pid"),
                             {"pid": str(profile.id)},
                         )
                         p = persist_result.fetchone()
                         if p:
                             await persist_db.execute(
-                                text("UPDATE config_profiles SET auto_pilot_config = :ap WHERE id = :pid"),
-                                {"pid": str(profile.id), "ap": json.dumps(cycle_result["updated_ap_config"])},
+                                text(
+                                    "UPDATE profiles "
+                                    "SET auto_pilot_config = CAST(:ap AS jsonb) "
+                                    "WHERE id = :pid"
+                                ),
+                                {
+                                    "pid": str(profile.id),
+                                    "ap": json.dumps(cycle_result["updated_ap_config"]),
+                                },
                             )
                             await persist_db.commit()
                             logger.info("[autopilot] persisted ap_config for profile %s (action=%s)",

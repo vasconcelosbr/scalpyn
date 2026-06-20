@@ -48,6 +48,9 @@ interface AuditLog {
   regime: string | null;
   perf_snapshot: any;
   version_id: string | null;
+  trigger_source: string | null;
+  celery_task_id: string | null;
+  profile_name: string | null;
   created_at: string;
 }
 
@@ -274,6 +277,13 @@ export default function AutopilotPage() {
 
       {!loadingDetail && status && (
         <>
+          {/* Dry-run warning banner */}
+          {(runResult?.dry_run === true || auditLogs.some(l => l.action.startsWith("DRY_RUN"))) && (
+            <div className="card p-3 border border-amber-500/30 flex items-center gap-2">
+              <span className="text-amber-400 text-[11px] font-semibold uppercase tracking-wide">Modo Simulação (dry_run)</span>
+              <span className="text-[11px] text-[var(--text-secondary)]">— nenhuma config está sendo persistida. Para ativar escrita real, desative dry_run_mode nos guardrails.</span>
+            </div>
+          )}
           {/* Status cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* State */}
@@ -465,8 +475,15 @@ export default function AutopilotPage() {
                         {regimeBadge(log.regime)}
                         <span className="text-[11px] text-[var(--text-secondary)] truncate">{log.reason || "—"}</span>
                       </span>
-                      <span className="text-[10px] text-[var(--text-tertiary)] shrink-0 font-mono">
-                        {fmtDate(log.created_at)}
+                      <span className="flex items-center gap-2 shrink-0">
+                        {log.trigger_source && (
+                          <span className="text-[9px] text-[var(--text-tertiary)] bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded px-1.5 py-0.5 font-mono">
+                            {log.trigger_source === "manual_api" ? "manual" : "agendado"}
+                          </span>
+                        )}
+                        <span className="text-[10px] text-[var(--text-tertiary)] font-mono">
+                          {fmtDate(log.created_at)}
+                        </span>
                       </span>
                     </button>
                     {expandedLog === log.id && log.perf_snapshot && (

@@ -139,6 +139,8 @@ class IndicatorLiftAnalyzer:
             await db.execute(
                 text("""
                     SELECT
+                        profile_id,
+                        profile_name,
                         outcome,
                         pnl_pct,
                         mae_pct,
@@ -193,6 +195,8 @@ class IndicatorLiftAnalyzer:
                 global_losses += 1
 
             trades.append({
+                "profile_id": row.profile_id,
+                "profile_name": row.profile_name,
                 "outcome": outcome,
                 "is_win": is_win,
                 "is_loss": is_loss,
@@ -235,6 +239,7 @@ class IndicatorLiftAnalyzer:
                 "tp15": 0,
                 "tp30": 0,
                 "tp60": 0,
+                "source_profiles": {},
             }
 
         for trade in trades:
@@ -263,6 +268,10 @@ class IndicatorLiftAnalyzer:
 
                 key = (ind, bdef["bucket_label"])
                 bd = bucket_data[key]
+                if trade["profile_id"]:
+                    bd["source_profiles"][str(trade["profile_id"])] = (
+                        trade["profile_name"] or str(trade["profile_id"])
+                    )
                 bd["total"] += 1
                 if trade["is_win"]:
                     bd["wins"] += 1
@@ -371,6 +380,20 @@ class IndicatorLiftAnalyzer:
                 "confidence_score": confidence_score,
                 "confidence_level": confidence_level,
                 "role_detected": role_detected,
+                "source_profiles": sorted(
+                    bd["source_profiles"].values(),
+                    key=lambda value: value.lower(),
+                ),
+                "source_profile_ids": sorted(bd["source_profiles"].keys()),
+                "validation_status": "exploratory_only",
+                "actionability_status": "exploratory_only",
+                "target_section": (
+                    "signals"
+                    if role_detected == "winning_indicator"
+                    else "block_rules"
+                    if role_detected == "losing_indicator"
+                    else None
+                ),
             }
             results.append(result)
 
@@ -408,6 +431,11 @@ class IndicatorLiftAnalyzer:
                 confidence_score=r["confidence_score"],
                 confidence_level=r["confidence_level"],
                 role_detected=r["role_detected"],
+                source_profiles=r["source_profiles"],
+                source_profile_ids=r["source_profile_ids"],
+                validation_status=r["validation_status"],
+                actionability_status=r["actionability_status"],
+                target_section=r["target_section"],
             )
             db.add(row_obj)
 

@@ -86,6 +86,9 @@ SELECTION_INVERSION_DELTA = 0.50  # % — rejected_ev - approved_ev threshold
 MIN_HOURS_BETWEEN_MUTATIONS = 48  # horas mínimas entre mutações
 EV_REGRESSION_DELTA = 0.20        # % — degradação para trigger baseado em baseline
 MIN_RECORDS_REQUIRED = 30         # amostras mínimas para trigger
+AUTOPILOT_MIN_SCOPED_CLOSED_TRADES = int(
+    os.getenv("AUTOPILOT_MIN_SCOPED_CLOSED_TRADES", "30")
+)
 MIN_SPAN_DAYS = int(os.getenv("AUTOPILOT_MIN_SPAN_DAYS", "5"))  # janela mínima real de dados (dias) antes de mutar
 CIRCUIT_BREAKER_THRESHOLD = 3     # regressões consecutivas
 CIRCUIT_BREAKER_PAUSE_HOURS = 168 # 7 dias
@@ -127,6 +130,59 @@ _ST_TTT_TIMEOUT  = "TIMEOUT"   # mesmo string que outcome TIMEOUT, coluna difere
 _ST_TTT_OUTCOMES_SQL = "('FAST_WIN', 'TIMEOUT')"  # IN (...) para ttt_outcome
 
 
+class AutopilotScopeError(Exception):
+    """Raised when mutation evidence is not strictly scoped to one user/profile."""
+
+
+def _json_diff(before: Optional[dict], after: Optional[dict]) -> dict:
+    """Return an explicit top-level before/after diff for audit payloads."""
+    before = before or {}
+    after = after or {}
+    return {
+        key: {"before": before.get(key), "after": after.get(key)}
+        for key in sorted(set(before) | set(after))
+        if before.get(key) != after.get(key)
+    }
+
+
+def _uuid_or_none(value: Optional[str]) -> Optional[str]:
+    try:
+        return str(uuid.UUID(str(value))) if value else None
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+async def _validate_mutation_scope(
+    user_id: Optional[str],
+    profile_id: Optional[str],
+    db: AsyncSession,
+) -> Optional[str]:
+    """Validate required IDs and ownership. Returns a blocking reason or None."""
+    if not user_id and not profile_id:
+        return "missing_user_and_profile"
+    if not user_id:
+        return "missing_user_id"
+    if not profile_id:
+        return "missing_profile_id"
+
+    try:
+        user_uuid = str(uuid.UUID(str(user_id)))
+        profile_uuid = str(uuid.UUID(str(profile_id)))
+    except (TypeError, ValueError, AttributeError):
+        return "invalid_scope"
+
+    result = await db.execute(text("""
+        SELECT id
+        FROM profiles
+        WHERE id = CAST(:profile_id AS uuid)
+          AND user_id = CAST(:user_id AS uuid)
+        LIMIT 1
+    """), {"profile_id": profile_uuid, "user_id": user_uuid})
+    if result.scalar_one_or_none() is None:
+        return "profile_not_found"
+    return None
+
+
 # ── Guardrails (lidos de config_profiles JSONB — Zero Hardcode) ───────────────
 # Defaults seguros usados quando nenhum registro 'autopilot_guardrails' existe.
 # dry_run_mode=True por padrão: o sistema nunca escreve sem config explícita no DB.
@@ -145,6 +201,7 @@ _GUARDRAILS_DEFAULTS: Dict[str, Any] = {
     "kill_switch":                  False,
     "dry_run_mode":                  True,   # SAFE DEFAULT: nunca escreve sem config explícita
     "scope_profile_id":             None,    # None = sem escopo; sobrescrito pelo seed do DB
+    "min_scoped_closed_trades": AUTOPILOT_MIN_SCOPED_CLOSED_TRADES,
     # C.4 — Autoridade expandida: autopilot pode ajustar todas as dimensões da config.
     # Sem floor/ceiling por decisão do operador — amplitude livre dentro dos guardrails.
     # autopilot_full_authority=True: habilita apply_full_adjustments (block_rules, entry_triggers,
@@ -211,16 +268,18 @@ async def _load_guardrails(db: AsyncSession, user_id: str) -> Dict[str, Any]:
     return dict(_GUARDRAILS_DEFAULTS)
 
 
-async def _load_ml_fee_pct(db: AsyncSession) -> float:
+async def _load_ml_fee_pct(db: AsyncSession, user_id: Optional[str] = None) -> float:
     """Load ml_fee_roundtrip_pct from config_profiles (type='ml').
     Returns 0.0 on any error or missing config — safe fallback for COALESCE queries.
     ZERO HARDCODE: fee is never a literal in SQL or Python.
     """
     try:
+        user_clause = "AND user_id = CAST(:user_id AS uuid)" if user_id else ""
         row = await db.execute(text(
             "SELECT config_json->>'ml_fee_roundtrip_pct' AS fee "
-            "FROM config_profiles WHERE config_type = 'ml' AND is_active = true LIMIT 1"
-        ))
+            "FROM config_profiles WHERE config_type = 'ml' AND is_active = true "
+            f"{user_clause} ORDER BY updated_at DESC LIMIT 1"
+        ), {"user_id": str(user_id)} if user_id else {})
         r = row.one_or_none()
         if r and r.fee is not None:
             return float(r.fee)
@@ -231,7 +290,14 @@ async def _load_ml_fee_pct(db: AsyncSession) -> float:
 
 # ── Performance Analysis ──────────────────────────────────────────────────────
 
-async def compute_performance_window(days: int, db: AsyncSession, user_id = None) -> Dict[str, Any]:
+async def compute_performance_window(
+    days: int,
+    db: AsyncSession,
+    user_id: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    *,
+    mutation_context: bool = False,
+) -> Dict[str, Any]:
     """
     Computa métricas de performance do modelo nos últimos N dias.
 
@@ -253,19 +319,34 @@ async def compute_performance_window(days: int, db: AsyncSession, user_id = None
         selection_inversion  — rejected_ev - approved_ev (0 quando source=L1_SPECTRUM)
         autopilot_source     — fonte usada neste ciclo (para audit trail)
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    if mutation_context and not user_id:
+        raise AutopilotScopeError(
+            "user_id is required for mutation performance window"
+        )
+    if mutation_context and not profile_id:
+        raise AutopilotScopeError(
+            "profile_id is required for mutation performance window"
+        )
+
+    computed_at = datetime.now(timezone.utc)
+    cutoff = computed_at - timedelta(days=days)
     # B3: EV in net-of-fee terms. COALESCE uses net_return_pct when available
     # (post-fix shadows), falls back to pnl_pct - fee for pre-fix records.
     # fee_pct is NEVER a literal — always loaded from config_profiles.
-    fee_pct = await _load_ml_fee_pct(db)
+    fee_pct = await _load_ml_fee_pct(db, user_id=user_id)
 
     _source = AUTOPILOT_SOURCE  # snapshot local para evitar mudança mid-cycle
 
     # ── Approved performance from shadow_trades (fonte = AUTOPILOT_SOURCE) ────
     # shadow_trades vocabulary: _ST_TP='TP_HIT', _ST_SL='SL_HIT'  (UPPERCASE)
     # decisions_log permanece como CAPTURA upstream — NÃO removida.
-    _uid_clause = "AND user_id = :uid" if user_id else ""
-    _uid_params: Dict[str, Any] = {"uid": str(user_id)} if user_id else {}
+    _uid_clause = "AND user_id = CAST(:uid AS uuid)" if user_id else ""
+    _profile_clause = "AND profile_id = CAST(:profile_id AS uuid)" if profile_id else ""
+    _scope_params: Dict[str, Any] = {}
+    if user_id:
+        _scope_params["uid"] = str(user_id)
+    if profile_id:
+        _scope_params["profile_id"] = str(profile_id)
     allowed_result = await db.execute(text(f"""
         SELECT
             COUNT(*)                                                                  AS n,
@@ -281,7 +362,8 @@ async def compute_performance_window(days: int, db: AsyncSession, user_id = None
           AND pnl_pct IS NOT NULL
           AND created_at >= :cutoff
           {_uid_clause}
-    """), {"cutoff": cutoff, "fee_pct": fee_pct, "source": _source, **_uid_params})
+          {_profile_clause}
+    """), {"cutoff": cutoff, "fee_pct": fee_pct, "source": _source, **_scope_params})
     allowed_row = dict(allowed_result.mappings().one())
 
     n_allowed = int(allowed_row["n"] or 0)
@@ -319,7 +401,9 @@ async def compute_performance_window(days: int, db: AsyncSession, user_id = None
               AND outcome IN {_ST_OUTCOMES_SQL}
               AND pnl_pct IS NOT NULL
               AND created_at >= :cutoff
-        """), {"cutoff": cutoff, "fee_pct": fee_pct})
+              {_uid_clause}
+              {_profile_clause}
+        """), {"cutoff": cutoff, "fee_pct": fee_pct, **_scope_params})
         rejected_row = dict(rejected_result.mappings().one())
 
         n_rejected = int(rejected_row["n"] or 0)
@@ -332,9 +416,11 @@ async def compute_performance_window(days: int, db: AsyncSession, user_id = None
             _vocab_check = await db.execute(
                 text(
                     f"SELECT COUNT(*) AS n FROM shadow_trades "
-                    f"WHERE source = '{_LEGACY_SOURCE_REJECTED}' AND pnl_pct IS NOT NULL AND created_at >= :cutoff"
+                    f"WHERE source = '{_LEGACY_SOURCE_REJECTED}' "
+                    f"AND pnl_pct IS NOT NULL AND created_at >= :cutoff "
+                    f"{_uid_clause} {_profile_clause}"
                 ),
-                {"cutoff": cutoff},
+                {"cutoff": cutoff, **_scope_params},
             )
             _n_raw = int(_vocab_check.scalar() or 0)
             if _n_raw > 0:
@@ -347,6 +433,15 @@ async def compute_performance_window(days: int, db: AsyncSession, user_id = None
                 )
 
     selection_inversion = rejected_ev - approved_ev
+
+    performance_window = {
+        "start": cutoff.isoformat(),
+        "end": computed_at.isoformat(),
+        "source": _source,
+        "closed_trades": n_allowed,
+        "profile_id": str(profile_id) if profile_id else None,
+        "user_id": str(user_id) if user_id else None,
+    }
 
     return {
         "approved_ev":        approved_ev,
@@ -363,7 +458,11 @@ async def compute_performance_window(days: int, db: AsyncSession, user_id = None
         "selection_inversion": selection_inversion,
         "analysis_days":      days,
         "autopilot_source":   _source,
-        "computed_at":        datetime.now(timezone.utc).isoformat(),
+        "computed_at":        computed_at.isoformat(),
+        "user_id":            str(user_id) if user_id else None,
+        "profile_id":         str(profile_id) if profile_id else None,
+        "evidence_count":     n_allowed,
+        "performance_window": performance_window,
     }
 
 
@@ -425,6 +524,8 @@ async def check_behavior_circuit_breaker(
     db: AsyncSession,
     perf: Dict[str, Any],
     guardrails: Dict[str, Any],
+    user_id: str,
+    profile_id: str,
 ) -> Tuple[bool, str]:
     """
     Detecta salto súbito na taxa de aprovação — sinal de que o autopilot pode ter
@@ -472,7 +573,14 @@ async def check_behavior_circuit_breaker(
             WHERE source IN ('{_LEGACY_SOURCE_APPROVED}', '{_LEGACY_SOURCE_REJECTED}')
               AND outcome IS NOT NULL
               AND created_at >= :c30d
-        """), {"c7d": cutoff_7d, "c30d": cutoff_30d})
+              AND user_id = CAST(:user_id AS uuid)
+              AND profile_id = CAST(:profile_id AS uuid)
+        """), {
+            "c7d": cutoff_7d,
+            "c30d": cutoff_30d,
+            "user_id": str(user_id),
+            "profile_id": str(profile_id),
+        })
         row = dict(result.mappings().one())
 
         n_l3_7d   = int(row["n_l3_7d"]  or 0)
@@ -763,34 +871,93 @@ async def save_profile_version(
 
 
 async def log_audit(
-    profile_id: str,
+    profile_id: Optional[str],
     action: str,
     reason: str,
     regime: str,
     perf: Optional[Dict[str, Any]],
     db: AsyncSession,
+    user_id: Optional[str] = None,
+    target_config: Optional[str] = None,
+    target_section: Optional[str] = None,
     config_before: Optional[dict] = None,
     config_after: Optional[dict] = None,
+    diff_json: Optional[dict] = None,
+    reason_code: Optional[str] = None,
+    mutation_applied: bool = False,
     version_id: Optional[str] = None,
+    trigger_source: Optional[str] = None,
+    celery_task_id: Optional[str] = None,
+    profile_name: Optional[str] = None,
 ) -> None:
     """Insere registro em autopilot_audit_logs."""
+
+    mutation_actions = {
+        "MUTATED",
+        "RULES_ADJUSTED",
+        "MIN_SCORE_ADJUSTED",
+        "BLOCK_RULES_ADJUSTED",
+        "ENTRY_TRIGGERS_ADJUSTED",
+    }
+    if action in mutation_actions:
+        performance_window = (perf or {}).get("performance_window")
+        evidence_count = (perf or {}).get("evidence_count")
+        missing = [
+            name
+            for name, value in {
+                "user_id": user_id,
+                "profile_id": profile_id,
+                "performance_window": performance_window,
+                "evidence_count": evidence_count,
+                "before_json": config_before,
+                "after_json": config_after,
+                "diff_json": diff_json,
+                "reason_code": reason_code,
+            }.items()
+            if value is None
+        ]
+        if missing:
+            raise AutopilotScopeError(
+                "missing mutation audit payload: " + ", ".join(missing)
+            )
+
+    performance_window = (perf or {}).get("performance_window")
+    evidence_count = (perf or {}).get("evidence_count")
     await db.execute(text("""
         INSERT INTO autopilot_audit_logs (
-            id, profile_id, action, reason, regime,
-            perf_snapshot, config_before, config_after, version_id, created_at
+            id, user_id, profile_id, action, reason, reason_code, regime,
+            target_config, target_section, perf_snapshot, performance_window,
+            evidence_count, config_before, config_after, diff_json,
+            mutation_applied, version_id, trigger_source, celery_task_id,
+            profile_name, created_at
         ) VALUES (
-            gen_random_uuid(), :pid, :action, :reason, :regime,
-            :perf, :before, :after, :ver_id, NOW()
+            gen_random_uuid(), CAST(:uid AS uuid), CAST(:pid AS uuid),
+            :action, :reason, :reason_code, :regime,
+            :target_config, :target_section, :perf, :performance_window,
+            :evidence_count, :before, :after, :diff,
+            :mutation_applied, :ver_id, :trigger_source, :celery_task_id,
+            :profile_name, NOW()
         )
     """), {
-        "pid":    profile_id,
+        "uid":    str(user_id) if user_id else None,
+        "pid":    str(profile_id) if profile_id else None,
         "action": action,
         "reason": reason,
+        "reason_code": reason_code or reason,
         "regime": regime,
+        "target_config": target_config,
+        "target_section": target_section,
         "perf":   json.dumps(perf) if perf else None,
-        "before": json.dumps(config_before) if config_before else None,
-        "after":  json.dumps(config_after) if config_after else None,
+        "performance_window": json.dumps(performance_window) if performance_window else None,
+        "evidence_count": evidence_count,
+        "before": json.dumps(config_before) if config_before is not None else None,
+        "after":  json.dumps(config_after) if config_after is not None else None,
+        "diff": json.dumps(diff_json) if diff_json is not None else None,
+        "mutation_applied": mutation_applied,
         "ver_id": version_id,
+        "trigger_source": trigger_source,
+        "celery_task_id": celery_task_id,
+        "profile_name": profile_name,
     })
 
 
@@ -908,6 +1075,7 @@ def _rule_matches(operator: str, val: float, rule: dict) -> bool:
 
 async def compute_rule_insights(
     user_id: str,
+    profile_id: str,
     scoring_rules: list,
     db: AsyncSession,
     days: int = PERFORMANCE_DAYS,
@@ -929,7 +1097,12 @@ async def compute_rule_insights(
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     # B3: also fetch net_return_pct; Python-side COALESCE below.
     # Usa AUTOPILOT_SOURCE para consistência com compute_performance_window e detect_regime.
-    _insights_fee = await _load_ml_fee_pct(db)
+    if not user_id:
+        raise AutopilotScopeError("user_id is required for mutation rule insights")
+    if not profile_id:
+        raise AutopilotScopeError("profile_id is required for mutation rule insights")
+
+    _insights_fee = await _load_ml_fee_pct(db, user_id=user_id)
     result = await db.execute(text(f"""
         SELECT features_snapshot, outcome, pnl_pct, net_return_pct
         FROM shadow_trades
@@ -937,9 +1110,15 @@ async def compute_rule_insights(
           AND outcome IN {_ST_OUTCOMES_SQL}
           AND pnl_pct IS NOT NULL
           AND features_snapshot IS NOT NULL
-          AND user_id = :uid
+          AND user_id = CAST(:uid AS uuid)
+          AND profile_id = CAST(:profile_id AS uuid)
           AND created_at >= :cutoff
-    """), {"uid": user_id, "cutoff": cutoff, "source": AUTOPILOT_SOURCE})
+    """), {
+        "uid": str(user_id),
+        "profile_id": str(profile_id),
+        "cutoff": cutoff,
+        "source": AUTOPILOT_SOURCE,
+    })
     rows = result.mappings().all()
 
     if not rows:
@@ -1091,7 +1270,8 @@ async def apply_rule_adjustments(
         msg = f"profile_id={profile_id} fora de scope_profile_id={scope_profile_id}"
         logger.warning("[Autopilot] SCOPE_VIOLATION_BLOCKED (rules): %s", msg)
         await log_audit(profile_id=profile_id, action="SCOPE_VIOLATION_BLOCKED",
-                        reason=msg, regime=regime, perf=perf, db=db)
+                        reason=msg, regime=regime, perf=perf, db=db,
+                        user_id=user_id)
         return {"action": "SCOPE_VIOLATION_BLOCKED", "reason": msg}
     from uuid import UUID
     from sqlalchemy import select
@@ -1114,7 +1294,7 @@ async def apply_rule_adjustments(
         if not scoring_rules:
             return {"action": "RULES_SKIPPED", "reason": "no_rules_defined"}
 
-        insights = await compute_rule_insights(user_id, scoring_rules, db)
+        insights = await compute_rule_insights(user_id, profile_id, scoring_rules, db)
         if not insights or "_overall" not in insights:
             return {"action": "RULES_SKIPPED", "reason": "insufficient_data"}
 
@@ -1143,6 +1323,7 @@ async def apply_rule_adjustments(
                 regime=regime,
                 perf=perf_with_changes,
                 db=db,
+                user_id=user_id,
             )
             logger.info(
                 "[Autopilot][DRY RUN] %d scoring rules WOULD be adjusted for profile=%s user=%s (not persisted)",
@@ -1158,6 +1339,8 @@ async def apply_rule_adjustments(
 
         new_config = dict(cp.config_json)
         new_config["scoring_rules"] = adjusted_rules
+        before_payload = {"scoring_rules": scoring_rules}
+        after_payload = {"scoring_rules": adjusted_rules}
         cp.config_json = new_config
         # Invalidate Redis cache after ORM write (L-06)
         from ..services.config_service import config_service as _cs
@@ -1165,11 +1348,19 @@ async def apply_rule_adjustments(
 
         await log_audit(
             profile_id=profile_id,
+            user_id=user_id,
             action="RULES_ADJUSTED",
             reason=f"{n_changed} scoring rules adjusted via ML win-rate analysis",
+            reason_code="scoped_rule_edge_adjustment",
             regime=regime,
             perf=perf_with_changes,
             db=db,
+            target_config=str(cp.id),
+            target_section="scoring_rules",
+            config_before=before_payload,
+            config_after=after_payload,
+            diff_json=_json_diff(before_payload, after_payload),
+            mutation_applied=True,
         )
 
         logger.info(
@@ -1277,6 +1468,7 @@ async def _adjust_minimum_score(
             await log_audit(
                 profile_id=profile_id, action="DRY_RUN_MIN_SCORE_ADJUSTED",
                 reason=f"[DRY RUN] {reason_msg}", regime=regime, perf=perf, db=db,
+                user_id=user_id,
             )
             return {"action": "DRY_RUN_MIN_SCORE_ADJUSTED", "dry_run": True,
                     "dimension": "minimum_score", "before": current_min, "after": new_min}
@@ -1299,10 +1491,17 @@ async def _adjust_minimum_score(
 
         logger.info("[Autopilot] minimum_score adjusted: %s (snapshot=%s)", reason_msg, snapshot_id)
         await log_audit(
-            profile_id=profile_id, action="MIN_SCORE_ADJUSTED",
+            profile_id=profile_id, user_id=user_id, action="MIN_SCORE_ADJUSTED",
             reason=reason_msg, regime=regime, perf=perf, db=db,
+            target_config=str(cp.id), target_section="minimum_score",
             config_before={"minimum_score": current_min},
             config_after={"minimum_score": new_min},
+            diff_json=_json_diff(
+                {"minimum_score": current_min},
+                {"minimum_score": new_min},
+            ),
+            reason_code=f"minimum_score_{direction}",
+            mutation_applied=True,
             version_id=snapshot_id,
         )
         return {"action": "MIN_SCORE_ADJUSTED", "dimension": "minimum_score",
@@ -1337,7 +1536,6 @@ async def _adjust_block_rules(
     if scope_profile_id and str(profile_id) != str(scope_profile_id):
         return {"action": "SCOPE_VIOLATION_BLOCKED", "dimension": "block_rules"}
 
-    overall_wr = insights.get("_overall", {}).get("win_rate", 0.5)
     if not insights or "_overall" not in insights:
         return {"action": "SKIPPED", "dimension": "block_rules", "reason": "no_insights"}
 
@@ -1398,6 +1596,7 @@ async def _adjust_block_rules(
                 profile_id=profile_id, action="DRY_RUN_BLOCK_RULES_ADJUSTED",
                 reason=f"[DRY RUN] {len(changes)} block_rules WOULD be toggled",
                 regime=regime, perf={**perf, "block_changes": changes}, db=db,
+                user_id=user_id,
             )
             return {"action": "DRY_RUN_BLOCK_RULES_ADJUSTED", "dry_run": True,
                     "dimension": "block_rules", "n_changed": len(changes), "changes": changes}
@@ -1413,6 +1612,8 @@ async def _adjust_block_rules(
         new_config = dict(cp.config_json)
         new_config["block_rules"] = dict(new_config.get("block_rules") or {})
         new_config["block_rules"]["blocks"] = adjusted
+        before_payload = {"block_rules": {"blocks": blocks}}
+        after_payload = {"block_rules": {"blocks": adjusted}}
         cp.config_json = new_config
         # Invalidate Redis cache after ORM write (L-06)
         from uuid import UUID as _UUID
@@ -1421,10 +1622,15 @@ async def _adjust_block_rules(
         await _cs.invalidate_cache("block", _uid)
 
         await log_audit(
-            profile_id=profile_id, action="BLOCK_RULES_ADJUSTED",
+            profile_id=profile_id, user_id=user_id, action="BLOCK_RULES_ADJUSTED",
             reason=f"{len(changes)} block_rules toggled via edge analysis",
             regime=regime, perf={**perf, "block_changes": changes}, db=db,
-            config_after={"block_rules": {"blocks": adjusted}},
+            target_config=str(cp.id), target_section="block_rules",
+            config_before=before_payload,
+            config_after=after_payload,
+            diff_json=_json_diff(before_payload, after_payload),
+            reason_code="scoped_block_rule_edge_adjustment",
+            mutation_applied=True,
             version_id=snapshot_id,
         )
         return {"action": "BLOCK_RULES_ADJUSTED", "dimension": "block_rules",
@@ -1517,6 +1723,7 @@ async def _adjust_entry_triggers(
                 profile_id=profile_id, action="DRY_RUN_ENTRY_TRIGGERS_ADJUSTED",
                 reason=f"[DRY RUN] {len(changes)} entry_triggers WOULD be toggled",
                 regime=regime, perf={**perf, "trigger_changes": changes}, db=db,
+                user_id=user_id,
             )
             return {"action": "DRY_RUN_ENTRY_TRIGGERS_ADJUSTED", "dry_run": True,
                     "dimension": "entry_triggers", "n_changed": len(changes), "changes": changes}
@@ -1532,6 +1739,8 @@ async def _adjust_entry_triggers(
         new_config = dict(cp.config_json)
         new_config["entry_triggers"] = dict(new_config.get("entry_triggers") or {})
         new_config["entry_triggers"]["conditions"] = adjusted
+        before_payload = {"entry_triggers": {"conditions": conditions}}
+        after_payload = {"entry_triggers": {"conditions": adjusted}}
         cp.config_json = new_config
         # Invalidate Redis cache after ORM write (L-06)
         from uuid import UUID as _UUID
@@ -1540,10 +1749,15 @@ async def _adjust_entry_triggers(
         await _cs.invalidate_cache("block", _uid)
 
         await log_audit(
-            profile_id=profile_id, action="ENTRY_TRIGGERS_ADJUSTED",
+            profile_id=profile_id, user_id=user_id, action="ENTRY_TRIGGERS_ADJUSTED",
             reason=f"{len(changes)} entry_triggers toggled via edge analysis",
             regime=regime, perf={**perf, "trigger_changes": changes}, db=db,
-            config_after={"entry_triggers": {"conditions": adjusted}},
+            target_config=str(cp.id), target_section="entry_triggers",
+            config_before=before_payload,
+            config_after=after_payload,
+            diff_json=_json_diff(before_payload, after_payload),
+            reason_code="scoped_entry_trigger_edge_adjustment",
+            mutation_applied=True,
             version_id=snapshot_id,
         )
         return {"action": "ENTRY_TRIGGERS_ADJUSTED", "dimension": "entry_triggers",
@@ -1589,7 +1803,6 @@ async def apply_full_adjustments(
 
     # ── scoring_rules ─────────────────────────────────────────────────────────
     if "scoring_rules" in can_adjust:
-        scoring_rules_list = insights.get("_scoring_rules_list", [])
         results["scoring_rules"] = await apply_rule_adjustments(
             profile_id=profile_id,
             user_id=user_id,
@@ -1651,18 +1864,56 @@ async def apply_full_adjustments(
 # ── Main Cycle ───────────────────────────────────────────────────────────────
 
 async def run_autopilot_cycle(
-    profile_id: str,
+    profile_id: Optional[str],
     profile_role: str,
-    user_id: str,
+    user_id: Optional[str],
     current_config: dict,
     auto_pilot_config: dict,
     db: AsyncSession,
+    trigger_source: Optional[str] = None,
+    celery_task_id: Optional[str] = None,
+    profile_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Executa um ciclo completo de autopilot para um profile.
 
     Retorna um dict com action, reason, regime, perf (para logging pelo caller).
     """
+    scope_reason = await _validate_mutation_scope(user_id, profile_id, db)
+    if scope_reason:
+        logger.warning(
+            "[Autopilot] AUTOPILOT_SCOPE_BLOCKED reason=%s user_id=%s profile_id=%s",
+            scope_reason,
+            user_id,
+            profile_id,
+        )
+        await log_audit(
+            profile_id=_uuid_or_none(profile_id),
+            user_id=_uuid_or_none(user_id),
+            action="AUTOPILOT_SCOPE_BLOCKED",
+            reason=scope_reason,
+            reason_code=scope_reason,
+            regime="UNKNOWN",
+            perf=None,
+            db=db,
+            mutation_applied=False,
+            trigger_source=trigger_source,
+            celery_task_id=celery_task_id,
+            profile_name=profile_name,
+        )
+        await db.commit()
+        return {
+            "status": "blocked",
+            "action": "AUTOPILOT_SCOPE_BLOCKED",
+            "reason": scope_reason,
+            "mutation_applied": False,
+            "autopilot_still_active": True,
+        }
+
+    # IDs are valid and ownership was verified above.
+    user_id = str(user_id)
+    profile_id = str(profile_id)
+
     # 0. Carregar guardrails de config_profiles (fail-safe: defaults se ausente)
     guardrails = await _load_guardrails(db, user_id)
     dry_run = bool(guardrails.get("dry_run_mode", True))  # safe default
@@ -1676,6 +1927,10 @@ async def run_autopilot_cycle(
             profile_id=profile_id, action="KILLED",
             reason="kill_switch=true in autopilot_guardrails",
             regime="UNKNOWN", perf=None, db=db,
+            user_id=user_id,
+            trigger_source=trigger_source,
+            celery_task_id=celery_task_id,
+            profile_name=profile_name,
         )
         await db.commit()
         return {"action": "KILLED", "reason": "kill_switch=true"}
@@ -1687,6 +1942,10 @@ async def run_autopilot_cycle(
         await log_audit(
             profile_id=profile_id, action="SCOPE_VIOLATION_BLOCKED",
             reason=msg, regime="UNKNOWN", perf=None, db=db,
+            user_id=user_id,
+            trigger_source=trigger_source,
+            celery_task_id=celery_task_id,
+            profile_name=profile_name,
         )
         await db.commit()
         return {"action": "SCOPE_VIOLATION_BLOCKED", "reason": msg}
@@ -1705,16 +1964,74 @@ async def run_autopilot_cycle(
             regime="UNKNOWN",
             perf=None,
             db=db,
+            user_id=user_id,
+            trigger_source=trigger_source,
+            celery_task_id=celery_task_id,
+            profile_name=profile_name,
         )
         await db.commit()
         return {"action": "PAUSED", "reason": reason}
 
     # 2. Computar performance
     try:
-        perf = await compute_performance_window(days=PERFORMANCE_DAYS, db=db)
+        perf = await compute_performance_window(
+            days=PERFORMANCE_DAYS,
+            db=db,
+            user_id=user_id,
+            profile_id=profile_id,
+            mutation_context=True,
+        )
     except Exception as e:
         logger.error(f"[Autopilot] Erro ao computar performance para {profile_id}: {e}")
         return {"action": "ERROR", "reason": str(e)}
+
+    min_scoped_trades = int(
+        guardrails.get(
+            "min_scoped_closed_trades",
+            AUTOPILOT_MIN_SCOPED_CLOSED_TRADES,
+        )
+    )
+    closed_trades = int(perf.get("approved_count") or 0)
+    if closed_trades < min_scoped_trades:
+        block_reason = (
+            "no_closed_trades_for_scope"
+            if closed_trades == 0
+            else "insufficient_scoped_sample"
+        )
+        logger.warning(
+            "[Autopilot] AUTOPILOT_SCOPE_BLOCKED reason=%s user_id=%s "
+            "profile_id=%s closed_trades=%s min_required=%s",
+            block_reason,
+            user_id,
+            profile_id,
+            closed_trades,
+            min_scoped_trades,
+        )
+        await log_audit(
+            profile_id=profile_id,
+            user_id=user_id,
+            action="AUTOPILOT_SCOPE_BLOCKED",
+            reason=block_reason,
+            reason_code=block_reason,
+            regime="UNKNOWN",
+            perf=perf,
+            db=db,
+            mutation_applied=False,
+            trigger_source=trigger_source,
+            celery_task_id=celery_task_id,
+            profile_name=profile_name,
+        )
+        await db.commit()
+        return {
+            "status": "blocked",
+            "action": "AUTOPILOT_SCOPE_BLOCKED",
+            "reason": block_reason,
+            "mutation_applied": False,
+            "autopilot_still_active": True,
+            "closed_trades": closed_trades,
+            "min_required": min_scoped_trades,
+            "perf": perf,
+        }
 
     # Audit P0-11: populate ev_after_last_mutation from the previous cycle.
     # On the cycle *after* a mutation, ev_after_last_mutation is None; fill it
@@ -1733,7 +2050,7 @@ async def run_autopilot_cycle(
     skill_selection = None
     active_skill = None
     try:
-        from .market_regime_engine import MarketRegimeEngine, RegimeSignal, MarketRegime
+        from .market_regime_engine import RegimeSignal, MarketRegime
         from .skill_selector import select_skill_for_regime
 
         regime_signal = RegimeSignal(
@@ -1769,7 +2086,11 @@ async def run_autopilot_cycle(
     # 4a. D — Behavioral circuit breaker (salto súbito na taxa de aprovação)
     # Roda APÓS ter performance calculada. Independente de dry_run — só pausa, não escreve.
     beh_triggered, beh_reason = await check_behavior_circuit_breaker(
-        db=db, perf=perf, guardrails=guardrails,
+        db=db,
+        perf=perf,
+        guardrails=guardrails,
+        user_id=user_id,
+        profile_id=profile_id,
     )
     if beh_triggered:
         await log_audit(
@@ -1779,6 +2100,10 @@ async def run_autopilot_cycle(
             regime=regime,
             perf=perf,
             db=db,
+            user_id=user_id,
+            trigger_source=trigger_source,
+            celery_task_id=celery_task_id,
+            profile_name=profile_name,
         )
         await db.commit()
         return {"action": "BEHAVIORAL_CB_PAUSED", "reason": beh_reason, "perf": perf}
@@ -1800,6 +2125,7 @@ async def run_autopilot_cycle(
                 action="DRY_RUN_AUTO_ROLLBACK",
                 reason=f"[DRY RUN] WOULD rollback: {rollback_reason}",
                 regime=regime, perf=perf, db=db,
+                user_id=user_id,
             )
             await db.commit()
             return {
@@ -1844,46 +2170,31 @@ async def run_autopilot_cycle(
                 action="AUTO_ROLLBACK_FAILED",
                 reason=f"rollback_error: {exc} (version={last_version_id})",
                 regime=regime, perf=perf, db=db,
+                user_id=user_id,
             )
 
-    # 5. Ajustar config via full_authority (C.3) — roda sempre, independente de mutação.
-    # Se autopilot_full_authority=False (default), comporta-se como antes: só scoring_rules.
-    full_authority = bool(guardrails.get("autopilot_full_authority", False))
-    can_adjust = list(guardrails.get("autopilot_can_adjust", ["scoring_rules"]))
-    if not full_authority:
-        can_adjust = ["scoring_rules"]   # fallback seguro: só scoring rules
-    min_score_delta = int(guardrails.get("min_score_delta_per_cycle", 1))
-
-    # Carrega insights uma vez para todas as dimensões que precisam deles
-    from uuid import UUID as _UUID
-    from ..models.config_profile import ConfigProfile as _CP
-    _score_result = await db.execute(
-        select(_CP).where(
-            _CP.user_id == _UUID(str(user_id)),
-            _CP.pool_id.is_(None),
-            _CP.config_type == "score",
-        ).order_by(_CP.updated_at.desc()).limit(1)
-    )
-    _score_cp = _score_result.scalars().first()
-    _scoring_rules_list = list(
-        (_score_cp.config_json.get("scoring_rules") or _score_cp.config_json.get("rules") or [])
-        if (_score_cp and _score_cp.config_json) else []
-    )
-    insights = await compute_rule_insights(user_id, _scoring_rules_list, db)
-    insights["_scoring_rules_list"] = _scoring_rules_list  # passa para apply_full_adjustments
-
-    rule_result = await apply_full_adjustments(
+    # 5. Não escrever em config_profiles com evidência de um único profile.
+    # Essa tabela não possui profile_id; portanto scoring_rules/minimum_score/
+    # block_rules/entry_triggers ali seriam configurações globais do usuário.
+    # A mutação profile-scoped continua abaixo, em profiles.config.
+    unscoped_target_reason = "target_config_profiles_not_profile_scoped"
+    rule_result = {
+        "action": "AUTOPILOT_MUTATION_BLOCKED_INVALID_TARGET_SCOPE",
+        "reason": unscoped_target_reason,
+        "mutation_applied": False,
+    }
+    await log_audit(
         profile_id=profile_id,
         user_id=user_id,
-        perf=perf,
+        action="AUTOPILOT_MUTATION_BLOCKED_INVALID_TARGET_SCOPE",
+        reason=unscoped_target_reason,
+        reason_code=unscoped_target_reason,
         regime=regime,
-        insights=insights,
+        perf=perf,
         db=db,
-        dry_run=dry_run,
-        scope_profile_id=scope_id,
-        can_adjust=can_adjust,
-        min_score_delta=min_score_delta,
-        guardrails=guardrails,
+        target_config="config_profiles",
+        target_section="scoring_rules|minimum_score|block_rules|entry_triggers",
+        mutation_applied=False,
     )
 
     # 6. Decidir se deve mutar config principal (usa ev_threshold dos guardrails)
@@ -1897,6 +2208,10 @@ async def run_autopilot_cycle(
             regime=regime,
             perf=perf,
             db=db,
+            user_id=user_id,
+            trigger_source=trigger_source,
+            celery_task_id=celery_task_id,
+            profile_name=profile_name,
         )
         await db.commit()
         return {
@@ -1929,7 +2244,11 @@ async def run_autopilot_cycle(
             regime=regime,
             perf=perf,
             db=db,
+            user_id=user_id,
             config_before=current_config,
+            trigger_source=trigger_source,
+            celery_task_id=celery_task_id,
+            profile_name=profile_name,
         )
         await db.commit()
         return {"action": "ERROR", "reason": str(e)}
@@ -1947,9 +2266,13 @@ async def run_autopilot_cycle(
             regime=result["regime"],
             perf=perf,
             db=db,
+            user_id=user_id,
             config_before=current_config,
             config_after=result["config"],
             version_id=None,
+            trigger_source=trigger_source,
+            celery_task_id=celery_task_id,
+            profile_name=profile_name,
         )
         await db.commit()
         return {
@@ -1992,16 +2315,65 @@ async def run_autopilot_cycle(
         "analysis_summary":        result.get("analysis_summary"),
     })
 
-    # 10. Log de audit
+    # 10. Persistir profile + audit na mesma transação. O compare por config
+    # impede sobrescrever edição concorrente feita após o início do ciclo.
+    update_result = await db.execute(text("""
+        UPDATE profiles
+        SET config = CAST(:new_config AS jsonb),
+            auto_pilot_config = CAST(:ap_config AS jsonb),
+            updated_at = NOW()
+        WHERE id = CAST(:profile_id AS uuid)
+          AND user_id = CAST(:user_id AS uuid)
+          AND config = CAST(:expected_config AS jsonb)
+        RETURNING id
+    """), {
+        "profile_id": profile_id,
+        "user_id": user_id,
+        "new_config": json.dumps(result["config"]),
+        "ap_config": json.dumps(updated_ap_config),
+        "expected_config": json.dumps(current_config),
+    })
+    if update_result.scalar_one_or_none() is None:
+        await db.rollback()
+        block_reason = "profile_config_changed_during_cycle"
+        await log_audit(
+            profile_id=profile_id,
+            user_id=user_id,
+            action="AUTOPILOT_MUTATION_BLOCKED_CONCURRENT_UPDATE",
+            reason=block_reason,
+            reason_code=block_reason,
+            regime=result["regime"],
+            perf=perf,
+            db=db,
+            target_config=profile_id,
+            target_section="profile_config",
+            mutation_applied=False,
+        )
+        await db.commit()
+        return {
+            "status": "blocked",
+            "action": "AUTOPILOT_MUTATION_BLOCKED_CONCURRENT_UPDATE",
+            "reason": block_reason,
+            "mutation_applied": False,
+            "autopilot_still_active": True,
+            "perf": perf,
+        }
+
     await log_audit(
         profile_id=profile_id,
+        user_id=user_id,
         action="MUTATED",
         reason=reason,
+        reason_code="scoped_profile_mutation",
         regime=result["regime"],
         perf=perf,
         db=db,
+        target_config=profile_id,
+        target_section="profile_config",
         config_before=current_config,
         config_after=result["config"],
+        diff_json=_json_diff(current_config, result["config"]),
+        mutation_applied=True,
         version_id=version_id,
     )
 
@@ -2019,6 +2391,7 @@ async def run_autopilot_cycle(
         "version_id":       version_id,
         "rule_adjustment":  rule_result,
         "skill_selection":  skill_selection.to_dict() if skill_selection else None,
+        "mutation_applied": True,
     }
 
 

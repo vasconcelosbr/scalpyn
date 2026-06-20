@@ -1373,24 +1373,42 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             decision["symbol"],
             decision["strategy"],
             decision.get("direction"),
+            decision.get("_profile_id"),
         ))
 
     if dedup_checks:
         unique_checks = list(set(dedup_checks))
 
         # Build ORM-safe OR clause: each tuple becomes an AND condition.
+        #
+        # Profile identity is part of the dedup key. Multiple L3 watchlists
+        # evaluate the same symbol in the same scan cycle; collapsing their
+        # decisions by symbol/strategy/direction prevents Profile Intelligence
+        # candidates from receiving profile-attributed shadow trades.
         row_conditions = []
-        for s, st, d in unique_checks:
+        for s, st, d, profile_id in unique_checks:
             dir_cond = (DecisionLog.direction == d) if d is not None else DecisionLog.direction.is_(None)
+            profile_cond = (
+                (DecisionLog.profile_id == profile_id)
+                if profile_id is not None
+                else DecisionLog.profile_id.is_(None)
+            )
             row_conditions.append(and_(
                 DecisionLog.symbol == s,
                 DecisionLog.strategy == st,
                 dir_cond,
+                profile_cond,
             ))
 
         existing_result = await db.execute(
-            select(DecisionLog.symbol, DecisionLog.strategy, DecisionLog.direction)
+            select(
+                DecisionLog.symbol,
+                DecisionLog.strategy,
+                DecisionLog.direction,
+                DecisionLog.profile_id,
+            )
             .where(and_(
+                DecisionLog.user_id == user_id,
                 DecisionLog.created_at >= recent_window,
                 or_(*row_conditions),
             ))
@@ -1398,7 +1416,12 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
         )
 
         existing_decisions = {
-            (row.symbol, row.strategy, row.direction or None)
+            (
+                row.symbol,
+                row.strategy,
+                row.direction or None,
+                row.profile_id,
+            )
             for row in existing_result.fetchall()
         }
 
@@ -1409,6 +1432,7 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
                 decision["symbol"],
                 decision["strategy"],
                 decision.get("direction"),
+                decision.get("_profile_id"),
             )
             if key in existing_decisions:
                 logger.debug(
@@ -2916,11 +2940,14 @@ async def _run_pipeline_scan():
                                         "probability": _prob,
                                         "approved": _approved,
                                         "threshold": _ml.get("threshold_used"),
+                                        "model_id": _ml.get("model_id"),
                                     }
                                     # Embed probability and macro context so they reach decisions_log
                                     if isinstance(_d.get("metrics"), dict):
                                         _d["metrics"]["win_fast_probability"] = _prob
                                         _d["metrics"]["ml_threshold"] = _ml.get("threshold_used")
+                                        _d["metrics"]["ml_model_id"] = _ml.get("model_id")
+                                        _d["metrics"]["ml_model_type"] = "xgboost"
                                         # Persist macro fields for ML history — never overwrite existing keys
                                         for _mk, _mv in (_ml.get("macro_context") or {}).items():
                                             if _mk not in _d["metrics"]:

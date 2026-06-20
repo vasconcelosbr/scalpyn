@@ -24,6 +24,18 @@ interface PIOverview {
   best_profile_win_rate?: number | null;
   best_combination_name?: string | null;
   best_combination_champion_score?: number | null;
+  ml_challengers?: Record<string, {
+    available: boolean;
+    implemented: boolean;
+    installed: boolean;
+    operational: boolean;
+    status: string;
+    effective_contribution: number;
+    can_train: boolean;
+    can_infer: boolean;
+    can_generate_suggestions: boolean;
+    influences_autopilot: boolean;
+  }>;
 }
 
 interface PIRun {
@@ -76,6 +88,10 @@ interface IndicatorStat {
   confidence_level?: string | null;
   role_detected?: string | null;
   source_profiles?: any;
+  source_profile_ids?: string[];
+  validation_status?: string | null;
+  actionability_status?: string | null;
+  target_section?: string | null;
   evidence_json?: any;
 }
 
@@ -104,6 +120,8 @@ interface Combination {
   signals_json?: any;
   block_rules_json?: any;
   created_at?: string;
+  source_profiles?: string[];
+  source_profile_ids?: string[];
 }
 
 interface Suggestion {
@@ -122,6 +140,24 @@ interface Suggestion {
   suggested_signals_json?: any;
   suggested_block_rules_json?: any;
   source_combination_id?: string | null;
+  source_type?: string | null;
+  source_model_type?: string | null;
+  source_model_id?: string | null;
+  source_run_id?: string | null;
+  profile_id?: string | null;
+  profile_name?: string | null;
+  source_profiles?: string[];
+  source_profile_ids?: string[];
+  target_section?: string | null;
+  target_field?: string | null;
+  validation_status?: string | null;
+  actionability_status?: string | null;
+  blocked_reason?: string | null;
+  expected_impact?: any;
+  risk_level?: string | null;
+  evidence_count?: number | null;
+  rollback_available?: boolean;
+  diff_json?: any;
   created_at?: string;
 }
 
@@ -204,6 +240,15 @@ interface AutopilotCandidate {
   observed_trades: number;
   observed_win_rate?: number | null;
   observed_avg_pnl_pct?: number | null;
+  approval_status: string;
+  approval_required: boolean;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  approval_reason?: string | null;
+  promotion_blocked_reason?: string | null;
+  rollback_available: boolean;
+  rollback_payload?: Record<string, any> | null;
+  evidence?: Record<string, any>;
   reason?: string | null;
   updated_at: string;
 }
@@ -285,6 +330,18 @@ function statusBadge(status: string | null | undefined) {
   if (s === "running") return <span className="badge range text-[10px] animate-pulse">RUNNING</span>;
   if (s === "failed") return <span className="badge bearish text-[10px]">FAILED</span>;
   if (s === "queued") return <span className="badge range text-[10px]">QUEUED</span>;
+  if (s === "validated" || s === "approved" || s === "applied") {
+    return <span className="badge bullish text-[10px]">{status.toUpperCase()}</span>;
+  }
+  if (s === "blocked" || s === "rejected" || s === "expired") {
+    return <span className="badge bearish text-[10px]">{status.toUpperCase()}</span>;
+  }
+  if (s === "exploratory_only") {
+    return <span className="badge range text-[10px]">EXPLORATÓRIO</span>;
+  }
+  if (s === "reverted") {
+    return <span className="badge range text-[10px]">REVERTIDO</span>;
+  }
   return <span className="badge range text-[10px]">{status.toUpperCase()}</span>;
 }
 
@@ -302,6 +359,39 @@ function combinationTypeBadge(type: string) {
       {type.replace(/_/g, " ")}
     </span>
   );
+}
+
+function validationBadge(combination: Combination) {
+  const validation = combination.validation_metrics_json || {};
+  const status = validation.validation_status || combination.status;
+  if (status === "validated") {
+    return <span className="badge bullish text-[10px]">VALIDADO</span>;
+  }
+  if (!status || status === "discovered") {
+    return <span className="badge range text-[10px]">EXPLORATÓRIO</span>;
+  }
+  return <span className="badge bearish text-[10px]">BLOQUEADO</span>;
+}
+
+function combinationIsActionable(combination: Combination) {
+  if (!["counterfactual_dynamic", "association_rule", "optuna"].includes(combination.combination_type)) {
+    return true;
+  }
+  const validation = combination.validation_metrics_json || {};
+  if (validation.validation_status !== "validated") return false;
+  return combination.combination_type !== "association_rule"
+    || validation.actionability_status === "positive_signal_candidate";
+}
+
+function suggestionIsActionable(suggestion: Suggestion) {
+  return suggestion.validation_status === "validated"
+    && !["exploratory_only", "not_actionable"].includes(
+      suggestion.actionability_status || "",
+    )
+    && Boolean(suggestion.source_type)
+    && Boolean(suggestion.source_run_id)
+    && Boolean(suggestion.profile_id)
+    && Boolean(suggestion.rollback_available);
 }
 
 function winRateColor(wr: number | null | undefined) {
@@ -364,6 +454,8 @@ export default function ProfileIntelligencePage() {
   const [autopilotAudit, setAutopilotAudit] = useState<any[]>([]);
   const [togglingAutopilot, setTogglingAutopilot] = useState(false);
   const [runningAutopilot, setRunningAutopilot] = useState(false);
+  const [candidateActionId, setCandidateActionId] = useState<string | null>(null);
+  const [selectedAutopilotCandidate, setSelectedAutopilotCandidate] = useState<AutopilotCandidate | null>(null);
 
   // Loading
   const [loadingOverview, setLoadingOverview] = useState(true);
@@ -527,10 +619,101 @@ export default function ProfileIntelligencePage() {
     try {
       await apiPost("/profile-intelligence/autopilot/run", {});
       showToast("Ciclo do Auto-Pilot enfileirado.");
+      // Aguarda o worker registrar início antes de recarregar status
+      await new Promise((r) => setTimeout(r, 1500));
+      await loadTab("Auto-Pilot");
     } catch (e: any) {
       showToast(`Erro ao iniciar ciclo: ${e.message}`, false);
     } finally {
       setRunningAutopilot(false);
+    }
+  };
+
+  const refreshAutopilot = async () => {
+    await loadTab("Auto-Pilot");
+  };
+
+  const authenticatedUserId = () => {
+    const raw = typeof window !== "undefined" ? localStorage.getItem("user") : null;
+    if (!raw) return null;
+    try {
+      const user = JSON.parse(raw);
+      return user?.id || user?.user_id || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const handleApproveCandidate = async (candidate: AutopilotCandidate) => {
+    const confirmed = window.confirm(
+      "Confirmo que revisei as métricas shadow e autorizo este candidato para ativação live."
+    );
+    if (!confirmed) return;
+    const reason = window.prompt("Informe o motivo técnico da aprovação:");
+    const approvedBy = authenticatedUserId();
+    if (!reason?.trim() || !approvedBy) {
+      showToast("Aprovação exige motivo e usuário autenticado.", false);
+      return;
+    }
+    setCandidateActionId(candidate.id);
+    try {
+      await apiPost(`/profile-intelligence/autopilot/candidates/${candidate.id}/approve`, {
+        approved_by: approvedBy,
+        approval_reason: reason.trim(),
+        confirm_risk: true,
+        approval_source: "profile_intelligence_ui",
+      });
+      showToast("Candidato aprovado. A ativação live continua separada.");
+      await refreshAutopilot();
+    } catch (e: any) {
+      showToast(`Erro ao aprovar candidato: ${e.message}`, false);
+    } finally {
+      setCandidateActionId(null);
+    }
+  };
+
+  const handleRejectCandidate = async (candidate: AutopilotCandidate) => {
+    const reason = window.prompt("Informe o motivo da rejeição:");
+    if (!reason?.trim()) return;
+    setCandidateActionId(candidate.id);
+    try {
+      await apiPost(`/profile-intelligence/autopilot/candidates/${candidate.id}/reject`, {
+        rejection_reason: reason.trim(),
+      });
+      showToast("Candidato rejeitado.");
+      await refreshAutopilot();
+    } catch (e: any) {
+      showToast(`Erro ao rejeitar candidato: ${e.message}`, false);
+    } finally {
+      setCandidateActionId(null);
+    }
+  };
+
+  const handleActivateCandidate = async (candidate: AutopilotCandidate) => {
+    if (!window.confirm("Ativar este candidato aprovado em live agora?")) return;
+    setCandidateActionId(candidate.id);
+    try {
+      await apiPost(`/profile-intelligence/autopilot/candidates/${candidate.id}/activate`, {});
+      showToast("Candidato ativado em live.");
+      await refreshAutopilot();
+    } catch (e: any) {
+      showToast(`Ativação bloqueada: ${e.message}`, false);
+    } finally {
+      setCandidateActionId(null);
+    }
+  };
+
+  const handleRollbackCandidate = async (candidate: AutopilotCandidate) => {
+    if (!window.confirm("Executar rollback e restaurar o profile incumbent?")) return;
+    setCandidateActionId(candidate.id);
+    try {
+      await apiPost(`/profile-intelligence/autopilot/candidates/${candidate.id}/rollback`, {});
+      showToast("Rollback executado.");
+      await refreshAutopilot();
+    } catch (e: any) {
+      showToast(`Erro no rollback: ${e.message}`, false);
+    } finally {
+      setCandidateActionId(null);
     }
   };
 
@@ -633,8 +816,14 @@ export default function ProfileIntelligencePage() {
   const handleSaveSettings = async () => {
     setSavingSettings(true);
     try {
-      await apiPut("/profile-intelligence/settings", settings);
-      showToast("Configurações salvas.");
+      const payload = {
+        ...settings,
+        enable_lightgbm: false,
+        enable_catboost: false,
+      };
+      const response = await apiPut("/profile-intelligence/settings", payload);
+      setSettings(response?.settings || payload);
+      showToast("Configurações salvas. LightGBM e CatBoost permanecem não implementados.");
     } catch (e: any) {
       showToast(`Erro: ${e.message}`, false);
     } finally {
@@ -889,7 +1078,7 @@ export default function ProfileIntelligencePage() {
                   <AlertTriangle className="w-4 h-4 text-yellow-400 mt-0.5 shrink-0" />
                   <div className="text-[12px] text-[var(--text-secondary)] space-y-1">
                     <p><strong className="text-yellow-400">Aviso operacional:</strong> O Profile Intelligence Engine é analítico. Sugestões são <em>hipóteses</em>, não recomendações operacionais.</p>
-                    <p>Com o Auto-Pilot desligado, sugestões permanecem manuais. Quando ligado, somente clones Shadow com amostra válida e gates Spot aprovados podem ser promovidos.</p>
+                    <p>Com o Auto-Pilot ligado, clones continuam evoluindo em Shadow. Qualquer ativação live exige aprovação humana explícita e uma ação separada de ativação.</p>
                   </div>
                 </div>
               </div>
@@ -910,8 +1099,8 @@ export default function ProfileIntelligencePage() {
                   </h2>
                 </div>
                 <p className="text-[12px] text-[var(--text-secondary)] mt-1 max-w-3xl">
-                  Calibra clones versionados, testa candidatos em Shadow, promove somente com evidência válida
-                  e executa rollback por degradação. Profiles originais não são alterados.
+                  Calibra clones versionados, testa candidatos em Shadow e prepara recomendações.
+                  Promoção live automática está bloqueada; aprovação e ativação são ações humanas separadas.
                 </p>
                 <p className="text-[11px] text-[var(--text-tertiary)] mt-2">
                   Último ciclo: {fmtDate(autopilot?.last_cycle_at)}
@@ -923,6 +1112,7 @@ export default function ProfileIntelligencePage() {
                   className="btn btn-secondary text-[12px] flex items-center gap-1.5"
                   onClick={handleRunAutopilot}
                   disabled={!autopilot?.enabled || runningAutopilot}
+                  title={!autopilot?.enabled ? "Ligue o Auto-Pilot para executar um ciclo" : "Executar ciclo agora"}
                 >
                   <RotateCcw className={`w-3.5 h-3.5 ${runningAutopilot ? "animate-spin" : ""}`} />
                   Executar ciclo
@@ -941,9 +1131,10 @@ export default function ProfileIntelligencePage() {
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             {[
               ["Coletando", autopilot?.candidate_counts?.SHADOW_COLLECTING ?? 0],
-              ["Prontos", autopilot?.candidate_counts?.SHADOW_READY_FOR_REVIEW ?? 0],
-              ["Aguardando live", autopilot?.candidate_counts?.APPROVED_WAITING_LIVE ?? 0],
-              ["Live", autopilot?.candidate_counts?.LIVE ?? 0],
+              ["Prontos", autopilot?.candidate_counts?.SHADOW_READY ?? 0],
+              ["Aguardando aprovação", autopilot?.candidate_counts?.PENDING_HUMAN_APPROVAL ?? 0],
+              ["Aprovados", autopilot?.candidate_counts?.APPROVED_FOR_LIVE ?? 0],
+              ["Live", autopilot?.candidate_counts?.LIVE_ACTIVATED ?? 0],
               ["Rollbacks", autopilot?.candidate_counts?.ROLLED_BACK ?? 0],
             ].map(([label, value]) => (
               <div className="card p-3" key={String(label)}>
@@ -967,7 +1158,7 @@ export default function ProfileIntelligencePage() {
                 <table className="w-full text-[12px]">
                   <thead>
                     <tr className="border-b border-[var(--border-subtle)]">
-                      {["Profile", "Versão", "Estado", "Trades", "Win Rate", "P&L médio", "Watchlist", "Atualizado", "Motivo"].map(h => (
+                      {["Profile", "Versão", "Estado", "Trades", "Win Rate", "P&L médio", "Rollback", "Atualizado", "Ações"].map(h => (
                         <th key={h} className="px-4 py-2 text-left text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -985,9 +1176,55 @@ export default function ProfileIntelligencePage() {
                         <td className={`px-4 py-2.5 ${pnlColor(candidate.observed_avg_pnl_pct)}`}>
                           {fmtPct(candidate.observed_avg_pnl_pct, 2)}
                         </td>
-                        <td className="px-4 py-2.5 text-[var(--text-secondary)]">{candidate.watchlist_name || "—"}</td>
+                        <td className="px-4 py-2.5">
+                          <span className={candidate.rollback_available ? "text-green-400" : "text-red-400"}>
+                            {candidate.rollback_available ? "Disponível" : "Ausente"}
+                          </span>
+                        </td>
                         <td className="px-4 py-2.5 whitespace-nowrap">{fmtDate(candidate.updated_at)}</td>
-                        <td className="px-4 py-2.5 max-w-[260px] truncate" title={candidate.reason || ""}>{candidate.reason || "—"}</td>
+                        <td className="px-4 py-2.5">
+                          <div className="flex gap-1.5 flex-wrap min-w-[250px]">
+                            <button className="btn btn-secondary text-[10px]" onClick={() => setSelectedAutopilotCandidate(candidate)}>
+                              Ver detalhes
+                            </button>
+                            {candidate.state === "PENDING_HUMAN_APPROVAL" && (
+                              <>
+                                <button
+                                  className="btn btn-primary text-[10px]"
+                                  disabled={candidateActionId === candidate.id || !candidate.rollback_available}
+                                  onClick={() => handleApproveCandidate(candidate)}
+                                >
+                                  Aprovar
+                                </button>
+                                <button
+                                  className="btn btn-secondary text-[10px] text-red-400"
+                                  disabled={candidateActionId === candidate.id}
+                                  onClick={() => handleRejectCandidate(candidate)}
+                                >
+                                  Rejeitar
+                                </button>
+                              </>
+                            )}
+                            {candidate.state === "APPROVED_FOR_LIVE" && (
+                              <button
+                                className="btn btn-primary text-[10px]"
+                                disabled={candidateActionId === candidate.id}
+                                onClick={() => handleActivateCandidate(candidate)}
+                              >
+                                Ativar live
+                              </button>
+                            )}
+                            {candidate.state === "LIVE_ACTIVATED" && (
+                              <button
+                                className="btn btn-secondary text-[10px]"
+                                disabled={candidateActionId === candidate.id}
+                                onClick={() => handleRollbackCandidate(candidate)}
+                              >
+                                Rollback
+                              </button>
+                            )}
+                          </div>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1030,6 +1267,41 @@ export default function ProfileIntelligencePage() {
       )}
 
       {/* ── TAB: Profiles ──────────────────────────────────────────────────────── */}
+      {selectedAutopilotCandidate && (
+        <Modal
+          title={`Candidato · ${selectedAutopilotCandidate.profile_name}`}
+          onClose={() => setSelectedAutopilotCandidate(null)}
+        >
+          <div className="space-y-3 text-[12px]">
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                ["Estado", selectedAutopilotCandidate.state],
+                ["Trades", selectedAutopilotCandidate.observed_trades],
+                ["Win Rate", selectedAutopilotCandidate.observed_win_rate == null ? "—" : `${(selectedAutopilotCandidate.observed_win_rate * 100).toFixed(1)}%`],
+                ["P&L médio", fmtPct(selectedAutopilotCandidate.observed_avg_pnl_pct, 2)],
+                ["Aprovação", selectedAutopilotCandidate.approval_status],
+                ["Rollback", selectedAutopilotCandidate.rollback_available ? "Disponível" : "Ausente"],
+              ].map(([label, value]) => (
+                <div key={String(label)} className="bg-[var(--bg-elevated)] rounded p-2">
+                  <div className="text-[10px] text-[var(--text-tertiary)]">{label}</div>
+                  <div className="text-[var(--text-primary)]">{String(value)}</div>
+                </div>
+              ))}
+            </div>
+            <div>
+              <div className="text-[10px] uppercase text-[var(--text-tertiary)]">Motivo</div>
+              <div className="text-[var(--text-secondary)]">{selectedAutopilotCandidate.reason || "—"}</div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase text-[var(--text-tertiary)]">Evidências e riscos</div>
+              <pre className="mt-1 p-3 rounded bg-[var(--bg-elevated)] overflow-auto max-h-[320px] text-[10px]">
+                {JSON.stringify(selectedAutopilotCandidate.evidence || {}, null, 2)}
+              </pre>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {activeTab === "Profiles" && (
         <div className="card">
           <div className="p-4 border-b border-[var(--border-default)]">
@@ -1267,6 +1539,9 @@ export default function ProfileIntelligencePage() {
                                     Source profiles: {Array.isArray(stat.source_profiles) ? stat.source_profiles.join(", ") : JSON.stringify(stat.source_profiles)}
                                   </div>
                                 )}
+                                <div className="text-[10px] text-[var(--text-tertiary)]">
+                                  Validation: {stat.validation_status || "exploratory_only"} · Actionability: {stat.actionability_status || "exploratory_only"} · Target: {stat.target_section || "—"}
+                                </div>
                                 {stat.total_cases < 30 && (
                                   <div className="text-[10px] text-yellow-400">⚠️ Evidência insuficiente — não usar como base de decisão operacional.</div>
                                 )}
@@ -1322,7 +1597,7 @@ export default function ProfileIntelligencePage() {
                 <table className="w-full text-[12px]">
                   <thead>
                     <tr className="border-b border-[var(--border-subtle)]">
-                      {["Nome / Família", "Tipo", "Cases", "W/L", "Win Rate", "Lift", "Champion Score", "TP ≤30m", "Confidence", "Overfit", ""].map(h => (
+                      {["Nome / Família", "Tipo", "Validation", "Discovery Trades", "Validation Trades", "Validation Lift", "Champion Score", "Confidence", "Overfit", ""].map(h => (
                         <th key={h} className="px-4 py-2 text-left text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -1335,16 +1610,13 @@ export default function ProfileIntelligencePage() {
                           {c.setup_family && <div className="text-[10px] text-[var(--text-tertiary)]">{c.setup_family}</div>}
                         </td>
                         <td className="px-4 py-2.5">{combinationTypeBadge(c.combination_type)}</td>
-                        <td className="px-4 py-2.5 text-[var(--text-secondary)]">{c.total_cases ?? "—"}</td>
-                        <td className="px-4 py-2.5">
-                          <span className="text-green-400">{c.wins ?? "—"}</span>
-                          <span className="text-[var(--text-tertiary)]">/</span>
-                          <span className="text-red-400">{c.losses ?? "—"}</span>
+                        <td className="px-4 py-2.5">{validationBadge(c)}</td>
+                        <td className="px-4 py-2.5 text-[var(--text-secondary)]">{c.discovery_metrics_json?.total_cases ?? c.total_cases ?? "—"}</td>
+                        <td className="px-4 py-2.5 text-[var(--text-secondary)]">{c.validation_metrics_json?.total_cases ?? "—"}</td>
+                        <td className="px-4 py-2.5 text-[var(--text-secondary)]">
+                          {c.validation_metrics_json?.lift != null ? `${Number(c.validation_metrics_json.lift).toFixed(2)}x` : "—"}
                         </td>
-                        <td className={`px-4 py-2.5 font-semibold ${winRateColor(c.win_rate)}`}>{fmtPct(c.win_rate)}</td>
-                        <td className="px-4 py-2.5 text-[var(--text-secondary)]">{c.lift_vs_base != null ? `${c.lift_vs_base.toFixed(2)}x` : "—"}</td>
                         <td className="px-4 py-2.5 min-w-[120px]"><ChampionScoreBar score={c.champion_score} /></td>
-                        <td className="px-4 py-2.5 text-[var(--text-primary)]">{fmtPct(c.tp_30m_rate)}</td>
                         <td className="px-4 py-2.5">{confidenceBadge(c.confidence_level)}</td>
                         <td className="px-4 py-2.5">
                           {c.overfit_risk ? <span className="text-yellow-400 text-[11px]">⚠️ Sim</span> : <span className="text-[var(--text-tertiary)] text-[11px]">—</span>}
@@ -1382,7 +1654,7 @@ export default function ProfileIntelligencePage() {
           <div className="card">
             <div className="p-4 border-b border-[var(--border-default)]">
               <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">Sugestões de Novos Profiles</h2>
-              <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">Status: pending_user_approval — aguardando revisão humana.</p>
+              <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">Exploratório não é aplicável. Validado ainda exige revisão humana e cria somente profile SHADOW_ONLY.</p>
             </div>
             {loadingTab ? <TableSkeleton /> : suggestions.length === 0 ? (
               <EmptyState message="Nenhuma sugestão disponível. Execute uma análise ou aguarde mais shadow trades fechados." onRun={() => setShowRunModal(true)} />
@@ -1391,7 +1663,7 @@ export default function ProfileIntelligencePage() {
                 <table className="w-full text-[12px]">
                   <thead>
                     <tr className="border-b border-[var(--border-subtle)]">
-                      {["Nome Sugerido", "Família", "Confidence", "Champion Score", "Status", "Criado em", "Ações"].map(h => (
+                      {["Nome Sugerido", "Origem", "Profile", "Validation", "Risco", "Status", "Ações"].map(h => (
                         <th key={h} className="px-4 py-2 text-left text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -1400,13 +1672,11 @@ export default function ProfileIntelligencePage() {
                     {suggestions.map(s => (
                       <tr key={s.id} className="hover:bg-[var(--bg-elevated)] transition-colors">
                         <td className="px-4 py-2.5 font-medium text-[var(--text-primary)] max-w-[220px] truncate">{s.suggested_profile_name}</td>
-                        <td className="px-4 py-2.5 text-[var(--text-secondary)]">{s.suggested_profile_family || "—"}</td>
-                        <td className="px-4 py-2.5">{confidenceBadge(s.confidence_level)}</td>
-                        <td className="px-4 py-2.5 min-w-[110px]"><ChampionScoreBar score={s.confidence_score} /></td>
-                        <td className="px-4 py-2.5">
-                          <span className="badge range text-[10px]">{s.status.replace(/_/g, " ")}</span>
-                        </td>
-                        <td className="px-4 py-2.5 text-[var(--text-tertiary)] font-mono whitespace-nowrap">{fmtDate(s.created_at)}</td>
+                        <td className="px-4 py-2.5 text-[var(--text-secondary)] font-mono text-[10px]">{s.source_type || "—"}</td>
+                        <td className="px-4 py-2.5 text-[var(--text-secondary)]">{s.profile_name || "—"}</td>
+                        <td className="px-4 py-2.5">{statusBadge(s.validation_status)}</td>
+                        <td className="px-4 py-2.5 text-[var(--text-secondary)]">{s.risk_level || "—"}</td>
+                        <td className="px-4 py-2.5">{statusBadge(s.status)}</td>
                         <td className="px-4 py-2.5">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <button
@@ -1425,18 +1695,18 @@ export default function ProfileIntelligencePage() {
                             </button>
                             <button
                               className={`btn text-[10px] px-2 py-1 whitespace-nowrap flex items-center gap-1 ${
-                                s.status === "created"
+                                ["created", "applied"].includes(s.status)
                                   ? "btn-secondary opacity-50 cursor-not-allowed"
-                                  : !["pending_user_approval", "draft"].includes(s.status)
+                                  : !suggestionIsActionable(s)
                                   ? "btn-secondary opacity-40 cursor-not-allowed"
                                   : "btn-primary"
                               }`}
-                              onClick={() => ["pending_user_approval", "draft"].includes(s.status) && s.status !== "created" && handleOpenCreateProfile(s)}
-                              disabled={s.status === "created" || !["pending_user_approval", "draft"].includes(s.status)}
-                              title={s.status === "created" ? "Profile já criado" : "Criar profile a partir desta sugestão"}
+                              onClick={() => suggestionIsActionable(s) && handleOpenCreateProfile(s)}
+                              disabled={["created", "applied"].includes(s.status) || !suggestionIsActionable(s)}
+                              title={!suggestionIsActionable(s) ? (s.blocked_reason || "Sugestão não acionável") : "Criar profile SHADOW_ONLY"}
                             >
                               <BarChart3 className="w-3 h-3" />
-                              {s.status === "created" ? "Criado" : "Criar"}
+                              {["created", "applied"].includes(s.status) ? "Aplicado" : "Criar"}
                             </button>
                           </div>
                         </td>
@@ -1560,8 +1830,6 @@ export default function ProfileIntelligencePage() {
                   { key: "enable_association_rules", label: "Association Rules", hint: "mlxtend apriori para encontrar co-ocorrências" },
                   { key: "enable_anthropic_explanations", label: "Anthropic AI Explanations", hint: "⚠️ Consome tokens da cota Anthropic" },
                   { key: "enable_optuna", label: "Optuna Search", hint: "⚠️ Pesado — aumenta tempo de análise significativamente" },
-                  { key: "enable_lightgbm", label: "LightGBM", hint: "Requer pacote instalado no worker" },
-                  { key: "enable_catboost", label: "CatBoost", hint: "Requer pacote instalado no worker" },
                 ].map(({ key, label, hint }) => (
                   <div key={key} className="flex items-center justify-between">
                     <div>
@@ -1576,6 +1844,37 @@ export default function ProfileIntelligencePage() {
                     </button>
                   </div>
                 ))}
+
+                <div className="grid grid-cols-1 gap-3 pt-2">
+                  {["LightGBM", "CatBoost"].map(model => (
+                    <div
+                      key={model}
+                      className="rounded-lg border border-yellow-500/25 bg-yellow-500/5 p-3"
+                      title="Este recurso ainda não possui implementação backend. Não treina, não infere, não gera sugestões e não influencia o Auto-Pilot."
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-[13px] font-medium text-[var(--text-primary)]">{model}</div>
+                          <div className="text-[11px] text-yellow-400">Status: Não implementado</div>
+                        </div>
+                        <button
+                          type="button"
+                          disabled
+                          aria-label={`${model} não implementado`}
+                          className="relative w-11 h-6 rounded-full bg-[var(--bg-hover)] border border-[var(--border-strong)] opacity-50 cursor-not-allowed"
+                        >
+                          <span className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white/70 shadow" />
+                        </button>
+                      </div>
+                      <div className="mt-2 text-[11px] text-[var(--text-tertiary)]">
+                        Contribuição atual: zero. Não treina, não executa inferência, não gera sugestões e não influencia o Auto-Pilot.
+                      </div>
+                      <div className="mt-1 text-[10px] text-[var(--text-tertiary)]">
+                        Desabilitado até backend, trainer, predictor e model registry serem implementados.
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               <button
@@ -1605,6 +1904,23 @@ export default function ProfileIntelligencePage() {
                 <AlertTriangle className="w-4 h-4 shrink-0" /> <span>Evidência insuficiente — não usar como base de decisão operacional (LOW confidence).</span>
               </div>
             )}
+            {!combinationIsActionable(selectedCombination) && (
+              <div className="card p-3 border-red-500/30 bg-red-500/5 text-[11px] text-red-400 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>
+                  Não acionável: {selectedCombination.validation_metrics_json?.blocked_reason
+                    || selectedCombination.validation_metrics_json?.actionability_status
+                    || "blocked_no_validation"}.
+                </span>
+              </div>
+            )}
+
+            {selectedCombination.source_profiles?.length ? (
+              <div className="text-[11px] text-[var(--text-secondary)]">
+                <div className="text-[10px] uppercase text-[var(--text-tertiary)]">Source profiles</div>
+                {selectedCombination.source_profiles.join(", ")}
+              </div>
+            ) : null}
 
             {/* Discovery vs Validation */}
             <div className="grid grid-cols-2 gap-3">
@@ -1663,10 +1979,14 @@ export default function ProfileIntelligencePage() {
               </p>
               <button
                 onClick={() => handleGenerateSuggestion(selectedCombination.id)}
-                disabled={generatingSuggestion}
+                disabled={generatingSuggestion || !combinationIsActionable(selectedCombination)}
                 className="btn btn-secondary text-[12px] w-full"
               >
-                {generatingSuggestion ? "Gerando..." : "Generate Suggestion"}
+                {generatingSuggestion
+                  ? "Gerando..."
+                  : combinationIsActionable(selectedCombination)
+                    ? "Generate Suggestion"
+                    : "Sugestão bloqueada por validation"}
               </button>
               {lastGeneratedSuggestionId && (
                 <button
@@ -1695,9 +2015,14 @@ export default function ProfileIntelligencePage() {
             <div className="grid grid-cols-2 gap-2 text-[11px]">
               {[
                 ["Família", selectedSuggestion.suggested_profile_family || "—"],
-                ["Confidence", selectedSuggestion.confidence_level || "—"],
+                ["Origem", selectedSuggestion.source_type || "—"],
+                ["Run", selectedSuggestion.source_run_id || "—"],
+                ["Profile", selectedSuggestion.profile_name || "—"],
+                ["Validation", selectedSuggestion.validation_status || "—"],
+                ["Actionability", selectedSuggestion.actionability_status || "—"],
+                ["Risco", selectedSuggestion.risk_level || "—"],
                 ["Status", selectedSuggestion.status],
-                ["Score", selectedSuggestion.confidence_score?.toFixed(1) ?? "—"],
+                ["Rollback", selectedSuggestion.rollback_available ? "Disponível" : "Ausente"],
               ].map(([k, v]) => (
                 <div key={k} className="bg-[var(--bg-elevated)] rounded p-2">
                   <div className="text-[10px] text-[var(--text-tertiary)]">{k}</div>
@@ -1705,6 +2030,19 @@ export default function ProfileIntelligencePage() {
                 </div>
               ))}
             </div>
+
+            {selectedSuggestion.blocked_reason && (
+              <div className="card p-3 border-red-500/30 bg-red-500/5 text-[11px] text-red-400">
+                Bloqueado: {selectedSuggestion.blocked_reason}
+              </div>
+            )}
+
+            {selectedSuggestion.source_profiles?.length ? (
+              <div className="text-[11px] text-[var(--text-secondary)]">
+                <div className="text-[10px] uppercase text-[var(--text-tertiary)]">Source profiles</div>
+                {selectedSuggestion.source_profiles.join(", ")}
+              </div>
+            ) : null}
 
             {/* Evidence */}
             {selectedSuggestion.evidence_summary_json && (
@@ -1783,15 +2121,15 @@ export default function ProfileIntelligencePage() {
               </button>
               <button
                 className={`btn text-[12px] flex items-center gap-1.5 flex-1 ${
-                  selectedSuggestion.status === "created" || !["pending_user_approval","draft"].includes(selectedSuggestion.status)
+                  ["created", "applied"].includes(selectedSuggestion.status) || !suggestionIsActionable(selectedSuggestion)
                     ? "btn-secondary opacity-40 cursor-not-allowed"
                     : "btn-primary"
                 }`}
-                disabled={selectedSuggestion.status === "created" || !["pending_user_approval","draft"].includes(selectedSuggestion.status)}
+                disabled={["created", "applied"].includes(selectedSuggestion.status) || !suggestionIsActionable(selectedSuggestion)}
                 onClick={() => { setSelectedSuggestion(null); handleOpenCreateProfile(selectedSuggestion); }}
               >
                 <BarChart3 className="w-3.5 h-3.5" />
-                {selectedSuggestion.status === "created" ? "Já criado" : "Criar Profile"}
+                {["created", "applied"].includes(selectedSuggestion.status) ? "Aplicado" : "Criar Profile"}
               </button>
             </div>
           </div>

@@ -8,7 +8,6 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -24,6 +23,19 @@ except ImportError:
 
 def _is_available() -> bool:
     return _OPTUNA_AVAILABLE
+
+
+def _optuna_validation_status(classification: dict) -> str:
+    if classification["validation_status"] == "validated":
+        return "optuna_validated"
+    if classification["blocked_reason"] in {
+        "blocked_low_discovery_support",
+        "blocked_low_validation_support",
+    }:
+        return "optuna_blocked_low_support"
+    if classification["blocked_reason"] == "blocked_no_validation":
+        return "optuna_blocked_no_validation"
+    return "optuna_blocked_overfit_risk"
 
 
 class OptunaProfileSearchService:
@@ -50,37 +62,21 @@ class OptunaProfileSearchService:
         if not _OPTUNA_AVAILABLE:
             return []
 
-        # Load all closed shadow trades for discovery window
-        rows = (await db.execute(text("""
-            SELECT outcome, pnl_pct, mae_pct, mfe_pct, holding_seconds, features_snapshot
-            FROM shadow_trades
-            WHERE user_id = :uid
-              AND created_at >= :start
-              AND created_at < :end
-              AND outcome IN ('TP_HIT','SL_HIT','TIMEOUT')
-              AND features_snapshot IS NOT NULL
-            ORDER BY created_at
-            LIMIT 50000
-        """), {"uid": str(user_id), "start": discovery_start, "end": discovery_end})).fetchall()
+        from .counterfactual_combination_service import (
+            _load_trades_for_window,
+            _match_trades,
+            _window_metrics,
+        )
+        trades = await _load_trades_for_window(
+            db, user_id, discovery_start, discovery_end
+        )
+        validation_trades = await _load_trades_for_window(
+            db, user_id, validation_start, validation_end
+        )
 
-        if len(rows) < self.MIN_TRADES_FOR_SEARCH:
-            logger.info("[Optuna] Insufficient data (%d trades) for user=%s", len(rows), user_id)
+        if len(trades) < self.MIN_TRADES_FOR_SEARCH:
+            logger.info("[Optuna] Insufficient data (%d trades) for user=%s", len(trades), user_id)
             return []
-
-        # Unpack trades
-        trades = []
-        for row in rows:
-            features = row.features_snapshot
-            if isinstance(features, str):
-                import json; features = json.loads(features)
-            trades.append({
-                "outcome": row.outcome,
-                "pnl_pct": float(row.pnl_pct or 0),
-                "mae_pct": float(row.mae_pct or 0),
-                "mfe_pct": float(row.mfe_pct or 0),
-                "holding_seconds": float(row.holding_seconds or 0),
-                "features": features or {},
-            })
 
         base_win_rate = base_metrics.get("base_win_rate", 0.5)
         base_avg_pnl = base_metrics.get("base_avg_pnl_pct", 0)
@@ -210,9 +206,74 @@ class OptunaProfileSearchService:
             if params.get("macd_required") == "true":
                 rules.append({"indicator": "macd_histogram_pct", "operator": ">", "value": 0})
 
+            discovery_matching, discovery_missing = _match_trades(trades, rules)
+            validation_matching, validation_missing = _match_trades(
+                validation_trades, rules
+            )
+            discovery_metrics = _window_metrics(
+                discovery_matching,
+                trades,
+                discovery_start,
+                discovery_end,
+                discovery_missing,
+            )
+            validation_metrics = _window_metrics(
+                validation_matching,
+                validation_trades,
+                validation_start,
+                validation_end,
+                validation_missing,
+            )
+            from .profile_validation_service import classify_validation
+            classification = classify_validation(
+                discovery_metrics=discovery_metrics,
+                validation_metrics=validation_metrics,
+                discovery_start=discovery_start,
+                discovery_end=discovery_end,
+                validation_start=validation_start,
+                validation_end=validation_end,
+                missing_count=discovery_missing + validation_missing,
+            )
+            optuna_status = _optuna_validation_status(classification)
+            base_validation_metrics = _window_metrics(
+                validation_trades,
+                validation_trades,
+                validation_start,
+                validation_end,
+                0,
+            )
+            validation_metrics.update({
+                "validation_expected_pnl": validation_metrics["avg_pnl_pct"],
+                "validation_precision": validation_metrics["win_rate"],
+                "validation_fpr": 1.0 - validation_metrics["win_rate"],
+                "validation_win_rate_lift": (
+                    validation_metrics["win_rate"]
+                    - validation_metrics["base_win_rate"]
+                ),
+                "validation_drawdown_reduction": (
+                    abs(base_validation_metrics["avg_mae_pct"])
+                    - abs(validation_metrics["avg_mae_pct"])
+                ),
+                "validation_trade_count": validation_metrics["total_cases"],
+            })
+            validation_metrics.update({
+                **classification,
+                "actionability_status": (
+                    "validated"
+                    if optuna_status == "optuna_validated"
+                    else optuna_status
+                ),
+                "optuna_status": optuna_status,
+                "best_trial_value_discovery": trial.value,
+            })
+
             combo_hash = hashlib.sha256(
                 f"optuna|{trial.number}|{user_id}|{run_id}".encode()
             ).hexdigest()[:32]
+            from .algorithm_governance_service import source_profile_attribution
+            source_profiles, source_profile_ids = source_profile_attribution(
+                discovery_matching + validation_matching
+            )
 
             c = ProfileRuleCombination(
                 user_id=user_id,
@@ -222,11 +283,29 @@ class OptunaProfileSearchService:
                 setup_family="unknown",
                 suggested_name=f"Optuna Trial #{trial.number} (score={trial.value:.1f})",
                 rules_json=rules,
+                source_profiles=source_profiles,
+                source_profile_ids=source_profile_ids,
                 champion_score=trial.value,
-                status="discovered",
+                total_cases=discovery_metrics["total_cases"],
+                wins=discovery_metrics["wins"],
+                losses=discovery_metrics["losses"],
+                win_rate=discovery_metrics["win_rate"],
+                avg_pnl_pct=discovery_metrics["avg_pnl_pct"],
+                lift_vs_base=discovery_metrics["lift"],
+                discovery_metrics_json=discovery_metrics,
+                validation_metrics_json=validation_metrics,
+                overfit_risk=optuna_status != "optuna_validated",
+                status=validation_metrics["actionability_status"],
             )
             db.add(c)
-            saved.append({"hash": combo_hash, "score": trial.value, "params": params})
+            saved.append({
+                "hash": combo_hash,
+                "score": trial.value,
+                "params": params,
+                "discovery_metrics": discovery_metrics,
+                "validation_metrics": validation_metrics,
+                "status": optuna_status,
+            })
 
         if saved:
             await db.flush()

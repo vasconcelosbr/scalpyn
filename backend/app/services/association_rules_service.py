@@ -13,6 +13,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
+
+def _association_actionability(
+    consequents: List[str],
+    validation_status: str,
+) -> str:
+    if validation_status != "validated":
+        return "exploratory_only"
+    if set(consequents) & {"LOSS", "SL_HIT"}:
+        return "block_rule_candidate"
+    if set(consequents) & {"WIN", "TP_HIT", "TP_15M", "TP_30M"}:
+        return "positive_signal_candidate"
+    if "TIMEOUT" in set(consequents):
+        return "risk_warning"
+    return "not_actionable"
+
 # Attempt to import mlxtend
 try:
     from mlxtend.frequent_patterns import apriori, association_rules
@@ -125,14 +140,17 @@ class AssociationRulesEngine:
         base_metrics: dict,
         discovery_start: datetime,
         discovery_end: datetime,
+        validation_start: datetime,
+        validation_end: datetime,
     ) -> List[dict]:
         """
         Run association rules analysis. Returns list of discovered combinations.
         Saves qualifying rules to profile_rule_combinations.
         """
-        # Load closed trades
-        rows = (await db.execute(text("""
-            SELECT outcome, pnl_pct, mae_pct, mfe_pct, holding_seconds, features_snapshot
+        async def load_transactions(start, end):
+            rows = (await db.execute(text("""
+            SELECT profile_id, profile_name, symbol, created_at, outcome,
+                   holding_seconds, features_snapshot
             FROM shadow_trades
             WHERE user_id = :uid
               AND created_at >= :start
@@ -141,30 +159,52 @@ class AssociationRulesEngine:
               AND features_snapshot IS NOT NULL
             ORDER BY created_at
             LIMIT 30000
-        """), {"uid": str(user_id), "start": discovery_start, "end": discovery_end})).fetchall()
+            """), {"uid": str(user_id), "start": start, "end": end})).fetchall()
+            loaded = []
+            for row in rows:
+                features = row.features_snapshot
+                if isinstance(features, str):
+                    import json
+                    features = json.loads(features)
+                if not features:
+                    continue
+                items = _feature_to_items(features, row.outcome, row.holding_seconds)
+                if items:
+                    loaded.append({
+                        "items": set(items),
+                        "profile_id": row.profile_id,
+                        "profile_name": row.profile_name,
+                        "symbol": row.symbol,
+                        "created_at": row.created_at,
+                    })
+            return loaded
 
-        if len(rows) < 30:
-            logger.info("[AssocRules] Insufficient trades (%d) for user=%s", len(rows), user_id)
+        discovery = await load_transactions(discovery_start, discovery_end)
+        validation = await load_transactions(validation_start, validation_end)
+        if len(discovery) < 30:
+            logger.info("[AssocRules] Insufficient trades (%d) for user=%s", len(discovery), user_id)
             return []
 
-        # Build transactions
-        transactions = []
-        for row in rows:
-            features = row.features_snapshot
-            if isinstance(features, str):
-                import json; features = json.loads(features)
-            if not features:
-                continue
-            items = _feature_to_items(features, row.outcome, row.holding_seconds)
-            if items:
-                transactions.append(set(items))
+        transactions = [row["items"] for row in discovery]
 
         if _MLXTEND_AVAILABLE:
-            return await self._run_mlxtend(db, user_id, run_id, base_metrics, transactions)
+            return await self._run_mlxtend(
+                db, user_id, run_id, base_metrics, transactions,
+                validation, discovery_start, discovery_end,
+                validation_start, validation_end,
+            )
         else:
-            return await self._run_fallback(db, user_id, run_id, base_metrics, transactions)
+            return await self._run_fallback(
+                db, user_id, run_id, base_metrics, transactions,
+                validation, discovery_start, discovery_end,
+                validation_start, validation_end,
+            )
 
-    async def _run_mlxtend(self, db, user_id, run_id, base_metrics, transactions):
+    async def _run_mlxtend(
+        self, db, user_id, run_id, base_metrics, transactions,
+        validation, discovery_start, discovery_end,
+        validation_start, validation_end,
+    ):
         import pandas as pd
         from mlxtend.frequent_patterns import apriori, association_rules
         from mlxtend.preprocessing import TransactionEncoder
@@ -183,9 +223,17 @@ class AssociationRulesEngine:
         outcome_items = {"WIN", "LOSS", "SL_HIT", "TP_15M", "TP_30M"}
         winning_rules = rules[rules["consequents"].apply(lambda x: bool(x & outcome_items))]
 
-        return await self._save_rules(db, user_id, run_id, base_metrics, winning_rules.head(50))
+        return await self._save_rules(
+            db, user_id, run_id, base_metrics, winning_rules.head(50),
+            validation, len(transactions), discovery_start, discovery_end,
+            validation_start, validation_end,
+        )
 
-    async def _run_fallback(self, db, user_id, run_id, base_metrics, transactions):
+    async def _run_fallback(
+        self, db, user_id, run_id, base_metrics, transactions,
+        validation, discovery_start, discovery_end,
+        validation_start, validation_end,
+    ):
         """Simple co-occurrence counting fallback."""
         from itertools import combinations
         from collections import defaultdict
@@ -224,16 +272,104 @@ class AssociationRulesEngine:
                 })
 
         results.sort(key=lambda x: x["lift"], reverse=True)
-        return await self._save_fallback_rules(db, user_id, run_id, base_metrics, results[:30])
+        return await self._save_fallback_rules(
+            db, user_id, run_id, base_metrics, results[:30],
+            validation, len(transactions), discovery_start, discovery_end,
+            validation_start, validation_end,
+        )
 
-    async def _save_rules(self, db, user_id, run_id, base_metrics, rules_df):
+    def _validation_metrics(self, validation, antecedents, consequents):
+        from .profile_validation_service import diversity_metrics
+
+        total = len(validation)
+        antecedent_rows = [
+            row for row in validation
+            if set(antecedents).issubset(row["items"])
+        ]
+        matched = [
+            row for row in antecedent_rows
+            if set(consequents).issubset(row["items"])
+        ]
+        outcome_count = sum(
+            1 for row in validation
+            if set(consequents).issubset(row["items"])
+        )
+        antecedent_count = len(antecedent_rows)
+        co_count = len(matched)
+        confidence = co_count / max(antecedent_count, 1)
+        support = co_count / max(total, 1)
+        outcome_rate = outcome_count / max(total, 1)
+        lift = confidence / max(outcome_rate, 0.001)
+        metrics = {
+            "total_cases": antecedent_count,
+            "trade_count": antecedent_count,
+            "support": support,
+            "confidence": confidence,
+            "lift": lift,
+            # For association rules this pair represents target-event rate
+            # versus its unconditional base rate. It works for both WIN and
+            # LOSS consequents without misclassifying LOSS as a positive signal.
+            "win_rate": confidence,
+            "base_win_rate": outcome_rate,
+            "target_event_rate": confidence,
+            "target_base_rate": outcome_rate,
+            **diversity_metrics(antecedent_rows),
+        }
+        return metrics
+
+    async def _save_rules(
+        self, db, user_id, run_id, base_metrics, rules_df,
+        validation, discovery_count, discovery_start, discovery_end,
+        validation_start, validation_end,
+    ):
         """Save mlxtend rules to profile_rule_combinations."""
         from ..models.profile_intelligence import ProfileRuleCombination
         saved = []
         for _, row in rules_df.iterrows():
             antecedents = list(row["antecedents"])
             consequents = list(row["consequents"])
+            val_metrics = self._validation_metrics(
+                validation, antecedents, consequents
+            )
+            discovery_support = float(row.get("support", 0))
+            disc_metrics = {
+                "start": discovery_start.isoformat(),
+                "end": discovery_end.isoformat(),
+                "total_cases": int(discovery_support * discovery_count),
+                "trade_count": int(discovery_support * discovery_count),
+                "support": discovery_support,
+                "confidence": float(row.get("confidence", 0)),
+                "lift": float(row.get("lift", 0)),
+            }
+            from .profile_validation_service import classify_validation
+            classification = classify_validation(
+                discovery_metrics=disc_metrics,
+                validation_metrics=val_metrics,
+                discovery_start=discovery_start,
+                discovery_end=discovery_end,
+                validation_start=validation_start,
+                validation_end=validation_end,
+                association_rule=True,
+            )
+            val_metrics.update({
+                "start": validation_start.isoformat(),
+                "end": validation_end.isoformat(),
+                "antecedents": antecedents,
+                "consequents": consequents,
+            })
+            classification["actionability_status"] = _association_actionability(
+                consequents,
+                classification["validation_status"],
+            )
+            val_metrics.update(classification)
             rules_json = [{"item": a} for a in antecedents]
+            from .algorithm_governance_service import source_profile_attribution
+            source_profiles, source_profile_ids = source_profile_attribution(
+                [
+                    item for item in validation
+                    if set(antecedents).issubset(item["items"])
+                ]
+            )
             combo_hash = hashlib.sha256(
                 f"assoc|{'|'.join(sorted(antecedents))}|{'|'.join(sorted(consequents))}|{user_id}".encode()
             ).hexdigest()[:32]
@@ -246,28 +382,82 @@ class AssociationRulesEngine:
                 setup_family="unknown",
                 suggested_name=f"AR: {' + '.join(antecedents[:3])} → {', '.join(consequents)}",
                 rules_json=rules_json,
+                source_profiles=source_profiles,
+                source_profile_ids=source_profile_ids,
                 support=float(row.get("support", 0)),
                 confidence=float(row.get("confidence", 0)),
                 rule_lift=float(row.get("lift", 0)),
                 leverage=float(row.get("leverage", 0)) if "leverage" in row else None,
                 conviction=float(row.get("conviction", 0)) if "conviction" in row else None,
-                status="discovered",
+                discovery_metrics_json=disc_metrics,
+                validation_metrics_json=val_metrics,
+                status=classification["actionability_status"],
             )
             db.add(combination)
-            saved.append({"hash": combo_hash, "antecedents": antecedents, "consequents": consequents})
+            saved.append({
+                "hash": combo_hash,
+                "antecedents": antecedents,
+                "consequents": consequents,
+                **classification,
+            })
 
         if saved:
             await db.flush()
         return saved
 
-    async def _save_fallback_rules(self, db, user_id, run_id, base_metrics, results):
+    async def _save_fallback_rules(
+        self, db, user_id, run_id, base_metrics, results,
+        validation, discovery_count, discovery_start, discovery_end,
+        validation_start, validation_end,
+    ):
         """Save fallback rules to profile_rule_combinations."""
         from ..models.profile_intelligence import ProfileRuleCombination
         saved = []
         for r in results:
             antecedents = list(r["antecedents"])
             consequents = list(r["consequents"])
+            val_metrics = self._validation_metrics(
+                validation, antecedents, consequents
+            )
+            discovery_support = float(r["support"])
+            disc_metrics = {
+                "start": discovery_start.isoformat(),
+                "end": discovery_end.isoformat(),
+                "total_cases": int(discovery_support * discovery_count),
+                "trade_count": int(discovery_support * discovery_count),
+                "support": discovery_support,
+                "confidence": r["confidence"],
+                "lift": r["lift"],
+            }
+            from .profile_validation_service import classify_validation
+            classification = classify_validation(
+                discovery_metrics=disc_metrics,
+                validation_metrics=val_metrics,
+                discovery_start=discovery_start,
+                discovery_end=discovery_end,
+                validation_start=validation_start,
+                validation_end=validation_end,
+                association_rule=True,
+            )
+            val_metrics.update({
+                "start": validation_start.isoformat(),
+                "end": validation_end.isoformat(),
+                "antecedents": antecedents,
+                "consequents": consequents,
+            })
+            classification["actionability_status"] = _association_actionability(
+                consequents,
+                classification["validation_status"],
+            )
+            val_metrics.update(classification)
             rules_json = [{"item": a} for a in antecedents]
+            from .algorithm_governance_service import source_profile_attribution
+            source_profiles, source_profile_ids = source_profile_attribution(
+                [
+                    item for item in validation
+                    if set(antecedents).issubset(item["items"])
+                ]
+            )
             combo_hash = hashlib.sha256(
                 f"assoc|{'|'.join(sorted(antecedents))}|{'|'.join(sorted(consequents))}|{user_id}".encode()
             ).hexdigest()[:32]
@@ -280,13 +470,22 @@ class AssociationRulesEngine:
                 setup_family="unknown",
                 suggested_name=f"AR(fb): {' + '.join(antecedents[:2])} → {', '.join(consequents)}",
                 rules_json=rules_json,
+                source_profiles=source_profiles,
+                source_profile_ids=source_profile_ids,
                 support=r["support"],
                 confidence=r["confidence"],
                 rule_lift=r["lift"],
-                status="discovered",
+                discovery_metrics_json=disc_metrics,
+                validation_metrics_json=val_metrics,
+                status=classification["actionability_status"],
             )
             db.add(combination)
-            saved.append({"hash": combo_hash, "antecedents": antecedents, "consequents": consequents})
+            saved.append({
+                "hash": combo_hash,
+                "antecedents": antecedents,
+                "consequents": consequents,
+                **classification,
+            })
 
         if saved:
             await db.flush()

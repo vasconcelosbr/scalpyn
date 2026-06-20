@@ -194,8 +194,7 @@ def _evaluate_rules(features: dict, rules: list) -> bool:
 
         raw_val = features.get(indicator)
         if raw_val is None:
-            # skip missing feature — treat as pass (lenient)
-            continue
+            return False
 
         # Normalise to float for numeric comparisons
         if isinstance(raw_val, bool):
@@ -204,7 +203,7 @@ def _evaluate_rules(features: dict, rules: list) -> bool:
             try:
                 feature_val = float(raw_val)
             except (TypeError, ValueError):
-                continue
+                return False
 
         # Handle boolean/equality operators
         if operator == "==":
@@ -229,6 +228,14 @@ def _evaluate_rules(features: dict, rules: list) -> bool:
                 return False
 
     return True
+
+
+def _missing_features_count(features: dict, rules: list) -> int:
+    return sum(
+        1
+        for rule in rules
+        if rule.get("indicator") and features.get(rule["indicator"]) is None
+    )
 
 
 def _compute_metrics_from_trades(trades: list) -> dict:
@@ -289,6 +296,10 @@ async def _load_trades_for_window(
         await db.execute(
             text("""
                 SELECT
+                    profile_id,
+                    profile_name,
+                    symbol,
+                    created_at,
                     outcome,
                     pnl_pct,
                     mae_pct,
@@ -320,6 +331,10 @@ async def _load_trades_for_window(
             features = {}
         outcome = row.outcome or ""
         trades.append({
+            "profile_id": row.profile_id,
+            "profile_name": row.profile_name,
+            "symbol": row.symbol,
+            "created_at": row.created_at,
             "outcome": outcome,
             "is_win": outcome == "TP_HIT",
             "is_loss": outcome == "SL_HIT",
@@ -331,6 +346,44 @@ async def _load_trades_for_window(
             "features": features,
         })
     return trades
+
+
+def _match_trades(trades: list, rules: list) -> tuple[list, int]:
+    matching = []
+    missing_count = 0
+    for trade in trades:
+        missing_count += _missing_features_count(trade["features"], rules)
+        if _evaluate_rules(trade["features"], rules):
+            matching.append(trade)
+    return matching, missing_count
+
+
+def _window_metrics(
+    matching: list,
+    all_trades: list,
+    start: datetime,
+    end: datetime,
+    missing_count: int,
+) -> dict:
+    from .profile_validation_service import diversity_metrics
+
+    metrics = _compute_metrics_from_trades(matching)
+    base = _compute_metrics_from_trades(all_trades)
+    metrics.update({
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "trade_count": metrics["total_cases"],
+        "base_win_rate": base["win_rate"],
+        "lift": (
+            metrics["win_rate"] / max(base["win_rate"], 0.001)
+            if metrics["total_cases"]
+            else 0.0
+        ),
+        "expected_pnl": metrics["avg_pnl_pct"],
+        "missing_count": missing_count,
+        **diversity_metrics(matching),
+    })
+    return metrics
 
 
 def _build_combination_hash(name: str, user_id: UUID) -> str:
@@ -538,6 +591,8 @@ class DynamicCombinationGenerator:
         indicator_stats: List[dict],
         discovery_start: datetime,
         discovery_end: datetime,
+        validation_start: datetime,
+        validation_end: datetime,
         max_combinations: int = 500,
     ) -> List[dict]:
         logger.info(
@@ -562,6 +617,7 @@ class DynamicCombinationGenerator:
 
         # Load discovery trades
         disc_trades = await _load_trades_for_window(db, user_id, discovery_start, discovery_end)
+        val_trades = await _load_trades_for_window(db, user_id, validation_start, validation_end)
 
         base_win_rate = base_metrics.get("base_win_rate", 0.0)
         safe_base_wr = max(base_win_rate, 0.001)
@@ -595,19 +651,48 @@ class DynamicCombinationGenerator:
                     continue
                 _seen_hashes.add(combination_hash)
 
-                matching = [t for t in disc_trades if _evaluate_rules(t["features"], rules)]
-                m = _compute_metrics_from_trades(matching)
+                matching, disc_missing = _match_trades(disc_trades, rules)
+                m = _window_metrics(
+                    matching,
+                    disc_trades,
+                    discovery_start,
+                    discovery_end,
+                    disc_missing,
+                )
 
                 if m["total_cases"] < 5:
                     continue
 
                 lift_vs_base = m["win_rate"] / safe_base_wr
+                val_matching, val_missing = _match_trades(val_trades, rules)
+                val_m = _window_metrics(
+                    val_matching,
+                    val_trades,
+                    validation_start,
+                    validation_end,
+                    val_missing,
+                )
+                from .profile_validation_service import classify_validation
+                validation = classify_validation(
+                    discovery_metrics=m,
+                    validation_metrics=val_m,
+                    discovery_start=discovery_start,
+                    discovery_end=discovery_end,
+                    validation_start=validation_start,
+                    validation_end=validation_end,
+                    missing_count=disc_missing + val_missing,
+                )
+                val_m.update(validation)
+                from .algorithm_governance_service import source_profile_attribution
+                source_profiles, source_profile_ids = source_profile_attribution(
+                    matching + val_matching
+                )
 
                 champion_metrics = dict(m)
                 champion_metrics["degradation_pct"] = 0.0
                 overfit_risk = detect_overfit_risk(
-                    m, {},
-                    total_cases=m["total_cases"],
+                    m, val_m,
+                    total_cases=m["total_cases"] + val_m["total_cases"],
                     n_rules=len(rules),
                 )
                 champion_score = calculate_champion_score(
@@ -626,6 +711,8 @@ class DynamicCombinationGenerator:
                         setup_family=None,
                         suggested_name=combo_name[:120],
                         rules_json=rules,
+                        source_profiles=source_profiles,
+                        source_profile_ids=source_profile_ids,
                         total_cases=m["total_cases"],
                         wins=m["wins"],
                         losses=m["losses"],
@@ -645,7 +732,9 @@ class DynamicCombinationGenerator:
                         confidence_level=confidence_level,
                         degradation_pct=0.0,
                         overfit_risk=overfit_risk,
-                        status="discovered",
+                        discovery_metrics_json=m,
+                        validation_metrics_json=val_m,
+                        status=validation["actionability_status"],
                     )
                     db.add(comb)
                     await db.flush()
@@ -656,9 +745,14 @@ class DynamicCombinationGenerator:
                         "name": combo_name,
                         "combination_hash": combination_hash,
                         "rules": rules,
+                        "source_profiles": source_profiles,
+                        "source_profile_ids": source_profile_ids,
                         "champion_score": champion_score,
                         "confidence_level": confidence_level,
                         "overfit_risk": overfit_risk,
+                        "discovery_metrics": m,
+                        "validation_metrics": val_m,
+                        **validation,
                         **m,
                     })
                 except Exception as exc:

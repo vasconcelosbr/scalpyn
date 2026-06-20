@@ -140,6 +140,12 @@ interface ProfileReportRow {
   avg_holding_win_seconds: number | null;
 }
 
+interface ProfileIntelligenceCandidate {
+  profile_id: string;
+  watchlist_id: string | null;
+  watchlist_name: string | null;
+}
+
 // ── filter shape ─────────────────────────────────────────────────────────────
 type StatusFilter = "ALL" | "OPEN" | "TP_HIT" | "SL_HIT" | "TIMEOUT";
 
@@ -1880,9 +1886,11 @@ type ReportSortKey =
 function ProfileReportTable({
   rows,
   loading,
+  watchlistNames,
 }: {
   rows: ProfileReportRow[];
   loading: boolean;
+  watchlistNames: Record<string, string>;
 }) {
   const [sortKey, setSortKey] = useState<ReportSortKey>("profile_name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -1983,6 +1991,7 @@ function ProfileReportTable({
             <th style={thStyle}>
               Perfil <SortBtn col="profile_name" />
             </th>
+            <th style={thStyle}>Watchlist</th>
             <th style={{ ...thStyle, textAlign: "right" }}>
               Total <SortBtn col="total" />
             </th>
@@ -2027,6 +2036,9 @@ function ProfileReportTable({
                 style={{ background: i % 2 === 0 ? "transparent" : `${C.elevated}66` }}
               >
                 <td style={tdStyle}>{row.profile_name}</td>
+                <td style={{ ...tdStyle, color: C.muted }}>
+                  {watchlistNames[row.profile_id] ?? "—"}
+                </td>
                 <td style={{ ...tdStyle, textAlign: "right" }}>{row.total}</td>
                 <td style={{ ...tdStyle, textAlign: "right" }}>{row.open_count}</td>
                 <td style={{ ...tdStyle, textAlign: "right", color: winRateColor }}>
@@ -2068,7 +2080,7 @@ function ProfileReportTable({
 const MAX_LOCAL_FETCH = 200; // = _MAX_PAGE_SIZE em backend/app/api/shadow_trades.py
 const CLIENT_PAGE_SIZE = 50;
 
-type SourceTab = "L3" | "L3_REJECTED" | "L3_SIMULATED" | "L1_SPECTRUM";
+type SourceTab = "L3" | "L3_REJECTED" | "L3_SIMULATED" | "L1_SPECTRUM" | "L3_LAB";
 
 function buildBaseQuery(
   filter: FilterState,
@@ -2114,6 +2126,7 @@ export default function ShadowPortfolioPage() {
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const [sourceTab, setSourceTab] = useState<SourceTab>("L3");
   const [profiles, setProfiles] = useState<ProfileItem[]>([]);
+  const [watchlistNames, setWatchlistNames] = useState<Record<string, string>>({});
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const [mainTab, setMainTab] = useState<"trades" | "report">("trades");
   const [profileReport, setProfileReport] = useState<ProfileReportRow[]>([]);
@@ -2137,6 +2150,24 @@ export default function ShadowPortfolioPage() {
         // Silently fail — profile selector is optional
         setProfiles([]);
       });
+  }, []);
+
+  // Profile Intelligence creates an exclusive L3 watchlist for each shadow
+  // candidate. Keep that association visible in the selector and report.
+  useEffect(() => {
+    apiGet<{ candidates?: ProfileIntelligenceCandidate[] }>(
+      "/api/profile-intelligence/autopilot/candidates?limit=100",
+    )
+      .then((res) => {
+        const names: Record<string, string> = {};
+        for (const candidate of res.candidates ?? []) {
+          if (candidate.profile_id && candidate.watchlist_name) {
+            names[candidate.profile_id] = candidate.watchlist_name;
+          }
+        }
+        setWatchlistNames(names);
+      })
+      .catch(() => setWatchlistNames({}));
   }, []);
 
   useEffect(() => {
@@ -2397,7 +2428,7 @@ export default function ShadowPortfolioPage() {
           {mainTab === "trades" && profiles.length > 0 && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
               <span style={{ fontSize: 11, color: C.muted, whiteSpace: "nowrap" }}>
-                Strategy Lab:
+                Profile / Watchlist:
               </span>
               <select
                 value={selectedProfileId ?? ""}
@@ -2419,7 +2450,9 @@ export default function ShadowPortfolioPage() {
                 <option value="">Todos os profiles</option>
                 {profiles.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.name}
+                    {watchlistNames[p.id]
+                      ? `${p.name} — ${watchlistNames[p.id]}`
+                      : p.name}
                   </option>
                 ))}
               </select>
@@ -2452,6 +2485,7 @@ export default function ShadowPortfolioPage() {
                 { key: "L3_REJECTED",  label: "Rejeitados (L3)",   color: C.amber  },
                 { key: "L3_SIMULATED", label: "Simulados (L3)",    color: C.purple },
                 { key: "L1_SPECTRUM",  label: "Dataset ML (L1)",   color: C.blue   },
+                { key: "L3_LAB",       label: "Strategy Lab",      color: C.green  },
               ] as { key: SourceTab; label: string; color: string }[]
             ).map(({ key, label, color }) => {
               const active = sourceTab === key;
@@ -2539,7 +2573,11 @@ export default function ShadowPortfolioPage() {
             ) : null}
           </>
         ) : (
-          <ProfileReportTable rows={profileReport} loading={loadingReport} />
+          <ProfileReportTable
+            rows={profileReport}
+            loading={loadingReport}
+            watchlistNames={watchlistNames}
+          />
         )}
       </div>
 

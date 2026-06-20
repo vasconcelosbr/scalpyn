@@ -27,6 +27,10 @@ from .profile_intelligence import (
     ProfileRuleCombination,
     ProfileSuggestion,
     ProfileIntelligenceAuditLog,
+    MLModelRegistry,
+    ProductionChampionControl,
+    AlgorithmForwardValidation,
+    AutopilotAutonomyPolicy,
 )
 from .profile_intelligence_autopilot import (
     ProfileIntelligenceAutopilotSettings,
@@ -76,6 +80,10 @@ __all__ = [
     "ProfileRuleCombination",
     "ProfileSuggestion",
     "ProfileIntelligenceAuditLog",
+    "MLModelRegistry",
+    "ProductionChampionControl",
+    "AlgorithmForwardValidation",
+    "AutopilotAutonomyPolicy",
     "ProfileIntelligenceAutopilotSettings",
     "ProfileIntelligenceAutopilotCycle",
     "ProfileIntelligenceAutopilotCandidate",

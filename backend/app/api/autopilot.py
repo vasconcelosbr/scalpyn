@@ -17,7 +17,7 @@ Routes:
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -50,7 +50,13 @@ async def get_autopilot_status(
     perf = None
     try:
         from ..services.autopilot_engine import compute_performance_window
-        perf = await compute_performance_window(days=30, db=db)
+        perf = await compute_performance_window(
+            days=30,
+            db=db,
+            user_id=str(user_id),
+            profile_id=profile_id,
+            mutation_context=False,
+        )
     except Exception as e:
         logger.warning(f"[Autopilot API] Falha ao computar performance para status: {e}")
 
@@ -119,7 +125,11 @@ async def get_autopilot_history(
 
     # Audit logs
     audit_result = await db.execute(text("""
-        SELECT id, action, reason, regime, perf_snapshot, version_id, created_at
+        SELECT id, user_id, profile_id, action, reason, reason_code, regime,
+               target_config, target_section, perf_snapshot, performance_window,
+               evidence_count, config_before, config_after, diff_json,
+               mutation_applied, version_id, trigger_source, celery_task_id,
+               profile_name, created_at
         FROM autopilot_audit_logs
         WHERE profile_id = :pid
         ORDER BY created_at DESC
@@ -215,7 +225,6 @@ async def run_autopilot_now(
     Executa o ciclo de Auto-Pilot manualmente para um profile (on-demand).
     Ignora o cooldown de MIN_HOURS_BETWEEN_MUTATIONS.
     """
-    from datetime import datetime, timezone
     from ..services.autopilot_engine import run_autopilot_cycle
 
     profile = await _get_profile(profile_id, user_id, db)
@@ -239,19 +248,16 @@ async def run_autopilot_now(
         current_config=current_config,
         auto_pilot_config=ap_config_override,
         db=db,
+        trigger_source="manual_api",
+        profile_name=getattr(profile, "name", None),
     )
 
-    # Apply mutation if needed
-    if cycle_result.get("action") == "MUTATED":
-        profile.config = cycle_result["new_config"]
-        profile.auto_pilot_config = cycle_result["updated_ap_config"]
-        profile.updated_at = datetime.now(timezone.utc)
-        await db.commit()
-
     return {
-        "status":           "success",
+        "status":           cycle_result.get("status", "success"),
         "profile_id":       profile_id,
         "action":           cycle_result.get("action"),
+        "mutation_applied": cycle_result.get("mutation_applied", False),
+        "autopilot_still_active": cycle_result.get("autopilot_still_active", True),
         "dry_run":          cycle_result.get("dry_run", True),
         "reason":           cycle_result.get("reason"),
         "regime":           cycle_result.get("regime"),
@@ -274,7 +280,7 @@ async def get_autopilot_skills(
     from ..services.skill_profiles import load_user_skills, seed_user_skills
     from ..services.market_regime_engine import MarketRegimeEngine
 
-    profile = await _get_profile(profile_id, user_id, db)
+    await _get_profile(profile_id, user_id, db)
 
     # Seed defaults if needed
     skills = await load_user_skills(db, str(user_id))

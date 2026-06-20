@@ -1,6 +1,5 @@
 """Pydantic schemas for Profile Intelligence Engine API."""
 from __future__ import annotations
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 from pydantic import BaseModel, Field
@@ -38,8 +37,14 @@ class PISettingsUpdate(BaseModel):
     enable_optuna: Optional[bool] = None
     enable_association_rules: Optional[bool] = None
     enable_dynamic_combinations: Optional[bool] = None
-    enable_lightgbm: Optional[bool] = None
-    enable_catboost: Optional[bool] = None
+    enable_lightgbm: Optional[bool] = Field(
+        default=None,
+        description="Reserved compatibility flag; LightGBM is not implemented and is normalized to false.",
+    )
+    enable_catboost: Optional[bool] = Field(
+        default=None,
+        description="Reserved compatibility flag; CatBoost is not implemented and is normalized to false.",
+    )
 
 
 class CreateProfileRequest(BaseModel):
@@ -57,3 +62,14 @@ class CreateProfileRequest(BaseModel):
 class AutopilotSettingsUpdate(BaseModel):
     enabled: bool
     settings: Optional[Dict[str, Any]] = None
+
+
+class CandidateApprovalRequest(BaseModel):
+    approved_by: UUID
+    approval_reason: str = Field(min_length=10, max_length=2000)
+    confirm_risk: bool
+    approval_source: str = Field(default="profile_intelligence_ui", min_length=3, max_length=80)
+
+
+class CandidateRejectionRequest(BaseModel):
+    rejection_reason: str = Field(min_length=5, max_length=2000)
