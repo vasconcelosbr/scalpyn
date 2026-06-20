@@ -345,6 +345,24 @@ function statusBadge(status: string | null | undefined) {
   return <span className="badge range text-[10px]">{status.toUpperCase()}</span>;
 }
 
+const BLOCKED_REASON_LABELS: Record<string, string> = {
+  blocked_no_validation:            "Aguardando trades de validação out-of-sample",
+  blocked_low_discovery_support:    "Discovery com amostras insuficientes",
+  blocked_low_validation_support:   "Validação com amostras insuficientes",
+  blocked_missing_feature:          "Indicador não disponível nos dados históricos",
+  blocked_validation_lift:          "Lift de validação abaixo do mínimo exigido",
+  blocked_validation_winrate:       "Win rate de validação abaixo do mínimo exigido",
+  blocked_single_symbol_dependency: "Dependência de símbolo único — risco de overfitting",
+  blocked_single_day_dependency:    "Dependência de dia único — risco de overfitting",
+  migration_requires_registry_review: "Combinação legada — revisão de registro necessária",
+  exploratory_only:                 "Apenas exploratório — validação pendente",
+};
+
+function blockedReasonLabel(reason: string | null | undefined): string {
+  if (!reason) return "Validação pendente";
+  return BLOCKED_REASON_LABELS[reason] ?? reason;
+}
+
 function combinationTypeBadge(type: string) {
   const map: Record<string, string> = {
     counterfactual_seed: "bullish",
@@ -1703,7 +1721,7 @@ export default function ProfileIntelligencePage() {
                               }`}
                               onClick={() => suggestionIsActionable(s) && handleOpenCreateProfile(s)}
                               disabled={["created", "applied"].includes(s.status) || !suggestionIsActionable(s)}
-                              title={!suggestionIsActionable(s) ? (s.blocked_reason || "Sugestão não acionável") : "Criar profile SHADOW_ONLY"}
+                              title={!suggestionIsActionable(s) ? blockedReasonLabel(s.blocked_reason) : "Criar profile SHADOW_ONLY"}
                             >
                               <BarChart3 className="w-3 h-3" />
                               {["created", "applied"].includes(s.status) ? "Aplicado" : "Criar"}
@@ -1908,9 +1926,10 @@ export default function ProfileIntelligencePage() {
               <div className="card p-3 border-red-500/30 bg-red-500/5 text-[11px] text-red-400 flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 shrink-0" />
                 <span>
-                  Não acionável: {selectedCombination.validation_metrics_json?.blocked_reason
+                  {blockedReasonLabel(
+                    selectedCombination.validation_metrics_json?.blocked_reason
                     || selectedCombination.validation_metrics_json?.actionability_status
-                    || "blocked_no_validation"}.
+                  )}
                 </span>
               </div>
             )}
