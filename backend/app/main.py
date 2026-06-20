@@ -72,6 +72,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         _log.warning("DB warmup failed (will retry on first request): %s", e)
 
+    # Recover PI runs orphaned by a previous API restart (BackgroundTask dies
+    # with the process; status stays "queued" forever without this).
+    try:
+        from sqlalchemy import text
+        from .database import AsyncSessionLocal
+        async with AsyncSessionLocal() as _sess:
+            res = await _sess.execute(text("""
+                UPDATE profile_intelligence_runs
+                   SET status = 'failed',
+                       error_message = 'Orphaned by API restart — trigger a new run'
+                 WHERE status = 'queued'
+            """))
+            await _sess.commit()
+            if res.rowcount:
+                _log.warning("[Startup] Marked %d orphaned PI run(s) as failed.", res.rowcount)
+    except Exception as e:
+        _log.warning("[Startup] PI orphan recovery failed (non-fatal): %s", e)
+
     # ── DB pool stats logger (Task #116) ──────────────────────────────────
     # Periodically logs pool utilisation so we can diagnose `QueuePool limit
     # … reached` errors.  Disable via DB_POOL_STATS_INTERVAL_SECONDS=0.
