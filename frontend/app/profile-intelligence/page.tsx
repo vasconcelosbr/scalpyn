@@ -635,11 +635,27 @@ export default function ProfileIntelligencePage() {
   const handleRunAutopilot = async () => {
     setRunningAutopilot(true);
     try {
-      await apiPost("/profile-intelligence/autopilot/run", {});
-      showToast("Ciclo do Auto-Pilot enfileirado.");
-      // Aguarda o worker registrar início antes de recarregar status
-      await new Promise((r) => setTimeout(r, 1500));
+      await apiPost("/profile-intelligence/autopilot/run-cycle", {});
+      showToast("Ciclo do Auto-Pilot enfileirado. Aguardando conclusão...");
+      // Polling até o ciclo concluir (máx 60 tentativas × 3s = 3min)
+      const prevCycleAt = autopilot?.last_cycle_at;
+      let attempts = 0;
+      while (attempts < 60) {
+        await new Promise((r) => setTimeout(r, 3000));
+        attempts++;
+        try {
+          const fresh = await apiGet("/profile-intelligence/autopilot");
+          setAutopilot((prev) => ({ ...(prev || {} as AutopilotStatus), ...fresh }));
+          const done = fresh?.latest_cycle?.status === "completed" ||
+                       fresh?.latest_cycle?.status === "failed" ||
+                       (fresh?.last_cycle_at && fresh.last_cycle_at !== prevCycleAt);
+          if (done) break;
+        } catch {
+          // ignora erros de polling
+        }
+      }
       await loadTab("Auto-Pilot");
+      showToast("Ciclo do Auto-Pilot concluído.");
     } catch (e: any) {
       showToast(`Erro ao iniciar ciclo: ${e.message}`, false);
     } finally {
@@ -834,14 +850,9 @@ export default function ProfileIntelligencePage() {
   const handleSaveSettings = async () => {
     setSavingSettings(true);
     try {
-      const payload = {
-        ...settings,
-        enable_lightgbm: false,
-        enable_catboost: false,
-      };
-      const response = await apiPut("/profile-intelligence/settings", payload);
-      setSettings(response?.settings || payload);
-      showToast("Configurações salvas. LightGBM e CatBoost permanecem não implementados.");
+      const response = await apiPut("/profile-intelligence/settings", settings);
+      setSettings(response?.settings || settings);
+      showToast("Configurações salvas.");
     } catch (e: any) {
       showToast(`Erro: ${e.message}`, false);
     } finally {

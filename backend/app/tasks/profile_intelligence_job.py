@@ -19,6 +19,8 @@ from .celery_app import celery_app
 logger = logging.getLogger("scalpyn.tasks.profile_intelligence_job")
 
 _LOCK_TTL_S = int(os.environ.get("PROFILE_INTELLIGENCE_LOCK_TTL_S", "7200"))
+_PI_ENABLE_OPTUNA = os.environ.get("PI_ENABLE_OPTUNA", "false").lower() == "true"
+_PI_ENABLE_ASSOC_RULES = os.environ.get("PI_ENABLE_ASSOCIATION_RULES", "false").lower() == "true"
 
 
 def _acquire_pi_lock(user_id) -> tuple:
@@ -116,8 +118,8 @@ async def _run_pi_job():
                     min_closed_trades=30,
                     include_counterfactual=True,
                     include_dynamic_combinations=True,
-                    include_association_rules=False,
-                    include_optuna=False,
+                    include_association_rules=_PI_ENABLE_ASSOC_RULES,
+                    include_optuna=_PI_ENABLE_OPTUNA,
                     include_ai_explanation=False,
                 )
                 logger.info("[PIJob] Completed run %s for user %s", run_id, user_id)
@@ -161,8 +163,8 @@ async def _run_for_user(user_id, force_autopilot: bool = False):
                 min_closed_trades=30,
                 include_counterfactual=True,
                 include_dynamic_combinations=True,
-                include_association_rules=False,
-                include_optuna=False,
+                include_association_rules=_PI_ENABLE_ASSOC_RULES,
+                include_optuna=_PI_ENABLE_OPTUNA,
                 include_ai_explanation=False,
             )
             return await ProfileIntelligenceAutopilotService().run_cycle(
@@ -178,6 +180,34 @@ async def _run_for_user(user_id, force_autopilot: bool = False):
 @celery_app.task(name="app.tasks.profile_intelligence_job.run_for_user", bind=True)
 def run_for_user(self, user_id: str, force_autopilot: bool = False):
     return _run_async(_run_for_user(user_id, force_autopilot))
+
+
+async def _run_cycle_only_for_user(user_id):
+    """Apenas o ciclo Auto-Pilot — sem análise PI completa."""
+    from uuid import UUID
+    from ..database import AsyncSessionLocal
+    from ..services.profile_intelligence_autopilot_service import ProfileIntelligenceAutopilotService
+
+    uid = UUID(str(user_id))
+    redis_client, acquired, lock_key = _acquire_pi_lock(f"cycle_only:{uid}")
+    if not acquired:
+        return {"status": "duplicate"}
+    try:
+        async with AsyncSessionLocal() as db:
+            return await ProfileIntelligenceAutopilotService().run_cycle(
+                db=db,
+                user_id=uid,
+                analysis_run_id=None,
+                force=True,
+            )
+    finally:
+        _release_pi_lock(redis_client, lock_key)
+
+
+@celery_app.task(name="app.tasks.profile_intelligence_job.run_cycle_for_user", bind=True)
+def run_cycle_for_user(self, user_id: str):
+    """Celery entry point: ciclo Auto-Pilot sem PI analysis (acionado pelo botão manual)."""
+    return _run_async(_run_cycle_only_for_user(user_id))
 
 
 async def _monitor_autopilot():

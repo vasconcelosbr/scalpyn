@@ -73,7 +73,7 @@ DEFAULT_AUTOPILOT_SETTINGS = {
     "review_trade_target": 100,
     "review_min_trades": 50,
     "review_after_hours": 36,
-    "promotion_min_win_rate": 0.80,
+    "promotion_min_win_rate": 0.55,
     "promotion_min_avg_pnl_pct": 0.005,
     "rollback_relative_floor": 0.80,
     "negative_rule_penalty": -10.0,

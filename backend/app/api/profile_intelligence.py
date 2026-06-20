@@ -57,9 +57,9 @@ _DEFAULT_SETTINGS = {
     "enable_catboost": False,
 }
 
-_UNIMPLEMENTED_ML_FLAGS = {
-    "enable_lightgbm": "LightGBM is not implemented",
-    "enable_catboost": "CatBoost is not implemented",
+_ML_CHALLENGER_FLAGS = {
+    "enable_lightgbm": "lightgbm",
+    "enable_catboost": "catboost",
 }
 
 
@@ -67,33 +67,32 @@ def _normalize_unimplemented_ml_flags(
     settings: Optional[Dict[str, Any]],
 ) -> tuple[Dict[str, Any], list[str]]:
     normalized = dict(settings or {})
-    warnings = [
-        message
-        for flag, message in _UNIMPLEMENTED_ML_FLAGS.items()
-        if normalized.get(flag) is True
-    ]
-    for flag in _UNIMPLEMENTED_ML_FLAGS:
-        normalized[flag] = False
+    warnings = []
+    for flag, package in _ML_CHALLENGER_FLAGS.items():
+        if normalized.get(flag) is True and find_spec(package) is None:
+            warnings.append(f"{package} não está instalado neste ambiente — flag ignorado")
+            normalized[flag] = False
     return normalized, warnings
 
 
 def _ml_challenger_status() -> Dict[str, Dict[str, Any]]:
-    status = {
-        "available": False,
-        "implemented": False,
-        "installed": False,
-        "operational": False,
-        "status": "not_implemented",
-        "effective_contribution": 0,
-        "can_train": False,
-        "can_infer": False,
-        "can_generate_suggestions": False,
-        "influences_autopilot": False,
-    }
-    return {
-        "lightgbm": dict(status),
-        "catboost": dict(status),
-    }
+    try:
+        from ..services.ml_challenger_service import get_challenger_status
+        return get_challenger_status()
+    except Exception:
+        status = {
+            "available": False,
+            "implemented": True,
+            "installed": False,
+            "operational": False,
+            "status": "import_error",
+            "effective_contribution": 0,
+            "can_train": False,
+            "can_infer": False,
+            "can_generate_suggestions": False,
+            "influences_autopilot": False,
+        }
+        return {"lightgbm": dict(status), "catboost": dict(status)}
 
 
 # ── 1. Overview ──────────────────────────────────────────────────────────────
@@ -174,8 +173,8 @@ async def get_overview(
     # ML availability
     ml_available = {
         "xgboost": find_spec("xgboost") is not None,
-        "lightgbm": False,
-        "catboost": False,
+        "lightgbm": find_spec("lightgbm") is not None,
+        "catboost": find_spec("catboost") is not None,
         "optuna": find_spec("optuna") is not None,
         "mlxtend": find_spec("mlxtend") is not None,
         "shap": find_spec("shap") is not None,
@@ -1054,6 +1053,34 @@ async def trigger_autopilot_cycle(
     await db.commit()
     queued = await _queue_autopilot_cycle(background_tasks, user_id)
     return {"status": queued["cycle_status"], "task_id": queued["task_id"]}
+
+
+@router.post("/autopilot/run-cycle")
+async def trigger_autopilot_run_cycle(
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """Executa apenas o ciclo Auto-Pilot, sem análise PI completa."""
+    from ..services.profile_intelligence_autopilot_service import ProfileIntelligenceAutopilotService
+    row, _ = await ProfileIntelligenceAutopilotService().get_settings(db, user_id)
+    if not row.enabled:
+        raise HTTPException(status_code=409, detail="Auto-Pilot global está desligado")
+    await db.commit()
+    try:
+        from ..tasks.profile_intelligence_job import run_cycle_for_user
+        task = run_cycle_for_user.delay(str(user_id))
+        return {"status": "queued", "task_id": task.id}
+    except Exception as exc:
+        logger.warning("[PI API] run-cycle dispatch failed, using background: %s", exc)
+        from ..database import AsyncSessionLocal
+
+        async def _background():
+            async with AsyncSessionLocal() as bg_db:
+                await ProfileIntelligenceAutopilotService().run_cycle(bg_db, user_id, analysis_run_id=None, force=True)
+
+        background_tasks.add_task(_background)
+        return {"status": "queued", "task_id": None}
 
 
 @router.get("/autopilot/candidates")

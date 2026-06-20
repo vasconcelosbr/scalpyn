@@ -240,6 +240,12 @@ class ProfileIntelligenceAuditLog(Base):
     model_name        = Column(String(60), nullable=True)
     prompt_text       = Column(Text, nullable=True)
     response_text     = Column(Text, nullable=True)
+    before_json       = Column(JSONB, nullable=True)
+    after_json        = Column(JSONB, nullable=True)
+    diff_json         = Column(JSONB, nullable=True)
+    actor_user_id     = Column(UUID(as_uuid=True), nullable=True)
+    profile_name      = Column(String(200), nullable=True)
+    source_run_id     = Column(UUID(as_uuid=True), nullable=True)
     created_at        = Column(TIMESTAMP(timezone=True), nullable=False,
                                default=lambda: datetime.now(timezone.utc))
 
