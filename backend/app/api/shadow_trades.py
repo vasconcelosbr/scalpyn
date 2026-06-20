@@ -911,8 +911,8 @@ async def profile_report(
 ) -> List[ProfileReportRow]:
     """Relatório executivo agregado por perfil do Strategy Lab.
 
-    Retorna uma linha por perfil ativo que possua ao menos um shadow trade,
-    com total, abertos, win rate, P&L total/médio e holding médio até TP.
+    Retorna uma linha por perfil shadow-only (AP/PI) mesmo sem shadow trades,
+    e por qualquer outro perfil que possua ao menos um shadow trade.
     """
     try:
         q = text("""
@@ -933,8 +933,9 @@ async def profile_report(
             LEFT JOIN shadow_trades st
                    ON st.profile_id = p.id
                   AND st.user_id = :uid
-            GROUP BY p.id, p.name
-            HAVING COUNT(st.id) > 0
+            WHERE p.user_id = :uid
+            GROUP BY p.id, p.name, p.is_shadow_only
+            HAVING (p.is_shadow_only = TRUE OR COUNT(st.id) > 0)
             ORDER BY p.name
         """)
         rows = (await db.execute(q, {"uid": str(user_id)})).fetchall()
