@@ -132,10 +132,40 @@ async def _run_pi_job():
                     analysis_run_id=run_id,
                 )
                 logger.info("[PIJob] Auto-Pilot result for user %s: %s", user_id, autopilot_result)
+                await _run_ml_challengers_if_enabled(db, user_id)
             except Exception as exc:
                 logger.error("[PIJob] Failed for user %s: %s", user_id, exc)
             finally:
                 _release_pi_lock(redis_client, lock_key)
+
+
+async def _run_ml_challengers_if_enabled(db, user_id) -> None:
+    """Treina LightGBM/CatBoost se habilitados nas settings do usuário. Isolado — falhas não abortam o job."""
+    try:
+        from sqlalchemy import text as _text
+        import json as _json
+        row = (await db.execute(_text("""
+            SELECT config_json FROM config_profiles
+            WHERE user_id = :uid AND config_type = 'profile_intelligence' AND is_active = TRUE
+            LIMIT 1
+        """), {"uid": str(user_id)})).fetchone()
+        if not row:
+            return
+        cfg = _json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})
+        enable_lgbm = bool(cfg.get("enable_lightgbm", False))
+        enable_cb   = bool(cfg.get("enable_catboost", False))
+        if not enable_lgbm and not enable_cb:
+            return
+        from ..services.ml_challenger_service import MLChallengerService
+        result = await MLChallengerService().train_challengers(
+            db=db,
+            user_id=user_id,
+            enable_lightgbm=enable_lgbm,
+            enable_catboost=enable_cb,
+        )
+        logger.info("[PIJob] ML challengers result for user %s: %s", user_id, result)
+    except Exception as exc:
+        logger.error("[PIJob] ML challenger training failed for user %s (non-fatal): %s", user_id, exc)
 
 
 @celery_app.task(name="app.tasks.profile_intelligence_job.run", bind=True)
@@ -167,12 +197,14 @@ async def _run_for_user(user_id, force_autopilot: bool = False):
                 include_optuna=_PI_ENABLE_OPTUNA,
                 include_ai_explanation=False,
             )
-            return await ProfileIntelligenceAutopilotService().run_cycle(
+            result = await ProfileIntelligenceAutopilotService().run_cycle(
                 db=db,
                 user_id=uid,
                 analysis_run_id=run_id,
                 force=force_autopilot,
             )
+            await _run_ml_challengers_if_enabled(db, uid)
+            return result
     finally:
         _release_pi_lock(redis_client, lock_key)
 
