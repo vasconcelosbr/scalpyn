@@ -394,6 +394,15 @@ TASK_ANNOTATIONS = {
         "max_retries": 0,
         **_NO_REQUEUE_ON_WORKER_LOSS,
     },
+    # User-triggered PI run: same budget as beat-driven run. acks_late=False
+    # prevents the 18-task duplicate accumulation caused by worker restarts.
+    "app.tasks.profile_intelligence_job.run_for_user": {
+        "queue": "structural",
+        "time_limit": 3600,
+        "soft_time_limit": 3540,
+        "max_retries": 0,
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
 }
 
 celery_app.conf.update(

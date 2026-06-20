@@ -607,11 +607,37 @@ class ProfileIntelligenceService:
         # 3. Determine discovery/validation time windows (70%/30% split)
         # ------------------------------------------------------------------
         lookback_start = now_utc - timedelta(days=lookback_days)
-        total_span_seconds = lookback_days * 86400
-        discovery_span_seconds = int(total_span_seconds * 0.70)
 
-        discovery_start = lookback_start
-        discovery_end = lookback_start + timedelta(seconds=discovery_span_seconds)
+        # Clamp discovery start to earliest available feature data so that a long
+        # lookback_days doesn't produce an empty discovery window when features
+        # haven't been collected for the full period yet.
+        earliest_features = (
+            await db.execute(
+                text("""
+                    SELECT MIN(created_at)
+                    FROM shadow_trades
+                    WHERE user_id = :uid
+                      AND features_snapshot IS NOT NULL
+                      AND features_snapshot != '{}'::jsonb
+                """),
+                {"uid": str(user_id)},
+            )
+        ).scalar()
+
+        if earliest_features is not None and earliest_features > lookback_start:
+            logger.info(
+                "[PIEngine] Clamping discovery_start from %s to %s (earliest features)",
+                lookback_start.date(), earliest_features.date(),
+            )
+            effective_start = earliest_features
+        else:
+            effective_start = lookback_start
+
+        effective_span_seconds = (now_utc - effective_start).total_seconds()
+        discovery_span_seconds = int(effective_span_seconds * 0.70)
+
+        discovery_start = effective_start
+        discovery_end = effective_start + timedelta(seconds=discovery_span_seconds)
         validation_start = discovery_end + timedelta(microseconds=1)
         validation_end = now_utc
 
