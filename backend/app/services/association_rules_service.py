@@ -325,6 +325,7 @@ class AssociationRulesEngine:
         """Save mlxtend rules to profile_rule_combinations."""
         from ..models.profile_intelligence import ProfileRuleCombination
         saved = []
+        _seen_hashes: set = set()
         for _, row in rules_df.iterrows():
             antecedents = list(row["antecedents"])
             consequents = list(row["consequents"])
@@ -374,6 +375,10 @@ class AssociationRulesEngine:
                 f"assoc|{'|'.join(sorted(antecedents))}|{'|'.join(sorted(consequents))}|{user_id}".encode()
             ).hexdigest()[:32]
 
+            if combo_hash in _seen_hashes:
+                continue
+            _seen_hashes.add(combo_hash)
+
             combination = ProfileRuleCombination(
                 user_id=user_id,
                 run_id=run_id,
@@ -413,6 +418,7 @@ class AssociationRulesEngine:
         """Save fallback rules to profile_rule_combinations."""
         from ..models.profile_intelligence import ProfileRuleCombination
         saved = []
+        _seen_hashes: set = set()
         for r in results:
             antecedents = list(r["antecedents"])
             consequents = list(r["consequents"])
@@ -461,6 +467,10 @@ class AssociationRulesEngine:
             combo_hash = hashlib.sha256(
                 f"assoc|{'|'.join(sorted(antecedents))}|{'|'.join(sorted(consequents))}|{user_id}".encode()
             ).hexdigest()[:32]
+
+            if combo_hash in _seen_hashes:
+                continue
+            _seen_hashes.add(combo_hash)
 
             combination = ProfileRuleCombination(
                 user_id=user_id,

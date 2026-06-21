@@ -819,63 +819,73 @@ class ProfileIntelligenceService:
 
         # ------------------------------------------------------------------
         # 9. AssociationRulesEngine (optional)
+        # Each optional phase runs in a SAVEPOINT so a failure here cannot
+        # abort the outer transaction and kill subsequent phases.
         # ------------------------------------------------------------------
         if include_association_rules:
             try:
-                from .association_rules_service import AssociationRulesEngine
-                assoc_engine = AssociationRulesEngine()
-                await assoc_engine.run(
-                    db=db,
-                    user_id=user_id,
-                    run_id=run_id,
-                    lookback_days=lookback_days,
-                    base_metrics=base_metrics,
-                    discovery_start=discovery_start,
-                    discovery_end=discovery_end,
-                    validation_start=validation_start,
-                    validation_end=validation_end,
-                )
+                async with db.begin_nested():
+                    from .association_rules_service import AssociationRulesEngine
+                    assoc_engine = AssociationRulesEngine()
+                    await assoc_engine.run(
+                        db=db,
+                        user_id=user_id,
+                        run_id=run_id,
+                        lookback_days=lookback_days,
+                        base_metrics=base_metrics,
+                        discovery_start=discovery_start,
+                        discovery_end=discovery_end,
+                        validation_start=validation_start,
+                        validation_end=validation_end,
+                    )
                 await log_pi_event(
                     db, user_id, "association_rules_completed",
                     run_id=run_id,
                 )
             except Exception as exc:
                 logger.warning("[PIEngine] AssociationRulesEngine skipped/failed: %s", exc)
-                await log_pi_event(
-                    db, user_id, "association_rules_error",
-                    run_id=run_id,
-                    result_json={"error": str(exc)},
-                )
+                try:
+                    await log_pi_event(
+                        db, user_id, "association_rules_error",
+                        run_id=run_id,
+                        result_json={"error": str(exc)},
+                    )
+                except Exception:
+                    pass
 
         # ------------------------------------------------------------------
         # 10. OptunaProfileSearchService (optional)
         # ------------------------------------------------------------------
         if include_optuna and total_closed_trades >= min_closed_trades:
             try:
-                from .optuna_profile_search_service import OptunaProfileSearchService
-                optuna_svc = OptunaProfileSearchService()
-                await optuna_svc.search(
-                    db=db,
-                    user_id=user_id,
-                    run_id=run_id,
-                    lookback_days=lookback_days,
-                    base_metrics=base_metrics,
-                    discovery_start=discovery_start,
-                    discovery_end=discovery_end,
-                    validation_start=validation_start,
-                    validation_end=validation_end,
-                )
+                async with db.begin_nested():
+                    from .optuna_profile_search_service import OptunaProfileSearchService
+                    optuna_svc = OptunaProfileSearchService()
+                    await optuna_svc.search(
+                        db=db,
+                        user_id=user_id,
+                        run_id=run_id,
+                        lookback_days=lookback_days,
+                        base_metrics=base_metrics,
+                        discovery_start=discovery_start,
+                        discovery_end=discovery_end,
+                        validation_start=validation_start,
+                        validation_end=validation_end,
+                    )
                 await log_pi_event(
                     db, user_id, "optuna_completed",
                     run_id=run_id,
                 )
             except Exception as exc:
                 logger.warning("[PIEngine] OptunaProfileSearchService skipped/failed: %s", exc)
-                await log_pi_event(
-                    db, user_id, "optuna_error",
-                    run_id=run_id,
-                    result_json={"error": str(exc)},
-                )
+                try:
+                    await log_pi_event(
+                        db, user_id, "optuna_error",
+                        run_id=run_id,
+                        result_json={"error": str(exc)},
+                    )
+                except Exception:
+                    pass
 
         # ------------------------------------------------------------------
         # 11. ProfileSuggestionService
