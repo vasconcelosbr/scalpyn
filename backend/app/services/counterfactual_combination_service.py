@@ -31,7 +31,7 @@ COUNTERFACTUAL_SEEDS = [
         "name": "L3_META_EARLY_PULLBACK_FAST_V1",
         "family": "early_pullback",
         "rules": [
-            {"indicator": "ema50_gt_ema200", "operator": "==", "value": False},
+            {"indicator": "ema50_gt_ema200", "operator": "==", "value": True},
             {"indicator": "rsi", "operator": ">=", "value": 30},
             {"indicator": "rsi", "operator": "<=", "value": 45},
             {"indicator": "zscore", "operator": ">=", "value": -1.5},
@@ -103,7 +103,7 @@ COUNTERFACTUAL_SEEDS = [
         "family": "early_pullback",
         "rules": [
             {"indicator": "ema9_gt_ema21", "operator": "==", "value": True},
-            {"indicator": "ema50_gt_ema200", "operator": "==", "value": False},
+            {"indicator": "ema50_gt_ema200", "operator": "==", "value": True},
             {"indicator": "adx", "operator": ">=", "value": 18},
             {"indicator": "macd_histogram_pct", "operator": ">", "value": 0},
             {"indicator": "rsi", "operator": ">=", "value": 38},
@@ -644,6 +644,10 @@ class DynamicCombinationGenerator:
                 # Build rules from bucket definitions
                 rules = _build_rules_from_buckets(combo)
 
+                # Reject combinations that contain bearish signals as long entry conditions
+                if _is_semantically_bearish(rules):
+                    continue
+
                 combo_name = "_AND_".join(b["bucket_label"] for b in combo)
                 # Canonical hash: stable across runs, based on sorted+normalised rules
                 combination_hash = _build_canonical_rules_hash(rules, user_id)
@@ -767,6 +771,26 @@ class DynamicCombinationGenerator:
 # ---------------------------------------------------------------------------
 # Contradiction detection helpers
 # ---------------------------------------------------------------------------
+
+# Indicator/operator/value triples that are semantically bearish and must not
+# appear as long entry conditions in a trend-following long strategy.
+_BEARISH_LONG_SIGNALS: list = [
+    ("ema50_gt_ema200", "==", False),
+    ("ema9_gt_ema21", "==", False),
+]
+
+
+def _is_semantically_bearish(rules: list) -> bool:
+    """Return True if any rule matches a known bearish-for-long signal."""
+    for rule in rules:
+        ind = rule.get("indicator")
+        op = rule.get("operator")
+        val = rule.get("value")
+        for b_ind, b_op, b_val in _BEARISH_LONG_SIGNALS:
+            if ind == b_ind and op == b_op and val == b_val:
+                return True
+    return False
+
 
 def _has_contradictions(combo: tuple) -> bool:
     """Return True if this combination of bucket stats is internally contradictory."""

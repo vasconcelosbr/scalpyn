@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Bot,
   RefreshCw,
@@ -121,10 +121,12 @@ export default function AutopilotPage() {
   const [loadingProfiles, setLoadingProfiles] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [running, setRunning] = useState(false);
+  const [runElapsed, setRunElapsed] = useState(0);
   const [toggling, setToggling] = useState(false);
   const [rollingBack, setRollingBack] = useState<string | null>(null);
   const [runResult, setRunResult] = useState<any>(null);
   const [expandedLog, setExpandedLog] = useState<string | null>(null);
+  const runTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Load profile list
   useEffect(() => {
@@ -191,14 +193,20 @@ export default function AutopilotPage() {
   const handleRun = async () => {
     if (!selectedId) return;
     setRunning(true);
+    setRunElapsed(0);
     setRunResult(null);
+    runTimerRef.current = setInterval(() => setRunElapsed((s) => s + 1), 1000);
     try {
       const res = await apiPost(`/autopilot/${selectedId}/run`);
       await loadDetail(selectedId);
-      setRunResult(res);
+      setRunResult({ ...res, elapsed_s: runElapsed });
     } catch (e: any) {
       setRunResult({ error: e.message });
     } finally {
+      if (runTimerRef.current) {
+        clearInterval(runTimerRef.current);
+        runTimerRef.current = null;
+      }
       setRunning(false);
     }
   };
@@ -402,7 +410,7 @@ export default function AutopilotPage() {
               disabled={running || toggling}
             >
               <Play className={`w-3.5 h-3.5 ${running ? "animate-pulse" : ""}`} />
-              {running ? "Analisando..." : "Analisar agora"}
+              {running ? `Analisando... ${runElapsed}s` : "Analisar agora"}
             </button>
 
             <button
@@ -435,6 +443,9 @@ export default function AutopilotPage() {
                     <span className="text-[12px] font-semibold text-[var(--text-primary)]">
                       Ciclo concluído — {runResult.action}
                     </span>
+                    {runResult.elapsed_s != null && (
+                      <span className="text-[11px] text-[var(--text-tertiary)]">({runResult.elapsed_s}s)</span>
+                    )}
                   </div>
                   {runResult.reason && (
                     <p className="text-[11px] text-[var(--text-secondary)] pl-6">{runResult.reason}</p>

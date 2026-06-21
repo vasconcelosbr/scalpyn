@@ -69,7 +69,7 @@ DEFAULT_AUTOPILOT_SETTINGS = {
     "cycle_hours": 24,
     "duplicate_relative_tolerance": 0.20,
     "loss_family_cooldown_hours": 60,
-    "max_shadow_candidates": 30,
+    "max_shadow_candidates": 100,
     "review_trade_target": 100,
     "review_min_trades": 50,
     "review_after_hours": 36,

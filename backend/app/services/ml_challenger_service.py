@@ -35,6 +35,10 @@ VAL_FRACTION = float(__import__("os").getenv("ML_CHALLENGER_VAL_FRACTION", "0.20
 N_TRIALS_LGBM = int(__import__("os").getenv("ML_CHALLENGER_N_TRIALS_LGBM", "30"))
 N_TRIALS_CB = int(__import__("os").getenv("ML_CHALLENGER_N_TRIALS_CB", "20"))
 
+# Sources to include in challenger training — must match the champion's training scope.
+# Lab/simulated/rejected sources are excluded to prevent signal dilution.
+TRAIN_SOURCES: List[str] = ["L3", "L1_SPECTRUM"]
+
 
 def _is_installed(package: str) -> bool:
     try:
@@ -235,9 +239,17 @@ class MLChallengerService:
     """
 
     async def _load_shadow_data(
-        self, db: AsyncSession, user_id: UUID, lookback_days: int
+        self,
+        db: AsyncSession,
+        user_id: UUID,
+        lookback_days: int,
+        source_filter: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        rows = (await db.execute(text("""
+        sources = source_filter if source_filter is not None else TRAIN_SOURCES
+        # Build per-source placeholders to avoid any injection risk
+        source_placeholders = ", ".join(f":src_{i}" for i in range(len(sources)))
+        source_params = {f"src_{i}": s for i, s in enumerate(sources)}
+        rows = (await db.execute(text(f"""
             SELECT
                 id::text          AS shadow_id,
                 symbol,
@@ -250,13 +262,18 @@ class MLChallengerService:
                 profile_id::text  AS profile_id
             FROM shadow_trades
             WHERE user_id = :uid
+              AND source IN ({source_placeholders})
               AND outcome IN ('TP_HIT', 'SL_HIT', 'TIMEOUT')
               AND pnl_pct IS NOT NULL
               AND features_snapshot IS NOT NULL
-              AND features_snapshot::text <> '{}'
+              AND features_snapshot::text <> '{{}}'
               AND created_at >= NOW() - CAST(:days AS interval)
             ORDER BY created_at ASC
-        """), {"uid": str(user_id), "days": f"{lookback_days} days"})).fetchall()
+        """), {"uid": str(user_id), "days": f"{lookback_days} days", **source_params})).fetchall()
+        logger.info(
+            "[MLChallenger] _load_shadow_data: sources=%s rows=%d user=%s",
+            sources, len(rows), user_id,
+        )
         return [dict(r._mapping) for r in rows]
 
     def _build_dataset(
@@ -418,6 +435,7 @@ class MLChallengerService:
         n_trials_lgbm: int = N_TRIALS_LGBM,
         n_trials_cb: int = N_TRIALS_CB,
         profile_id: Optional[UUID] = None,
+        source_filter: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Treina challengers habilitados e registra no banco.
@@ -426,8 +444,8 @@ class MLChallengerService:
         if not enable_lightgbm and not enable_catboost:
             return {"skipped": "no_challengers_enabled"}
 
-        # Carrega dados uma vez
-        records = await self._load_shadow_data(db, user_id, lookback_days)
+        # Carrega dados filtrados pelas mesmas fontes do champion
+        records = await self._load_shadow_data(db, user_id, lookback_days, source_filter)
         if len(records) < MIN_RECORDS:
             logger.info(
                 "[MLChallenger] Dados insuficientes (%d < %d) para user=%s — pulando",
