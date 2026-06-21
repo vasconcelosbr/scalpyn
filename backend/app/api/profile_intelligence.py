@@ -315,6 +315,30 @@ async def trigger_run(
     return RunResponse(run_id=str(run_id), status="queued", message="Run queued successfully")
 
 
+@router.post("/run-with-ml")
+async def trigger_run_with_ml(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """Dispatch PI run + ML challenger training as a Celery task on the structural queue.
+
+    Runs _run_for_user on scalpyn-worker-structural, which includes:
+      1. PI Engine analysis
+      2. Autopilot cycle
+      3. LightGBM (L1_SPECTRUM) + CatBoost (L3/L3_LAB) training if enabled in settings
+
+    Returns immediately with the Celery task ID.
+    """
+    try:
+        from ..tasks.profile_intelligence_job import run_for_user
+        task = run_for_user.delay(str(user_id))
+        logger.info("[PI API] run-with-ml dispatched task_id=%s user=%s", task.id, user_id)
+        return {"status": "queued", "task_id": task.id, "queue": "structural"}
+    except Exception as exc:
+        logger.error("[PI API] run-with-ml dispatch failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Failed to dispatch ML training task: {exc}")
+
+
 # ── 4. Profile ranking ────────────────────────────────────────────────────────
 
 @router.get("/profiles/ranking")
