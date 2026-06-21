@@ -473,6 +473,10 @@ async def get_ml_status(
 class OrchestratorBackfillRequest(BaseModel):
     limit: int = 300
     source_filter: Optional[List[str]] = None
+    dry_run: bool = True
+    profile_id: Optional[str] = None
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
 
 
 @router.post("/orchestrator/backfill")
@@ -482,15 +486,14 @@ async def orchestrator_backfill(
     user_id: UUID = Depends(get_current_user_id),
 ) -> Dict[str, Any]:
     """
-    Backfill final_priority_score e ml_probability para shadow trades sem score.
+    Backfill final_priority_score + orchestrator_payload para shadow trades sem score.
 
-    Processa `limit` trades com features_snapshot preenchido mas
-    final_priority_score = NULL, usando:
-      - Lane 1: XGBoost global → p_l1_win → ml_probability
-      - Lane 2: CatBoost profile (se disponível) → p_l3_profile_win
-      - final_priority_score = weighted_combination(L1, L3)
+    SEGURO POR PADRÃO: dry_run=True (retorna preview sem escrever no banco).
 
-    Idempotente: execuções repetidas processam apenas trades ainda sem score.
+    ml_probability NÃO é sobrescrito — pertence ao modelo original da decisão.
+    Os scores vão para orchestrator_payload JSONB + final_priority_score.
+
+    Idempotente: só processa trades com final_priority_score IS NULL.
     """
     try:
         from ..services.decision_orchestrator import backfill_orchestrator_scores
@@ -499,6 +502,10 @@ async def orchestrator_backfill(
             user_id=str(user_id),
             limit=request.limit,
             source_filter=request.source_filter,
+            dry_run=request.dry_run,
+            profile_id=request.profile_id,
+            from_date=request.from_date,
+            to_date=request.to_date,
         )
         return {"status": "success", **result}
     except Exception as exc:

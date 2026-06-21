@@ -161,6 +161,7 @@ def _train_catboost_sync(
     X_train, y_train, X_val, y_val,
     feature_names: List[str],
     n_trials: int = 20,
+    cat_feature_indices: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
     from catboost import CatBoostClassifier, Pool
     import numpy as np
@@ -169,8 +170,18 @@ def _train_catboost_sync(
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-    train_pool = Pool(X_train, label=y_train, feature_names=list(feature_names))
-    val_pool = Pool(X_val, label=y_val, feature_names=list(feature_names))
+    # cat_feature_indices: colunas de source_encoded e profile_id_encoded.
+    # Pool com cat_features ativa o encoding interno CatBoost (ordered target statistics)
+    # em vez de tratar os IDs como scalars contínuos.
+    # Valores inteiros são válidos — CatBoost converte internamente para string-category.
+    train_pool = Pool(
+        X_train, label=y_train, feature_names=list(feature_names),
+        cat_features=cat_feature_indices,
+    )
+    val_pool = Pool(
+        X_val, label=y_val, feature_names=list(feature_names),
+        cat_features=cat_feature_indices,
+    )
 
     def objective(trial: optuna.Trial) -> float:
         params = {
@@ -367,7 +378,12 @@ class MLChallengerService:
         X = np.column_stack([X_base, source_enc, profile_enc])
         all_feature_names = available + ["source_encoded", "profile_id_encoded"]
 
-        return X, y, all_feature_names
+        # Índices das colunas categóricas — usados por Pool(cat_features=...) no CatBoost.
+        # source_encoded e profile_id_encoded são as ÚLTIMAS duas colunas.
+        n_base = X_base.shape[1]
+        cat_feature_indices = [n_base, n_base + 1]  # source_encoded, profile_id_encoded
+
+        return X, y, all_feature_names, cat_feature_indices
 
     def _chronological_split(self, X, y, val_fraction: float = 0.20):
         n = len(y)
@@ -391,6 +407,7 @@ class MLChallengerService:
         profile_id: Optional[UUID],
         user_id: UUID,
         model_lane: Optional[str] = None,
+        cat_feature_indices: Optional[List[int]] = None,
     ) -> UUID:
         """Serializa e salva em ml_models + ml_model_registry. Retorna model_id."""
         import joblib as _joblib
@@ -406,6 +423,7 @@ class MLChallengerService:
                 "metrics": metrics,
                 "threshold": threshold,
                 "trained_by": "MLChallengerService",
+                "cat_feature_indices": cat_feature_indices,
             },
         }
         _joblib.dump(payload, buf)
@@ -619,7 +637,7 @@ class MLChallengerService:
                 }
             elif _is_installed("catboost"):
                 try:
-                    X, y, all_cols = self._build_l3_dataset(cb_records, feature_columns)
+                    X, y, all_cols, cat_indices = self._build_l3_dataset(cb_records, feature_columns)
                     if len(y) < MIN_RECORDS:
                         results["catboost"] = {"status": "skipped", "reason": "insufficient_labeled"}
                     else:
@@ -628,13 +646,13 @@ class MLChallengerService:
                             results["catboost"] = {"status": "skipped", "reason": "val_too_small"}
                         else:
                             logger.info(
-                                "[MLChallenger] Treinando CatBoost (n_train=%d n_trials=%d features=%d)",
-                                len(y_tr), n_trials_cb, len(all_cols),
+                                "[MLChallenger] Treinando CatBoost (n_train=%d n_trials=%d features=%d cat=%s)",
+                                len(y_tr), n_trials_cb, len(all_cols), cat_indices,
                             )
                             cb_result = await loop.run_in_executor(
                                 _TRAINER_POOL,
                                 _train_catboost_sync,
-                                X_tr, y_tr, X_va, y_va, all_cols, n_trials_cb,
+                                X_tr, y_tr, X_va, y_va, all_cols, n_trials_cb, cat_indices,
                             )
                             model_id = await self._save_to_db(
                                 db, user_id=user_id,
@@ -649,6 +667,7 @@ class MLChallengerService:
                                 threshold=cb_result["threshold"],
                                 profile_id=profile_id,
                                 model_lane="L3_PROFILE",
+                                cat_feature_indices=cat_indices,
                             )
                             await db.commit()
                             results["catboost"] = {

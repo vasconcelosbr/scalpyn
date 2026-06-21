@@ -7,8 +7,14 @@ Arquitetura 2-lanes:
   final_priority_score = w_l1 * p_l1_win + w_l3 * p_l3_profile_win
                          (fallback para p_l1_win quando CatBoost não disponível)
 
+Semântica de campos em shadow_trades:
+  - ml_probability      : score do modelo ORIGINAL da decisão (não sobrescrito aqui)
+  - final_priority_score: score combinado L1+L3 (gravado pelo backfill)
+  - orchestrator_payload: JSON com p_l1_win, p_l3_profile_win, reason_codes, model_ids
+
 Uso:
   - backfill_orchestrator_scores(): atualiza shadow trades com final_priority_score = NULL
+    SEGURO POR PADRÃO: dry_run=True não escreve nada.
   - compute_trade_score(): computa score para um trade individual (sem DB write)
 """
 
@@ -17,6 +23,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -25,13 +32,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger("scalpyn.services.decision_orchestrator")
 
-# Pesos padrão (configuráveis via config_profiles config_type='orchestrator_weights')
 DEFAULT_L1_WEIGHT = 0.60
 DEFAULT_L3_WEIGHT = 0.40
 
-# Fontes que recebem score completo (L1 + L3 se profile disponível)
 L3_ELIGIBLE_SOURCES = frozenset({"L3", "L3_LAB"})
-# Fontes que recebem apenas score L1
 L1_ONLY_SOURCES = frozenset({"L1_SPECTRUM"})
 
 
@@ -55,21 +59,38 @@ async def _load_orchestrator_weights(db: AsyncSession, user_id: str) -> Dict[str
     return {"l1_weight": DEFAULT_L1_WEIGHT, "l3_weight": DEFAULT_L3_WEIGHT}
 
 
+async def _get_active_l1_model_id(db: AsyncSession) -> Optional[str]:
+    """Retorna o id do modelo L1_SPECTRUM ativo, ou None."""
+    try:
+        row = (await db.execute(text("""
+            SELECT id::text FROM ml_models
+            WHERE model_lane = 'L1_SPECTRUM'
+              AND status = 'active'
+            ORDER BY activated_at DESC NULLS LAST, created_at DESC
+            LIMIT 1
+        """))).fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
 async def _get_profile_catboost_score(
     db: AsyncSession,
     profile_id: Optional[str],
     features: Dict[str, Any],
-) -> Optional[float]:
+) -> Optional[Dict[str, Any]]:
     """
     Carrega modelo CatBoost do profile e executa inferência.
-    Retorna None se não há modelo disponível ou inferência falha.
+
+    Retorna {"score": float, "model_id": str} ou None se modelo indisponível.
+    Usa Pool(cat_features=...) com os índices salvos no payload do modelo.
     """
     if not profile_id:
         return None
 
     try:
         row = (await db.execute(text("""
-            SELECT model_blob, decision_threshold, hyperparams
+            SELECT id::text, model_blob, decision_threshold, hyperparams
             FROM ml_models
             WHERE model_scope = 'profile'
               AND profile_id = :pid
@@ -78,12 +99,11 @@ async def _get_profile_catboost_score(
             LIMIT 1
         """), {"pid": str(profile_id)})).fetchone()
 
-        if not row or not row[0]:
+        if not row or not row[1]:
             return None
 
-        model_blob, threshold, hyperparams_raw = row
+        model_id, model_blob, threshold, hyperparams_raw = row
         hp = hyperparams_raw if isinstance(hyperparams_raw, dict) else json.loads(hyperparams_raw or "{}")
-        # Só usar modelo CatBoost nesta lane
         if "catboost" not in str(hp.get("model_type", "catboost")).lower():
             return None
 
@@ -93,13 +113,12 @@ async def _get_profile_catboost_score(
         payload = joblib.load(io.BytesIO(bytes(model_blob)))
         model = payload["model"]
         saved_cols: List[str] = payload.get("feature_columns", [])
+        cat_feature_indices: Optional[List[int]] = payload.get("metadata", {}).get("cat_feature_indices")
 
-        # Extrair features no schema do modelo salvo
         from app.ml.feature_extractor import extract_features
 
         feat_dict = extract_features(features or {})
 
-        # source_encoded e profile_id_encoded — appendados no treinamento CatBoost L3
         _SRC_ENC = {"L1_SPECTRUM": 0, "L3": 1, "L3_LAB": 2, "L3_REJECTED": 3, "L3_SIMULATED": 4}
         feat_dict["source_encoded"] = float(_SRC_ENC.get("L3", 1))
         feat_dict["profile_id_encoded"] = float(abs(hash(str(profile_id))) % 10000)
@@ -110,8 +129,14 @@ async def _get_profile_catboost_score(
         )
         X = np.nan_to_num(X, nan=0.0)
 
-        proba = float(model.predict_proba(X)[0][1])
-        return round(proba, 4)
+        if cat_feature_indices:
+            from catboost import Pool
+            pool = Pool(X, feature_names=list(saved_cols), cat_features=cat_feature_indices)
+            proba = float(model.predict_proba(pool)[0][1])
+        else:
+            proba = float(model.predict_proba(X)[0][1])
+
+        return {"score": round(proba, 4), "model_id": model_id}
 
     except Exception as exc:
         logger.warning("[Orchestrator] CatBoost inference falhou para profile=%s: %s", profile_id, exc)
@@ -127,12 +152,11 @@ def _combine_scores(
 ) -> float:
     """Combina scores L1 e L3 em final_priority_score."""
     if p_l3_profile_win is not None and source in L3_ELIGIBLE_SOURCES:
-        # Normaliza pesos para somar 1.0
         total = l1_weight + l3_weight
         w1 = l1_weight / total
         w3 = l3_weight / total
         return round(w1 * p_l1_win + w3 * p_l3_profile_win, 4)
-    return round(p_l1_win, 4)  # fallback: apenas L1
+    return round(p_l1_win, 4)
 
 
 async def compute_trade_score(
@@ -161,9 +185,11 @@ async def compute_trade_score(
     """
     weights = await _load_orchestrator_weights(db, user_id)
 
-    p_l3_win: Optional[float] = None
+    p_l3_result: Optional[Dict[str, Any]] = None
     if source in L3_ELIGIBLE_SOURCES:
-        p_l3_win = await _get_profile_catboost_score(db, profile_id, features)
+        p_l3_result = await _get_profile_catboost_score(db, profile_id, features)
+
+    p_l3_win = p_l3_result["score"] if p_l3_result else None
 
     final_score = _combine_scores(
         p_l1_win, p_l3_win,
@@ -185,15 +211,23 @@ async def backfill_orchestrator_scores(
     user_id: str,
     limit: int = 300,
     source_filter: Optional[List[str]] = None,
+    dry_run: bool = True,
+    profile_id: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Backfill de final_priority_score para shadow trades sem score.
+    Backfill de final_priority_score + orchestrator_payload para shadow trades sem score.
 
-    Busca trades com features_snapshot preenchido mas final_priority_score = NULL,
-    executa inferência XGBoost (Lane 1) + CatBoost de profile (Lane 2) se disponível,
-    e grava final_priority_score + ml_probability em batch.
+    SEGURO POR PADRÃO: dry_run=True não escreve nada no banco.
 
-    Seguro para executar repetidamente (idempotente via WHERE final_priority_score IS NULL).
+    ml_probability NÃO é sobrescrito — pertence ao modelo original da decisão.
+    Os scores orquestradores vão para orchestrator_payload JSONB + final_priority_score.
+
+    orchestrator_payload contém:
+        p_l1_win, p_l3_profile_win, reason_codes, l1_model_id, l3_model_id, weights, scored_at
+
+    Idempotente: só processa trades com final_priority_score IS NULL.
     """
     from app.ml.prediction_service import predictor
 
@@ -201,12 +235,28 @@ async def backfill_orchestrator_scores(
     source_placeholders = ", ".join(f":src_{i}" for i in range(len(sources)))
     source_params = {f"src_{i}": s for i, s in enumerate(sources)}
 
+    extra_filters: List[str] = []
+    params: Dict[str, Any] = {"uid": user_id, "lim": limit, **source_params}
+
+    if profile_id:
+        extra_filters.append("AND profile_id = :profile_id_filter::uuid")
+        params["profile_id_filter"] = profile_id
+    if from_date:
+        extra_filters.append("AND created_at >= :from_date::timestamptz")
+        params["from_date"] = from_date
+    if to_date:
+        extra_filters.append("AND created_at <= :to_date::timestamptz")
+        params["to_date"] = to_date
+
+    extra_sql = " ".join(extra_filters)
+
     rows = (await db.execute(text(f"""
         SELECT
             id::text          AS trade_id,
             source,
             profile_id::text  AS profile_id,
-            features_snapshot
+            features_snapshot,
+            symbol
         FROM shadow_trades
         WHERE user_id = :uid
           AND source IN ({source_placeholders})
@@ -214,21 +264,32 @@ async def backfill_orchestrator_scores(
           AND features_snapshot::text <> '{{}}'
           AND final_priority_score IS NULL
           AND status IN ('RUNNING', 'CLOSED', 'TP_HIT', 'SL_HIT', 'TIMEOUT')
+          {extra_sql}
         ORDER BY created_at DESC
         LIMIT :lim
-    """), {"uid": user_id, "lim": limit, **source_params})).fetchall()
+    """), params)).fetchall()
 
     if not rows:
-        return {"updated": 0, "pending": 0}
+        return {
+            "dry_run": dry_run,
+            "updated": 0,
+            "pending_found": 0,
+            "message": "Nenhum trade pendente encontrado.",
+        }
 
     weights = await _load_orchestrator_weights(db, user_id)
+    l1_model_id = await _get_active_l1_model_id(db)
+    scored_at = datetime.now(timezone.utc).isoformat()
+
+    would_update = 0
     updated = 0
     errors = 0
+    sample_results: List[Dict[str, Any]] = []
 
     for row in rows:
         trade_id = row.trade_id
         source = row.source
-        profile_id = row.profile_id
+        profile_id_val = row.profile_id
         raw_features = row.features_snapshot
         features: Dict[str, Any] = {}
         if raw_features:
@@ -241,17 +302,24 @@ async def backfill_orchestrator_scores(
                 features = raw_features
 
         try:
-            # Lane 1: XGBoost global
             pred = await predictor.predict(features, db)
             p_l1_win = pred.get("win_fast_probability")
             if p_l1_win is None:
                 errors += 1
                 continue
 
-            # Lane 2: CatBoost profile (se elegível)
-            p_l3_win: Optional[float] = None
+            p_l3_result: Optional[Dict[str, Any]] = None
+            reason_codes: List[str] = []
+            l3_model_id: Optional[str] = None
+
             if source in L3_ELIGIBLE_SOURCES:
-                p_l3_win = await _get_profile_catboost_score(db, profile_id, features)
+                p_l3_result = await _get_profile_catboost_score(db, profile_id_val, features)
+                if p_l3_result is None:
+                    reason_codes.append("L3_MODEL_UNAVAILABLE")
+                else:
+                    l3_model_id = p_l3_result.get("model_id")
+
+            p_l3_win = p_l3_result["score"] if p_l3_result else None
 
             final_score = _combine_scores(
                 p_l1_win, p_l3_win,
@@ -259,42 +327,120 @@ async def backfill_orchestrator_scores(
                 source,
             )
 
-            await db.execute(text("""
-                UPDATE shadow_trades
-                SET ml_probability       = :p_l1,
-                    final_priority_score = :fps
-                WHERE id = :sid::uuid
-            """), {
-                "p_l1": round(p_l1_win, 4),
-                "fps": final_score,
-                "sid": trade_id,
-            })
-            updated += 1
+            lane = "L1_L3_COMBINED" if p_l3_win is not None else "L1_ONLY"
+            reason_codes.append(lane)
+
+            orchestrator_payload = {
+                "p_l1_win": round(p_l1_win, 4),
+                "p_l3_profile_win": p_l3_win,
+                "final_priority_score": final_score,
+                "l1_model_id": l1_model_id,
+                "l3_model_id": l3_model_id,
+                "reason_codes": reason_codes,
+                "weights": weights,
+                "scored_at": scored_at,
+            }
+
+            entry = {
+                "trade_id": trade_id,
+                "source": source,
+                "symbol": row.symbol,
+                "p_l1_win": round(p_l1_win, 4),
+                "p_l3_profile_win": p_l3_win,
+                "final_priority_score": final_score,
+                "lane": lane,
+            }
+
+            if dry_run:
+                would_update += 1
+                if len(sample_results) < 10:
+                    sample_results.append(entry)
+            else:
+                await db.execute(text("""
+                    UPDATE shadow_trades
+                    SET final_priority_score = :fps,
+                        orchestrator_payload  = :payload::jsonb
+                    WHERE id = :sid::uuid
+                """), {
+                    "fps": final_score,
+                    "payload": json.dumps(orchestrator_payload),
+                    "sid": trade_id,
+                })
+                updated += 1
+                if len(sample_results) < 10:
+                    sample_results.append(entry)
 
         except Exception as exc:
             logger.warning("[Orchestrator] Erro no trade %s: %s", trade_id, exc)
             errors += 1
 
-    try:
-        await db.commit()
-    except Exception as e:
-        logger.error("[Orchestrator] Commit falhou: %s", e)
-        return {"updated": 0, "errors": errors, "commit_failed": True}
+    if not dry_run:
+        try:
+            await db.commit()
+        except Exception as e:
+            logger.error("[Orchestrator] Commit falhou: %s", e)
+            return {"updated": 0, "errors": errors, "commit_failed": True, "dry_run": False}
 
+        try:
+            await db.execute(text("""
+                INSERT INTO profile_intelligence_audit_log (
+                    user_id, event_type, payload_json, created_at
+                ) VALUES (
+                    :uid::uuid, 'orchestrator_backfill', :meta::jsonb, NOW()
+                )
+            """), {
+                "uid": user_id,
+                "meta": json.dumps({
+                    "updated": updated,
+                    "errors": errors,
+                    "pending_found": len(rows),
+                    "sources": sources,
+                    "weights": weights,
+                    "l1_model_id": l1_model_id,
+                    "dry_run": False,
+                }),
+            })
+            await db.commit()
+        except Exception as e:
+            logger.warning("[Orchestrator] Audit trail falhou: %s", e)
+
+    action_count = would_update if dry_run else updated
     logger.info(
-        "[Orchestrator] Backfill concluído: updated=%d errors=%d total=%d",
-        updated, errors, len(rows),
+        "[Orchestrator] Backfill %s: %s=%d errors=%d total=%d",
+        "simulado" if dry_run else "concluído",
+        "would_update" if dry_run else "updated",
+        action_count, errors, len(rows),
     )
-    return {
-        "updated": updated,
+
+    result: Dict[str, Any] = {
+        "dry_run": dry_run,
         "errors": errors,
         "pending_found": len(rows),
         "weights": weights,
+        "sample_results": sample_results,
     }
+    if dry_run:
+        result["would_update"] = would_update
+        result["message"] = (
+            f"Modo dry_run=True: {would_update} trades seriam atualizados. "
+            "Passe dry_run=False para efetivar."
+        )
+    else:
+        result["updated"] = updated
+
+    return result
 
 
 async def get_orchestrator_status(db: AsyncSession, user_id: str) -> Dict[str, Any]:
-    """Retorna métricas de cobertura do final_priority_score."""
+    """
+    Retorna métricas de cobertura + disponibilidade de modelos.
+
+    Readiness:
+      READY_FULL      — L1 e L3 ativos
+      READY_L1_ONLY   — apenas L1 ativo
+      NOT_READY       — nenhum modelo ativo
+      NO_COVERAGE     — sem shadow trades nos últimos 30 dias
+    """
     rows = (await db.execute(text("""
         SELECT
             source,
@@ -324,7 +470,66 @@ async def get_orchestrator_status(db: AsyncSession, user_id: str) -> Dict[str, A
         for r in rows
     ]
 
+    l1_model: Optional[Dict[str, Any]] = None
+    l3_model: Optional[Dict[str, Any]] = None
+
+    try:
+        row = (await db.execute(text("""
+            SELECT id::text, version, roc_auc, activated_at
+            FROM ml_models
+            WHERE model_lane = 'L1_SPECTRUM'
+              AND status = 'active'
+            ORDER BY activated_at DESC NULLS LAST, created_at DESC
+            LIMIT 1
+        """))).fetchone()
+        if row:
+            l1_model = {
+                "id": row[0],
+                "version": row[1],
+                "roc_auc": float(row[2]) if row[2] is not None else None,
+                "activated_at": row[3].isoformat() if row[3] else None,
+            }
+    except Exception as e:
+        logger.warning("[Orchestrator] Falha ao checar L1 model: %s", e)
+
+    try:
+        row = (await db.execute(text("""
+            SELECT id::text, version, roc_auc, activated_at
+            FROM ml_models
+            WHERE model_lane = 'L3_PROFILE'
+              AND status = 'active'
+            ORDER BY activated_at DESC NULLS LAST, created_at DESC
+            LIMIT 1
+        """))).fetchone()
+        if row:
+            l3_model = {
+                "id": row[0],
+                "version": row[1],
+                "roc_auc": float(row[2]) if row[2] is not None else None,
+                "activated_at": row[3].isoformat() if row[3] else None,
+            }
+    except Exception as e:
+        logger.warning("[Orchestrator] Falha ao checar L3 model: %s", e)
+
+    l1_available = l1_model is not None
+    l3_available = l3_model is not None
+    total_trades = sum(r["total"] for r in coverage)
+
+    if total_trades == 0:
+        readiness = "NO_COVERAGE"
+    elif l1_available and l3_available:
+        readiness = "READY_FULL"
+    elif l1_available:
+        readiness = "READY_L1_ONLY"
+    else:
+        readiness = "NOT_READY"
+
     return {
+        "readiness": readiness,
+        "l1_model": l1_model,
+        "l3_model": l3_model,
+        "l1_available": l1_available,
+        "l3_available": l3_available,
         "coverage": coverage,
-        "catboost_available": False,  # será True quando ml_models tiver profile CatBoost ativo
+        "total_trades_30d": total_trades,
     }
