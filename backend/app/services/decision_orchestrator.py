@@ -243,13 +243,13 @@ async def backfill_orchestrator_scores(
     if only_null_scores:
         extra_filters.append("AND final_priority_score IS NULL")
     if profile_id:
-        extra_filters.append("AND profile_id = :profile_id_filter::uuid")
+        extra_filters.append("AND profile_id = CAST(:profile_id_filter AS UUID)")
         params["profile_id_filter"] = profile_id
     if from_date:
-        extra_filters.append("AND created_at >= :from_date::timestamptz")
+        extra_filters.append("AND created_at >= CAST(:from_date AS TIMESTAMPTZ)")
         params["from_date"] = from_date
     if to_date:
-        extra_filters.append("AND created_at <= :to_date::timestamptz")
+        extra_filters.append("AND created_at <= CAST(:to_date AS TIMESTAMPTZ)")
         params["to_date"] = to_date
 
     extra_sql = " ".join(extra_filters)
@@ -369,8 +369,8 @@ async def backfill_orchestrator_scores(
                 await db.execute(text("""
                     UPDATE shadow_trades
                     SET final_priority_score = :fps,
-                        orchestrator_payload  = :payload::jsonb
-                    WHERE id = :sid::uuid
+                        orchestrator_payload  = CAST(:payload AS JSONB)
+                    WHERE id = CAST(:sid AS UUID)
                 """), {
                     "fps": final_score,
                     "payload": json.dumps(orchestrator_payload),
@@ -396,7 +396,7 @@ async def backfill_orchestrator_scores(
                 INSERT INTO profile_intelligence_audit_log (
                     user_id, event_type, payload_json, created_at
                 ) VALUES (
-                    :uid::uuid, 'orchestrator_backfill', :meta::jsonb, NOW()
+                    CAST(:uid AS UUID), 'orchestrator_backfill', CAST(:meta AS JSONB), NOW()
                 )
             """), {
                 "uid": user_id,
