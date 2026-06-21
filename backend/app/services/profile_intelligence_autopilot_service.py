@@ -45,6 +45,7 @@ from .profile_create_service import (
     _build_profile_config,
     ensure_master_scoring_rules,
 )
+from .profile_intelligence_audit_service import log_pi_event
 
 
 logger = logging.getLogger("scalpyn.services.profile_intelligence_autopilot")
@@ -1463,9 +1464,10 @@ class ProfileIntelligenceAutopilotService:
             "top_losers": [rule["evidence"] for rule in negative_requirements],
             "origin_profile_version": profile.profile_version.isoformat() if profile.profile_version else None,
         }
+        candidate_name = f"{profile.name} · Auto-Pilot v{version}"
         await self._create_candidate(
             db, user_id, cycle, settings, metrics,
-            name=f"{profile.name} · Auto-Pilot v{version}",
+            name=candidate_name,
             description=f"Clone versionado e calibrado automaticamente a partir de {profile.name}.",
             config=config,
             origin_profile_id=profile.id,
@@ -1475,6 +1477,29 @@ class ProfileIntelligenceAutopilotService:
             source_combination_id=None,
             version_number=version,
             evidence=evidence,
+        )
+        await log_pi_event(
+            db, user_id,
+            event_type="CANDIDATE_PROFILE_CREATED",
+            event_description=f"Clone shadow criado: {candidate_name}",
+            run_id=cycle.analysis_run_id,
+            profile_name=candidate_name,
+            source_run_id=cycle.analysis_run_id,
+            after_json={
+                "origin_profile_id": str(profile.id),
+                "origin_profile_name": profile.name,
+                "version": version,
+                "signals_added": len(winner_conditions),
+                "score_penalties_added": len(negative_requirements),
+                "winner_conditions": [c.get("evidence", c) for c in winner_conditions],
+                "loser_penalties": [r.get("evidence", r.get("name", "")) for r in negative_requirements],
+                "config_signals_count": len(config.get("signals", {}).get("conditions", [])),
+            },
+            diff_json={
+                "added_signals": len(winner_conditions),
+                "added_score_penalties": len(negative_requirements),
+                "origin": str(profile.id),
+            },
         )
 
     async def _create_discovered_candidates(self, db, user_id, cycle, settings, metrics):

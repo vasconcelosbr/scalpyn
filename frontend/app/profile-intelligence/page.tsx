@@ -48,6 +48,7 @@ interface PIRun {
   total_suggestions?: number;
   base_win_rate?: number | null;
   error_message?: string | null;
+  trigger_source?: string | null;
 }
 
 interface ProfileRanking {
@@ -1077,7 +1078,7 @@ export default function ProfileIntelligencePage() {
                     <table className="w-full text-[12px]">
                       <thead>
                         <tr className="border-b border-[var(--border-subtle)]">
-                          {["Data", "Status", "Lookback", "Trades", "Combinações", "Sugestões", "Win Rate", "Erro"].map(h => (
+                          {["Data", "Origem", "Status", "Lookback", "Trades", "Combinações", "Sugestões", "Win Rate", "Erro"].map(h => (
                             <th key={h} className="px-4 py-2 text-left text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap">{h}</th>
                           ))}
                         </tr>
@@ -1086,6 +1087,13 @@ export default function ProfileIntelligencePage() {
                         {runs.map(run => (
                           <tr key={run.id} className="hover:bg-[var(--bg-elevated)] transition-colors">
                             <td className="px-4 py-2.5 font-mono text-[var(--text-secondary)] whitespace-nowrap">{fmtDate(run.run_at)}</td>
+                            <td className="px-4 py-2.5">
+                              {run.trigger_source === "manual"
+                                ? <span className="badge range text-[10px]">manual</span>
+                                : run.trigger_source === "beat"
+                                  ? <span className="badge bullish text-[10px]">auto</span>
+                                  : <span className="text-[var(--text-tertiary)] text-[10px]">—</span>}
+                            </td>
                             <td className="px-4 py-2.5">{statusBadge(run.status)}</td>
                             <td className="px-4 py-2.5 text-[var(--text-secondary)]">{run.lookback_days}d</td>
                             <td className="px-4 py-2.5 text-[var(--text-primary)]">{run.total_closed_trades ?? "—"}</td>
@@ -1457,7 +1465,7 @@ export default function ProfileIntelligencePage() {
                 {indicatorSubTab === "winners" ? "Indicadores com Melhor Performance" : "Indicadores com Pior Performance"}
               </h2>
               <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">
-                {indicatorSubTab === "winners" ? "Candidatos a Signal ou Scoring Rule" : "Candidatos a Block Rule ou redução de score"}
+                {indicatorSubTab === "winners" ? "Candidatos a Signal ou Scoring Rule" : "Candidatos a Score Penalty (−10 pts) — não viram Block Rule diretamente"}
               </p>
             </div>
             {loadingTab ? <TableSkeleton /> : (
@@ -1529,7 +1537,7 @@ export default function ProfileIntelligencePage() {
                                 {stat.total_cases < 30
                                   ? <span className="badge range text-[10px]">Low Sample</span>
                                   : stat.role_detected === "losing_indicator"
-                                  ? <span className="badge bearish text-[10px]">Block Rule</span>
+                                  ? <span className="badge bearish text-[10px]">Score Penalty</span>
                                   : <span className="badge range text-[10px]">Monitor</span>}
                               </td>
                               <td className="px-4 py-2.5">

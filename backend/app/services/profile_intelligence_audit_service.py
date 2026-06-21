@@ -23,6 +23,12 @@ async def log_pi_event(
     model_name: Optional[str] = None,
     prompt_text: Optional[str] = None,
     response_text: Optional[str] = None,
+    before_json: Optional[Dict] = None,
+    after_json: Optional[Dict] = None,
+    diff_json: Optional[Dict] = None,
+    actor_user_id: Optional[UUID] = None,
+    profile_name: Optional[str] = None,
+    source_run_id: Optional[UUID] = None,
 ) -> None:
     """Insert a row into profile_intelligence_audit_log. Never raises."""
     try:
@@ -39,6 +45,12 @@ async def log_pi_event(
             model_name=model_name,
             prompt_text=prompt_text,
             response_text=response_text,
+            before_json=before_json,
+            after_json=after_json,
+            diff_json=diff_json,
+            actor_user_id=actor_user_id,
+            profile_name=profile_name,
+            source_run_id=source_run_id,
         )
         db.add(row)
         await db.flush()

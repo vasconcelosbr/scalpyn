@@ -89,11 +89,29 @@ async def get_autopilot_status(
     except Exception as e:
         logger.warning(f"[Autopilot API] Falha ao detectar regime para status: {e}")
 
+    # Load guardrails to expose dry_run_mode in the UI
+    dry_run_mode = True  # safe default: assume dry_run until proven otherwise
+    try:
+        guardrails_row = (await db.execute(text("""
+            SELECT config_json FROM config_profiles
+            WHERE user_id = :uid AND config_type = 'autopilot_guardrails'
+              AND is_active = TRUE
+            LIMIT 1
+        """), {"uid": str(user_id)})).fetchone()
+        if guardrails_row:
+            import json as _json
+            g = guardrails_row[0]
+            cfg = _json.loads(g) if isinstance(g, str) else (g or {})
+            dry_run_mode = bool(cfg.get("dry_run_mode", True))
+    except Exception as e:
+        logger.warning("[Autopilot API] Could not load guardrails for dry_run check: %s", e)
+
     return {
         "profile_id":              profile_id,
         "profile_name":            profile.name,
         "profile_role":            getattr(profile, "profile_role", None),
         "auto_pilot_enabled":      getattr(profile, "auto_pilot_enabled", False),
+        "dry_run_mode":            dry_run_mode,
         "last_mutation_at":        last_mutation_at,
         "last_regime":             ap_config.get("last_regime"),
         "current_regime":          current_regime,

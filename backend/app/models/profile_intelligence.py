@@ -35,6 +35,7 @@ class ProfileIntelligenceRun(Base):
     base_avg_pnl_pct            = Column(Numeric, nullable=True)
     base_tp_30m_rate            = Column(Numeric, nullable=True)
     status                      = Column(String(30), default="running")
+    trigger_source              = Column(String(20), nullable=True)  # 'manual', 'beat', 'api'
     engine_version              = Column(String(30), nullable=True)
     settings_json               = Column(JSONB, nullable=True)
     notes                       = Column(Text, nullable=True)

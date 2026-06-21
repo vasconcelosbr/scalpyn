@@ -258,6 +258,7 @@ async def trigger_run(
         lookback_days=payload.lookback_days,
         min_closed_trades=payload.min_closed_trades,
         status="queued",
+        trigger_source="manual",
         engine_version=ProfileIntelligenceService.ENGINE_VERSION,
         settings_json=settings_override,
     )
@@ -1423,6 +1424,7 @@ def _run_to_dict(r: ProfileIntelligenceRun) -> dict:
         "base_avg_pnl_pct": float(r.base_avg_pnl_pct or 0),
         "base_tp_30m_rate": float(r.base_tp_30m_rate or 0),
         "error_message": r.error_message,
+        "trigger_source": r.trigger_source,
         "created_at": r.created_at.isoformat() if r.created_at else None,
     }
 

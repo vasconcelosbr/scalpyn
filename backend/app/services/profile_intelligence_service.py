@@ -485,6 +485,7 @@ class ProfileIntelligenceService:
         max_combinations: int = 500,
         settings_override: Optional[dict] = None,
         run_id: Optional[UUID] = None,
+        trigger_source: Optional[str] = None,
     ) -> UUID:
         """
         Runs the full PI Engine. Returns the run_id.
@@ -519,6 +520,7 @@ class ProfileIntelligenceService:
                 lookback_days=lookback_days,
                 min_closed_trades=min_closed_trades,
                 status="running",
+                trigger_source=trigger_source,
                 engine_version=self.ENGINE_VERSION,
                 settings_json=settings_override,
             )

@@ -121,6 +121,7 @@ async def _run_pi_job():
                     include_association_rules=_PI_ENABLE_ASSOC_RULES,
                     include_optuna=_PI_ENABLE_OPTUNA,
                     include_ai_explanation=False,
+                    trigger_source="beat",
                 )
                 logger.info("[PIJob] Completed run %s for user %s", run_id, user_id)
                 from ..services.profile_intelligence_autopilot_service import (
@@ -196,6 +197,7 @@ async def _run_for_user(user_id, force_autopilot: bool = False):
                 include_association_rules=_PI_ENABLE_ASSOC_RULES,
                 include_optuna=_PI_ENABLE_OPTUNA,
                 include_ai_explanation=False,
+                trigger_source="beat",
             )
             result = await ProfileIntelligenceAutopilotService().run_cycle(
                 db=db,

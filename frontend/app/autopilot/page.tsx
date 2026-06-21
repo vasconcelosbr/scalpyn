@@ -28,6 +28,7 @@ interface AutopilotStatus {
   profile_name: string;
   profile_role: string | null;
   auto_pilot_enabled: boolean;
+  dry_run_mode: boolean;
   last_mutation_at: string | null;
   last_regime: string | null;
   last_mutation_reason: string | null;
@@ -285,11 +286,17 @@ export default function AutopilotPage() {
 
       {!loadingDetail && status && (
         <>
-          {/* Dry-run warning banner */}
-          {(runResult?.dry_run === true || auditLogs.some(l => l.action.startsWith("DRY_RUN"))) && (
-            <div className="card p-3 border border-amber-500/30 flex items-center gap-2">
-              <span className="text-amber-400 text-[11px] font-semibold uppercase tracking-wide">Modo Simulação (dry_run)</span>
-              <span className="text-[11px] text-[var(--text-secondary)]">— nenhuma config está sendo persistida. Para ativar escrita real, desative dry_run_mode nos guardrails.</span>
+          {/* Dry-run warning banner — always visible when guardrails.dry_run_mode=true */}
+          {(status.dry_run_mode === true || runResult?.dry_run === true || auditLogs.some(l => l.action.startsWith("DRY_RUN"))) && (
+            <div className="card p-3 border border-amber-500/40 bg-amber-500/5 flex items-start gap-3">
+              <span className="text-amber-400 text-[18px] leading-none">⚠</span>
+              <div>
+                <span className="text-amber-400 text-[12px] font-semibold uppercase tracking-wide">Modo Simulação Ativo (dry_run_mode = true)</span>
+                <p className="text-[11px] text-[var(--text-secondary)] mt-0.5">
+                  O Auto-Pilot está analisando mas <strong>não persiste nenhuma mudança</strong> nos profiles. Todos os ajustes são apenas simulados.
+                  Para ativar escrita real: <code className="text-amber-300 bg-black/30 px-1 rounded text-[10px]">UPDATE config_profiles SET config_json = config_json || '{`{"dry_run_mode": false}`}'::jsonb WHERE config_type = 'autopilot_guardrails'</code>
+                </p>
+              </div>
             </div>
           )}
           {/* Status cards */}
