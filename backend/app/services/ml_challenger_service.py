@@ -25,7 +25,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-logger = logging.getLogger("scalpyn.services.ml_challenger")
+logger = logging.getLogger(__name__)
 
 _TRAINER_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ml_challenger")
 

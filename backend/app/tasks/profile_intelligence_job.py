@@ -16,7 +16,7 @@ import os
 
 from .celery_app import celery_app
 
-logger = logging.getLogger("scalpyn.tasks.profile_intelligence_job")
+logger = logging.getLogger(__name__)
 
 _LOCK_TTL_S = int(os.environ.get("PROFILE_INTELLIGENCE_LOCK_TTL_S", "7200"))
 _PI_ENABLE_OPTUNA = os.environ.get("PI_ENABLE_OPTUNA", "false").lower() == "true"

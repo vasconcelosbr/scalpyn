@@ -301,9 +301,14 @@ async def trigger_run(
                 except Exception:
                     pass
             if run_ok:
-                from ..tasks.profile_intelligence_job import _run_ml_challengers_if_enabled
-                async with AsyncSessionLocal() as ml_db:
-                    await _run_ml_challengers_if_enabled(ml_db, user_id)
+                logger.info("[PI API] run %s completed — starting ML challenger training", run_id)
+                try:
+                    from ..tasks.profile_intelligence_job import _run_ml_challengers_if_enabled
+                    async with AsyncSessionLocal() as ml_db:
+                        await _run_ml_challengers_if_enabled(ml_db, user_id)
+                    logger.info("[PI API] ML challenger training finished for run %s", run_id)
+                except Exception as ml_exc:
+                    logger.error("[PI API] ML challenger training failed for run %s: %s", run_id, ml_exc)
 
     background_tasks.add_task(_run_background)
 
