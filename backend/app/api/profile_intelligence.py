@@ -302,7 +302,8 @@ async def trigger_run(
                     pass
             if run_ok:
                 from ..tasks.profile_intelligence_job import _run_ml_challengers_if_enabled
-                await _run_ml_challengers_if_enabled(bg_db, user_id)
+                async with AsyncSessionLocal() as ml_db:
+                    await _run_ml_challengers_if_enabled(ml_db, user_id)
 
     background_tasks.add_task(_run_background)
 
