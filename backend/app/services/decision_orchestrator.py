@@ -215,6 +215,7 @@ async def backfill_orchestrator_scores(
     profile_id: Optional[str] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    only_null_scores: bool = True,
 ) -> Dict[str, Any]:
     """
     Backfill de final_priority_score + orchestrator_payload para shadow trades sem score.
@@ -227,7 +228,8 @@ async def backfill_orchestrator_scores(
     orchestrator_payload contém:
         p_l1_win, p_l3_profile_win, reason_codes, l1_model_id, l3_model_id, weights, scored_at
 
-    Idempotente: só processa trades com final_priority_score IS NULL.
+    only_null_scores=True (default): processa apenas trades com final_priority_score IS NULL.
+    only_null_scores=False: permite re-score de trades já pontuados (use com cautela).
     """
     from app.ml.prediction_service import predictor
 
@@ -238,6 +240,8 @@ async def backfill_orchestrator_scores(
     extra_filters: List[str] = []
     params: Dict[str, Any] = {"uid": user_id, "lim": limit, **source_params}
 
+    if only_null_scores:
+        extra_filters.append("AND final_priority_score IS NULL")
     if profile_id:
         extra_filters.append("AND profile_id = :profile_id_filter::uuid")
         params["profile_id_filter"] = profile_id
@@ -262,7 +266,6 @@ async def backfill_orchestrator_scores(
           AND source IN ({source_placeholders})
           AND features_snapshot IS NOT NULL
           AND features_snapshot::text <> '{{}}'
-          AND final_priority_score IS NULL
           AND status IN ('RUNNING', 'CLOSED', 'TP_HIT', 'SL_HIT', 'TIMEOUT')
           {extra_sql}
         ORDER BY created_at DESC
@@ -284,6 +287,7 @@ async def backfill_orchestrator_scores(
     would_update = 0
     updated = 0
     errors = 0
+    l1_unavailable_count = 0
     sample_results: List[Dict[str, Any]] = []
 
     for row in rows:
@@ -302,14 +306,20 @@ async def backfill_orchestrator_scores(
                 features = raw_features
 
         try:
+            reason_codes: List[str] = []
             pred = await predictor.predict(features, db)
             p_l1_win = pred.get("win_fast_probability")
             if p_l1_win is None:
+                reason_codes.append("L1_MODEL_UNAVAILABLE")
+                l1_unavailable_count += 1
                 errors += 1
+                logger.warning(
+                    "[Orchestrator] L1_MODEL_UNAVAILABLE trade=%s source=%s reason_codes=%s",
+                    trade_id, source, reason_codes,
+                )
                 continue
 
             p_l3_result: Optional[Dict[str, Any]] = None
-            reason_codes: List[str] = []
             l3_model_id: Optional[str] = None
 
             if source in L3_ELIGIBLE_SOURCES:
@@ -393,6 +403,7 @@ async def backfill_orchestrator_scores(
                 "meta": json.dumps({
                     "updated": updated,
                     "errors": errors,
+                    "l1_unavailable_count": l1_unavailable_count,
                     "pending_found": len(rows),
                     "sources": sources,
                     "weights": weights,
@@ -415,6 +426,7 @@ async def backfill_orchestrator_scores(
     result: Dict[str, Any] = {
         "dry_run": dry_run,
         "errors": errors,
+        "l1_unavailable_count": l1_unavailable_count,
         "pending_found": len(rows),
         "weights": weights,
         "sample_results": sample_results,

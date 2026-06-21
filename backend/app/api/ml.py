@@ -477,6 +477,7 @@ class OrchestratorBackfillRequest(BaseModel):
     profile_id: Optional[str] = None
     from_date: Optional[str] = None
     to_date: Optional[str] = None
+    only_null_scores: bool = True
 
 
 @router.post("/orchestrator/backfill")
@@ -506,6 +507,7 @@ async def orchestrator_backfill(
             profile_id=request.profile_id,
             from_date=request.from_date,
             to_date=request.to_date,
+            only_null_scores=request.only_null_scores,
         )
         return {"status": "success", **result}
     except Exception as exc:
