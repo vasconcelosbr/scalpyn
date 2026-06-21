@@ -35,9 +35,12 @@ VAL_FRACTION = float(__import__("os").getenv("ML_CHALLENGER_VAL_FRACTION", "0.20
 N_TRIALS_LGBM = int(__import__("os").getenv("ML_CHALLENGER_N_TRIALS_LGBM", "30"))
 N_TRIALS_CB = int(__import__("os").getenv("ML_CHALLENGER_N_TRIALS_CB", "20"))
 
-# Sources to include in challenger training — must match the champion's training scope.
-# Lab/simulated/rejected sources are excluded to prevent signal dilution.
-TRAIN_SOURCES: List[str] = ["L3", "L1_SPECTRUM"]
+# Lane 1 (XGBoost challenger): global opportunity signal, no profile bias.
+LGBM_TRAIN_SOURCES: List[str] = ["L1_SPECTRUM"]
+# Lane 2 (CatBoost validator): profile-scoped decisions only.
+CATBOOST_TRAIN_SOURCES: List[str] = ["L3", "L3_LAB"]
+# Backwards-compat alias — callers that pass source_filter still work.
+TRAIN_SOURCES: List[str] = LGBM_TRAIN_SOURCES  # was ["L3", "L1_SPECTRUM"] — deprecated
 
 
 def _is_installed(package: str) -> bool:
@@ -276,6 +279,15 @@ class MLChallengerService:
         )
         return [dict(r._mapping) for r in rows]
 
+    # Ordinal encoding for shadow trade source (stable across versions)
+    _SOURCE_ENCODING: Dict[str, int] = {
+        "L1_SPECTRUM": 0,
+        "L3": 1,
+        "L3_LAB": 2,
+        "L3_REJECTED": 3,
+        "L3_SIMULATED": 4,
+    }
+
     def _build_dataset(
         self,
         records: List[Dict[str, Any]],
@@ -303,6 +315,60 @@ class MLChallengerService:
 
         return X, y, available
 
+    def _build_l3_dataset(
+        self,
+        records: List[Dict[str, Any]],
+        feature_columns: List[str],
+        win_fast_threshold_s: float = 1800.0,
+    ):
+        """Constrói dataset L3 para CatBoost com features categóricas adicionais.
+
+        Appends source_encoded (ordinal) e profile_id_encoded (hash) como
+        features numéricas extras ao final do vector — CatBoost usa internamente
+        para splitting por profile. As colunas categóricas ficam APÓS as base
+        features para não perturbar o índice do modelo L1.
+        """
+        import numpy as np
+        from app.ml.feature_extractor import build_training_dataframe
+
+        # Pre-filter para alinhar com o que build_training_dataframe vai manter.
+        # build_training_dataframe faz `continue` em pnl_pct is None; mantendo
+        # a mesma filtragem aqui garantimos que zip(valid, df.iterrows) é válido.
+        valid_records = [r for r in records if r.get("pnl_pct") is not None]
+
+        df = build_training_dataframe(
+            valid_records,
+            fee_roundtrip_pct=0.0,
+            label_net_of_fees=False,
+            win_fast_threshold_s=win_fast_threshold_s,
+        )
+
+        available = [c for c in feature_columns if c in df.columns]
+        X_base = df[available].fillna(0.0).values.astype(float)
+
+        if "is_win_fast" in df.columns:
+            y = df["is_win_fast"].values.astype(int)
+        elif "label" in df.columns:
+            y = df["label"].values.astype(int)
+        else:
+            y = np.zeros(len(df), dtype=int)
+
+        # Categorical encoding — dois scalars por row
+        source_enc = np.array(
+            [self._SOURCE_ENCODING.get(r.get("source", "L3"), 1) for r in valid_records],
+            dtype=float,
+        )
+        profile_enc = np.array(
+            [abs(hash(str(r.get("profile_id") or ""))) % 10000 for r in valid_records],
+            dtype=float,
+        )
+
+        # Stack: base features + source_encoded + profile_id_encoded
+        X = np.column_stack([X_base, source_enc, profile_enc])
+        all_feature_names = available + ["source_encoded", "profile_id_encoded"]
+
+        return X, y, all_feature_names
+
     def _chronological_split(self, X, y, val_fraction: float = 0.20):
         n = len(y)
         split = max(1, int(n * (1.0 - val_fraction)))
@@ -324,6 +390,7 @@ class MLChallengerService:
         threshold: float,
         profile_id: Optional[UUID],
         user_id: UUID,
+        model_lane: Optional[str] = None,
     ) -> UUID:
         """Serializa e salva em ml_models + ml_model_registry. Retorna model_id."""
         import joblib as _joblib
@@ -353,6 +420,10 @@ class MLChallengerService:
         n_train = metrics.get("train_samples", 0)
         n_val = metrics.get("val_samples", 0)
 
+        # Infere lane a partir do model_type se não fornecida explicitamente
+        if model_lane is None:
+            model_lane = "L3_PROFILE" if model_type == "catboost" else "L1_SPECTRUM"
+
         # Armazena em ml_models (storage BYTEA canônico)
         await db.execute(text("""
             INSERT INTO ml_models (
@@ -361,14 +432,16 @@ class MLChallengerService:
                 f1_score, roc_auc,
                 model_path, decision_threshold,
                 notes, model_blob,
-                model_scope, profile_id
+                model_scope, profile_id,
+                label_version, model_lane
             ) VALUES (
                 :id, :version, 'candidate',
                 :hyperparams::jsonb, :n_train, :n_val,
                 :f1, :roc_auc,
                 :model_path, :threshold,
                 :notes, :blob,
-                :scope, :pid::uuid
+                :scope, :pid::uuid,
+                :label_version, :model_lane
             )
         """), {
             "id": str(model_uuid),
@@ -381,10 +454,12 @@ class MLChallengerService:
             "model_path": f"db://ml_models/{model_type}_v{version}",
             "threshold": threshold,
             "notes": (
-                f"Challenger {model_type} | user_id={user_id} | "
+                f"Challenger {model_type} | lane={model_lane} | user_id={user_id} | "
                 f"roc_auc={roc_auc:.4f} | v{version} | trained_by=MLChallengerService"
             ),
             "blob": model_blob,
+            "label_version": "is_win_fast_v1",
+            "model_lane": model_lane,
             "scope": "profile" if profile_id else "global",
             "pid": str(profile_id) if profile_id else None,
         })
@@ -436,22 +511,23 @@ class MLChallengerService:
         n_trials_cb: int = N_TRIALS_CB,
         profile_id: Optional[UUID] = None,
         source_filter: Optional[List[str]] = None,
+        lgbm_source_filter: Optional[List[str]] = None,
+        catboost_source_filter: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Treina challengers habilitados e registra no banco.
-        Retorna dict com resultados por tipo de modelo.
+
+        Arquitetura 2-lanes:
+          - LightGBM (Lane 1): L1_SPECTRUM — global opportunity filter
+          - CatBoost  (Lane 2): L3 + L3_LAB — profile validator com categóricas
+
+        Parâmetros:
+            lgbm_source_filter: override para fontes do LightGBM (default: LGBM_TRAIN_SOURCES)
+            catboost_source_filter: override para fontes do CatBoost (default: CATBOOST_TRAIN_SOURCES)
+            source_filter: override legacy (aplicado a ambos se lgbm/catboost não fornecidos)
         """
         if not enable_lightgbm and not enable_catboost:
             return {"skipped": "no_challengers_enabled"}
-
-        # Carrega dados filtrados pelas mesmas fontes do champion
-        records = await self._load_shadow_data(db, user_id, lookback_days, source_filter)
-        if len(records) < MIN_RECORDS:
-            logger.info(
-                "[MLChallenger] Dados insuficientes (%d < %d) para user=%s — pulando",
-                len(records), MIN_RECORDS, user_id,
-            )
-            return {"skipped": f"insufficient_data", "records": len(records), "min_required": MIN_RECORDS}
 
         try:
             from app.ml.feature_extractor import FEATURE_COLUMNS as _FC
@@ -460,93 +536,134 @@ class MLChallengerService:
             logger.warning("[MLChallenger] feature_extractor não disponível")
             return {"skipped": "feature_extractor_unavailable"}
 
-        try:
-            X, y, available_cols = self._build_dataset(records, feature_columns)
-        except Exception as exc:
-            logger.exception("[MLChallenger] build_dataset falhou: %s", exc)
-            return {"skipped": "build_dataset_failed", "error": str(exc)}
-
-        if len(y) < MIN_RECORDS:
-            return {"skipped": "insufficient_labeled_data", "records": len(y)}
-
-        X_train, y_train, X_val, y_val = self._chronological_split(X, y, VAL_FRACTION)
-        if len(y_val) < 10:
-            return {"skipped": "val_set_too_small", "val_size": len(y_val)}
-
-        results: Dict[str, Any] = {
-            "records_total": len(records),
-            "train_samples": len(y_train),
-            "val_samples": len(y_val),
-            "feature_count": len(available_cols),
-        }
+        results: Dict[str, Any] = {}
         loop = asyncio.get_event_loop()
 
-        # LightGBM
+        # ── Lane 1: LightGBM em L1_SPECTRUM ─────────────────────────────────────
         if enable_lightgbm:
-            if _is_installed("lightgbm"):
+            lgbm_sources = lgbm_source_filter or (source_filter if source_filter else LGBM_TRAIN_SOURCES)
+            lgbm_records = await self._load_shadow_data(db, user_id, lookback_days, lgbm_sources)
+            logger.info(
+                "[MLChallenger] Lane1/LightGBM: sources=%s records=%d", lgbm_sources, len(lgbm_records),
+            )
+            if len(lgbm_records) < MIN_RECORDS:
+                results["lightgbm"] = {
+                    "status": "skipped",
+                    "reason": "insufficient_data",
+                    "records": len(lgbm_records),
+                    "min_required": MIN_RECORDS,
+                    "sources": lgbm_sources,
+                }
+            elif _is_installed("lightgbm"):
                 try:
-                    logger.info("[MLChallenger] Treinando LightGBM (n_train=%d n_trials=%d)", len(y_train), n_trials_lgbm)
-                    lgbm_result = await loop.run_in_executor(
-                        _TRAINER_POOL,
-                        _train_lgbm_sync,
-                        X_train, y_train, X_val, y_val, n_trials_lgbm,
-                    )
-                    model_id = await self._save_to_db(
-                        db, user_id=user_id,
-                        model_type="lightgbm",
-                        model_obj=lgbm_result["model"],
-                        feature_columns=available_cols,
-                        metrics=lgbm_result["metrics"],
-                        threshold=lgbm_result["threshold"],
-                        profile_id=profile_id,
-                    )
-                    await db.commit()
-                    results["lightgbm"] = {
-                        "status": "trained",
-                        "model_id": str(model_id),
-                        "metrics": lgbm_result["metrics"],
-                        "threshold": lgbm_result["threshold"],
-                    }
-                    logger.info(
-                        "[MLChallenger] LightGBM OK: roc_auc=%.4f model_id=%s",
-                        lgbm_result["metrics"]["roc_auc"], model_id,
-                    )
+                    X, y, available_cols = self._build_dataset(lgbm_records, feature_columns)
+                    if len(y) < MIN_RECORDS:
+                        results["lightgbm"] = {"status": "skipped", "reason": "insufficient_labeled"}
+                    else:
+                        X_tr, y_tr, X_va, y_va = self._chronological_split(X, y, VAL_FRACTION)
+                        if len(y_va) < 10:
+                            results["lightgbm"] = {"status": "skipped", "reason": "val_too_small"}
+                        else:
+                            logger.info(
+                                "[MLChallenger] Treinando LightGBM (n_train=%d n_trials=%d)",
+                                len(y_tr), n_trials_lgbm,
+                            )
+                            lgbm_result = await loop.run_in_executor(
+                                _TRAINER_POOL,
+                                _train_lgbm_sync,
+                                X_tr, y_tr, X_va, y_va, n_trials_lgbm,
+                            )
+                            model_id = await self._save_to_db(
+                                db, user_id=user_id,
+                                model_type="lightgbm",
+                                model_obj=lgbm_result["model"],
+                                feature_columns=available_cols,
+                                metrics={**lgbm_result["metrics"], "train_sources": lgbm_sources},
+                                threshold=lgbm_result["threshold"],
+                                profile_id=profile_id,
+                                model_lane="L1_SPECTRUM",
+                            )
+                            await db.commit()
+                            results["lightgbm"] = {
+                                "status": "trained",
+                                "model_id": str(model_id),
+                                "lane": "L1_SPECTRUM",
+                                "sources": lgbm_sources,
+                                "metrics": lgbm_result["metrics"],
+                                "threshold": lgbm_result["threshold"],
+                            }
+                            logger.info(
+                                "[MLChallenger] LightGBM OK: roc_auc=%.4f model_id=%s",
+                                lgbm_result["metrics"]["roc_auc"], model_id,
+                            )
                 except Exception as exc:
                     logger.exception("[MLChallenger] LightGBM falhou: %s", exc)
                     results["lightgbm"] = {"status": "failed", "error": str(exc)}
             else:
                 results["lightgbm"] = {"status": "not_installed"}
 
-        # CatBoost
+        # ── Lane 2: CatBoost em L3 + L3_LAB com features categóricas ────────────
         if enable_catboost:
-            if _is_installed("catboost"):
+            cb_sources = catboost_source_filter or (source_filter if source_filter else CATBOOST_TRAIN_SOURCES)
+            cb_records = await self._load_shadow_data(db, user_id, lookback_days, cb_sources)
+            logger.info(
+                "[MLChallenger] Lane2/CatBoost: sources=%s records=%d", cb_sources, len(cb_records),
+            )
+            if len(cb_records) < MIN_RECORDS:
+                results["catboost"] = {
+                    "status": "skipped",
+                    "reason": "insufficient_data",
+                    "records": len(cb_records),
+                    "min_required": MIN_RECORDS,
+                    "sources": cb_sources,
+                }
+            elif _is_installed("catboost"):
                 try:
-                    logger.info("[MLChallenger] Treinando CatBoost (n_train=%d n_trials=%d)", len(y_train), n_trials_cb)
-                    cb_result = await loop.run_in_executor(
-                        _TRAINER_POOL,
-                        _train_catboost_sync,
-                        X_train, y_train, X_val, y_val, available_cols, n_trials_cb,
-                    )
-                    model_id = await self._save_to_db(
-                        db, user_id=user_id,
-                        model_type="catboost",
-                        model_obj=cb_result["model"],
-                        feature_columns=available_cols,
-                        metrics=cb_result["metrics"],
-                        threshold=cb_result["threshold"],
-                        profile_id=profile_id,
-                    )
-                    await db.commit()
-                    results["catboost"] = {
-                        "status": "trained",
-                        "model_id": str(model_id),
-                        "metrics": cb_result["metrics"],
-                        "threshold": cb_result["threshold"],
-                    }
-                    logger.info(
-                        "[MLChallenger] CatBoost OK: roc_auc=%.4f model_id=%s",
-                        cb_result["metrics"]["roc_auc"], model_id,
-                    )
+                    X, y, all_cols = self._build_l3_dataset(cb_records, feature_columns)
+                    if len(y) < MIN_RECORDS:
+                        results["catboost"] = {"status": "skipped", "reason": "insufficient_labeled"}
+                    else:
+                        X_tr, y_tr, X_va, y_va = self._chronological_split(X, y, VAL_FRACTION)
+                        if len(y_va) < 10:
+                            results["catboost"] = {"status": "skipped", "reason": "val_too_small"}
+                        else:
+                            logger.info(
+                                "[MLChallenger] Treinando CatBoost (n_train=%d n_trials=%d features=%d)",
+                                len(y_tr), n_trials_cb, len(all_cols),
+                            )
+                            cb_result = await loop.run_in_executor(
+                                _TRAINER_POOL,
+                                _train_catboost_sync,
+                                X_tr, y_tr, X_va, y_va, all_cols, n_trials_cb,
+                            )
+                            model_id = await self._save_to_db(
+                                db, user_id=user_id,
+                                model_type="catboost",
+                                model_obj=cb_result["model"],
+                                feature_columns=all_cols,
+                                metrics={
+                                    **cb_result["metrics"],
+                                    "train_sources": cb_sources,
+                                    "cat_features": ["source_encoded", "profile_id_encoded"],
+                                },
+                                threshold=cb_result["threshold"],
+                                profile_id=profile_id,
+                                model_lane="L3_PROFILE",
+                            )
+                            await db.commit()
+                            results["catboost"] = {
+                                "status": "trained",
+                                "model_id": str(model_id),
+                                "lane": "L3_PROFILE",
+                                "sources": cb_sources,
+                                "metrics": cb_result["metrics"],
+                                "threshold": cb_result["threshold"],
+                                "cat_features": ["source_encoded", "profile_id_encoded"],
+                            }
+                            logger.info(
+                                "[MLChallenger] CatBoost OK: roc_auc=%.4f model_id=%s",
+                                cb_result["metrics"]["roc_auc"], model_id,
+                            )
                 except Exception as exc:
                     logger.exception("[MLChallenger] CatBoost falhou: %s", exc)
                     results["catboost"] = {"status": "failed", "error": str(exc)}

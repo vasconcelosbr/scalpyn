@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 revision = "100_pi_run_trigger_source"
-down_revision = "099_autopilot_audit_enrichment"
+down_revision = "100_pi_audit_log_enrichment"
 branch_labels = None
 depends_on = None
 
