@@ -47,7 +47,7 @@ def _is_installed(package: str) -> bool:
     try:
         __import__(package)
         return True
-    except ImportError:
+    except (ImportError, OSError):
         return False
 
 
