@@ -16,7 +16,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "102_shadow_trades_orchestrator_payload"
+revision = "102_shadow_orch_payload"
 down_revision = "101_ml_models_contract"
 branch_labels = None
 depends_on = None
