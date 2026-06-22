@@ -168,20 +168,24 @@ def _train_catboost_sync(
     import optuna
     from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
 
+    import pandas as pd
+
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-    # cat_feature_indices: colunas de source_encoded e profile_id_encoded.
-    # Pool com cat_features ativa o encoding interno CatBoost (ordered target statistics)
-    # em vez de tratar os IDs como scalars contínuos.
-    # Valores inteiros são válidos — CatBoost converte internamente para string-category.
-    train_pool = Pool(
-        X_train, label=y_train, feature_names=list(feature_names),
-        cat_features=cat_feature_indices,
-    )
-    val_pool = Pool(
-        X_val, label=y_val, feature_names=list(feature_names),
-        cat_features=cat_feature_indices,
-    )
+    def _make_pool(X, y):
+        if cat_feature_indices:
+            # CatBoost rejects float numpy arrays with cat_features — use a
+            # DataFrame with categorical columns converted to string so CatBoost
+            # can apply its ordered target statistics encoding.
+            df = pd.DataFrame(X, columns=list(feature_names))
+            cat_names = [list(feature_names)[i] for i in cat_feature_indices]
+            for name in cat_names:
+                df[name] = df[name].astype(int).astype(str)
+            return Pool(df, label=y, cat_features=cat_names)
+        return Pool(X, label=y, feature_names=list(feature_names))
+
+    train_pool = _make_pool(X_train, y_train)
+    val_pool = _make_pool(X_val, y_val)
 
     def objective(trial: optuna.Trial) -> float:
         params = {
@@ -321,8 +325,10 @@ class MLChallengerService:
 
         if "label" in df.columns:
             y = df["label"].values.astype(int)
+        elif "is_win_fast" in df.columns:
+            y = df["is_win_fast"].values.astype(int)
         else:
-            y = (df["outcome"] == "TP_HIT").astype(int).values
+            y = np.zeros(len(df), dtype=int)
 
         return X, y, available
 
