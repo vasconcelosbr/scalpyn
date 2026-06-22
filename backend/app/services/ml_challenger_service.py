@@ -13,6 +13,7 @@ Integração com o PI Engine:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import logging
@@ -41,6 +42,24 @@ LGBM_TRAIN_SOURCES: List[str] = ["L1_SPECTRUM"]
 CATBOOST_TRAIN_SOURCES: List[str] = ["L3", "L3_LAB"]
 # Backwards-compat alias — callers that pass source_filter still work.
 TRAIN_SOURCES: List[str] = LGBM_TRAIN_SOURCES  # was ["L3", "L1_SPECTRUM"] — deprecated
+
+
+_PROFILE_NULL_BUCKET = 9999  # reserved bucket for NULL profile_id
+
+
+def _stable_profile_bucket(profile_id: Optional[str]) -> int:
+    """Deterministic, PYTHONHASHSEED-independent bucket for profile_id (0-9998).
+
+    Python's built-in hash() is randomised per-process (PYTHONHASHSEED).
+    Using it for CatBoost categorical encoding causes train/serve mismatch
+    across worker restarts — the same profile_id would land in a different
+    bucket at inference time. hashlib.md5 is deterministic and process-stable.
+
+    NULL profile_id → _PROFILE_NULL_BUCKET (9999), never overlaps with hashed range.
+    """
+    if not profile_id:
+        return _PROFILE_NULL_BUCKET
+    return int(hashlib.md5(profile_id.encode()).hexdigest()[:8], 16) % 9999
 
 
 def _is_installed(package: str) -> bool:
@@ -85,6 +104,7 @@ def get_challenger_status() -> Dict[str, Any]:
 def _train_lgbm_sync(
     X_train, y_train, X_val, y_val,
     n_trials: int = 30,
+    X_test=None, y_test=None,
 ) -> Dict[str, Any]:
     import lightgbm as lgb
     import numpy as np
@@ -144,6 +164,23 @@ def _train_lgbm_sync(
     fp = int(((binary_preds == 1) & (np.asarray(y_val) == 0)).sum())
     fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
 
+    test_metrics: Dict[str, Any] = {}
+    if X_test is not None and y_test is not None and len(y_test) >= 5:
+        t_preds = final_model.predict(X_test)
+        t_bin = (t_preds >= threshold).astype(int)
+        t_tn = int(((t_bin == 0) & (np.asarray(y_test) == 0)).sum())
+        t_fp = int(((t_bin == 1) & (np.asarray(y_test) == 0)).sum())
+        test_metrics = {
+            "roc_auc": float(roc_auc_score(y_test, t_preds)),
+            "pr_auc": float(average_precision_score(y_test, t_preds)),
+            "f1": float(f1_score(y_test, t_bin, zero_division=0)),
+            "precision": float(precision_score(y_test, t_bin, zero_division=0)),
+            "recall": float(recall_score(y_test, t_bin, zero_division=0)),
+            "fpr": t_fp / (t_fp + t_tn) if (t_fp + t_tn) > 0 else 0.0,
+            "samples": int(len(y_test)),
+            "positive_rate": float(np.asarray(y_test).mean()),
+        }
+
     return {
         "model": final_model,
         "model_type": "lightgbm",
@@ -162,6 +199,7 @@ def _train_lgbm_sync(
             "train_samples": int(len(y_train)),
             "positive_rate": float(y_val.mean()) if hasattr(y_val, "mean") else 0.0,
         },
+        "test_metrics": test_metrics,
         "threshold": threshold,
     }
 
@@ -171,6 +209,7 @@ def _train_catboost_sync(
     feature_names: List[str],
     n_trials: int = 20,
     cat_feature_indices: Optional[List[int]] = None,
+    X_test=None, y_test=None,
 ) -> Dict[str, Any]:
     from catboost import CatBoostClassifier, Pool
     import numpy as np
@@ -239,6 +278,24 @@ def _train_catboost_sync(
     fp = int(((binary_preds == 1) & (np.asarray(y_val) == 0)).sum())
     fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
 
+    test_metrics: Dict[str, Any] = {}
+    if X_test is not None and y_test is not None and len(y_test) >= 5:
+        test_pool = _make_pool(X_test, y_test)
+        t_preds = final_model.predict_proba(test_pool)[:, 1]
+        t_bin = (t_preds >= threshold).astype(int)
+        t_tn = int(((t_bin == 0) & (np.asarray(y_test) == 0)).sum())
+        t_fp = int(((t_bin == 1) & (np.asarray(y_test) == 0)).sum())
+        test_metrics = {
+            "roc_auc": float(roc_auc_score(y_test, t_preds)),
+            "pr_auc": float(average_precision_score(y_test, t_preds)),
+            "f1": float(f1_score(y_test, t_bin, zero_division=0)),
+            "precision": float(precision_score(y_test, t_bin, zero_division=0)),
+            "recall": float(recall_score(y_test, t_bin, zero_division=0)),
+            "fpr": t_fp / (t_fp + t_tn) if (t_fp + t_tn) > 0 else 0.0,
+            "samples": int(len(y_test)),
+            "positive_rate": float(np.asarray(y_test).mean()),
+        }
+
     return {
         "model": final_model,
         "model_type": "catboost",
@@ -257,6 +314,7 @@ def _train_catboost_sync(
             "train_samples": int(len(y_train)),
             "positive_rate": float(y_val.mean()) if hasattr(y_val, "mean") else 0.0,
         },
+        "test_metrics": test_metrics,
         "threshold": threshold,
     }
 
@@ -387,13 +445,15 @@ class MLChallengerService:
         else:
             y = np.zeros(len(df), dtype=int)
 
-        # Categorical encoding — dois scalars por row
+        # Categorical encoding — dois scalars por row.
+        # profile_id_encoded usa _stable_profile_bucket (hashlib.md5, determinístico)
+        # em vez de hash() (PYTHONHASHSEED-randomised). NULL profile_id → bucket 9999.
         source_enc = np.array(
             [self._SOURCE_ENCODING.get(r.get("source", "L3"), 1) for r in valid_records],
             dtype=float,
         )
         profile_enc = np.array(
-            [abs(hash(str(r.get("profile_id") or ""))) % 10000 for r in valid_records],
+            [_stable_profile_bucket(r.get("profile_id")) for r in valid_records],
             dtype=float,
         )
 
@@ -413,6 +473,32 @@ class MLChallengerService:
         split = max(1, int(n * (1.0 - val_fraction)))
         return X[:split], y[:split], X[split:], y[split:]
 
+    def _chronological_split_with_test(
+        self, X, y, val_fraction: float = 0.20, test_fraction: float = 0.20
+    ):
+        """60/20/20 temporal split. Test set is the most-recent slice, never seen
+        during Optuna hyper-param optimisation — provides unbiased evaluation.
+
+        Returns (X_train, y_train, X_val, y_val, X_test, y_test).
+        If the dataset is too small to populate all three sets with at least
+        MIN_SET_SIZE samples, falls back to an empty test set rather than
+        crashing. Optuna always sees only X_val.
+        """
+        MIN_SET_SIZE = 5
+        n = len(y)
+        train_end = max(1, int(n * (1.0 - val_fraction - test_fraction)))
+        val_end = max(train_end + MIN_SET_SIZE, int(n * (1.0 - test_fraction)))
+        val_end = min(val_end, n - MIN_SET_SIZE)
+        if val_end <= train_end or n - val_end < MIN_SET_SIZE:
+            # Not enough data for test — degrade gracefully to no test split
+            split = max(1, int(n * (1.0 - val_fraction)))
+            return X[:split], y[:split], X[split:], y[split:], None, None
+        return (
+            X[:train_end], y[:train_end],
+            X[train_end:val_end], y[train_end:val_end],
+            X[val_end:], y[val_end:],
+        )
+
     async def _next_version(self, db: AsyncSession) -> str:
         row = (await db.execute(
             text("SELECT COALESCE(MAX(version::integer), 0) + 1 FROM ml_models")
@@ -431,6 +517,7 @@ class MLChallengerService:
         user_id: UUID,
         model_lane: Optional[str] = None,
         cat_feature_indices: Optional[List[int]] = None,
+        test_metrics: Optional[Dict[str, Any]] = None,
     ) -> UUID:
         """Serializa e salva em ml_models + ml_model_registry. Retorna model_id."""
         import joblib as _joblib
@@ -460,27 +547,39 @@ class MLChallengerService:
         f1 = metrics.get("f1", 0.0)
         precision = metrics.get("precision", None)
         recall = metrics.get("recall", None)
+        fpr = metrics.get("fpr", None)
         n_train = metrics.get("train_samples", 0)
         n_val = metrics.get("val_samples", 0)
+        n_test = (test_metrics or {}).get("samples", 0)
+        # Full hyperparams blob: val metrics + test metrics side-by-side
+        hyperparams_full = {**metrics}
+        if test_metrics:
+            hyperparams_full["test_metrics"] = test_metrics
 
         # Infere lane a partir do model_type se não fornecida explicitamente
         if model_lane is None:
             model_lane = "L3_PROFILE" if model_type == "catboost" else "L1_SPECTRUM"
 
+        test_roc = (test_metrics or {}).get("roc_auc")
+        test_prec = (test_metrics or {}).get("precision")
+        test_rec = (test_metrics or {}).get("recall")
+
         # Armazena em ml_models (storage BYTEA canônico)
         await db.execute(text("""
             INSERT INTO ml_models (
                 id, version, status,
-                hyperparams, train_samples, val_samples,
-                f1_score, roc_auc, precision_score, recall_score,
+                hyperparams, train_samples, val_samples, test_samples,
+                f1_score, roc_auc, precision_score, recall_score, false_positive_rate,
+                feature_columns_json, feature_count,
                 model_path, decision_threshold,
                 notes, model_blob,
                 model_scope, profile_id,
                 label_version, model_lane
             ) VALUES (
                 :id, :version, 'candidate',
-                :hyperparams, :n_train, :n_val,
-                :f1, :roc_auc, :precision, :recall,
+                :hyperparams, :n_train, :n_val, :n_test,
+                :f1, :roc_auc, :precision, :recall, :fpr,
+                :feature_columns_json, :feature_count,
                 :model_path, :threshold,
                 :notes, :blob,
                 :scope, :pid,
@@ -489,19 +588,27 @@ class MLChallengerService:
         """), {
             "id": str(model_uuid),
             "version": version,
-            "hyperparams": json.dumps(metrics),
+            "hyperparams": json.dumps(hyperparams_full),
             "n_train": n_train,
             "n_val": n_val,
+            "n_test": n_test or None,
             "f1": f1,
             "roc_auc": roc_auc,
             "precision": precision,
             "recall": recall,
+            "fpr": fpr,
+            "feature_columns_json": json.dumps(feature_columns),
+            "feature_count": len(feature_columns),
             "model_path": f"db://ml_models/{model_type}_v{version}",
             "threshold": threshold,
             "notes": (
                 f"Challenger {model_type} | lane={model_lane} | user_id={user_id} | "
                 f"roc_auc={roc_auc:.4f} | prec={precision:.4f if precision is not None else 'N/A'} | "
-                f"rec={recall:.4f if recall is not None else 'N/A'} | v{version} | trained_by=MLChallengerService"
+                f"rec={recall:.4f if recall is not None else 'N/A'} | fpr={fpr:.4f if fpr is not None else 'N/A'} | "
+                f"test_roc={test_roc:.4f if test_roc is not None else 'N/A'} | "
+                f"test_prec={test_prec:.4f if test_prec is not None else 'N/A'} | "
+                f"test_rec={test_rec:.4f if test_rec is not None else 'N/A'} | "
+                f"n_test={n_test} | v{version} | trained_by=MLChallengerService"
             ),
             "blob": model_blob,
             "label_version": "is_win_fast_v1",
@@ -605,17 +712,17 @@ class MLChallengerService:
                     if len(y) < MIN_RECORDS:
                         results["lightgbm"] = {"status": "skipped", "reason": "insufficient_labeled"}
                     else:
-                        X_tr, y_tr, X_va, y_va = self._chronological_split(X, y, VAL_FRACTION)
+                        X_tr, y_tr, X_va, y_va, X_te, y_te = self._chronological_split_with_test(X, y, VAL_FRACTION)
                         if len(y_va) < 10:
                             results["lightgbm"] = {"status": "skipped", "reason": "val_too_small"}
                         else:
                             logger.info(
-                                "[MLChallenger] Treinando LightGBM (n_train=%d n_trials=%d)",
-                                len(y_tr), n_trials_lgbm,
+                                "[MLChallenger] Treinando LightGBM (n_train=%d n_val=%d n_test=%d n_trials=%d)",
+                                len(y_tr), len(y_va), len(y_te) if y_te is not None else 0, n_trials_lgbm,
                             )
                             lgbm_result = await asyncio.to_thread(
                                 _train_lgbm_sync,
-                                X_tr, y_tr, X_va, y_va, n_trials_lgbm,
+                                X_tr, y_tr, X_va, y_va, n_trials_lgbm, X_te, y_te,
                             )
                             model_id = await self._save_to_db(
                                 db, user_id=user_id,
@@ -626,6 +733,7 @@ class MLChallengerService:
                                 threshold=lgbm_result["threshold"],
                                 profile_id=profile_id,
                                 model_lane="L1_SPECTRUM",
+                                test_metrics=lgbm_result.get("test_metrics"),
                             )
                             await db.commit()
                             results["lightgbm"] = {
@@ -634,11 +742,15 @@ class MLChallengerService:
                                 "lane": "L1_SPECTRUM",
                                 "sources": lgbm_sources,
                                 "metrics": lgbm_result["metrics"],
+                                "test_metrics": lgbm_result.get("test_metrics"),
                                 "threshold": lgbm_result["threshold"],
                             }
                             logger.info(
-                                "[MLChallenger] LightGBM OK: roc_auc=%.4f model_id=%s",
-                                lgbm_result["metrics"]["roc_auc"], model_id,
+                                "[MLChallenger] LightGBM OK: roc_auc=%.4f prec=%.4f rec=%.4f model_id=%s",
+                                lgbm_result["metrics"]["roc_auc"],
+                                lgbm_result["metrics"].get("precision", 0),
+                                lgbm_result["metrics"].get("recall", 0),
+                                model_id,
                             )
                 except Exception as exc:
                     logger.exception("[MLChallenger] LightGBM falhou: %s", exc)
@@ -667,17 +779,18 @@ class MLChallengerService:
                     if len(y) < MIN_RECORDS:
                         results["catboost"] = {"status": "skipped", "reason": "insufficient_labeled"}
                     else:
-                        X_tr, y_tr, X_va, y_va = self._chronological_split(X, y, VAL_FRACTION)
+                        X_tr, y_tr, X_va, y_va, X_te, y_te = self._chronological_split_with_test(X, y, VAL_FRACTION)
                         if len(y_va) < 10:
                             results["catboost"] = {"status": "skipped", "reason": "val_too_small"}
                         else:
                             logger.info(
-                                "[MLChallenger] Treinando CatBoost (n_train=%d n_trials=%d features=%d cat=%s)",
-                                len(y_tr), n_trials_cb, len(all_cols), cat_indices,
+                                "[MLChallenger] Treinando CatBoost (n_train=%d n_val=%d n_test=%d n_trials=%d features=%d cat=%s)",
+                                len(y_tr), len(y_va), len(y_te) if y_te is not None else 0,
+                                n_trials_cb, len(all_cols), cat_indices,
                             )
                             cb_result = await asyncio.to_thread(
                                 _train_catboost_sync,
-                                X_tr, y_tr, X_va, y_va, all_cols, n_trials_cb, cat_indices,
+                                X_tr, y_tr, X_va, y_va, all_cols, n_trials_cb, cat_indices, X_te, y_te,
                             )
                             model_id = await self._save_to_db(
                                 db, user_id=user_id,
@@ -693,6 +806,7 @@ class MLChallengerService:
                                 profile_id=profile_id,
                                 model_lane="L3_PROFILE",
                                 cat_feature_indices=cat_indices,
+                                test_metrics=cb_result.get("test_metrics"),
                             )
                             await db.commit()
                             results["catboost"] = {
@@ -701,12 +815,16 @@ class MLChallengerService:
                                 "lane": "L3_PROFILE",
                                 "sources": cb_sources,
                                 "metrics": cb_result["metrics"],
+                                "test_metrics": cb_result.get("test_metrics"),
                                 "threshold": cb_result["threshold"],
                                 "cat_features": ["source_encoded", "profile_id_encoded"],
                             }
                             logger.info(
-                                "[MLChallenger] CatBoost OK: roc_auc=%.4f model_id=%s",
-                                cb_result["metrics"]["roc_auc"], model_id,
+                                "[MLChallenger] CatBoost OK: roc_auc=%.4f prec=%.4f rec=%.4f model_id=%s",
+                                cb_result["metrics"]["roc_auc"],
+                                cb_result["metrics"].get("precision", 0),
+                                cb_result["metrics"].get("recall", 0),
+                                model_id,
                             )
                 except Exception as exc:
                     logger.exception("[MLChallenger] CatBoost falhou: %s", exc)

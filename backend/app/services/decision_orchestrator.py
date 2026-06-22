@@ -119,9 +119,10 @@ async def _get_profile_catboost_score(
 
         feat_dict = extract_features(features or {})
 
+        from app.services.ml_challenger_service import _stable_profile_bucket
         _SRC_ENC = {"L1_SPECTRUM": 0, "L3": 1, "L3_LAB": 2, "L3_REJECTED": 3, "L3_SIMULATED": 4}
         feat_dict["source_encoded"] = float(_SRC_ENC.get("L3", 1))
-        feat_dict["profile_id_encoded"] = float(abs(hash(str(profile_id))) % 10000)
+        feat_dict["profile_id_encoded"] = float(_stable_profile_bucket(str(profile_id) if profile_id else None))
 
         X = np.array(
             [[feat_dict.get(c, 0.0) for c in saved_cols]],
