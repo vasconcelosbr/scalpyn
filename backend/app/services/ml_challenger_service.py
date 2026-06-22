@@ -104,6 +104,7 @@ def _train_lgbm_sync(
             "metric": "auc",
             "verbosity": -1,
             "boosting_type": "gbdt",
+            "feature_pre_filter": False,
             "n_estimators": trial.suggest_int("n_estimators", 100, 600),
             "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
             "num_leaves": trial.suggest_int("num_leaves", 15, 127),
@@ -460,11 +461,11 @@ class MLChallengerService:
                 label_version, model_lane
             ) VALUES (
                 :id, :version, 'candidate',
-                :hyperparams::jsonb, :n_train, :n_val,
+                :hyperparams, :n_train, :n_val,
                 :f1, :roc_auc,
                 :model_path, :threshold,
                 :notes, :blob,
-                :scope, :pid::uuid,
+                :scope, :pid,
                 :label_version, :model_lane
             )
         """), {
@@ -502,9 +503,9 @@ class MLChallengerService:
             ) VALUES (
                 :mid, :mid,
                 :model_type, :version,
-                :pid::uuid, NULL,
+                :pid, NULL,
                 'win_fast', 'all',
-                :metrics::jsonb, :threshold,
+                :metrics, :threshold,
                 'candidate',
                 :now, :now
             )
