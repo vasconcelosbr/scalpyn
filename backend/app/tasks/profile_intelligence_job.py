@@ -217,12 +217,25 @@ def run_for_user(self, user_id: str, force_autopilot: bool = False):
 
 
 async def _run_ml_challengers_only(user_id):
-    """Train LightGBM/CatBoost for a user — no PI analysis, no autopilot, no lock."""
+    """Train LightGBM/CatBoost for a user — no PI analysis, no autopilot, no lock.
+
+    Uses NullPool so connections are never reused across event loop boundaries,
+    which avoids the asyncpg 'Event loop is closed' error when this task runs
+    after a compute_structural_5m task on the same ForkPoolWorker process.
+    """
     from uuid import UUID
-    from ..database import AsyncSessionLocal
+    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import NullPool
+    from ..config import settings
     uid = UUID(str(user_id))
-    async with AsyncSessionLocal() as db:
-        await _run_ml_challengers_if_enabled(db, uid)
+    engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with factory() as db:
+            await _run_ml_challengers_if_enabled(db, uid)
+    finally:
+        await engine.dispose()
 
 
 @celery_app.task(name="app.tasks.profile_intelligence_job.train_ml_challengers_for_user", bind=True)
