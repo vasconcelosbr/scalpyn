@@ -18,7 +18,7 @@ import json
 import logging
 import math
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
@@ -281,9 +281,9 @@ class MLChallengerService:
               AND pnl_pct IS NOT NULL
               AND features_snapshot IS NOT NULL
               AND features_snapshot::text <> '{{}}'
-              AND created_at >= NOW() - CAST(:days AS interval)
+              AND created_at >= :cutoff
             ORDER BY created_at ASC
-        """), {"uid": str(user_id), "days": f"{lookback_days} days", **source_params})).fetchall()
+        """), {"uid": str(user_id), "cutoff": datetime.now(timezone.utc) - timedelta(days=lookback_days), **source_params})).fetchall()
         logger.info(
             "[MLChallenger] _load_shadow_data: sources=%s rows=%d user=%s",
             sources, len(rows), user_id,
