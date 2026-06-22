@@ -89,7 +89,7 @@ def _train_lgbm_sync(
     import lightgbm as lgb
     import numpy as np
     import optuna
-    from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
+    from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, precision_score, recall_score
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -135,9 +135,14 @@ def _train_lgbm_sync(
     val_preds = final_model.predict(X_val)
     roc_auc = float(roc_auc_score(y_val, val_preds))
     pr_auc = float(average_precision_score(y_val, val_preds))
-    binary_preds = (val_preds >= 0.5).astype(int)
-    f1 = float(f1_score(y_val, binary_preds, zero_division=0))
     threshold = float(np.median(val_preds))
+    binary_preds = (val_preds >= threshold).astype(int)
+    f1 = float(f1_score(y_val, binary_preds, zero_division=0))
+    prec = float(precision_score(y_val, binary_preds, zero_division=0))
+    rec = float(recall_score(y_val, binary_preds, zero_division=0))
+    tn = int(((binary_preds == 0) & (np.asarray(y_val) == 0)).sum())
+    fp = int(((binary_preds == 1) & (np.asarray(y_val) == 0)).sum())
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
 
     return {
         "model": final_model,
@@ -147,6 +152,9 @@ def _train_lgbm_sync(
             "roc_auc": roc_auc,
             "pr_auc": pr_auc,
             "f1": f1,
+            "precision": prec,
+            "recall": rec,
+            "fpr": fpr,
             "n_trials": n_trials,
             "best_trial_number": study.best_trial.number,
             "best_trial_value": study.best_trial.value,
@@ -167,7 +175,7 @@ def _train_catboost_sync(
     from catboost import CatBoostClassifier, Pool
     import numpy as np
     import optuna
-    from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
+    from sklearn.metrics import roc_auc_score, average_precision_score, f1_score, precision_score, recall_score
 
     import pandas as pd
 
@@ -222,9 +230,14 @@ def _train_catboost_sync(
     val_preds = final_model.predict_proba(val_pool)[:, 1]
     roc_auc = float(roc_auc_score(y_val, val_preds))
     pr_auc = float(average_precision_score(y_val, val_preds))
-    binary_preds = (val_preds >= 0.5).astype(int)
-    f1 = float(f1_score(y_val, binary_preds, zero_division=0))
     threshold = float(np.median(val_preds))
+    binary_preds = (val_preds >= threshold).astype(int)
+    f1 = float(f1_score(y_val, binary_preds, zero_division=0))
+    prec = float(precision_score(y_val, binary_preds, zero_division=0))
+    rec = float(recall_score(y_val, binary_preds, zero_division=0))
+    tn = int(((binary_preds == 0) & (np.asarray(y_val) == 0)).sum())
+    fp = int(((binary_preds == 1) & (np.asarray(y_val) == 0)).sum())
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
 
     return {
         "model": final_model,
@@ -234,6 +247,9 @@ def _train_catboost_sync(
             "roc_auc": roc_auc,
             "pr_auc": pr_auc,
             "f1": f1,
+            "precision": prec,
+            "recall": rec,
+            "fpr": fpr,
             "n_trials": n_trials,
             "best_trial_number": study.best_trial.number,
             "best_trial_value": study.best_trial.value,
@@ -442,6 +458,8 @@ class MLChallengerService:
 
         roc_auc = metrics.get("roc_auc", 0.0)
         f1 = metrics.get("f1", 0.0)
+        precision = metrics.get("precision", None)
+        recall = metrics.get("recall", None)
         n_train = metrics.get("train_samples", 0)
         n_val = metrics.get("val_samples", 0)
 
@@ -454,7 +472,7 @@ class MLChallengerService:
             INSERT INTO ml_models (
                 id, version, status,
                 hyperparams, train_samples, val_samples,
-                f1_score, roc_auc,
+                f1_score, roc_auc, precision_score, recall_score,
                 model_path, decision_threshold,
                 notes, model_blob,
                 model_scope, profile_id,
@@ -462,7 +480,7 @@ class MLChallengerService:
             ) VALUES (
                 :id, :version, 'candidate',
                 :hyperparams, :n_train, :n_val,
-                :f1, :roc_auc,
+                :f1, :roc_auc, :precision, :recall,
                 :model_path, :threshold,
                 :notes, :blob,
                 :scope, :pid,
@@ -476,11 +494,14 @@ class MLChallengerService:
             "n_val": n_val,
             "f1": f1,
             "roc_auc": roc_auc,
+            "precision": precision,
+            "recall": recall,
             "model_path": f"db://ml_models/{model_type}_v{version}",
             "threshold": threshold,
             "notes": (
                 f"Challenger {model_type} | lane={model_lane} | user_id={user_id} | "
-                f"roc_auc={roc_auc:.4f} | v{version} | trained_by=MLChallengerService"
+                f"roc_auc={roc_auc:.4f} | prec={precision:.4f if precision is not None else 'N/A'} | "
+                f"rec={recall:.4f if recall is not None else 'N/A'} | v{version} | trained_by=MLChallengerService"
             ),
             "blob": model_blob,
             "label_version": "is_win_fast_v1",

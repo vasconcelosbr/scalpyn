@@ -722,6 +722,49 @@ class ProfileCreateService:
 
         pi_audit_id = pi_audit.id
 
+        # ── 12b. Granular audit events (signal / scoring / block) ─────────────
+        signals = profile_config.get("signals", {}).get("conditions", [])
+        scoring_rules = profile_config.get("scoring", [])
+        block_rules = profile_config.get("block_rules", {}).get("blocks", [])
+
+        for sig in signals:
+            db.add(ProfileIntelligenceAuditLog(
+                user_id=user_id,
+                run_id=suggestion.run_id,
+                suggestion_id=suggestion_id,
+                combination_id=suggestion.source_combination_id,
+                event_type="SIGNAL_INSERTED",
+                event_description=f"Sinal inserido no perfil '{final_name}': {sig.get('indicator', sig.get('type', '?'))}",
+                profile_name=final_name,
+                payload_json={"profile_id": str(profile_id), "signal": sig},
+            ))
+
+        for rule in scoring_rules:
+            db.add(ProfileIntelligenceAuditLog(
+                user_id=user_id,
+                run_id=suggestion.run_id,
+                suggestion_id=suggestion_id,
+                combination_id=suggestion.source_combination_id,
+                event_type="SCORING_RULE_INSERTED",
+                event_description=f"Regra de scoring inserida no perfil '{final_name}': {rule.get('indicator', rule.get('type', '?'))}",
+                profile_name=final_name,
+                payload_json={"profile_id": str(profile_id), "rule": rule},
+            ))
+
+        for block in block_rules:
+            db.add(ProfileIntelligenceAuditLog(
+                user_id=user_id,
+                run_id=suggestion.run_id,
+                suggestion_id=suggestion_id,
+                combination_id=suggestion.source_combination_id,
+                event_type="BLOCK_RULE_INSERTED",
+                event_description=f"Regra de bloqueio inserida no perfil '{final_name}': {block.get('indicator', block.get('type', '?'))}",
+                profile_name=final_name,
+                payload_json={"profile_id": str(profile_id), "block": block},
+            ))
+
+        await db.flush()
+
         # ── 13. Update suggestion status ──────────────────────────────────────
         suggestion.status = "applied"
         suggestion.created_profile_id = profile_id

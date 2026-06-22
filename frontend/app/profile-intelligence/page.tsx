@@ -468,6 +468,12 @@ export default function ProfileIntelligencePage() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [settings, setSettings] = useState<PISettings>({});
+  const [mlChallengers, setMlChallengers] = useState<Record<string, {
+    available: boolean; implemented: boolean; installed: boolean;
+    operational: boolean; status: string; effective_contribution: number;
+    can_train: boolean; can_infer: boolean; can_generate_suggestions: boolean;
+    influences_autopilot: boolean;
+  }> | null>(null);
   const [autopilot, setAutopilot] = useState<AutopilotStatus | null>(null);
   const [autopilotCandidates, setAutopilotCandidates] = useState<AutopilotCandidate[]>([]);
   const [autopilotAudit, setAutopilotAudit] = useState<any[]>([]);
@@ -593,6 +599,7 @@ export default function ProfileIntelligencePage() {
       } else if (tab === "Settings") {
         const d = await apiGet("/profile-intelligence/settings");
         setSettings(d?.settings || d || {});
+        if (d?.ml_challengers) setMlChallengers(d.ml_challengers);
       }
     } catch (e) {
       console.error(e);
@@ -1883,34 +1890,65 @@ export default function ProfileIntelligencePage() {
                 ))}
 
                 <div className="grid grid-cols-1 gap-3 pt-2">
-                  {["LightGBM", "CatBoost"].map(model => (
-                    <div
-                      key={model}
-                      className="rounded-lg border border-yellow-500/25 bg-yellow-500/5 p-3"
-                      title="Este recurso ainda não possui implementação backend. Não treina, não infere, não gera sugestões e não influencia o Auto-Pilot."
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-[13px] font-medium text-[var(--text-primary)]">{model}</div>
-                          <div className="text-[11px] text-yellow-400">Status: Não implementado</div>
+                  {(["lightgbm", "catboost"] as const).map(key => {
+                    const label = key === "lightgbm" ? "LightGBM" : "CatBoost";
+                    const ch = mlChallengers?.[key];
+                    const isOp = ch?.operational === true;
+                    const statusText = ch == null
+                      ? "Verificando…"
+                      : isOp
+                      ? "Operacional"
+                      : ch.installed
+                      ? "Instalado — sem modelo ativo"
+                      : "Pacote não instalado";
+                    const borderCls = isOp
+                      ? "border-emerald-500/30 bg-emerald-500/5"
+                      : "border-yellow-500/25 bg-yellow-500/5";
+                    const statusColor = isOp ? "text-emerald-400" : "text-yellow-400";
+                    const flagKey = key === "lightgbm" ? "enable_lightgbm" : "enable_catboost";
+                    const enabled = !!(settings as any)[flagKey];
+                    const caps: [string, boolean][] = ch ? [
+                      ["Treina", ch.can_train],
+                      ["Infere", ch.can_infer],
+                      ["Sugestões", ch.can_generate_suggestions],
+                      ["Auto-Pilot", ch.influences_autopilot],
+                    ] : [];
+                    return (
+                      <div key={key} className={`rounded-lg border ${borderCls} p-3`}>
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-[13px] font-medium text-[var(--text-primary)]">{label}</div>
+                            <div className={`text-[11px] ${statusColor}`}>Status: {statusText}</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSettings(s => ({ ...s, [flagKey]: !(s as any)[flagKey] }))}
+                            aria-label={`${label} ${enabled ? "habilitado" : "desabilitado"}`}
+                            className={`relative w-11 h-6 rounded-full transition-colors ${enabled ? "bg-[var(--accent-primary)]" : "bg-[var(--bg-hover)]"} border border-[var(--border-strong)]`}
+                          >
+                            <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-5" : "translate-x-0"}`} />
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          disabled
-                          aria-label={`${model} não implementado`}
-                          className="relative w-11 h-6 rounded-full bg-[var(--bg-hover)] border border-[var(--border-strong)] opacity-50 cursor-not-allowed"
-                        >
-                          <span className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white/70 shadow" />
-                        </button>
+                        {isOp && caps.length > 0 ? (
+                          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+                            {caps.map(([lbl, val]) => (
+                              <span key={lbl} className={`text-[10px] ${val ? "text-emerald-400" : "text-[var(--text-tertiary)]"}`}>
+                                {val ? "✓" : "○"} {lbl}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="mt-2 text-[11px] text-[var(--text-tertiary)]">
+                            {ch == null
+                              ? "Carregando status do backend…"
+                              : !ch.installed
+                              ? "Instale o pacote para habilitar."
+                              : "Configure o model registry para ativar."}
+                          </div>
+                        )}
                       </div>
-                      <div className="mt-2 text-[11px] text-[var(--text-tertiary)]">
-                        Contribuição atual: zero. Não treina, não executa inferência, não gera sugestões e não influencia o Auto-Pilot.
-                      </div>
-                      <div className="mt-1 text-[10px] text-[var(--text-tertiary)]">
-                        Desabilitado até backend, trainer, predictor e model registry serem implementados.
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 

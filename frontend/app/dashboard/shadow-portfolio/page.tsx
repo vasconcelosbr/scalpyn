@@ -2030,27 +2030,27 @@ function ProfileReportTable({
                 : row.pnl_avg_pct < 0
                 ? C.red
                 : C.muted;
-            const isWaiting = row.total === 0;
+            const noTrades = row.total === 0;
             return (
               <tr
                 key={row.profile_id}
-                style={{ background: i % 2 === 0 ? "transparent" : `${C.elevated}66`, opacity: isWaiting ? 0.65 : 1 }}
+                style={{ background: i % 2 === 0 ? "transparent" : `${C.elevated}66`, opacity: noTrades ? 0.65 : 1 }}
               >
                 <td style={tdStyle}>{row.profile_name}</td>
                 <td style={{ ...tdStyle, color: C.muted }}>
                   {watchlistNames[row.profile_id] ?? "—"}
                 </td>
                 <td style={{ ...tdStyle, textAlign: "right" }}>
-                  {isWaiting ? (
-                    <span style={{ fontSize: 10, color: C.amber }}>Aguardando</span>
+                  {noTrades ? (
+                    <span title="Nenhum shadow trade registrado ainda para este perfil" style={{ fontSize: 10, color: C.muted, cursor: "default" }}>Sem trades</span>
                   ) : row.total}
                 </td>
-                <td style={{ ...tdStyle, textAlign: "right" }}>{isWaiting ? "—" : row.open_count}</td>
+                <td style={{ ...tdStyle, textAlign: "right" }}>{noTrades ? "—" : row.open_count}</td>
                 <td style={{ ...tdStyle, textAlign: "right", color: winRateColor }}>
                   {row.win_rate !== null ? `${row.win_rate.toFixed(1)}%` : "—"}
                 </td>
                 <td style={{ ...tdStyle, textAlign: "right", color: pnlColor }}>
-                  {isWaiting ? "—" : fmtUsd(row.pnl_total_usdt)}
+                  {noTrades ? "—" : fmtUsd(row.pnl_total_usdt)}
                 </td>
                 <td style={{ ...tdStyle, textAlign: "right", color: pnlAvgColor }}>
                   {row.pnl_avg_pct !== null ? fmtPct(row.pnl_avg_pct) : "—"}
