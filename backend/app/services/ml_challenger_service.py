@@ -561,7 +561,6 @@ class MLChallengerService:
             return {"skipped": "feature_extractor_unavailable"}
 
         results: Dict[str, Any] = {}
-        loop = asyncio.get_event_loop()
 
         # ── Lane 1: LightGBM em L1_SPECTRUM ─────────────────────────────────────
         if enable_lightgbm:
@@ -592,8 +591,7 @@ class MLChallengerService:
                                 "[MLChallenger] Treinando LightGBM (n_train=%d n_trials=%d)",
                                 len(y_tr), n_trials_lgbm,
                             )
-                            lgbm_result = await loop.run_in_executor(
-                                _TRAINER_POOL,
+                            lgbm_result = await asyncio.to_thread(
                                 _train_lgbm_sync,
                                 X_tr, y_tr, X_va, y_va, n_trials_lgbm,
                             )
@@ -655,8 +653,7 @@ class MLChallengerService:
                                 "[MLChallenger] Treinando CatBoost (n_train=%d n_trials=%d features=%d cat=%s)",
                                 len(y_tr), n_trials_cb, len(all_cols), cat_indices,
                             )
-                            cb_result = await loop.run_in_executor(
-                                _TRAINER_POOL,
+                            cb_result = await asyncio.to_thread(
                                 _train_catboost_sync,
                                 X_tr, y_tr, X_va, y_va, all_cols, n_trials_cb, cat_indices,
                             )
