@@ -315,6 +315,26 @@ async def trigger_run(
     return RunResponse(run_id=str(run_id), status="queued", message="Run queued successfully")
 
 
+@router.post("/train-ml")
+async def trigger_ml_training(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """Dispatch LightGBM + CatBoost training as a Celery task on the structural_compute queue.
+
+    Requires enable_lightgbm and/or enable_catboost in the user's profile_intelligence config.
+    Bypasses the PI Redis lock — runs training only, no PI analysis.
+    """
+    try:
+        from ..tasks.profile_intelligence_job import train_ml_challengers_for_user
+        task = train_ml_challengers_for_user.delay(str(user_id))
+        logger.info("[PI API] train-ml dispatched task_id=%s user=%s", task.id, user_id)
+        return {"status": "queued", "task_id": task.id, "queue": "structural_compute"}
+    except Exception as exc:
+        logger.error("[PI API] train-ml dispatch failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Failed to dispatch ML training task: {exc}")
+
+
 @router.post("/run-with-ml")
 async def trigger_run_with_ml(
     db: AsyncSession = Depends(get_db),

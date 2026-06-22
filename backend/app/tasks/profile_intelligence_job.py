@@ -216,6 +216,21 @@ def run_for_user(self, user_id: str, force_autopilot: bool = False):
     return _run_async(_run_for_user(user_id, force_autopilot))
 
 
+async def _run_ml_challengers_only(user_id):
+    """Train LightGBM/CatBoost for a user — no PI analysis, no autopilot, no lock."""
+    from uuid import UUID
+    from ..database import AsyncSessionLocal
+    uid = UUID(str(user_id))
+    async with AsyncSessionLocal() as db:
+        await _run_ml_challengers_if_enabled(db, uid)
+
+
+@celery_app.task(name="app.tasks.profile_intelligence_job.train_ml_challengers_for_user", bind=True)
+def train_ml_challengers_for_user(self, user_id: str):
+    """Dedicated task: train LightGBM/CatBoost challengers for a user on structural_compute."""
+    return _run_async(_run_ml_challengers_only(user_id))
+
+
 async def _run_cycle_only_for_user(user_id):
     """Apenas o ciclo Auto-Pilot — sem análise PI completa."""
     from uuid import UUID

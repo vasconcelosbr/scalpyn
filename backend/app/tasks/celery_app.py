@@ -194,7 +194,9 @@ TASK_ROUTES = {
     # Structural queue: heavy analysis but no latency requirement.
     "app.tasks.profile_intelligence_job.run":       {"queue": QUEUE_STRUCTURAL},
     "app.tasks.profile_intelligence_job.run_for_user": {"queue": QUEUE_STRUCTURAL},
+    "app.tasks.profile_intelligence_job.run_cycle_for_user": {"queue": QUEUE_STRUCTURAL},
     "app.tasks.profile_intelligence_job.monitor":   {"queue": QUEUE_STRUCTURAL},
+    "app.tasks.profile_intelligence_job.train_ml_challengers_for_user": {"queue": QUEUE_STRUCTURAL_COMPUTE},
 
     # Opportunity Snapshot Evaluator — populates future_outcome on snapshots.
     # Structural queue: DB-only work (ohlcv table + shadow_trades join), no latency req.
@@ -400,6 +402,14 @@ TASK_ANNOTATIONS = {
         "queue": "structural",
         "time_limit": 3600,
         "soft_time_limit": 3540,
+        "max_retries": 0,
+        **_NO_REQUEUE_ON_WORKER_LOSS,
+    },
+    # Dedicated ML training task: runs on structural_compute (idle worker) so
+    # it never competes with pipeline scans on the structural queue.
+    "app.tasks.profile_intelligence_job.train_ml_challengers_for_user": {
+        "time_limit": 1800,
+        "soft_time_limit": 1740,
         "max_retries": 0,
         **_NO_REQUEUE_ON_WORKER_LOSS,
     },
