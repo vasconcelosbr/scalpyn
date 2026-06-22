@@ -375,10 +375,24 @@ async def list_ml_models(
     """))
     models = []
     for r in rows.mappings():
+        # A model is operationally incomplete if it lacks precision/recall/test metrics
+        # or a feature contract. Mark it as ranking_shadow_only to prevent
+        # unintended promotion to live gating.
+        is_incomplete = (
+            r["status"] == "active"
+            and (
+                r["precision_score"] is None
+                or r["recall_score"] is None
+                or r["test_samples"] is None
+                or r["feature_columns_json"] is None
+            )
+        )
+        governance_warning = "ranking_shadow_only" if is_incomplete else None
         models.append({
             "id":                   str(r["id"]),
             "version":              r["version"],
             "status":               r["status"],
+            "governance_warning":   governance_warning,
             "hyperparams":          r["hyperparams"],
             "train_samples":        r["train_samples"],
             "val_samples":          r["val_samples"],

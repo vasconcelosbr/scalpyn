@@ -337,11 +337,13 @@ class MLChallengerService:
         user_id: UUID,
         lookback_days: int,
         source_filter: Optional[List[str]] = None,
+        require_profile_id: bool = False,
     ) -> List[Dict[str, Any]]:
         sources = source_filter if source_filter is not None else TRAIN_SOURCES
         # Build per-source placeholders to avoid any injection risk
         source_placeholders = ", ".join(f":src_{i}" for i in range(len(sources)))
         source_params = {f"src_{i}": s for i, s in enumerate(sources)}
+        profile_clause = "AND profile_id IS NOT NULL" if require_profile_id else ""
         rows = (await db.execute(text(f"""
             SELECT
                 id::text          AS shadow_id,
@@ -361,13 +363,35 @@ class MLChallengerService:
               AND features_snapshot IS NOT NULL
               AND features_snapshot::text <> '{{}}'
               AND created_at >= :cutoff
+              {profile_clause}
             ORDER BY created_at ASC
         """), {"uid": str(user_id), "cutoff": datetime.now(timezone.utc) - timedelta(days=lookback_days), **source_params})).fetchall()
         logger.info(
-            "[MLChallenger] _load_shadow_data: sources=%s rows=%d user=%s",
-            sources, len(rows), user_id,
+            "[MLChallenger] _load_shadow_data: sources=%s rows=%d require_profile_id=%s user=%s",
+            sources, len(rows), require_profile_id, user_id,
         )
         return [dict(r._mapping) for r in rows]
+
+    @staticmethod
+    def _l3_strict_meta(
+        all_records: List[Dict[str, Any]],
+        strict_records: List[Dict[str, Any]],
+        sources: List[str],
+    ) -> Dict[str, Any]:
+        """Audit metadata for the L3_PROFILE_STRICT dataset policy."""
+        excluded = len(all_records) - len(strict_records)
+        distinct = len({r["profile_id"] for r in strict_records if r.get("profile_id")})
+        unknown = sum(1 for r in strict_records if not r.get("profile_id"))
+        src_breakdown = {s: sum(1 for r in strict_records if r.get("source") == s) for s in sources}
+        return {
+            "dataset_policy": "L3_PROFILE_STRICT",
+            "included_trade_count": len(strict_records),
+            "excluded_null_profile_id": excluded,
+            "unknown_profile_count": unknown,
+            "unknown_profile_pct": round(100.0 * unknown / max(len(strict_records), 1), 2),
+            "distinct_profiles": distinct,
+            "source_breakdown": src_breakdown,
+        }
 
     # Ordinal encoding for shadow trade source (stable across versions)
     _SOURCE_ENCODING: Dict[str, int] = {
@@ -564,6 +588,18 @@ class MLChallengerService:
         test_prec = (test_metrics or {}).get("precision")
         test_rec = (test_metrics or {}).get("recall")
 
+        # Compute stable feature contract identifiers
+        try:
+            from app.ml.feature_extractor import (
+                feature_columns_hash as _fc_hash,
+                FEATURE_SCHEMA_VERSION as _FSV,
+            )
+            fc_hash = _fc_hash(feature_columns)
+            fc_schema_ver = _FSV
+        except Exception:
+            fc_hash = None
+            fc_schema_ver = None
+
         # Armazena em ml_models (storage BYTEA canônico)
         await db.execute(text("""
             INSERT INTO ml_models (
@@ -571,6 +607,7 @@ class MLChallengerService:
                 hyperparams, train_samples, val_samples, test_samples,
                 f1_score, roc_auc, precision_score, recall_score, false_positive_rate,
                 feature_columns_json, feature_count,
+                feature_columns_hash, feature_schema_version,
                 model_path, decision_threshold,
                 notes, model_blob,
                 model_scope, profile_id,
@@ -580,6 +617,7 @@ class MLChallengerService:
                 :hyperparams, :n_train, :n_val, :n_test,
                 :f1, :roc_auc, :precision, :recall, :fpr,
                 :feature_columns_json, :feature_count,
+                :feature_columns_hash, :feature_schema_version,
                 :model_path, :threshold,
                 :notes, :blob,
                 :scope, :pid,
@@ -599,6 +637,8 @@ class MLChallengerService:
             "fpr": fpr,
             "feature_columns_json": json.dumps(feature_columns),
             "feature_count": len(feature_columns),
+            "feature_columns_hash": fc_hash,
+            "feature_schema_version": fc_schema_ver,
             "model_path": f"db://ml_models/{model_type}_v{version}",
             "threshold": threshold,
             "notes": (
@@ -761,9 +801,19 @@ class MLChallengerService:
         # ── Lane 2: CatBoost em L3 + L3_LAB com features categóricas ────────────
         if enable_catboost:
             cb_sources = catboost_source_filter or (source_filter if source_filter else CATBOOST_TRAIN_SOURCES)
-            cb_records = await self._load_shadow_data(db, user_id, lookback_days, cb_sources)
+            # L3_PROFILE_STRICT policy: load all records first for metadata, then filter.
+            # L3 has 66%+ NULL profile_id — training without filter produces a "global/unknown"
+            # model, defeating the purpose of the L3_PROFILE lane.
+            cb_all_records = await self._load_shadow_data(db, user_id, lookback_days, cb_sources)
+            cb_records = [r for r in cb_all_records if r.get("profile_id")]
+            l3_meta = self._l3_strict_meta(cb_all_records, cb_records, cb_sources)
             logger.info(
-                "[MLChallenger] Lane2/CatBoost: sources=%s records=%d", cb_sources, len(cb_records),
+                "[MLChallenger] Lane2/CatBoost: sources=%s all=%d strict=%d excluded_null=%d "
+                "distinct_profiles=%d unknown_pct=%.1f%%",
+                cb_sources, len(cb_all_records), len(cb_records),
+                l3_meta["excluded_null_profile_id"],
+                l3_meta["distinct_profiles"],
+                l3_meta["unknown_profile_pct"],
             )
             if len(cb_records) < MIN_RECORDS:
                 results["catboost"] = {
@@ -772,6 +822,7 @@ class MLChallengerService:
                     "records": len(cb_records),
                     "min_required": MIN_RECORDS,
                     "sources": cb_sources,
+                    "l3_strict_meta": l3_meta,
                 }
             elif _is_installed("catboost"):
                 try:
@@ -801,6 +852,7 @@ class MLChallengerService:
                                     **cb_result["metrics"],
                                     "train_sources": cb_sources,
                                     "cat_features": ["source_encoded", "profile_id_encoded"],
+                                    **l3_meta,
                                 },
                                 threshold=cb_result["threshold"],
                                 profile_id=profile_id,
@@ -818,12 +870,16 @@ class MLChallengerService:
                                 "test_metrics": cb_result.get("test_metrics"),
                                 "threshold": cb_result["threshold"],
                                 "cat_features": ["source_encoded", "profile_id_encoded"],
+                                "l3_strict_meta": l3_meta,
                             }
                             logger.info(
-                                "[MLChallenger] CatBoost OK: roc_auc=%.4f prec=%.4f rec=%.4f model_id=%s",
+                                "[MLChallenger] CatBoost OK: roc_auc=%.4f prec=%.4f rec=%.4f "
+                                "distinct_profiles=%d excluded_null=%d model_id=%s",
                                 cb_result["metrics"]["roc_auc"],
                                 cb_result["metrics"].get("precision", 0),
                                 cb_result["metrics"].get("recall", 0),
+                                l3_meta["distinct_profiles"],
+                                l3_meta["excluded_null_profile_id"],
                                 model_id,
                             )
                 except Exception as exc:

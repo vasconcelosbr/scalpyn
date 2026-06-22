@@ -131,8 +131,16 @@ async def _get_profile_catboost_score(
         X = np.nan_to_num(X, nan=0.0)
 
         if cat_feature_indices:
+            # B-NEW-1 fix: training uses astype(int).astype(str) → "2760".
+            # A float32 numpy array would give CatBoost "2760.0" — a different
+            # category hash. Build a DataFrame and convert exactly like _make_pool().
+            import pandas as pd
             from catboost import Pool
-            pool = Pool(X, feature_names=list(saved_cols), cat_features=cat_feature_indices)
+            df_inf = pd.DataFrame(X, columns=list(saved_cols))
+            cat_names = [saved_cols[i] for i in cat_feature_indices]
+            for name in cat_names:
+                df_inf[name] = df_inf[name].astype(int).astype(str)
+            pool = Pool(df_inf, feature_names=list(saved_cols), cat_features=cat_names)
             proba = float(model.predict_proba(pool)[0][1])
         else:
             proba = float(model.predict_proba(X)[0][1])
