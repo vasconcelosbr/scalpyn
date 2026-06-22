@@ -643,11 +643,13 @@ class MLChallengerService:
             "threshold": threshold,
             "notes": (
                 f"Challenger {model_type} | lane={model_lane} | user_id={user_id} | "
-                f"roc_auc={roc_auc:.4f} | prec={precision:.4f if precision is not None else 'N/A'} | "
-                f"rec={recall:.4f if recall is not None else 'N/A'} | fpr={fpr:.4f if fpr is not None else 'N/A'} | "
-                f"test_roc={test_roc:.4f if test_roc is not None else 'N/A'} | "
-                f"test_prec={test_prec:.4f if test_prec is not None else 'N/A'} | "
-                f"test_rec={test_rec:.4f if test_rec is not None else 'N/A'} | "
+                f"roc_auc={roc_auc:.4f} | "
+                f"prec={f'{precision:.4f}' if precision is not None else 'N/A'} | "
+                f"rec={f'{recall:.4f}' if recall is not None else 'N/A'} | "
+                f"fpr={f'{fpr:.4f}' if fpr is not None else 'N/A'} | "
+                f"test_roc={f'{test_roc:.4f}' if test_roc is not None else 'N/A'} | "
+                f"test_prec={f'{test_prec:.4f}' if test_prec is not None else 'N/A'} | "
+                f"test_rec={f'{test_rec:.4f}' if test_rec is not None else 'N/A'} | "
                 f"n_test={n_test} | v{version} | trained_by=MLChallengerService"
             ),
             "blob": model_blob,
