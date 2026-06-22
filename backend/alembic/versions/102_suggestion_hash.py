@@ -1,7 +1,7 @@
 """Add suggestion_hash to profile_suggestions for deduplication.
 
 Revision ID: 102_suggestion_hash
-Revises: 101_ml_models_contract
+Revises: 102_shadow_trades_orchestrator_payload
 Create Date: 2026-06-22
 
 Contexto:
@@ -15,7 +15,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "102_suggestion_hash"
-down_revision = "101_ml_models_contract"
+down_revision = "102_shadow_trades_orchestrator_payload"
 branch_labels = None
 depends_on = None
 
