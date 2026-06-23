@@ -369,7 +369,8 @@ async def list_ml_models(
             activated_at, retired_at, notes,
             feature_columns_json, feature_columns_hash,
             feature_count, feature_schema_version,
-            dataset_query_cutoff
+            dataset_query_cutoff,
+            label_version, metrics_json, target_window_seconds
         FROM ml_models
         ORDER BY version DESC
     """))
@@ -415,6 +416,9 @@ async def list_ml_models(
             "feature_count":         r["feature_count"],
             "feature_schema_version": r["feature_schema_version"],
             "dataset_query_cutoff":  r["dataset_query_cutoff"].isoformat() if r["dataset_query_cutoff"] else None,
+            "label_version":         r["label_version"],
+            "metrics_json":          r["metrics_json"],
+            "target_window_seconds": r["target_window_seconds"],
         })
     return {"models": models}
 

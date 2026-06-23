@@ -5,6 +5,8 @@ Validates:
   B-NEW-2: L3_PROFILE_STRICT exclui registros L3 com profile_id NULL.
   B-NEW-3: governance_warning=ranking_shadow_only para modelos active sem métricas.
   B-TRACE-1: _stable_profile_bucket determinístico; NULL → bucket 9999.
+  LABEL-1: label_version_for_threshold mapeia 1800→is_win_fast_v1, 14400→is_tp_4h_v1.
+  LABEL-2: build_training_dataframe rotula corretamente com threshold 14400 (is_tp_4h_v1).
 """
 
 import hashlib
@@ -324,3 +326,96 @@ class TestModelStatusOnCreation:
         assert "'candidate'" in source
         assert "status='active'" not in source
         assert '"active"' not in source.split("'candidate'")[0]  # not before the candidate value
+
+
+# ---------------------------------------------------------------------------
+# LABEL-1, LABEL-2 — is_tp_4h_v1 label engineering
+# ---------------------------------------------------------------------------
+
+class TestLabelVersionRegistry:
+    def test_1800s_maps_to_is_win_fast_v1(self):
+        from backend.app.ml.feature_extractor import label_version_for_threshold
+        assert label_version_for_threshold(1800.0) == "is_win_fast_v1"
+
+    def test_14400s_maps_to_is_tp_4h_v1(self):
+        from backend.app.ml.feature_extractor import label_version_for_threshold
+        assert label_version_for_threshold(14400.0) == "is_tp_4h_v1"
+
+    def test_unknown_threshold_uses_generic_name(self):
+        from backend.app.ml.feature_extractor import label_version_for_threshold
+        result = label_version_for_threshold(7200.0)
+        assert result == "is_win_custom_7200s"
+        assert "7200" in result
+
+    def test_registry_contains_both_production_labels(self):
+        from backend.app.ml.feature_extractor import _LABEL_THRESHOLD_REGISTRY
+        assert 1800.0 in _LABEL_THRESHOLD_REGISTRY
+        assert 14400.0 in _LABEL_THRESHOLD_REGISTRY
+
+
+class TestIsTp4hLabel:
+    """build_training_dataframe deve rotular is_win_fast=1 apenas quando
+    outcome='TP_HIT' AND holding_seconds <= threshold (14400 para is_tp_4h_v1).
+    """
+
+    def _make_record(self, outcome, holding_seconds, pnl_pct=1.5):
+        return {
+            "outcome": outcome,
+            "holding_seconds": holding_seconds,
+            "pnl_pct": pnl_pct,
+            "created_at": "2026-06-23T00:00:00Z",
+        }
+
+    def test_tp_hit_within_4h_is_positive(self):
+        from backend.app.ml.feature_extractor import build_training_dataframe
+        records = [self._make_record("TP_HIT", 3600)]  # 1h — dentro dos 4h
+        df = build_training_dataframe(records, win_fast_threshold_s=14400.0)
+        assert len(df) == 1
+        assert df["is_win_fast"].iloc[0] == 1
+
+    def test_tp_hit_at_exactly_4h_is_positive(self):
+        from backend.app.ml.feature_extractor import build_training_dataframe
+        records = [self._make_record("TP_HIT", 14400)]  # exatamente 4h
+        df = build_training_dataframe(records, win_fast_threshold_s=14400.0)
+        assert df["is_win_fast"].iloc[0] == 1
+
+    def test_tp_hit_after_4h_is_negative(self):
+        from backend.app.ml.feature_extractor import build_training_dataframe
+        records = [self._make_record("TP_HIT", 14401)]  # 1 segundo além
+        df = build_training_dataframe(records, win_fast_threshold_s=14400.0)
+        assert df["is_win_fast"].iloc[0] == 0
+
+    def test_sl_hit_is_always_negative(self):
+        from backend.app.ml.feature_extractor import build_training_dataframe
+        records = [self._make_record("SL_HIT", 600)]
+        df = build_training_dataframe(records, win_fast_threshold_s=14400.0)
+        assert df["is_win_fast"].iloc[0] == 0
+
+    def test_tp_hit_without_holding_is_negative(self):
+        from backend.app.ml.feature_extractor import build_training_dataframe
+        records = [self._make_record("TP_HIT", None)]
+        df = build_training_dataframe(records, win_fast_threshold_s=14400.0)
+        assert df["is_win_fast"].iloc[0] == 0
+
+    def test_default_threshold_1800_still_works(self):
+        """Backward compat: threshold=1800 (default) rejects slow TPs."""
+        from backend.app.ml.feature_extractor import build_training_dataframe
+        fast = self._make_record("TP_HIT", 900)    # 15 min — passa
+        slow = self._make_record("TP_HIT", 3600)   # 1h — rejeita no threshold 1800
+        df = build_training_dataframe([fast, slow], win_fast_threshold_s=1800.0)
+        labels = df["is_win_fast"].tolist()
+        assert labels[0] == 1  # fast win
+        assert labels[1] == 0  # slow win labeled negative at 30min threshold
+
+    def test_4h_positive_rate_higher_than_30min(self):
+        """is_tp_4h_v1 deve ter positive_rate muito maior que is_win_fast_v1."""
+        from backend.app.ml.feature_extractor import build_training_dataframe
+        records = [
+            self._make_record("TP_HIT", h)
+            for h in [600, 1800, 3600, 7200, 10800, 14400, 14401, 18000]
+        ] + [self._make_record("SL_HIT", 1800)] * 4
+        df_30m = build_training_dataframe(records, win_fast_threshold_s=1800.0)
+        df_4h  = build_training_dataframe(records, win_fast_threshold_s=14400.0)
+        rate_30m = df_30m["is_win_fast"].mean()
+        rate_4h  = df_4h["is_win_fast"].mean()
+        assert rate_4h > rate_30m, f"4h rate ({rate_4h:.2f}) must exceed 30m rate ({rate_30m:.2f})"

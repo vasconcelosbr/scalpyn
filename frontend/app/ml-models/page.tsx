@@ -4,6 +4,22 @@ import { useEffect, useState } from "react";
 import { apiGet } from "@/lib/api";
 import { Brain, CheckCircle, Archive, ChevronDown, ChevronRight } from "lucide-react";
 
+interface MetricsBlock {
+  precision: number | null;
+  recall: number | null;
+  fpr: number | null;
+  f1: number | null;
+  roc_auc: number | null;
+  samples: number | null;
+}
+
+interface MetricsJson {
+  label_version: string | null;
+  target_window_seconds: number | null;
+  validation: MetricsBlock | null;
+  test: MetricsBlock | null;
+}
+
 interface MlModel {
   id: string;
   version: number;
@@ -25,6 +41,9 @@ interface MlModel {
   activated_at: string | null;
   retired_at: string | null;
   notes: string | null;
+  label_version: string | null;
+  metrics_json: MetricsJson | null;
+  target_window_seconds: number | null;
 }
 
 function fmt(v: number | null, digits = 4): string {
@@ -184,17 +203,33 @@ export default function MlModelsPage() {
             {isExpanded && (
               <div className="border-t border-[#1A2035] px-5 py-4 space-y-5">
 
-                {/* Metrics full row */}
+                {/* Label version badge */}
+                {(m.label_version || m.metrics_json?.label_version) && (
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-[#1A2035] border border-[#334155] font-mono text-[#94A3B8]">
+                      label: {m.label_version ?? m.metrics_json?.label_version ?? "—"}
+                    </span>
+                    {(m.target_window_seconds ?? m.metrics_json?.target_window_seconds) != null && (
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-[#1A2035] border border-[#334155] font-mono text-[#94A3B8]">
+                        janela TP: {Math.round(((m.target_window_seconds ?? m.metrics_json?.target_window_seconds) as number) / 60)} min
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Validation metrics (precision_score/recall_score columns carry val metrics for challenger models) */}
                 <div>
-                  <div className="text-[10px] uppercase tracking-widest text-[#334155] mb-3">Métricas — test set</div>
+                  <div className="text-[10px] uppercase tracking-widest text-[#334155] mb-3">
+                    {m.metrics_json?.validation ? "Métricas — validação (val set)" : "Métricas"}
+                  </div>
                   <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
                     {[
-                      { label: "Precision", value: fmtPct(m.precision_score), good: (m.precision_score ?? 0) >= 0.5 },
-                      { label: "Recall",    value: fmtPct(m.recall_score),    good: (m.recall_score ?? 0) >= 0.4 },
-                      { label: "F1",        value: fmt(m.f1_score, 4),        good: (m.f1_score ?? 0) >= 0.5 },
-                      { label: "ROC AUC",   value: fmt(m.roc_auc, 4),         good: (m.roc_auc ?? 0) >= 0.6 },
-                      { label: "Capture",   value: fmtPct(m.win_fast_capture_rate), good: (m.win_fast_capture_rate ?? 0) >= 0.5 },
-                      { label: "FPR",       value: fmtPct(m.false_positive_rate),   good: (m.false_positive_rate ?? 1) <= 0.4 },
+                      { label: "Precision", value: fmtPct(m.metrics_json?.validation?.precision ?? m.precision_score), good: (m.metrics_json?.validation?.precision ?? m.precision_score ?? 0) >= 0.5 },
+                      { label: "Recall",    value: fmtPct(m.metrics_json?.validation?.recall ?? m.recall_score),       good: (m.metrics_json?.validation?.recall ?? m.recall_score ?? 0) >= 0.4 },
+                      { label: "F1",        value: fmt(m.metrics_json?.validation?.f1 ?? m.f1_score, 4),               good: (m.metrics_json?.validation?.f1 ?? m.f1_score ?? 0) >= 0.5 },
+                      { label: "ROC AUC",   value: fmt(m.metrics_json?.validation?.roc_auc ?? m.roc_auc, 4),           good: (m.metrics_json?.validation?.roc_auc ?? m.roc_auc ?? 0) >= 0.6 },
+                      { label: "Capture",   value: fmtPct(m.win_fast_capture_rate),                                    good: (m.win_fast_capture_rate ?? 0) >= 0.5 },
+                      { label: "FPR",       value: fmtPct(m.metrics_json?.validation?.fpr ?? m.false_positive_rate),  good: (m.metrics_json?.validation?.fpr ?? m.false_positive_rate ?? 1) <= 0.4 },
                     ].map((item) => (
                       <div key={item.label} className="bg-[#0C1020] rounded-md p-3 flex flex-col items-center gap-1">
                         <span className={`text-[16px] font-bold font-mono ${item.good ? "text-[#34D399]" : "text-[#F87171]"}`}>
@@ -205,6 +240,32 @@ export default function MlModelsPage() {
                     ))}
                   </div>
                 </div>
+
+                {/* Test set metrics — only available post-migration-104 */}
+                {m.metrics_json?.test && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-widest text-[#334155] mb-3">Métricas — test set (hold-out)</div>
+                    <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
+                      {[
+                        { label: "Precision", value: fmtPct(m.metrics_json.test.precision), good: (m.metrics_json.test.precision ?? 0) >= 0.5 },
+                        { label: "Recall",    value: fmtPct(m.metrics_json.test.recall),    good: (m.metrics_json.test.recall ?? 0) >= 0.4 },
+                        { label: "F1",        value: fmt(m.metrics_json.test.f1, 4),        good: (m.metrics_json.test.f1 ?? 0) >= 0.5 },
+                        { label: "ROC AUC",   value: fmt(m.metrics_json.test.roc_auc, 4),   good: (m.metrics_json.test.roc_auc ?? 0) >= 0.6 },
+                        { label: "FPR",       value: fmtPct(m.metrics_json.test.fpr),       good: (m.metrics_json.test.fpr ?? 1) <= 0.4 },
+                      ].map((item) => (
+                        <div key={item.label} className="bg-[#080E1C] border border-[#1A2035] rounded-md p-3 flex flex-col items-center gap-1">
+                          <span className={`text-[16px] font-bold font-mono ${item.good ? "text-[#34D399]" : "text-[#F87171]"}`}>
+                            {item.value}
+                          </span>
+                          <span className="text-[10px] text-[#4B5563] uppercase tracking-wide">{item.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {m.metrics_json.test.samples != null && (
+                      <div className="mt-2 text-[10px] text-[#4B5563] font-mono">test samples: {m.metrics_json.test.samples}</div>
+                    )}
+                  </div>
+                )}
 
                 {/* Dataset */}
                 <div>

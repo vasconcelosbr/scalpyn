@@ -117,6 +117,28 @@ def feature_columns_hash(feature_columns: List[str]) -> str:
     payload = json.dumps(list(feature_columns), ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
+
+# ── Label registry ────────────────────────────────────────────────────────────
+# Maps the win-time threshold (seconds) to a canonical label version string
+# stored in ml_models.label_version. Add new entries here when new label
+# variants are introduced — do NOT change existing mappings.
+_LABEL_THRESHOLD_REGISTRY: Dict[float, str] = {
+    1800.0: "is_win_fast_v1",   # TP_HIT AND holding ≤ 30 min (original)
+    14400.0: "is_tp_4h_v1",     # TP_HIT AND holding ≤ 4 h
+}
+
+
+def label_version_for_threshold(win_fast_threshold_s: float) -> str:
+    """Return the canonical label_version string for a given time threshold.
+
+    Falls back to a generic name for thresholds not in the registry so that
+    experimental runs never silently reuse a production label name.
+    """
+    key = float(win_fast_threshold_s)
+    if key in _LABEL_THRESHOLD_REGISTRY:
+        return _LABEL_THRESHOLD_REGISTRY[key]
+    return f"is_win_custom_{int(key)}s"
+
 # FEATURES DELIBERATELY EXCLUDED FROM FEATURE_COLUMNS:
 # "score"             — P0-2: calculated from rsi/ema9_gt_ema21/volume_spike/atr_pct/
 #                       macd_signal/price>vwap; circular dependency dominates model.

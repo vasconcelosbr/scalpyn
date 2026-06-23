@@ -138,7 +138,37 @@ interface ProfileReportRow {
   pnl_total_usdt: number;
   pnl_avg_pct: number | null;
   avg_holding_win_seconds: number | null;
+  tp_4h_count: number;
+  tp_4h_rate: number | null;
 }
+
+type ProfileClass =
+  | "GOOD_4H"
+  | "SLOW_WINNER"
+  | "GOOD_SHADOW_BAD_4H"
+  | "BAD_BOTH"
+  | "LOW_SAMPLE"
+  | "NO_TRADES";
+
+function classifyProfile(row: ProfileReportRow): ProfileClass {
+  if (row.total === 0) return "NO_TRADES";
+  if (row.decided_count < 20) return "LOW_SAMPLE";
+  const wr = row.win_rate ?? 0;
+  const r4h = row.tp_4h_rate ?? 0;
+  if (wr >= 50 && r4h >= 40) return "GOOD_4H";
+  if (wr >= 50 && r4h < 40) return "SLOW_WINNER";
+  if (wr < 50 && r4h >= 20) return "GOOD_SHADOW_BAD_4H";
+  return "BAD_BOTH";
+}
+
+const CLASS_META: Record<ProfileClass, { label: string; color: string }> = {
+  GOOD_4H:            { label: "GOOD 4H",   color: "#22B97A" },
+  SLOW_WINNER:        { label: "SLOW WIN",  color: "#F2A33A" },
+  GOOD_SHADOW_BAD_4H: { label: "SHADOW/4H", color: "#9D7CF7" },
+  BAD_BOTH:           { label: "BAD",        color: "#E5484D" },
+  LOW_SAMPLE:         { label: "LOW N",      color: "#5A6075" },
+  NO_TRADES:          { label: "EMPTY",      color: "#5A6075" },
+};
 
 interface ProfileIntelligenceCandidate {
   profile_id: string;
@@ -1879,6 +1909,7 @@ type ReportSortKey =
   | "total"
   | "open_count"
   | "win_rate"
+  | "tp_4h_rate"
   | "pnl_total_usdt"
   | "pnl_avg_pct"
   | "avg_holding_win_seconds";
@@ -2002,6 +2033,10 @@ function ProfileReportTable({
               Win Rate <SortBtn col="win_rate" />
             </th>
             <th style={{ ...thStyle, textAlign: "right" }}>
+              TP 4h <SortBtn col="tp_4h_rate" />
+            </th>
+            <th style={{ ...thStyle, textAlign: "center" }}>Classe</th>
+            <th style={{ ...thStyle, textAlign: "right" }}>
               P&amp;L Total <SortBtn col="pnl_total_usdt" />
             </th>
             <th style={{ ...thStyle, textAlign: "right" }}>
@@ -2020,6 +2055,14 @@ function ProfileReportTable({
                 : row.win_rate >= 50
                 ? C.green
                 : C.red;
+            const tp4hColor =
+              row.tp_4h_rate === null
+                ? C.muted
+                : row.tp_4h_rate >= 40
+                ? C.green
+                : row.tp_4h_rate >= 20
+                ? C.amber
+                : C.red;
             const pnlColor =
               row.pnl_total_usdt > 0 ? C.green : row.pnl_total_usdt < 0 ? C.red : C.muted;
             const pnlAvgColor =
@@ -2031,6 +2074,8 @@ function ProfileReportTable({
                 ? C.red
                 : C.muted;
             const noTrades = row.total === 0;
+            const cls = classifyProfile(row);
+            const clsMeta = CLASS_META[cls];
             return (
               <tr
                 key={row.profile_id}
@@ -2048,6 +2093,26 @@ function ProfileReportTable({
                 <td style={{ ...tdStyle, textAlign: "right" }}>{noTrades ? "—" : row.open_count}</td>
                 <td style={{ ...tdStyle, textAlign: "right", color: winRateColor }}>
                   {row.win_rate !== null ? `${row.win_rate.toFixed(1)}%` : "—"}
+                </td>
+                <td
+                  style={{ ...tdStyle, textAlign: "right", color: tp4hColor }}
+                  title={row.tp_4h_count > 0 ? `${row.tp_4h_count} TP em ≤4h de ${row.win_count} wins` : undefined}
+                >
+                  {row.tp_4h_rate !== null ? `${row.tp_4h_rate.toFixed(1)}%` : "—"}
+                </td>
+                <td style={{ ...tdStyle, textAlign: "center" }}>
+                  <span style={{
+                    fontSize: 10,
+                    fontWeight: 600,
+                    color: clsMeta.color,
+                    border: `1px solid ${clsMeta.color}55`,
+                    borderRadius: 4,
+                    padding: "1px 6px",
+                    letterSpacing: 0.3,
+                    whiteSpace: "nowrap",
+                  }}>
+                    {clsMeta.label}
+                  </span>
                 </td>
                 <td style={{ ...tdStyle, textAlign: "right", color: pnlColor }}>
                   {noTrades ? "—" : fmtUsd(row.pnl_total_usdt)}

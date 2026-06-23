@@ -542,6 +542,7 @@ class MLChallengerService:
         model_lane: Optional[str] = None,
         cat_feature_indices: Optional[List[int]] = None,
         test_metrics: Optional[Dict[str, Any]] = None,
+        win_fast_threshold_s: float = 1800.0,
     ) -> UUID:
         """Serializa e salva em ml_models + ml_model_registry. Retorna model_id."""
         import joblib as _joblib
@@ -593,12 +594,37 @@ class MLChallengerService:
             from app.ml.feature_extractor import (
                 feature_columns_hash as _fc_hash,
                 FEATURE_SCHEMA_VERSION as _FSV,
+                label_version_for_threshold as _lv_for_threshold,
             )
             fc_hash = _fc_hash(feature_columns)
             fc_schema_ver = _FSV
+            label_ver = _lv_for_threshold(win_fast_threshold_s)
         except Exception:
             fc_hash = None
             fc_schema_ver = None
+            label_ver = "is_win_fast_v1"
+
+        # Structured metrics_json — separates validation from test set
+        _metrics_json = json.dumps({
+            "label_version": label_ver,
+            "target_window_seconds": int(win_fast_threshold_s),
+            "validation": {
+                "precision": precision,
+                "recall": recall,
+                "fpr": fpr,
+                "f1": f1,
+                "roc_auc": roc_auc,
+                "samples": n_val,
+            },
+            "test": {
+                "precision": (test_metrics or {}).get("precision"),
+                "recall": (test_metrics or {}).get("recall"),
+                "fpr": (test_metrics or {}).get("fpr"),
+                "f1": (test_metrics or {}).get("f1"),
+                "roc_auc": (test_metrics or {}).get("roc_auc"),
+                "samples": n_test or None,
+            } if test_metrics else None,
+        })
 
         # Armazena em ml_models (storage BYTEA canônico)
         await db.execute(text("""
@@ -611,7 +637,8 @@ class MLChallengerService:
                 model_path, decision_threshold,
                 notes, model_blob,
                 model_scope, profile_id,
-                label_version, model_lane
+                label_version, model_lane,
+                metrics_json, target_window_seconds
             ) VALUES (
                 :id, :version, 'candidate',
                 :hyperparams, :n_train, :n_val, :n_test,
@@ -621,7 +648,8 @@ class MLChallengerService:
                 :model_path, :threshold,
                 :notes, :blob,
                 :scope, :pid,
-                :label_version, :model_lane
+                :label_version, :model_lane,
+                :metrics_json, :target_window_seconds
             )
         """), {
             "id": str(model_uuid),
@@ -643,6 +671,7 @@ class MLChallengerService:
             "threshold": threshold,
             "notes": (
                 f"Challenger {model_type} | lane={model_lane} | user_id={user_id} | "
+                f"label={label_ver} | win_threshold_s={int(win_fast_threshold_s)} | "
                 f"roc_auc={roc_auc:.4f} | "
                 f"prec={f'{precision:.4f}' if precision is not None else 'N/A'} | "
                 f"rec={f'{recall:.4f}' if recall is not None else 'N/A'} | "
@@ -653,10 +682,12 @@ class MLChallengerService:
                 f"n_test={n_test} | v{version} | trained_by=MLChallengerService"
             ),
             "blob": model_blob,
-            "label_version": "is_win_fast_v1",
+            "label_version": label_ver,
             "model_lane": model_lane,
             "scope": "profile" if profile_id else "global",
             "pid": str(profile_id) if profile_id else None,
+            "metrics_json": _metrics_json,
+            "target_window_seconds": int(win_fast_threshold_s),
         })
 
         # Registra em ml_model_registry (champion/challenger tracking)
@@ -708,6 +739,7 @@ class MLChallengerService:
         source_filter: Optional[List[str]] = None,
         lgbm_source_filter: Optional[List[str]] = None,
         catboost_source_filter: Optional[List[str]] = None,
+        win_fast_threshold_s: float = 1800.0,
     ) -> Dict[str, Any]:
         """
         Treina challengers habilitados e registra no banco.
@@ -750,7 +782,7 @@ class MLChallengerService:
                 }
             elif _is_installed("lightgbm"):
                 try:
-                    X, y, available_cols = self._build_dataset(lgbm_records, feature_columns)
+                    X, y, available_cols = self._build_dataset(lgbm_records, feature_columns, win_fast_threshold_s)
                     if len(y) < MIN_RECORDS:
                         results["lightgbm"] = {"status": "skipped", "reason": "insufficient_labeled"}
                     else:
@@ -776,6 +808,7 @@ class MLChallengerService:
                                 profile_id=profile_id,
                                 model_lane="L1_SPECTRUM",
                                 test_metrics=lgbm_result.get("test_metrics"),
+                                win_fast_threshold_s=win_fast_threshold_s,
                             )
                             await db.commit()
                             results["lightgbm"] = {
@@ -828,7 +861,7 @@ class MLChallengerService:
                 }
             elif _is_installed("catboost"):
                 try:
-                    X, y, all_cols, cat_indices = self._build_l3_dataset(cb_records, feature_columns)
+                    X, y, all_cols, cat_indices = self._build_l3_dataset(cb_records, feature_columns, win_fast_threshold_s)
                     if len(y) < MIN_RECORDS:
                         results["catboost"] = {"status": "skipped", "reason": "insufficient_labeled"}
                     else:
@@ -861,6 +894,7 @@ class MLChallengerService:
                                 model_lane="L3_PROFILE",
                                 cat_feature_indices=cat_indices,
                                 test_metrics=cb_result.get("test_metrics"),
+                                win_fast_threshold_s=win_fast_threshold_s,
                             )
                             await db.commit()
                             results["catboost"] = {

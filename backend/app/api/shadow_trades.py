@@ -928,7 +928,12 @@ async def profile_report(
                 AVG(CASE WHEN st.outcome IN ('TP_HIT','SL_HIT','TIMEOUT') THEN st.pnl_pct END)
                                                                               AS pnl_avg_pct,
                 AVG(CASE WHEN st.outcome = 'TP_HIT' THEN st.holding_seconds END)
-                                                                              AS avg_holding_win_seconds
+                                                                              AS avg_holding_win_seconds,
+                COUNT(st.id) FILTER (
+                    WHERE st.outcome = 'TP_HIT'
+                      AND st.holding_seconds IS NOT NULL
+                      AND st.holding_seconds <= 14400
+                )                                                             AS tp_4h_count
             FROM profiles p
             LEFT JOIN shadow_trades st
                    ON st.profile_id = p.id
@@ -943,7 +948,9 @@ async def profile_report(
         for r in rows:
             decided = int(r.decided_count or 0)
             win = int(r.win_count or 0)
+            tp_4h = int(r.tp_4h_count or 0)
             win_rate = round(win / decided * 100, 2) if decided > 0 else None
+            tp_4h_rate = round(tp_4h / win * 100, 2) if win > 0 else None
             result.append(ProfileReportRow(
                 profile_id=r.profile_id,
                 profile_name=r.profile_name,
@@ -956,6 +963,8 @@ async def profile_report(
                 pnl_avg_pct=round(float(r.pnl_avg_pct), 4) if r.pnl_avg_pct is not None else None,
                 avg_holding_win_seconds=round(float(r.avg_holding_win_seconds), 1)
                     if r.avg_holding_win_seconds is not None else None,
+                tp_4h_count=tp_4h,
+                tp_4h_rate=tp_4h_rate,
             ))
         return result
     except HTTPException:
