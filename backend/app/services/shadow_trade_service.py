@@ -593,7 +593,9 @@ _INSERT_SHADOW_SQL = text("""
         last_processed_time,
         ttt_enabled, ttt_tp_pct, ttt_timeout_minutes,
         barrier_mode, tp_pct_applied, sl_pct_applied,
-        profile_id, profile_version, profile_name, strategy_type
+        profile_id, profile_version, profile_name, strategy_type,
+        watchlist_id, watchlist_name, watchlist_level, source_watchlist_id,
+        lineage_confidence, lineage_source, lineage_resolved_at
     ) VALUES (
         gen_random_uuid(),
         :decision_id, :user_id, :symbol, :strategy, :direction,
@@ -605,7 +607,10 @@ _INSERT_SHADOW_SQL = text("""
         :last_processed_time,
         :ttt_enabled, :ttt_tp_pct, :ttt_timeout_minutes,
         :barrier_mode, :tp_pct_applied, :sl_pct_applied,
-        :profile_id, :profile_version, :profile_name, :strategy_type
+        :profile_id, :profile_version, :profile_name, :strategy_type,
+        CAST(:watchlist_id AS UUID), :watchlist_name, :watchlist_level,
+        CAST(:source_watchlist_id AS UUID),
+        :lineage_confidence, :lineage_source, :lineage_resolved_at
     )
     ON CONFLICT DO NOTHING
     RETURNING id
@@ -619,6 +624,7 @@ async def _create_from_decision(
     user_config: Dict[str, Any],
     source: str = SHADOW_SOURCE_L3,
     extra_config: Optional[Dict[str, Any]] = None,
+    lineage: Optional[Any] = None,
 ) -> Optional[UUID]:
     """Insere uma row em ``shadow_trades`` para a ``decision`` informada.
 
@@ -700,6 +706,20 @@ async def _create_from_decision(
 
     # Task #303: ``decision.id`` é ``None`` para ``_SyntheticDecision``
     # (fallback "live_l3") — vira NULL na coluna após migration 057.
+    # Lineage resolution: prefer explicit lineage over decision attributes.
+    # For canonical L3, decision.profile_id is NULL but lineage.profile_id
+    # carries wl.profile_id — fills the gap without touching existing L3_LAB logic.
+    _lin_profile_id = (
+        lineage.profile_id
+        if lineage and lineage.profile_id
+        else getattr(decision, "profile_id", None)
+    )
+    _lin_profile_name = (
+        lineage.profile_name
+        if lineage and lineage.profile_name
+        else getattr(decision, "profile_name", None)
+    )
+
     res = await db.execute(
         _INSERT_SHADOW_SQL,
         {
@@ -730,14 +750,12 @@ async def _create_from_decision(
             "barrier_mode": barrier_mode,
             "tp_pct_applied": tp_pct or None,
             "sl_pct_applied": sl_pct or None,
-            # Profile attribution follows the decision that opened the shadow.
-            # NULL preserves the canonical/global L3 behavior; non-NULL allows
-            # independent profile simulations for the same symbol.
-            "profile_id": getattr(decision, "profile_id", None),
+            # Profile attribution: lineage overrides decision attrs for canonical L3.
+            "profile_id": _lin_profile_id,
             "profile_version": getattr(decision, "profile_version", None),
-            "profile_name": getattr(decision, "profile_name", None),
+            "profile_name": _lin_profile_name,
             "strategy_type": (
-                "PROFILE_L3" if getattr(decision, "profile_id", None) else None
+                "PROFILE_L3" if _lin_profile_id else None
             ),
             "status": initial_status,
             # skip_reason intencionalmente NULL: textos como NOT_TRADABLE/COOLDOWN
@@ -757,6 +775,14 @@ async def _create_from_decision(
             # primeira janela de candles avaliada seja "tudo após a
             # entrada" (e não tudo desde sempre).
             "last_processed_time": entry_ts,
+            # Watchlist lineage (migration 103)
+            "watchlist_id": lineage.watchlist_id if lineage else None,
+            "watchlist_name": lineage.watchlist_name if lineage else None,
+            "watchlist_level": lineage.watchlist_level if lineage else None,
+            "source_watchlist_id": lineage.source_watchlist_id if lineage else None,
+            "lineage_confidence": lineage.lineage_confidence if lineage else None,
+            "lineage_source": lineage.lineage_source if lineage else None,
+            "lineage_resolved_at": lineage.lineage_resolved_at if lineage else None,
         },
     )
     row = res.fetchone()
@@ -1057,7 +1083,16 @@ def _flatten_analysis_snapshot(
     return flat
 
 
-async def create_shadows_for_new_decisions(user_id, decision_ids: List[int]) -> int:
+async def create_shadows_for_new_decisions(
+    user_id,
+    decision_ids: List[int],
+    watchlist_id: Optional[str] = None,
+    watchlist_name: Optional[str] = None,
+    watchlist_level: Optional[str] = None,
+    source_watchlist_id: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    profile_name: Optional[str] = None,
+) -> int:
     """Inline shadow creation triggered by pipeline_scan immediately after
     _persist_decision_logs.
 
@@ -1137,6 +1172,22 @@ async def create_shadows_for_new_decisions(user_id, decision_ids: List[int]) -> 
     _apply_barrier_params(user_config, _ml_config)
     user_config["ml_fee_roundtrip_pct"] = _ml_config.get("ml_fee_roundtrip_pct")
 
+    from ..schemas.watchlist_lineage_context import WatchlistLineageContext
+    from datetime import datetime as _dt, timezone as _tz
+    _lineage: Optional[Any] = None
+    if watchlist_id is not None:
+        _lineage = WatchlistLineageContext(
+            watchlist_id=watchlist_id,
+            watchlist_name=watchlist_name,
+            watchlist_level=watchlist_level,
+            source_watchlist_id=source_watchlist_id,
+            profile_id=profile_id,
+            profile_name=profile_name,
+            lineage_confidence="EXACT",
+            lineage_source="pipeline_scan",
+            lineage_resolved_at=_dt.now(_tz.utc),
+        )
+
     created = 0
     # Sorted for deadlock safety (same convention as safe_backfill — gotcha #251/#273).
     for decision_id in sorted(decision_ids):
@@ -1158,6 +1209,7 @@ async def create_shadows_for_new_decisions(user_id, decision_ids: List[int]) -> 
                     new_id = await _create_from_decision(
                         own_db, decision, "NOT_TRADABLE", user_config,
                         source=SHADOW_SOURCE_L3,
+                        lineage=_lineage,
                     )
                     if new_id is not None:
                         created += 1
@@ -1306,6 +1358,10 @@ async def create_l3_rejected_inline_shadows(
     profile_id: Optional[Any] = None,
     profile_version: Optional[datetime] = None,
     profile_name: Optional[str] = None,
+    watchlist_id: Optional[str] = None,
+    watchlist_name: Optional[str] = None,
+    watchlist_level: Optional[str] = None,
+    source_watchlist_id: Optional[str] = None,
 ) -> int:
     """L3_REJECTED inline capture: shadow para TODOS os ativos com decision=BLOCK no ciclo L3.
 
@@ -1383,6 +1439,20 @@ async def create_l3_rejected_inline_shadows(
     _apply_barrier_params(user_config, ml_config)
     user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
 
+    from ..schemas.watchlist_lineage_context import WatchlistLineageContext
+    from datetime import datetime as _dt, timezone as _tz
+    _lineage: Optional[Any] = None
+    if watchlist_id is not None:
+        _lineage = WatchlistLineageContext(
+            watchlist_id=watchlist_id,
+            watchlist_name=watchlist_name,
+            watchlist_level=watchlist_level,
+            source_watchlist_id=source_watchlist_id,
+            lineage_confidence="EXACT",
+            lineage_source="pipeline_scan",
+            lineage_resolved_at=_dt.now(_tz.utc),
+        )
+
     shadows_last_hour = 0
     try:
         async with CeleryAsyncSessionLocal() as count_db:
@@ -1447,6 +1517,7 @@ async def create_l3_rejected_inline_shadows(
                             "l3_score": d.get("score"),
                             "l3_reasons": d.get("reasons"),
                         },
+                        lineage=_lineage,
                     )
                     if new_id is not None:
                         created += 1
@@ -1473,6 +1544,10 @@ async def create_l1_spectrum_shadows(
     execution_id: str,
     assets_by_symbol: Dict[str, Dict[str, Any]],
     promotion_at: "datetime",
+    watchlist_id: Optional[str] = None,
+    watchlist_name: Optional[str] = None,
+    watchlist_level: Optional[str] = None,
+    source_watchlist_id: Optional[str] = None,
 ) -> int:
     """L1_SPECTRUM capture: create sampled shadow trades from L1 stage promotions.
 
@@ -1553,6 +1628,20 @@ async def create_l1_spectrum_shadows(
         }
     _apply_barrier_params(user_config, ml_config)
     user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
+
+    from ..schemas.watchlist_lineage_context import WatchlistLineageContext
+    from datetime import datetime as _dt, timezone as _tz
+    _lineage_l1: Optional[Any] = None
+    if watchlist_id is not None:
+        _lineage_l1 = WatchlistLineageContext(
+            watchlist_id=watchlist_id,
+            watchlist_name=watchlist_name,
+            watchlist_level=watchlist_level,
+            source_watchlist_id=source_watchlist_id,
+            lineage_confidence="EXACT",
+            lineage_source="pipeline_scan",
+            lineage_resolved_at=_dt.now(_tz.utc),
+        )
 
     # 2. Rate limit: count shadows from this source in the last hour
     shadows_last_hour = 0
@@ -1715,6 +1804,7 @@ async def create_l1_spectrum_shadows(
                     new_id = await _create_from_decision(
                         own_db, synthetic, "L1_SPECTRUM_CAPTURE", user_config,
                         source=source_label,
+                        lineage=_lineage_l1,
                     )
                     if new_id is not None:
                         created += 1
@@ -1771,6 +1861,10 @@ async def create_l3_simulated_shadows(
     profile_id: Optional[Any] = None,
     profile_version: Optional[datetime] = None,
     profile_name: Optional[str] = None,
+    watchlist_id: Optional[str] = None,
+    watchlist_name: Optional[str] = None,
+    watchlist_level: Optional[str] = None,
+    source_watchlist_id: Optional[str] = None,
 ) -> int:
     """L3_SIMULATED capture: camada contrafactual para TODOS os ativos avaliados no gate L3.
 
@@ -1848,6 +1942,20 @@ async def create_l3_simulated_shadows(
     _apply_barrier_params(user_config, ml_config)
     user_config["ml_fee_roundtrip_pct"] = ml_config.get("ml_fee_roundtrip_pct")
 
+    from ..schemas.watchlist_lineage_context import WatchlistLineageContext
+    from datetime import datetime as _dt, timezone as _tz
+    _lineage_sim: Optional[Any] = None
+    if watchlist_id is not None:
+        _lineage_sim = WatchlistLineageContext(
+            watchlist_id=watchlist_id,
+            watchlist_name=watchlist_name,
+            watchlist_level=watchlist_level,
+            source_watchlist_id=source_watchlist_id,
+            lineage_confidence="EXACT",
+            lineage_source="pipeline_scan",
+            lineage_resolved_at=_dt.now(_tz.utc),
+        )
+
     shadows_last_hour = 0
     try:
         async with CeleryAsyncSessionLocal() as count_db:
@@ -1912,6 +2020,7 @@ async def create_l3_simulated_shadows(
                             "l3_score": d.get("score"),
                             "l3_reasons": d.get("reasons"),
                         },
+                        lineage=_lineage_sim,
                     )
                     if new_id is not None:
                         created += 1
@@ -2650,7 +2759,9 @@ _INSERT_STRATEGY_LAB_SQL = text("""
         last_processed_time,
         ttt_enabled, ttt_tp_pct, ttt_timeout_minutes,
         barrier_mode, tp_pct_applied, sl_pct_applied,
-        profile_id, profile_version, profile_name, strategy_type, rules_snapshot
+        profile_id, profile_version, profile_name, strategy_type, rules_snapshot,
+        watchlist_id, watchlist_name, watchlist_level, source_watchlist_id,
+        lineage_confidence, lineage_source, lineage_resolved_at
     ) VALUES (
         gen_random_uuid(),
         NULL, :user_id, :symbol, :strategy, :direction,
@@ -2663,7 +2774,10 @@ _INSERT_STRATEGY_LAB_SQL = text("""
         :ttt_enabled, :ttt_tp_pct, :ttt_timeout_minutes,
         :barrier_mode, :tp_pct_applied, :sl_pct_applied,
         CAST(:profile_id AS UUID), :profile_version, :profile_name,
-        :strategy_type, CAST(:rules_snapshot AS JSONB)
+        :strategy_type, CAST(:rules_snapshot AS JSONB),
+        CAST(:watchlist_id AS UUID), :watchlist_name, :watchlist_level,
+        CAST(:source_watchlist_id AS UUID),
+        :lineage_confidence, :lineage_source, :lineage_resolved_at
     )
     ON CONFLICT DO NOTHING
     RETURNING id
@@ -2682,6 +2796,10 @@ async def create_strategy_lab_shadows(
     execution_id: str,
     promotion_at: datetime,
     db: Any,
+    watchlist_id: Optional[str] = None,
+    watchlist_name: Optional[str] = None,
+    watchlist_level: Optional[str] = None,
+    source_watchlist_id: Optional[str] = None,
 ) -> int:
     """Strategy Lab: create profile-attributed ALLOW shadows bypassing decisions_log dedup.
 
@@ -2820,6 +2938,13 @@ async def create_strategy_lab_shadows(
                             "profile_name": profile_name,
                             "strategy_type": strategy_type,
                             "rules_snapshot": rules_json,
+                            "watchlist_id": watchlist_id,
+                            "watchlist_name": watchlist_name,
+                            "watchlist_level": watchlist_level,
+                            "source_watchlist_id": source_watchlist_id,
+                            "lineage_confidence": "EXACT" if watchlist_id else None,
+                            "lineage_source": "pipeline_scan" if watchlist_id else None,
+                            "lineage_resolved_at": promotion_at if watchlist_id else None,
                         },
                     )
                     row = res.fetchone()
@@ -2855,6 +2980,10 @@ async def create_strategy_lab_rejected_shadows(
     execution_id: str,
     promotion_at: datetime,
     db: Any,
+    watchlist_id: Optional[str] = None,
+    watchlist_name: Optional[str] = None,
+    watchlist_level: Optional[str] = None,
+    source_watchlist_id: Optional[str] = None,
 ) -> int:
     """Strategy Lab: create profile-attributed BLOCK shadows for counterfactual analysis.
 
@@ -2988,6 +3117,13 @@ async def create_strategy_lab_rejected_shadows(
                             "profile_name": profile_name,
                             "strategy_type": strategy_type,
                             "rules_snapshot": rules_json,
+                            "watchlist_id": watchlist_id,
+                            "watchlist_name": watchlist_name,
+                            "watchlist_level": watchlist_level,
+                            "source_watchlist_id": source_watchlist_id,
+                            "lineage_confidence": "EXACT" if watchlist_id else None,
+                            "lineage_source": "pipeline_scan" if watchlist_id else None,
+                            "lineage_resolved_at": promotion_at if watchlist_id else None,
                         },
                     )
                     row = res.fetchone()

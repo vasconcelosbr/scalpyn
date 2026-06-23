@@ -246,4 +246,17 @@ class ShadowTrade(Base):
     ml_probability = Column(Float, nullable=True)
     ml_model_id = Column(UUID(as_uuid=True), nullable=True)
 
+    # ── Watchlist Lineage (migration 103) ─────────────────────────────────────
+    # Snapshot da watchlist que originou a promoção — preenchido inline pelo
+    # pipeline_scan para todos os novos trades. Linhas históricas: NULL até
+    # backfill via shadow_lineage_backfill (L3_LAB resolvível via profile_id
+    # JOIN; L3 canônico → lineage_confidence='LEGACY_UNKNOWN').
+    watchlist_id = Column(UUID(as_uuid=True), nullable=True)
+    watchlist_name = Column(String(150), nullable=True)
+    watchlist_level = Column(String(10), nullable=True)
+    source_watchlist_id = Column(UUID(as_uuid=True), nullable=True)
+    lineage_confidence = Column(String(30), nullable=True)
+    lineage_source = Column(String(50), nullable=True)
+    lineage_resolved_at = Column(DateTime(timezone=True), nullable=True)
+
     decision = relationship("DecisionLog", foreign_keys=[decision_id])

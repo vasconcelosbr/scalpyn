@@ -602,20 +602,26 @@ async def _compute_indicators_on_demand(
 
 # ── Serializers ────────────────────────────────────────────────────────────────
 
-def _wl_to_dict(wl: PipelineWatchlist) -> Dict[str, Any]:
+def _wl_to_dict(
+    wl: PipelineWatchlist,
+    profile_name: Optional[str] = None,
+    source_watchlist_level: Optional[str] = None,
+) -> Dict[str, Any]:
     return {
-        "id":                   str(wl.id),
-        "name":                 wl.name,
-        "level":                wl.level,
-        "market_mode":          getattr(wl, "market_mode", "spot") or "spot",
-        "source_pool_id":       str(wl.source_pool_id) if wl.source_pool_id else None,
-        "source_watchlist_id":  str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
-        "profile_id":           str(wl.profile_id) if wl.profile_id else None,
-        "auto_refresh":         wl.auto_refresh,
-        "filters_json":         wl.filters_json or {},
-        "last_scanned_at":      wl.last_scanned_at.isoformat() if getattr(wl, "last_scanned_at", None) else None,
-        "created_at":           wl.created_at.isoformat() if wl.created_at else None,
-        "updated_at":           wl.updated_at.isoformat() if wl.updated_at else None,
+        "id":                     str(wl.id),
+        "name":                   wl.name,
+        "level":                  wl.level,
+        "market_mode":            getattr(wl, "market_mode", "spot") or "spot",
+        "source_pool_id":         str(wl.source_pool_id) if wl.source_pool_id else None,
+        "source_watchlist_id":    str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+        "source_watchlist_level": source_watchlist_level,
+        "profile_id":             str(wl.profile_id) if wl.profile_id else None,
+        "profile_name":           profile_name,
+        "auto_refresh":           wl.auto_refresh,
+        "filters_json":           wl.filters_json or {},
+        "last_scanned_at":        wl.last_scanned_at.isoformat() if getattr(wl, "last_scanned_at", None) else None,
+        "created_at":             wl.created_at.isoformat() if wl.created_at else None,
+        "updated_at":             wl.updated_at.isoformat() if wl.updated_at else None,
     }
 
 
@@ -769,7 +775,11 @@ async def list_watchlists(
     )
     wls = result.scalars().all()
 
-    # Fetch asset counts for all watchlists in one query
+    # Fetch asset counts, profile names, and source watchlist levels in bulk
+    counts: Dict[UUID, int] = {}
+    profile_names: Dict[str, str] = {}
+    source_wl_levels: Dict[str, str] = {}
+
     if wls:
         wl_ids = [w.id for w in wls]
         count_result = await db.execute(
@@ -784,12 +794,30 @@ async def list_watchlists(
             )
             .group_by(PipelineWatchlistAsset.watchlist_id)
         )
-        counts: Dict[UUID, int] = {row.watchlist_id: row.cnt for row in count_result.fetchall()}
-    else:
-        counts = {}
+        counts = {row.watchlist_id: row.cnt for row in count_result.fetchall()}
+
+        # Bulk fetch profile names for watchlists that have a profile_id
+        profile_ids = [str(w.profile_id) for w in wls if w.profile_id]
+        if profile_ids:
+            pname_rows = (await db.execute(
+                text("SELECT id::text, name FROM profiles WHERE id::text = ANY(:ids)"),
+                {"ids": profile_ids},
+            )).fetchall()
+            profile_names = {r.id: r.name for r in pname_rows}
+
+        # Bulk fetch source watchlist levels for watchlists that have a source_watchlist_id
+        src_wl_ids = [str(w.source_watchlist_id) for w in wls if w.source_watchlist_id]
+        if src_wl_ids:
+            swl_rows = (await db.execute(
+                text("SELECT id::text, level FROM pipeline_watchlists WHERE id::text = ANY(:ids)"),
+                {"ids": src_wl_ids},
+            )).fetchall()
+            source_wl_levels = {r.id: r.level for r in swl_rows}
 
     def _with_count(w: PipelineWatchlist) -> Dict[str, Any]:
-        d = _wl_to_dict(w)
+        _pname = profile_names.get(str(w.profile_id)) if w.profile_id else None
+        _swl_level = source_wl_levels.get(str(w.source_watchlist_id)) if w.source_watchlist_id else None
+        d = _wl_to_dict(w, profile_name=_pname, source_watchlist_level=_swl_level)
         d["asset_count"] = counts.get(w.id, 0)
         return d
 
@@ -3274,3 +3302,43 @@ async def debug_watchlist_pipeline(
         report["error"] = str(exc)
 
     return report
+
+
+# ── Lineage coverage & backfill ────────────────────────────────────────────────
+
+@router.get("/lineage-coverage")
+async def get_lineage_coverage_endpoint(
+    user_id: UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Estatísticas de cobertura de watchlist lineage em shadow_trades."""
+    from ..services.shadow_lineage_backfill import get_lineage_coverage
+    return await get_lineage_coverage(db, user_id=str(user_id))
+
+
+@router.post("/lineage-backfill")
+async def run_lineage_backfill(
+    payload: Dict[str, Any] = Body(default={}),
+    user_id: UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Executa ou simula backfill de lineage em shadow_trades históricos.
+
+    Body (JSON):
+      dry_run: bool  — true para preview sem escrever (default true)
+      limit:   int   — máx linhas por fonte a atualizar (default 5000)
+    """
+    from ..services.shadow_lineage_backfill import (
+        preview_lineage_backfill,
+        apply_lineage_backfill,
+    )
+    dry_run: bool = payload.get("dry_run", True)
+    limit: int = int(payload.get("limit", 5000))
+
+    if dry_run:
+        result = await preview_lineage_backfill(db, user_id=str(user_id))
+    else:
+        async with db.begin():
+            result = await apply_lineage_backfill(db, limit=limit, user_id=str(user_id))
+
+    return result

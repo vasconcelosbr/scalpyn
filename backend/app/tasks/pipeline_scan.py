@@ -2738,6 +2738,10 @@ async def _run_pipeline_scan():
                                     execution_id=str(execution_id),
                                     assets_by_symbol={a["symbol"]: a for a in passed},
                                     promotion_at=datetime.now(timezone.utc),
+                                    watchlist_id=str(wl.id),
+                                    watchlist_name=wl.name,
+                                    watchlist_level=wl.level,
+                                    source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
                                 )
                             except Exception as _l1cap_exc:
                                 logger.warning(
@@ -3237,7 +3241,12 @@ async def _run_pipeline_scan():
                                 create_shadows_for_new_decisions,
                             )
                             await create_shadows_for_new_decisions(
-                                wl.user_id, _allow_decision_ids
+                                wl.user_id, _allow_decision_ids,
+                                watchlist_id=str(wl.id),
+                                watchlist_name=wl.name,
+                                watchlist_level=wl.level,
+                                source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+                                profile_id=str(wl.profile_id) if wl.profile_id else None,
                             )
 
                         # ── Shadow Bypass Score Gate ──────────────────────────────────────
@@ -3299,7 +3308,12 @@ async def _run_pipeline_scan():
                                             create_shadows_for_new_decisions as _create_bypass_shadows,
                                         )
                                         await _create_bypass_shadows(
-                                            wl.user_id, _bypass_ids
+                                            wl.user_id, _bypass_ids,
+                                            watchlist_id=str(wl.id),
+                                            watchlist_name=wl.name,
+                                            watchlist_level=wl.level,
+                                            source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+                                            profile_id=str(wl.profile_id) if wl.profile_id else None,
                                         )
                                         logger.info(
                                             "[BypassShadow] wl=%s: %d score-bypassed"
@@ -3409,6 +3423,10 @@ async def _run_pipeline_scan():
                                 decisions=_all_block_decisions,
                                 execution_id=str(execution_id),
                                 promotion_at=datetime.now(timezone.utc),
+                                watchlist_id=str(wl.id),
+                                watchlist_name=wl.name,
+                                watchlist_level=wl.level,
+                                source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
                             )
                         except Exception as _l3rej_exc:
                             logger.warning(
@@ -3429,6 +3447,10 @@ async def _run_pipeline_scan():
                                 decisions=decisions,
                                 execution_id=str(execution_id),
                                 promotion_at=datetime.now(timezone.utc),
+                                watchlist_id=str(wl.id),
+                                watchlist_name=wl.name,
+                                watchlist_level=wl.level,
+                                source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
                             )
                         except Exception as _l3sim_exc:
                             logger.warning(
@@ -3504,6 +3526,10 @@ async def _run_pipeline_scan():
                                             execution_id=str(execution_id),
                                             promotion_at=datetime.now(timezone.utc),
                                             db=db,
+                                            watchlist_id=str(wl.id),
+                                            watchlist_name=wl.name,
+                                            watchlist_level=wl.level,
+                                            source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
                                         )
                                     if _lp_block:
                                         await _create_lab_rejected(
@@ -3518,6 +3544,10 @@ async def _run_pipeline_scan():
                                             execution_id=str(execution_id),
                                             promotion_at=datetime.now(timezone.utc),
                                             db=db,
+                                            watchlist_id=str(wl.id),
+                                            watchlist_name=wl.name,
+                                            watchlist_level=wl.level,
+                                            source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
                                         )
                                 except Exception as _lp_exc:
                                     logger.warning(
