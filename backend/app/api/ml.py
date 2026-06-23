@@ -356,6 +356,7 @@ async def list_ml_models(
 ):
     """List all ml_models rows ordered by version descending."""
     from sqlalchemy import text as sa_text
+    from ..ml.dataset_policy import governance_flags_for_model
 
     rows = await db.execute(sa_text("""
         SELECT
@@ -370,31 +371,36 @@ async def list_ml_models(
             feature_columns_json, feature_columns_hash,
             feature_count, feature_schema_version,
             dataset_query_cutoff,
-            label_version, metrics_json, target_window_seconds
+            label_version, metrics_json, target_window_seconds,
+            model_lane, source_filter
         FROM ml_models
         ORDER BY version DESC
     """))
     models = []
     for r in rows.mappings():
-        # A model is operationally incomplete if it lacks precision/recall/test metrics
-        # or a feature contract. Mark it as ranking_shadow_only to prevent
-        # unintended promotion to live gating.
-        is_incomplete = (
-            r["status"] == "active"
-            and (
-                r["precision_score"] is None
-                or r["recall_score"] is None
-                or r["test_samples"] is None
-                or r["feature_columns_json"] is None
-            )
-        )
-        governance_warning = "ranking_shadow_only" if is_incomplete else None
+        hp = r["hyperparams"] or {}
+        mj = r["metrics_json"] or {}
+        gov = governance_flags_for_model({
+            "status":              r["status"],
+            "model_lane":          r["model_lane"],
+            "precision_score":     r["precision_score"],
+            "recall_score":        r["recall_score"],
+            "test_samples":        r["test_samples"],
+            "feature_columns_json": r["feature_columns_json"],
+            "metrics_json":        mj,
+            "hyperparams":         hp,
+        })
         models.append({
             "id":                   str(r["id"]),
             "version":              r["version"],
             "status":               r["status"],
-            "governance_warning":   governance_warning,
-            "hyperparams":          r["hyperparams"],
+            "governance_warning":   gov["governance_warning"],
+            "allowed_usage":        gov["allowed_usage"],
+            "blocked_reasons":      gov["blocked_reasons"],
+            "eligible_for_orchestrator": gov["eligible_for_orchestrator"],
+            "eligible_for_autopilot":    gov["eligible_for_autopilot"],
+            "eligible_for_allow_block":  gov["eligible_for_allow_block"],
+            "hyperparams":          hp,
             "train_samples":        r["train_samples"],
             "val_samples":          r["val_samples"],
             "test_samples":         r["test_samples"],
@@ -411,16 +417,59 @@ async def list_ml_models(
             "activated_at":         r["activated_at"].isoformat() if r["activated_at"] else None,
             "retired_at":           r["retired_at"].isoformat() if r["retired_at"] else None,
             "notes":                r["notes"],
+            "model_lane":           r["model_lane"],
+            "source_filter":        r["source_filter"],
             "feature_columns_json":  r["feature_columns_json"],
             "feature_columns_hash":  r["feature_columns_hash"],
             "feature_count":         r["feature_count"],
             "feature_schema_version": r["feature_schema_version"],
             "dataset_query_cutoff":  r["dataset_query_cutoff"].isoformat() if r["dataset_query_cutoff"] else None,
             "label_version":         r["label_version"],
-            "metrics_json":          r["metrics_json"],
+            "metrics_json":          mj,
             "target_window_seconds": r["target_window_seconds"],
         })
     return {"models": models}
+
+
+@router.get("/catboost/readiness")
+async def catboost_readiness(
+    source: str = "L3",
+    label_version: str = "is_tp_4h_v1",
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Evaluate whether the CatBoost dataset is ready for training.
+
+    Parameters
+    ----------
+    source : str
+        'L3' (→ L3_ONLY policy), 'L3_LAB' (→ L3_LAB_ONLY policy),
+        or 'combined' (→ L3_COMBINED — always blocked).
+    label_version : str
+        e.g. 'is_tp_4h_v1'
+    """
+    from ..ml.dataset_policy import CatBoostReadinessGate, DatasetPolicy
+
+    _POLICY_MAP = {
+        "L3":       DatasetPolicy.L3_ONLY,
+        "l3":       DatasetPolicy.L3_ONLY,
+        "L3_LAB":   DatasetPolicy.L3_LAB_ONLY,
+        "l3_lab":   DatasetPolicy.L3_LAB_ONLY,
+        "combined": DatasetPolicy.L3_COMBINED,
+        "L3_COMBINED": DatasetPolicy.L3_COMBINED,
+    }
+
+    _WIN_MAP = {
+        "is_tp_4h_v1":    14400.0,
+        "is_win_fast_v1": 1800.0,
+    }
+
+    policy = _POLICY_MAP.get(source, DatasetPolicy.L3_ONLY)
+    win_s  = _WIN_MAP.get(label_version, 14400.0)
+
+    gate = CatBoostReadinessGate()
+    report = await gate.check(db, user_id, policy, label_version, win_s)
+    return report.to_dict()
 
 
 @router.get("/status")

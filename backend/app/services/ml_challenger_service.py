@@ -38,10 +38,16 @@ N_TRIALS_CB = int(__import__("os").getenv("ML_CHALLENGER_N_TRIALS_CB", "20"))
 
 # Lane 1 (XGBoost challenger): global opportunity signal, no profile bias.
 LGBM_TRAIN_SOURCES: List[str] = ["L1_SPECTRUM"]
-# Lane 2 (CatBoost validator): profile-scoped decisions only.
-CATBOOST_TRAIN_SOURCES: List[str] = ["L3", "L3_LAB"]
+# Lane 2 (CatBoost validator): separate policies — combined is BLOCKED by default.
+# Use catboost_source_filter=["L3"] or ["L3_LAB"] in train_challengers().
+CATBOOST_TRAIN_SOURCES: List[str] = ["L3", "L3_LAB"]  # kept for backward-compat; blocked at runtime
+CATBOOST_L3_ONLY_SOURCES: List[str] = ["L3"]
+CATBOOST_L3_LAB_ONLY_SOURCES: List[str] = ["L3_LAB"]
 # Backwards-compat alias — callers that pass source_filter still work.
 TRAIN_SOURCES: List[str] = LGBM_TRAIN_SOURCES  # was ["L3", "L1_SPECTRUM"] — deprecated
+
+# Error code emitted when combined L3+L3_LAB is requested but gate is closed.
+MIXED_SOURCE_BLOCKED_REASON = "MIXED_SOURCE_DATASET_BLOCKED"
 
 
 _PROFILE_NULL_BUCKET = 9999  # reserved bucket for NULL profile_id
@@ -726,6 +732,20 @@ class MLChallengerService:
         )
         return model_uuid
 
+    @staticmethod
+    def _check_mixed_source_gate(cb_sources: List[str]) -> Optional[str]:
+        """Return a blocked reason string if combined L3+L3_LAB is detected.
+
+        The L3+L3_LAB combination is blocked by default because of the
+        source-composition shift documented in the v42 audit: train=79.7% L3_LAB,
+        test=91.4% L3 → AUC inversion.  Callers must pass a single-source list.
+        """
+        has_l3      = "L3" in cb_sources
+        has_l3_lab  = "L3_LAB" in cb_sources
+        if has_l3 and has_l3_lab:
+            return MIXED_SOURCE_BLOCKED_REASON
+        return None
+
     async def train_challengers(
         self,
         db: AsyncSession,
@@ -740,21 +760,56 @@ class MLChallengerService:
         lgbm_source_filter: Optional[List[str]] = None,
         catboost_source_filter: Optional[List[str]] = None,
         win_fast_threshold_s: float = 1800.0,
+        allow_mixed_source: bool = False,
     ) -> Dict[str, Any]:
         """
         Treina challengers habilitados e registra no banco.
 
         Arquitetura 2-lanes:
           - LightGBM (Lane 1): L1_SPECTRUM — global opportunity filter
-          - CatBoost  (Lane 2): L3 + L3_LAB — profile validator com categóricas
+          - CatBoost  (Lane 2): L3_ONLY ou L3_LAB_ONLY — policy separada por source
+
+        IMPORTANTE: combinar L3+L3_LAB no CatBoost está BLOQUEADO por padrão.
+        A auditoria do v42 mostrou que o source composition shift (80% L3_LAB treino
+        → 91% L3 test) causou inversão de AUC no hold-out. Use catboost_source_filter
+        com apenas um source, ou passe allow_mixed_source=True explicitamente
+        (não recomendado).
 
         Parâmetros:
+            catboost_source_filter: ['L3'] ou ['L3_LAB'] (nunca ambos sem allow_mixed_source)
             lgbm_source_filter: override para fontes do LightGBM (default: LGBM_TRAIN_SOURCES)
-            catboost_source_filter: override para fontes do CatBoost (default: CATBOOST_TRAIN_SOURCES)
             source_filter: override legacy (aplicado a ambos se lgbm/catboost não fornecidos)
+            allow_mixed_source: bypass do gate L3+L3_LAB (False por padrão)
         """
         if not enable_lightgbm and not enable_catboost:
             return {"skipped": "no_challengers_enabled"}
+
+        # Mixed-source gate: run BEFORE any expensive imports so the block
+        # is returned even when feature_extractor is unavailable.
+        if enable_catboost and not allow_mixed_source:
+            _early_cb_sources = catboost_source_filter or (
+                source_filter if source_filter else CATBOOST_L3_ONLY_SOURCES
+            )
+            _early_block = self._check_mixed_source_gate(_early_cb_sources)
+            if _early_block:
+                logger.warning(
+                    "[MLChallenger] CatBoost BLOCKED (early): %s (sources=%s user=%s)",
+                    _early_block, _early_cb_sources, user_id,
+                )
+                return {
+                    "catboost": {
+                        "status": "blocked",
+                        "reason": _early_block,
+                        "sources": _early_cb_sources,
+                        "message": (
+                            "CatBoost L3+L3_LAB combined training is disabled. "
+                            "v42 audit: source composition shift (train=79.7% L3_LAB → "
+                            "test=91.4% L3) caused AUC inversion (val=0.707 → test=0.422). "
+                            "Pass catboost_source_filter=['L3'] or ['L3_LAB'], "
+                            "or allow_mixed_source=True to override (not recommended)."
+                        ),
+                    }
+                }
 
         try:
             from app.ml.feature_extractor import FEATURE_COLUMNS as _FC
@@ -833,9 +888,30 @@ class MLChallengerService:
             else:
                 results["lightgbm"] = {"status": "not_installed"}
 
-        # ── Lane 2: CatBoost em L3 + L3_LAB com features categóricas ────────────
+        # ── Lane 2: CatBoost — L3_ONLY ou L3_LAB_ONLY (combinado BLOQUEADO) ────
         if enable_catboost:
-            cb_sources = catboost_source_filter or (source_filter if source_filter else CATBOOST_TRAIN_SOURCES)
+            cb_sources = catboost_source_filter or (source_filter if source_filter else CATBOOST_L3_ONLY_SOURCES)
+            # Mixed source gate: block L3+L3_LAB combined unless explicitly overridden.
+            if not allow_mixed_source:
+                blocked_reason = self._check_mixed_source_gate(cb_sources)
+                if blocked_reason:
+                    results["catboost"] = {
+                        "status": "blocked",
+                        "reason": blocked_reason,
+                        "sources": cb_sources,
+                        "message": (
+                            "CatBoost L3+L3_LAB combined training is disabled. "
+                            "v42 audit: source composition shift (train=79.7% L3_LAB → "
+                            "test=91.4% L3) caused AUC inversion (0.707 val → 0.422 test). "
+                            "Pass catboost_source_filter=['L3'] or ['L3_LAB'] instead, "
+                            "or allow_mixed_source=True to override (not recommended)."
+                        ),
+                    }
+                    logger.warning(
+                        "[MLChallenger] CatBoost BLOCKED: %s (sources=%s user=%s)",
+                        blocked_reason, cb_sources, user_id,
+                    )
+                    return results  # skip further processing
             # L3_PROFILE_STRICT policy: load all records first for metadata, then filter.
             # L3 has 66%+ NULL profile_id — training without filter produces a "global/unknown"
             # model, defeating the purpose of the L3_PROFILE lane.
@@ -878,6 +954,13 @@ class MLChallengerService:
                                 _train_catboost_sync,
                                 X_tr, y_tr, X_va, y_va, all_cols, n_trials_cb, cat_indices, X_te, y_te,
                             )
+                            # Derive lane from sources: single-source policies get distinct lanes.
+                            if cb_sources == ["L3"]:
+                                cb_lane = "L3_PROFILE"
+                            elif cb_sources == ["L3_LAB"]:
+                                cb_lane = "L3_LAB_PROFILE"
+                            else:
+                                cb_lane = "L3_PROFILE"  # combined (only if allow_mixed_source)
                             model_id = await self._save_to_db(
                                 db, user_id=user_id,
                                 model_type="catboost",
@@ -886,12 +969,17 @@ class MLChallengerService:
                                 metrics={
                                     **cb_result["metrics"],
                                     "train_sources": cb_sources,
+                                    "dataset_policy": (
+                                        "L3_ONLY" if cb_sources == ["L3"]
+                                        else "L3_LAB_ONLY" if cb_sources == ["L3_LAB"]
+                                        else "L3_COMBINED"
+                                    ),
                                     "cat_features": ["source_encoded", "profile_id_encoded"],
                                     **l3_meta,
                                 },
                                 threshold=cb_result["threshold"],
                                 profile_id=profile_id,
-                                model_lane="L3_PROFILE",
+                                model_lane=cb_lane,
                                 cat_feature_indices=cat_indices,
                                 test_metrics=cb_result.get("test_metrics"),
                                 win_fast_threshold_s=win_fast_threshold_s,
@@ -900,7 +988,7 @@ class MLChallengerService:
                             results["catboost"] = {
                                 "status": "trained",
                                 "model_id": str(model_id),
-                                "lane": "L3_PROFILE",
+                                "lane": cb_lane,
                                 "sources": cb_sources,
                                 "metrics": cb_result["metrics"],
                                 "test_metrics": cb_result.get("test_metrics"),

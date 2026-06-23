@@ -305,12 +305,13 @@ class TestGovernanceWarning:
         assert warning == "ranking_shadow_only"
 
     def test_ml_api_response_includes_governance_warning_field(self):
-        """Verify ml.py list_ml_models response includes governance_warning."""
+        """Verify ml.py list_ml_models response includes governance_warning via governance_flags_for_model."""
         import inspect
         import backend.app.api.ml as ml_module
         source = inspect.getsource(ml_module.list_ml_models)
         assert "governance_warning" in source
-        assert "ranking_shadow_only" in source
+        # ranking_shadow_only is now computed by governance_flags_for_model() in dataset_policy.py
+        assert "governance_flags_for_model" in source
 
 
 # ---------------------------------------------------------------------------
