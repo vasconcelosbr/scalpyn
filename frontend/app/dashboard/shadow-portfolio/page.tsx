@@ -618,18 +618,32 @@ function SummaryCards({
 }
 
 // ── trade table ──────────────────────────────────────────────────────────────
-const COLS: { key: string; label: string; align?: "left" | "right" | "center" }[] = [
+type TradeSortKey =
+  | "entry_price"
+  | "current_price"
+  | "tp_price"
+  | "sl_price"
+  | "pnl_pct"
+  | "pnl_usdt"
+  | "holding_seconds";
+
+const COLS: {
+  key: string;
+  label: string;
+  align?: "left" | "right" | "center";
+  sortKey?: TradeSortKey;
+}[] = [
   { key: "created_at", label: "Aberto em" },
   { key: "symbol", label: "Símbolo" },
   { key: "status", label: "Status", align: "center" },
-  { key: "entry", label: "Entrada", align: "right" },
-  { key: "current", label: "Preço Atual", align: "right" },
-  { key: "tp", label: "TP", align: "right" },
-  { key: "sl", label: "SL", align: "right" },
+  { key: "entry", label: "Entrada", align: "right", sortKey: "entry_price" },
+  { key: "current", label: "Preço Atual", align: "right", sortKey: "current_price" },
+  { key: "tp", label: "TP", align: "right", sortKey: "tp_price" },
+  { key: "sl", label: "SL", align: "right", sortKey: "sl_price" },
   { key: "outcome", label: "Resultado", align: "center" },
-  { key: "pnl_pct", label: "P&L %", align: "right" },
-  { key: "pnl_usdt", label: "P&L $", align: "right" },
-  { key: "holding", label: "Holding", align: "right" },
+  { key: "pnl_pct", label: "P&L %", align: "right", sortKey: "pnl_pct" },
+  { key: "pnl_usdt", label: "P&L $", align: "right", sortKey: "pnl_usdt" },
+  { key: "holding", label: "Holding", align: "right", sortKey: "holding_seconds" },
   { key: "completed_at", label: "Fechado em" },
 ];
 
@@ -652,6 +666,87 @@ function TradeTable({
     const id = window.setInterval(() => setNowTick(Date.now()), 30_000);
     return () => window.clearInterval(id);
   }, []);
+
+  const [tradeSortKey, setTradeSortKey] = useState<TradeSortKey | null>(null);
+  const [tradeSortDir, setTradeSortDir] = useState<"asc" | "desc">("desc");
+
+  const handleTradeSort = (key: TradeSortKey) => {
+    if (tradeSortKey === key) {
+      setTradeSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setTradeSortKey(key);
+      setTradeSortDir("desc");
+    }
+  };
+
+  const TradeSortBtn = ({ col }: { col: TradeSortKey }) => {
+    const active = tradeSortKey === col;
+    return (
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          handleTradeSort(col);
+        }}
+        style={{
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          padding: "0 2px",
+          color: active ? C.blue : C.dim,
+          verticalAlign: "middle",
+          lineHeight: 0,
+        }}
+      >
+        {active && tradeSortDir === "asc" ? (
+          <ChevronUp size={11} />
+        ) : active && tradeSortDir === "desc" ? (
+          <ChevronDown size={11} />
+        ) : (
+          <ChevronDown size={11} style={{ opacity: 0.3 }} />
+        )}
+      </button>
+    );
+  };
+
+  const sorted = useMemo(() => {
+    if (!tradeSortKey) return items;
+    const now = Date.now();
+    const getLive = (it: ShadowTradeRead, key: TradeSortKey): number | null => {
+      const isOpen = it.status === "PENDING" || it.status === "RUNNING";
+      if (key === "pnl_pct") {
+        if (isOpen && it.entry_price != null && it.current_price != null && it.entry_price > 0) {
+          return ((it.current_price - it.entry_price) / it.entry_price) * 100;
+        }
+        return it.pnl_pct ?? null;
+      }
+      if (key === "pnl_usdt") {
+        if (isOpen && it.entry_price != null && it.current_price != null && it.entry_price > 0 && it.amount_usdt) {
+          const pct = ((it.current_price - it.entry_price) / it.entry_price) * 100;
+          return (it.amount_usdt * pct) / 100;
+        }
+        return it.pnl_usdt ?? null;
+      }
+      if (key === "holding_seconds") {
+        if (isOpen) {
+          const ref = it.entry_timestamp ?? it.created_at;
+          if (ref) {
+            try {
+              const ms = new Date(ref).getTime();
+              if (!isNaN(ms)) return Math.max(0, Math.floor((now - ms) / 1000));
+            } catch { /* ignore */ }
+          }
+        }
+        return it.holding_seconds ?? null;
+      }
+      return (it as unknown as Record<string, number | null>)[key] ?? null;
+    };
+    return [...items].sort((a, b) => {
+      const nullVal = tradeSortDir === "asc" ? Infinity : -Infinity;
+      const av = getLive(a, tradeSortKey) ?? nullVal;
+      const bv = getLive(b, tradeSortKey) ?? nullVal;
+      return tradeSortDir === "asc" ? av - bv : bv - av;
+    });
+  }, [items, tradeSortKey, tradeSortDir, nowTick]);
 
   if (error) {
     return (
@@ -746,12 +841,13 @@ function TradeTable({
                 }}
               >
                 {col.label}
+                {col.sortKey && <TradeSortBtn col={col.sortKey} />}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {items.map((it) => {
+          {sorted.map((it) => {
             const sStyle = statusStyle(it.status);
             const oStyle = outcomeStyle(it.outcome);
             // Para trades em aberto (sem pnl_pct persistido), calcula
