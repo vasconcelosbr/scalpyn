@@ -750,6 +750,7 @@ async def _record_simulation_one_async(shadow_id: Any) -> None:
             "falhou para shadow_id=%s — ignorando (best-effort, snapshot "
             "de saída já foi commitado em TX1)",
             shadow_id,
+            exc_info=True,
         )
 
 

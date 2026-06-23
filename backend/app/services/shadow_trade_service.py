@@ -2291,8 +2291,7 @@ _INSERT_SIM_SQL = text("""
         :mae_pct, :mfe_pct,
         CAST(:exit_metrics_json AS JSONB)
     )
-    ON CONFLICT (decision_id) WHERE source = 'SHADOW'
-        AND decision_id IS NOT NULL DO NOTHING
+    ON CONFLICT DO NOTHING
     RETURNING id
 """)
 
