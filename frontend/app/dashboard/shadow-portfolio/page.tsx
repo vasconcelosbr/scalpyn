@@ -2071,7 +2071,7 @@ function ProfileReportTable({
   };
 
   const thStyle: React.CSSProperties = {
-    padding: "8px 12px",
+    padding: "7px 10px",
     fontSize: 11,
     color: C.muted,
     fontWeight: 500,
@@ -2081,7 +2081,7 @@ function ProfileReportTable({
     background: C.elevated,
   };
   const tdStyle: React.CSSProperties = {
-    padding: "9px 12px",
+    padding: "7px 10px",
     fontSize: 12,
     borderBottom: `1px solid ${C.border}`,
     color: C.text,
@@ -2109,16 +2109,16 @@ function ProfileReportTable({
         background: C.surface,
         border: `1px solid ${C.border}`,
         borderRadius: 8,
-        overflow: "hidden",
+        overflow: "auto",
       }}
     >
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <table style={{ minWidth: 860, width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th style={thStyle}>
+            <th style={{ ...thStyle, minWidth: 140, maxWidth: 200 }}>
               Perfil <SortBtn col="profile_name" />
             </th>
-            <th style={thStyle}>Watchlist</th>
+            <th style={{ ...thStyle, minWidth: 100, maxWidth: 140 }}>Watchlist</th>
             <th style={{ ...thStyle, textAlign: "right" }}>
               Total <SortBtn col="total" />
             </th>
@@ -2177,8 +2177,10 @@ function ProfileReportTable({
                 key={row.profile_id}
                 style={{ background: i % 2 === 0 ? "transparent" : `${C.elevated}66`, opacity: noTrades ? 0.65 : 1 }}
               >
-                <td style={tdStyle}>{row.profile_name}</td>
-                <td style={{ ...tdStyle, color: C.muted }}>
+                <td style={{ ...tdStyle, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.profile_name}>
+                  {row.profile_name}
+                </td>
+                <td style={{ ...tdStyle, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: C.muted }} title={watchlistNames[row.profile_id] ?? ""}>
                   {watchlistNames[row.profile_id] ?? "—"}
                 </td>
                 <td style={{ ...tdStyle, textAlign: "right" }}>
