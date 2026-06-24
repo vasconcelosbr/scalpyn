@@ -595,7 +595,8 @@ _INSERT_SHADOW_SQL = text("""
         barrier_mode, tp_pct_applied, sl_pct_applied,
         profile_id, profile_version, profile_name, strategy_type,
         watchlist_id, watchlist_name, watchlist_level, source_watchlist_id,
-        lineage_confidence, lineage_source, lineage_resolved_at
+        lineage_confidence, lineage_source, lineage_resolved_at,
+        ml_model_id, ml_probability, final_priority_score, model_lane, ranking_id
     ) VALUES (
         gen_random_uuid(),
         :decision_id, :user_id, :symbol, :strategy, :direction,
@@ -610,7 +611,9 @@ _INSERT_SHADOW_SQL = text("""
         :profile_id, :profile_version, :profile_name, :strategy_type,
         CAST(:watchlist_id AS UUID), :watchlist_name, :watchlist_level,
         CAST(:source_watchlist_id AS UUID),
-        :lineage_confidence, :lineage_source, :lineage_resolved_at
+        :lineage_confidence, :lineage_source, :lineage_resolved_at,
+        CAST(:ml_model_id AS UUID), :ml_probability, :final_priority_score,
+        :model_lane, CAST(:ranking_id AS UUID)
     )
     ON CONFLICT DO NOTHING
     RETURNING id
@@ -783,6 +786,13 @@ async def _create_from_decision(
             "lineage_confidence": lineage.lineage_confidence if lineage else None,
             "lineage_source": lineage.lineage_source if lineage else None,
             "lineage_resolved_at": lineage.lineage_resolved_at if lineage else None,
+            # ML lineage (migration 106, Fase 8) — only set when the caller
+            # actually computed a score for this decision; never inferred.
+            "ml_model_id": getattr(lineage, "ml_model_id", None) if lineage else None,
+            "ml_probability": getattr(lineage, "ml_probability", None) if lineage else None,
+            "final_priority_score": getattr(lineage, "final_priority_score", None) if lineage else None,
+            "model_lane": getattr(lineage, "model_lane", None) if lineage else None,
+            "ranking_id": getattr(lineage, "ranking_id", None) if lineage else None,
         },
     )
     row = res.fetchone()
@@ -1092,9 +1102,18 @@ async def create_shadows_for_new_decisions(
     source_watchlist_id: Optional[str] = None,
     profile_id: Optional[str] = None,
     profile_name: Optional[str] = None,
+    ml_scores_by_symbol: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> int:
     """Inline shadow creation triggered by pipeline_scan immediately after
     _persist_decision_logs.
+
+    ml_scores_by_symbol: Optional[symbol -> {"probability", "model_id",
+    "model_lane"}]. When the caller already ran the L3 ML gate for this
+    symbol (see pipeline_scan.py _ml_gate_scores), pass it here so the
+    resulting shadow carries real ML lineage from the moment it's created
+    instead of relying on the separate /api/ml/orchestrator/backfill pass
+    (Fase 8, audit 2026-06-24, P1: ML lineage was always written async/later,
+    never at creation time).
 
     Eliminates the async gap between the decisions_log commit and the next
     shadow_trade_monitor beat (up to 5 min), which is the primary source of
@@ -1206,10 +1225,25 @@ async def create_shadows_for_new_decisions(
                             decision_id,
                         )
                         continue
+                    _ml_for_symbol = (ml_scores_by_symbol or {}).get(decision.symbol)
+                    _decision_lineage = _lineage
+                    if _ml_for_symbol:
+                        import dataclasses as _dc
+                        _base = _lineage if _lineage is not None else WatchlistLineageContext(
+                            lineage_confidence="EXACT",
+                            lineage_source="pipeline_scan_ml_gate",
+                            lineage_resolved_at=_dt.now(_tz.utc),
+                        )
+                        _decision_lineage = _dc.replace(
+                            _base,
+                            ml_model_id=_ml_for_symbol.get("model_id"),
+                            ml_probability=_ml_for_symbol.get("probability"),
+                            model_lane=_ml_for_symbol.get("model_lane"),
+                        )
                     new_id = await _create_from_decision(
                         own_db, decision, "NOT_TRADABLE", user_config,
                         source=SHADOW_SOURCE_L3,
-                        lineage=_lineage,
+                        lineage=_decision_lineage,
                     )
                     if new_id is not None:
                         created += 1

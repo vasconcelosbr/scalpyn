@@ -2271,6 +2271,11 @@ async def get_watchlist_assets(
                             metrics=ind,
                             db=db,
                             symbol=a.symbol,
+                            profile_id=str(wl.profile_id) if wl.profile_id else None,
+                            # Audit P2-5 fix: this block only runs for
+                            # wl.level == "L3" (checked above) — lane is
+                            # always L3_PROFILE here.
+                            model_lane="L3_PROFILE",
                         )
 
                         probability = result["win_fast_probability"]

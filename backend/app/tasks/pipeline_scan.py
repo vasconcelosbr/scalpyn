@@ -2920,6 +2920,12 @@ async def _run_pipeline_scan():
                                             # decision_id not yet known — ml_predictions
                                             # row written post-persist below.
                                             decision_id=None,
+                                            profile_id=d.get("profile_id"),
+                                            # Audit P2-5 fix: this gate runs only
+                                            # inside the L3 block (effective_level
+                                            # == "L3", checked above) — the
+                                            # intended lane is always L3_PROFILE.
+                                            model_lane="L3_PROFILE",
                                         )
                                     except Exception as _exc:
                                         logger.warning(
@@ -2945,6 +2951,10 @@ async def _run_pipeline_scan():
                                         "approved": _approved,
                                         "threshold": _ml.get("threshold_used"),
                                         "model_id": _ml.get("model_id"),
+                                        # Fase 8 lineage — this gate only runs for
+                                        # effective_level == "L3", so the lane is
+                                        # always L3_PROFILE (see model_lane= above).
+                                        "model_lane": "L3_PROFILE",
                                     }
                                     # Embed probability and macro context so they reach decisions_log
                                     if isinstance(_d.get("metrics"), dict):
@@ -3247,6 +3257,12 @@ async def _run_pipeline_scan():
                                 watchlist_level=wl.level,
                                 source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
                                 profile_id=str(wl.profile_id) if wl.profile_id else None,
+                                # Fase 8 (audit 2026-06-24): thread the L3 ML
+                                # gate score computed above straight into the
+                                # shadow row at creation time instead of
+                                # leaving ml_probability/model_lane NULL until
+                                # a later /api/ml/orchestrator/backfill call.
+                                ml_scores_by_symbol=_ml_gate_scores,
                             )
 
                         # ── Shadow Bypass Score Gate ──────────────────────────────────────

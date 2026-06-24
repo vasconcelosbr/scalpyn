@@ -75,6 +75,10 @@ class PredictRequest(BaseModel):
 
     features: Dict[str, Any]
     profile_type: str = "FUTURES"
+    # Audit P2-5: explicit lane avoids ambiguous model selection when more
+    # than one lane has an active+approved model simultaneously. None keeps
+    # the legacy lane-agnostic behavior for existing diagnostic callers.
+    model_lane: Optional[str] = None
 
 
 class BatchPredictRequest(BaseModel):
@@ -82,6 +86,7 @@ class BatchPredictRequest(BaseModel):
 
     assets: List[Dict[str, Any]]
     profile_type: str = "FUTURES"
+    model_lane: Optional[str] = None
 
 
 class ReloadModelRequest(BaseModel):
@@ -237,6 +242,7 @@ async def predict(
         result = await _win_fast_predictor.predict(
             metrics=request.features,
             db=db,
+            model_lane=request.model_lane,
         )
 
         return {
@@ -287,6 +293,7 @@ async def predict_batch(
                     metrics=asset.get("features", asset),
                     db=db,
                     symbol=asset.get("symbol"),
+                    model_lane=request.model_lane,
                 )
                 results.append({**asset, "ml": pred})
             except Exception:
@@ -429,6 +436,101 @@ async def list_ml_models(
             "target_window_seconds": r["target_window_seconds"],
         })
     return {"models": models}
+
+
+@router.get("/models/eligible")
+async def list_eligible_models(
+    lane: str,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """List active models that have passed the Promotion Gate for a given lane.
+
+    Audit P0-1/P2-5 fix — this is the query any future ML Opportunity Ranking
+    job must use to pick a model, instead of "status='active' ORDER BY
+    activated_at DESC LIMIT 1" without a lane/quality filter. Returns an empty
+    list (not an error) when there's no eligible model — callers must handle
+    that as NO_ELIGIBLE_MODEL_FOR_LANE, never fall back to a random model.
+    """
+    from sqlalchemy import text as sa_text
+
+    if lane not in ("L1_SPECTRUM", "L3_PROFILE"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"lane inválida: {lane!r} — use L1_SPECTRUM ou L3_PROFILE",
+        )
+
+    rows = await db.execute(sa_text("""
+        SELECT id, version, model_lane, label_version, metrics_json,
+               decision_threshold, activated_at
+        FROM ml_models
+        WHERE status = 'active'
+          AND model_lane = :lane
+          AND (metrics_json->'promotion_gate'->>'status') = 'APPROVED'
+        ORDER BY activated_at DESC NULLS LAST
+    """), {"lane": lane})
+
+    models = [
+        {
+            "id": str(r["id"]),
+            "version": r["version"],
+            "model_lane": r["model_lane"],
+            "label_version": r["label_version"],
+            "decision_threshold": r["decision_threshold"],
+            "activated_at": r["activated_at"].isoformat() if r["activated_at"] else None,
+            "promotion_gate": (r["metrics_json"] or {}).get("promotion_gate"),
+        }
+        for r in rows.mappings()
+    ]
+    return {"lane": lane, "eligible_models": models, "count": len(models)}
+
+
+@router.post("/models/{model_id}/evaluate-promotion-gate")
+async def evaluate_model_promotion_gate(
+    model_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """Re-evaluate the Promotion Gate for a single model and persist the result
+    into metrics_json.promotion_gate. Never changes `status` — this endpoint
+    only computes and records eligibility; promoting/demoting status is a
+    separate, deliberately unimplemented action (no auto-promotion exists
+    anywhere in this codebase as of the 2026-06-24 audit)."""
+    import json
+    from sqlalchemy import text as sa_text
+    from ..ml.promotion_gate import evaluate_promotion_gate, merge_promotion_gate_into_metrics_json
+    from ..services.profile_intelligence_audit_service import log_pi_event
+
+    row = (await db.execute(sa_text("""
+        SELECT id, model_lane, label_version, source_filter, dataset_contract_id,
+               feature_count, test_samples, roc_auc, metrics_json
+        FROM ml_models WHERE id = :id
+    """), {"id": str(model_id)})).mappings().first()
+
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Modelo não encontrado")
+
+    before = dict(row["metrics_json"] or {})
+    gate_result = evaluate_promotion_gate(dict(row))
+    after = merge_promotion_gate_into_metrics_json(row["metrics_json"], gate_result)
+
+    await db.execute(sa_text("""
+        UPDATE ml_models SET metrics_json = :mj WHERE id = :id
+    """), {"mj": json.dumps(after), "id": str(model_id)})
+    await db.commit()
+
+    await log_pi_event(
+        db, user_id,
+        event_type="ML_PROMOTION_GATE_EVALUATED",
+        event_description=f"model_id={model_id} status={gate_result['status']}",
+        before_json=before,
+        after_json=after,
+        diff_json={"promotion_gate": gate_result},
+        actor_user_id=user_id,
+    )
+    await db.commit()
+
+    return {"model_id": str(model_id), "promotion_gate": gate_result}
 
 
 @router.get("/catboost/readiness")

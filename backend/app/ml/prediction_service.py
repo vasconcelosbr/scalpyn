@@ -4,12 +4,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
 from app.ml.feature_extractor import FEATURE_COLUMNS, ML_EXCLUDED_FIELDS, extract_features
-from app.ml.gcs_model_loader import get_model
+from app.ml.gcs_model_loader import get_model, NoEligibleModelError
 from app.ml.macro_client import fetch_macro_context
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_THRESHOLD = 0.500
+
+VALID_MODEL_LANES = frozenset({"L1_SPECTRUM", "L3_PROFILE"})
 
 
 class WinFastPredictor:
@@ -19,15 +21,37 @@ class WinFastPredictor:
     Threshold lido do banco (Zero Hardcode).
     """
 
-    async def _get_threshold(self, db: AsyncSession) -> tuple:
-        """Busca model_id e threshold do modelo ativo."""
-        result = await db.execute(text("""
-            SELECT id, decision_threshold
-            FROM ml_models
-            WHERE status = 'active'
-            ORDER BY activated_at DESC
-            LIMIT 1
-        """))
+    async def _get_threshold(self, db: AsyncSession, model_lane: str | None = None) -> tuple:
+        """Busca model_id e threshold do modelo ativo.
+
+        Audit P2-5 fix: sem model_lane, a query original podia retornar o
+        modelo de uma lane diferente da pretendida sempre que mais de uma
+        lane tivesse modelo active simultaneamente (estado real em produção
+        em 2026-06-24: v44/L3_PROFILE e v46/L1_SPECTRUM ambos active). Quando
+        model_lane é passado, exige também aprovação no Promotion Gate.
+        """
+        if model_lane:
+            result = await db.execute(text("""
+                SELECT id, decision_threshold
+                FROM ml_models
+                WHERE status = 'active'
+                  AND model_lane = :lane
+                  AND (metrics_json->'promotion_gate'->>'status') = 'APPROVED'
+                ORDER BY activated_at DESC
+                LIMIT 1
+            """), {"lane": model_lane})
+        else:
+            logger.warning(
+                "[ML] _get_threshold() chamado sem model_lane — seleção "
+                "lane-agnostic (legado, ambígua com múltiplos modelos active)."
+            )
+            result = await db.execute(text("""
+                SELECT id, decision_threshold
+                FROM ml_models
+                WHERE status = 'active'
+                ORDER BY activated_at DESC
+                LIMIT 1
+            """))
         row = result.fetchone()
         if not row:
             return None, DEFAULT_THRESHOLD
@@ -40,21 +64,50 @@ class WinFastPredictor:
         decision_id: int | None = None,
         symbol: str | None = None,
         profile_id: str | None = None,
+        model_lane: str | None = None,
     ) -> dict:
         """
-        Prediz probabilidade WIN_FAST para um sinal L3.
+        Prediz probabilidade WIN_FAST para um sinal L1/L3.
+
+        Args:
+            model_lane: 'L1_SPECTRUM' ou 'L3_PROFILE'. Fortemente recomendado
+                em todo caller novo (audit P2-5). None preserva o
+                comportamento legado lane-agnostic para callers de
+                diagnóstico ainda não migrados.
 
         Returns:
             {
-                "win_fast_probability": 0.73,
-                "model_approved": True,
-                "threshold_used": 0.50,
-                "model_id": "uuid" | None
+                "win_fast_probability": 0.73 | None,
+                "model_approved": True | False,
+                "threshold_used": 0.50 | None,
+                "model_id": "uuid" | None,
+                "model_lane": "L1_SPECTRUM" | None,
+                "score_status": "OK" | "SKIPPED",
+                "reason_code": None | "NO_ELIGIBLE_MODEL_FOR_LANE" | "model_unavailable_fail_closed",
             }
         """
+        if model_lane is not None and model_lane not in VALID_MODEL_LANES:
+            raise ValueError(f"model_lane inválida: {model_lane!r} — use {sorted(VALID_MODEL_LANES)}")
+
         # Carrega modelo (GCS cache) — profile-specific if profile_id provided
         try:
-            model = get_model(profile_id=profile_id)
+            model = get_model(profile_id=profile_id, model_lane=model_lane)
+        except NoEligibleModelError as e:
+            # Distinct from infra failure — there's simply no APPROVED model for
+            # this lane right now. Regra absoluta #15: não inventar score nem
+            # usar modelo aleatório. score_status=SKIPPED, não bloqueia decisão
+            # real por si só (quem chama decide o que fazer com SKIPPED).
+            logger.info("[ML] NO_ELIGIBLE_MODEL_FOR_LANE lane=%s: %s", model_lane, e)
+            return {
+                "win_fast_probability": None,
+                "model_approved": False,
+                "threshold_used": None,
+                "model_id": None,
+                "model_version": None,
+                "model_lane": model_lane,
+                "score_status": "SKIPPED",
+                "reason_code": "NO_ELIGIBLE_MODEL_FOR_LANE",
+            }
         except Exception as e:
             logger.warning(f"Modelo indisponível: {e} — BLOQUEANDO por segurança (fail-closed)")
             return {
@@ -62,6 +115,10 @@ class WinFastPredictor:
                 "model_approved": False,
                 "threshold_used": None,
                 "model_id": None,
+                "model_version": None,
+                "model_lane": model_lane,
+                "score_status": "SKIPPED",
+                "reason_code": "model_unavailable_fail_closed",
                 "reason": "model_unavailable_fail_closed",
             }
 
@@ -77,7 +134,7 @@ class WinFastPredictor:
                 )
 
         # Threshold do banco
-        model_id, threshold = await self._get_threshold(db)
+        model_id, threshold = await self._get_threshold(db, model_lane=model_lane)
 
         # ── Macro enrichment (Market Data Hub) ──────────────────────────────
         # Fetch global macro context concurrently. Never blocks inference on
@@ -154,6 +211,9 @@ class WinFastPredictor:
             "model_approved":       approved,
             "threshold_used":       threshold,
             "model_id":             model_id,
+            "model_lane":           model_lane,
+            "score_status":         "OK",
+            "reason_code":          None,
             # Macro context returned so callers can persist it to decisions_log.metrics
             # for future ML training without re-fetching. Internal flags stripped.
             "macro_context": {k: v for k, v in macro.items() if k != "macro_context_available"},

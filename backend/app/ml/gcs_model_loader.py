@@ -22,6 +22,17 @@ logger = logging.getLogger(__name__)
 MODEL_CACHE_TTL = int(os.getenv("MODEL_CACHE_TTL", "300"))  # seconds
 
 
+class NoEligibleModelError(Exception):
+    """Raised when model_lane is given and no active model for that lane has
+    passed the Promotion Gate (status='APPROVED' in metrics_json.promotion_gate).
+
+    This is a distinct, expected outcome — NOT an infra/loading failure — so
+    callers (prediction_service.py) must catch it separately and respond with
+    reason_code='NO_ELIGIBLE_MODEL_FOR_LANE' rather than a generic fail-closed
+    'model unavailable' response.
+    """
+
+
 def _ml_dependency_versions() -> Dict[str, Optional[str]]:
     deps = {
         "xgboost": "xgboost",
@@ -68,25 +79,42 @@ class GCSModelLoader:
                 cls._instance._cache: Dict[str, Dict] = {}
         return cls._instance
 
-    def get_model(self, profile_id: Optional[str] = None):
+    def get_model(self, profile_id: Optional[str] = None, model_lane: Optional[str] = None):
         """Retorna modelo — recarrega do DB se cache expirado.
 
         Args:
             profile_id: Optional UUID string. When provided, loads the active
                         profile-specific model first; falls back to global model
                         if no profile model exists.
+            model_lane: 'L1_SPECTRUM' or 'L3_PROFILE'. Audit P2-5 fix — selecting
+                        the active model without filtering by lane is ambiguous
+                        whenever more than one lane has an active model
+                        simultaneously (the real production state as of the
+                        2026-06-24 audit: v44/L3_PROFILE and v46/L1_SPECTRUM were
+                        both active at once). Passing None preserves the old
+                        lane-agnostic behavior for callers not yet migrated
+                        (diagnostics/evaluation_report.py/forward_scorer.py) but
+                        logs a warning so it stays visible during the transition.
         """
+        if model_lane is None:
+            logger.warning(
+                "[ML] get_model() called without model_lane — falling back to "
+                "lane-agnostic 'most recently activated' selection. This is "
+                "ambiguous when multiple lanes have active models simultaneously "
+                "(see audit P2-5). Pass model_lane explicitly for any new caller."
+            )
+
         if profile_id:
-            cache_key = f"profile:{profile_id}"
+            cache_key = f"profile:{profile_id}:{model_lane or 'any'}"
         else:
-            cache_key = "global"
+            cache_key = f"global:{model_lane or 'any'}"
 
         now = time.time()
         cached = self._cache.get(cache_key)
         if cached and (now - cached.get("loaded_at", 0.0)) <= MODEL_CACHE_TTL:
             return cached["model"]
 
-        return self._load_from_db(profile_id=profile_id, cache_key=cache_key)
+        return self._load_from_db(profile_id=profile_id, model_lane=model_lane, cache_key=cache_key)
 
     def _normalize_db_url(self) -> str:
         db_url = os.environ.get("DATABASE_URL", "")
@@ -123,16 +151,38 @@ class GCSModelLoader:
             feature_columns = None
         return {"model": model, "feature_columns": feature_columns, "version": version}
 
-    def _load_from_db(self, profile_id: Optional[str] = None, cache_key: str = "global"):
+    def _load_from_db(
+        self,
+        profile_id: Optional[str] = None,
+        model_lane: Optional[str] = None,
+        cache_key: str = "global",
+    ):
         """Lê model_blob da linha active em ml_models e deserializa.
 
         When profile_id is provided:
         1. Try profile-specific model (model_scope='profile' AND profile_id=profile_id)
         2. Fall back to global model if no profile model exists
+
+        When model_lane is provided (recommended — see audit P2-5), BOTH branches
+        additionally require:
+          - model_lane = <lane>          (no cross-lane ambiguity)
+          - metrics_json->promotion_gate->status = 'APPROVED'
+                                          (no anti-predictive model, see audit P0-1)
+        When model_lane is None, the query keeps the legacy lane-agnostic,
+        gate-agnostic behavior for not-yet-migrated diagnostic callers.
+
+        Raises NoEligibleModelError (not FileNotFoundError) when model_lane is
+        given and no row satisfies the lane+gate filter — this is a distinct,
+        expected outcome (no eligible model for this lane right now), not an
+        infra failure.
         """
         db_url = self._normalize_db_url()
-        logger.info("Carregando modelo do DB (cache_key=%s)...", cache_key)
+        logger.info(
+            "Carregando modelo do DB (cache_key=%s, model_lane=%s)...", cache_key, model_lane
+        )
         t0 = time.time()
+
+        _lane_clause = " AND model_lane = %s AND (metrics_json->'promotion_gate'->>'status') = 'APPROVED' " if model_lane else ""
 
         try:
             conn = psycopg2.connect(db_url, connect_timeout=10)
@@ -142,15 +192,17 @@ class GCSModelLoader:
 
                     # Try profile-specific model first (if profile_id given)
                     if profile_id:
+                        params = [profile_id] + ([model_lane] if model_lane else [])
                         cur.execute(
                             "SELECT model_blob, version FROM ml_models "
                             "WHERE status = 'active' "
                             "  AND model_scope = 'profile' "
                             "  AND profile_id = %s "
                             "  AND model_blob IS NOT NULL "
+                            + _lane_clause +
                             "ORDER BY activated_at DESC NULLS LAST, version DESC "
                             "LIMIT 1",
-                            (profile_id,)
+                            tuple(params)
                         )
                         row = cur.fetchone()
                         if row:
@@ -160,12 +212,15 @@ class GCSModelLoader:
 
                     # Fall back to global model
                     if row is None:
+                        params = [model_lane] if model_lane else []
                         cur.execute(
                             "SELECT model_blob, version FROM ml_models "
                             "WHERE status = 'active' "
                             "  AND (model_scope = 'global' OR model_scope IS NULL OR profile_id IS NULL) "
                             "  AND model_blob IS NOT NULL "
-                            "ORDER BY activated_at DESC NULLS LAST, version DESC LIMIT 1"
+                            + _lane_clause +
+                            "ORDER BY activated_at DESC NULLS LAST, version DESC LIMIT 1",
+                            tuple(params)
                         )
                         row = cur.fetchone()
                         if row and profile_id:
@@ -175,6 +230,11 @@ class GCSModelLoader:
             finally:
                 conn.close()
 
+            if row is None and model_lane:
+                raise NoEligibleModelError(
+                    f"Nenhum modelo active+lane={model_lane} aprovado pelo Promotion Gate. "
+                    f"reason_code=NO_ELIGIBLE_MODEL_FOR_LANE"
+                )
             if row is None:
                 raise FileNotFoundError(
                     "Nenhum modelo ativo com model_blob no DB — "
@@ -223,13 +283,19 @@ class GCSModelLoader:
     def invalidate(self, profile_id: Optional[str] = None):
         """Força reload no próximo request.
 
-        When profile_id given, invalidates only that profile's cache entry.
+        When profile_id given, invalidates every cache entry for that profile
+        (one per model_lane, since cache_key is now "profile:{id}:{lane}").
         When called with no args, invalidates ALL cached entries (global + all profiles).
         """
         if profile_id:
-            cache_key = f"profile:{profile_id}"
-            self._cache.pop(cache_key, None)
-            logger.info("Cache do modelo invalidado para profile_id=%s.", profile_id)
+            prefix = f"profile:{profile_id}:"
+            removed = [k for k in self._cache if k.startswith(prefix)]
+            for k in removed:
+                self._cache.pop(k, None)
+            logger.info(
+                "Cache do modelo invalidado para profile_id=%s (%d entrada(s)).",
+                profile_id, len(removed),
+            )
         else:
             self._cache.clear()
             self._model = None
@@ -241,14 +307,16 @@ class GCSModelLoader:
 _loader = GCSModelLoader()
 
 
-def get_model(profile_id: Optional[str] = None):
+def get_model(profile_id: Optional[str] = None, model_lane: Optional[str] = None):
     """Função de conveniência — use em qualquer lugar.
 
     Args:
         profile_id: Optional UUID string. When provided, tries profile-specific
                     model first, falls back to global model.
+        model_lane: 'L1_SPECTRUM' or 'L3_PROFILE'. Strongly recommended for any
+                    new caller — see NoEligibleModelError / audit P2-5.
     """
-    return _loader.get_model(profile_id=profile_id)
+    return _loader.get_model(profile_id=profile_id, model_lane=model_lane)
 
 
 def invalidate_model_cache(profile_id: Optional[str] = None):

@@ -30,3 +30,14 @@ class WatchlistLineageContext:
     lineage_resolved_at: Optional[datetime] = field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+    # ML lineage (Profile Intelligence Adaptive Loop, Fase 8, audit 2026-06-24).
+    # Populated only when an ML score was actually computed for this decision
+    # at shadow-creation time (e.g. the L3 ML gate in pipeline_scan.py) —
+    # left None otherwise. Never inferred or backfilled with a guess; the
+    # async /api/ml/orchestrator/backfill endpoint remains the path for
+    # historical rows created before this lineage existed.
+    ml_model_id: Optional[str] = None
+    ml_probability: Optional[float] = None
+    final_priority_score: Optional[float] = None
+    model_lane: Optional[str] = None
+    ranking_id: Optional[str] = None

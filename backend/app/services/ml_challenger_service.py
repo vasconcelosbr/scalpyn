@@ -610,8 +610,23 @@ class MLChallengerService:
             fc_schema_ver = None
             label_ver = "is_win_fast_v1"
 
+        # train_sources is injected into `metrics` by train_challengers() callers
+        # (e.g. metrics={**lgbm_result["metrics"], "train_sources": lgbm_sources}).
+        # Audit P1-9 fix: source_filter/dataset_contract_id were columns that
+        # existed since migration 101 but were never populated by any INSERT.
+        _train_sources = metrics.get("train_sources") or []
+        source_filter_str = ",".join(sorted(_train_sources)) if _train_sources else None
+
+        import hashlib as _hashlib
+        if source_filter_str and label_ver and model_lane and fc_hash:
+            dataset_contract_id = _hashlib.sha256(
+                f"{label_ver}|{model_lane}|{source_filter_str}|{fc_hash}".encode()
+            ).hexdigest()[:32]
+        else:
+            dataset_contract_id = None
+
         # Structured metrics_json — separates validation from test set
-        _metrics_json = json.dumps({
+        _metrics_json_dict = {
             "label_version": label_ver,
             "target_window_seconds": int(win_fast_threshold_s),
             "validation": {
@@ -630,7 +645,31 @@ class MLChallengerService:
                 "roc_auc": (test_metrics or {}).get("roc_auc"),
                 "samples": n_test or None,
             } if test_metrics else None,
-        })
+        }
+
+        # Promotion Gate — evaluate eligibility at creation time (audit P0-1 fix).
+        # A model is born 'candidate' regardless of gate outcome (no auto-promotion
+        # happens here); the gate result is persisted so it's visible immediately
+        # and so the eligibility filter used by inference/ranking can rely on it
+        # without requiring a separate backfill step for newly trained models.
+        from app.ml.promotion_gate import evaluate_promotion_gate, merge_promotion_gate_into_metrics_json
+        _gate_input = {
+            "metrics_json": _metrics_json_dict,
+            "roc_auc": roc_auc,
+            "test_samples": n_test or None,
+            "feature_count": len(feature_columns),
+            "label_version": label_ver,
+            "model_lane": model_lane,
+            "source_filter": source_filter_str,
+            "dataset_contract_id": dataset_contract_id,
+        }
+        _gate_result = evaluate_promotion_gate(_gate_input)
+        _metrics_json_dict = merge_promotion_gate_into_metrics_json(_metrics_json_dict, _gate_result)
+        _metrics_json = json.dumps(_metrics_json_dict)
+        logger.info(
+            "[MLChallenger] PromotionGate model_type=%s lane=%s status=%s reasons=%s",
+            model_type, model_lane, _gate_result["status"], _gate_result["reasons"],
+        )
 
         # Armazena em ml_models (storage BYTEA canônico)
         await db.execute(text("""
@@ -644,7 +683,8 @@ class MLChallengerService:
                 notes, model_blob,
                 model_scope, profile_id,
                 label_version, model_lane,
-                metrics_json, target_window_seconds
+                metrics_json, target_window_seconds,
+                source_filter, dataset_contract_id
             ) VALUES (
                 :id, :version, 'candidate',
                 :hyperparams, :n_train, :n_val, :n_test,
@@ -655,7 +695,8 @@ class MLChallengerService:
                 :notes, :blob,
                 :scope, :pid,
                 :label_version, :model_lane,
-                :metrics_json, :target_window_seconds
+                :metrics_json, :target_window_seconds,
+                :source_filter, :dataset_contract_id
             )
         """), {
             "id": str(model_uuid),
@@ -694,6 +735,8 @@ class MLChallengerService:
             "pid": str(profile_id) if profile_id else None,
             "metrics_json": _metrics_json,
             "target_window_seconds": int(win_fast_threshold_s),
+            "source_filter": source_filter_str,
+            "dataset_contract_id": dataset_contract_id,
         })
 
         # Registra em ml_model_registry (champion/challenger tracking)

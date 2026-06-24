@@ -316,10 +316,13 @@ async def backfill_orchestrator_scores(
 
         try:
             reason_codes: List[str] = []
-            pred = await predictor.predict(features, db)
+            # Audit P2-5 fix: p_l1_win is, by definition, the L1_SPECTRUM lane
+            # score — must never silently resolve to whichever model was most
+            # recently activated across ALL lanes.
+            pred = await predictor.predict(features, db, model_lane="L1_SPECTRUM")
             p_l1_win = pred.get("win_fast_probability")
             if p_l1_win is None:
-                reason_codes.append("L1_MODEL_UNAVAILABLE")
+                reason_codes.append(pred.get("reason_code") or "L1_MODEL_UNAVAILABLE")
                 l1_unavailable_count += 1
                 errors += 1
                 logger.warning(
