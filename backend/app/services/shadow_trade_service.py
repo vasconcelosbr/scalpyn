@@ -1239,6 +1239,7 @@ async def create_shadows_for_new_decisions(
                             ml_model_id=_ml_for_symbol.get("model_id"),
                             ml_probability=_ml_for_symbol.get("probability"),
                             model_lane=_ml_for_symbol.get("model_lane"),
+                            ranking_id=_ml_for_symbol.get("ranking_id"),
                         )
                     new_id = await _create_from_decision(
                         own_db, decision, "NOT_TRADABLE", user_config,

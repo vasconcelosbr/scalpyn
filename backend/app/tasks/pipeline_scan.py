@@ -2911,6 +2911,68 @@ async def _run_pipeline_scan():
                             try:
                                 from ..ml.prediction_service import predictor as _ml_predictor
 
+                                # ML Opportunity Ranking producer (audit 2026-06-24,
+                                # item 7 of the post-VALIDACAO_GERAL punch list).
+                                # One run_id per watchlist scan cycle that reaches
+                                # the ML gate — groups every symbol scored in this
+                                # batch for later reconstruction of "the full
+                                # ranking of that cycle".
+                                _ml_run_id = uuid4()
+
+                                async def _record_ml_opportunity_ranking(
+                                    d: dict, ml_result: dict
+                                ):
+                                    """Insert one row into ml_opportunity_rankings
+                                    for this (run_id, symbol). Never raises —
+                                    ranking persistence is observability, it must
+                                    not affect the L3 decision flow."""
+                                    from sqlalchemy import text as _ranking_text
+                                    try:
+                                        _res = await db.execute(
+                                            _ranking_text(
+                                                """
+                                                INSERT INTO ml_opportunity_rankings (
+                                                    id, run_id, symbol, profile_id, watchlist_id,
+                                                    model_lane, model_id, promotion_gate_status,
+                                                    win_fast_probability, score_status, reason_code,
+                                                    source
+                                                ) VALUES (
+                                                    gen_random_uuid(), :run_id, :symbol,
+                                                    CAST(:profile_id AS UUID), CAST(:watchlist_id AS UUID),
+                                                    :model_lane, CAST(:model_id AS UUID), :promotion_gate_status,
+                                                    :win_fast_probability, :score_status, :reason_code,
+                                                    :source
+                                                )
+                                                RETURNING id
+                                                """
+                                            ),
+                                            {
+                                                "run_id": str(_ml_run_id),
+                                                "symbol": d.get("symbol"),
+                                                "profile_id": d.get("profile_id"),
+                                                "watchlist_id": str(wl.id),
+                                                "model_lane": "L3_PROFILE",
+                                                "model_id": ml_result.get("model_id"),
+                                                "promotion_gate_status": (
+                                                    "APPROVED" if ml_result.get("model_id") else None
+                                                ),
+                                                "win_fast_probability": ml_result.get("win_fast_probability"),
+                                                "score_status": ml_result.get("score_status") or (
+                                                    "OK" if ml_result.get("model_id") else "SKIPPED"
+                                                ),
+                                                "reason_code": ml_result.get("reason_code"),
+                                                "source": "L3_ML_GATE",
+                                            },
+                                        )
+                                        _row = _res.fetchone()
+                                        return _row[0] if _row is not None else None
+                                    except Exception as _rank_exc:
+                                        logger.warning(
+                                            "[MLOpportunityRanking] insert failed for %s: %s",
+                                            d.get("symbol"), _rank_exc,
+                                        )
+                                        return None
+
                                 async def _ml_predict_one(d: dict) -> dict:
                                     try:
                                         return await _ml_predictor.predict(
@@ -2946,6 +3008,7 @@ async def _run_pipeline_scan():
                                     _sym = _d.get("symbol")
                                     _prob = _ml.get("win_fast_probability")
                                     _approved = _ml.get("model_approved", True)
+                                    _ranking_id = await _record_ml_opportunity_ranking(_d, _ml)
                                     _ml_gate_scores[_sym] = {
                                         "probability": _prob,
                                         "approved": _approved,
@@ -2955,6 +3018,8 @@ async def _run_pipeline_scan():
                                         # effective_level == "L3", so the lane is
                                         # always L3_PROFILE (see model_lane= above).
                                         "model_lane": "L3_PROFILE",
+                                        # Fase 6/7 — ML Opportunity Ranking lineage.
+                                        "ranking_id": str(_ranking_id) if _ranking_id else None,
                                     }
                                     # Embed probability and macro context so they reach decisions_log
                                     if isinstance(_d.get("metrics"), dict):
