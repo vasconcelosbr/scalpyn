@@ -208,52 +208,59 @@ class WinFastPredictor:
 
         # Feature count resolution.
         # CatBoost loaded from binary blob does NOT set n_features_in_ (returns 0).
-        # Priority: _n_inference_features (stamped by gcs_model_loader from the blob
-        # metadata) → n_features_in_ (sklearn compat, reliable for LightGBM/XGBoost)
-        # → feature_count_ (CatBoost-native property, reliable after binary load).
+        # Use _n_inference_features stamped by gcs_model_loader as the authoritative
+        # source; fall back to sklearn's n_features_in_ for LightGBM/XGBoost.
         expected_features = getattr(model, "_n_inference_features", None) or None
         if not expected_features:
             expected_features = getattr(model, "n_features_in_", None) or None
-        if not expected_features:
-            expected_features = getattr(model, "feature_count_", None)
 
-        if expected_features is not None and X.shape[1] > expected_features:
-            logger.info(
-                "[ML] Model expects %d features, vector has %d — truncating macro features. "
-                "Retrain model to enable macro enrichment in inference.",
-                expected_features, X.shape[1],
+        # Determine if this model has CatBoost categorical extra features that require
+        # a DataFrame rather than a plain float numpy array for inference.
+        _inf_names = getattr(model, "_inference_feature_names", []) or []
+        _has_cat_features = bool(
+            len(_inf_names) > len(FEATURE_COLUMNS)
+            and ({"source_encoded", "profile_id_encoded"} & set(_inf_names[len(FEATURE_COLUMNS):]))
+        )
+
+        if _has_cat_features:
+            # CatBoost was trained with source_encoded + profile_id_encoded as categorical
+            # columns AFTER the base features. Numpy float arrays are rejected — must use
+            # a DataFrame with those columns set as integers (CatBoost converts internally).
+            import hashlib as _hlib
+            import pandas as _pd
+            _src_enc_map = {
+                "L1_SPECTRUM": 0, "L3": 1, "L3_LAB": 2,
+                "L3_REJECTED": 3, "L3_SIMULATED": 4,
+            }
+            _src = "L3" if (model_lane or "").startswith("L3") else (model_lane or "L3")
+            _source_code = _src_enc_map.get(_src, 1)
+            _pid_bucket = (
+                int(_hlib.md5(profile_id.encode()).hexdigest(), 16) % 9999
+                if profile_id else 9999
             )
-            X = X[:, :expected_features]
-        elif expected_features is not None and X.shape[1] < expected_features:
-            # Model has more features than FEATURE_COLUMNS — two known cases:
-            # 1. CatBoost L3_PROFILE trained with source_encoded + profile_id_encoded.
-            # 2. Legacy: INCLUDE_REJECTED_IN_TRAIN appended 'was_rejected'.
-            _inf_names = getattr(model, "_inference_feature_names", [])
-            _extra_names = list(_inf_names[len(FEATURE_COLUMNS):]) if len(_inf_names) > len(FEATURE_COLUMNS) else []
-            if {"source_encoded", "profile_id_encoded"} & set(_extra_names):
-                import hashlib as _hlib
-                _src_enc_map = {
-                    "L1_SPECTRUM": 0, "L3": 1, "L3_LAB": 2,
-                    "L3_REJECTED": 3, "L3_SIMULATED": 4,
-                }
-                _src = "L3" if (model_lane or "").startswith("L3") else (model_lane or "L3")
-                _source_code = _src_enc_map.get(_src, 1)
-                _pid_bucket = (
-                    int(_hlib.md5(profile_id.encode()).hexdigest(), 16) % 9999
-                    if profile_id else 9999
-                )
-                _extra_map = {"source_encoded": _source_code, "profile_id_encoded": _pid_bucket}
-                extra_row = np.array(
-                    [[_extra_map.get(n, 0) for n in _extra_names]], dtype="float32"
-                )
-                X = np.concatenate([X, extra_row], axis=1)
+            # Build full-width numpy array (48 base + extra), then wrap in DataFrame
+            n_full = len(_inf_names)
+            X_full = np.zeros((1, n_full), dtype="float64")
+            X_full[0, :X.shape[1]] = X[0, :]  # copy base features (NaN-safe)
+            X_infer = _pd.DataFrame(X_full, columns=_inf_names)
+            X_infer["source_encoded"] = _source_code
+            X_infer["profile_id_encoded"] = _pid_bucket
+            logger.info(
+                "[ML] CatBoost DataFrame inference: source_encoded=%d profile_id_encoded=%d lane=%s",
+                _source_code, _pid_bucket, model_lane,
+            )
+        else:
+            X_infer = X
+            if expected_features is not None and X.shape[1] > expected_features:
                 logger.info(
-                    "[ML] CatBoost extra features: source_encoded=%d profile_id_encoded=%d lane=%s",
-                    _source_code, _pid_bucket, model_lane,
+                    "[ML] Model expects %d features, vector has %d — truncating macro features. "
+                    "Retrain model to enable macro enrichment in inference.",
+                    expected_features, X.shape[1],
                 )
-            else:
+                X_infer = X[:, :expected_features]
+            elif expected_features is not None and X.shape[1] < expected_features:
                 n_pad = expected_features - X.shape[1]
-                X = np.concatenate([X, np.zeros((1, n_pad), dtype="float32")], axis=1)
+                X_infer = np.concatenate([X, np.zeros((1, n_pad), dtype="float32")], axis=1)
                 logger.debug(
                     "[ML] Padded %d feature(s) with 0.0 to match model's %d expected features.",
                     n_pad, expected_features,
@@ -261,7 +268,7 @@ class WinFastPredictor:
 
         # Predição
         try:
-            proba = float(model.predict_proba(X)[0][1])
+            proba = float(model.predict_proba(X_infer)[0][1])
         except Exception as exc:
             logger.warning("[ML] prediction exception lane=%s: %s", model_lane, exc)
             return _fail_closed_result(
