@@ -2,7 +2,7 @@
 
 Data: 2026-06-25  
 Origem: `C:\Users\ricar\Downloads\Scalpyn Project Plan.pdf`  
-Escopo executado: implementacao local versionavel, testes e preparacao para novo deploy/canario controlado.
+Escopo executado: implementacao, testes, commit/push, autodeploy Railway, migration 112 e evidencia SQL read-only. Canario controlado ainda nao executado.
 
 ## Diagnostico Pre-Implementacao
 
@@ -106,11 +106,83 @@ Delta: +6 passed, 0 novas falhas, 0 novos erros
 
 As falhas/erros continuam concentradas em suites ja conhecidas, incluindo dependencias de `localhost:8001`.
 
+## Deploy
+
+Commit:
+
+```text
+fe073a287961f080cf399b4472d23dc91b6f13b8 fix(ml): link gate rankings to decisions
+```
+
+Autodeploy Railway em production:
+
+| Servico | Status | Instancia | Deployment |
+|---|---|---|---|
+| `scalpyn` | SUCCESS | RUNNING | `9d211800-3c21-4407-9b71-98caa1fba327` |
+| `scalpyn-beat` | SUCCESS | RUNNING | `8a1ac3bb-47ef-46fe-a9f4-1c27e8fb2bb8` |
+| `scalpyn-worker-compute` | SUCCESS | RUNNING | `5b71cf94-6e31-483e-8730-59597b12115a` |
+| `scalpyn-worker-execution` | SUCCESS | RUNNING | `d4b131d0-7faf-4763-9e1e-11f7cf3e087a` |
+| `scalpyn-worker-micro` | SUCCESS | RUNNING | `d62eae1a-8bfe-4a89-86f3-0c8a41597fe0` |
+| `scalpyn-worker-structural` | SUCCESS | RUNNING | `4a2805f6-2e21-4c66-8079-80e3b7c4cf69` |
+
+Log de migration no API:
+
+```text
+Running upgrade 111_ml_gate_audit_payload -> 112_ml_gate_lineage, Add ML Gate lineage contract fields.
+==> [migrations] alembic upgrade head OK
+```
+
 ## Evidencias SQL
 
-Nao executadas para a migration 112 porque ela ainda nao foi aplicada em producao neste passo. As evidencias SQL obrigatorias devem ser coletadas depois do deploy/migration e antes/durante o canario.
+Executadas via `psql` contra o Postgres de producao em transacao `READ ONLY`.
 
-Queries ajustadas ao schema real devem usar `ml_opportunity_rankings`, nao `ml_rankings`.
+Head aplicado:
+
+```text
+version_num
+---------------------
+112_ml_gate_lineage
+```
+
+Colunas confirmadas:
+
+```text
+decisions_log:
+gate_action, ml_gate_enabled, model_id, model_lane, model_version,
+orchestrator_payload, probability, ranking_id, reason_codes,
+score_status, threshold_used
+
+ml_opportunity_rankings:
+decision_id, gate_action, l1_ranker_mode, orchestrator_payload,
+rank_percentile, reason_codes, selected_by_l1_ranker,
+threshold_used, used_by_gate
+
+shadow_trades:
+decision_id, gate_action, ml_gate_enabled, ml_model_id, model_lane,
+model_version, orchestrator_payload, ranking_id, reason_codes,
+score_status, threshold_used
+```
+
+Estado seguro:
+
+```text
+live_enabled=0
+autopilot_enabled=0
+total_profiles=109
+```
+
+Flags Railway:
+
+```text
+scalpyn                   ML_GATE_ENABLED=false
+scalpyn-worker-compute    ML_GATE_ENABLED=false
+scalpyn-worker-execution  ML_GATE_ENABLED=false
+scalpyn-worker-micro      ML_GATE_ENABLED=false
+scalpyn-worker-structural ML_GATE_ENABLED=false
+scalpyn-beat              ML_GATE_ENABLED=false
+```
+
+Queries de canario com dados novos ainda nao foram executadas porque `ML_GATE_ENABLED` permaneceu `false`.
 
 ## Resultado do Canario
 
@@ -118,7 +190,7 @@ Nao executado. `ML_GATE_ENABLED` nao foi religado por esta execucao.
 
 ## Status Final
 
-- `ML_GATE_ENABLED`: nao alterado.
+- `ML_GATE_ENABLED`: confirmado `false` nos 6 servicos backend/worker/beat.
 - Live trading: nao alterado.
 - v48: implementado como ranker top-k/percentil no ML Gate; nao aprova trade sozinho.
 - v50: mantido como L3_PROFILE; regressao CatBoost protegida por testes.
@@ -126,15 +198,12 @@ Nao executado. `ML_GATE_ENABLED` nao foi religado por esta execucao.
 
 ## Pendencias
 
-1. Commit/push dos arquivos desta execucao.
-2. Deploy controlado para aplicar migration 112.
-3. Coletar SQL pos-migration.
-4. Executar canario shadow de 30-60 minutos com `ML_GATE_ENABLED=true`.
-5. Coletar evidencias SQL pos-canario.
-6. Manter `ML_GATE_ENABLED=false` para live trading ate lineage 100% comprovado.
+1. Autorizar explicitamente canario shadow de 30-60 minutos com `ML_GATE_ENABLED=true`.
+2. Coletar evidencias SQL pos-canario.
+3. Manter `ML_GATE_ENABLED=false` para live trading ate lineage 100% comprovado.
 
 ## Veredito
 
-Implementacao local: PASS.
+Implementacao, commit/push, deploy Git-backed e migration 112: PASS.
 
-Deploy/canario/end-to-end: PENDENTE. Nao houve alteracao de producao nem reativacao do ML Gate nesta execucao.
+Canario/end-to-end com dados novos: PENDENTE. Nao houve reativacao do ML Gate nesta execucao.
