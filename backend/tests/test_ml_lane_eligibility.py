@@ -149,4 +149,4 @@ class TestPredictorModelLaneContract:
 
         assert result["model_approved"] is False
         assert result["score_status"] == "SKIPPED"
-        assert result["reason_code"] == "model_unavailable_fail_closed"
+        assert result["reason_code"] == "MODEL_ARTIFACT_UNAVAILABLE"

@@ -45,8 +45,38 @@ _REDIS_PREFIX = "spe:pipeline:"   # Redis key prefix per watchlist
 _DEFAULT_STALENESS_MINUTES: int = int(
     os.environ.get("PIPELINE_SCAN_STALENESS_MINUTES", "60")
 )
-_PIPELINE_EXECUTION_TRACKING_SCHEMA_READY = False
-_PIPELINE_EXECUTION_TRACKING_SCHEMA_LOCK = asyncio.Lock()
+
+
+def _ml_gate_audit_payload(
+    ml_result: dict | None,
+    *,
+    decision_before_ml: str = "ALLOW",
+    decision_after_ml: str,
+    model_lane: str = "L3_PROFILE",
+) -> dict:
+    ml_result = ml_result or {}
+    reason_code = ml_result.get("reason_code")
+    model_approved = bool(ml_result.get("model_approved", False))
+    if not model_approved and not reason_code:
+        reason_code = "ML_EXCEPTION_FAIL_CLOSED"
+    if not model_approved and reason_code == "NO_ELIGIBLE_MODEL_FOR_LANE":
+        fallback_policy = "DISABLED_FOR_L3_WHEN_GATE_ENABLED"
+    elif not model_approved:
+        fallback_policy = "DISABLED_FOR_L3_WHEN_GATE_ENABLED"
+    else:
+        fallback_policy = "NOT_USED"
+    return {
+        "ml_gate": "ALLOW" if model_approved else "BLOCK",
+        "model_approved": model_approved,
+        "reason_code": reason_code,
+        "score_status": ml_result.get("score_status") or ("SCORED" if model_approved else "SKIPPED"),
+        "model_lane": ml_result.get("model_lane") or model_lane,
+        "model_id": ml_result.get("model_id"),
+        "decision_before_ml": decision_before_ml,
+        "decision_after_ml": decision_after_ml,
+        "fallback_used": False,
+        "fallback_policy": fallback_policy,
+    }
 
 # ── L3 Live Order Flow injection ─────────────────────────────────────────────
 # Antes da regra de entrada L3 ser avaliada, sobrescrevemos os indicadores de
@@ -2158,7 +2188,6 @@ async def _broadcast_scan_funnel(
 
 async def _run_pipeline_scan():
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
-    from ..init_db import backfill_execution_tracking_columns
     from ..models.pipeline_watchlist import PipelineWatchlist
     from ..models.pool import PoolCoin
     from ..models.profile import Profile
@@ -2170,14 +2199,6 @@ async def _run_pipeline_scan():
     stats = {"watchlists": 0, "new_signals": 0, "errors": 0, "funnels": [], "execution_id": execution_id}
 
     async with AsyncSessionLocal() as db:
-        global _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY
-        if not _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY:
-            async with _PIPELINE_EXECUTION_TRACKING_SCHEMA_LOCK:
-                if not _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY:
-                    await backfill_execution_tracking_columns(db)
-                    await db.commit()
-                    _PIPELINE_EXECUTION_TRACKING_SCHEMA_READY = True
-
         # Task #232 — orphan cleanup. ``pipeline_watchlist_assets`` rows
         # whose backing ``pool_coins`` entry was deleted between two
         # scans would otherwise stay forever (the upsert path only
@@ -2995,9 +3016,14 @@ async def _run_pipeline_scan():
                                             d.get("symbol"), _exc,
                                         )
                                         return {
-                                            "model_approved": True,
+                                            "model_approved": False,
                                             "win_fast_probability": None,
                                             "threshold_used": None,
+                                            "model_id": None,
+                                            "model_lane": "L3_PROFILE",
+                                            "score_status": "SKIPPED",
+                                            "reason_code": "ML_EXCEPTION_FAIL_CLOSED",
+                                            "reason": str(_exc),
                                         }
 
                                 _ml_preds = await asyncio.gather(
@@ -3007,13 +3033,26 @@ async def _run_pipeline_scan():
                                 for _d, _ml in zip(_ml_allow_decisions, _ml_preds):
                                     _sym = _d.get("symbol")
                                     _prob = _ml.get("win_fast_probability")
-                                    _approved = _ml.get("model_approved", True)
+                                    _approved = bool(_ml.get("model_approved", False))
                                     _ranking_id = await _record_ml_opportunity_ranking(_d, _ml)
+                                    _decision_after_ml = "ALLOW" if _approved else "BLOCK"
+                                    _gate_payload = _ml_gate_audit_payload(
+                                        _ml,
+                                        decision_before_ml="ALLOW",
+                                        decision_after_ml=_decision_after_ml,
+                                        model_lane="L3_PROFILE",
+                                    )
                                     _ml_gate_scores[_sym] = {
                                         "probability": _prob,
                                         "approved": _approved,
                                         "threshold": _ml.get("threshold_used"),
                                         "model_id": _ml.get("model_id"),
+                                        "reason_code": _gate_payload.get("reason_code"),
+                                        "score_status": _gate_payload.get("score_status"),
+                                        "promotion_gate_status": (
+                                            "APPROVED" if _approved else "BLOCK"
+                                        ),
+                                        "gate_payload": _gate_payload,
                                         # Fase 8 lineage — this gate only runs for
                                         # effective_level == "L3", so the lane is
                                         # always L3_PROFILE (see model_lane= above).
@@ -3031,15 +3070,21 @@ async def _run_pipeline_scan():
                                         for _mk, _mv in (_ml.get("macro_context") or {}).items():
                                             if _mk not in _d["metrics"]:
                                                 _d["metrics"][_mk] = _mv
+                                    _reasons = _d.setdefault("reasons", {})
+                                    _reasons["ml_gate"] = _gate_payload["ml_gate"]
+                                    _reasons["model_approved"] = _gate_payload["model_approved"]
+                                    _reasons["reason_code"] = _gate_payload["reason_code"]
+                                    _reasons["score_status"] = _gate_payload["score_status"]
+                                    _reasons["model_lane"] = _gate_payload["model_lane"]
+                                    _reasons["model_id"] = _gate_payload["model_id"]
+                                    _reasons["decision_before_ml"] = _gate_payload["decision_before_ml"]
+                                    _reasons["decision_after_ml"] = _gate_payload["decision_after_ml"]
+                                    _reasons["fallback_used"] = _gate_payload["fallback_used"]
+                                    _reasons["fallback_policy"] = _gate_payload["fallback_policy"]
+                                    _reasons["ml_gate_payload"] = _gate_payload
                                     if not _approved:
                                         _d["decision"] = "BLOCK"
                                         _d["l3_pass"] = False
-                                        _d.setdefault("reasons", {})["ml_gate"] = (
-                                            f"ML rejected "
-                                            f"(p={_prob:.3f} < {_ml.get('threshold_used', '?')})"
-                                            if _prob is not None
-                                            else "ML rejected (model unavailable)"
-                                        )
                                         _ml_blocked_count += 1
                                 if _ml_blocked_count:
                                     logger.info(
@@ -3421,66 +3466,64 @@ async def _run_pipeline_scan():
                         if _ml_gate_enabled and _ml_gate_scores:
                             try:
                                 from sqlalchemy import text as _sql_text
-                                _active_model_id: str | None = None
-                                try:
-                                    _ml_model_row = (await db.execute(
-                                        _sql_text(
-                                            "SELECT id FROM ml_models "
-                                            "WHERE status='active' "
-                                            "ORDER BY activated_at DESC LIMIT 1"
+                                _ml_pred_rows = []
+                                for _p in decision_payloads:
+                                    _pid = _p.get("id")
+                                    _psym = _p.get("symbol")
+                                    _pgate = _ml_gate_scores.get(_psym)
+                                    if not _pid or not _psym or not _pgate:
+                                        continue
+                                    _ml_pred_rows.append({
+                                        "model_id": _pgate.get("model_id"),
+                                        "decision_id": _pid,
+                                        "symbol": _psym,
+                                        "probability": _pgate.get("probability"),
+                                        "approved": bool(_pgate.get("approved", False)),
+                                        "threshold": _pgate.get("threshold"),
+                                        "model_lane": _pgate.get("model_lane"),
+                                        "reason_code": _pgate.get("reason_code"),
+                                        "score_status": _pgate.get("score_status"),
+                                        "promotion_gate_status": _pgate.get("promotion_gate_status"),
+                                        "gate_payload": _pgate.get("gate_payload") or {},
+                                    })
+                                if _ml_pred_rows:
+                                    async with db.begin_nested():
+                                        await db.execute(
+                                            _sql_text("""
+                                                INSERT INTO ml_predictions
+                                                    (model_id, decision_id, symbol,
+                                                     win_fast_probability, model_approved,
+                                                     threshold_used, model_lane, reason_code,
+                                                     score_status, promotion_gate_status,
+                                                     gate_payload)
+                                                SELECT
+                                                    CAST(NULLIF(r.model_id, '') AS UUID),
+                                                    r.decision_id,
+                                                    r.symbol,
+                                                    r.probability,
+                                                    r.approved,
+                                                    r.threshold,
+                                                    r.model_lane,
+                                                    r.reason_code,
+                                                    r.score_status,
+                                                    r.promotion_gate_status,
+                                                    r.gate_payload
+                                                FROM jsonb_to_recordset(CAST(:rows AS jsonb))
+                                                    AS r(model_id text, decision_id int,
+                                                         symbol text, probability float,
+                                                         approved bool, threshold float,
+                                                         model_lane text, reason_code text,
+                                                         score_status text,
+                                                         promotion_gate_status text,
+                                                         gate_payload jsonb)
+                                                ON CONFLICT DO NOTHING
+                                            """),
+                                            {"rows": __import__("json").dumps(_ml_pred_rows)},
                                         )
-                                    )).fetchone()
-                                    if _ml_model_row:
-                                        _active_model_id = str(_ml_model_row.id)
-                                except Exception:
-                                    pass
-
-                                if _active_model_id:
-                                    _ml_pred_rows = []
-                                    for _p in decision_payloads:
-                                        _pid = _p.get("id")
-                                        _psym = _p.get("symbol")
-                                        _pgate = _ml_gate_scores.get(_psym)
-                                        if not _pid or not _psym or not _pgate:
-                                            continue
-                                        _pprob = _pgate.get("probability")
-                                        if _pprob is None:
-                                            continue
-                                        _ml_pred_rows.append({
-                                            "model_id":   _active_model_id,
-                                            "decision_id": _pid,
-                                            "symbol":      _psym,
-                                            "probability": _pprob,
-                                            "approved":    _pgate.get("approved", True),
-                                            "threshold":   _pgate.get("threshold"),
-                                        })
-                                    if _ml_pred_rows:
-                                        async with db.begin_nested():
-                                            await db.execute(
-                                                _sql_text("""
-                                                    INSERT INTO ml_predictions
-                                                        (model_id, decision_id, symbol,
-                                                         win_fast_probability,
-                                                         model_approved, threshold_used)
-                                                    SELECT
-                                                        CAST(r.model_id AS UUID),
-                                                        r.decision_id,
-                                                        r.symbol,
-                                                        r.probability,
-                                                        r.approved,
-                                                        r.threshold
-                                                    FROM jsonb_to_recordset(CAST(:rows AS jsonb))
-                                                        AS r(model_id text, decision_id int,
-                                                             symbol text, probability float,
-                                                             approved bool, threshold float)
-                                                    ON CONFLICT DO NOTHING
-                                                """),
-                                                {"rows": __import__("json").dumps(_ml_pred_rows)},
-                                            )
-                                        logger.info(
-                                            "[MLGate] logged %d ml_predictions rows for wl=%s",
-                                            len(_ml_pred_rows), wl.name,
-                                        )
+                                    logger.info(
+                                        "[MLGate] logged %d ml_predictions rows for wl=%s",
+                                        len(_ml_pred_rows), wl.name,
+                                    )
                             except Exception as _ml_log_exc:
                                 logger.warning(
                                     "[MLGate] ml_predictions write failed for wl=%s: %s",

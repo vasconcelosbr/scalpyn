@@ -14,6 +14,27 @@ DEFAULT_THRESHOLD = 0.500
 VALID_MODEL_LANES = frozenset({"L1_SPECTRUM", "L3_PROFILE"})
 
 
+def _fail_closed_result(
+    *,
+    model_lane: str | None,
+    reason_code: str,
+    reason: str | None = None,
+) -> dict:
+    result = {
+        "win_fast_probability": None,
+        "model_approved": False,
+        "threshold_used": None,
+        "model_id": None,
+        "model_version": None,
+        "model_lane": model_lane,
+        "score_status": "SKIPPED",
+        "reason_code": reason_code,
+    }
+    if reason:
+        result["reason"] = reason
+    return result
+
+
 class WinFastPredictor:
     """
     Preditor stateless — compatível com Cloud Run.
@@ -83,7 +104,7 @@ class WinFastPredictor:
                 "model_id": "uuid" | None,
                 "model_lane": "L1_SPECTRUM" | None,
                 "score_status": "OK" | "SKIPPED",
-                "reason_code": None | "NO_ELIGIBLE_MODEL_FOR_LANE" | "model_unavailable_fail_closed",
+                "reason_code": None | "NO_ELIGIBLE_MODEL_FOR_LANE" | "MODEL_ARTIFACT_UNAVAILABLE",
             }
         """
         if model_lane is not None and model_lane not in VALID_MODEL_LANES:
@@ -98,29 +119,18 @@ class WinFastPredictor:
             # usar modelo aleatório. score_status=SKIPPED, não bloqueia decisão
             # real por si só (quem chama decide o que fazer com SKIPPED).
             logger.info("[ML] NO_ELIGIBLE_MODEL_FOR_LANE lane=%s: %s", model_lane, e)
-            return {
-                "win_fast_probability": None,
-                "model_approved": False,
-                "threshold_used": None,
-                "model_id": None,
-                "model_version": None,
-                "model_lane": model_lane,
-                "score_status": "SKIPPED",
-                "reason_code": "NO_ELIGIBLE_MODEL_FOR_LANE",
-            }
+            return _fail_closed_result(
+                model_lane=model_lane,
+                reason_code="NO_ELIGIBLE_MODEL_FOR_LANE",
+                reason=str(e),
+            )
         except Exception as e:
             logger.warning(f"Modelo indisponível: {e} — BLOQUEANDO por segurança (fail-closed)")
-            return {
-                "win_fast_probability": None,
-                "model_approved": False,
-                "threshold_used": None,
-                "model_id": None,
-                "model_version": None,
-                "model_lane": model_lane,
-                "score_status": "SKIPPED",
-                "reason_code": "model_unavailable_fail_closed",
-                "reason": "model_unavailable_fail_closed",
-            }
+            return _fail_closed_result(
+                model_lane=model_lane,
+                reason_code="MODEL_ARTIFACT_UNAVAILABLE",
+                reason=str(e),
+            )
 
         # Verify feature column alignment if model stores feature names (Audit P1-21)
         model_feature_names = getattr(model, 'feature_names_in_', None)
@@ -132,9 +142,28 @@ class WinFastPredictor:
                     "[ML] Feature column order mismatch! Model expects %s but code has %s",
                     actual[:5], expected[:5],
                 )
+                return _fail_closed_result(
+                    model_lane=model_lane,
+                    reason_code="MODEL_SCHEMA_ERROR",
+                    reason="feature column order mismatch",
+                )
 
         # Threshold do banco
-        model_id, threshold = await self._get_threshold(db, model_lane=model_lane)
+        try:
+            model_id, threshold = await self._get_threshold(db, model_lane=model_lane)
+        except Exception as exc:
+            logger.warning("[ML] threshold lookup failed lane=%s: %s", model_lane, exc)
+            return _fail_closed_result(
+                model_lane=model_lane,
+                reason_code="ML_EXCEPTION_FAIL_CLOSED",
+                reason=str(exc),
+            )
+        if not model_id:
+            return _fail_closed_result(
+                model_lane=model_lane,
+                reason_code="NO_ELIGIBLE_MODEL_FOR_LANE",
+                reason="no approved model threshold row",
+            )
 
         # ── Macro enrichment (Market Data Hub) ──────────────────────────────
         # Fetch global macro context concurrently. Never blocks inference on
@@ -203,7 +232,15 @@ class WinFastPredictor:
             )
 
         # Predição
-        proba = float(model.predict_proba(X)[0][1])
+        try:
+            proba = float(model.predict_proba(X)[0][1])
+        except Exception as exc:
+            logger.warning("[ML] prediction exception lane=%s: %s", model_lane, exc)
+            return _fail_closed_result(
+                model_lane=model_lane,
+                reason_code="ML_EXCEPTION_FAIL_CLOSED",
+                reason=str(exc),
+            )
         approved = proba >= threshold
 
         result = {
