@@ -112,6 +112,17 @@ class GCSModelLoader:
         now = time.time()
         cached = self._cache.get(cache_key)
         if cached and (now - cached.get("loaded_at", 0.0)) <= MODEL_CACHE_TTL:
+            if cached["model"] is None and cached.get("error") is not None:
+                # Bug fail-open (audit Última Fase 2026-06-25): um cache
+                # negativo que retornasse None silenciosamente fazia o
+                # predict() seguir adiante e quebrar mais tarde em
+                # model.predict_proba(None), cuja exceção genérica era
+                # capturada pelo caller com fallback model_approved=True —
+                # ou seja, só a 1ª chamada por janela de MODEL_CACHE_TTL
+                # bloqueava de fato; as demais passavam (fail-open). Re-
+                # levantar o erro cacheado preserva o fail-closed em toda
+                # chamada, não só na que efetivamente bateu no DB.
+                raise cached["error"]
             return cached["model"]
 
         return self._load_from_db(profile_id=profile_id, model_lane=model_lane, cache_key=cache_key)
@@ -267,12 +278,16 @@ class GCSModelLoader:
 
         except Exception as e:
             logger.error("Erro ao carregar modelo do DB (cache_key=%s): %s", cache_key, e)
-            # Avoid retry storm — set loaded_at so next call waits for TTL
+            # Avoid retry storm — set loaded_at so next call waits for TTL.
+            # "error" is re-raised on cache hit (see get_model() above) so
+            # every call within the TTL window fails closed, not just the
+            # one that actually missed the cache.
             self._cache[cache_key] = {
                 "model": None,
                 "loaded_at": time.time(),
                 "version": None,
                 "feature_columns": None,
+                "error": e,
             }
             if cache_key == "global":
                 self._loaded_at = time.time()
