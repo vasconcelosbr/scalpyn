@@ -6,6 +6,20 @@
 
 ---
 
+## ADENDO 2026-06-25 00:21 UTC — pós-commit, pós-deploy
+
+Esta auditoria foi seguida, na mesma sessão, por uma execução autorizada do punch list de remediação. Os itens abaixo **alteram a premissa central do relatório original** (que permanece abaixo, intacto, como registro histórico do estado "antes"):
+
+1. **Commitado**: 3 commits na branch `fix/profile-intelligence-adaptive-loop` (`68dc216`, `9f71865`, `faedd62`) — incluindo o lote original (Promotion Gate/model_lane/Shadow lineage/Label Lab/Feedback Engine) + correção de `decision_id` duplicado (migrations 109/110, ver Fase 14 abaixo).
+2. **Regressão completa rodada** com `pytest-asyncio`/`fakeredis` instalados: **64 failed, 901 passed, 12 errors** — confirmado via comparação rigorosa (reverter os 9 arquivos modificados para o commit-base e re-rodar a suíte completa) que **o conjunto de FAILED/ERROR é idêntico antes/depois**. Nenhuma regressão introduzida por este lote.
+3. **`decision_id` duplicado corrigido sem DELETE**: 38 grupos duplicados (17 com outcomes conflitantes) marcados via `shadow_trades.superseded_by_id` + `shadow_trade_duplicate_audit` (migration 109); índice único parcial `ux_shadow_trades_decision_id_canonical` criado (migration 110) após confirmar 0 grupos restantes. Total de linhas em `shadow_trades` apenas cresceu (13.540 → 13.591+) — nenhuma linha removida.
+4. **Deploy realizado**: `git checkout main && git merge fix/profile-intelligence-adaptive-loop --ff-only && git push origin main` (commit base `872d7fe` → `faedd62`). Confirmado via Railway: os 6 serviços (`scalpyn`, 4 workers, `beat`) reiniciaram no novo commit e estão `RUNNING`. Confirmado via HTTP: `GET /api/ml/models/eligible` retorna `401` (rota existe, exige auth) em vez de `404` — prova decisiva de que o código está servindo requisições reais, não apenas "deployado" no sentido abstrato.
+5. **Validação pós-deploy de lineage**: shadows criados após o deploy (`created_at >= 2026-06-25 00:18:37+00`) — **4 novos, 0 com `ml_model_id`/`model_lane`**. Isso é **esperado e correto**, não uma falha: `ML_GATE_ENABLED` continua `false` em produção (não alterado nesta sessão), então o bloco que computa e propaga o score ML para o Shadow nunca executa. O código está correto e implantado; a feature está, por desenho, desligada até decisão explícita de ligá-la.
+
+**Conclusão do adendo:** o "Achado Central" da auditoria original ("nenhum código está em produção") **não é mais verdadeiro** a partir de `faedd62`. As perguntas "pode ligar ML Gate / promover modelo / promover profile / ativar live trading" **não foram re-decididas neste adendo** — permanecem como estavam (Não, Não, Não, Não) até nova validação explícita, agora que o enforcement do Promotion Gate está de fato no caminho de execução real assim que `ML_GATE_ENABLED=true` for setado. Pendente: item 7 (produtor real de `ml_opportunity_rankings`) e re-execução completa desta auditoria com `ML_GATE_ENABLED=true` em um ambiente controlado antes de ligar isso em produção.
+
+---
+
 ## ACHADO CENTRAL (leia isto primeiro)
 
 > **Nenhuma alteração de código desta implementação está rodando em produção.**
