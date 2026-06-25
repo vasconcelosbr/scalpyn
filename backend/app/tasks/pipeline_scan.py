@@ -3071,14 +3071,11 @@ async def _run_pipeline_scan():
                                 async def _record_ml_opportunity_ranking(
                                     d: dict, ml_result: dict
                                 ):
-                                    """Insert one row into ml_opportunity_rankings
-                                    for this (run_id, symbol). Never raises —
-                                    ranking persistence is observability, it must
-                                    not affect the L3 decision flow. See
-                                    except Exception as _rank_exc below."""
+                                    """Insert one ML gate ranking row without poisoning the parent tx."""
                                     from sqlalchemy import text as _ranking_text
                                     try:
-                                        _res = await db.execute(
+                                        async with db.begin_nested():
+                                            _res = await db.execute(
                                             _ranking_text(
                                                 """
                                                 INSERT INTO ml_opportunity_rankings (
@@ -3164,13 +3161,18 @@ async def _run_pipeline_scan():
                                                     "gate_action": "ALLOW" if ml_result.get("model_approved") else "BLOCK",
                                                 }),
                                             },
-                                        )
-                                        _row = _res.fetchone()
-                                        return _row[0] if _row is not None else None
+                                            )
+                                            _row = _res.fetchone()
+                                            return _row[0] if _row is not None else None
                                     except Exception as _rank_exc:
                                         logger.warning(
-                                            "[MLOpportunityRanking] insert failed for %s: %s",
-                                            d.get("symbol"), _rank_exc,
+                                            "[MLOpportunityRanking] insert failed for %s: %s "
+                                            "transaction_rolled_back=true watchlist_id=%s "
+                                            "profile_id=%s lane=%s reason_code=%s exception_type=%s",
+                                            d.get("symbol"), _rank_exc, wl.id,
+                                            d.get("profile_id"), "L3_PROFILE",
+                                            ml_result.get("reason_code"),
+                                            type(_rank_exc).__name__,
                                         )
                                         return None
 
@@ -3201,7 +3203,7 @@ async def _run_pipeline_scan():
                                             "threshold_used": None,
                                             "model_id": None,
                                             "model_lane": "L3_PROFILE",
-                                            "score_status": "SKIPPED",
+                                            "score_status": "ML_EXCEPTION_FAIL_CLOSED",
                                             "reason_code": "ML_EXCEPTION_FAIL_CLOSED",
                                             "reason": str(_exc),
                                         }

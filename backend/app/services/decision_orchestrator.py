@@ -132,6 +132,8 @@ async def _get_profile_catboost_score(
         )
         X = np.nan_to_num(X, nan=0.0)
 
+        from app.ml.prediction_probability import predict_positive_probability
+
         if cat_feature_indices:
             # B-NEW-1 fix: training uses astype(int).astype(str) → "2760".
             # A float32 numpy array would give CatBoost "2760.0" — a different
@@ -143,9 +145,17 @@ async def _get_profile_catboost_score(
             for name in cat_names:
                 df_inf[name] = df_inf[name].astype(int).astype(str)
             pool = Pool(df_inf, feature_names=list(saved_cols), cat_features=cat_names)
-            proba = float(model.predict_proba(pool)[0][1])
+            proba = predict_positive_probability(
+                model,
+                pool,
+                model_lane="L3_PROFILE",
+            )
         else:
-            proba = float(model.predict_proba(X)[0][1])
+            proba = predict_positive_probability(
+                model,
+                X,
+                model_lane="L3_PROFILE",
+            )
 
         return {"score": round(proba, 4), "model_id": model_id}
 

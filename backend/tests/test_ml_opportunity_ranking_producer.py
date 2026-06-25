@@ -33,8 +33,17 @@ class TestPipelineScanProducerWiring:
         affect the L3 decision flow (caught and logged, not propagated)."""
         source = self._source()
         idx = source.index("_record_ml_opportunity_ranking")
-        snippet = source[idx: idx + 4500]
+        end = source.index("async def _ml_predict_one", idx)
+        snippet = source[idx:end]
         assert "except Exception as _rank_exc" in snippet
+
+    def test_insert_runs_in_savepoint_to_avoid_aborted_parent_transaction(self):
+        source = self._source()
+        idx = source.index("_record_ml_opportunity_ranking")
+        end = source.index("async def _ml_predict_one", idx)
+        snippet = source[idx:end]
+        assert "async with db.begin_nested()" in snippet
+        assert "transaction_rolled_back=true" in snippet
 
     def test_run_id_generated_once_per_gate_cycle(self):
         source = self._source()

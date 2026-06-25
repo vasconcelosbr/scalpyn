@@ -6,6 +6,7 @@ from sqlalchemy import text
 from app.ml.feature_extractor import FEATURE_COLUMNS, ML_EXCLUDED_FIELDS, extract_features
 from app.ml.gcs_model_loader import get_model, NoEligibleModelError
 from app.ml.macro_client import fetch_macro_context
+from app.ml.prediction_probability import predict_positive_probability
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,11 @@ def _fail_closed_result(
         "model_id": None,
         "model_version": None,
         "model_lane": model_lane,
-        "score_status": "SKIPPED",
+        "score_status": (
+            "ML_EXCEPTION_FAIL_CLOSED"
+            if reason_code == "ML_EXCEPTION_FAIL_CLOSED"
+            else "SKIPPED"
+        ),
         "reason_code": reason_code,
     }
     if reason:
@@ -268,7 +273,11 @@ class WinFastPredictor:
 
         # Predição
         try:
-            proba = float(model.predict_proba(X_infer)[0][1])
+            proba = predict_positive_probability(
+                model,
+                X_infer,
+                model_lane=model_lane,
+            )
         except Exception as exc:
             logger.warning("[ML] prediction exception lane=%s: %s", model_lane, exc)
             return _fail_closed_result(

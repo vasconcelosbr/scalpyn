@@ -38,7 +38,7 @@ def test_predict_proba_exception_returns_fail_closed_contract():
 
     assert result["win_fast_probability"] is None
     assert result["model_approved"] is False
-    assert result["score_status"] == "SKIPPED"
+    assert result["score_status"] == "ML_EXCEPTION_FAIL_CLOSED"
     assert result["reason_code"] == "ML_EXCEPTION_FAIL_CLOSED"
     assert result["model_lane"] == "L3_PROFILE"
 
@@ -52,7 +52,7 @@ def test_pipeline_ml_predict_one_exception_is_fail_closed():
 
     assert '"model_approved": False' in snippet
     assert '"reason_code": "ML_EXCEPTION_FAIL_CLOSED"' in snippet
-    assert '"score_status": "SKIPPED"' in snippet
+    assert '"score_status": "ML_EXCEPTION_FAIL_CLOSED"' in snippet
     assert '"model_approved": True' not in snippet
 
 
@@ -206,4 +206,4 @@ def test_catboost_v50_inference_uses_dataframe_for_categorical_features():
     assert "_pd.DataFrame" in source
     assert 'X_infer["source_encoded"]' in source
     assert 'X_infer["profile_id_encoded"]' in source
-    assert "predict_proba(X_infer)" in source
+    assert "predict_positive_probability(" in source
