@@ -245,6 +245,15 @@ class ShadowTrade(Base):
     final_priority_score = Column(Float, nullable=True)
     ml_probability = Column(Float, nullable=True)
     ml_model_id = Column(UUID(as_uuid=True), nullable=True)
+    orchestrator_payload = Column(JSONB, nullable=True)
+    model_lane = Column(String, nullable=True)
+    ranking_id = Column(UUID(as_uuid=True), ForeignKey("ml_opportunity_rankings.id"), nullable=True)
+    model_version = Column(String, nullable=True)
+    threshold_used = Column(Float, nullable=True)
+    score_status = Column(String, nullable=True)
+    gate_action = Column(String, nullable=True)
+    reason_codes = Column(JSONB, nullable=True)
+    ml_gate_enabled = Column(Boolean, nullable=False, default=False)
 
     # ── Watchlist Lineage (migration 103) ─────────────────────────────────────
     # Snapshot da watchlist que originou a promoção — preenchido inline pelo

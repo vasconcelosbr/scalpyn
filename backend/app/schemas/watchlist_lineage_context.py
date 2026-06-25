@@ -41,3 +41,10 @@ class WatchlistLineageContext:
     final_priority_score: Optional[float] = None
     model_lane: Optional[str] = None
     ranking_id: Optional[str] = None
+    model_version: Optional[str] = None
+    threshold_used: Optional[float] = None
+    score_status: Optional[str] = None
+    gate_action: Optional[str] = None
+    reason_codes: Optional[list[str]] = None
+    orchestrator_payload: Optional[dict] = None
+    ml_gate_enabled: bool = False

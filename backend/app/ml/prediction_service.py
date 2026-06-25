@@ -53,7 +53,7 @@ class WinFastPredictor:
         """
         if model_lane:
             result = await db.execute(text("""
-                SELECT id, decision_threshold
+                SELECT id, decision_threshold, version
                 FROM ml_models
                 WHERE status = 'active'
                   AND model_lane = :lane
@@ -67,7 +67,7 @@ class WinFastPredictor:
                 "lane-agnostic (legado, ambígua com múltiplos modelos active)."
             )
             result = await db.execute(text("""
-                SELECT id, decision_threshold
+                SELECT id, decision_threshold, version
                 FROM ml_models
                 WHERE status = 'active'
                 ORDER BY activated_at DESC
@@ -75,8 +75,8 @@ class WinFastPredictor:
             """))
         row = result.fetchone()
         if not row:
-            return None, DEFAULT_THRESHOLD
-        return str(row.id), float(row.decision_threshold)
+            return None, DEFAULT_THRESHOLD, None
+        return str(row.id), float(row.decision_threshold), str(row.version)
 
     async def predict(
         self,
@@ -150,7 +150,7 @@ class WinFastPredictor:
 
         # Threshold do banco
         try:
-            model_id, threshold = await self._get_threshold(db, model_lane=model_lane)
+            model_id, threshold, model_version = await self._get_threshold(db, model_lane=model_lane)
         except Exception as exc:
             logger.warning("[ML] threshold lookup failed lane=%s: %s", model_lane, exc)
             return _fail_closed_result(
@@ -283,6 +283,7 @@ class WinFastPredictor:
             "model_approved":       approved,
             "threshold_used":       threshold,
             "model_id":             model_id,
+            "model_version":        model_version,
             "model_lane":           model_lane,
             "score_status":         "OK",
             "reason_code":          None,

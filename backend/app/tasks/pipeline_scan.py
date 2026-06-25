@@ -19,7 +19,7 @@ from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Optional
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from ..tasks.celery_app import celery_app
 from ..services.pipeline_rejections import evaluate_rejections
@@ -65,18 +65,122 @@ def _ml_gate_audit_payload(
         fallback_policy = "DISABLED_FOR_L3_WHEN_GATE_ENABLED"
     else:
         fallback_policy = "NOT_USED"
+    gate_action = "ALLOW" if model_approved else "BLOCK"
+    score_status = ml_result.get("score_status") or ("OK" if model_approved else "SKIPPED")
+    reason_codes = []
+    if reason_code:
+        reason_codes.append(reason_code)
+    if not model_approved:
+        reason_codes.append("ML_GATE_BLOCKED")
+    else:
+        reason_codes.append("ML_GATE_ALLOWED")
     return {
-        "ml_gate": "ALLOW" if model_approved else "BLOCK",
+        "ml_gate": gate_action,
+        "gate_action": gate_action,
         "model_approved": model_approved,
         "reason_code": reason_code,
-        "score_status": ml_result.get("score_status") or ("SCORED" if model_approved else "SKIPPED"),
+        "reason_codes": reason_codes,
+        "score_status": score_status,
         "model_lane": ml_result.get("model_lane") or model_lane,
         "model_id": ml_result.get("model_id"),
+        "model_version": ml_result.get("model_version"),
+        "probability": ml_result.get("win_fast_probability"),
+        "threshold_used": ml_result.get("threshold_used"),
+        "p_l1_win": ml_result.get("p_l1_win"),
+        "l1_model_id": ml_result.get("l1_model_id"),
+        "l1_model_version": ml_result.get("l1_model_version"),
+        "l1_rank_position": ml_result.get("l1_rank_position"),
+        "l1_rank_percentile": ml_result.get("l1_rank_percentile"),
+        "l1_ranker_mode": ml_result.get("l1_ranker_mode"),
+        "selected_by_l1_ranker": ml_result.get("selected_by_l1_ranker"),
         "decision_before_ml": decision_before_ml,
         "decision_after_ml": decision_after_ml,
         "fallback_used": False,
         "fallback_policy": fallback_policy,
     }
+
+
+def _l1_ranker_config() -> dict:
+    mode = os.environ.get("L1_RANKER_MODE", "top_k").strip().lower()
+    if mode not in {"top_k", "percentile"}:
+        mode = "top_k"
+    try:
+        top_k = int(os.environ.get("L1_TOP_K_DEFAULT", "10"))
+    except ValueError:
+        top_k = 10
+    try:
+        percentile_min = float(os.environ.get("L1_PERCENTILE_MIN", "90"))
+    except ValueError:
+        percentile_min = 90.0
+    allow_threshold_gate = os.environ.get("L1_ALLOW_THRESHOLD_GATE", "false").strip().lower() == "true"
+    return {
+        "mode": mode,
+        "top_k": max(1, top_k),
+        "percentile_min": max(0.0, min(100.0, percentile_min)),
+        "allow_threshold_gate": allow_threshold_gate,
+    }
+
+
+def _rank_l1_candidates(items: list[tuple[dict, dict]]) -> dict:
+    cfg = _l1_ranker_config()
+    ranked: dict = {}
+    valid: list[tuple[dict, dict, float]] = []
+    for decision, pred in items:
+        symbol = decision.get("symbol")
+        probability = pred.get("win_fast_probability")
+        if pred.get("score_status") != "OK" or probability is None:
+            ranked[symbol] = {
+                "selected": False,
+                "reason_code": pred.get("reason_code") or "L1_MODEL_UNAVAILABLE",
+                "reason_codes": [pred.get("reason_code") or "L1_MODEL_UNAVAILABLE"],
+                "p_l1_win": probability,
+                "l1_model_id": pred.get("model_id"),
+                "l1_model_version": pred.get("model_version"),
+                "threshold_l1": pred.get("threshold_used"),
+                "l1_ranker_mode": cfg["mode"],
+                "l1_rank_position": None,
+                "l1_rank_percentile": None,
+                "selected_by_l1_ranker": False,
+            }
+            continue
+        valid.append((decision, pred, float(probability)))
+
+    valid.sort(key=lambda row: row[2], reverse=True)
+    total = len(valid)
+    for index, (decision, pred, probability) in enumerate(valid, start=1):
+        symbol = decision.get("symbol")
+        percentile = round(100.0 * (total - index + 1) / max(total, 1), 4)
+        if cfg["mode"] == "percentile":
+            selected = percentile >= cfg["percentile_min"]
+            reason_code = "L1_PERCENTILE_SELECTED" if selected else "L1_PERCENTILE_REJECTED"
+        else:
+            selected = index <= cfg["top_k"]
+            reason_code = "L1_TOP_K_SELECTED" if selected else "L1_TOP_K_REJECTED"
+        ranked[symbol] = {
+            "selected": selected,
+            "reason_code": reason_code,
+            "reason_codes": [reason_code],
+            "p_l1_win": probability,
+            "l1_model_id": pred.get("model_id"),
+            "l1_model_version": pred.get("model_version"),
+            "threshold_l1": pred.get("threshold_used"),
+            "l1_ranker_mode": cfg["mode"],
+            "l1_rank_position": index,
+            "l1_rank_percentile": percentile,
+            "selected_by_l1_ranker": selected,
+        }
+    return ranked
+
+
+def _uuid_or_none(value):
+    if value is None:
+        return None
+    if isinstance(value, UUID):
+        return value
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
 
 # ── L3 Live Order Flow injection ─────────────────────────────────────────────
 # Antes da regra de entrada L3 ser avaliada, sobrescrevemos os indicadores de
@@ -1464,7 +1568,9 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
                 decision.get("direction"),
                 decision.get("_profile_id"),
             )
-            if key in existing_decisions:
+            if (decision.get("reasons") or {}).get("ml_gate"):
+                decisions_to_insert.append(decision)
+            elif key in existing_decisions:
                 logger.debug(
                     "[Decision] SKIP duplicate: %s | strategy=%s | direction=%s (logged in last 5 min)",
                     key[0], key[1], key[2] or "—",
@@ -1513,6 +1619,17 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             profile_id=decision.get("_profile_id"),
             profile_name=decision.get("_profile_name"),
             profile_version=decision.get("_profile_version"),
+            ranking_id=_uuid_or_none(decision.get("ranking_id")),
+            model_id=_uuid_or_none(decision.get("model_id")),
+            model_version=decision.get("model_version"),
+            model_lane=decision.get("model_lane"),
+            probability=decision.get("probability"),
+            threshold_used=decision.get("threshold_used"),
+            score_status=decision.get("score_status"),
+            gate_action=decision.get("gate_action"),
+            reason_codes=decision.get("reason_codes"),
+            orchestrator_payload=decision.get("orchestrator_payload"),
+            ml_gate_enabled=bool(decision.get("ml_gate_enabled", False)),
         ))
     db.add_all(rows)
     await db.flush()
@@ -1534,6 +1651,17 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
             "latency_ms": row.latency_ms,
             "direction": row.direction,
             "event_type": row.event_type,
+            "ranking_id": str(row.ranking_id) if row.ranking_id else None,
+            "model_id": str(row.model_id) if row.model_id else None,
+            "model_version": row.model_version,
+            "model_lane": row.model_lane,
+            "probability": row.probability,
+            "threshold_used": row.threshold_used,
+            "score_status": row.score_status,
+            "gate_action": row.gate_action,
+            "reason_codes": row.reason_codes or [],
+            "orchestrator_payload": row.orchestrator_payload or {},
+            "ml_gate_enabled": row.ml_gate_enabled,
             "created_at": row.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
         logger.info(
@@ -2946,7 +3074,8 @@ async def _run_pipeline_scan():
                                     """Insert one row into ml_opportunity_rankings
                                     for this (run_id, symbol). Never raises —
                                     ranking persistence is observability, it must
-                                    not affect the L3 decision flow."""
+                                    not affect the L3 decision flow. See
+                                    except Exception as _rank_exc below."""
                                     from sqlalchemy import text as _ranking_text
                                     try:
                                         _res = await db.execute(
@@ -2954,15 +3083,26 @@ async def _run_pipeline_scan():
                                                 """
                                                 INSERT INTO ml_opportunity_rankings (
                                                     id, run_id, symbol, profile_id, watchlist_id,
-                                                    model_lane, model_id, promotion_gate_status,
+                                                    model_lane, model_id, model_version,
+                                                    promotion_gate_status,
                                                     win_fast_probability, score_status, reason_code,
-                                                    source
+                                                    threshold_used, gate_action, used_by_gate,
+                                                    p_l1_win, rank_position, rank_percentile,
+                                                    p_l3_profile_win,
+                                                    l1_ranker_mode, selected_by_l1_ranker,
+                                                    reason_codes, orchestrator_payload, source
                                                 ) VALUES (
                                                     gen_random_uuid(), :run_id, :symbol,
                                                     CAST(:profile_id AS UUID), CAST(:watchlist_id AS UUID),
-                                                    :model_lane, CAST(:model_id AS UUID), :promotion_gate_status,
+                                                    :model_lane, CAST(:model_id AS UUID), :model_version,
+                                                    :promotion_gate_status,
                                                     :win_fast_probability, :score_status, :reason_code,
-                                                    :source
+                                                    :threshold_used, :gate_action, TRUE,
+                                                    :p_l1_win, :rank_position, :rank_percentile,
+                                                    :p_l3_profile_win,
+                                                    :l1_ranker_mode, :selected_by_l1_ranker,
+                                                    CAST(:reason_codes AS JSONB),
+                                                    CAST(:orchestrator_payload AS JSONB), :source
                                                 )
                                                 RETURNING id
                                                 """
@@ -2970,10 +3110,12 @@ async def _run_pipeline_scan():
                                             {
                                                 "run_id": str(_ml_run_id),
                                                 "symbol": d.get("symbol"),
+                                                "source": "L3_ML_GATE",
                                                 "profile_id": d.get("profile_id"),
                                                 "watchlist_id": str(wl.id),
                                                 "model_lane": "L3_PROFILE",
                                                 "model_id": ml_result.get("model_id"),
+                                                "model_version": ml_result.get("model_version"),
                                                 "promotion_gate_status": (
                                                     "APPROVED" if ml_result.get("model_id") else None
                                                 ),
@@ -2982,7 +3124,45 @@ async def _run_pipeline_scan():
                                                     "OK" if ml_result.get("model_id") else "SKIPPED"
                                                 ),
                                                 "reason_code": ml_result.get("reason_code"),
-                                                "source": "L3_ML_GATE",
+                                                "threshold_used": ml_result.get("threshold_used"),
+                                                "gate_action": "ALLOW" if ml_result.get("model_approved") else "BLOCK",
+                                                "p_l1_win": ml_result.get("p_l1_win"),
+                                                "rank_position": ml_result.get("l1_rank_position"),
+                                                "rank_percentile": ml_result.get("l1_rank_percentile"),
+                                                "p_l3_profile_win": (
+                                                    ml_result.get("win_fast_probability")
+                                                    if ml_result.get("selected_by_l1_ranker")
+                                                    else None
+                                                ),
+                                                "l1_ranker_mode": ml_result.get("l1_ranker_mode"),
+                                                "selected_by_l1_ranker": ml_result.get("selected_by_l1_ranker"),
+                                                "reason_codes": __import__("json").dumps(
+                                                    [
+                                                        code for code in [
+                                                            *list(ml_result.get("reason_codes") or []),
+                                                            ml_result.get("reason_code"),
+                                                            "ML_GATE_ALLOWED" if ml_result.get("model_approved") else "ML_GATE_BLOCKED",
+                                                        ]
+                                                        if code
+                                                    ]
+                                                ),
+                                                "orchestrator_payload": __import__("json").dumps({
+                                                    "p_l1_win": ml_result.get("p_l1_win"),
+                                                    "l1_model_id": ml_result.get("l1_model_id"),
+                                                    "l1_model_version": ml_result.get("l1_model_version"),
+                                                    "l1_rank_position": ml_result.get("l1_rank_position"),
+                                                    "l1_rank_percentile": ml_result.get("l1_rank_percentile"),
+                                                    "l1_ranker_mode": ml_result.get("l1_ranker_mode"),
+                                                    "selected_by_l1_ranker": ml_result.get("selected_by_l1_ranker"),
+                                                    "p_l3_profile_win": ml_result.get("win_fast_probability"),
+                                                    "l3_model_id": ml_result.get("model_id"),
+                                                    "l3_model_version": ml_result.get("model_version"),
+                                                    "threshold_l3": ml_result.get("threshold_used"),
+                                                    "score_status": ml_result.get("score_status") or (
+                                                        "OK" if ml_result.get("model_id") else "SKIPPED"
+                                                    ),
+                                                    "gate_action": "ALLOW" if ml_result.get("model_approved") else "BLOCK",
+                                                }),
                                             },
                                         )
                                         _row = _res.fetchone()
@@ -3026,12 +3206,64 @@ async def _run_pipeline_scan():
                                             "reason": str(_exc),
                                         }
 
-                                _ml_preds = await asyncio.gather(
-                                    *[_ml_predict_one(d) for d in _ml_allow_decisions]
+                                async def _l1_predict_one(d: dict) -> dict:
+                                    try:
+                                        return await _ml_predictor.predict(
+                                            metrics=d.get("metrics") or {},
+                                            db=db,
+                                            symbol=d.get("symbol"),
+                                            decision_id=None,
+                                            profile_id=None,
+                                            model_lane="L1_SPECTRUM",
+                                        )
+                                    except Exception as _exc:
+                                        logger.warning(
+                                            "[MLGate] L1 ranker failed for %s: %s",
+                                            d.get("symbol"), _exc,
+                                        )
+                                        return {
+                                            "model_approved": False,
+                                            "win_fast_probability": None,
+                                            "threshold_used": None,
+                                            "model_id": None,
+                                            "model_version": None,
+                                            "model_lane": "L1_SPECTRUM",
+                                            "score_status": "SKIPPED",
+                                            "reason_code": "L1_MODEL_UNAVAILABLE",
+                                            "reason": str(_exc),
+                                        }
+
+                                _l1_preds = await asyncio.gather(
+                                    *[_l1_predict_one(d) for d in _ml_allow_decisions]
+                                )
+                                _l1_rank_by_symbol = _rank_l1_candidates(
+                                    list(zip(_ml_allow_decisions, _l1_preds))
                                 )
                                 _ml_blocked_count = 0
-                                for _d, _ml in zip(_ml_allow_decisions, _ml_preds):
+                                for _d in _ml_allow_decisions:
                                     _sym = _d.get("symbol")
+                                    _l1_rank = _l1_rank_by_symbol.get(_sym) or {
+                                        "selected": False,
+                                        "reason_code": "L1_MODEL_UNAVAILABLE",
+                                        "reason_codes": ["L1_MODEL_UNAVAILABLE"],
+                                        "selected_by_l1_ranker": False,
+                                    }
+                                    if _l1_rank.get("selected"):
+                                        _ml = await _ml_predict_one(_d)
+                                    else:
+                                        _ml = {
+                                            "model_approved": False,
+                                            "win_fast_probability": _l1_rank.get("p_l1_win"),
+                                            "threshold_used": _l1_rank.get("threshold_l1"),
+                                            "model_id": _l1_rank.get("l1_model_id"),
+                                            "model_version": _l1_rank.get("l1_model_version"),
+                                            "model_lane": "L1_SPECTRUM",
+                                            "score_status": (
+                                                "OK" if _l1_rank.get("p_l1_win") is not None else "SKIPPED"
+                                            ),
+                                            "reason_code": _l1_rank.get("reason_code"),
+                                        }
+                                    _ml.update(_l1_rank)
                                     _prob = _ml.get("win_fast_probability")
                                     _approved = bool(_ml.get("model_approved", False))
                                     _ranking_id = await _record_ml_opportunity_ranking(_d, _ml)
@@ -3042,17 +3274,43 @@ async def _run_pipeline_scan():
                                         decision_after_ml=_decision_after_ml,
                                         model_lane="L3_PROFILE",
                                     )
+                                    _combined_reason_codes = list(dict.fromkeys(
+                                        list(_ml.get("reason_codes") or [])
+                                        + list(_gate_payload.get("reason_codes") or [])
+                                    ))
+                                    _gate_payload["reason_codes"] = _combined_reason_codes
                                     _ml_gate_scores[_sym] = {
                                         "probability": _prob,
                                         "approved": _approved,
                                         "threshold": _ml.get("threshold_used"),
                                         "model_id": _ml.get("model_id"),
+                                        "model_version": _ml.get("model_version"),
                                         "reason_code": _gate_payload.get("reason_code"),
+                                        "reason_codes": _combined_reason_codes,
                                         "score_status": _gate_payload.get("score_status"),
                                         "promotion_gate_status": (
-                                            "APPROVED" if _approved else "BLOCK"
+                                            "APPROVED" if _ml.get("model_id") else None
                                         ),
+                                        "gate_action": _gate_payload.get("gate_action"),
                                         "gate_payload": _gate_payload,
+                                        "orchestrator_payload": {
+                                            "p_l1_win": _ml.get("p_l1_win"),
+                                            "l1_model_id": _ml.get("l1_model_id"),
+                                            "l1_model_version": _ml.get("l1_model_version"),
+                                            "l1_rank_position": _ml.get("l1_rank_position"),
+                                            "l1_rank_percentile": _ml.get("l1_rank_percentile"),
+                                            "l1_ranker_mode": _ml.get("l1_ranker_mode"),
+                                            "selected_by_l1_ranker": _ml.get("selected_by_l1_ranker"),
+                                            "p_l3_profile_win": _prob,
+                                            "l3_model_id": _ml.get("model_id"),
+                                            "l3_model_version": _ml.get("model_version"),
+                                            "threshold_l3": _ml.get("threshold_used"),
+                                            "score_status": _gate_payload.get("score_status"),
+                                            "gate_action": _gate_payload.get("gate_action"),
+                                            "reason_codes": _combined_reason_codes,
+                                            "decision_before_ml": "ALLOW",
+                                            "decision_after_ml": _decision_after_ml,
+                                        },
                                         # Fase 8 lineage — this gate only runs for
                                         # effective_level == "L3", so the lane is
                                         # always L3_PROFILE (see model_lane= above).
@@ -3060,6 +3318,17 @@ async def _run_pipeline_scan():
                                         # Fase 6/7 — ML Opportunity Ranking lineage.
                                         "ranking_id": str(_ranking_id) if _ranking_id else None,
                                     }
+                                    _d["ranking_id"] = _ml_gate_scores[_sym]["ranking_id"]
+                                    _d["model_id"] = _ml.get("model_id")
+                                    _d["model_version"] = _ml.get("model_version")
+                                    _d["model_lane"] = "L3_PROFILE"
+                                    _d["probability"] = _prob
+                                    _d["threshold_used"] = _ml.get("threshold_used")
+                                    _d["score_status"] = _gate_payload.get("score_status")
+                                    _d["gate_action"] = _gate_payload.get("gate_action")
+                                    _d["reason_codes"] = _combined_reason_codes
+                                    _d["orchestrator_payload"] = _ml_gate_scores[_sym]["orchestrator_payload"]
+                                    _d["ml_gate_enabled"] = True
                                     # Embed probability and macro context so they reach decisions_log
                                     if isinstance(_d.get("metrics"), dict):
                                         _d["metrics"]["win_fast_probability"] = _prob
@@ -3255,6 +3524,9 @@ async def _run_pipeline_scan():
                             if not should_log and sym not in prior_visibility:
                                 should_log = True
                                 event_type = "L3_VISIBLE"
+                        if _ml_gate_enabled and sym in _ml_gate_scores:
+                            should_log = True
+                            event_type = "ML_GATE_ALLOWED" if d.get("decision") == "ALLOW" else "ML_GATE_BLOCKED"
                         new_states[sym] = {
                             "state": d.get("decision"),
                             "score": d.get("score"),
@@ -3315,6 +3587,27 @@ async def _run_pipeline_scan():
                     try:
                         async with db.begin_nested():
                             decision_payloads = await _persist_decision_logs(db, wl.user_id, decisions_to_log)
+                            if _ml_gate_enabled and _ml_gate_scores and decision_payloads:
+                                from sqlalchemy import text as _ml_link_text
+                                for _p in decision_payloads:
+                                    _psym = _p.get("symbol")
+                                    _pid = _p.get("id")
+                                    _pgate = _ml_gate_scores.get(_psym)
+                                    _ranking_id = (_pgate or {}).get("ranking_id")
+                                    if not _pid or not _ranking_id:
+                                        continue
+                                    await db.execute(
+                                        _ml_link_text("""
+                                            UPDATE ml_opportunity_rankings
+                                               SET decision_id = :decision_id
+                                             WHERE id = CAST(:ranking_id AS UUID)
+                                               AND decision_id IS NULL
+                                        """),
+                                        {
+                                            "decision_id": _pid,
+                                            "ranking_id": _ranking_id,
+                                        },
+                                    )
                             # Stamp db_confirmed_at on each successfully persisted symbol
                             if decisions_to_log:
                                 _confirmed_at = datetime.now(timezone.utc).isoformat()

@@ -50,6 +50,19 @@ class DecisionLog(Base):
     profile_name    = Column(String(255),          nullable=True)
     profile_version = Column(TIMESTAMP(timezone=True), nullable=True)
 
+    # ML Gate lineage/audit contract (migration 112).
+    ranking_id = Column(UUID(as_uuid=True), ForeignKey("ml_opportunity_rankings.id"), nullable=True)
+    model_id = Column(UUID(as_uuid=True), nullable=True)
+    model_version = Column(String(50), nullable=True)
+    model_lane = Column(String(50), nullable=True)
+    probability = Column(Float, nullable=True)
+    threshold_used = Column(Float, nullable=True)
+    score_status = Column(String(40), nullable=True)
+    gate_action = Column(String(20), nullable=True)
+    reason_codes = Column(JSONB, nullable=True)
+    orchestrator_payload = Column(JSONB, nullable=True)
+    ml_gate_enabled = Column(Boolean, nullable=False, default=False)
+
 
 class AssetTrace(Base):
     __tablename__ = 'asset_traces'

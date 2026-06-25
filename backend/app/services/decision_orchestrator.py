@@ -67,6 +67,7 @@ async def _get_active_l1_model_id(db: AsyncSession) -> Optional[str]:
             SELECT id::text FROM ml_models
             WHERE model_lane = 'L1_SPECTRUM'
               AND status = 'active'
+              AND (metrics_json->'promotion_gate'->>'status') = 'APPROVED'
             ORDER BY activated_at DESC NULLS LAST, created_at DESC
             LIMIT 1
         """))).fetchone()

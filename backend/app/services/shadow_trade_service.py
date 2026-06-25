@@ -596,7 +596,9 @@ _INSERT_SHADOW_SQL = text("""
         profile_id, profile_version, profile_name, strategy_type,
         watchlist_id, watchlist_name, watchlist_level, source_watchlist_id,
         lineage_confidence, lineage_source, lineage_resolved_at,
-        ml_model_id, ml_probability, final_priority_score, model_lane, ranking_id
+        ml_model_id, ml_probability, final_priority_score, model_lane, ranking_id,
+        model_version, threshold_used, score_status, gate_action, reason_codes,
+        ml_gate_enabled, orchestrator_payload
     ) VALUES (
         gen_random_uuid(),
         :decision_id, :user_id, :symbol, :strategy, :direction,
@@ -613,7 +615,10 @@ _INSERT_SHADOW_SQL = text("""
         CAST(:source_watchlist_id AS UUID),
         :lineage_confidence, :lineage_source, :lineage_resolved_at,
         CAST(:ml_model_id AS UUID), :ml_probability, :final_priority_score,
-        :model_lane, CAST(:ranking_id AS UUID)
+        :model_lane, CAST(:ranking_id AS UUID),
+        :model_version, :threshold_used, :score_status, :gate_action,
+        CAST(:reason_codes AS JSONB), :ml_gate_enabled,
+        CAST(:orchestrator_payload AS JSONB)
     )
     ON CONFLICT DO NOTHING
     RETURNING id
@@ -793,6 +798,15 @@ async def _create_from_decision(
             "final_priority_score": getattr(lineage, "final_priority_score", None) if lineage else None,
             "model_lane": getattr(lineage, "model_lane", None) if lineage else None,
             "ranking_id": getattr(lineage, "ranking_id", None) if lineage else None,
+            "model_version": getattr(lineage, "model_version", None) if lineage else None,
+            "threshold_used": getattr(lineage, "threshold_used", None) if lineage else None,
+            "score_status": getattr(lineage, "score_status", None) if lineage else None,
+            "gate_action": getattr(lineage, "gate_action", None) if lineage else None,
+            "reason_codes": json.dumps(getattr(lineage, "reason_codes", None) or [], default=str),
+            "ml_gate_enabled": bool(getattr(lineage, "ml_gate_enabled", False)) if lineage else False,
+            "orchestrator_payload": json.dumps(
+                getattr(lineage, "orchestrator_payload", None) or {}, default=str
+            ),
         },
     )
     row = res.fetchone()
@@ -1240,6 +1254,13 @@ async def create_shadows_for_new_decisions(
                             ml_probability=_ml_for_symbol.get("probability"),
                             model_lane=_ml_for_symbol.get("model_lane"),
                             ranking_id=_ml_for_symbol.get("ranking_id"),
+                            model_version=_ml_for_symbol.get("model_version"),
+                            threshold_used=_ml_for_symbol.get("threshold"),
+                            score_status=_ml_for_symbol.get("score_status"),
+                            gate_action=_ml_for_symbol.get("gate_action"),
+                            reason_codes=_ml_for_symbol.get("reason_codes"),
+                            orchestrator_payload=_ml_for_symbol.get("orchestrator_payload"),
+                            ml_gate_enabled=True,
                         )
                     new_id = await _create_from_decision(
                         own_db, decision, "NOT_TRADABLE", user_config,
