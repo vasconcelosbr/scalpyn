@@ -206,12 +206,17 @@ class WinFastPredictor:
             dtype="float32",
         )
 
-        # Backwards-compat: models trained before macro features were added to
-        # FEATURE_COLUMNS expect fewer columns. Truncate X to what the model
-        # was trained with — macro features appear at the end of FEATURE_COLUMNS
-        # so truncation is safe. When the model is retrained with macro data,
-        # n_features_in_ matches len(FEATURE_COLUMNS) and this branch is skipped.
-        expected_features = getattr(model, "n_features_in_", None)
+        # Feature count resolution.
+        # CatBoost loaded from binary blob does NOT set n_features_in_ (returns 0).
+        # Priority: _n_inference_features (stamped by gcs_model_loader from the blob
+        # metadata) → n_features_in_ (sklearn compat, reliable for LightGBM/XGBoost)
+        # → feature_count_ (CatBoost-native property, reliable after binary load).
+        expected_features = getattr(model, "_n_inference_features", None) or None
+        if not expected_features:
+            expected_features = getattr(model, "n_features_in_", None) or None
+        if not expected_features:
+            expected_features = getattr(model, "feature_count_", None)
+
         if expected_features is not None and X.shape[1] > expected_features:
             logger.info(
                 "[ML] Model expects %d features, vector has %d — truncating macro features. "
@@ -220,16 +225,39 @@ class WinFastPredictor:
             )
             X = X[:, :expected_features]
         elif expected_features is not None and X.shape[1] < expected_features:
-            # Forward-compat: model was trained with INCLUDE_REJECTED_IN_TRAIN=true,
-            # which appends 'was_rejected' as the last feature column in trainer.py.
-            # During live inference all L3 candidates are non-rejected (was_rejected=0).
-            n_pad = expected_features - X.shape[1]
-            X = np.concatenate([X, np.zeros((1, n_pad), dtype="float32")], axis=1)
-            logger.debug(
-                "[ML] Padded %d feature(s) with 0.0 (was_rejected=0 for L3 inference) "
-                "to match model's %d expected features.",
-                n_pad, expected_features,
-            )
+            # Model has more features than FEATURE_COLUMNS — two known cases:
+            # 1. CatBoost L3_PROFILE trained with source_encoded + profile_id_encoded.
+            # 2. Legacy: INCLUDE_REJECTED_IN_TRAIN appended 'was_rejected'.
+            _inf_names = getattr(model, "_inference_feature_names", [])
+            _extra_names = list(_inf_names[len(FEATURE_COLUMNS):]) if len(_inf_names) > len(FEATURE_COLUMNS) else []
+            if {"source_encoded", "profile_id_encoded"} & set(_extra_names):
+                import hashlib as _hlib
+                _src_enc_map = {
+                    "L1_SPECTRUM": 0, "L3": 1, "L3_LAB": 2,
+                    "L3_REJECTED": 3, "L3_SIMULATED": 4,
+                }
+                _src = "L3" if (model_lane or "").startswith("L3") else (model_lane or "L3")
+                _source_code = _src_enc_map.get(_src, 1)
+                _pid_bucket = (
+                    int(_hlib.md5(profile_id.encode()).hexdigest(), 16) % 9999
+                    if profile_id else 9999
+                )
+                _extra_map = {"source_encoded": _source_code, "profile_id_encoded": _pid_bucket}
+                extra_row = np.array(
+                    [[_extra_map.get(n, 0) for n in _extra_names]], dtype="float32"
+                )
+                X = np.concatenate([X, extra_row], axis=1)
+                logger.info(
+                    "[ML] CatBoost extra features: source_encoded=%d profile_id_encoded=%d lane=%s",
+                    _source_code, _pid_bucket, model_lane,
+                )
+            else:
+                n_pad = expected_features - X.shape[1]
+                X = np.concatenate([X, np.zeros((1, n_pad), dtype="float32")], axis=1)
+                logger.debug(
+                    "[ML] Padded %d feature(s) with 0.0 to match model's %d expected features.",
+                    n_pad, expected_features,
+                )
 
         # Predição
         try:

@@ -160,6 +160,17 @@ class GCSModelLoader:
         else:
             model = loaded
             feature_columns = None
+
+        # Stamp feature metadata onto model object so prediction_service can resolve
+        # the correct feature count without relying on n_features_in_, which CatBoost
+        # loaded from binary bytes does not populate (returns 0, not None).
+        if feature_columns:
+            try:
+                model._n_inference_features = len(feature_columns)
+                model._inference_feature_names = list(feature_columns)
+            except Exception:
+                pass
+
         return {"model": model, "feature_columns": feature_columns, "version": version}
 
     def _load_from_db(
