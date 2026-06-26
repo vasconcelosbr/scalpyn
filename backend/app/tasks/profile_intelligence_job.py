@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 _LOCK_TTL_S = int(os.environ.get("PROFILE_INTELLIGENCE_LOCK_TTL_S", "7200"))
 _PI_ENABLE_OPTUNA = os.environ.get("PI_ENABLE_OPTUNA", "false").lower() == "true"
 _PI_ENABLE_ASSOC_RULES = os.environ.get("PI_ENABLE_ASSOCIATION_RULES", "false").lower() == "true"
+# Guard: block old autopilot from creating new profile candidates.
+# Set to 'true' only after deliberate review. Defaults to False (calibration-only mode).
+_PI_CANDIDATE_CYCLE_ENABLED = os.environ.get("PI_AUTOPILOT_CANDIDATE_CYCLE_ENABLED", "false").lower() == "true"
 
 
 def _acquire_pi_lock(user_id) -> tuple:
@@ -127,12 +130,15 @@ async def _run_pi_job():
                 from ..services.profile_intelligence_autopilot_service import (
                     ProfileIntelligenceAutopilotService,
                 )
-                autopilot_result = await ProfileIntelligenceAutopilotService().run_cycle(
-                    db=db,
-                    user_id=user_id,
-                    analysis_run_id=run_id,
-                )
-                logger.info("[PIJob] Auto-Pilot result for user %s: %s", user_id, autopilot_result)
+                if _PI_CANDIDATE_CYCLE_ENABLED:
+                    autopilot_result = await ProfileIntelligenceAutopilotService().run_cycle(
+                        db=db,
+                        user_id=user_id,
+                        analysis_run_id=run_id,
+                    )
+                    logger.info("[PIJob] Auto-Pilot result for user %s: %s", user_id, autopilot_result)
+                else:
+                    logger.info("[PIJob] Candidate cycle disabled (PI_AUTOPILOT_CANDIDATE_CYCLE_ENABLED=false) — skipping for user %s", user_id)
                 await _run_ml_challengers_if_enabled(db, user_id)
             except Exception as exc:
                 logger.error("[PIJob] Failed for user %s: %s", user_id, exc)
@@ -201,12 +207,16 @@ async def _run_for_user(user_id, force_autopilot: bool = False):
                 include_ai_explanation=False,
                 trigger_source="beat",
             )
-            result = await ProfileIntelligenceAutopilotService().run_cycle(
-                db=db,
-                user_id=uid,
-                analysis_run_id=run_id,
-                force=force_autopilot,
-            )
+            if _PI_CANDIDATE_CYCLE_ENABLED:
+                result = await ProfileIntelligenceAutopilotService().run_cycle(
+                    db=db,
+                    user_id=uid,
+                    analysis_run_id=run_id,
+                    force=force_autopilot,
+                )
+            else:
+                logger.info("[PIJob] Candidate cycle disabled for user %s — calibration-only mode", uid)
+                result = {"status": "skipped", "reason": "candidate_cycle_disabled"}
             await _run_ml_challengers_if_enabled(db, uid)
             return result
     finally:
@@ -297,3 +307,52 @@ async def _monitor_autopilot():
 @celery_app.task(name="app.tasks.profile_intelligence_job.monitor", bind=True)
 def monitor(self):
     return _run_async(_monitor_autopilot())
+
+
+# ── Live Engine feedback loop ────────────────────────────────────────────────
+
+async def _run_feedback_loop():
+    from ..database import AsyncSessionLocal
+    from ..services.profile_intelligence_live_service import (
+        run_fast_cycle, run_medium_cycle, run_ai_review_cycle,
+        _needs_medium_cycle, _needs_ai_cycle,
+    )
+
+    async with AsyncSessionLocal() as db:
+        result = await run_fast_cycle(db)
+        logger.info("[PILive] fast cycle done: %s", result)
+
+    if await _check_medium_needed():
+        async with AsyncSessionLocal() as db:
+            result = await run_medium_cycle(db)
+            logger.info("[PILive] medium cycle done: %s", result)
+
+    if await _check_ai_needed():
+        async with AsyncSessionLocal() as db:
+            result = await run_ai_review_cycle(db)
+            logger.info("[PILive] AI review done: %s", result)
+
+
+async def _check_medium_needed() -> bool:
+    from ..database import AsyncSessionLocal
+    from ..services.profile_intelligence_live_service import _needs_medium_cycle
+    async with AsyncSessionLocal() as db:
+        return await _needs_medium_cycle(db)
+
+
+async def _check_ai_needed() -> bool:
+    from ..database import AsyncSessionLocal
+    from ..services.profile_intelligence_live_service import _needs_ai_cycle
+    async with AsyncSessionLocal() as db:
+        return await _needs_ai_cycle(db)
+
+
+@celery_app.task(name="app.tasks.profile_intelligence_job.feedback_loop", bind=True)
+def feedback_loop(self):
+    """Profile Intelligence Live Engine — 24x7 feedback loop.
+
+    Fast cycle runs every invocation (heartbeat + shadow scan).
+    Medium cycle runs every PI_MEDIUM_INTERVAL_M (default 30 min).
+    AI review runs every PI_AI_REVIEW_INTERVAL_H (default 4 h).
+    """
+    return _run_async(_run_feedback_loop())

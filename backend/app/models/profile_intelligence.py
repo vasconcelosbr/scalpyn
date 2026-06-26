@@ -367,3 +367,177 @@ class AutopilotAutonomyPolicy(Base):
                                     default=lambda: datetime.now(timezone.utc))
     updated_at             = Column(TIMESTAMP(timezone=True), nullable=False,
                                     default=lambda: datetime.now(timezone.utc))
+
+
+# ── Live Engine models (migration 113) ─────────────────────────────────────────
+
+class ProfileIntelligenceHeartbeat(Base):
+    __tablename__ = "profile_intelligence_heartbeats"
+
+    id             = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id         = Column(UUID(as_uuid=True), nullable=True)
+    engine_status  = Column(String(40), nullable=False, default="IDLE")
+    current_phase  = Column(String(60), nullable=False, default="IDLE")
+    heartbeat_at   = Column(TIMESTAMP(timezone=True), nullable=False,
+                            default=lambda: datetime.now(timezone.utc))
+    next_cycle_at  = Column(TIMESTAMP(timezone=True), nullable=True)
+    worker_name    = Column(String(120), nullable=True)
+    commit_hash    = Column(String(64), nullable=True)
+    metadata       = Column(JSONB, nullable=False, default=dict)
+    created_at     = Column(TIMESTAMP(timezone=True), nullable=False,
+                            default=lambda: datetime.now(timezone.utc))
+
+
+class ProfileIntelligenceActivityLog(Base):
+    __tablename__ = "profile_intelligence_activity_log"
+
+    id           = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id       = Column(UUID(as_uuid=True), nullable=True)
+    event_type   = Column(String(60), nullable=False)
+    phase        = Column(String(60), nullable=False)
+    severity     = Column(String(20), nullable=False, default="info")
+    message      = Column(Text, nullable=False)
+    profile_id   = Column(UUID(as_uuid=True), nullable=True)
+    profile_name = Column(String(255), nullable=True)
+    payload      = Column(JSONB, nullable=False, default=dict)
+    created_at   = Column(TIMESTAMP(timezone=True), nullable=False,
+                          default=lambda: datetime.now(timezone.utc))
+
+
+class ProfileIndicatorPerformance(Base):
+    __tablename__ = "profile_indicator_performance"
+
+    id                  = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id              = Column(UUID(as_uuid=True), nullable=False)
+    profile_id          = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"),
+                                 nullable=False)
+    profile_name        = Column(String(255), nullable=True)
+    indicator_name      = Column(String(80), nullable=False)
+    bucket              = Column(String(120), nullable=True)
+    sample_count        = Column(Integer, nullable=False)
+    win_count           = Column(Integer, nullable=False, default=0)
+    loss_count          = Column(Integer, nullable=False, default=0)
+    win_rate            = Column(Numeric, nullable=True)
+    avg_pnl_pct         = Column(Numeric, nullable=True)
+    ev_pct              = Column(Numeric, nullable=True)
+    avg_mae_pct         = Column(Numeric, nullable=True)
+    avg_mfe_pct         = Column(Numeric, nullable=True)
+    avg_holding_seconds = Column(Numeric, nullable=True)
+    lift_vs_profile     = Column(Numeric, nullable=True)
+    fpr                 = Column(Numeric, nullable=True)
+    metadata            = Column(JSONB, nullable=False, default=dict)
+    created_at          = Column(TIMESTAMP(timezone=True), nullable=False,
+                                 default=lambda: datetime.now(timezone.utc))
+
+
+class ProfileHardNegativePattern(Base):
+    __tablename__ = "profile_hard_negative_patterns"
+
+    id                = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id            = Column(UUID(as_uuid=True), nullable=False)
+    profile_id        = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="CASCADE"),
+                               nullable=False)
+    profile_name      = Column(String(255), nullable=True)
+    pattern_key       = Column(String(120), nullable=False)
+    pattern_payload   = Column(JSONB, nullable=False, default=dict)
+    sample_count      = Column(Integer, nullable=False)
+    loss_count        = Column(Integer, nullable=False)
+    fp_rate           = Column(Numeric, nullable=True)
+    avg_loss_pct      = Column(Numeric, nullable=True)
+    suggested_penalty = Column(JSONB, nullable=True)
+    status            = Column(String(30), nullable=False, default="OBSERVED")
+    created_at        = Column(TIMESTAMP(timezone=True), nullable=False,
+                               default=lambda: datetime.now(timezone.utc))
+
+
+class ProfileAdjustmentSuggestion(Base):
+    __tablename__ = "profile_adjustment_suggestions"
+
+    id                      = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id                  = Column(UUID(as_uuid=True), nullable=False)
+    profile_id              = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="RESTRICT"),
+                                     nullable=False)
+    profile_name            = Column(String(255), nullable=True)
+    suggestion_type         = Column(String(60), nullable=False)
+    target_section          = Column(String(80), nullable=False)
+    target_field            = Column(String(120), nullable=True)
+    current_value           = Column(JSONB, nullable=True)
+    suggested_value         = Column(JSONB, nullable=False)
+    reason                  = Column(Text, nullable=False)
+    evidence                = Column(JSONB, nullable=False, default=dict)
+    confidence              = Column(Numeric, nullable=True)
+    expected_impact         = Column(JSONB, nullable=True)
+    status                  = Column(String(40), nullable=False, default="PENDING_SHADOW_VALIDATION")
+    mutation_applied        = Column(Boolean, nullable=False, default=False)
+    requires_human_approval = Column(Boolean, nullable=False, default=True)
+    rollback_payload        = Column(JSONB, nullable=True)
+    created_by              = Column(String(60), nullable=False, default="profile_intelligence")
+    created_at              = Column(TIMESTAMP(timezone=True), nullable=False,
+                                     default=lambda: datetime.now(timezone.utc))
+    updated_at              = Column(TIMESTAMP(timezone=True), nullable=True)
+
+
+class ProfileAdjustmentVersion(Base):
+    __tablename__ = "profile_adjustment_versions"
+
+    id                       = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    suggestion_id            = Column(UUID(as_uuid=True),
+                                      ForeignKey("profile_adjustment_suggestions.id", ondelete="CASCADE"),
+                                      nullable=False)
+    profile_id               = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="RESTRICT"),
+                                      nullable=False)
+    version_status           = Column(String(40), nullable=False)
+    before_snapshot          = Column(JSONB, nullable=False)
+    after_snapshot           = Column(JSONB, nullable=False)
+    diff                     = Column(JSONB, nullable=False, default=dict)
+    shadow_validation_status = Column(String(30), nullable=False, default="PENDING")
+    mutation_applied         = Column(Boolean, nullable=False, default=False)
+    applied_at               = Column(TIMESTAMP(timezone=True), nullable=True)
+    applied_by               = Column(String(120), nullable=True)
+    rollback_available       = Column(Boolean, nullable=False, default=True)
+    created_at               = Column(TIMESTAMP(timezone=True), nullable=False,
+                                      default=lambda: datetime.now(timezone.utc))
+
+
+class ProfileAiReview(Base):
+    __tablename__ = "profile_ai_reviews"
+
+    id               = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id           = Column(UUID(as_uuid=True), nullable=True)
+    status           = Column(String(30), nullable=False, default="PENDING")
+    requested_at     = Column(TIMESTAMP(timezone=True), nullable=False,
+                              default=lambda: datetime.now(timezone.utc))
+    completed_at     = Column(TIMESTAMP(timezone=True), nullable=True)
+    next_review_at   = Column(TIMESTAMP(timezone=True), nullable=True)
+    model_name       = Column(String(60), nullable=True)
+    prompt_hash      = Column(String(64), nullable=True)
+    tokens_input     = Column(Integer, nullable=True)
+    tokens_output    = Column(Integer, nullable=True)
+    summary          = Column(Text, nullable=True)
+    findings         = Column(JSONB, nullable=False, default=dict)
+    recommendations  = Column(JSONB, nullable=False, default=list)
+    contradictions   = Column(JSONB, nullable=False, default=list)
+    risk_flags       = Column(JSONB, nullable=False, default=list)
+    raw_response_ref = Column(Text, nullable=True)
+    created_at       = Column(TIMESTAMP(timezone=True), nullable=False,
+                              default=lambda: datetime.now(timezone.utc))
+
+
+class AutopilotPendingAction(Base):
+    __tablename__ = "autopilot_pending_actions"
+
+    id                      = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    suggestion_id           = Column(UUID(as_uuid=True),
+                                     ForeignKey("profile_adjustment_suggestions.id", ondelete="SET NULL"),
+                                     nullable=True)
+    profile_id              = Column(UUID(as_uuid=True), ForeignKey("profiles.id", ondelete="RESTRICT"),
+                                     nullable=False)
+    action_type             = Column(String(60), nullable=False)
+    action_status           = Column(String(30), nullable=False, default="PENDING")
+    target_scope            = Column(String(30), nullable=False, default="SHADOW")
+    mutation_applied        = Column(Boolean, nullable=False, default=False)
+    requires_human_approval = Column(Boolean, nullable=False, default=True)
+    payload                 = Column(JSONB, nullable=False, default=dict)
+    created_at              = Column(TIMESTAMP(timezone=True), nullable=False,
+                                     default=lambda: datetime.now(timezone.utc))
+    updated_at              = Column(TIMESTAMP(timezone=True), nullable=True)

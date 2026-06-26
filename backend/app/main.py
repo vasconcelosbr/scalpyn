@@ -464,6 +464,10 @@ app.include_router(autopilot_api.router)
 from .api import profile_intelligence as profile_intelligence_api  # noqa: E402
 app.include_router(profile_intelligence_api.router)
 
+# Profile Intelligence Live Engine — heartbeat, activity, shadow, indicator, AI.
+from .api import profile_intelligence_live as pi_live_api  # noqa: E402
+app.include_router(pi_live_api.router)
+
 # WebSocket
 app.include_router(websocket.router)
 

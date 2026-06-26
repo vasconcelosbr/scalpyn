@@ -439,7 +439,7 @@ function ChampionScoreBar({ score }: { score: number | null | undefined }) {
   );
 }
 
-const TABS = ["Overview", "Auto-Pilot", "Profiles", "Indicators", "Combinations", "Suggestions", "Audit", "Settings"] as const;
+const TABS = ["Overview", "Live Engine", "Auto-Pilot", "Profiles", "Indicators", "Combinations", "Suggestions", "Audit", "Settings"] as const;
 type Tab = typeof TABS[number];
 
 const DEFAULT_RUN_PAYLOAD = {
@@ -481,6 +481,15 @@ export default function ProfileIntelligencePage() {
   const [runningAutopilot, setRunningAutopilot] = useState(false);
   const [candidateActionId, setCandidateActionId] = useState<string | null>(null);
   const [selectedAutopilotCandidate, setSelectedAutopilotCandidate] = useState<AutopilotCandidate | null>(null);
+
+  // Live Engine state
+  const [liveStatus, setLiveStatus] = useState<any>(null);
+  const [liveActivity, setLiveActivity] = useState<any[]>([]);
+  const [liveShadow, setLiveShadow] = useState<any>(null);
+  const [liveIndicators, setLiveIndicators] = useState<any>(null);
+  const [liveAdjustments, setLiveAdjustments] = useState<any[]>([]);
+  const [liveAiReview, setLiveAiReview] = useState<any>(null);
+  const [liveSafety, setLiveSafety] = useState<any>(null);
 
   // Loading
   const [loadingOverview, setLoadingOverview] = useState(true);
@@ -568,7 +577,24 @@ export default function ProfileIntelligencePage() {
     if (tab === "Overview") return;
     setLoadingTab(true);
     try {
-      if (tab === "Auto-Pilot") {
+      if (tab === "Live Engine") {
+        const [status, activity, shadow, indicators, adjustments, aiReview, safety] = await Promise.all([
+          apiGet("/profile-intelligence/live/status").catch(() => null),
+          apiGet("/profile-intelligence/live/activity?limit=50").catch(() => null),
+          apiGet("/profile-intelligence/live/shadow-summary?hours=24").catch(() => null),
+          apiGet("/profile-intelligence/live/indicator-performance?limit=20").catch(() => null),
+          apiGet("/profile-intelligence/live/adjustment-suggestions?limit=30").catch(() => null),
+          apiGet("/profile-intelligence/live/ai-review").catch(() => null),
+          apiGet("/profile-intelligence/live/safety").catch(() => null),
+        ]);
+        setLiveStatus(status);
+        setLiveActivity(activity?.items || []);
+        setLiveShadow(shadow);
+        setLiveIndicators(indicators);
+        setLiveAdjustments(adjustments?.items || []);
+        setLiveAiReview(aiReview);
+        setLiveSafety(safety);
+      } else if (tab === "Auto-Pilot") {
         const [status, candidates, events] = await Promise.all([
           apiGet("/profile-intelligence/autopilot"),
           apiGet("/profile-intelligence/autopilot/candidates?limit=100"),
@@ -1961,6 +1987,257 @@ export default function ProfileIntelligencePage() {
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── TAB: Live Engine ───────────────────────────────────────────────────── */}
+      {activeTab === "Live Engine" && (
+        <div className="space-y-4">
+          {/* Safety Guard — always first */}
+          {liveSafety && (
+            <div className={`card p-4 flex items-start gap-3 ${liveSafety.gate === "PASS" ? "border-green-500/30 bg-green-500/5" : "border-yellow-500/30 bg-yellow-500/5"}`}>
+              <CheckCircle className={`w-4 h-4 shrink-0 mt-0.5 ${liveSafety.gate === "PASS" ? "text-green-400" : "text-yellow-400"}`} />
+              <div className="flex-1 min-w-0">
+                <div className={`text-[12px] font-semibold mb-1 ${liveSafety.gate === "PASS" ? "text-green-400" : "text-yellow-400"}`}>
+                  Safety Guard — {liveSafety.gate}
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                  {[
+                    ["ML Gate", liveSafety.ml_gate_enabled ? "ON" : "OFF", !liveSafety.ml_gate_enabled],
+                    ["Live Trading", liveSafety.live_trading_enabled ? "ON" : "OFF", !liveSafety.live_trading_enabled],
+                    ["Auto Mutation", liveSafety.auto_mutation_enabled ? "ON" : "OFF", !liveSafety.auto_mutation_enabled],
+                    ["Create Profile", liveSafety.create_profile_enabled ? "ON" : "OFF", !liveSafety.create_profile_enabled],
+                    ["Human Approval", liveSafety.human_approval_required ? "Required" : "Not required", liveSafety.human_approval_required],
+                  ].map(([label, value, isGood]) => (
+                    <div key={String(label)} className="text-center">
+                      <div className="text-[10px] text-[var(--text-tertiary)] uppercase">{label}</div>
+                      <div className={`text-[12px] font-semibold ${isGood ? "text-green-400" : "text-red-400"}`}>{String(value)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Engine Status */}
+            <div className="card p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Zap className="w-4 h-4 text-[var(--accent-primary)]" />
+                <h3 className="text-[13px] font-semibold text-[var(--text-primary)]">Engine Status</h3>
+              </div>
+              {loadingTab ? (
+                <div className="skeleton h-24 rounded" />
+              ) : liveStatus ? (
+                <div className="space-y-2">
+                  <div className="flex justify-between text-[12px]">
+                    <span className="text-[var(--text-tertiary)]">Status</span>
+                    <span className={`font-semibold ${liveStatus.engine_status === "RUNNING" ? "text-green-400" : liveStatus.is_stale ? "text-yellow-400" : "text-[var(--text-primary)]"}`}>
+                      {liveStatus.is_stale ? "STALE" : liveStatus.engine_status}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-[12px]">
+                    <span className="text-[var(--text-tertiary)]">Fase</span>
+                    <span className="text-[var(--text-primary)]">{liveStatus.current_phase}</span>
+                  </div>
+                  <div className="flex justify-between text-[12px]">
+                    <span className="text-[var(--text-tertiary)]">Último heartbeat</span>
+                    <span className="text-[var(--text-primary)]">{liveStatus.last_heartbeat_at ? new Date(liveStatus.last_heartbeat_at).toLocaleTimeString() : "—"}</span>
+                  </div>
+                  <div className="flex justify-between text-[12px]">
+                    <span className="text-[var(--text-tertiary)]">Próximo ciclo</span>
+                    <span className="text-[var(--text-primary)]">{liveStatus.next_cycle_at ? new Date(liveStatus.next_cycle_at).toLocaleTimeString() : "—"}</span>
+                  </div>
+                  <div className="flex justify-between text-[12px]">
+                    <span className="text-[var(--text-tertiary)]">Worker</span>
+                    <span className="text-[var(--text-secondary)] truncate max-w-[60%]">{liveStatus.worker_name || "—"}</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-[12px] text-[var(--text-tertiary)]">Motor não iniciado. Aguardando primeiro heartbeat.</div>
+              )}
+            </div>
+
+            {/* Shadow Analyzer */}
+            <div className="card p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Eye className="w-4 h-4 text-blue-400" />
+                <h3 className="text-[13px] font-semibold text-[var(--text-primary)]">Shadow Analyzer (24h)</h3>
+              </div>
+              {loadingTab ? <div className="skeleton h-24 rounded" /> : liveShadow ? (
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    ["Trades", liveShadow.total_trades],
+                    ["Profiles", liveShadow.total_profiles],
+                    ["Win Rate", liveShadow.win_rate != null ? `${(liveShadow.win_rate * 100).toFixed(1)}%` : "—"],
+                    ["Avg PnL", liveShadow.avg_pnl_pct != null ? `${liveShadow.avg_pnl_pct > 0 ? "+" : ""}${liveShadow.avg_pnl_pct.toFixed(3)}%` : "—"],
+                    ["Negative Profiles", liveShadow.negative_profiles],
+                    ["Hard Negatives", liveShadow.hard_negative_patterns_detected],
+                  ].map(([label, value]) => (
+                    <div key={String(label)} className="bg-[var(--bg-input)] rounded px-3 py-2">
+                      <div className="text-[10px] text-[var(--text-tertiary)] uppercase">{label}</div>
+                      <div className="text-[13px] font-semibold text-[var(--text-primary)]">{String(value ?? "—")}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : <div className="text-[12px] text-[var(--text-tertiary)]">Sem dados de shadow disponíveis.</div>}
+            </div>
+
+            {/* AI Critic */}
+            <div className="card p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Brain className="w-4 h-4 text-purple-400" />
+                <h3 className="text-[13px] font-semibold text-[var(--text-primary)]">AI Critic (4h)</h3>
+              </div>
+              {loadingTab ? <div className="skeleton h-24 rounded" /> : liveAiReview ? (
+                <div className="space-y-2">
+                  <div className="flex justify-between text-[12px]">
+                    <span className="text-[var(--text-tertiary)]">Status</span>
+                    <span className={`font-semibold ${liveAiReview.status === "COMPLETED" ? "text-green-400" : liveAiReview.status === "SCHEDULED" ? "text-blue-400" : "text-[var(--text-secondary)]"}`}>{liveAiReview.status}</span>
+                  </div>
+                  {liveAiReview.next_review_at && (
+                    <div className="flex justify-between text-[12px]">
+                      <span className="text-[var(--text-tertiary)]">Próxima revisão</span>
+                      <span className="text-[var(--text-primary)]">{new Date(liveAiReview.next_review_at).toLocaleTimeString()}</span>
+                    </div>
+                  )}
+                  {liveAiReview.summary && (
+                    <div className="text-[11px] text-[var(--text-secondary)] bg-[var(--bg-input)] rounded p-2">{liveAiReview.summary}</div>
+                  )}
+                  {liveAiReview.risk_flags?.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-[10px] font-semibold text-yellow-400 uppercase">Risk Flags</div>
+                      {liveAiReview.risk_flags.map((f: any, i: number) => (
+                        <div key={i} className="text-[11px] text-yellow-300 bg-yellow-500/5 rounded px-2 py-1">
+                          {typeof f === "string" ? f : f.flag || JSON.stringify(f)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {liveAiReview.tokens_input && (
+                    <div className="text-[10px] text-[var(--text-tertiary)]">{liveAiReview.tokens_input} in / {liveAiReview.tokens_output} out tokens</div>
+                  )}
+                </div>
+              ) : <div className="text-[12px] text-[var(--text-tertiary)]">AI Critic ainda não executou.</div>}
+            </div>
+
+            {/* Auto-Pilot Calibration */}
+            <div className="card p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Settings className="w-4 h-4 text-orange-400" />
+                <h3 className="text-[13px] font-semibold text-[var(--text-primary)]">Auto-Pilot Calibration</h3>
+              </div>
+              <div className="text-[11px] text-[var(--text-secondary)] bg-orange-500/5 border border-orange-500/20 rounded p-2">
+                Modo: Calibração-only. Criação de profiles: <span className="text-red-400 font-semibold">OFF</span>. Shadow-only: <span className="text-green-400 font-semibold">ON</span>.
+              </div>
+              <div className="space-y-1">
+                {[
+                  ["Sugestões pendentes", liveAdjustments.filter(s => s.status === "PENDING_SHADOW_VALIDATION").length],
+                  ["Total sugestões", liveAdjustments.length],
+                  ["Mutations aplicadas", liveAdjustments.filter(s => s.mutation_applied).length],
+                ].map(([label, value]) => (
+                  <div key={String(label)} className="flex justify-between text-[12px]">
+                    <span className="text-[var(--text-tertiary)]">{label}</span>
+                    <span className={`font-semibold ${String(label).includes("Mutations") && Number(value) > 0 ? "text-red-400" : "text-[var(--text-primary)]"}`}>{String(value)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Indicator Performance */}
+          {liveIndicators && (
+            <div className="card p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-teal-400" />
+                <h3 className="text-[13px] font-semibold text-[var(--text-primary)]">Indicator Calibration</h3>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <div className="text-[11px] font-semibold text-green-400 uppercase mb-2">Top Win Indicators</div>
+                  {liveIndicators.top_winners?.slice(0, 5).map((r: any, i: number) => (
+                    <div key={i} className="flex justify-between text-[11px] py-1 border-b border-[var(--border-subtle)]">
+                      <span className="text-[var(--text-secondary)]">{r.indicator_name}/{r.bucket}</span>
+                      <span className="text-green-400 font-medium">{r.win_rate != null ? `${(r.win_rate * 100).toFixed(1)}% wr` : "—"}</span>
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <div className="text-[11px] font-semibold text-red-400 uppercase mb-2">Top Loss Indicators</div>
+                  {liveIndicators.top_losers?.slice(0, 5).map((r: any, i: number) => (
+                    <div key={i} className="flex justify-between text-[11px] py-1 border-b border-[var(--border-subtle)]">
+                      <span className="text-[var(--text-secondary)]">{r.indicator_name}/{r.bucket}</span>
+                      <span className="text-red-400 font-medium">{r.win_rate != null ? `${(r.win_rate * 100).toFixed(1)}% wr` : "—"}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Adjustment Suggestions */}
+          {liveAdjustments.length > 0 && (
+            <div className="card p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-amber-400" />
+                <h3 className="text-[13px] font-semibold text-[var(--text-primary)]">Calibration Suggestions ({liveAdjustments.length})</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-[11px]">
+                  <thead>
+                    <tr className="text-[var(--text-tertiary)] uppercase border-b border-[var(--border-subtle)]">
+                      <th className="text-left pb-2 font-medium">Profile</th>
+                      <th className="text-left pb-2 font-medium">Type</th>
+                      <th className="text-left pb-2 font-medium">Section</th>
+                      <th className="text-right pb-2 font-medium">Status</th>
+                      <th className="text-right pb-2 font-medium">Mutation</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {liveAdjustments.slice(0, 10).map(s => (
+                      <tr key={s.id} className="border-b border-[var(--border-subtle)] hover:bg-[var(--bg-hover)]">
+                        <td className="py-2 text-[var(--text-primary)] max-w-[120px] truncate">{s.profile_name || s.profile_id?.slice(0, 8)}</td>
+                        <td className="py-2 text-[var(--text-secondary)]">{s.suggestion_type}</td>
+                        <td className="py-2 text-[var(--text-tertiary)]">{s.target_section}</td>
+                        <td className="py-2 text-right">
+                          <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-400">{s.status}</span>
+                        </td>
+                        <td className="py-2 text-right">
+                          <span className={`font-semibold ${s.mutation_applied ? "text-red-400" : "text-green-400"}`}>{s.mutation_applied ? "APPLIED" : "SAFE"}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Activity Timeline */}
+          <div className="card p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <RotateCcw className="w-4 h-4 text-[var(--text-tertiary)]" />
+              <h3 className="text-[13px] font-semibold text-[var(--text-primary)]">Activity Timeline</h3>
+            </div>
+            {loadingTab ? (
+              <TableSkeleton />
+            ) : liveActivity.length === 0 ? (
+              <div className="text-[12px] text-[var(--text-tertiary)] py-4 text-center">Nenhuma atividade registrada ainda. O motor iniciará no próximo ciclo.</div>
+            ) : (
+              <div className="space-y-1 max-h-72 overflow-y-auto custom-scrollbar">
+                {liveActivity.map((ev, i) => (
+                  <div key={i} className="flex items-start gap-2 text-[11px] py-1.5 border-b border-[var(--border-subtle)]">
+                    <span className={`shrink-0 font-mono w-16 truncate ${ev.severity === "error" ? "text-red-400" : ev.severity === "warn" ? "text-yellow-400" : "text-[var(--text-tertiary)]"}`}>
+                      {ev.created_at ? new Date(ev.created_at).toLocaleTimeString() : "—"}
+                    </span>
+                    <span className="px-1 py-0.5 rounded text-[10px] bg-[var(--bg-input)] text-[var(--text-secondary)] shrink-0">{ev.event_type}</span>
+                    <span className="text-[var(--text-primary)] truncate">{ev.message}</span>
+                    {ev.profile_name && <span className="text-[var(--accent-primary)] shrink-0">{ev.profile_name}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

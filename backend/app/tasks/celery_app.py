@@ -195,7 +195,8 @@ TASK_ROUTES = {
     "app.tasks.profile_intelligence_job.run":       {"queue": QUEUE_STRUCTURAL},
     "app.tasks.profile_intelligence_job.run_for_user": {"queue": QUEUE_STRUCTURAL},
     "app.tasks.profile_intelligence_job.run_cycle_for_user": {"queue": QUEUE_STRUCTURAL},
-    "app.tasks.profile_intelligence_job.monitor":   {"queue": QUEUE_STRUCTURAL},
+    "app.tasks.profile_intelligence_job.monitor":        {"queue": QUEUE_STRUCTURAL},
+    "app.tasks.profile_intelligence_job.feedback_loop": {"queue": QUEUE_STRUCTURAL},
     "app.tasks.profile_intelligence_job.train_ml_challengers_for_user": {"queue": QUEUE_STRUCTURAL_COMPUTE},
 
     # Opportunity Snapshot Evaluator — populates future_outcome on snapshots.
@@ -619,6 +620,12 @@ celery_app.conf.beat_schedule = {
     "profile_intelligence_autopilot_monitor": {
         "task": "app.tasks.profile_intelligence_job.monitor",
         "schedule": float(os.environ.get("PROFILE_INTELLIGENCE_MONITOR_INTERVAL_S", 300)),
+        "options": {"queue": QUEUE_STRUCTURAL},
+    },
+    # Live Engine 24x7: fast heartbeat every 5 min, medium/AI gated internally.
+    "profile_intelligence_live": {
+        "task": "app.tasks.profile_intelligence_job.feedback_loop",
+        "schedule": float(os.environ.get("PI_LIVE_FAST_INTERVAL_S", 300)),
         "options": {"queue": QUEUE_STRUCTURAL},
     },
 
