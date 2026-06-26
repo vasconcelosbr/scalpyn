@@ -245,6 +245,7 @@ def load_shadow_rows(engine, sources: list[str], lookback_days: int, require_pro
                 LEFT JOIN decisions_log dl
                     ON dl.id = st.decision_id AND dl.metrics IS NOT NULL
                 WHERE st.source IN ({placeholders})
+                  AND st.status = 'COMPLETED'
                   AND st.pnl_pct IS NOT NULL
                   AND st.features_snapshot IS NOT NULL
                   AND st.features_snapshot::text <> '{{}}'
@@ -561,7 +562,7 @@ def _probability_distribution(score: np.ndarray) -> dict[str, Any]:
 
 
 def classify_profile_threshold(
-    trade_count: int,
+    completed_trades_total: int,
     positive_count: int,
     approved_count: int,
     precision_test: float,
@@ -570,11 +571,12 @@ def classify_profile_threshold(
 ) -> tuple[str, str]:
     """Return (status, reason) for a profile's threshold candidate.
 
-    Thresholds per prompt: trade_count>=100, positive_count>=30, approved_count>=30,
+    completed_trades_total: full dataset count for the profile (not test-split count).
+    Gates: completed_trades_total>=100, positive_count>=30, approved_count>=30,
     precision>=0.50, fpr<=0.20, ev>0.
     """
-    if trade_count < 100:
-        return "cold_start", "trade_count < 100"
+    if completed_trades_total < 100:
+        return "cold_start", "completed_trades_total < 100"
     if positive_count < 30:
         return "cold_start", "positive_count < 30"
     if approved_count < 30:
@@ -588,7 +590,13 @@ def classify_profile_threshold(
     return "approved_candidate", "passes_all_criteria"
 
 
-def _profile_thresholds(test: pd.DataFrame, y_true: np.ndarray, score: np.ndarray, pnl: np.ndarray) -> list[dict[str, Any]]:
+def _profile_thresholds(
+    test: pd.DataFrame,
+    y_true: np.ndarray,
+    score: np.ndarray,
+    pnl: np.ndarray,
+    full_profile_counts: dict[str, int],
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if "_profile_id" not in test.columns:
         return rows
@@ -597,13 +605,13 @@ def _profile_thresholds(test: pd.DataFrame, y_true: np.ndarray, score: np.ndarra
     tmp["score"] = score
     tmp["pnl"] = pnl
     for profile_id, part in tmp.groupby("_profile_id", dropna=False):
-        trade_count = int(len(part))
+        completed_trades_total = full_profile_counts.get(str(profile_id), 0)
         positive_count = int(part["y"].sum())
         sweep = _threshold_sweep(part["y"].to_numpy(), part["score"].to_numpy(), part["pnl"].to_numpy())
         best = max(sweep, key=lambda row: (row["ev"] if row["ev"] is not None else -999, row["precision"]))
         approved_count = best["approved_count"]
         status, reason = classify_profile_threshold(
-            trade_count=trade_count,
+            completed_trades_total=completed_trades_total,
             positive_count=positive_count,
             approved_count=approved_count,
             precision_test=best["precision"],
@@ -613,7 +621,8 @@ def _profile_thresholds(test: pd.DataFrame, y_true: np.ndarray, score: np.ndarra
         rows.append(
             {
                 "profile_id": str(profile_id),
-                "trade_count": trade_count,
+                "completed_trades_total": completed_trades_total,
+                "trade_count_test": int(len(part)),
                 "positive_count": positive_count,
                 "base_win_rate": float(part["y"].mean()),
                 "precision_test": best["precision"],
@@ -726,7 +735,13 @@ def train_lane(bundle: DatasetBundle) -> dict[str, Any]:
         "threshold_sweep_validation": val_sweep,
         "threshold_sweep_test": _threshold_sweep(y_test, test_score, test_pnl),
         "top_buckets_test": _top_buckets(y_test, test_score, test_pnl, test),
-        "profile_thresholds": _profile_thresholds(test, y_test, test_score, test_pnl),
+        "profile_thresholds": _profile_thresholds(
+            test, y_test, test_score, test_pnl,
+            full_profile_counts=(
+                bundle.df["_profile_id"].dropna().astype(str).value_counts().to_dict()
+                if "_profile_id" in bundle.df.columns else {}
+            ),
+        ),
         "hard_negative_patterns_json": _hard_negative_patterns(test, y_test, test_score, diagnostic_threshold),
         "probability_distribution": _probability_distribution(test_score),
         "probability_valid": bool(np.min(test_score) >= 0.0 and np.max(test_score) <= 1.0) if len(test_score) else False,

@@ -153,18 +153,19 @@ def test_select_operational_threshold_no_valid_point_zero_ev():
 
 # --- Phase E: classify_profile_threshold ---
 
-def test_classify_profile_cold_start_trade_count_14():
+def test_classify_profile_cold_start_total_below_100():
+    # completed_trades_total < 100 → cold_start regardless of test-set size
     status, reason = classify_profile_threshold(
-        trade_count=14, positive_count=5, approved_count=10,
+        completed_trades_total=14, positive_count=5, approved_count=10,
         precision_test=0.60, fpr_test=0.10, ev_test=1.0,
     )
     assert status == "cold_start"
-    assert "trade_count" in reason
+    assert "completed_trades_total" in reason
 
 
 def test_classify_profile_cold_start_insufficient_positives():
     status, reason = classify_profile_threshold(
-        trade_count=101, positive_count=10, approved_count=30,
+        completed_trades_total=101, positive_count=10, approved_count=30,
         precision_test=0.60, fpr_test=0.10, ev_test=1.0,
     )
     assert status == "cold_start"
@@ -173,7 +174,7 @@ def test_classify_profile_cold_start_insufficient_positives():
 
 def test_classify_profile_rejected_high_fpr():
     status, reason = classify_profile_threshold(
-        trade_count=150, positive_count=40, approved_count=35,
+        completed_trades_total=150, positive_count=40, approved_count=35,
         precision_test=0.60, fpr_test=0.714, ev_test=0.5,
     )
     assert status == "rejected"
@@ -182,7 +183,7 @@ def test_classify_profile_rejected_high_fpr():
 
 def test_classify_profile_rejected_negative_ev():
     status, reason = classify_profile_threshold(
-        trade_count=150, positive_count=40, approved_count=35,
+        completed_trades_total=150, positive_count=40, approved_count=35,
         precision_test=0.60, fpr_test=0.10, ev_test=-0.1,
     )
     assert status == "rejected"
@@ -191,7 +192,7 @@ def test_classify_profile_rejected_negative_ev():
 
 def test_classify_profile_rejected_low_precision():
     status, reason = classify_profile_threshold(
-        trade_count=150, positive_count=40, approved_count=35,
+        completed_trades_total=150, positive_count=40, approved_count=35,
         precision_test=0.40, fpr_test=0.10, ev_test=0.5,
     )
     assert status == "rejected"
@@ -200,11 +201,39 @@ def test_classify_profile_rejected_low_precision():
 
 def test_classify_profile_approved_candidate():
     status, reason = classify_profile_threshold(
-        trade_count=150, positive_count=40, approved_count=35,
+        completed_trades_total=150, positive_count=40, approved_count=35,
         precision_test=0.55, fpr_test=0.10, ev_test=0.8,
     )
     assert status == "approved_candidate"
     assert reason == "passes_all_criteria"
+
+
+def test_classify_profile_ml_eligible_513_completed():
+    # 513 completed → PROFILE_THRESHOLD_ELIGIBLE (>=500); passes maturity gate
+    status, reason = classify_profile_threshold(
+        completed_trades_total=513, positive_count=35, approved_count=31,
+        precision_test=0.55, fpr_test=0.10, ev_test=0.5,
+    )
+    assert status == "approved_candidate"
+
+
+def test_classify_profile_ml_eligible_301_completed():
+    # 301 completed → ML_ELIGIBLE (>=100); passes maturity gate
+    status, reason = classify_profile_threshold(
+        completed_trades_total=301, positive_count=35, approved_count=31,
+        precision_test=0.55, fpr_test=0.10, ev_test=0.5,
+    )
+    assert status == "approved_candidate"
+
+
+def test_classify_profile_500_completed_approved_lt_30_is_insufficient_not_cold_start():
+    # completed_trades_total >= 500 but approved_count < 30 → insufficient_operating_sample, NOT cold_start
+    status, reason = classify_profile_threshold(
+        completed_trades_total=500, positive_count=35, approved_count=5,
+        precision_test=0.55, fpr_test=0.10, ev_test=0.5,
+    )
+    assert status == "insufficient_operating_sample"
+    assert status != "cold_start"
 
 
 # --- Phase F: _json_safe_raw_model_output ---
