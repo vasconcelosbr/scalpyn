@@ -212,42 +212,45 @@ def load_shadow_rows(engine, sources: list[str], lookback_days: int, require_pro
     cutoff = _utc_now() - timedelta(days=lookback_days)
     placeholders = ", ".join(f":src_{i}" for i, _ in enumerate(sources))
     params = {f"src_{i}": src for i, src in enumerate(sources)}
-    profile_clause = "AND profile_id IS NOT NULL" if require_profile_id else ""
+    profile_clause = "AND st.profile_id IS NOT NULL" if require_profile_id else ""
     with engine.connect() as conn:
         rows = conn.execute(
             text(
                 f"""
                 SELECT
-                    id::text AS shadow_id,
-                    symbol,
-                    source,
-                    pnl_pct,
-                    net_return_pct,
-                    holding_seconds,
-                    outcome,
-                    features_snapshot,
-                    created_at,
-                    profile_id::text AS profile_id,
-                    profile_name,
-                    strategy_type,
-                    profile_status_at_entry,
-                    max_profit_first_30m,
-                    max_profit_pct,
-                    mae_pct,
-                    mfe_pct,
-                    barrier_touched,
-                    sl_pct,
-                    sl_pct_applied,
-                    tp_pct,
-                    tp_pct_applied
-                FROM shadow_trades
-                WHERE source IN ({placeholders})
-                  AND pnl_pct IS NOT NULL
-                  AND features_snapshot IS NOT NULL
-                  AND features_snapshot::text <> '{{}}'
-                  AND created_at >= :cutoff
+                    st.id::text AS shadow_id,
+                    st.symbol,
+                    st.source,
+                    st.pnl_pct,
+                    st.net_return_pct,
+                    st.holding_seconds,
+                    st.outcome,
+                    st.features_snapshot,
+                    st.created_at,
+                    st.profile_id::text AS profile_id,
+                    st.profile_name,
+                    st.strategy_type,
+                    st.profile_status_at_entry,
+                    st.max_profit_first_30m,
+                    st.max_profit_pct,
+                    st.mae_pct,
+                    st.mfe_pct,
+                    st.barrier_touched,
+                    st.sl_pct,
+                    st.sl_pct_applied,
+                    st.tp_pct,
+                    st.tp_pct_applied,
+                    dl.metrics AS dl_metrics
+                FROM shadow_trades st
+                LEFT JOIN decisions_log dl
+                    ON dl.id = st.decision_id AND dl.metrics IS NOT NULL
+                WHERE st.source IN ({placeholders})
+                  AND st.pnl_pct IS NOT NULL
+                  AND st.features_snapshot IS NOT NULL
+                  AND st.features_snapshot::text <> '{{}}'
+                  AND st.created_at >= :cutoff
                   {profile_clause}
-                ORDER BY created_at ASC
+                ORDER BY st.created_at ASC
                 """
             ),
             {**params, "cutoff": cutoff},
@@ -294,16 +297,28 @@ def _filter_features(df: pd.DataFrame, candidates: list[str]) -> tuple[list[str]
     return kept, audit
 
 
+def _parse_jsonb(value: Any) -> dict[str, Any]:
+    if not value:
+        return {}
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _metrics_to_df(records: list[dict[str, Any]]) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for row in records:
-        features_snapshot = row.get("features_snapshot") or {}
-        if isinstance(features_snapshot, str):
-            try:
-                features_snapshot = json.loads(features_snapshot)
-            except json.JSONDecodeError:
-                features_snapshot = {}
-        features = extract_features(features_snapshot)
+        features = extract_features(_parse_jsonb(row.get("features_snapshot")))
+        # Phase D fallback: fill None features from decisions_log.metrics when available
+        dl = _parse_jsonb(row.get("dl_metrics"))
+        if dl:
+            dl_features = extract_features(dl)
+            for k, v in dl_features.items():
+                if features.get(k) is None and v is not None:
+                    features[k] = v
         features.update(derive_labels(row))
         features.update(
             {
