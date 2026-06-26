@@ -383,7 +383,7 @@ class ProfileIntelligenceHeartbeat(Base):
     next_cycle_at  = Column(TIMESTAMP(timezone=True), nullable=True)
     worker_name    = Column(String(120), nullable=True)
     commit_hash    = Column(String(64), nullable=True)
-    metadata       = Column(JSONB, nullable=False, default=dict)
+    meta_json      = Column("metadata", JSONB, nullable=False, default=dict)
     created_at     = Column(TIMESTAMP(timezone=True), nullable=False,
                             default=lambda: datetime.now(timezone.utc))
 
@@ -425,7 +425,7 @@ class ProfileIndicatorPerformance(Base):
     avg_holding_seconds = Column(Numeric, nullable=True)
     lift_vs_profile     = Column(Numeric, nullable=True)
     fpr                 = Column(Numeric, nullable=True)
-    metadata            = Column(JSONB, nullable=False, default=dict)
+    meta_json           = Column("metadata", JSONB, nullable=False, default=dict)
     created_at          = Column(TIMESTAMP(timezone=True), nullable=False,
                                  default=lambda: datetime.now(timezone.utc))
 
