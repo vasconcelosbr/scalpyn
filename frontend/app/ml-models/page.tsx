@@ -83,6 +83,49 @@ function MetricBadge({ label, value, good }: { label: string; value: string; goo
   );
 }
 
+function HyperparamValue({ v }: { v: unknown }) {
+  if (v == null) return <span className="text-[#4B5563]">—</span>;
+  if (typeof v === "number") {
+    return <span>{Number.isInteger(v) ? v : v.toFixed(4)}</span>;
+  }
+  if (typeof v === "boolean") {
+    return <span>{v ? "true" : "false"}</span>;
+  }
+  if (Array.isArray(v)) {
+    if (v.length === 0) return <span className="text-[#4B5563]">[]</span>;
+    // Short primitive arrays: inline
+    if (v.length <= 4 && v.every((x) => typeof x !== "object" || x === null)) {
+      return <span>[{v.join(", ")}]</span>;
+    }
+    return (
+      <details className="inline">
+        <summary className="cursor-pointer text-[#60A5FA] hover:underline">[{v.length} items]</summary>
+        <pre className="mt-1 text-[10px] text-[#94A3B8] whitespace-pre-wrap break-all max-h-48 overflow-auto bg-[#060810] p-2 rounded">
+          {JSON.stringify(v, null, 2)}
+        </pre>
+      </details>
+    );
+  }
+  if (typeof v === "object") {
+    const keys = Object.keys(v as object);
+    if (keys.length === 0) return <span className="text-[#4B5563]">{"{}"}</span>;
+    // Small objects (≤4 keys, all primitive): inline
+    const allPrimitive = keys.every((k) => typeof (v as Record<string, unknown>)[k] !== "object");
+    if (keys.length <= 4 && allPrimitive) {
+      return <span>{keys.map((k) => `${k}:${(v as Record<string, unknown>)[k]}`).join(" ")}</span>;
+    }
+    return (
+      <details className="inline">
+        <summary className="cursor-pointer text-[#60A5FA] hover:underline">{"{"}…{keys.length} keys{"}"}</summary>
+        <pre className="mt-1 text-[10px] text-[#94A3B8] whitespace-pre-wrap break-all max-h-48 overflow-auto bg-[#060810] p-2 rounded">
+          {JSON.stringify(v, null, 2)}
+        </pre>
+      </details>
+    );
+  }
+  return <span>{String(v)}</span>;
+}
+
 function HyperparamTable({ params }: { params: Record<string, unknown> | null }) {
   if (!params) return <span className="text-[#4B5563]">—</span>;
   const entries = Object.entries(params).filter(
@@ -91,10 +134,10 @@ function HyperparamTable({ params }: { params: Record<string, unknown> | null })
   return (
     <div className="grid grid-cols-2 gap-x-6 gap-y-1">
       {entries.map(([k, v]) => (
-        <div key={k} className="flex items-center justify-between gap-2">
-          <span className="text-[11px] text-[#4B5563]">{k}</span>
-          <span className="text-[11px] font-mono text-[#94A3B8]">
-            {typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(4)) : String(v ?? "—")}
+        <div key={k} className="flex items-start justify-between gap-2">
+          <span className="text-[11px] text-[#4B5563] shrink-0">{k}</span>
+          <span className="text-[11px] font-mono text-[#94A3B8] text-right">
+            <HyperparamValue v={v} />
           </span>
         </div>
       ))}

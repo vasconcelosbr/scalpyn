@@ -99,9 +99,32 @@ def _utc_now() -> datetime:
 def _json_default(value: Any) -> Any:
     if isinstance(value, (datetime, pd.Timestamp)):
         return value.isoformat()
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return None
     if isinstance(value, np.generic):
-        return value.item()
+        v = value.item()
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            return None
+        return v
     return str(value)
+
+
+def _json_safe_raw_model_output(value: object) -> tuple[object | None, str | None]:
+    """Return (json_safe_value, repr_string) for raw model output.
+
+    Converts NaN/inf to (None, repr) so the payload survives json.dumps(allow_nan=False).
+    """
+    if value is None:
+        return None, None
+    try:
+        f = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None, repr(value)
+    if math.isnan(f):
+        return None, "nan"
+    if math.isinf(f):
+        return None, "-inf" if f < 0 else "inf"
+    return f, None
 
 
 def _safe_float(value: Any) -> float | None:
@@ -448,6 +471,41 @@ def _threshold_sweep(y_true: np.ndarray, score: np.ndarray, pnl: np.ndarray) -> 
     return rows
 
 
+def select_operational_threshold(
+    sweep: list[dict[str, Any]],
+    lane: str,
+    baseline_precision: float,
+) -> tuple[float | None, str]:
+    """Return (threshold, status) applying operational gates before selection.
+
+    Returns (None, 'NO_VALID_OPERATING_POINT') when no candidate passes the gates,
+    so the caller can reject the model rather than picking an extreme threshold.
+    """
+    if lane.startswith("XGB_L1"):
+        min_approved = 30
+        min_prec = 0.0
+        max_fpr = 0.20
+    else:
+        min_approved = 50
+        min_prec = baseline_precision * 1.25 if baseline_precision > 0 else 0.0
+        max_fpr = 0.20
+
+    candidates = [
+        row for row in sweep
+        if (
+            row["approved_count"] >= min_approved
+            and row["precision"] > max(min_prec, 0.0)
+            and row["recall"] > 0
+            and (row["ev"] if row["ev"] is not None else -999) > 0
+            and row["fpr"] <= max_fpr
+        )
+    ]
+    if not candidates:
+        return None, "NO_VALID_OPERATING_POINT"
+    best = max(candidates, key=lambda r: ((r["ev"] if r["ev"] is not None else -999), r["precision"]))
+    return best["threshold"], "OPERATIONAL"
+
+
 def _top_buckets(y_true: np.ndarray, score: np.ndarray, pnl: np.ndarray, meta: pd.DataFrame) -> dict[str, Any]:
     order = np.argsort(-score)
     baseline = float(y_true.mean()) if len(y_true) else 0.0
@@ -487,6 +545,34 @@ def _probability_distribution(score: np.ndarray) -> dict[str, Any]:
     }
 
 
+def classify_profile_threshold(
+    trade_count: int,
+    positive_count: int,
+    approved_count: int,
+    precision_test: float,
+    fpr_test: float,
+    ev_test: float | None,
+) -> tuple[str, str]:
+    """Return (status, reason) for a profile's threshold candidate.
+
+    Thresholds per prompt: trade_count>=100, positive_count>=30, approved_count>=30,
+    precision>=0.50, fpr<=0.20, ev>0.
+    """
+    if trade_count < 100:
+        return "cold_start", "trade_count < 100"
+    if positive_count < 30:
+        return "cold_start", "positive_count < 30"
+    if approved_count < 30:
+        return "insufficient_operating_sample", "approved_count < 30"
+    if ev_test is None or ev_test <= 0:
+        return "rejected", "rejected_negative_ev"
+    if fpr_test > 0.20:
+        return "rejected", "rejected_high_fpr"
+    if precision_test < 0.50:
+        return "rejected", "rejected_low_precision"
+    return "approved_candidate", "passes_all_criteria"
+
+
 def _profile_thresholds(test: pd.DataFrame, y_true: np.ndarray, score: np.ndarray, pnl: np.ndarray) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if "_profile_id" not in test.columns:
@@ -496,25 +582,33 @@ def _profile_thresholds(test: pd.DataFrame, y_true: np.ndarray, score: np.ndarra
     tmp["score"] = score
     tmp["pnl"] = pnl
     for profile_id, part in tmp.groupby("_profile_id", dropna=False):
-        if len(part) < 10:
-            status = "cold_start"
-        elif int(part["y"].sum()) < 3:
-            status = "shadow_only"
-        else:
-            status = "approved_candidate"
+        trade_count = int(len(part))
+        positive_count = int(part["y"].sum())
         sweep = _threshold_sweep(part["y"].to_numpy(), part["score"].to_numpy(), part["pnl"].to_numpy())
         best = max(sweep, key=lambda row: (row["ev"] if row["ev"] is not None else -999, row["precision"]))
+        approved_count = best["approved_count"]
+        status, reason = classify_profile_threshold(
+            trade_count=trade_count,
+            positive_count=positive_count,
+            approved_count=approved_count,
+            precision_test=best["precision"],
+            fpr_test=best["fpr"],
+            ev_test=best["ev"],
+        )
         rows.append(
             {
                 "profile_id": str(profile_id),
-                "trade_count": int(len(part)),
-                "positive_count": int(part["y"].sum()),
+                "trade_count": trade_count,
+                "positive_count": positive_count,
                 "base_win_rate": float(part["y"].mean()),
                 "precision_test": best["precision"],
+                "recall_test": best["recall"],
                 "fpr_test": best["fpr"],
                 "ev_test": best["ev"],
                 "threshold_optimal": best["threshold"],
+                "approved_count": approved_count,
                 "status": status,
+                "reason": reason,
             }
         )
     return rows
@@ -601,22 +695,28 @@ def train_lane(bundle: DatasetBundle) -> dict[str, Any]:
     val_pnl = val["_pnl_pct"].to_numpy(dtype=float)
     test_pnl = test["_pnl_pct"].to_numpy(dtype=float)
     val_sweep = _threshold_sweep(y_val, val_score, val_pnl)
-    threshold_global = max(
+    baseline_precision = float(y_train.mean()) if len(y_train) else 0.0
+    threshold_global, operating_point_status = select_operational_threshold(
+        val_sweep, bundle.lane, baseline_precision
+    )
+    # Use best-available threshold for diagnostic metrics when no operational point found
+    diagnostic_threshold = threshold_global if threshold_global is not None else max(
         val_sweep,
         key=lambda row: (row["ev"] if row["ev"] is not None else -999, row["precision"]),
     )["threshold"]
     metrics = {
-        "validation": _classification_metrics(y_val, val_score, threshold_global),
-        "test": _classification_metrics(y_test, test_score, threshold_global),
+        "validation": _classification_metrics(y_val, val_score, diagnostic_threshold),
+        "test": _classification_metrics(y_test, test_score, diagnostic_threshold),
         "split": split_summary(train, val, test, bundle.label_name),
         "threshold_sweep_validation": val_sweep,
         "threshold_sweep_test": _threshold_sweep(y_test, test_score, test_pnl),
         "top_buckets_test": _top_buckets(y_test, test_score, test_pnl, test),
         "profile_thresholds": _profile_thresholds(test, y_test, test_score, test_pnl),
-        "hard_negative_patterns_json": _hard_negative_patterns(test, y_test, test_score, threshold_global),
+        "hard_negative_patterns_json": _hard_negative_patterns(test, y_test, test_score, diagnostic_threshold),
         "probability_distribution": _probability_distribution(test_score),
         "probability_valid": bool(np.min(test_score) >= 0.0 and np.max(test_score) <= 1.0) if len(test_score) else False,
         "threshold_global": threshold_global,
+        "operating_point_status": operating_point_status,
         "promotion_gate_status": PENDING_EVIDENCE,
     }
     return {
@@ -714,11 +814,12 @@ def persist_candidate(engine, bundle: DatasetBundle, trained: dict[str, Any]) ->
                 "train_from": train["_created_at"].min() if len(train) else None,
                 "train_to": test["_created_at"].max() if len(test) else None,
                 "model_path": f"db://ml_models/{model_id}",
-                "threshold": float(trained["threshold_global"]),
+                "threshold": float(trained["threshold_global"]) if trained["threshold_global"] is not None else None,
                 "notes": (
                     f"XGBoost dual-lane challenger | lane={bundle.lane} | "
                     f"label={bundle.label_name} | contract={bundle.contract_id} | "
-                    "status=candidate | promotion_gate_status=PENDING_EVIDENCE"
+                    f"status=candidate | promotion_gate_status=PENDING_EVIDENCE | "
+                    f"operating_point_status={trained['metrics'].get('operating_point_status', 'UNKNOWN')}"
                 ),
                 "feature_columns_json": json.dumps(bundle.feature_columns),
                 "feature_columns_hash": fc_hash,
@@ -770,7 +871,7 @@ def persist_candidate(engine, bundle: DatasetBundle, trained: dict[str, Any]) ->
                 "test_start": test["_created_at"].min() if len(test) else None,
                 "test_end": test["_created_at"].max() if len(test) else None,
                 "metrics_json": json.dumps(metrics, default=_json_default),
-                "threshold": float(trained["threshold_global"]),
+                "threshold": float(trained["threshold_global"]) if trained["threshold_global"] is not None else None,
                 "artifact_path": f"db://ml_models/{model_id}",
                 "now": now,
             },
@@ -895,8 +996,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if result.get("status") == "trained"
     )
     both_trained = all(result.get("status") == "trained" for result in trained.values())
-    if both_trained and probability_ok:
+    both_have_operating_point = all(
+        result.get("metrics", {}).get("operating_point_status") == "OPERATIONAL"
+        for result in trained.values()
+        if result.get("status") == "trained"
+    )
+    if both_trained and probability_ok and both_have_operating_point:
         verdict = "XGB_DUAL_LANE_CHALLENGERS_VALIDATED"
+    elif both_trained and not both_have_operating_point:
+        verdict = "XGB_DUAL_LANE_REJECTED_NO_OPERATING_POINT"
     elif any(result.get("status") == "blocked" for result in trained.values()):
         verdict = "BLOCKED_XGB_DUAL_LANE"
     else:
