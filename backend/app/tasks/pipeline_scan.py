@@ -70,6 +70,8 @@ def _ml_gate_audit_payload(
     reason_codes = []
     if reason_code:
         reason_codes.append(reason_code)
+    if score_status == "ML_EXCEPTION_FAIL_CLOSED":
+        reason_codes.append("ML_PROBABILITY_INVALID")
     if not model_approved:
         reason_codes.append("ML_GATE_BLOCKED")
     else:
@@ -3312,6 +3314,9 @@ async def _run_pipeline_scan():
                                             "reason_codes": _combined_reason_codes,
                                             "decision_before_ml": "ALLOW",
                                             "decision_after_ml": _decision_after_ml,
+                                            "probability_valid": _prob is not None,
+                                            "probability_error": _ml.get("reason") if _gate_payload.get("score_status") == "ML_EXCEPTION_FAIL_CLOSED" else None,
+                                            "raw_model_output": None,
                                         },
                                         # Fase 8 lineage — this gate only runs for
                                         # effective_level == "L3", so the lane is
