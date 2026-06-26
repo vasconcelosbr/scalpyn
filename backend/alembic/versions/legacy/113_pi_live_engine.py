@@ -21,7 +21,7 @@ import sqlalchemy as sa
 
 
 revision = "113_pi_live_engine"
-down_revision = "112_ml_gate_lineage"
+down_revision = "000_baseline_prod_schema"
 branch_labels = None
 depends_on = None
 
