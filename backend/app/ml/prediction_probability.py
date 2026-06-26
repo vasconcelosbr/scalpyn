@@ -10,6 +10,9 @@ import numpy as np
 
 class ProbabilityPredictionError(RuntimeError):
     """Raised when a model cannot produce a valid positive-class probability."""
+    def __init__(self, message: str, *, raw_value: float | None = None) -> None:
+        super().__init__(message)
+        self.raw_value = raw_value
 
 
 def _positive_probability_from_output(output: Any) -> float:
@@ -26,9 +29,9 @@ def _positive_probability_from_output(output: Any) -> float:
         value = float(row[1] if np.asarray(row).shape[0] > 1 else row[0])
 
     if not math.isfinite(value):
-        raise ProbabilityPredictionError(f"non-finite probability: {value!r}")
+        raise ProbabilityPredictionError(f"non-finite probability: {value!r}", raw_value=value)
     if value < 0.0 or value > 1.0:
-        raise ProbabilityPredictionError(f"probability outside [0, 1]: {value!r}")
+        raise ProbabilityPredictionError(f"probability outside [0, 1]: {value!r}", raw_value=value)
     return value
 
 

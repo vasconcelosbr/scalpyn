@@ -20,6 +20,7 @@ def _fail_closed_result(
     model_lane: str | None,
     reason_code: str,
     reason: str | None = None,
+    raw_model_output: float | None = None,
 ) -> dict:
     result = {
         "win_fast_probability": None,
@@ -34,6 +35,7 @@ def _fail_closed_result(
             else "SKIPPED"
         ),
         "reason_code": reason_code,
+        "raw_model_output": raw_model_output,
     }
     if reason:
         result["reason"] = reason
@@ -284,6 +286,7 @@ class WinFastPredictor:
                 model_lane=model_lane,
                 reason_code="ML_EXCEPTION_FAIL_CLOSED",
                 reason=str(exc),
+                raw_model_output=getattr(exc, "raw_value", None),
             )
         approved = proba >= threshold
 

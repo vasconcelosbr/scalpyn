@@ -3316,7 +3316,7 @@ async def _run_pipeline_scan():
                                             "decision_after_ml": _decision_after_ml,
                                             "probability_valid": _prob is not None,
                                             "probability_error": _ml.get("reason") if _gate_payload.get("score_status") == "ML_EXCEPTION_FAIL_CLOSED" else None,
-                                            "raw_model_output": None,
+                                            "raw_model_output": _ml.get("raw_model_output"),
                                         },
                                         # Fase 8 lineage — this gate only runs for
                                         # effective_level == "L3", so the lane is
