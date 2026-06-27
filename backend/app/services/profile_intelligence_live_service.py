@@ -393,12 +393,6 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
                                 profile_id=uuid.UUID(pid), profile_name=pname,
                                 payload={"suggestion_id": str(sugg_id)})
 
-    await db.execute(text("""
-        UPDATE profile_intelligence_runs
-        SET suggestions_generated = :n, finished_at = now(), updated_at = now()
-        WHERE id = :run_id
-    """), {"n": suggestions_generated, "run_id": str(run_id)})
-
     await _log_activity(db, run_id=run_id, event_type="RUN_COMPLETED",
                         phase="medium",
                         message=f"Ciclo médio concluído: {suggestions_generated} sugestões geradas")
