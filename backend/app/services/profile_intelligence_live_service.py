@@ -478,6 +478,22 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
     await db.commit()
 
     ai_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not ai_key:
+        # Fallback: use any active validated Anthropic key stored in the DB
+        try:
+            from .ai_keys_service import decrypt_value
+            key_row = await db.execute(text("""
+                SELECT api_key_encrypted FROM ai_provider_keys
+                WHERE provider = 'anthropic' AND is_active = true AND is_validated = true
+                ORDER BY last_tested_at DESC NULLS LAST
+                LIMIT 1
+            """))
+            enc = key_row.scalar_one_or_none()
+            if enc:
+                ai_key = decrypt_value(bytes(enc) if not isinstance(enc, bytes) else enc)
+        except Exception as _exc:
+            logger.warning("[PILive] Could not load Anthropic key from DB: %s", _exc)
+
     summary = None
     findings: dict = {}
     recommendations: list = []
