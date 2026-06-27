@@ -439,7 +439,7 @@ function ChampionScoreBar({ score }: { score: number | null | undefined }) {
   );
 }
 
-const TABS = ["Overview", "Live Engine", "Auto-Pilot", "Profiles", "Indicators", "Combinations", "Suggestions", "Audit", "Settings"] as const;
+const TABS = ["Overview", "Live Engine", "Calibration Evolution", "Auto-Pilot", "Profiles", "Indicators", "Combinations", "Suggestions", "Audit", "Settings"] as const;
 type Tab = typeof TABS[number];
 
 const DEFAULT_RUN_PAYLOAD = {
@@ -490,6 +490,20 @@ export default function ProfileIntelligencePage() {
   const [liveAdjustments, setLiveAdjustments] = useState<any[]>([]);
   const [liveAiReview, setLiveAiReview] = useState<any>(null);
   const [liveSafety, setLiveSafety] = useState<any>(null);
+
+  // Calibration Evolution state
+  const [calSummary, setCalSummary] = useState<any>(null);
+  const [calAdjustments, setCalAdjustments] = useState<any[]>([]);
+  const [calTimeline, setCalTimeline] = useState<any[]>([]);
+  const [calIndicators, setCalIndicators] = useState<any[]>([]);
+  const [calAiExplanations, setCalAiExplanations] = useState<any[]>([]);
+  const [calSafety, setCalSafety] = useState<any>(null);
+  const [calTotal, setCalTotal] = useState(0);
+  const [selectedCalAdjustment, setSelectedCalAdjustment] = useState<any>(null);
+  const [calDetailLoading, setCalDetailLoading] = useState(false);
+  const [calDetail, setCalDetail] = useState<any>(null);
+  const [calSubTab, setCalSubTab] = useState<"adjustments" | "indicators" | "timeline" | "ai">("adjustments");
+  const [calFilterMinConf, setCalFilterMinConf] = useState<string>("");
 
   // Loading
   const [loadingOverview, setLoadingOverview] = useState(true);
@@ -594,6 +608,22 @@ export default function ProfileIntelligencePage() {
         setLiveAdjustments(adjustments?.items || []);
         setLiveAiReview(aiReview);
         setLiveSafety(safety);
+      } else if (tab === "Calibration Evolution") {
+        const [summary, adjustments, timeline, indicators, aiExpl, safety] = await Promise.all([
+          apiGet("/profile-intelligence/calibration-evolution/summary").catch(() => null),
+          apiGet("/profile-intelligence/calibration-evolution/adjustments?limit=100").catch(() => ({ items: [], total: 0 })),
+          apiGet("/profile-intelligence/calibration-evolution/timeline?hours=168&limit=100").catch(() => ({ items: [] })),
+          apiGet("/profile-intelligence/calibration-evolution/indicator-impact?limit=50").catch(() => ({ items: [] })),
+          apiGet("/profile-intelligence/calibration-evolution/ai-explanations?limit=10").catch(() => ({ items: [] })),
+          apiGet("/profile-intelligence/calibration-evolution/safety").catch(() => null),
+        ]);
+        setCalSummary(summary);
+        setCalAdjustments(adjustments?.items || []);
+        setCalTotal(adjustments?.total || 0);
+        setCalTimeline(timeline?.items || []);
+        setCalIndicators(indicators?.items || []);
+        setCalAiExplanations(aiExpl?.items || []);
+        setCalSafety(safety);
       } else if (tab === "Auto-Pilot") {
         const [status, candidates, events] = await Promise.all([
           apiGet("/profile-intelligence/autopilot"),
@@ -1162,6 +1192,456 @@ export default function ProfileIntelligencePage() {
             </>
           )}
         </div>
+      )}
+
+      {/* ── TAB: Calibration Evolution ─────────────────────────────────────── */}
+      {activeTab === "Calibration Evolution" && (
+        <div className="space-y-4">
+
+          {/* Safety banner */}
+          {calSafety && !calSafety.safety_pass && (
+            <div className="card p-3 border-red-500/30 bg-red-500/5 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+              <div className="text-[12px] text-red-400">
+                Safety checks falhando — revise antes de qualquer ação.
+                {calSafety.checks?.filter((c: any) => !c.pass).map((c: any) => (
+                  <span key={c.name} className="ml-2 font-mono">[{c.name}={c.value}]</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Summary cards */}
+          {loadingTab ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {[...Array(8)].map((_, i) => <div key={i} className="skeleton h-20 rounded-[var(--radius-lg)]" />)}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {[
+                { label: "Sugestões Pendentes", value: calSummary?.suggestions?.total ?? "—", sub: `${calSummary?.suggestions?.profiles_targeted ?? 0} profiles`, hint: "Total de sugestões de calibração" },
+                { label: "Alta Confiança", value: calSummary?.suggestions?.high_confidence ?? "—", sub: "conf ≥ 0.80", hint: "Sugestões com confiança ≥ 80%" },
+                { label: "Mutações Aplicadas", value: calSummary?.suggestions?.mutations_applied ?? "—", sub: "mutation_applied=true", hint: "Quantas calibrações foram aplicadas" },
+                { label: "Versões Registradas", value: calSummary?.versions?.total ?? "—", sub: `${calSummary?.versions?.applied ?? 0} aplicadas`, hint: "profile_adjustment_versions" },
+                { label: "Indicadores Analisados", value: calSummary?.indicators?.distinct_indicators ?? "—", sub: `${calSummary?.indicators?.profiles_analyzed ?? 0} profiles`, hint: "Indicadores distintos na última análise (48h)" },
+                { label: "Win Rate Média", value: calSummary?.indicators?.avg_win_rate != null ? `${(calSummary.indicators.avg_win_rate * 100).toFixed(1)}%` : "—", sub: "todos os profiles", hint: "Win rate média entre profiles analisados" },
+                { label: "P&L Médio", value: calSummary?.indicators?.avg_pnl_pct != null ? `${(calSummary.indicators.avg_pnl_pct * 100).toFixed(2)}%` : "—", sub: "média indicadores", hint: "P&L médio percentual" },
+                { label: "AI Critic", value: calSummary?.latest_ai_review?.status ?? "—", sub: calSummary?.latest_ai_review?.model_name?.replace("claude-", "") ?? "sem review", hint: "Último review do AI Critic" },
+              ].map((card, i) => (
+                <div key={i} className="card p-3 space-y-1" title={card.hint}>
+                  <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">{card.label}</div>
+                  <div className="text-[18px] font-bold text-[var(--text-primary)] truncate">{String(card.value)}</div>
+                  {card.sub && <div className="text-[11px] text-[var(--text-secondary)]">{card.sub}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* AI Critic latest summary */}
+          {calSummary?.latest_ai_review?.summary_preview && (
+            <div className="card p-4 border-blue-500/20 bg-blue-500/5">
+              <div className="flex items-start gap-2">
+                <Brain className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" />
+                <div>
+                  <div className="text-[11px] font-semibold text-blue-400 mb-1">
+                    AI Critic · {calSummary.latest_ai_review.model_name} · {calSummary.latest_ai_review.tokens_input}↑ {calSummary.latest_ai_review.tokens_output}↓ tokens
+                    {calSummary.latest_ai_review.completed_at && (
+                      <span className="text-[var(--text-tertiary)] ml-2">{fmtDate(calSummary.latest_ai_review.completed_at)}</span>
+                    )}
+                  </div>
+                  <p className="text-[12px] text-[var(--text-secondary)]">{calSummary.latest_ai_review.summary_preview}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Sub-tabs */}
+          <div className="flex gap-1 border-b border-[var(--border-default)]">
+            {(["adjustments", "indicators", "timeline", "ai"] as const).map(st => (
+              <button
+                key={st}
+                onClick={() => setCalSubTab(st)}
+                className={`px-3 py-2 text-[12px] font-medium border-b-2 transition-colors capitalize ${
+                  calSubTab === st
+                    ? "border-[var(--accent-primary)] text-[var(--accent-primary)]"
+                    : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                }`}
+              >
+                {st === "adjustments" ? `Ajustes (${calTotal})` : st === "indicators" ? `Indicadores (${calIndicators.length})` : st === "timeline" ? `Timeline (${calTimeline.length})` : `AI Reviews (${calAiExplanations.length})`}
+              </button>
+            ))}
+            {/* Export buttons */}
+            <div className="ml-auto flex gap-1 pb-1">
+              {(["csv", "json"] as const).map(fmt => (
+                <button
+                  key={fmt}
+                  className="btn btn-secondary text-[10px]"
+                  onClick={async () => {
+                    try {
+                      const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+                      const res = await fetch(`/api/profile-intelligence/calibration-evolution/export?fmt=${fmt}`, {
+                        headers: token ? { Authorization: `Bearer ${token}` } : {},
+                      });
+                      if (!res.ok) { showToast(`Erro ao exportar (${res.status})`, false); return; }
+                      const blob = await res.blob();
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url; a.download = `calibration_adjustments.${fmt}`; a.click();
+                      URL.revokeObjectURL(url);
+                    } catch { showToast("Erro ao exportar", false); }
+                  }}
+                >
+                  {fmt.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* ── Sub-tab: Adjustments ── */}
+          {calSubTab === "adjustments" && (
+            <div className="card">
+              {/* Filters */}
+              <div className="p-3 border-b border-[var(--border-default)] flex gap-2 flex-wrap items-center">
+                <span className="text-[11px] text-[var(--text-tertiary)]">Filtros:</span>
+                <input
+                  type="number"
+                  min={0} max={1} step={0.1}
+                  placeholder="Min confiança (0–1)"
+                  value={calFilterMinConf}
+                  onChange={e => setCalFilterMinConf(e.target.value)}
+                  className="input text-[11px] w-44 h-7 px-2"
+                />
+                <button
+                  className="btn btn-secondary text-[10px] h-7"
+                  onClick={async () => {
+                    setLoadingTab(true);
+                    try {
+                      const qs = calFilterMinConf ? `&min_confidence=${calFilterMinConf}` : "";
+                      const d = await apiGet(`/profile-intelligence/calibration-evolution/adjustments?limit=100${qs}`);
+                      setCalAdjustments(d?.items || []);
+                      setCalTotal(d?.total || 0);
+                    } finally {
+                      setLoadingTab(false);
+                    }
+                  }}
+                >
+                  Filtrar
+                </button>
+                <button
+                  className="btn btn-secondary text-[10px] h-7"
+                  onClick={() => { setCalFilterMinConf(""); loadTab("Calibration Evolution"); }}
+                >
+                  Limpar
+                </button>
+              </div>
+
+              {loadingTab ? <TableSkeleton /> : calAdjustments.length === 0 ? (
+                <div className="p-8 text-center text-[12px] text-[var(--text-tertiary)]">
+                  Nenhuma sugestão de calibração encontrada. Execute o PI Engine para gerar sugestões.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[12px]">
+                    <thead>
+                      <tr className="border-b border-[var(--border-subtle)]">
+                        {["Profile", "Seção", "Campo", "Tipo", "Confiança", "Status", "Trades Base", "Win Rate Base", "P&L Base", "Criado", "Ações"].map(h => (
+                          <th key={h} className="px-3 py-2 text-left text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[var(--border-subtle)]">
+                      {calAdjustments.map((item: any) => (
+                        <tr key={item.suggestion_id} className="hover:bg-[var(--bg-elevated)] transition-colors">
+                          <td className="px-3 py-2 text-[var(--text-primary)] max-w-[120px] truncate" title={item.profile_name}>{item.profile_name || "—"}</td>
+                          <td className="px-3 py-2 text-[var(--text-secondary)]">{item.target_section || "—"}</td>
+                          <td className="px-3 py-2 font-mono text-[10px] text-[var(--text-secondary)] max-w-[100px] truncate" title={item.target_field || ""}>{item.target_field || "—"}</td>
+                          <td className="px-3 py-2">
+                            <span className="badge range text-[10px]">{item.suggestion_type}</span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`font-mono ${item.confidence >= 0.8 ? "text-green-400" : item.confidence >= 0.6 ? "text-yellow-400" : "text-[var(--text-tertiary)]"}`}>
+                              {item.confidence != null ? item.confidence.toFixed(2) : "—"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">{statusBadge(item.suggestion_status)}</td>
+                          <td className="px-3 py-2 text-[var(--text-secondary)]">{item.baseline?.total_trades ?? "—"}</td>
+                          <td className={`px-3 py-2 ${winRateColor(item.baseline?.win_rate)}`}>
+                            {item.baseline?.win_rate != null ? `${(item.baseline.win_rate * 100).toFixed(1)}%` : "—"}
+                          </td>
+                          <td className={`px-3 py-2 ${pnlColor(item.baseline?.avg_pnl_pct)}`}>
+                            {item.baseline?.avg_pnl_pct != null ? `${(item.baseline.avg_pnl_pct * 100).toFixed(2)}%` : "—"}
+                          </td>
+                          <td className="px-3 py-2 whitespace-nowrap text-[var(--text-secondary)]">{fmtDate(item.suggestion_created_at)}</td>
+                          <td className="px-3 py-2">
+                            <button
+                              className="btn btn-secondary text-[10px]"
+                              onClick={async () => {
+                                setSelectedCalAdjustment(item);
+                                setCalDetail(null);
+                                setCalDetailLoading(true);
+                                try {
+                                  const d = await apiGet(`/profile-intelligence/calibration-evolution/adjustments/${item.suggestion_id}`);
+                                  setCalDetail(d);
+                                } finally {
+                                  setCalDetailLoading(false);
+                                }
+                              }}
+                            >
+                              Detalhe
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Sub-tab: Indicators ── */}
+          {calSubTab === "indicators" && (
+            <div className="card">
+              {loadingTab ? <TableSkeleton /> : calIndicators.length === 0 ? (
+                <div className="p-8 text-center text-[12px] text-[var(--text-tertiary)]">Nenhum dado de indicador disponível.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[12px]">
+                    <thead>
+                      <tr className="border-b border-[var(--border-subtle)]">
+                        {["Profile", "Indicador", "Bucket", "Amostras", "Win Rate", "P&L médio", "Lift", "EV%", "FPR"].map(h => (
+                          <th key={h} className="px-3 py-2 text-left text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[var(--border-subtle)]">
+                      {calIndicators.map((ind: any, i: number) => (
+                        <tr key={`${ind.profile_id}-${ind.indicator_name}-${i}`} className="hover:bg-[var(--bg-elevated)] transition-colors">
+                          <td className="px-3 py-2 text-[var(--text-primary)] max-w-[120px] truncate">{ind.profile_name || "—"}</td>
+                          <td className="px-3 py-2 font-mono text-[11px]">{ind.indicator_name}</td>
+                          <td className="px-3 py-2 text-[var(--text-secondary)]">{ind.bucket || "—"}</td>
+                          <td className="px-3 py-2">{ind.sample_count}</td>
+                          <td className={`px-3 py-2 ${winRateColor(ind.win_rate)}`}>{ind.win_rate != null ? `${(ind.win_rate * 100).toFixed(1)}%` : "—"}</td>
+                          <td className={`px-3 py-2 ${pnlColor(ind.avg_pnl_pct)}`}>{ind.avg_pnl_pct != null ? `${(ind.avg_pnl_pct * 100).toFixed(2)}%` : "—"}</td>
+                          <td className={`px-3 py-2 ${(ind.lift_vs_profile ?? 0) > 0 ? "text-green-400" : "text-red-400"}`}>{ind.lift_vs_profile != null ? `${ind.lift_vs_profile > 0 ? "+" : ""}${(ind.lift_vs_profile * 100).toFixed(1)}%` : "—"}</td>
+                          <td className={`px-3 py-2 ${pnlColor(ind.ev_pct)}`}>{ind.ev_pct != null ? `${(ind.ev_pct * 100).toFixed(2)}%` : "—"}</td>
+                          <td className="px-3 py-2 text-[var(--text-secondary)]">{ind.fpr != null ? `${(ind.fpr * 100).toFixed(1)}%` : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Sub-tab: Timeline ── */}
+          {calSubTab === "timeline" && (
+            <div className="card divide-y divide-[var(--border-subtle)] max-h-[600px] overflow-auto">
+              {loadingTab ? <TableSkeleton /> : calTimeline.length === 0 ? (
+                <div className="p-8 text-center text-[12px] text-[var(--text-tertiary)]">Nenhum evento de calibração nos últimos 7 dias.</div>
+              ) : (
+                calTimeline.map((ev: any) => (
+                  <div key={ev.id} className="p-3 hover:bg-[var(--bg-elevated)] transition-colors">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${ev.severity === "error" ? "bg-red-400" : ev.severity === "warning" ? "bg-yellow-400" : "bg-green-400"}`} />
+                        <span className="font-mono text-[11px] text-[var(--text-primary)]">{ev.event_type}</span>
+                        {ev.phase && <span className="badge range text-[9px]">{ev.phase}</span>}
+                      </div>
+                      <span className="text-[10px] text-[var(--text-tertiary)] shrink-0">{fmtDate(ev.created_at)}</span>
+                    </div>
+                    <div className="text-[11px] text-[var(--text-secondary)] mt-1 ml-3.5">{ev.message}</div>
+                    {ev.profile_name && (
+                      <div className="text-[10px] text-[var(--text-tertiary)] ml-3.5 mt-0.5">{ev.profile_name}</div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {/* ── Sub-tab: AI Reviews ── */}
+          {calSubTab === "ai" && (
+            <div className="space-y-3">
+              {loadingTab ? <TableSkeleton /> : calAiExplanations.length === 0 ? (
+                <div className="card p-8 text-center text-[12px] text-[var(--text-tertiary)]">Nenhum AI Review real disponível.</div>
+              ) : (
+                calAiExplanations.map((rev: any) => (
+                  <div key={rev.id} className="card p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-2 flex-wrap">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Brain className="w-4 h-4 text-[var(--accent-primary)]" />
+                          <span className="text-[13px] font-semibold text-[var(--text-primary)]">{rev.model_name}</span>
+                          <span className="badge bullish text-[10px]">{rev.status}</span>
+                        </div>
+                        <div className="text-[11px] text-[var(--text-tertiary)] mt-0.5">
+                          {rev.tokens_input}↑ / {rev.tokens_output}↓ tokens · {fmtDate(rev.completed_at)}
+                        </div>
+                      </div>
+                    </div>
+                    {rev.summary && (
+                      <div className="text-[12px] text-[var(--text-secondary)] bg-[var(--bg-elevated)] rounded p-3">
+                        {rev.summary}
+                      </div>
+                    )}
+                    {rev.findings && Object.keys(rev.findings).length > 0 && (
+                      <div>
+                        <div className="text-[10px] uppercase font-semibold text-[var(--text-tertiary)] mb-1">Findings</div>
+                        <pre className="text-[10px] text-[var(--text-secondary)] bg-[var(--bg-input)] rounded p-2 overflow-auto max-h-[150px]">
+                          {JSON.stringify(rev.findings, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                    {rev.recommendations?.length > 0 && (
+                      <div>
+                        <div className="text-[10px] uppercase font-semibold text-[var(--text-tertiary)] mb-1">Recomendações</div>
+                        <ul className="space-y-1">
+                          {rev.recommendations.map((rec: string, i: number) => (
+                            <li key={i} className="text-[11px] text-[var(--text-secondary)] flex gap-1.5">
+                              <span className="text-[var(--accent-primary)] shrink-0">→</span>
+                              {rec}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {rev.risk_flags?.length > 0 && (
+                      <div className="flex gap-2 flex-wrap">
+                        {rev.risk_flags.map((flag: string, i: number) => (
+                          <span key={i} className="badge bearish text-[10px]">{flag}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Calibration Adjustment Drawer ───────────────────────────────────── */}
+      {selectedCalAdjustment && (
+        <Drawer
+          title={`Ajuste · ${selectedCalAdjustment.profile_name || selectedCalAdjustment.suggestion_id?.slice(0, 8)}`}
+          onClose={() => { setSelectedCalAdjustment(null); setCalDetail(null); }}
+        >
+          {calDetailLoading ? (
+            <div className="text-center py-6 text-[var(--text-secondary)] text-[12px]">
+              <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-[var(--accent-primary)]" />
+              Carregando detalhe...
+            </div>
+          ) : calDetail ? (
+            <div className="space-y-4 text-[12px]">
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  ["Profile", calDetail.profile_name],
+                  ["Tipo", calDetail.suggestion_type],
+                  ["Seção", calDetail.target_section],
+                  ["Campo", calDetail.target_field || "—"],
+                  ["Confiança", calDetail.confidence != null ? calDetail.confidence.toFixed(2) : "—"],
+                  ["Status", calDetail.suggestion_status],
+                  ["Mutação aplicada", calDetail.mutation_applied ? "Sim" : "Não"],
+                  ["Criado por", calDetail.created_by],
+                ].map(([label, value]) => (
+                  <div key={String(label)} className="bg-[var(--bg-elevated)] rounded p-2">
+                    <div className="text-[10px] text-[var(--text-tertiary)]">{label}</div>
+                    <div className="text-[var(--text-primary)] truncate" title={String(value)}>{String(value)}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div>
+                <div className="text-[10px] uppercase font-semibold text-[var(--text-tertiary)] mb-1">Motivo</div>
+                <p className="text-[var(--text-secondary)]">{calDetail.reason}</p>
+              </div>
+
+              {calDetail.evidence && (
+                <div>
+                  <div className="text-[10px] uppercase font-semibold text-[var(--text-tertiary)] mb-1">Evidência</div>
+                  <pre className="text-[10px] text-[var(--text-secondary)] bg-[var(--bg-input)] rounded p-2 overflow-auto max-h-[200px]">
+                    {JSON.stringify(calDetail.evidence, null, 2)}
+                  </pre>
+                </div>
+              )}
+
+              {(calDetail.current_value != null || calDetail.suggested_value != null) && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="bg-[var(--bg-elevated)] rounded p-2">
+                    <div className="text-[10px] text-[var(--text-tertiary)] mb-1">Valor atual</div>
+                    <pre className="text-[10px] text-[var(--text-secondary)] overflow-auto max-h-[120px]">
+                      {JSON.stringify(calDetail.current_value, null, 2)}
+                    </pre>
+                  </div>
+                  <div className="bg-[var(--bg-elevated)] rounded p-2 border border-[var(--accent-primary)]/20">
+                    <div className="text-[10px] text-[var(--accent-primary)] mb-1">Valor sugerido</div>
+                    <pre className="text-[10px] text-[var(--text-secondary)] overflow-auto max-h-[120px]">
+                      {JSON.stringify(calDetail.suggested_value, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              )}
+
+              {calDetail.version && (
+                <div>
+                  <div className="text-[10px] uppercase font-semibold text-[var(--text-tertiary)] mb-1">Versão</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      ["Status versão", calDetail.version.version_status],
+                      ["Shadow validation", calDetail.version.shadow_validation_status],
+                      ["Rollback", calDetail.version.rollback_available ? "Disponível" : "Ausente"],
+                      ["Aplicado em", fmtDate(calDetail.version.applied_at)],
+                    ].map(([l, v]) => (
+                      <div key={String(l)} className="bg-[var(--bg-elevated)] rounded p-2">
+                        <div className="text-[10px] text-[var(--text-tertiary)]">{l}</div>
+                        <div className="text-[var(--text-primary)]">{String(v)}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {calDetail.version.diff && (
+                    <div className="mt-2">
+                      <div className="text-[10px] uppercase font-semibold text-[var(--text-tertiary)] mb-1">Diff</div>
+                      <pre className="text-[10px] text-[var(--text-secondary)] bg-[var(--bg-input)] rounded p-2 overflow-auto max-h-[150px]">
+                        {JSON.stringify(calDetail.version.diff, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!calDetail.version && (
+                <div className="card p-3 border-yellow-500/20 bg-yellow-500/5 text-[11px] text-yellow-400">
+                  Nenhuma versão registrada — sugestão aguarda aprovação para aplicação.
+                </div>
+              )}
+
+              {calDetail.indicator_performance?.length > 0 && (
+                <div>
+                  <div className="text-[10px] uppercase font-semibold text-[var(--text-tertiary)] mb-1">Performance de Indicadores (top 10)</div>
+                  <div className="space-y-1">
+                    {calDetail.indicator_performance.slice(0, 10).map((ind: any, i: number) => (
+                      <div key={i} className="flex items-center gap-2 text-[11px] text-[var(--text-secondary)]">
+                        <span className="font-mono text-[var(--text-primary)] w-36 truncate">{ind.indicator_name}</span>
+                        <span className={winRateColor(ind.win_rate)}>{ind.win_rate != null ? `WR ${(ind.win_rate * 100).toFixed(0)}%` : "—"}</span>
+                        <span className={pnlColor(ind.avg_pnl_pct)}>{ind.avg_pnl_pct != null ? `P&L ${(ind.avg_pnl_pct * 100).toFixed(2)}%` : "—"}</span>
+                        {ind.lift_vs_profile != null && (
+                          <span className={`text-[10px] ${ind.lift_vs_profile > 0 ? "text-green-400" : "text-red-400"}`}>
+                            lift {ind.lift_vs_profile > 0 ? "+" : ""}{(ind.lift_vs_profile * 100).toFixed(1)}%
+                          </span>
+                        )}
+                        <span className="text-[10px] text-[var(--text-tertiary)]">{ind.sample_count} amostras</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-center py-6 text-[12px] text-[var(--text-tertiary)]">Erro ao carregar detalhe.</div>
+          )}
+        </Drawer>
       )}
 
       {activeTab === "Auto-Pilot" && (

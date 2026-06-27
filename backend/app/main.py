@@ -472,6 +472,10 @@ app.include_router(profile_intelligence_api.router)
 from .api import profile_intelligence_live as pi_live_api  # noqa: E402
 app.include_router(pi_live_api.router)
 
+# Calibration Evolution — read-only audit/governance dashboard.
+from .api import calibration_evolution as calibration_evolution_api  # noqa: E402
+app.include_router(calibration_evolution_api.router)
+
 # WebSocket
 app.include_router(websocket.router)
 
