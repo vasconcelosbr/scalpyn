@@ -190,7 +190,33 @@ Nenhum profile ou watchlist foi criado/apagado por esta entrega; a única persis
 | Safety final | SQL/env | 0/0/0/0/0; ML Gate false |
 | Evidência visual | runtimes de browser | NÃO DISPONÍVEL — `missing field sandboxPolicy` |
 
-## 17. Veredito
+## 17. Correção complementar — dashboard frontend
+
+Após validação do usuário, foi identificada uma lacuna na entrega visual: as métricas estavam nas tabelas existentes, mas não havia um dashboard frontend dedicado. A correção adicionou:
+
+- Rota: `/dashboard/watchlist-performance`.
+- Menu Back Office: `Ranking de Watchlists`.
+- KPIs de universo L3, maior EV Score, amostra confiável, LOW_N e P&L positivo.
+- Distribuição por prioridade, Top 10 visual e tabela operacional completa.
+- Busca, filtro por prioridade, refresh manual e atualização automática a cada 30 segundos.
+- Links diretos para Shadow Portfolio e Watchlist.
+
+Evidências da correção:
+
+| Afirmação | Origem | Valor literal |
+|---|---|---|
+| Commit do dashboard | git | `54abaae` |
+| Testes frontend | npm test | 19/19 passed |
+| Build frontend | Next.js/Vercel | 41 páginas; rota `/dashboard/watchlist-performance` |
+| Deployment frontend final | Vercel | `dpl_BEnkqwL8mH5XzJ1aBQDiGRNSBszg`, READY |
+| URL pública | HTTP | `/dashboard/watchlist-performance` = 200 |
+| Proxy do dashboard | HTTP autenticado | 200; 102 linhas |
+| Maior score na validação final | proxy frontend | 48,32; prioridade B |
+| Configuração corrigida | Vercel env | `BACKEND_URL` definido para Production, Preview e Development |
+
+O primeiro deploy da rota retornava a página, mas o proxy ainda respondia 502 porque `BACKEND_URL` não existia no projeto Vercel e o fallback era `localhost:8000`. A variável foi configurada para o backend Railway público e um novo deploy de produção foi concluído.
+
+## 18. Veredito
 
 `WATCHLIST_PERFORMANCE_ORDERING_OPERATIONAL_WITH_TUNING_PENDING`
 
