@@ -369,7 +369,7 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
                     (:id, :run_id, :profile_id, :profile_name, 'REDUCE_RISK',
                      'scoring', 'minimum_score', null, CAST(:suggested AS jsonb),
                      :reason, CAST(:evidence AS jsonb), :confidence, 'PENDING_SHADOW_VALIDATION',
-                     false, true, 'profile_intelligence', now())
+                     false, false, 'profile_intelligence', now())
             """), {
                 "id": str(sugg_id),
                 "run_id": str(run_id),
@@ -391,7 +391,7 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
                      mutation_applied, requires_human_approval, payload, created_at)
                 VALUES
                     (:id, :suggestion_id, :profile_id, 'ADJUST_MINIMUM_SCORE', 'PENDING', 'SHADOW',
-                     false, true, CAST(:payload AS jsonb), now())
+                     false, false, CAST(:payload AS jsonb), now())
             """), {
                 "id": str(uuid.uuid4()),
                 "suggestion_id": str(sugg_id),
@@ -423,6 +423,157 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
         "cycle": "medium",
         "profiles_analyzed": len(profiles_seen),
         "suggestions_generated": suggestions_generated,
+    }
+
+
+_SHADOW_CALIBRATION_BATCH = int(os.environ.get("PI_SHADOW_CALIBRATION_BATCH", "20"))
+_SCORE_BUMP = int(os.environ.get("PI_SCORE_BUMP", "5"))
+_SCORE_CAP = int(os.environ.get("PI_SCORE_CAP", "85"))
+
+
+async def _is_autopilot_enabled(db: AsyncSession) -> bool:
+    """Return True if the PI autopilot is globally enabled for any user."""
+    row = await db.execute(text("""
+        SELECT COUNT(*) FROM profile_intelligence_autopilot_settings WHERE enabled=true
+    """))
+    return (row.scalar() or 0) > 0
+
+
+async def run_shadow_calibration_cycle(db: AsyncSession) -> dict:
+    """Shadow calibration executor: moves PENDING_SHADOW_VALIDATION → SHADOW_APPLIED.
+
+    - Only runs when autopilot is globally enabled.
+    - Creates profile_adjustment_versions records (before/after snapshots).
+    - Never sets mutation_applied=true.
+    - Never changes the live profile config.
+    - Processes at most PI_SHADOW_CALIBRATION_BATCH suggestions per cycle.
+    - Deduplicates by profile: only the latest suggestion per profile is processed.
+    """
+    run_id = uuid.uuid4()
+
+    if not await _is_autopilot_enabled(db):
+        return {"cycle": "shadow_calibration", "status": "skipped_autopilot_disabled"}
+
+    _ensure_no_forbidden("REDUCE_RISK")
+
+    await _log_activity(db, run_id=run_id,
+                        event_type="AUTOPILOT_SHADOW_CALIBRATION_STARTED",
+                        phase="shadow_calibration",
+                        message="Shadow calibration cycle iniciado")
+
+    # One suggestion per profile — pick the most recent per profile
+    pending_rows = await db.execute(text("""
+        SELECT DISTINCT ON (s.profile_id)
+               s.id AS suggestion_id, s.profile_id, s.profile_name,
+               s.target_section, s.target_field, s.confidence,
+               p.config->'scoring' AS scoring_config
+        FROM profile_adjustment_suggestions s
+        JOIN profiles p ON p.id = s.profile_id
+        WHERE s.status = 'PENDING_SHADOW_VALIDATION'
+          AND s.suggestion_type = 'REDUCE_RISK'
+          AND s.target_field = 'minimum_score'
+          AND NOT EXISTS (
+            SELECT 1 FROM profile_adjustment_versions v
+            WHERE v.suggestion_id = s.id
+          )
+        ORDER BY s.profile_id, s.created_at DESC
+        LIMIT :batch
+    """), {"batch": _SHADOW_CALIBRATION_BATCH})
+    pending = pending_rows.fetchall()
+
+    processed = 0
+    failed = 0
+    errors = []
+
+    for row in pending:
+        try:
+            sid = row.suggestion_id
+            pid = str(row.profile_id)
+            pname = row.profile_name or "unknown"
+            scoring = row.scoring_config or {}
+            thresholds = scoring.get("thresholds", {})
+            current_buy = int(thresholds.get("buy", 65))
+            new_buy = min(current_buy + _SCORE_BUMP, _SCORE_CAP)
+
+            before_snap = {"scoring": {"thresholds": {"buy": current_buy}}}
+            after_snap = {"scoring": {"thresholds": {"buy": new_buy}}}
+            diff = {"scoring": {"thresholds": {"buy": {"before": current_buy, "after": new_buy}}}}
+
+            version_id = uuid.uuid4()
+            await db.execute(text("""
+                INSERT INTO profile_adjustment_versions
+                    (id, suggestion_id, profile_id, version_status, before_snapshot,
+                     after_snapshot, diff, shadow_validation_status, mutation_applied,
+                     rollback_available, created_at)
+                VALUES
+                    (:vid, :sid, :pid, 'SHADOW_APPLIED', CAST(:before AS jsonb),
+                     CAST(:after AS jsonb), CAST(:diff AS jsonb),
+                     'PENDING_VALIDATION', false, true, now())
+            """), {
+                "vid": str(version_id),
+                "sid": str(sid),
+                "pid": pid,
+                "before": json.dumps(before_snap),
+                "after": json.dumps(after_snap),
+                "diff": json.dumps(diff),
+            })
+
+            await db.execute(text("""
+                UPDATE profile_adjustment_suggestions
+                SET status='SHADOW_APPLIED', updated_at=now()
+                WHERE id=:sid
+            """), {"sid": str(sid)})
+
+            await db.execute(text("""
+                UPDATE autopilot_pending_actions
+                SET action_status='PROCESSING', updated_at=now()
+                WHERE suggestion_id=:sid AND action_status='PENDING'
+            """), {"sid": str(sid)})
+
+            await _log_activity(db, run_id=run_id,
+                                event_type="AUTOPILOT_SHADOW_CALIBRATION_APPLIED",
+                                phase="shadow_calibration",
+                                message=f"Shadow calibration aplicada: {pname} buy_threshold {current_buy}→{new_buy}",
+                                profile_id=uuid.UUID(pid),
+                                profile_name=pname,
+                                payload={
+                                    "suggestion_id": str(sid),
+                                    "version_id": str(version_id),
+                                    "indicator": "scoring.thresholds.buy",
+                                    "old_value": current_buy,
+                                    "new_value": new_buy,
+                                    "reason": "low_win_rate_reduce_risk",
+                                    "target_scope": "SHADOW",
+                                    "mutation_applied": False,
+                                })
+            processed += 1
+
+        except Exception as exc:
+            failed += 1
+            errors.append({"profile_id": str(row.profile_id), "error": str(exc)})
+            logger.error("[ShadowCalib] failed for profile %s: %s", row.profile_id, exc)
+            await _log_activity(db, run_id=run_id,
+                                event_type="AUTOPILOT_SHADOW_CALIBRATION_FAILED",
+                                phase="shadow_calibration",
+                                severity="error",
+                                message=f"Falha na shadow calibration para {row.profile_name}: {exc}",
+                                profile_id=row.profile_id if row.profile_id else None,
+                                profile_name=row.profile_name)
+
+    final_event = "AUTOPILOT_RUN_COMPLETED_WITH_ERRORS" if failed else "AUTOPILOT_RUN_COMPLETED"
+    await _log_activity(db, run_id=run_id,
+                        event_type=final_event,
+                        phase="shadow_calibration",
+                        severity="error" if failed else "info",
+                        message=f"Shadow calibration concluída: processed={processed} failed={failed}",
+                        payload={"processed": processed, "failed": failed,
+                                 "errors": errors, "mutation_applied": False})
+    await db.commit()
+    return {
+        "cycle": "shadow_calibration",
+        "processed": processed,
+        "failed": failed,
+        "errors": errors,
     }
 
 

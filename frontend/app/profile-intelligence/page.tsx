@@ -2488,13 +2488,14 @@ export default function ProfileIntelligencePage() {
                 <div className={`text-[12px] font-semibold mb-1 ${liveSafety.gate === "PASS" ? "text-green-400" : "text-yellow-400"}`}>
                   Safety Guard — {liveSafety.gate}
                 </div>
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
                   {[
                     ["ML Gate", liveSafety.ml_gate_enabled ? "ON" : "OFF", !liveSafety.ml_gate_enabled],
                     ["Live Trading", liveSafety.live_trading_enabled ? "ON" : "OFF", !liveSafety.live_trading_enabled],
-                    ["Auto Mutation", liveSafety.auto_mutation_enabled ? "ON" : "OFF", !liveSafety.auto_mutation_enabled],
+                    ["Production Mutation", liveSafety.auto_mutation_production ? "ON" : "OFF", !liveSafety.auto_mutation_production],
                     ["Create Profile", liveSafety.create_profile_enabled ? "ON" : "OFF", !liveSafety.create_profile_enabled],
-                    ["Human Approval", liveSafety.human_approval_required ? "Required" : "Not required", liveSafety.human_approval_required],
+                    ["Shadow Calibration", liveSafety.shadow_calibration_autonomous !== false ? "Autonomous" : "Manual", liveSafety.shadow_calibration_autonomous !== false],
+                    ["Production Approval", liveSafety.human_approval_required_for_production !== false ? "Required" : "—", liveSafety.human_approval_required_for_production !== false],
                   ].map(([label, value, isGood]) => (
                     <div key={String(label)} className="text-center">
                       <div className="text-[10px] text-[var(--text-tertiary)] uppercase">{label}</div>

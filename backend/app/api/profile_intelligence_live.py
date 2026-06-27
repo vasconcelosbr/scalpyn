@@ -346,7 +346,13 @@ async def live_safety(
         "ml_gate_enabled": ml_gate_enabled,
         "live_trading_enabled": int(counts.live_enabled or 0) > 0,
         "auto_mutation_enabled": False,
+        "auto_mutation_production": False,
+        # Shadow calibration is autonomous when autopilot is on — no human needed
+        "shadow_calibration_autonomous": True,
+        # Human approval is only required for production promotion/live activation
         "human_approval_required": True,
+        "human_approval_required_for_production": True,
+        "human_approval_required_for_shadow": False,
         "create_profile_enabled": False,
         "live_profiles_count": int(counts.live_enabled or 0),
         "autopilot_profiles_count": int(counts.autopilot_enabled or 0),

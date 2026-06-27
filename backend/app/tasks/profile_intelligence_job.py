@@ -329,6 +329,7 @@ async def _run_feedback_loop():
     """
     from ..services.profile_intelligence_live_service import (
         run_fast_cycle, run_medium_cycle, run_ai_review_cycle,
+        run_shadow_calibration_cycle,
         _needs_medium_cycle, _needs_ai_cycle,
     )
 
@@ -364,6 +365,17 @@ async def _run_feedback_loop():
             logger.error("[PILive] medium cycle failed (non-fatal): %s", exc)
         finally:
             await engine.dispose()
+
+    # Shadow calibration cycle: apply PENDING_SHADOW_VALIDATION suggestions (autonomous)
+    engine, factory = _live_nullpool_session()
+    try:
+        async with factory() as db:
+            result = await run_shadow_calibration_cycle(db)
+        logger.info("[PILive] shadow calibration done: %s", result)
+    except Exception as exc:
+        logger.error("[PILive] shadow calibration failed (non-fatal): %s", exc)
+    finally:
+        await engine.dispose()
 
     # AI review cycle: Claude critic (gated by _needs_ai_cycle, default 4h)
     engine, factory = _live_nullpool_session()
