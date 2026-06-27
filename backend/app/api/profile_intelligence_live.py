@@ -91,7 +91,8 @@ async def live_shadow_summary(
     db: AsyncSession = Depends(get_db),
     _uid: str = Depends(get_current_user_id),
 ):
-    row = await db.execute(text("""
+    _h = min(hours, 168)
+    row = await db.execute(text(f"""
         SELECT
             COUNT(*) AS total_trades,
             COUNT(DISTINCT profile_id) AS total_profiles,
@@ -106,11 +107,11 @@ async def live_shadow_summary(
           AND status = 'COMPLETED'
           AND pnl_pct IS NOT NULL
           AND profile_id IS NOT NULL
-          AND created_at >= now() - interval :hours
-    """), {"hours": f"{min(hours, 168)} hours"})
+          AND created_at >= now() - interval '{_h} hours'
+    """))
     stats = row.fetchone()
 
-    neg_row = await db.execute(text("""
+    neg_row = await db.execute(text(f"""
         SELECT COUNT(DISTINCT profile_id) AS negative_profiles
         FROM (
             SELECT profile_id, AVG(pnl_pct) AS avg_pnl
@@ -118,18 +119,18 @@ async def live_shadow_summary(
             WHERE source IN ('L3','L3_LAB')
               AND status = 'COMPLETED'
               AND profile_id IS NOT NULL
-              AND created_at >= now() - interval :hours
+              AND created_at >= now() - interval '{_h} hours'
             GROUP BY profile_id
             HAVING COUNT(*) >= 5
         ) t
         WHERE avg_pnl < 0
-    """), {"hours": f"{min(hours, 168)} hours"})
+    """))
     neg = neg_row.scalar_one_or_none() or 0
 
-    hn_row = await db.execute(text("""
+    hn_row = await db.execute(text(f"""
         SELECT COUNT(*) FROM profile_hard_negative_patterns
-        WHERE created_at >= now() - interval :hours
-    """), {"hours": f"{min(hours, 168)} hours"})
+        WHERE created_at >= now() - interval '{_h} hours'
+    """))
     hard_negs = hn_row.scalar_one_or_none() or 0
 
     total_trades = int(stats.total_trades or 0)
