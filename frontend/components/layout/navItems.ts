@@ -59,6 +59,7 @@ export const BACKOFFICE_ITEMS: NavItem[] = [
   { name: "Profile Intelligence", href: "/profile-intelligence", icon: Brain },
   { name: "ML Models", href: "/ml-models", icon: Brain },
   { name: "Performance", href: "/dashboard/performance", icon: Activity },
+  { name: "Ranking de Watchlists", href: "/dashboard/watchlist-performance", icon: BarChart2 },
   { name: "Shadow Portfolio", href: "/dashboard/shadow-portfolio", icon: TestTube2 },
   { name: "Centro Operacional", href: "/dashboard/operations", icon: Monitor },
   { name: "Operations", href: "/backoffice", icon: Monitor },
