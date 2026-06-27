@@ -56,7 +56,7 @@ async def _log_activity(
         INSERT INTO profile_intelligence_activity_log
             (id, run_id, event_type, phase, severity, message, profile_id, profile_name, payload, created_at)
         VALUES
-            (:id, :run_id, :event_type, :phase, :severity, :message, :profile_id, :profile_name, :payload::jsonb, now())
+            (:id, :run_id, :event_type, :phase, :severity, :message, :profile_id, :profile_name, CAST(:payload AS jsonb), now())
     """), {
         "id": str(uuid.uuid4()),
         "run_id": str(run_id) if run_id else None,
@@ -88,7 +88,7 @@ async def record_heartbeat(
         INSERT INTO profile_intelligence_heartbeats
             (id, run_id, engine_status, current_phase, heartbeat_at, next_cycle_at, worker_name, commit_hash, metadata, created_at)
         VALUES
-            (:id, :run_id, :engine_status, :current_phase, now(), :next_cycle_at, :worker_name, :commit_hash, :metadata::jsonb, now())
+            (:id, :run_id, :engine_status, :current_phase, now(), :next_cycle_at, :worker_name, :commit_hash, CAST(:metadata AS jsonb), now())
     """), {
         "id": str(uuid.uuid4()),
         "run_id": str(run_id) if run_id else None,
@@ -331,7 +331,7 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
                  pattern_payload, sample_count, loss_count, fp_rate, avg_loss_pct, status, created_at)
             VALUES
                 (:id, :run_id, :profile_id, :profile_name, :pattern_key,
-                 :payload::jsonb, :sample_count, :loss_count, :fp_rate, :avg_loss_pct, 'OBSERVED', now())
+                 CAST(:payload AS jsonb), :sample_count, :loss_count, :fp_rate, :avg_loss_pct, 'OBSERVED', now())
         """), {
             "id": str(uuid.uuid4()),
             "run_id": str(run_id),
@@ -365,8 +365,8 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
                      mutation_applied, requires_human_approval, created_by, created_at)
                 VALUES
                     (:id, :run_id, :profile_id, :profile_name, 'REDUCE_RISK',
-                     'scoring', 'minimum_score', null, :suggested::jsonb,
-                     :reason, :evidence::jsonb, :confidence, 'PENDING_SHADOW_VALIDATION',
+                     'scoring', 'minimum_score', null, CAST(:suggested AS jsonb),
+                     :reason, CAST(:evidence AS jsonb), :confidence, 'PENDING_SHADOW_VALIDATION',
                      false, true, 'profile_intelligence', now())
             """), {
                 "id": str(sugg_id),
@@ -389,7 +389,7 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
                      mutation_applied, requires_human_approval, payload, created_at)
                 VALUES
                     (:id, :suggestion_id, :profile_id, 'ADJUST_MINIMUM_SCORE', 'PENDING', 'SHADOW',
-                     false, true, :payload::jsonb, now())
+                     false, true, CAST(:payload AS jsonb), now())
             """), {
                 "id": str(uuid.uuid4()),
                 "suggestion_id": str(sugg_id),
@@ -552,10 +552,10 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
         SET status = 'COMPLETED', completed_at = now(),
             tokens_input = :ti, tokens_output = :to,
             summary = :summary,
-            findings = :findings::jsonb,
-            recommendations = :recommendations::jsonb,
-            contradictions = :contradictions::jsonb,
-            risk_flags = :risk_flags::jsonb
+            findings = CAST(:findings AS jsonb),
+            recommendations = CAST(:recommendations AS jsonb),
+            contradictions = CAST(:contradictions AS jsonb),
+            risk_flags = CAST(:risk_flags AS jsonb)
         WHERE id = :id
     """), {
         "id": str(review_id),
