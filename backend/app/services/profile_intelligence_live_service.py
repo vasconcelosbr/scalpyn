@@ -129,11 +129,19 @@ async def _needs_medium_cycle(db: AsyncSession) -> bool:
 
 
 async def _needs_ai_cycle(db: AsyncSession) -> bool:
-    """Return True if the last AI review is older than PI_AI_REVIEW_INTERVAL_H."""
+    """Return True if no real (tokens > 0) AI review exists within the interval."""
+    # If a review is in progress, don't spawn another
+    pending = await db.execute(text("""
+        SELECT COUNT(*) FROM profile_ai_reviews
+        WHERE status IN ('SCHEDULED', 'RUNNING')
+    """))
+    if (pending.scalar() or 0) > 0:
+        return False
+    # Only count COMPLETED reviews with real tokens — hollow COMPLETED don't count
     row = await db.execute(text("""
         SELECT completed_at
         FROM profile_ai_reviews
-        WHERE status = 'COMPLETED'
+        WHERE status = 'COMPLETED' AND COALESCE(tokens_input, 0) > 0
         ORDER BY completed_at DESC
         LIMIT 1
     """))
@@ -477,9 +485,10 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
     })
     await db.commit()
 
+    # ── Key resolution ─────────────────────────────────────────────────────────
     ai_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    key_source = "env" if ai_key else None
     if not ai_key:
-        # Fallback: use any active validated Anthropic key stored in the DB
         try:
             from .ai_keys_service import decrypt_value
             key_row = await db.execute(text("""
@@ -491,6 +500,8 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
             enc = key_row.scalar_one_or_none()
             if enc:
                 ai_key = decrypt_value(bytes(enc) if not isinstance(enc, bytes) else enc)
+                key_source = "db"
+                logger.info("[PILive] AI key source=db decrypt=success len_gt20=%s", len(ai_key) > 20)
         except Exception as _exc:
             logger.warning("[PILive] Could not load Anthropic key from DB: %s", _exc)
 
@@ -500,15 +511,31 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
     contradictions: list = []
     risk_flags: list = []
     tokens_in = tokens_out = 0
+    model_used: str | None = None
 
-    if ai_key:
+    # Determine final_status as we go — only set COMPLETED when all guards pass
+    if not ai_key:
+        final_status = "FAILED_MISSING_KEY"
+        risk_flags = [{"flag": "FAILED_MISSING_KEY",
+                       "detail": "No Anthropic key in env (ANTHROPIC_API_KEY) or DB (ai_provider_keys)"}]
+        await _log_activity(db, run_id=None, event_type="AI_REVIEW_FAILED",
+                            phase="ai", message="AI Critic: chave Anthropic ausente",
+                            severity="error",
+                            payload={"review_id": str(review_id), "reason": "FAILED_MISSING_KEY"})
+    else:
+        await _log_activity(db, run_id=None, event_type="AI_REVIEW_KEY_LOADED",
+                            phase="ai", message=f"AI key carregada (source={key_source})",
+                            payload={"source": key_source, "len_gt20": len(ai_key) > 20})
+        await db.commit()
+
         try:
             await _log_activity(db, run_id=None, event_type="AI_REVIEW_RUNNING",
-                                 phase="ai", message="Consultando AI Critic...")
+                                phase="ai", message="Consultando AI Critic...")
             await db.commit()
 
             import anthropic  # type: ignore
             client = anthropic.AsyncAnthropic(api_key=ai_key)
+            model_used = os.environ.get("PI_AI_MODEL", "claude-haiku-4-5-20251001")
             prompt_text = (
                 "You are an analytical AI critic for a trading algorithm profile intelligence system. "
                 "Review the following shadow trade statistics and suggest improvements.\n\n"
@@ -519,7 +546,7 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
                 "contradictions, risk_flags."
             )
             response = await client.messages.create(
-                model=os.environ.get("PI_AI_MODEL", "claude-haiku-4-5-20251001"),
+                model=model_used,
                 max_tokens=1000,
                 messages=[{"role": "user", "content": prompt_text}],
             )
@@ -537,15 +564,33 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
             except json.JSONDecodeError:
                 summary = raw[:500]
 
+            # Validate response before marking COMPLETED
+            if tokens_in <= 0 or tokens_out <= 0:
+                final_status = "FAILED_EMPTY_AI_RESPONSE"
+                risk_flags = [{"flag": "FAILED_EMPTY_AI_RESPONSE",
+                               "detail": f"tokens_in={tokens_in} tokens_out={tokens_out}"}]
+            elif not summary:
+                final_status = "FAILED_EMPTY_SUMMARY"
+                risk_flags = [{"flag": "FAILED_EMPTY_SUMMARY", "detail": "Claude returned empty summary"}]
+            else:
+                final_status = "COMPLETED"
+
         except Exception as exc:
             logger.warning("[PILive] AI review failed: %s", exc)
-            summary = f"AI review failed: {type(exc).__name__}"
-            risk_flags = [{"flag": "AI_REVIEW_FAILED", "detail": str(exc)[:200]}]
+            final_status = "FAILED_AI_CALL"
+            summary = None
+            risk_flags = [{"flag": "FAILED_AI_CALL", "detail": f"{type(exc).__name__}: {str(exc)[:200]}"}]
+            await _log_activity(db, run_id=None, event_type="AI_REVIEW_FAILED",
+                                phase="ai", message=f"AI Critic falhou: {type(exc).__name__}",
+                                severity="error",
+                                payload={"review_id": str(review_id), "reason": "FAILED_AI_CALL",
+                                         "error_type": type(exc).__name__})
 
     await db.execute(text("""
         UPDATE profile_ai_reviews
-        SET status = 'COMPLETED', completed_at = now(),
+        SET status = :status, completed_at = now(),
             tokens_input = :ti, tokens_output = :to,
+            model_name = :model_name,
             summary = :summary,
             findings = CAST(:findings AS jsonb),
             recommendations = CAST(:recommendations AS jsonb),
@@ -554,8 +599,10 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
         WHERE id = :id
     """), {
         "id": str(review_id),
+        "status": final_status,
         "ti": tokens_in,
         "to": tokens_out,
+        "model_name": model_used,
         "summary": summary,
         "findings": json.dumps(findings),
         "recommendations": json.dumps(recommendations),
@@ -563,11 +610,22 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
         "risk_flags": json.dumps(risk_flags),
     })
 
-    await _log_activity(db, run_id=None, event_type="AI_REVIEW_COMPLETED",
-                        phase="ai", message=f"AI Critic concluído: {summary or 'sem summary'}",
-                        payload={"review_id": str(review_id), "next_review_at": next_review_at.isoformat()})
+    if final_status == "COMPLETED":
+        await _log_activity(db, run_id=None, event_type="AI_REVIEW_COMPLETED",
+                            phase="ai", message=f"AI Critic concluído: {summary[:100] if summary else ''}",
+                            payload={"review_id": str(review_id),
+                                     "tokens_in": tokens_in,
+                                     "tokens_out": tokens_out,
+                                     "model": model_used,
+                                     "next_review_at": next_review_at.isoformat()})
+    else:
+        await _log_activity(db, run_id=None, event_type="AI_REVIEW_FAILED",
+                            phase="ai", message=f"AI Critic: {final_status}",
+                            severity="warning",
+                            payload={"review_id": str(review_id), "status": final_status})
     await db.commit()
-    return {"review_id": str(review_id), "summary": summary, "next_review_at": next_review_at.isoformat()}
+    return {"review_id": str(review_id), "status": final_status,
+            "summary": summary, "next_review_at": next_review_at.isoformat()}
 
 
 def _bucket(indicator: str, value: Any) -> str:
