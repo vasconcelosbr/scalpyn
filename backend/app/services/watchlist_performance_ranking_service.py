@@ -318,10 +318,15 @@ async def get_performance_rankings(
     sources = config["source_filter"]
     query = text("""
         WITH selected AS (
-            SELECT *
-            FROM watchlist_performance_priority_base_view
-            WHERE user_id = :uid
-              AND (source IS NULL OR source = ANY(CAST(:sources AS text[])))
+            SELECT base.*
+            FROM watchlist_performance_priority_base_view AS base
+            JOIN pipeline_watchlists AS watchlist
+              ON watchlist.id = base.watchlist_id
+             AND watchlist.user_id = base.user_id
+             AND watchlist.profile_id = base.profile_id
+             AND UPPER(watchlist.level) = 'L3'
+            WHERE base.user_id = :uid
+              AND (base.source IS NULL OR base.source = ANY(CAST(:sources AS text[])))
         ), aggregated AS (
             SELECT
                 user_id,

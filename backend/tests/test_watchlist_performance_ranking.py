@@ -102,6 +102,14 @@ def test_watchlist_l3_uses_same_performance_order():
     assert "performance_priority_order" in source
 
 
+def test_ranking_scope_is_current_l3_watchlist_profile_pair():
+    source = Path("backend/app/services/watchlist_performance_ranking_service.py").read_text(encoding="utf-8")
+    assert "JOIN pipeline_watchlists AS watchlist" in source
+    assert "watchlist.id = base.watchlist_id" in source
+    assert "watchlist.profile_id = base.profile_id" in source
+    assert "UPPER(watchlist.level) = 'L3'" in source
+
+
 def test_l3_api_uses_same_performance_order():
     source = Path("backend/app/api/performance_rankings.py").read_text(encoding="utf-8")
     assert '"/api/l3/watchlists"' in source
