@@ -32,6 +32,10 @@ from ..database import get_db
 from ..models.backoffice import DecisionLog
 from ..models.shadow_trade import ShadowTrade
 from ..services.exit_metrics import flatten_entry_snapshot
+from ..services.watchlist_performance_ranking_service import (
+    RankingConfigError,
+    get_performance_rankings,
+)
 from ..schemas.shadow_trade import (
     HoldingTimeAnalytics,
     OutcomeMetrics,
@@ -906,72 +910,24 @@ async def shadow_trades_timeout_analysis(
 
 @router.get("/profile-report", response_model=List[ProfileReportRow])
 async def profile_report(
+    order_by: str = Query("ev_score", pattern="^(ev_score|performance_priority)$"),
+    direction: str = Query("desc", pattern="^(asc|desc)$"),
     db: AsyncSession = Depends(get_db),
     user_id: UUID = Depends(get_current_user_id),
 ) -> List[ProfileReportRow]:
-    """Relatório executivo agregado por perfil do Strategy Lab.
-
-    Retorna uma linha por perfil shadow-only (AP/PI) mesmo sem shadow trades,
-    e por qualquer outro perfil que possua ao menos um shadow trade.
-    """
+    """Canonical performance ranking shared by Shadow Portfolio and L3."""
     try:
-        q = text("""
-            SELECT
-                p.id                                                          AS profile_id,
-                p.name                                                        AS profile_name,
-                COUNT(st.id)                                                  AS total,
-                COUNT(st.id) FILTER (WHERE st.status IN ('PENDING','RUNNING')) AS open_count,
-                COUNT(st.id) FILTER (WHERE st.outcome = 'TP_HIT')            AS win_count,
-                COUNT(st.id) FILTER (WHERE st.outcome IN ('TP_HIT','SL_HIT')) AS decided_count,
-                COALESCE(SUM(CASE WHEN st.pnl_usdt IS NOT NULL THEN st.pnl_usdt ELSE 0 END), 0)
-                                                                              AS pnl_total_usdt,
-                AVG(CASE WHEN st.outcome IN ('TP_HIT','SL_HIT','TIMEOUT') THEN st.pnl_pct END)
-                                                                              AS pnl_avg_pct,
-                AVG(CASE WHEN st.outcome = 'TP_HIT' THEN st.holding_seconds END)
-                                                                              AS avg_holding_win_seconds,
-                COUNT(st.id) FILTER (
-                    WHERE st.outcome = 'TP_HIT'
-                      AND st.holding_seconds IS NOT NULL
-                      AND st.holding_seconds <= 14400
-                )                                                             AS tp_4h_count
-            FROM profiles p
-            LEFT JOIN shadow_trades st
-                   ON st.profile_id = p.id
-                  AND st.user_id = :uid
-            WHERE p.user_id = :uid
-            GROUP BY p.id, p.name, p.is_shadow_only
-            HAVING (p.is_shadow_only = TRUE OR COUNT(st.id) > 0)
-            ORDER BY p.name
-        """)
-        rows = (await db.execute(q, {"uid": str(user_id)})).fetchall()
-        result: List[ProfileReportRow] = []
-        for r in rows:
-            decided = int(r.decided_count or 0)
-            win = int(r.win_count or 0)
-            tp_4h = int(r.tp_4h_count or 0)
-            win_rate = round(win / decided * 100, 2) if decided > 0 else None
-            tp_4h_rate = round(tp_4h / win * 100, 2) if win > 0 else None
-            result.append(ProfileReportRow(
-                profile_id=r.profile_id,
-                profile_name=r.profile_name,
-                total=int(r.total or 0),
-                open_count=int(r.open_count or 0),
-                win_count=win,
-                decided_count=decided,
-                win_rate=win_rate,
-                pnl_total_usdt=round(float(r.pnl_total_usdt or 0.0), 4),
-                pnl_avg_pct=round(float(r.pnl_avg_pct), 4) if r.pnl_avg_pct is not None else None,
-                avg_holding_win_seconds=round(float(r.avg_holding_win_seconds), 1)
-                    if r.avg_holding_win_seconds is not None else None,
-                tp_4h_count=tp_4h,
-                tp_4h_rate=tp_4h_rate,
-            ))
-        return result
+        rows = await get_performance_rankings(db, user_id)
+        if direction == "asc":
+            rows.reverse()
+        return rows
+    except RankingConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("Failed to compute profile report: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to compute profile report") from exc
+        logger.error("Failed to compute performance ranking: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to compute performance ranking") from exc
 
 
 @router.get("/{shadow_id}", response_model=ShadowTradeDetail)

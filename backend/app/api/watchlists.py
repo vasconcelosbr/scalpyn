@@ -32,6 +32,10 @@ from ..models.pipeline_watchlist import (
     PipelineWatchlistRejection,
 )
 from ..services.market_data_service import _is_etf_pair
+from ..services.watchlist_performance_ranking_service import (
+    RankingConfigError,
+    get_performance_rankings,
+)
 from ..services.pipeline_rejections import (
     build_analysis_snapshot,
     build_asset_evaluation_trace,
@@ -764,10 +768,11 @@ def _iso_utc(value: Optional[datetime]) -> Optional[str]:
 
 @router.get("/")
 async def list_watchlists(
+    order_by: str = Query("performance_priority", pattern="^(performance_priority|created_at)$"),
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all pipeline watchlists for the authenticated user."""
+    """List watchlists, with L3 rows ordered by the canonical performance ranking."""
     result = await db.execute(
         select(PipelineWatchlist)
         .where(PipelineWatchlist.user_id == user_id)
@@ -775,7 +780,19 @@ async def list_watchlists(
     )
     wls = result.scalars().all()
 
-    # Fetch asset counts, profile names, and source watchlist levels in bulk
+    rankings: List[Dict[str, Any]] = []
+    if order_by == "performance_priority":
+        try:
+            rankings = await get_performance_rankings(db, user_id, level="L3")
+        except RankingConfigError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+    ranking_by_watchlist = {
+        str(row["watchlist_id"]): row for row in rankings if row.get("watchlist_id")
+    }
+    ranking_by_profile: Dict[str, Dict[str, Any]] = {}
+    for row in rankings:
+        ranking_by_profile.setdefault(str(row["profile_id"]), row)
+
     counts: Dict[UUID, int] = {}
     profile_names: Dict[str, str] = {}
     source_wl_levels: Dict[str, str] = {}
@@ -796,33 +813,50 @@ async def list_watchlists(
         )
         counts = {row.watchlist_id: row.cnt for row in count_result.fetchall()}
 
-        # Bulk fetch profile names for watchlists that have a profile_id
         profile_ids = [str(w.profile_id) for w in wls if w.profile_id]
         if profile_ids:
             pname_rows = (await db.execute(
                 text("SELECT id::text, name FROM profiles WHERE id::text = ANY(:ids)"),
                 {"ids": profile_ids},
             )).fetchall()
-            profile_names = {r.id: r.name for r in pname_rows}
+            profile_names = {row.id: row.name for row in pname_rows}
 
-        # Bulk fetch source watchlist levels for watchlists that have a source_watchlist_id
-        src_wl_ids = [str(w.source_watchlist_id) for w in wls if w.source_watchlist_id]
-        if src_wl_ids:
-            swl_rows = (await db.execute(
+        source_ids = [str(w.source_watchlist_id) for w in wls if w.source_watchlist_id]
+        if source_ids:
+            source_rows = (await db.execute(
                 text("SELECT id::text, level FROM pipeline_watchlists WHERE id::text = ANY(:ids)"),
-                {"ids": src_wl_ids},
+                {"ids": source_ids},
             )).fetchall()
-            source_wl_levels = {r.id: r.level for r in swl_rows}
+            source_wl_levels = {row.id: row.level for row in source_rows}
 
-    def _with_count(w: PipelineWatchlist) -> Dict[str, Any]:
-        _pname = profile_names.get(str(w.profile_id)) if w.profile_id else None
-        _swl_level = source_wl_levels.get(str(w.source_watchlist_id)) if w.source_watchlist_id else None
-        d = _wl_to_dict(w, profile_name=_pname, source_watchlist_level=_swl_level)
-        d["asset_count"] = counts.get(w.id, 0)
-        return d
+    def _with_ranking(watchlist: PipelineWatchlist) -> Dict[str, Any]:
+        profile_name = profile_names.get(str(watchlist.profile_id)) if watchlist.profile_id else None
+        source_level = source_wl_levels.get(str(watchlist.source_watchlist_id)) if watchlist.source_watchlist_id else None
+        item = _wl_to_dict(watchlist, profile_name=profile_name, source_watchlist_level=source_level)
+        item["asset_count"] = counts.get(watchlist.id, 0)
+        ranking = ranking_by_watchlist.get(str(watchlist.id))
+        if ranking is None and watchlist.profile_id:
+            ranking = ranking_by_profile.get(str(watchlist.profile_id))
+        for key in (
+            "ev_score", "stat_confidence", "delta_win_rate_vs_baseline",
+            "delta_pnl_vs_baseline", "priority", "priority_reason",
+            "rank_position", "completed_trades", "win_rate", "tp_4h_rate",
+            "avg_pnl_pct", "pnl_total_usdt", "computed_at",
+        ):
+            item[key] = ranking.get(key) if ranking else None
+        item["performance_priority_order"] = ranking.get("rank_position") if ranking else None
+        return item
 
-    return {"watchlists": [_with_count(w) for w in wls], "total": len(wls)}
-
+    items = [_with_ranking(watchlist) for watchlist in wls]
+    if order_by == "performance_priority":
+        level_order = {"POOL": 0, "L1": 1, "L2": 2, "L3": 3}
+        items.sort(key=lambda item: (
+            level_order.get(str(item.get("level") or "").upper(), 4),
+            item.get("performance_priority_order") is None,
+            item.get("performance_priority_order") or 0,
+            item.get("created_at") or "",
+        ))
+    return {"watchlists": items, "total": len(items), "order_by": order_by}
 
 @router.post("/")
 async def create_watchlist(

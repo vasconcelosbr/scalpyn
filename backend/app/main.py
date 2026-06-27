@@ -456,6 +456,10 @@ app.include_router(performance_api.router)
 from .api import shadow_trades as shadow_trades_api  # noqa: E402
 app.include_router(shadow_trades_api.router)
 
+# Shared Shadow Portfolio / Watchlist / L3 performance ordering.
+from .api import performance_rankings as performance_rankings_api  # noqa: E402
+app.include_router(performance_rankings_api.router)
+
 # Auto-Pilot Engine — autonomous strategy evolution for Strategy Profiles.
 from .api import autopilot as autopilot_api  # noqa: E402
 app.include_router(autopilot_api.router)

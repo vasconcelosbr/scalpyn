@@ -255,17 +255,36 @@ class TimeoutAnalyticsResponse(BaseModel):
 
 
 class ProfileReportRow(BaseModel):
-    """Uma linha do relatório executivo por perfil do Strategy Lab."""
+    """Canonical profile/watchlist performance ranking row."""
 
     profile_id: UUID
     profile_name: str
+    watchlist_id: Optional[UUID] = None
+    watchlist_name: Optional[str] = None
+    level: str = "L3"
     total: int
+    total_trades: int
     open_count: int
+    open_trades: int
     win_count: int
+    wins: int
     decided_count: int
-    win_rate: Optional[float] = None        # win_count / decided_count * 100
+    completed_trades: int
+    win_rate: Optional[float] = None
     pnl_total_usdt: float
     pnl_avg_pct: Optional[float] = None
-    avg_holding_win_seconds: Optional[float] = None  # TP_HIT only
-    tp_4h_count: int = 0                    # TP_HIT AND holding_seconds <= 14400
-    tp_4h_rate: Optional[float] = None      # tp_4h_count / win_count * 100
+    avg_pnl_pct: Optional[float] = None
+    avg_holding_win_seconds: Optional[float] = None
+    tp_4h_count: int = 0
+    tp_4h_wins: int = 0
+    tp_4h_rate: Optional[float] = None
+    ev_score: float
+    stat_confidence: str
+    delta_win_rate_vs_baseline: float
+    delta_pnl_vs_baseline: float
+    priority: str
+    priority_reason: str
+    operational_class: str
+    rank_position: int
+    score_components: Dict[str, float]
+    computed_at: datetime

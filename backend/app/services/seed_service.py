@@ -7,6 +7,7 @@ from sqlalchemy import select
 from ..models.user import User
 from ..models.config_profile import ConfigProfile
 from .config_service import config_service
+from .watchlist_performance_ranking_service import DEFAULT_RANKING_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -159,3 +160,4 @@ async def seed_user_defaults(db: AsyncSession, user_id: UUID) -> None:
         await config_service.update_config(db, 'universe', user_id, DEFAULT_UNIVERSE, user_id, change_description="System Seed Reset")
         await config_service.update_config(db, 'decision_log', user_id, DEFAULT_DECISION_LOG, user_id, change_description="System Seed Reset")
         await config_service.update_config(db, 'ai-settings', user_id, DEFAULT_AI_SETTINGS, user_id, change_description="System Seed Reset")
+        await config_service.update_config(db, 'watchlist_performance_ranking', user_id, DEFAULT_RANKING_CONFIG, user_id, change_description="System Seed Reset")

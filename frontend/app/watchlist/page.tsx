@@ -58,6 +58,14 @@ interface PipelineWatchlist {
   created_at: string | null;
   updated_at: string | null;
   asset_count: number;
+  ev_score?: number | null;
+  stat_confidence?: string | null;
+  priority?: string | null;
+  priority_reason?: string | null;
+  performance_priority_order?: number | null;
+  completed_trades?: number | null;
+  win_rate?: number | null;
+  avg_pnl_pct?: number | null;
 }
 
 type WatchlistDetailTab = 'approved' | 'rejected';
@@ -1096,6 +1104,21 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
         </span>
         <LevelBadge level={displayLevel} />
         <span className="text-sm font-medium text-[#E2E8F0] flex-1">{wl.name}</span>
+        {displayLevel === 'L3' && wl.ev_score != null && (
+          <span
+            className="inline-flex items-center gap-2 text-[10px] text-[#94A3B8]"
+            title={wl.priority_reason ?? 'Ranking de performance L3'}
+          >
+            <span className="rounded border border-[#22B97A]/35 bg-[#22B97A]/10 px-1.5 py-0.5 font-bold text-[#22B97A]">
+              {wl.priority ?? '—'}
+            </span>
+            <span className="font-mono text-[#E2E8F0]">EV {wl.ev_score.toFixed(2)}</span>
+            <span>{wl.stat_confidence ?? '—'}</span>
+            <span>{wl.avg_pnl_pct == null ? 'P&L —' : `P&L ${wl.avg_pnl_pct >= 0 ? '+' : ''}${wl.avg_pnl_pct.toFixed(2)}%`}</span>
+            <span>{wl.win_rate == null ? 'WR —' : `WR ${(wl.win_rate * 100).toFixed(1)}%`}</span>
+            <span>N {wl.completed_trades ?? 0}</span>
+          </span>
+        )}
         {isFutures && (
           <span className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-[#F472B6]/10 text-[#F472B6] border border-[#F472B6]/25 font-semibold">
             <ArrowLeftRight size={8} />
@@ -1316,7 +1339,7 @@ function PipelineTab() {
       // schema drift on /watchlists) does not blank out pools and profiles.
       // The previous Promise.all + empty catch hid the original bug.
       const results = await Promise.allSettled([
-        apiFetch<{ watchlists: PipelineWatchlist[] }>('/watchlists'),
+        apiFetch<{ watchlists: PipelineWatchlist[] }>('/watchlists?order_by=performance_priority'),
         apiFetch<{ pools: Pool[] }>('/pools'),
         apiFetch<{ profiles: Profile[] }>('/profiles'),
       ]);

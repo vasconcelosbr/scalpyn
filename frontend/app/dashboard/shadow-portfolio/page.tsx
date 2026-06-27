@@ -130,18 +130,36 @@ interface ProfileItem {
 interface ProfileReportRow {
   profile_id: string;
   profile_name: string;
+  watchlist_id: string | null;
+  watchlist_name: string | null;
+  level: string;
   total: number;
+  total_trades: number;
   open_count: number;
+  open_trades: number;
   win_count: number;
+  wins: number;
   decided_count: number;
+  completed_trades: number;
   win_rate: number | null;
   pnl_total_usdt: number;
   pnl_avg_pct: number | null;
+  avg_pnl_pct: number | null;
   avg_holding_win_seconds: number | null;
   tp_4h_count: number;
+  tp_4h_wins: number;
   tp_4h_rate: number | null;
+  ev_score: number;
+  stat_confidence: string;
+  delta_win_rate_vs_baseline: number;
+  delta_pnl_vs_baseline: number;
+  priority: string;
+  priority_reason: string;
+  operational_class: string;
+  rank_position: number;
+  score_components: Record<string, number>;
+  computed_at: string;
 }
-
 type ProfileClass =
   | "GOOD_4H"
   | "SLOW_WINNER"
@@ -2001,14 +2019,27 @@ function DetailModal({
 
 // ── profile report table ─────────────────────────────────────────────────────
 type ReportSortKey =
+  | "priority"
+  | "ev_score"
   | "profile_name"
   | "total"
-  | "open_count"
+  | "stat_confidence"
   | "win_rate"
+  | "delta_win_rate_vs_baseline"
   | "tp_4h_rate"
   | "pnl_total_usdt"
   | "pnl_avg_pct"
   | "avg_holding_win_seconds";
+
+const PRIORITY_COLOR: Record<string, string> = {
+  "A+": "#16A66A",
+  A: "#22B97A",
+  B: "#4C8DFF",
+  C: "#F2A33A",
+  D: "#E5484D",
+  LOW_N: "#5A6075",
+  BLOCKED: "#5A6075",
+};
 
 function ProfileReportTable({
   rows,
@@ -2019,28 +2050,26 @@ function ProfileReportTable({
   loading: boolean;
   watchlistNames: Record<string, string>;
 }) {
-  const [sortKey, setSortKey] = useState<ReportSortKey>("profile_name");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [sortKey, setSortKey] = useState<ReportSortKey>("ev_score");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
-  const sorted = useMemo(() => {
-    return [...rows].sort((a, b) => {
-      const av = a[sortKey] ?? (sortDir === "asc" ? Infinity : -Infinity);
-      const bv = b[sortKey] ?? (sortDir === "asc" ? Infinity : -Infinity);
-      if (typeof av === "string" && typeof bv === "string") {
-        return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
-      }
-      return sortDir === "asc"
-        ? (av as number) - (bv as number)
-        : (bv as number) - (av as number);
-    });
-  }, [rows, sortKey, sortDir]);
+  const sorted = useMemo(() => [...rows].sort((a, b) => {
+    const av = a[sortKey] ?? (sortDir === "asc" ? Infinity : -Infinity);
+    const bv = b[sortKey] ?? (sortDir === "asc" ? Infinity : -Infinity);
+    if (typeof av === "string" && typeof bv === "string") {
+      return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+    }
+    return sortDir === "asc"
+      ? Number(av) - Number(bv)
+      : Number(bv) - Number(av);
+  }), [rows, sortKey, sortDir]);
 
   const handleSort = (key: ReportSortKey) => {
     if (sortKey === key) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+      setSortDir((direction) => direction === "asc" ? "desc" : "asc");
     } else {
       setSortKey(key);
-      setSortDir("asc");
+      setSortDir(key === "profile_name" || key === "priority" || key === "stat_confidence" ? "asc" : "desc");
     }
   };
 
@@ -2048,24 +2077,11 @@ function ProfileReportTable({
     const active = sortKey === col;
     return (
       <button
+        aria-label={`Ordenar por ${col}`}
         onClick={() => handleSort(col)}
-        style={{
-          background: "transparent",
-          border: "none",
-          cursor: "pointer",
-          padding: "0 2px",
-          color: active ? C.blue : C.dim,
-          verticalAlign: "middle",
-          lineHeight: 0,
-        }}
+        style={{ background: "transparent", border: "none", cursor: "pointer", padding: "0 2px", color: active ? C.blue : C.dim, verticalAlign: "middle", lineHeight: 0 }}
       >
-        {active && sortDir === "asc" ? (
-          <ChevronUp size={12} />
-        ) : active && sortDir === "desc" ? (
-          <ChevronDown size={12} />
-        ) : (
-          <ChevronDown size={12} style={{ opacity: 0.35 }} />
-        )}
+        {active && sortDir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} style={{ opacity: active ? 1 : 0.35 }} />}
       </button>
     );
   };
@@ -2087,140 +2103,57 @@ function ProfileReportTable({
     color: C.text,
   };
 
-  if (loading) {
-    return (
-      <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 12 }}>
-        Carregando relatório...
-      </div>
-    );
-  }
-
-  if (rows.length === 0) {
-    return (
-      <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 12 }}>
-        Nenhum perfil encontrado.
-      </div>
-    );
-  }
+  if (loading) return <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 12 }}>Carregando relatório...</div>;
+  if (rows.length === 0) return <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 12 }}>Nenhum perfil encontrado.</div>;
 
   return (
-    <div
-      style={{
-        background: C.surface,
-        border: `1px solid ${C.border}`,
-        borderRadius: 8,
-        overflow: "auto",
-      }}
-    >
-      <table style={{ minWidth: 860, width: "100%", borderCollapse: "collapse" }}>
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "auto" }}>
+      <table style={{ minWidth: 1500, width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th style={{ ...thStyle, minWidth: 140, maxWidth: 200 }}>
-              Perfil <SortBtn col="profile_name" />
-            </th>
-            <th style={{ ...thStyle, minWidth: 100, maxWidth: 140 }}>Watchlist</th>
-            <th style={{ ...thStyle, textAlign: "right" }}>
-              Total <SortBtn col="total" />
-            </th>
-            <th style={{ ...thStyle, textAlign: "right" }}>
-              Em aberto <SortBtn col="open_count" />
-            </th>
-            <th style={{ ...thStyle, textAlign: "right" }}>
-              Win Rate <SortBtn col="win_rate" />
-            </th>
-            <th style={{ ...thStyle, textAlign: "right" }}>
-              TP 4h <SortBtn col="tp_4h_rate" />
-            </th>
+            <th style={{ ...thStyle, textAlign: "center" }}>Prioridade <SortBtn col="priority" /></th>
+            <th
+              style={{ ...thStyle, textAlign: "right" }}
+              title="EV Score: + P&L médio + Win Rate + confiança estatística + TP 4h + P&L total - holding - baixa amostra - P&L negativo"
+            >EV Score <SortBtn col="ev_score" /></th>
+            <th style={{ ...thStyle, minWidth: 150 }}>Perfil <SortBtn col="profile_name" /></th>
+            <th style={{ ...thStyle, minWidth: 120 }}>Watchlist</th>
+            <th style={{ ...thStyle, textAlign: "right" }}>Total <SortBtn col="total" /></th>
+            <th style={{ ...thStyle, textAlign: "center" }}>Confiança <SortBtn col="stat_confidence" /></th>
+            <th style={{ ...thStyle, textAlign: "right" }}>Win Rate <SortBtn col="win_rate" /></th>
+            <th style={{ ...thStyle, textAlign: "right" }}>Delta vs Baseline <SortBtn col="delta_win_rate_vs_baseline" /></th>
+            <th style={{ ...thStyle, textAlign: "right" }}>TP 4h <SortBtn col="tp_4h_rate" /></th>
+            <th style={{ ...thStyle, textAlign: "right" }}>P&amp;L Médio <SortBtn col="pnl_avg_pct" /></th>
+            <th style={{ ...thStyle, textAlign: "right" }}>P&amp;L Total <SortBtn col="pnl_total_usdt" /></th>
+            <th style={{ ...thStyle, textAlign: "right" }}>Holding (WIN) <SortBtn col="avg_holding_win_seconds" /></th>
             <th style={{ ...thStyle, textAlign: "center" }}>Classe</th>
-            <th style={{ ...thStyle, textAlign: "right" }}>
-              P&amp;L Total <SortBtn col="pnl_total_usdt" />
-            </th>
-            <th style={{ ...thStyle, textAlign: "right" }}>
-              P&amp;L Médio <SortBtn col="pnl_avg_pct" />
-            </th>
-            <th style={{ ...thStyle, textAlign: "right" }}>
-              Holding (WIN) <SortBtn col="avg_holding_win_seconds" />
-            </th>
+            <th style={{ ...thStyle, minWidth: 260 }}>Motivo</th>
           </tr>
         </thead>
         <tbody>
-          {sorted.map((row, i) => {
-            const winRateColor =
-              row.win_rate === null
-                ? C.muted
-                : row.win_rate >= 50
-                ? C.green
-                : C.red;
-            const tp4hColor =
-              row.tp_4h_rate === null
-                ? C.muted
-                : row.tp_4h_rate >= 40
-                ? C.green
-                : row.tp_4h_rate >= 20
-                ? C.amber
-                : C.red;
-            const pnlColor =
-              row.pnl_total_usdt > 0 ? C.green : row.pnl_total_usdt < 0 ? C.red : C.muted;
-            const pnlAvgColor =
-              row.pnl_avg_pct === null
-                ? C.muted
-                : row.pnl_avg_pct > 0
-                ? C.green
-                : row.pnl_avg_pct < 0
-                ? C.red
-                : C.muted;
-            const noTrades = row.total === 0;
-            const cls = classifyProfile(row);
-            const clsMeta = CLASS_META[cls];
+          {sorted.map((row, index) => {
+            const priorityColor = PRIORITY_COLOR[row.priority] ?? C.muted;
+            const classKey = row.operational_class === "LOW_N" ? "LOW_SAMPLE" : row.operational_class === "EMPTY" ? "NO_TRADES" : row.operational_class;
+            const classMeta = CLASS_META[classKey as ProfileClass] ?? CLASS_META.NO_TRADES;
+            const watchlist = row.watchlist_name ?? watchlistNames[row.profile_id] ?? "—";
             return (
-              <tr
-                key={row.profile_id}
-                style={{ background: i % 2 === 0 ? "transparent" : `${C.elevated}66`, opacity: noTrades ? 0.65 : 1 }}
-              >
-                <td style={{ ...tdStyle, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.profile_name}>
-                  {row.profile_name}
+              <tr key={`${row.profile_id}:${row.watchlist_id ?? "none"}`} style={{ background: index % 2 === 0 ? "transparent" : `${C.elevated}66`, opacity: row.total === 0 ? 0.7 : 1 }}>
+                <td style={{ ...tdStyle, textAlign: "center" }}><span style={{ color: priorityColor, border: `1px solid ${priorityColor}66`, borderRadius: 4, padding: "2px 7px", fontWeight: 700 }}>{row.priority}</span></td>
+                <td style={{ ...tdStyle, textAlign: "right", color: row.ev_score >= 60 ? C.green : row.ev_score >= 30 ? C.amber : C.red, fontWeight: 700 }} title={JSON.stringify(row.score_components)}>{row.ev_score.toFixed(2)}</td>
+                <td style={{ ...tdStyle, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.profile_name}>{row.profile_name}</td>
+                <td style={{ ...tdStyle, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: C.muted }} title={watchlist}>{watchlist}</td>
+                <td style={{ ...tdStyle, textAlign: "right" }}>{row.total || "—"}</td>
+                <td style={{ ...tdStyle, textAlign: "center", color: row.stat_confidence === "HIGH" ? C.green : row.stat_confidence === "MEDIUM" ? C.blue : C.muted }}>{row.stat_confidence}</td>
+                <td style={{ ...tdStyle, textAlign: "right" }}>{row.win_rate == null ? "—" : `${(row.win_rate * 100).toFixed(1)}%`}</td>
+                <td style={{ ...tdStyle, textAlign: "right" }} title={`Delta P&L: ${row.delta_pnl_vs_baseline >= 0 ? "+" : ""}${row.delta_pnl_vs_baseline.toFixed(3)} pp`}>
+                  {`${row.delta_win_rate_vs_baseline >= 0 ? "+" : ""}${(row.delta_win_rate_vs_baseline * 100).toFixed(1)} pp`}
                 </td>
-                <td style={{ ...tdStyle, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: C.muted }} title={watchlistNames[row.profile_id] ?? ""}>
-                  {watchlistNames[row.profile_id] ?? "—"}
-                </td>
-                <td style={{ ...tdStyle, textAlign: "right" }}>
-                  {noTrades ? (
-                    <span title="Nenhum shadow trade registrado ainda para este perfil" style={{ fontSize: 10, color: C.muted, cursor: "default" }}>Sem trades</span>
-                  ) : row.total}
-                </td>
-                <td style={{ ...tdStyle, textAlign: "right" }}>{noTrades ? "—" : row.open_count}</td>
-                <td style={{ ...tdStyle, textAlign: "right", color: winRateColor }}>
-                  {row.win_rate !== null ? `${row.win_rate.toFixed(1)}%` : "—"}
-                </td>
-                <td
-                  style={{ ...tdStyle, textAlign: "right", color: tp4hColor }}
-                  title={row.tp_4h_count > 0 ? `${row.tp_4h_count} TP em ≤4h de ${row.win_count} wins` : undefined}
-                >
-                  {row.tp_4h_rate !== null ? `${row.tp_4h_rate.toFixed(1)}%` : "—"}
-                </td>
-                <td style={{ ...tdStyle, textAlign: "center" }}>
-                  <span style={{
-                    fontSize: 10,
-                    fontWeight: 600,
-                    color: clsMeta.color,
-                    border: `1px solid ${clsMeta.color}55`,
-                    borderRadius: 4,
-                    padding: "1px 6px",
-                    letterSpacing: 0.3,
-                    whiteSpace: "nowrap",
-                  }}>
-                    {clsMeta.label}
-                  </span>
-                </td>
-                <td style={{ ...tdStyle, textAlign: "right", color: pnlColor }}>
-                  {noTrades ? "—" : fmtUsd(row.pnl_total_usdt)}
-                </td>
-                <td style={{ ...tdStyle, textAlign: "right", color: pnlAvgColor }}>
-                  {row.pnl_avg_pct !== null ? fmtPct(row.pnl_avg_pct) : "—"}
-                </td>
-                <td style={{ ...tdStyle, textAlign: "right", color: C.muted }}>
-                  {fmtHolding(row.avg_holding_win_seconds)}
-                </td>
+                <td style={{ ...tdStyle, textAlign: "right" }}>{row.tp_4h_rate == null ? "—" : `${(row.tp_4h_rate * 100).toFixed(1)}%`}</td>
+                <td style={{ ...tdStyle, textAlign: "right", color: (row.pnl_avg_pct ?? 0) > 0 ? C.green : (row.pnl_avg_pct ?? 0) < 0 ? C.red : C.muted }}>{fmtPct(row.pnl_avg_pct)}</td>
+                <td style={{ ...tdStyle, textAlign: "right", color: row.pnl_total_usdt > 0 ? C.green : row.pnl_total_usdt < 0 ? C.red : C.muted }}>{fmtUsd(row.pnl_total_usdt)}</td>
+                <td style={{ ...tdStyle, textAlign: "right", color: C.muted }}>{fmtHolding(row.avg_holding_win_seconds)}</td>
+                <td style={{ ...tdStyle, textAlign: "center" }}><span style={{ color: classMeta.color, border: `1px solid ${classMeta.color}55`, borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>{classMeta.label}</span></td>
+                <td style={{ ...tdStyle, maxWidth: 360, color: C.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row.priority_reason}>{row.priority_reason}</td>
               </tr>
             );
           })}
@@ -2229,22 +2162,9 @@ function ProfileReportTable({
     </div>
   );
 }
-
 // ── data hooks ───────────────────────────────────────────────────────────────
-//
-// Backend limitation: `status` query param só aceita PENDING|RUNNING|
-// COMPLETED|ERROR. Não há filtro nativo por `outcome` (TP_HIT/SL_HIT/TIMEOUT).
-// Estratégia adotada (sem mudar backend):
-//
-// • ALL          → 1 GET paginado server-side (sem filtro de status).
-// • OPEN         → 2 GETs (status=PENDING + status=RUNNING) com page_size=MAX,
-//                  merge + sort por created_at desc, paginação client-side.
-// • TP/SL/TIMEOUT → 1 GET (status=COMPLETED) com page_size=MAX e filtro
-//                   client-side por `outcome`, paginação client-side.
-//
-// MAX_LOCAL_FETCH é cap de segurança — assumimos que volumes shadow por
-// usuário cabem nessa janela. Se algum dia atingir, o backend ganha um
-// param `outcome` e a UI volta a paginar 100% server-side.
+// Backend limitation: `status` accepts PENDING|RUNNING|COMPLETED|ERROR.
+// Outcome filters still use the bounded client-side strategy below.
 const MAX_LOCAL_FETCH = 200; // = _MAX_PAGE_SIZE em backend/app/api/shadow_trades.py
 const CLIENT_PAGE_SIZE = 50;
 
@@ -2341,7 +2261,7 @@ export default function ShadowPortfolioPage() {
   useEffect(() => {
     if (mainTab !== "report") return;
     setLoadingReport(true);
-    apiGet<ProfileReportRow[]>("/api/shadow-trades/profile-report")
+    apiGet<ProfileReportRow[]>("/api/shadow-trades/profile-report?order_by=ev_score&direction=desc")
       .then(setProfileReport)
       .catch(() => setProfileReport([]))
       .finally(() => setLoadingReport(false));
