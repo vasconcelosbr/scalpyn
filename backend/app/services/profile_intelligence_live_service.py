@@ -10,6 +10,7 @@ All mutations are disabled by default. No profile creation. No live trading.
 
 from __future__ import annotations
 
+import decimal
 import hashlib
 import json
 import logging
@@ -17,6 +18,14 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+
+class _SafeEncoder(json.JSONEncoder):
+    """JSON encoder that handles Decimal and other non-standard types."""
+    def default(self, o: Any) -> Any:
+        if isinstance(o, decimal.Decimal):
+            return float(o)
+        return super().default(o)
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,7 +75,7 @@ async def _log_activity(
         "message": message,
         "profile_id": str(profile_id) if profile_id else None,
         "profile_name": profile_name,
-        "payload": json.dumps(payload or {}),
+        "payload": json.dumps(payload or {}, cls=_SafeEncoder),
     })
 
 
@@ -604,10 +613,10 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
         "to": tokens_out,
         "model_name": model_used,
         "summary": summary,
-        "findings": json.dumps(findings),
-        "recommendations": json.dumps(recommendations),
-        "contradictions": json.dumps(contradictions),
-        "risk_flags": json.dumps(risk_flags),
+        "findings": json.dumps(findings, cls=_SafeEncoder),
+        "recommendations": json.dumps(recommendations, cls=_SafeEncoder),
+        "contradictions": json.dumps(contradictions, cls=_SafeEncoder),
+        "risk_flags": json.dumps(risk_flags, cls=_SafeEncoder),
     })
 
     if final_status == "COMPLETED":
