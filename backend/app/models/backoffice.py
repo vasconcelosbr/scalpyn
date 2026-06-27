@@ -51,7 +51,7 @@ class DecisionLog(Base):
     profile_version = Column(TIMESTAMP(timezone=True), nullable=True)
 
     # ML Gate lineage/audit contract (migration 112).
-    ranking_id = Column(UUID(as_uuid=True), ForeignKey("ml_opportunity_rankings.id"), nullable=True)
+    ranking_id = Column(UUID(as_uuid=True), ForeignKey("ml_opportunity_rankings.id", use_alter=True, name="fk_decisions_log_ranking_id"), nullable=True)
     model_id = Column(UUID(as_uuid=True), nullable=True)
     model_version = Column(String(50), nullable=True)
     model_lane = Column(String(50), nullable=True)

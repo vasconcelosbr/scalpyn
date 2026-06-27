@@ -247,7 +247,7 @@ class ShadowTrade(Base):
     ml_model_id = Column(UUID(as_uuid=True), nullable=True)
     orchestrator_payload = Column(JSONB, nullable=True)
     model_lane = Column(String, nullable=True)
-    ranking_id = Column(UUID(as_uuid=True), ForeignKey("ml_opportunity_rankings.id"), nullable=True)
+    ranking_id = Column(UUID(as_uuid=True), ForeignKey("ml_opportunity_rankings.id", use_alter=True, name="fk_shadow_trades_ranking_id"), nullable=True)
     model_version = Column(String, nullable=True)
     threshold_used = Column(Float, nullable=True)
     score_status = Column(String, nullable=True)
