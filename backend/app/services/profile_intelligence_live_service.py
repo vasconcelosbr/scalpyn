@@ -183,21 +183,6 @@ async def run_fast_cycle(db: AsyncSession) -> dict:
                         message=f"Shadow scan: {stats['completed_trades']} trades, {stats['profiles']} profiles",
                         payload=stats)
 
-    await db.execute(text("""
-        INSERT INTO profile_intelligence_runs
-            (id, run_type, trigger_source, status, run_at, finished_at,
-             total_shadow_trades, total_profiles, suggestions_generated, ai_review_requested, created_at, updated_at,
-             lookback_days, min_closed_trades)
-        VALUES
-            (:id, 'fast', 'beat', 'completed', now(), now(),
-             :shadow_trades, :profiles, 0, false, now(), now(),
-             1, 0)
-    """), {
-        "id": str(run_id),
-        "shadow_trades": int(stats.get("completed_trades") or 0),
-        "profiles": int(stats.get("profiles") or 0),
-    })
-
     await _log_activity(db, run_id=run_id, event_type="RUN_COMPLETED",
                         phase="fast", message="Ciclo rápido concluído")
     await db.commit()
