@@ -311,40 +311,80 @@ def monitor(self):
 
 # ── Live Engine feedback loop ────────────────────────────────────────────────
 
+def _live_nullpool_session():
+    """Return (engine, session_factory) with NullPool — avoids asyncpg event-loop conflicts."""
+    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import NullPool
+    from ..config import settings
+    engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    return engine, sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
 async def _run_feedback_loop():
-    from ..database import AsyncSessionLocal
+    """Live Engine 24x7 feedback loop — NullPool engines to avoid asyncpg event-loop conflicts.
+
+    Each sub-cycle creates a fresh engine (NullPool) so asyncpg connections are never
+    shared across event loops between Celery task invocations on the same ForkPoolWorker.
+    """
     from ..services.profile_intelligence_live_service import (
         run_fast_cycle, run_medium_cycle, run_ai_review_cycle,
         _needs_medium_cycle, _needs_ai_cycle,
     )
 
-    async with AsyncSessionLocal() as db:
-        result = await run_fast_cycle(db)
+    logger.info("[PILive] feedback_loop started")
+
+    # Fast cycle: heartbeat + shadow scan (runs every invocation)
+    engine, factory = _live_nullpool_session()
+    try:
+        async with factory() as db:
+            result = await run_fast_cycle(db)
         logger.info("[PILive] fast cycle done: %s", result)
+    except Exception as exc:
+        logger.error("[PILive] fast cycle failed: %s", exc)
+        raise
+    finally:
+        await engine.dispose()
 
-    if await _check_medium_needed():
-        async with AsyncSessionLocal() as db:
-            result = await run_medium_cycle(db)
+    # Medium cycle: indicator mining + suggestions (gated by _needs_medium_cycle)
+    engine, factory = _live_nullpool_session()
+    try:
+        async with factory() as db:
+            needs_medium = await _needs_medium_cycle(db)
+    finally:
+        await engine.dispose()
+
+    if needs_medium:
+        engine, factory = _live_nullpool_session()
+        try:
+            async with factory() as db:
+                result = await run_medium_cycle(db)
             logger.info("[PILive] medium cycle done: %s", result)
+        except Exception as exc:
+            logger.error("[PILive] medium cycle failed (non-fatal): %s", exc)
+        finally:
+            await engine.dispose()
 
-    if await _check_ai_needed():
-        async with AsyncSessionLocal() as db:
-            result = await run_ai_review_cycle(db)
+    # AI review cycle: Claude critic (gated by _needs_ai_cycle, default 4h)
+    engine, factory = _live_nullpool_session()
+    try:
+        async with factory() as db:
+            needs_ai = await _needs_ai_cycle(db)
+    finally:
+        await engine.dispose()
+
+    if needs_ai:
+        engine, factory = _live_nullpool_session()
+        try:
+            async with factory() as db:
+                result = await run_ai_review_cycle(db)
             logger.info("[PILive] AI review done: %s", result)
+        except Exception as exc:
+            logger.error("[PILive] AI review failed (non-fatal): %s", exc)
+        finally:
+            await engine.dispose()
 
-
-async def _check_medium_needed() -> bool:
-    from ..database import AsyncSessionLocal
-    from ..services.profile_intelligence_live_service import _needs_medium_cycle
-    async with AsyncSessionLocal() as db:
-        return await _needs_medium_cycle(db)
-
-
-async def _check_ai_needed() -> bool:
-    from ..database import AsyncSessionLocal
-    from ..services.profile_intelligence_live_service import _needs_ai_cycle
-    async with AsyncSessionLocal() as db:
-        return await _needs_ai_cycle(db)
+    logger.info("[PILive] feedback_loop completed")
 
 
 @celery_app.task(name="app.tasks.profile_intelligence_job.feedback_loop", bind=True)

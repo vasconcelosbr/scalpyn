@@ -185,7 +185,7 @@ async def run_fast_cycle(db: AsyncSession) -> dict:
 
     await db.execute(text("""
         INSERT INTO profile_intelligence_runs
-            (id, run_type, trigger_source, status, started_at, finished_at,
+            (id, run_type, trigger_source, status, run_at, finished_at,
              total_shadow_trades, total_profiles, suggestions_generated, ai_review_requested, created_at, updated_at,
              lookback_days, min_closed_trades)
         VALUES

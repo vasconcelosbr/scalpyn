@@ -637,6 +637,13 @@ export default function ProfileIntelligencePage() {
   useEffect(() => { loadOverview(); }, [loadOverview]);
   useEffect(() => { loadTab(activeTab); }, [activeTab, loadTab]);
 
+  // Auto-refresh Live Engine tab every 30 seconds while it's active
+  useEffect(() => {
+    if (activeTab !== "Live Engine") return;
+    const interval = setInterval(() => { loadTab("Live Engine"); }, 30000);
+    return () => clearInterval(interval);
+  }, [activeTab, loadTab]);
+
   const handleRefresh = () => {
     loadOverview();
     if (activeTab !== "Overview") loadTab(activeTab);
@@ -2065,20 +2072,29 @@ export default function ProfileIntelligencePage() {
                 <h3 className="text-[13px] font-semibold text-[var(--text-primary)]">Shadow Analyzer (24h)</h3>
               </div>
               {loadingTab ? <div className="skeleton h-24 rounded" /> : liveShadow ? (
-                <div className="grid grid-cols-2 gap-2">
-                  {[
-                    ["Trades", liveShadow.total_trades],
-                    ["Profiles", liveShadow.total_profiles],
-                    ["Win Rate", liveShadow.win_rate != null ? `${(liveShadow.win_rate * 100).toFixed(1)}%` : "—"],
-                    ["Avg PnL", liveShadow.avg_pnl_pct != null ? `${liveShadow.avg_pnl_pct > 0 ? "+" : ""}${liveShadow.avg_pnl_pct.toFixed(3)}%` : "—"],
-                    ["Negative Profiles", liveShadow.negative_profiles],
-                    ["Hard Negatives", liveShadow.hard_negative_patterns_detected],
-                  ].map(([label, value]) => (
-                    <div key={String(label)} className="bg-[var(--bg-input)] rounded px-3 py-2">
-                      <div className="text-[10px] text-[var(--text-tertiary)] uppercase">{label}</div>
-                      <div className="text-[13px] font-semibold text-[var(--text-primary)]">{String(value ?? "—")}</div>
+                <div className="space-y-2">
+                  {liveShadow.total_trades === 0 && liveShadow.message && (
+                    <div className="text-[11px] text-amber-400 bg-amber-400/10 rounded px-3 py-2">
+                      {liveShadow.message}
                     </div>
-                  ))}
+                  )}
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      ["Trades (24h)", liveShadow.total_trades],
+                      ["Profiles (24h)", liveShadow.total_profiles],
+                      ["Win Rate", liveShadow.win_rate != null && liveShadow.total_trades > 0 ? `${(liveShadow.win_rate * 100).toFixed(1)}%` : "—"],
+                      ["Avg PnL", liveShadow.avg_pnl_pct != null && liveShadow.total_trades > 0 ? `${liveShadow.avg_pnl_pct > 0 ? "+" : ""}${liveShadow.avg_pnl_pct.toFixed(3)}%` : "—"],
+                      ...(liveShadow.total_trades === 0 && liveShadow.fallback_total_trades != null
+                        ? [["Trades (7d)", liveShadow.fallback_total_trades], ["Profiles (7d)", liveShadow.fallback_total_profiles]]
+                        : [["Negative Profiles", liveShadow.negative_profiles], ["Hard Negatives", liveShadow.hard_negative_patterns_detected]]
+                      ),
+                    ].map(([label, value]) => (
+                      <div key={String(label)} className="bg-[var(--bg-input)] rounded px-3 py-2">
+                        <div className="text-[10px] text-[var(--text-tertiary)] uppercase">{label}</div>
+                        <div className="text-[13px] font-semibold text-[var(--text-primary)]">{String(value ?? "—")}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ) : <div className="text-[12px] text-[var(--text-tertiary)]">Sem dados de shadow disponíveis.</div>}
             </div>

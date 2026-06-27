@@ -132,9 +132,36 @@ async def live_shadow_summary(
     """), {"hours": f"{min(hours, 168)} hours"})
     hard_negs = hn_row.scalar_one_or_none() or 0
 
+    total_trades = int(stats.total_trades or 0)
+
+    fallback_total_trades = None
+    fallback_total_profiles = None
+    fallback_message = None
+    if total_trades == 0:
+        fb = await db.execute(text("""
+            SELECT COUNT(*) AS total_trades,
+                   COUNT(DISTINCT profile_id) AS total_profiles
+            FROM shadow_trades
+            WHERE source IN ('L3','L3_LAB')
+              AND status = 'COMPLETED'
+              AND pnl_pct IS NOT NULL
+              AND profile_id IS NOT NULL
+              AND created_at >= now() - interval '7 days'
+        """))
+        fb_stats = fb.fetchone()
+        fallback_total_trades = int(fb_stats.total_trades or 0)
+        fallback_total_profiles = int(fb_stats.total_profiles or 0)
+        if fallback_total_trades > 0:
+            fallback_message = (
+                f"Sem trades L3 finalizados nas últimas {hours}h; "
+                f"dados disponíveis em 7d: {fallback_total_trades} trades / {fallback_total_profiles} profiles."
+            )
+        else:
+            fallback_message = f"Sem trades L3 finalizados nas últimas {hours}h nem em 7d."
+
     return {
         "window_hours": hours,
-        "total_trades": int(stats.total_trades or 0),
+        "total_trades": total_trades,
         "total_profiles": int(stats.total_profiles or 0),
         "wins": int(stats.wins or 0),
         "losses": int(stats.losses or 0),
@@ -142,6 +169,10 @@ async def live_shadow_summary(
         "win_rate": float(stats.win_rate or 0),
         "negative_profiles": int(neg),
         "hard_negative_patterns_detected": int(hard_negs),
+        "fallback_window_days": 7 if total_trades == 0 else None,
+        "fallback_total_trades": fallback_total_trades,
+        "fallback_total_profiles": fallback_total_profiles,
+        "message": fallback_message,
     }
 
 
