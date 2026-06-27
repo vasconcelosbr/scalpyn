@@ -203,7 +203,7 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
     await _log_activity(db, run_id=run_id, event_type="MINING_INDICATORS",
                         phase="medium", message="Iniciando mineração de indicadores por profile")
 
-    rows = await db.execute(text("""
+    rows = await db.execute(text(f"""
         SELECT
             st.profile_id,
             p.name AS profile_name,
@@ -216,9 +216,9 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
           AND st.pnl_pct IS NOT NULL
           AND st.profile_id IS NOT NULL
           AND st.features_snapshot IS NOT NULL
-          AND st.created_at >= now() - interval :lookback
+          AND st.created_at >= now() - interval '{_LOOKBACK_HOURS} hours'
         LIMIT 5000
-    """), {"lookback": f"{_LOOKBACK_HOURS} hours"})
+    """))
     trades = rows.fetchall()
 
     suggestions_generated = 0
@@ -278,7 +278,7 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
     await _log_activity(db, run_id=run_id, event_type="MINING_HARD_NEGATIVES",
                         phase="medium", message="Minerando padrões de hard negative")
 
-    hard_neg_rows = await db.execute(text("""
+    hard_neg_rows = await db.execute(text(f"""
         SELECT
             st.profile_id,
             p.name AS profile_name,
@@ -292,9 +292,9 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
           AND st.profile_id IS NOT NULL
           AND st.features_snapshot IS NOT NULL
           AND (st.pnl_pct <= 0 OR st.outcome = 'SL_HIT')
-          AND st.created_at >= now() - interval :lookback
+          AND st.created_at >= now() - interval '{_LOOKBACK_HOURS} hours'
         LIMIT 2000
-    """), {"lookback": f"{_LOOKBACK_HOURS} hours"})
+    """))
     hard_negs = hard_neg_rows.fetchall()
 
     pattern_buckets: dict[tuple, list[float]] = {}
