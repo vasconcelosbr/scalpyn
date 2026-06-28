@@ -29,7 +29,7 @@ export function SliderWithValue({
   disabled = false,
   decimals = 0,
 }: SliderWithValueProps) {
-  const sliderId = useId();
+  const sliderId = useId().replace(/[^a-zA-Z0-9]/g, '_');
   const numericInputRef = useRef<HTMLInputElement>(null);
 
   // Clamp + round to avoid floating point drift
@@ -121,7 +121,7 @@ export function SliderWithValue({
         {/* Slider */}
         <div style={{ flex: 1, position: 'relative', display: 'flex', alignItems: 'center' }}>
           <style>{`
-            #${CSS.escape(sliderId)} {
+            #${sliderId} {
               -webkit-appearance: none;
               appearance: none;
               width: 100%;
@@ -135,7 +135,7 @@ export function SliderWithValue({
               );
               cursor: pointer;
             }
-            #${CSS.escape(sliderId)}::-webkit-slider-thumb {
+            #${sliderId}::-webkit-slider-thumb {
               -webkit-appearance: none;
               appearance: none;
               width: 16px;
@@ -147,14 +147,14 @@ export function SliderWithValue({
               cursor: pointer;
               transition: transform var(--transition-fast), box-shadow var(--transition-fast);
             }
-            #${CSS.escape(sliderId)}::-webkit-slider-thumb:hover {
+            #${sliderId}::-webkit-slider-thumb:hover {
               transform: scale(1.25);
               box-shadow: 0 0 0 4px rgba(79, 123, 247, 0.2);
             }
-            #${CSS.escape(sliderId)}:focus-visible::-webkit-slider-thumb {
+            #${sliderId}:focus-visible::-webkit-slider-thumb {
               box-shadow: 0 0 0 4px rgba(79, 123, 247, 0.35);
             }
-            #${CSS.escape(sliderId)}::-moz-range-thumb {
+            #${sliderId}::-moz-range-thumb {
               width: 14px;
               height: 14px;
               border-radius: 50%;
@@ -163,15 +163,15 @@ export function SliderWithValue({
               cursor: pointer;
               transition: transform var(--transition-fast);
             }
-            #${CSS.escape(sliderId)}::-moz-range-thumb:hover {
+            #${sliderId}::-moz-range-thumb:hover {
               transform: scale(1.25);
             }
-            #${CSS.escape(sliderId)}::-moz-range-track {
+            #${sliderId}::-moz-range-track {
               height: 4px;
               border-radius: 2px;
               background: var(--bg-hover);
             }
-            #${CSS.escape(sliderId)}::-moz-range-progress {
+            #${sliderId}::-moz-range-progress {
               height: 4px;
               border-radius: 2px;
               background: var(--accent-primary);
