@@ -772,7 +772,11 @@ export default function DashboardPage() {
         apiGet<DashboardOverview>(`/analytics/dashboard?${dateParams}&min_value_usdt=10`),
         apiGet<PnlSummary>(`/analytics/pnl?${dateParams}`),
       ]);
-      setOverview(ov);
+      setOverview({
+        ...ov,
+        capital_evolution: Array.isArray(ov.capital_evolution) ? ov.capital_evolution : [],
+        open_positions: Array.isArray(ov.open_positions) ? ov.open_positions : [],
+      });
       setPnl(pl);
       setLastFetched(new Date());
     } finally {
