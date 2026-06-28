@@ -15,7 +15,7 @@ async def run(*, apply: bool, expected_count: int, fix_deployed_at: datetime) ->
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import NullPool
-    from app.core.config import settings
+    from app.config import settings
     from app.services.ai_review_safety_service import reclassified_status
 
     engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
