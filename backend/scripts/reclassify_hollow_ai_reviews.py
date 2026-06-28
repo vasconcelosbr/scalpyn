@@ -62,7 +62,7 @@ async def run(*, apply: bool, expected_count: int, fix_deployed_at: datetime) ->
                                     'flag', :new, 'reason', :reason,
                                     'reclassified_at', now(), 'fix_deployed_at', :fix_at))
                         WHERE id = :id AND status = 'COMPLETED'
-                    """)), {"id": str(row.id), "new": new_status,
+                    """), {"id": str(row.id), "new": new_status,
                            "reason": reason, "fix_at": fix_deployed_at})
                     if result.rowcount != 1:
                         raise RuntimeError(f"concurrent update for review {row.id}")
@@ -73,7 +73,7 @@ async def run(*, apply: bool, expected_count: int, fix_deployed_at: datetime) ->
                                 'Hollow AI review reclassified with full audit snapshot',
                                 jsonb_build_object('review_id', :id, 'old_status', :old,
                                                    'new_status', :new, 'reason', :reason))
-                    """)), {"id": str(row.id), "old": row.status,
+                    """), {"id": str(row.id), "old": row.status,
                            "new": new_status, "reason": reason})
 
             print(json.dumps({"apply": apply, "count": len(rows), "reviews": preview}, indent=2))
