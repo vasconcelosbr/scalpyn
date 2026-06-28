@@ -202,19 +202,20 @@ async def apply(conn) -> None:
         else:
             price_age = None
 
+        barrier_val = "TP" if reason == "TP_HIT" else "SL"
         try:
             async with conn.transaction():
                 result = await conn.execute(
                     """
                     UPDATE shadow_trades
-                    SET status       = 'COMPLETED',
-                        outcome      = $1,
-                        exit_price   = $2,
-                        exit_timestamp = $3,
-                        completed_at = $3,
-                        pnl_pct      = $4,
-                        pnl_usdt     = $5,
-                        barrier_touched = CASE WHEN $1='TP_HIT' THEN 'TP' ELSE 'SL' END,
+                    SET status             = 'COMPLETED',
+                        outcome            = $1,
+                        exit_price         = $2,
+                        exit_timestamp     = $3,
+                        completed_at       = $3,
+                        pnl_pct            = $4,
+                        pnl_usdt           = $5,
+                        barrier_touched    = $7,
                         barrier_touched_at = $3,
                         intrabar_convention = 'SL_FIRST'
                     WHERE id = $6
@@ -226,6 +227,7 @@ async def apply(conn) -> None:
                     pnl_pct,
                     pnl_usdt,
                     t["id"],
+                    barrier_val,
                 )
                 if result == "UPDATE 1":
                     if reason == "SL_HIT":
