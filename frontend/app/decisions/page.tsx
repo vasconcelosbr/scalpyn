@@ -296,9 +296,10 @@ function AuditTrailView() {
       try {
         const response = await apiGet<DecisionsResponse>(`/decisions?${buildParams(currentFilters, config, cursor)}`);
         setItems((prev) => {
-          if (!append) return response.items;
+          const safeItems = Array.isArray(response.items) ? response.items : [];
+          if (!append) return safeItems;
           const seen = new Set(prev.map((item) => item.id));
-          return [...prev, ...response.items.filter((item) => !seen.has(item.id))];
+          return [...prev, ...safeItems.filter((item) => !seen.has(item.id))];
         });
         setNextCursor(response.next_cursor);
       } catch (err) {

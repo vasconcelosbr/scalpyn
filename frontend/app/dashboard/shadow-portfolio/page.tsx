@@ -2363,8 +2363,9 @@ export default function ShadowPortfolioPage() {
   // Polling leve de preços correntes a cada 15s, só com símbolos visíveis,
   // sem repaginar a lista. Pausa quando a aba do navegador está oculta.
   useEffect(() => {
-    if (!list || list.items.length === 0) return;
-    const symbols = Array.from(new Set(list.items.map((it) => it.symbol)));
+    const safeListItems = Array.isArray(list?.items) ? list.items : [];
+    if (!list || safeListItems.length === 0) return;
+    const symbols = Array.from(new Set(safeListItems.map((it) => it.symbol)));
     if (symbols.length === 0) return;
 
     let cancelled = false;
@@ -2393,8 +2394,9 @@ export default function ShadowPortfolioPage() {
   // Mescla livePrices em cima do current_price vindo do backend.
   const itemsWithLivePrices = useMemo(() => {
     if (!list) return [] as ShadowTradeRead[];
-    if (Object.keys(livePrices).length === 0) return list.items;
-    return list.items.map((it) => {
+    const safeItems = Array.isArray(list.items) ? list.items : [];
+    if (Object.keys(livePrices).length === 0) return safeItems;
+    return safeItems.map((it) => {
       const live = livePrices[it.symbol];
       if (live === undefined) return it;
       return { ...it, current_price: live };

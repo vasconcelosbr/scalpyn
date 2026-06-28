@@ -63,7 +63,7 @@ export default function WatchlistPerformanceDashboard() {
     setError(null);
     try {
       const data = await apiGet<WatchlistPerformanceRow[]>("/shadow-portfolio/report?order_by=ev_score&direction=desc");
-      setRows(data);
+      setRows(Array.isArray(data) ? data : []);
       setLastUpdated(new Date());
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Falha ao carregar o ranking");
