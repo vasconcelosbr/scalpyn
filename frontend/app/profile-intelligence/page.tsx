@@ -1199,18 +1199,35 @@ export default function ProfileIntelligencePage() {
         <div className="space-y-4">
 
           {/* Safety banner */}
-          {calSafety && !calSafety.safety_pass && (
-            <div className="card p-3 border-red-500/30 bg-red-500/5 flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-              <div className="text-[12px] text-red-400">
-                Safety checks falhando — revise antes de qualquer ação.
-                {calSafety.checks?.filter((c: any) => !c.pass).map((c: any) => (
-                  <span key={c.name} className="ml-2 font-mono">[{c.name}={c.value}]</span>
-                ))}
+          {calSafety && (
+            <div className={`card p-3 flex items-start gap-2 ${calSafety.safety_pass ? "border-green-500/30 bg-green-500/5" : "border-red-500/30 bg-red-500/5"}`}>
+              {calSafety.safety_pass
+                ? <CheckCircle className="w-4 h-4 text-green-400 mt-0.5 shrink-0" />
+                : <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />}
+              <div className="space-y-1">
+                <div className={`text-[12px] font-semibold ${calSafety.safety_pass ? "text-green-400" : "text-red-400"}`}>
+                  Safety Guard — {calSafety.safety_status ?? (calSafety.safety_pass ? "PASS" : "FAIL")}
+                </div>
+                {calSafety.safety_pass ? (
+                  <div className="text-[11px] text-[var(--text-secondary)]">
+                    AI Critic real review OK · hollow COMPLETED 24h: {calSafety.hollow_ai_reviews_24h ?? 0}
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-red-400">
+                    Safety checks falhando — revise antes de qualquer ação.
+                    {calSafety.checks?.filter((check: any) => !check.pass).map((check: any) => (
+                      <span key={check.name} className="ml-2 font-mono">[{check.name}={check.value}]</span>
+                    ))}
+                  </div>
+                )}
+                {(calSafety.legacy_hollow_reviews_24h ?? 0) > 0 && (
+                  <div className="text-[11px] text-yellow-400">
+                    Aviso informativo: {calSafety.legacy_hollow_reviews_24h} review(s) hollow legado(s) preservado(s) e reclassificado(s).
+                  </div>
+                )}
               </div>
             </div>
           )}
-
           {/* Summary cards */}
           {loadingTab ? (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

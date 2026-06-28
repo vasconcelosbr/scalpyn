@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 def _make_db(scalar_returns=None):
     """AsyncSession mock with configurable scalar returns for sequential calls."""
     db = AsyncMock()
+    db.execute = AsyncMock(return_value=MagicMock())
     if scalar_returns:
         db.execute.return_value.scalar_one_or_none = MagicMock(side_effect=scalar_returns)
     return db
@@ -37,6 +38,7 @@ async def test_ai_cycle_not_needed_when_review_in_progress():
     """SCHEDULED or RUNNING review blocks new cycle."""
     from app.services.profile_intelligence_live_service import _needs_ai_cycle
     db = AsyncMock()
+    db.execute = AsyncMock(return_value=MagicMock())
     # First call: pending count = 1
     db.execute.return_value.scalar = MagicMock(return_value=1)
     result = await _needs_ai_cycle(db)
@@ -48,6 +50,7 @@ async def test_ai_cycle_needed_when_no_real_completed():
     """No COMPLETED review with tokens > 0 means cycle is needed."""
     from app.services.profile_intelligence_live_service import _needs_ai_cycle
     db = AsyncMock()
+    db.execute = AsyncMock(return_value=MagicMock())
     # pending=0, then completed_at=None (no real review ever)
     db.execute.return_value.scalar = MagicMock(return_value=0)
     db.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
@@ -65,6 +68,7 @@ async def test_ai_review_missing_key_does_not_complete():
     with patch.dict("os.environ", {}, clear=False):
         with patch("os.environ.get", side_effect=lambda k, d="": "" if k == "ANTHROPIC_API_KEY" else d):
             db = AsyncMock()
+            db.execute = AsyncMock(return_value=MagicMock())
             # Patch _log_activity and DB queries
             db.execute.return_value.fetchone.return_value = (0, 0, 0.0, 0.0)
             db.execute.return_value.fetchall.return_value = []
@@ -75,11 +79,11 @@ async def test_ai_review_missing_key_does_not_complete():
                     result = await run_ai_review_cycle(db)
 
     assert result["status"] != "COMPLETED"
-    # Verify UPDATE was called with non-COMPLETED status
-    update_calls = [c for c in db.execute.call_args_list
-                    if "UPDATE profile_ai_reviews" in str(c)]
-    # At least one UPDATE call exists
-    assert any("UPDATE profile_ai_reviews" in str(c) for c in db.execute.call_args_list)
+    # Verify the persisted UPDATE is fail-closed.
+    update_calls = [call for call in db.execute.await_args_list
+                    if "UPDATE profile_ai_reviews" in str(call.args[0])]
+    assert update_calls
+    assert update_calls[-1].args[1]["status"] == "FAILED_MISSING_KEY"
 
 
 @pytest.mark.asyncio
@@ -97,6 +101,7 @@ async def test_ai_review_zero_tokens_does_not_complete():
 
     with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-test"}):
         db = AsyncMock()
+        db.execute = AsyncMock(return_value=MagicMock())
         db.execute.return_value.fetchone.return_value = (0, 0, 0.0, 0.0)
         db.execute.return_value.fetchall.return_value = []
 
@@ -121,6 +126,7 @@ async def test_ai_review_completed_requires_tokens_and_summary():
 
     with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-test"}):
         db = AsyncMock()
+        db.execute = AsyncMock(return_value=MagicMock())
         db.execute.return_value.fetchone.return_value = (5, 3, 0.01, 0.6)
         db.execute.return_value.fetchall.return_value = [("REDUCE_RISK", 10)]
 
@@ -140,6 +146,7 @@ async def test_ai_review_api_failure_does_not_complete():
 
     with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-test"}):
         db = AsyncMock()
+        db.execute = AsyncMock(return_value=MagicMock())
         db.execute.return_value.fetchone.return_value = (0, 0, 0.0, 0.0)
         db.execute.return_value.fetchall.return_value = []
 
@@ -163,12 +170,13 @@ async def test_ai_review_prefers_env_key_when_present():
 
     db_key_query_called = []
 
-    original_execute = AsyncMock()
+    original_execute = MagicMock()
     original_execute.return_value.fetchone.return_value = (5, 3, 0.01, 0.6)
     original_execute.return_value.fetchall.return_value = [("REDUCE_RISK", 10)]
 
     with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-env-key"}):
         db = AsyncMock()
+        db.execute = AsyncMock(return_value=MagicMock())
         db.execute.return_value.fetchone.return_value = (5, 3, 0.01, 0.6)
         db.execute.return_value.fetchall.return_value = [("REDUCE_RISK", 10)]
 
@@ -191,14 +199,15 @@ async def test_ai_review_reads_db_key_when_env_missing():
     real_response = _make_anthropic_response()
 
     with patch.dict("os.environ", {k: v for k, v in __import__("os").environ.items()
-                                   if k != "ANTHROPIC_API_KEY"}):
+                                   if k != "ANTHROPIC_API_KEY"}, clear=True):
         db = AsyncMock()
+        db.execute = AsyncMock(return_value=MagicMock())
         db.execute.return_value.fetchone.return_value = (5, 3, 0.01, 0.6)
         db.execute.return_value.fetchall.return_value = [("REDUCE_RISK", 10)]
         db.execute.return_value.scalar_one_or_none.return_value = b"encrypted_blob"
 
         with patch("app.services.profile_intelligence_live_service._log_activity", AsyncMock()):
-            with patch("app.services.profile_intelligence_live_service.decrypt_value",
+            with patch("app.services.ai_keys_service.decrypt_value",
                        return_value="sk-ant-db-key") as mock_decrypt:
                 with patch("anthropic.AsyncAnthropic") as mock_client:
                     mock_client.return_value.messages.create = AsyncMock(return_value=real_response)
@@ -218,6 +227,7 @@ async def test_ai_review_once_does_not_mutate_profiles_or_suggestions():
 
     with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-test"}):
         db = AsyncMock()
+        db.execute = AsyncMock(return_value=MagicMock())
         db.execute.return_value.fetchone.return_value = (5, 3, 0.01, 0.6)
         db.execute.return_value.fetchall.return_value = [("REDUCE_RISK", 10)]
 
@@ -250,7 +260,7 @@ async def test_ai_review_persists_model_tokens_summary():
 
     captured_params = {}
 
-    original_execute = AsyncMock()
+    original_execute = MagicMock()
     original_execute.return_value.fetchone.return_value = (5, 3, 0.01, 0.6)
     original_execute.return_value.fetchall.return_value = [("REDUCE_RISK", 10)]
 
@@ -261,6 +271,7 @@ async def test_ai_review_persists_model_tokens_summary():
 
     with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-test", "PI_AI_MODEL": "claude-haiku-4-5-20251001"}):
         db = AsyncMock()
+        db.execute = AsyncMock(return_value=MagicMock())
         db.execute.side_effect = capture_execute
 
         with patch("app.services.profile_intelligence_live_service._log_activity", AsyncMock()):

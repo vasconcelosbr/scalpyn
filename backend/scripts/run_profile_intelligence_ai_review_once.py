@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 # Make backend importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 async def _dry_run():
@@ -30,7 +30,7 @@ async def _dry_run():
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import NullPool
-    from app.core.config import settings
+    from app.config import settings
 
     engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
     factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -120,7 +120,7 @@ async def _once():
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import NullPool
-    from app.core.config import settings
+    from app.config import settings
     from app.services.profile_intelligence_live_service import run_ai_review_cycle
 
     engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
