@@ -275,9 +275,10 @@ async def live_ai_review(
     _uid: str = Depends(get_current_user_id),
 ):
     row = await db.execute(text("""
-        SELECT status, requested_at, completed_at, next_review_at,
+        SELECT id, status, requested_at, completed_at, next_review_at,
                model_name, tokens_input, tokens_output,
-               summary, findings, recommendations, risk_flags
+               summary, findings, recommendations, risk_flags,
+               analysis_context, context_payload_hash, context_query_hash
         FROM profile_ai_reviews
         ORDER BY requested_at DESC
         LIMIT 1
@@ -288,6 +289,7 @@ async def live_ai_review(
             hours=int(os.environ.get("PI_AI_REVIEW_INTERVAL_H", "4"))
         )
         return {
+            "review_id": None,
             "status": "NOT_STARTED",
             "requested_at": None,
             "completed_at": None,
@@ -299,9 +301,17 @@ async def live_ai_review(
             "findings": {},
             "recommendations": [],
             "risk_flags": [],
+            "analysis_context": None,
+            "context_payload_hash": None,
+            "context_query_hash": None,
         }
 
+    ac = review.analysis_context or {}
+    is_legacy = bool(ac.get("_legacy"))
+    has_context = bool(ac and not is_legacy and ac.get("dataset", {}).get("sources"))
+
     return {
+        "review_id": str(review.id),
         "status": review.status,
         "requested_at": review.requested_at.isoformat() if review.requested_at else None,
         "completed_at": review.completed_at.isoformat() if review.completed_at else None,
@@ -313,6 +323,11 @@ async def live_ai_review(
         "findings": review.findings or {},
         "recommendations": review.recommendations or [],
         "risk_flags": review.risk_flags or [],
+        "analysis_context": ac if not is_legacy else None,
+        "analysis_context_available": has_context,
+        "analysis_context_legacy": is_legacy,
+        "context_payload_hash": review.context_payload_hash,
+        "context_query_hash": review.context_query_hash,
     }
 
 

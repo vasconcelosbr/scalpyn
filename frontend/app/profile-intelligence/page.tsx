@@ -2598,6 +2598,51 @@ export default function ProfileIntelligencePage() {
                       <span className="text-[var(--text-primary)]">{new Date(liveAiReview.next_review_at).toLocaleTimeString()}</span>
                     </div>
                   )}
+
+                  {/* Auditable context block — shown before diagnosis */}
+                  {liveAiReview.analysis_context_available && liveAiReview.analysis_context ? (
+                    <div className="bg-purple-500/5 border border-purple-500/20 rounded p-2 space-y-1 text-[10px]">
+                      <div className="text-purple-400 font-semibold uppercase tracking-wide">Contexto auditável ✓</div>
+                      {[
+                        ["Fonte", liveAiReview.analysis_context.dataset?.table],
+                        ["Aba/visão", liveAiReview.analysis_context.dataset?.portfolio_view],
+                        ["Sources", liveAiReview.analysis_context.dataset?.sources?.join(", ")],
+                        ["Janela", `${liveAiReview.analysis_context.window?.window_hours}h`],
+                        ["Período", `${liveAiReview.analysis_context.window?.window_start ? new Date(liveAiReview.analysis_context.window.window_start).toLocaleString() : "—"} → ${liveAiReview.analysis_context.window?.window_end ? new Date(liveAiReview.analysis_context.window.window_end).toLocaleString() : "—"}`],
+                        ["Filtro", "COMPLETED + pnl_pct IS NOT NULL + profile_id IS NOT NULL"],
+                        ["Trades analisados", liveAiReview.analysis_context.sample?.trades_count],
+                        ["Profiles", liveAiReview.analysis_context.sample?.profiles_count],
+                        ["Symbols", liveAiReview.analysis_context.sample?.symbols_count],
+                        ["Review ID", liveAiReview.review_id ? `${liveAiReview.review_id.slice(0, 8)}…` : "—"],
+                        ["Context hash", liveAiReview.context_payload_hash ? `${liveAiReview.context_payload_hash.slice(0, 12)}…` : "—"],
+                      ].map(([label, value]) => (
+                        <div key={String(label)} className="flex gap-1">
+                          <span className="text-[var(--text-tertiary)] min-w-[90px]">{label}</span>
+                          <span className="text-[var(--text-secondary)]">{String(value ?? "—")}</span>
+                        </div>
+                      ))}
+                      {liveAiReview.analysis_context.sample?.source_breakdown && Object.keys(liveAiReview.analysis_context.sample.source_breakdown).length > 0 && (
+                        <div className="pt-1 border-t border-purple-500/10">
+                          <div className="text-purple-400 font-semibold mb-0.5">Source breakdown</div>
+                          {Object.entries(liveAiReview.analysis_context.sample.source_breakdown).map(([src, val]: [string, any]) => (
+                            <div key={src} className="flex gap-1">
+                              <span className="text-[var(--text-tertiary)] min-w-[90px]">{src}</span>
+                              <span className="text-[var(--text-secondary)]">{val?.trades ?? val} trades</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : liveAiReview.analysis_context_legacy ? (
+                    <div className="bg-yellow-500/5 border border-yellow-500/20 rounded p-2 text-[10px] text-yellow-300">
+                      Diagnóstico legado sem contexto auditável. Reprocessar review para obter rastreabilidade.
+                    </div>
+                  ) : liveAiReview.status === "COMPLETED" ? (
+                    <div className="bg-yellow-500/5 border border-yellow-500/20 rounded p-2 text-[10px] text-yellow-300">
+                      AI Critic executado, mas sem contexto de fonte/período. Reprocessar review.
+                    </div>
+                  ) : null}
+
                   {liveAiReview.summary && (
                     <div className="text-[11px] text-[var(--text-secondary)] bg-[var(--bg-input)] rounded p-2">{liveAiReview.summary}</div>
                   )}

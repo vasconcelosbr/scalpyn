@@ -577,45 +577,206 @@ async def run_shadow_calibration_cycle(db: AsyncSession) -> dict:
     }
 
 
+_AI_SOURCES = ["L3", "L3_LAB"]
+_AI_WINDOW_H = int(os.environ.get("PI_AI_WINDOW_H", "4"))
+
+_SOURCE_VIEW_MAP = {
+    "L3": "Aprovados (L3)",
+    "L3_REJECTED": "Rejeitados (L3)",
+    "L3_SIMULATED": "Simulados (L3)",
+    "L1_SPECTRUM": "Dataset ML (L1)",
+    "STRATEGY_LAB": "Strategy Lab",
+    "L3_LAB": "Strategy Lab / L3 Lab",
+}
+
+
+def _source_to_portfolio_view(sources: list[str]) -> str:
+    views = [_SOURCE_VIEW_MAP.get(s, f"UNKNOWN({s})") for s in sources]
+    return " + ".join(views) if views else "UNKNOWN"
+
+
+def _strip_json_codeblock(raw: str) -> str:
+    """Strip ```json ... ``` or ``` ... ``` wrappers Claude sometimes emits."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        end = len(lines) - 1
+        while end > 0 and lines[end].strip() in ("```", ""):
+            end -= 1
+        start = 1 if lines[0].startswith("```") else 0
+        raw = "\n".join(lines[start:end + 1])
+    return raw.strip()
+
+
 async def run_ai_review_cycle(db: AsyncSession) -> dict:
-    """AI Critic loop: compile summary, call Claude, save review."""
+    """AI Critic loop: compile auditable analysis_context, call Claude, save review.
+
+    Every review persists analysis_context with dataset, window, sample, and metrics.
+    COMPLETED is only set when tokens + summary + analysis_context are all present.
+    """
     review_id = uuid.uuid4()
 
     await _log_activity(db, run_id=None, event_type="AI_REVIEW_SCHEDULED",
                         phase="ai", message="AI Critic agendado")
 
-    row = await db.execute(text("""
+    # ── Build auditable analysis context ──────────────────────────────────────
+    window_end = datetime.now(timezone.utc)
+    window_start = window_end - timedelta(hours=_AI_WINDOW_H)
+
+    # Aggregate summary
+    agg_row = await db.execute(text("""
         SELECT
             COUNT(*) AS completed_trades,
             COUNT(DISTINCT profile_id) AS profiles,
+            COUNT(DISTINCT symbol) AS symbols,
             ROUND(AVG(pnl_pct)::numeric, 4) AS avg_pnl,
-            ROUND(COUNT(*) FILTER (WHERE pnl_pct > 0)::numeric / NULLIF(COUNT(*), 0), 4) AS win_rate
+            ROUND(COUNT(*) FILTER (WHERE pnl_pct > 0)::numeric / NULLIF(COUNT(*), 0), 4) AS win_rate,
+            ROUND(SUM(pnl_usdt)::numeric, 2) AS pnl_total_usdt
         FROM shadow_trades
-        WHERE source IN ('L3','L3_LAB')
+        WHERE source = ANY(:sources)
           AND status = 'COMPLETED'
           AND pnl_pct IS NOT NULL
           AND profile_id IS NOT NULL
-          AND created_at >= now() - interval '4 hours'
-    """))
-    summary_stats = dict(zip(["completed_trades", "profiles", "avg_pnl", "win_rate"],
-                             row.fetchone()))
+          AND created_at >= :window_start
+          AND created_at < :window_end
+    """), {"sources": _AI_SOURCES, "window_start": window_start, "window_end": window_end})
+    agg = agg_row.fetchone()
 
+    # Per-source breakdown
+    src_row = await db.execute(text("""
+        SELECT source, COUNT(*) AS trades, COUNT(DISTINCT profile_id) AS profiles
+        FROM shadow_trades
+        WHERE source = ANY(:sources)
+          AND status = 'COMPLETED'
+          AND pnl_pct IS NOT NULL
+          AND created_at >= :window_start
+          AND created_at < :window_end
+        GROUP BY source
+        ORDER BY source
+    """), {"sources": _AI_SOURCES, "window_start": window_start, "window_end": window_end})
+    source_breakdown = {r.source: {"trades": r.trades, "profiles": r.profiles}
+                        for r in src_row.fetchall()}
+
+    # Negative profiles (avg_pnl < 0, min 5 trades)
+    neg_row = await db.execute(text("""
+        SELECT COUNT(DISTINCT profile_id) FROM (
+            SELECT profile_id, AVG(pnl_pct) AS avg_pnl
+            FROM shadow_trades
+            WHERE source = ANY(:sources)
+              AND status = 'COMPLETED'
+              AND profile_id IS NOT NULL
+              AND created_at >= :window_start
+              AND created_at < :window_end
+            GROUP BY profile_id
+            HAVING COUNT(*) >= 5
+        ) t WHERE avg_pnl < 0
+    """), {"sources": _AI_SOURCES, "window_start": window_start, "window_end": window_end})
+    negative_profiles = int(neg_row.scalar() or 0)
+
+    # Hard negatives
+    hn_row = await db.execute(text("""
+        SELECT COUNT(*) FROM profile_hard_negative_patterns
+        WHERE created_at >= :window_start AND created_at < :window_end
+    """), {"window_start": window_start, "window_end": window_end})
+    hard_negatives = int(hn_row.scalar() or 0)
+
+    # Pending suggestions
     sugg_row = await db.execute(text("""
         SELECT suggestion_type, COUNT(*) AS cnt
         FROM profile_adjustment_suggestions
         WHERE status = 'PENDING_SHADOW_VALIDATION'
-        GROUP BY suggestion_type
-        ORDER BY cnt DESC
-        LIMIT 5
+        GROUP BY suggestion_type ORDER BY cnt DESC LIMIT 5
     """))
     pending_suggestions = [{"type": r[0], "count": r[1]} for r in sugg_row.fetchall()]
 
+    completed_trades = int(agg.completed_trades or 0)
+    profiles_count = int(agg.profiles or 0)
+    symbols_count = int(agg.symbols or 0)
+    avg_pnl = float(agg.avg_pnl or 0)
+    win_rate = float(agg.win_rate or 0)
+    pnl_total_usdt = float(agg.pnl_total_usdt or 0)
+
+    analysis_context = {
+        "dataset": {
+            "table": "shadow_trades",
+            "portfolio_view": _source_to_portfolio_view(_AI_SOURCES),
+            "sources": _AI_SOURCES,
+            "excluded_sources": ["L1_SPECTRUM", "L3_REJECTED", "L3_SIMULATED"],
+            "filters": {
+                "status": ["COMPLETED"],
+                "pnl_pct_not_null": True,
+                "profile_id_not_null": True,
+                "include_running": False,
+                "include_pending": False,
+                "include_cancelled": False,
+            },
+        },
+        "window": {
+            "window_hours": _AI_WINDOW_H,
+            "window_start": window_start.isoformat(),
+            "window_end": window_end.isoformat(),
+            "timezone": "UTC",
+        },
+        "sample": {
+            "trades_count": completed_trades,
+            "completed_trades": completed_trades,
+            "running_trades": 0,
+            "profiles_count": profiles_count,
+            "symbols_count": symbols_count,
+            "source_breakdown": source_breakdown,
+        },
+        "metrics": {
+            "win_rate": win_rate,
+            "avg_pnl_pct": avg_pnl,
+            "pnl_total_usdt": pnl_total_usdt,
+            "negative_profiles": negative_profiles,
+            "hard_negatives": hard_negatives,
+        },
+        "links": {
+            "review_id": str(review_id),
+            "context_query_hash": None,
+            "context_payload_hash": None,
+        },
+    }
+
+    context_query_hash = hashlib.sha256(
+        f"sources={sorted(_AI_SOURCES)}&window_h={_AI_WINDOW_H}".encode()
+    ).hexdigest()[:32]
+    context_payload_hash = hashlib.sha256(
+        json.dumps(analysis_context, sort_keys=True, cls=_SafeEncoder).encode()
+    ).hexdigest()[:32]
+    analysis_context["links"]["context_query_hash"] = context_query_hash
+    analysis_context["links"]["context_payload_hash"] = context_payload_hash
+
+    await _log_activity(db, run_id=None, event_type="AI_REVIEW_CONTEXT_BUILT",
+                        phase="ai",
+                        message=f"Contexto construído: {completed_trades} trades, {profiles_count} profiles, sources={_AI_SOURCES}",
+                        payload={
+                            "review_id": str(review_id),
+                            "sources": _AI_SOURCES,
+                            "window_hours": _AI_WINDOW_H,
+                            "window_start": window_start.isoformat(),
+                            "window_end": window_end.isoformat(),
+                            "trades_count": completed_trades,
+                            "profiles_count": profiles_count,
+                            "context_payload_hash": context_payload_hash,
+                        })
+
     payload = {
-        "time_window": "last_4h",
-        "profiles_analyzed": int(summary_stats.get("profiles") or 0),
-        "shadow_trades": int(summary_stats.get("completed_trades") or 0),
-        "avg_pnl_pct": float(summary_stats.get("avg_pnl") or 0),
-        "win_rate": float(summary_stats.get("win_rate") or 0),
+        "time_window": f"last_{_AI_WINDOW_H}h",
+        "window_start": window_start.isoformat(),
+        "window_end": window_end.isoformat(),
+        "sources": _AI_SOURCES,
+        "portfolio_view": analysis_context["dataset"]["portfolio_view"],
+        "profiles_analyzed": profiles_count,
+        "shadow_trades": completed_trades,
+        "symbols": symbols_count,
+        "avg_pnl_pct": avg_pnl,
+        "win_rate": win_rate,
+        "pnl_total_usdt": pnl_total_usdt,
+        "negative_profiles": negative_profiles,
+        "hard_negatives": hard_negatives,
+        "source_breakdown": source_breakdown,
         "pending_adjustment_suggestions": pending_suggestions,
         "ml_status": {
             "l1": "ranker_only_pending_stable_regime",
@@ -627,23 +788,35 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
             "mutation_applied": False,
         },
     }
-    prompt_hash = hashlib.md5(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    prompt_hash = hashlib.md5(json.dumps(payload, sort_keys=True, cls=_SafeEncoder).encode()).hexdigest()
 
     next_review_at = datetime.now(timezone.utc) + timedelta(hours=_AI_REVIEW_INTERVAL_H)
 
     await db.execute(text("""
         INSERT INTO profile_ai_reviews
             (id, status, requested_at, next_review_at, model_name, prompt_hash,
-             findings, recommendations, contradictions, risk_flags, created_at)
+             findings, recommendations, contradictions, risk_flags,
+             analysis_context, context_payload_hash, context_query_hash, created_at)
         VALUES
             (:id, 'SCHEDULED', now(), :next_review_at, null, :prompt_hash,
-             '{}', '[]', '[]', '[]', now())
+             '{}', '[]', '[]', '[]',
+             CAST(:analysis_context AS jsonb), :context_payload_hash, :context_query_hash,
+             now())
     """), {
         "id": str(review_id),
         "next_review_at": next_review_at,
         "prompt_hash": prompt_hash,
+        "analysis_context": json.dumps(analysis_context, cls=_SafeEncoder),
+        "context_payload_hash": context_payload_hash,
+        "context_query_hash": context_query_hash,
     })
     await db.commit()
+
+    await _log_activity(db, run_id=None, event_type="AI_REVIEW_CONTEXT_PERSISTED",
+                        phase="ai",
+                        message=f"Contexto persistido em review {str(review_id)[:8]}",
+                        payload={"review_id": str(review_id),
+                                 "context_payload_hash": context_payload_hash})
 
     # ── Key resolution ─────────────────────────────────────────────────────────
     ai_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -673,7 +846,6 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
     tokens_in = tokens_out = 0
     model_used: str | None = None
 
-    # Determine final_status as we go — only set COMPLETED when all guards pass
     if not ai_key:
         final_status = "FAILED_MISSING_KEY"
         risk_flags = [{"flag": "FAILED_MISSING_KEY",
@@ -699,11 +871,11 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
             prompt_text = (
                 "You are an analytical AI critic for a trading algorithm profile intelligence system. "
                 "Review the following shadow trade statistics and suggest improvements.\n\n"
-                f"Data: {json.dumps(payload, indent=2)}\n\n"
+                f"Data: {json.dumps(payload, indent=2, cls=_SafeEncoder)}\n\n"
                 "Provide a brief analysis with: summary (1-2 sentences), 2-3 findings, "
                 "2-3 recommendations (calibration only, no new profiles), any contradictions, "
                 "and risk flags. Format as JSON with keys: summary, findings, recommendations, "
-                "contradictions, risk_flags."
+                "contradictions, risk_flags. Return ONLY the JSON, no markdown code blocks."
             )
             response = await client.messages.create(
                 model=model_used,
@@ -715,7 +887,7 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
             tokens_out = response.usage.output_tokens if response.usage else 0
 
             try:
-                parsed = json.loads(raw)
+                parsed = json.loads(_strip_json_codeblock(raw))
                 summary = parsed.get("summary", "")
                 findings = parsed.get("findings", {})
                 recommendations = parsed.get("recommendations", [])
@@ -724,7 +896,6 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
             except json.JSONDecodeError:
                 summary = raw[:500]
 
-            # Validate response before marking COMPLETED
             if tokens_in <= 0 or tokens_out <= 0:
                 final_status = "FAILED_EMPTY_AI_RESPONSE"
                 risk_flags = [{"flag": "FAILED_EMPTY_AI_RESPONSE",
@@ -732,6 +903,10 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
             elif not summary:
                 final_status = "FAILED_EMPTY_SUMMARY"
                 risk_flags = [{"flag": "FAILED_EMPTY_SUMMARY", "detail": "Claude returned empty summary"}]
+            elif not analysis_context.get("sample", {}).get("trades_count") is not None:
+                final_status = "FAILED_MISSING_ANALYSIS_CONTEXT"
+                risk_flags = [{"flag": "FAILED_MISSING_ANALYSIS_CONTEXT",
+                               "detail": "analysis_context.sample.trades_count missing"}]
             else:
                 final_status = "COMPLETED"
 
@@ -771,21 +946,37 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
     })
 
     if final_status == "COMPLETED":
-        await _log_activity(db, run_id=None, event_type="AI_REVIEW_COMPLETED",
-                            phase="ai", message=f"AI Critic concluído: {summary[:100] if summary else ''}",
-                            payload={"review_id": str(review_id),
-                                     "tokens_in": tokens_in,
-                                     "tokens_out": tokens_out,
-                                     "model": model_used,
-                                     "next_review_at": next_review_at.isoformat()})
+        await _log_activity(db, run_id=None, event_type="AI_REVIEW_COMPLETED_WITH_CONTEXT",
+                            phase="ai",
+                            message=f"AI Critic concluído com contexto auditável: {summary[:80] if summary else ''}",
+                            payload={
+                                "review_id": str(review_id),
+                                "tokens_in": tokens_in,
+                                "tokens_out": tokens_out,
+                                "model": model_used,
+                                "sources": _AI_SOURCES,
+                                "window_hours": _AI_WINDOW_H,
+                                "window_start": window_start.isoformat(),
+                                "window_end": window_end.isoformat(),
+                                "trades_count": completed_trades,
+                                "profiles_count": profiles_count,
+                                "context_payload_hash": context_payload_hash,
+                                "next_review_at": next_review_at.isoformat(),
+                            })
     else:
-        await _log_activity(db, run_id=None, event_type="AI_REVIEW_FAILED",
+        await _log_activity(db, run_id=None, event_type="AI_REVIEW_FAILED_MISSING_CONTEXT"
+                            if "CONTEXT" in final_status else "AI_REVIEW_FAILED",
                             phase="ai", message=f"AI Critic: {final_status}",
                             severity="warning",
                             payload={"review_id": str(review_id), "status": final_status})
     await db.commit()
-    return {"review_id": str(review_id), "status": final_status,
-            "summary": summary, "next_review_at": next_review_at.isoformat()}
+    return {
+        "review_id": str(review_id),
+        "status": final_status,
+        "summary": summary,
+        "analysis_context": analysis_context,
+        "next_review_at": next_review_at.isoformat(),
+    }
 
 
 def _bucket(indicator: str, value: Any) -> str:
