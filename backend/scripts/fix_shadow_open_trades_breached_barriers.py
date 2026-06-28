@@ -196,7 +196,11 @@ async def apply(conn) -> None:
         exit_price = float(t["sl_price"]) if reason == "SL_HIT" else float(t["tp_price"])
         pnl_pct, pnl_usdt = _compute_pnl(t["entry_price"], exit_price, t["amount_usdt"])
         price_ts = t["price_ts"]
-        price_age = int((now_utc - price_ts.replace(tzinfo=timezone.utc if price_ts.tzinfo is None else None)).total_seconds()) if price_ts else None
+        if price_ts:
+            price_ts_aware = price_ts if price_ts.tzinfo else price_ts.replace(tzinfo=timezone.utc)
+            price_age = int((now_utc - price_ts_aware).total_seconds())
+        else:
+            price_age = None
 
         try:
             async with conn.transaction():
