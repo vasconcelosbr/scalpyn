@@ -1300,9 +1300,9 @@ async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
                                      entry_price, exit_price, tp_price, sl_price,
                                      pnl_pct, pnl_usdt, closure_reason, closer_run_id)
                                     VALUES
-                                    (:shadow_trade_id, :source, :symbol, :previous_status,
+                                    (CAST(:shadow_trade_id AS uuid), :source, :symbol, :previous_status,
                                      :entry_price, :exit_price, :tp_price, :sl_price,
-                                     :pnl_pct, :pnl_usdt, :closure_reason, :closer_run_id::uuid)
+                                     :pnl_pct, :pnl_usdt, :closure_reason, CAST(:closer_run_id AS uuid))
                                 """),
                                 row,
                             )
