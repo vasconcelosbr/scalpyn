@@ -61,8 +61,9 @@ async def run(*, apply: bool, expected_count: int, fix_deployed_at: datetime) ->
                         SET status = :new,
                             risk_flags = COALESCE(risk_flags, '[]'::jsonb) ||
                                 jsonb_build_array(jsonb_build_object(
-                                    'flag', :new, 'reason', :reason,
-                                    'reclassified_at', now(), 'fix_deployed_at', :fix_at))
+                                    'flag', CAST(:new AS text), 'reason', CAST(:reason AS text),
+                                    'reclassified_at', now(), 'fix_deployed_at',
+                                    CAST(:fix_at AS timestamptz)))
                         WHERE id = :id AND status = 'COMPLETED'
                     """), {"id": str(row.id), "new": new_status,
                            "reason": reason, "fix_at": fix_deployed_at})
@@ -73,8 +74,10 @@ async def run(*, apply: bool, expected_count: int, fix_deployed_at: datetime) ->
                             (event_type, phase, severity, message, payload)
                         VALUES ('AI_REVIEW_RECLASSIFIED', 'ai', 'warning',
                                 'Hollow AI review reclassified with full audit snapshot',
-                                jsonb_build_object('review_id', :id, 'old_status', :old,
-                                                   'new_status', :new, 'reason', :reason))
+                                jsonb_build_object('review_id', CAST(:id AS text),
+                                                   'old_status', CAST(:old AS text),
+                                                   'new_status', CAST(:new AS text),
+                                                   'reason', CAST(:reason AS text)))
                     """), {"id": str(row.id), "old": row.status,
                            "new": new_status, "reason": reason})
 
