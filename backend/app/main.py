@@ -4,7 +4,6 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
 from .config import settings
 from .init_db import init_db
 
@@ -290,10 +289,6 @@ app = FastAPI(
     lifespan=lifespan,
     redirect_slashes=False,
 )
-
-# GZip: comprime respostas JSON >= 1 KB (~60-80% menor). Must be added before
-# CORSMiddleware so CORS headers não são removidos pelo encoding middleware.
-app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,
