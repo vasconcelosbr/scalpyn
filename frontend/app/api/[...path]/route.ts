@@ -33,20 +33,19 @@ async function proxyRequest(req: NextRequest, context: RouteContext): Promise<Ne
   const search = req.nextUrl.search ?? '';
   const targetUrl = `${BACKEND_ROOT}${rawPath}${search}`;
 
-  // Forward all headers except host and connection (which confuse the backend).
-  // accept-encoding is intentionally kept so the backend can return gzip responses;
-  // content-encoding is stripped from the *response* below to let Next.js handle it.
+  // Forward all headers except host, connection, and accept-encoding.
+  // accept-encoding is stripped intentionally: the Next.js route handler's fetch()
+  // does not auto-decompress gzip from the backend. If we forwarded it and the
+  // backend returned content-encoding:gzip, the raw bytes would reach the browser
+  // without the header → JSON.parse failure. Compression to the browser is handled
+  // by Next.js itself (compress:true in next.config.ts).
   const forwardHeaders: Record<string, string> = {};
   req.headers.forEach((value, key) => {
     const lower = key.toLowerCase();
-    if (lower !== 'host' && lower !== 'connection') {
+    if (lower !== 'host' && lower !== 'connection' && lower !== 'accept-encoding') {
       forwardHeaders[key] = value;
     }
   });
-  // Ensure we always advertise gzip support upstream, even if the client didn't.
-  if (!forwardHeaders['accept-encoding']) {
-    forwardHeaders['accept-encoding'] = 'gzip, deflate, br';
-  }
 
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
   const body = hasBody ? await req.arrayBuffer() : undefined;
