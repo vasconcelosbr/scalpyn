@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from .config import get_current_user_id
+from ..services.metric_contracts import build_metric_contract, SHADOW_SOURCE_CONTRACT
 
 router = APIRouter(
     prefix="/api/profile-intelligence/calibration-evolution",
@@ -87,14 +88,45 @@ async def calibration_summary(
     """))
     ai = ai_row.fetchone()
 
+    # Portfolio trade-level metrics (L3 + L3_LAB, all-time, status=COMPLETED)
+    port_row = await db.execute(text("""
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'COMPLETED')                            AS completed_trades,
+          COUNT(*) FILTER (WHERE status = 'COMPLETED' AND pnl_pct > 0)            AS wins,
+          ROUND(
+            COUNT(*) FILTER (WHERE status = 'COMPLETED' AND pnl_pct > 0)::numeric
+            / NULLIF(COUNT(*) FILTER (WHERE status = 'COMPLETED'), 0),
+          4)                                                                       AS win_rate,
+          ROUND(AVG(pnl_pct) FILTER (WHERE status = 'COMPLETED')::numeric, 6)     AS avg_pnl_pct,
+          ROUND(SUM(pnl_usdt) FILTER (WHERE status = 'COMPLETED')::numeric, 2)    AS pnl_total_usdt,
+          COUNT(DISTINCT profile_id) FILTER (WHERE status = 'COMPLETED')          AS profiles_count
+        FROM shadow_trades
+        WHERE source IN ('L3', 'L3_LAB')
+          AND pnl_pct IS NOT NULL
+    """))
+    port = port_row.fetchone()
+
+    # Suggestions breakdown by status
+    status_rows = await db.execute(text("""
+        SELECT status, COUNT(*) AS n
+        FROM profile_adjustment_suggestions
+        GROUP BY status
+    """))
+    status_map = {r.status: int(r.n) for r in status_rows.fetchall()}
+    pending_shadow_validation = status_map.get("PENDING_SHADOW_VALIDATION", 0)
+    shadow_applied = status_map.get("SHADOW_APPLIED", 0)
+
     return {
         "suggestions": {
             "total": s.total_suggestions if s else 0,
+            "registered": s.total_suggestions if s else 0,
             "profiles_targeted": s.profiles_targeted if s else 0,
             "mutations_applied": s.mutations_applied if s else 0,
             "high_confidence": s.high_confidence if s else 0,
             "medium_confidence": s.medium_confidence if s else 0,
             "low_confidence": s.low_confidence if s else 0,
+            "pending_shadow_validation": pending_shadow_validation,
+            "shadow_applied": shadow_applied,
             "first_at": s.first_suggestion_at.isoformat() if s and s.first_suggestion_at else None,
             "last_at": s.last_suggestion_at.isoformat() if s and s.last_suggestion_at else None,
         },
@@ -110,6 +142,22 @@ async def calibration_summary(
             "avg_win_rate": _safe_float(pip.avg_win_rate) if pip else None,
             "avg_pnl_pct": _safe_float(pip.avg_pnl_pct) if pip else None,
         },
+        "portfolio_metrics": {
+            "sources": ["L3", "L3_LAB"],
+            "portfolio_views": [
+                SHADOW_SOURCE_CONTRACT["L3"]["view"],
+                SHADOW_SOURCE_CONTRACT["L3_LAB"]["view"],
+            ],
+            "period": "all-time",
+            "temporal_field": "status (COMPLETED)",
+            "aggregation": "trade-level",
+            "completed_trades": int(port.completed_trades) if port and port.completed_trades else 0,
+            "wins": int(port.wins) if port and port.wins else 0,
+            "win_rate": _safe_float(port.win_rate) if port else None,
+            "avg_pnl_pct": _safe_float(port.avg_pnl_pct) if port else None,
+            "pnl_total_usdt": _safe_float(port.pnl_total_usdt) if port else None,
+            "profiles_count": int(port.profiles_count) if port and port.profiles_count else 0,
+        },
         "latest_ai_review": {
             "id": str(ai.id) if ai else None,
             "model_name": ai.model_name if ai else None,
@@ -119,6 +167,78 @@ async def calibration_summary(
             "completed_at": ai.completed_at.isoformat() if ai and ai.completed_at else None,
             "status": ai.status if ai else None,
         } if ai else None,
+        "metric_contracts": {
+            "portfolio_win_rate": build_metric_contract(
+                metric_id="calibration.portfolio_win_rate",
+                label="Win Rate trade-level L3 + Strategy Lab",
+                source_table="shadow_trades",
+                aggregation_type="trade_level",
+                aggregation_level="per_trade",
+                formula="COUNT(pnl_pct > 0) / COUNT(status = 'COMPLETED')",
+                window_label="all-time",
+                window_field="created_at",
+                shadow_sources=["L3", "L3_LAB"],
+                shadow_portfolio_views=["Aprovados (L3)", "Strategy Lab"],
+                filters={"status": "COMPLETED", "pnl_pct_not_null": True},
+                comparable_with=["shadow.trade_level_win_rate", "overview.run_snapshot_win_rate"],
+                not_comparable_with=["calibration.bucket_avg_win_rate"],
+            ),
+            "bucket_avg_win_rate": build_metric_contract(
+                metric_id="calibration.bucket_avg_win_rate",
+                label="Win Rate médio dos buckets de indicadores (48h)",
+                source_table="profile_indicator_performance",
+                aggregation_type="simple_avg",
+                aggregation_level="indicator_bucket",
+                formula="AVG(win_rate)",
+                window_label="48h",
+                window_hours=48,
+                window_field="created_at",
+                not_comparable_with=[
+                    "calibration.portfolio_win_rate",
+                    "overview.run_snapshot_win_rate",
+                    "shadow.trade_level_win_rate",
+                ],
+                warning=(
+                    "Média simples por bucket de indicador. Inclui buckets com win_rate=0.0. "
+                    "NÃO representa a performance do portfólio."
+                ),
+            ),
+            "bucket_avg_pnl_pct": build_metric_contract(
+                metric_id="calibration.bucket_avg_pnl_pct",
+                label="P&L médio dos buckets de indicadores (48h)",
+                source_table="profile_indicator_performance",
+                aggregation_type="simple_avg",
+                aggregation_level="indicator_bucket",
+                formula="AVG(avg_pnl_pct)",
+                window_label="48h",
+                window_hours=48,
+                window_field="created_at",
+                not_comparable_with=[
+                    "calibration.portfolio_avg_pnl_pct",
+                    "shadow.trade_level_avg_pnl_pct",
+                ],
+                warning=(
+                    "NÃO é o P&L do portfólio. É a média dos buckets de indicadores. "
+                    "Inclui buckets com avg_pnl_pct=-1.0 (100% SL nos trades do bucket). "
+                    "Para P&L real do portfólio, use portfolio_metrics.avg_pnl_pct."
+                ),
+            ),
+            "suggestions_registered": build_metric_contract(
+                metric_id="calibration.suggestions_registered",
+                label="Sugestões Registradas all-time (profile_adjustment_suggestions)",
+                source_table="profile_adjustment_suggestions",
+                aggregation_type="count",
+                aggregation_level="row",
+                formula="COUNT(*)",
+                window_label="all-time",
+                unit="count",
+                not_comparable_with=["overview.run_suggestions_pending"],
+                warning=(
+                    "Total all-time de profile_adjustment_suggestions (Calibration Live Engine). "
+                    "Diferente de profile_suggestions (PI Engine legado, usado pelo Overview)."
+                ),
+            ),
+        },
     }
 
 

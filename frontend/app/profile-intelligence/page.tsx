@@ -14,6 +14,7 @@ interface PIOverview {
   total_runs?: number;
   last_run_at?: string | null;
   last_run_status?: string | null;
+  last_run_lookback_days?: number | null;
   total_profiles_analyzed?: number;
   total_closed_trades?: number;
   total_combinations?: number;
@@ -1117,21 +1118,21 @@ export default function ProfileIntelligencePage() {
               {/* Executive cards */}
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                 {[
-                  { label: "Profiles Analisados", value: overview?.total_profiles_analyzed ?? "—", hint: "Profiles com shadow trades no período" },
-                  { label: "Trades Fechados", value: overview?.total_closed_trades ?? "—", hint: "Shadow trades com desfecho (TP/SL/Timeout)" },
-                  { label: "Win Rate Base", value: overview?.base_win_rate != null ? `${(overview.base_win_rate * 100).toFixed(1)}%` : "—", hint: "Win rate geral de todos os trades fechados" },
-                  { label: "Melhor Profile", value: overview?.best_profile_name || "—", sub: overview?.best_profile_win_rate != null ? `${(overview.best_profile_win_rate * 100).toFixed(1)}% WR` : "", hint: "Profile com maior win rate" },
-                  { label: "Melhor Combinação", value: overview?.best_combination_name || "—", sub: overview?.best_combination_champion_score != null ? `Score: ${overview.best_combination_champion_score.toFixed(0)}` : "", hint: "Combinação com maior champion score" },
-                  { label: "Combinações", value: overview?.total_combinations ?? "—", hint: "Combinações de indicadores descobertas" },
-                  { label: "Sugestões Pendentes", value: overview?.total_suggestions_pending ?? "—", hint: "Sugestões aguardando revisão" },
-                  { label: "Alta Confiança", value: overview?.total_suggestions_high_confidence ?? "—", hint: "Sugestões com ≥100 trades de suporte" },
-                  { label: "Total de Runs", value: overview?.total_runs ?? "—", hint: "Execuções do PI Engine" },
-                  { label: "Status", value: overview?.last_run_status ? overview.last_run_status.toUpperCase() : "—", hint: "Status da última execução" },
+                  { label: "Profiles Analisados", value: overview?.total_profiles_analyzed ?? "—", sub: "snapshot do run", hint: "Snapshot do último run do PI Engine (profile_intelligence_runs.total_profiles). Não é query live em shadow_trades." },
+                  { label: "Trades Fechados", value: overview?.total_closed_trades ?? "—", sub: "snapshot do run", hint: "Snapshot do último run do PI Engine (profile_intelligence_runs.total_closed_trades). Não é query live em shadow_trades." },
+                  { label: "Win Rate Base", value: overview?.base_win_rate != null ? `${(overview.base_win_rate * 100).toFixed(1)}%` : "—", sub: overview?.last_run_at ? `trade-level · ${overview.last_run_lookback_days ?? 7}d · ${fmtDate(overview.last_run_at)}` : "trade-level · snapshot", hint: "Trade-level: TP_HIT / (TP+SL+Timeout). Snapshot congelado do último run do PI Engine. Não atualiza em tempo real. Período: lookback_days configurado no run." },
+                  { label: "Melhor Profile", value: overview?.best_profile_name || "—", sub: overview?.best_profile_win_rate != null ? `${(overview.best_profile_win_rate * 100).toFixed(1)}% WR` : "", hint: "Profile com maior win rate (shadow_trades, live, 60d, min 30 trades). Esta é query live — não é snapshot." },
+                  { label: "Melhor Combinação", value: overview?.best_combination_name || "—", sub: overview?.best_combination_champion_score != null ? `Score: ${overview.best_combination_champion_score.toFixed(0)}` : "", hint: "Combinação com maior champion score (profile_rule_combinations, live)." },
+                  { label: "Combinações", value: overview?.total_combinations ?? "—", hint: "Total de combinações descobertas (profile_rule_combinations, all-time, live)." },
+                  { label: "Sugestões do Run", value: overview?.total_suggestions_pending ?? "—", sub: "profile_suggestions · legada", hint: "profile_suggestions com status='pending_user_approval' (tabela legada do PI Engine). DIFERENTE de profile_adjustment_suggestions do Calibration Evolution." },
+                  { label: "Alta Confiança (PI)", value: overview?.total_suggestions_high_confidence ?? "—", sub: "profile_suggestions", hint: "profile_suggestions com confidence_level='HIGH' (string). DIFERENTE de profile_adjustment_suggestions com confidence ≥ 0.80 (numérico) do Calibration Evolution." },
+                  { label: "Total de Runs", value: overview?.total_runs ?? "—", hint: "Execuções do PI Engine (profile_intelligence_runs, all-time)." },
+                  { label: "Status", value: overview?.last_run_status ? overview.last_run_status.toUpperCase() : "—", hint: "Status da última execução do PI Engine." },
                 ].map((card, i) => (
                   <div key={i} className="card p-3 space-y-1" title={card.hint}>
                     <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">{card.label}</div>
                     <div className="text-[18px] font-bold text-[var(--text-primary)] truncate">{String(card.value)}</div>
-                    {card.sub && <div className="text-[11px] text-[var(--text-secondary)]">{card.sub}</div>}
+                    {(card as any).sub && <div className="text-[11px] text-[var(--text-secondary)]">{(card as any).sub}</div>}
                   </div>
                 ))}
               </div>
@@ -1228,29 +1229,123 @@ export default function ProfileIntelligencePage() {
               </div>
             </div>
           )}
-          {/* Summary cards */}
+          {/* Performance do Portfólio Shadow — trade-level, L3 + Strategy Lab */}
+          {!loadingTab && calSummary?.portfolio_metrics && (
+            <div className="space-y-2">
+              <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">
+                Performance do Portfólio Shadow · trade-level · L3 + Strategy Lab · all-time · shadow_trades
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                {[
+                  {
+                    label: "Win Rate (trade-level)",
+                    value: calSummary.portfolio_metrics.win_rate != null ? `${(calSummary.portfolio_metrics.win_rate * 100).toFixed(1)}%` : "—",
+                    sub: "L3 + L3_LAB · all-time",
+                    hint: "Win Rate REAL do portfólio shadow. Fonte: shadow_trades, status=COMPLETED, sources=L3+L3_LAB, all-time. Fórmula: TP_HIT / (TP+SL+Timeout). Comparável com Shadow Portfolio.",
+                  },
+                  {
+                    label: "P&L Médio / Trade",
+                    value: calSummary.portfolio_metrics.avg_pnl_pct != null ? `${(calSummary.portfolio_metrics.avg_pnl_pct * 100).toFixed(2)}%` : "—",
+                    sub: "trade-level · não é média de buckets",
+                    hint: "P&L médio REAL por trade. Fonte: shadow_trades L3+L3_LAB, COMPLETED, pnl_pct IS NOT NULL. NÃO COMPARAR com 'P&L Buckets (48h)' abaixo — são métricas de fonte e agregação diferentes.",
+                  },
+                  {
+                    label: "P&L Total USDT",
+                    value: calSummary.portfolio_metrics.pnl_total_usdt != null ? `$${calSummary.portfolio_metrics.pnl_total_usdt.toFixed(0)}` : "—",
+                    sub: "USDT simulado",
+                    hint: "P&L total acumulado simulado (shadow_trades L3+L3_LAB COMPLETED all-time, SUM(pnl_usdt)).",
+                  },
+                  {
+                    label: "Trades Fechados",
+                    value: calSummary.portfolio_metrics.completed_trades ?? "—",
+                    sub: "L3 + L3_LAB",
+                    hint: "shadow_trades com status=COMPLETED e pnl_pct IS NOT NULL. Sources: L3+L3_LAB.",
+                  },
+                  {
+                    label: "Profiles",
+                    value: calSummary.portfolio_metrics.profiles_count ?? "—",
+                    sub: "L3 + L3_LAB",
+                    hint: "Profiles distintos com shadow trades COMPLETED. Sources: L3+L3_LAB.",
+                  },
+                ].map((card, i) => (
+                  <div key={i} className="card p-3 space-y-1 border-emerald-500/20 bg-emerald-500/5" title={card.hint}>
+                    <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">{card.label}</div>
+                    <div className="text-[18px] font-bold text-[var(--text-primary)] truncate">{String(card.value)}</div>
+                    <div className="text-[11px] text-[var(--text-secondary)]">{card.sub}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Diagnóstico de Indicadores + Calibração — métricas de bucket e sugestões */}
           {loadingTab ? (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {[...Array(8)].map((_, i) => <div key={i} className="skeleton h-20 rounded-[var(--radius-lg)]" />)}
             </div>
           ) : (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {[
-                { label: "Sugestões Pendentes", value: calSummary?.suggestions?.total ?? "—", sub: `${calSummary?.suggestions?.profiles_targeted ?? 0} profiles`, hint: "Total de sugestões de calibração" },
-                { label: "Alta Confiança", value: calSummary?.suggestions?.high_confidence ?? "—", sub: "conf ≥ 0.80", hint: "Sugestões com confiança ≥ 80%" },
-                { label: "Mutações Aplicadas", value: calSummary?.suggestions?.mutations_applied ?? "—", sub: "mutation_applied=true", hint: "Quantas calibrações foram aplicadas" },
-                { label: "Versões Registradas", value: calSummary?.versions?.total ?? "—", sub: `${calSummary?.versions?.applied ?? 0} aplicadas`, hint: "profile_adjustment_versions" },
-                { label: "Indicadores Analisados", value: calSummary?.indicators?.distinct_indicators ?? "—", sub: `${calSummary?.indicators?.profiles_analyzed ?? 0} profiles`, hint: "Indicadores distintos na última análise (48h)" },
-                { label: "Win Rate Média", value: calSummary?.indicators?.avg_win_rate != null ? `${(calSummary.indicators.avg_win_rate * 100).toFixed(1)}%` : "—", sub: "todos os profiles", hint: "Win rate média entre profiles analisados" },
-                { label: "P&L Médio", value: calSummary?.indicators?.avg_pnl_pct != null ? `${(calSummary.indicators.avg_pnl_pct * 100).toFixed(2)}%` : "—", sub: "média indicadores", hint: "P&L médio percentual" },
-                { label: "AI Critic", value: calSummary?.latest_ai_review?.status ?? "—", sub: calSummary?.latest_ai_review?.model_name?.replace("claude-", "") ?? "sem review", hint: "Último review do AI Critic" },
-              ].map((card, i) => (
-                <div key={i} className="card p-3 space-y-1" title={card.hint}>
-                  <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">{card.label}</div>
-                  <div className="text-[18px] font-bold text-[var(--text-primary)] truncate">{String(card.value)}</div>
-                  {card.sub && <div className="text-[11px] text-[var(--text-secondary)]">{card.sub}</div>}
-                </div>
-              ))}
+            <div className="space-y-2">
+              <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">
+                Diagnóstico de Indicadores (48h) · profile_indicator_performance · média por bucket · não comparar com portfólio
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {[
+                  {
+                    label: "Sugestões Registradas",
+                    value: calSummary?.suggestions?.total ?? "—",
+                    sub: `${calSummary?.suggestions?.profiles_targeted ?? 0} profiles · all-time`,
+                    hint: "Total all-time de profile_adjustment_suggestions (Calibration Live Engine). Inclui SHADOW_APPLIED + PENDING_SHADOW_VALIDATION. DIFERENTE de profile_suggestions (PI Engine legado, usado pelo Overview).",
+                  },
+                  {
+                    label: "Pendentes Validação",
+                    value: calSummary?.suggestions?.pending_shadow_validation ?? "—",
+                    sub: "PENDING_SHADOW_VALIDATION",
+                    hint: "profile_adjustment_suggestions com status=PENDING_SHADOW_VALIDATION — aguardando validação shadow antes de ser aplicadas.",
+                  },
+                  {
+                    label: "Alta Confiança",
+                    value: calSummary?.suggestions?.high_confidence ?? "—",
+                    sub: "conf ≥ 0.80 (numérico)",
+                    hint: "profile_adjustment_suggestions com confidence ≥ 0.80 (campo numérico). DIFERENTE de profile_suggestions.confidence_level='HIGH' (string) do Overview.",
+                  },
+                  {
+                    label: "Mutações Aplicadas",
+                    value: calSummary?.suggestions?.mutations_applied ?? "—",
+                    sub: "mutation_applied=true",
+                    hint: "Calibrações efetivamente aplicadas em produção (mutation_applied=true).",
+                  },
+                  {
+                    label: "Indicadores (48h)",
+                    value: calSummary?.indicators?.distinct_indicators ?? "—",
+                    sub: `${calSummary?.indicators?.profiles_analyzed ?? 0} profiles`,
+                    hint: "Indicadores distintos em profile_indicator_performance nas últimas 48h (criados_at >= now() - 48h).",
+                  },
+                  {
+                    label: "Win Rate Buckets (48h)",
+                    value: calSummary?.indicators?.avg_win_rate != null ? `${(calSummary.indicators.avg_win_rate * 100).toFixed(1)}%` : "—",
+                    sub: "média por bucket · não é WR do portfólio",
+                    hint: "AVG(win_rate) sobre todos os rows de profile_indicator_performance 48h. Média SIMPLES por bucket de indicador — inclui buckets com win_rate=0. NÃO COMPARAR com Win Rate trade-level acima.",
+                  },
+                  {
+                    label: "P&L Buckets (48h)",
+                    value: calSummary?.indicators?.avg_pnl_pct != null ? `${(calSummary.indicators.avg_pnl_pct * 100).toFixed(2)}%` : "—",
+                    sub: "média por bucket · não é P&L do portfólio",
+                    hint: "AVG(avg_pnl_pct) sobre todos os rows de profile_indicator_performance 48h. Inclui buckets com avg_pnl_pct=-1.0 (100% SL no bucket). NÃO COMPARAR com P&L Médio/Trade acima.",
+                  },
+                  {
+                    label: "AI Critic",
+                    value: calSummary?.latest_ai_review?.status ?? "—",
+                    sub: calSummary?.latest_ai_review?.model_name?.replace("claude-", "") ?? "sem review",
+                    hint: "Último review do AI Critic (profile_ai_reviews). Fonte: shadow_trades L3+L3_LAB, janela 4h, created_at.",
+                  },
+                ].map((card, i) => (
+                  <div key={i} className="card p-3 space-y-1" title={card.hint}>
+                    <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider">{card.label}</div>
+                    <div className="text-[18px] font-bold text-[var(--text-primary)] truncate">{String(card.value)}</div>
+                    <div className="text-[11px] text-[var(--text-secondary)]">{card.sub}</div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

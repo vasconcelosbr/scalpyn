@@ -25,6 +25,7 @@ from ..models.profile_intelligence import (
     AutopilotAutonomyPolicy,
 )
 from .config import get_current_user_id
+from ..services.metric_contracts import build_metric_contract
 from ..schemas.profile_intelligence import (
     RunRequest,
     RunResponse,
@@ -201,6 +202,59 @@ async def get_overview(
         "best_profile_win_rate": round(best_profile_wr, 4) if best_profile_wr is not None else None,
         "best_combination_name": best_combo.suggested_name if best_combo else None,
         "best_combination_champion_score": float(best_combo.champion_score or 0) if best_combo else None,
+        "last_run_lookback_days": last_run.lookback_days if last_run else None,
+        "snapshot_info": {
+            "is_snapshot": True,
+            "source_table": "profile_intelligence_runs",
+            "run_at": last_run.run_at.isoformat() if last_run else None,
+            "lookback_days": last_run.lookback_days if last_run else None,
+            "fields_from_snapshot": [
+                "total_profiles_analyzed",
+                "total_closed_trades",
+                "base_win_rate",
+            ],
+            "note": (
+                "These fields are computed by the PI Engine at run time and frozen. "
+                "They do NOT reflect real-time shadow_trades state."
+            ),
+        } if last_run else None,
+        "metric_contracts": {
+            "win_rate_base": build_metric_contract(
+                metric_id="overview.run_snapshot_win_rate",
+                label="Win Rate Base trade-level (snapshot do run)",
+                source_table="profile_intelligence_runs",
+                aggregation_type="trade_level",
+                aggregation_level="per_trade",
+                formula="TP_HIT / (TP_HIT + SL_HIT + TIMEOUT)",
+                window_label=f"{last_run.lookback_days}d lookback" if last_run else None,
+                window_field="created_at (within run at time)",
+                is_snapshot=True,
+                snapshot_computed_at=last_run.run_at.isoformat() if last_run else None,
+                not_comparable_with=["calibration.bucket_avg_win_rate"],
+                warning=(
+                    "Snapshot congelado do último run. "
+                    "Não atualiza em tempo real. "
+                    "Para dados live, consultar Shadow Portfolio."
+                ),
+            ),
+            "suggestions_pending": build_metric_contract(
+                metric_id="overview.run_suggestions_pending",
+                label="Sugestões Pendentes do Run (profile_suggestions — tabela legada)",
+                source_table="profile_suggestions",
+                aggregation_type="count",
+                aggregation_level="row",
+                formula="COUNT(*) WHERE status = 'pending_user_approval'",
+                window_label="all-time",
+                filters={"status": "pending_user_approval"},
+                unit="count",
+                not_comparable_with=["calibration.suggestions_registered"],
+                warning=(
+                    "Usa profile_suggestions (tabela legada do PI Engine clássico). "
+                    "NÃO é a mesma tabela que profile_adjustment_suggestions "
+                    "(Calibration Live Engine, usada pelo Calibration Evolution)."
+                ),
+            ),
+        },
         # Nested data kept for backward compat
         "last_run": _run_to_dict(last_run) if last_run else None,
         "pending_suggestions": pending_count,
