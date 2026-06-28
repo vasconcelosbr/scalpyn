@@ -112,7 +112,14 @@ export async function apiFetch<T = any>(
   try {
     return JSON.parse(text) as T;
   } catch {
-    return text as unknown as T;
+    throw new ApiError({
+      status: 200,
+      endpoint,
+      path,
+      method,
+      detail: 'Response is not valid JSON',
+      rawBody: text.slice(0, 500),
+    });
   }
 }
 
