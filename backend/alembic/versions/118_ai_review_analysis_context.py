@@ -1,7 +1,7 @@
 """AI Critic analysis context: audit trail for source, period, filters, sample.
 
-Revision ID: 116_ai_review_analysis_context
-Revises: 115_autopilot_shadow_calibration
+Revision ID: 118_ai_review_analysis_context
+Revises: 117_ai_review_audit_name
 Create Date: 2026-06-28
 """
 
@@ -9,8 +9,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "116_ai_review_analysis_context"
-down_revision = "115_autopilot_shadow_calibration"
+revision = "118_ai_review_analysis_context"
+down_revision = "117_ai_review_audit_name"
 branch_labels = None
 depends_on = None
 
@@ -31,7 +31,7 @@ def upgrade() -> None:
         ADD COLUMN IF NOT EXISTS context_query_hash text
     """)
 
-    # Mark all existing reviews that have tokens but no context as legacy
+    # Mark existing completed reviews without context as legacy
     op.execute("""
         UPDATE profile_ai_reviews
         SET analysis_context = '{"_legacy": true, "note": "review created before analysis_context was tracked"}'::jsonb
