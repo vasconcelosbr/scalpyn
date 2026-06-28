@@ -991,3 +991,88 @@ async def trigger_monitor(
         raise HTTPException(
             status_code=500, detail=f"Dispatch failed: {exc}"
         ) from exc
+
+
+@router.get("/barrier-status")
+async def shadow_barrier_status(
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """Relatório de barreiras TP/SL rompidas em trades shadow abertos.
+
+    Retorna contagem por source de trades RUNNING/PENDING cujo preço atual
+    (market_metadata) já cruzou TP ou SL mas ainda não foram fechados pelo
+    monitor. Útil para detectar atraso no shadow closer.
+
+    Stale guard: market_metadata sem last_updated ou com last_updated
+    anterior a 10 min não é considerado preço válido para esta contagem.
+    """
+    from datetime import timedelta
+
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(seconds=600)
+
+    try:
+        res = await db.execute(
+            text("""
+                SELECT
+                    st.source,
+                    COUNT(*) FILTER (WHERE mm.price <= st.sl_price) AS open_below_sl,
+                    COUNT(*) FILTER (WHERE mm.price >= st.tp_price) AS open_above_tp,
+                    COUNT(*) AS open_total
+                FROM shadow_trades st
+                JOIN market_metadata mm ON mm.symbol = st.symbol
+                WHERE st.user_id = :uid
+                  AND st.status IN ('RUNNING', 'PENDING')
+                  AND st.tp_price IS NOT NULL
+                  AND st.sl_price IS NOT NULL
+                  AND (mm.last_updated IS NULL OR mm.last_updated >= :stale_cutoff)
+                GROUP BY st.source
+                ORDER BY st.source
+            """),
+            {"uid": str(user_id), "stale_cutoff": stale_cutoff},
+        )
+        rows = res.fetchall()
+
+        by_source = {}
+        total_below_sl = 0
+        total_above_tp = 0
+        for row in rows:
+            src = row[0] or "UNKNOWN"
+            below = int(row[1] or 0)
+            above = int(row[2] or 0)
+            total_below_sl += below
+            total_above_tp += above
+            by_source[src] = {
+                "open_below_sl": below,
+                "open_above_tp": above,
+                "open_breached": below + above,
+                "open_total": int(row[3] or 0),
+            }
+
+        open_breached = total_below_sl + total_above_tp
+        closer_status = "OK" if open_breached == 0 else "BARRIER_BREACH_DETECTED"
+
+        # Last closure audit row (best-effort)
+        last_run_res = await db.execute(
+            text("""
+                SELECT MAX(created_at) AS last_at
+                FROM shadow_trade_closure_audit
+            """)
+        )
+        last_run_row = last_run_res.fetchone()
+        last_closer_run_at = last_run_row[0] if last_run_row else None
+
+        return {
+            "open_below_sl": total_below_sl,
+            "open_above_tp": total_above_tp,
+            "open_breached_barriers": open_breached,
+            "closer_status": closer_status,
+            "last_closer_run_at": last_closer_run_at.isoformat() if last_closer_run_at else None,
+            "by_source": by_source,
+            "price_freshness_cutoff_seconds": 600,
+        }
+    except Exception as exc:
+        logger.error("Failed to compute barrier status: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500, detail="Failed to compute barrier status"
+        ) from exc

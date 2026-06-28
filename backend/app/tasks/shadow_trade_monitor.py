@@ -55,6 +55,21 @@ def _env_int(name: str, default: int) -> int:
 SHADOW_MONITOR_BATCH_SIZE = _env_int("SHADOW_MONITOR_BATCH_SIZE", 50)
 SHADOW_MONITOR_MAX_CANDLES_PER_RUN = _env_int("SHADOW_MONITOR_MAX_CANDLES_PER_RUN", 720)
 
+# Sources elegíveis para fechamento automático por barreira TP/SL.
+# Centralizado aqui — não usar allowlist incompleta dispersa no código.
+SHADOW_CLOSABLE_SOURCES: frozenset[str] = frozenset({
+    "L3",
+    "L3_LAB",
+    "L3_REJECTED",
+    "L3_SIMULATED",
+    "L1_SPECTRUM",
+    "STRATEGY_LAB",
+})
+
+# Preço stale: se market_metadata.last_updated for mais antigo que este limite,
+# não fechar pelo preço (pode ser falso positivo por ticker inativo).
+SHADOW_BARRIER_STALE_SECONDS = _env_int("SHADOW_BARRIER_STALE_SECONDS", 300)
+
 # ATR computation for atr_pct_at_entry (Fase 3 — migration 071).
 # Period/timeframe via env so they are changeable without a deploy.
 _SHADOW_ATR_PERIOD = _env_int("SHADOW_ATR_PERIOD", 14)
@@ -1134,11 +1149,221 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
     return "completed"
 
 
-async def _monitor_async() -> Dict[str, int]:
-    """Uma execução do monitor — processa até ``BATCH_SIZE`` shadows."""
+async def _fast_barrier_scan_async(run_id: str) -> Dict[str, Any]:
+    """Fast-scan de barreira: fecha TODOS os trades com TP/SL rompido no tick atual.
+
+    Roda ANTES do batch regular. Garante que qualquer trade com
+    ``market_metadata.price <= sl_price`` ou ``>= tp_price`` seja fechado
+    no mesmo tick em que a barreira é detectada — sem depender da rotação
+    do batch (que pode levar até 100 min com 1000+ trades abertos).
+
+    Stale guard: ignora market_metadata com last_updated mais antigo que
+    ``SHADOW_BARRIER_STALE_SECONDS`` (padrão 300s = 5 min). Preço stale
+    pode ser falso positivo por ticker inativo.
+
+    Fontes cobertas: ``SHADOW_CLOSABLE_SOURCES`` (centralizado).
+    Idempotente: usa ``FOR UPDATE SKIP LOCKED`` + ``status IN (RUNNING, PENDING)``.
+    Auditoria: grava em ``shadow_trade_closure_audit`` (migration 119).
+    """
+    from ..database import CeleryAsyncSessionLocal
+    import uuid as _uuid
+
+    closed_tp = 0
+    closed_sl = 0
+    skipped_stale = 0
+    errors = 0
+    sim_targets: List[Any] = []
+    source_counts: Dict[str, int] = {}
+
+    try:
+        # Phase 1: identify breached IDs via JOIN read-only (no lock yet)
+        async with CeleryAsyncSessionLocal() as db_scan:
+            stale_cutoff = datetime.now(timezone.utc) - timedelta(
+                seconds=SHADOW_BARRIER_STALE_SECONDS
+            )
+            res = await db_scan.execute(
+                text("""
+                    SELECT st.id
+                    FROM shadow_trades st
+                    JOIN market_metadata mm ON mm.symbol = st.symbol
+                    WHERE st.status IN ('RUNNING', 'PENDING')
+                      AND st.tp_price IS NOT NULL
+                      AND st.sl_price IS NOT NULL
+                      AND (mm.price <= st.sl_price OR mm.price >= st.tp_price)
+                      AND (mm.last_updated IS NULL OR mm.last_updated >= :stale_cutoff)
+                    ORDER BY st.id
+                """),
+                {"stale_cutoff": stale_cutoff},
+            )
+            breached_ids = [row[0] for row in res.fetchall()]
+
+        # Count stale skips separately (informational)
+        try:
+            async with CeleryAsyncSessionLocal() as db_stale:
+                res2 = await db_stale.execute(
+                    text("""
+                        SELECT COUNT(*)
+                        FROM shadow_trades st
+                        JOIN market_metadata mm ON mm.symbol = st.symbol
+                        WHERE st.status IN ('RUNNING', 'PENDING')
+                          AND st.tp_price IS NOT NULL
+                          AND st.sl_price IS NOT NULL
+                          AND (mm.price <= st.sl_price OR mm.price >= st.tp_price)
+                          AND mm.last_updated IS NOT NULL
+                          AND mm.last_updated < :stale_cutoff
+                    """),
+                    {"stale_cutoff": stale_cutoff},
+                )
+                skipped_stale = res2.scalar() or 0
+        except Exception:
+            pass
+
+        if not breached_ids:
+            logger.info(
+                "[shadow-monitor] fast-scan run_id=%s: no breached barriers found "
+                "(stale_skipped=%d)",
+                run_id, skipped_stale,
+            )
+            return {
+                "fast_scan_closed_tp": 0,
+                "fast_scan_closed_sl": 0,
+                "fast_scan_skipped_stale": skipped_stale,
+                "fast_scan_errors": 0,
+            }
+
+        logger.info(
+            "[shadow-closer] fast-scan run_id=%s started open_breached=%d "
+            "stale_skipped=%d",
+            run_id, len(breached_ids), skipped_stale,
+        )
+
+        # Phase 2: lock and process breached trades
+        audit_rows: list[dict] = []
+        async with CeleryAsyncSessionLocal() as db:
+            async with db.begin():
+                res = await db.execute(
+                    select(ShadowTrade)
+                    .where(
+                        ShadowTrade.id.in_(breached_ids),
+                        ShadowTrade.status.in_(("PENDING", "RUNNING")),
+                    )
+                    .with_for_update(skip_locked=True)
+                    .order_by(ShadowTrade.id.asc())
+                )
+                shadows = list(res.scalars().all())
+                shadows.sort(key=lambda s: s.id)
+
+                for shadow in shadows:
+                    try:
+                        prev_status = shadow.status
+                        transition = await _advance_shadow(db, shadow)
+                        if transition == "completed":
+                            outcome = shadow.outcome or "UNKNOWN"
+                            if outcome == "TP_HIT":
+                                closed_tp += 1
+                            elif outcome == "SL_HIT":
+                                closed_sl += 1
+                            src = shadow.source or "UNKNOWN"
+                            source_counts[src] = source_counts.get(src, 0) + 1
+                            sim_targets.append(shadow.id)
+                            audit_rows.append({
+                                "shadow_trade_id": str(shadow.id),
+                                "source": shadow.source,
+                                "symbol": shadow.symbol,
+                                "previous_status": prev_status,
+                                "entry_price": float(shadow.entry_price) if shadow.entry_price else None,
+                                "exit_price": float(shadow.exit_price) if shadow.exit_price else None,
+                                "tp_price": float(shadow.tp_price) if shadow.tp_price else None,
+                                "sl_price": float(shadow.sl_price) if shadow.sl_price else None,
+                                "pnl_pct": float(shadow.pnl_pct) if shadow.pnl_pct else None,
+                                "pnl_usdt": float(shadow.pnl_usdt) if shadow.pnl_usdt else None,
+                                "closure_reason": outcome,
+                                "closer_run_id": run_id,
+                            })
+                    except Exception:
+                        errors += 1
+                        logger.exception(
+                            "[shadow-closer] fast-scan advance failed shadow_id=%s",
+                            shadow.id,
+                        )
+
+        # Phase 3: write audit rows (best-effort, separate tx)
+        if audit_rows:
+            try:
+                async with CeleryAsyncSessionLocal() as db_audit:
+                    async with db_audit.begin():
+                        for row in audit_rows:
+                            await db_audit.execute(
+                                text("""
+                                    INSERT INTO shadow_trade_closure_audit
+                                    (shadow_trade_id, source, symbol, previous_status,
+                                     entry_price, exit_price, tp_price, sl_price,
+                                     pnl_pct, pnl_usdt, closure_reason, closer_run_id)
+                                    VALUES
+                                    (:shadow_trade_id, :source, :symbol, :previous_status,
+                                     :entry_price, :exit_price, :tp_price, :sl_price,
+                                     :pnl_pct, :pnl_usdt, :closure_reason, :closer_run_id::uuid)
+                                """),
+                                row,
+                            )
+            except Exception:
+                logger.warning(
+                    "[shadow-closer] fast-scan audit write failed run_id=%s — "
+                    "closures committed, audit only affected",
+                    run_id,
+                )
+
+    except Exception:
+        logger.exception(
+            "[shadow-closer] fast-scan failed run_id=%s — falling back to batch",
+            run_id,
+        )
+        return {
+            "fast_scan_closed_tp": closed_tp,
+            "fast_scan_closed_sl": closed_sl,
+            "fast_scan_skipped_stale": skipped_stale,
+            "fast_scan_errors": errors + 1,
+        }
+
+    # best-effort sim/capture (post-commit, isolated sessions)
+    for shadow_id in sim_targets:
+        await _record_simulation_one_async(shadow_id)
+
+    total_closed = closed_tp + closed_sl
+    logger.info(
+        "[shadow-closer] fast-scan run_id=%s closed_tp=%d closed_sl=%d "
+        "source_breakdown=%s skipped_stale=%d errors=%d",
+        run_id, closed_tp, closed_sl, source_counts, skipped_stale, errors,
+    )
+    return {
+        "fast_scan_closed_tp": closed_tp,
+        "fast_scan_closed_sl": closed_sl,
+        "fast_scan_skipped_stale": skipped_stale,
+        "fast_scan_errors": errors,
+    }
+
+
+async def _monitor_async() -> Dict[str, Any]:
+    """Uma execução do monitor — fast-scan de barreira + batch regular."""
+    import uuid as _uuid_mod
     from ..database import CeleryAsyncSessionLocal
 
-    summary = {"processed": 0, "completed": 0, "errors": 0, "backfill_created": 0, "watchlist_spot_created": 0}
+    run_id = str(_uuid_mod.uuid4())
+
+    # ── Fast-scan: fecha TODOS os trades com barreira rompida antes do batch ──
+    # Garante latência máxima de 1 tick (5 min) para qualquer trade que cruzou
+    # TP/SL, independentemente do tamanho do batch (que cobre até BATCH_SIZE
+    # trades por rotação, potencialmente 100+ min para 1000+ trades abertos).
+    fast_scan_result = await _fast_barrier_scan_async(run_id)
+
+    summary: Dict[str, Any] = {
+        "processed": 0,
+        "completed": 0,
+        "errors": 0,
+        "backfill_created": 0,
+        "watchlist_spot_created": 0,
+        **fast_scan_result,
+    }
     # Coletados dentro da tx principal e consumidos após o commit — FIX C3/D1.
     enrich_targets: List[Dict[str, Any]] = []
     # FIX D1 (2026-05-15): IDs dos shadows fechados neste tick — gravação de
@@ -1364,10 +1589,16 @@ def run(self) -> str:
     try:
         result = _run_async(_monitor_async())
         backfill = result.get("backfill_created", 0)
+        fast_tp = result.get("fast_scan_closed_tp", 0)
+        fast_sl = result.get("fast_scan_closed_sl", 0)
+        fast_stale = result.get("fast_scan_skipped_stale", 0)
+        fast_errors = result.get("fast_scan_errors", 0)
         msg = (
             f"Shadow monitor: {result['processed']} processed, "
             f"{result['completed']} completed, {result['errors']} errors, "
-            f"{backfill} backfill created"
+            f"{backfill} backfill | "
+            f"fast-scan closed_tp={fast_tp} closed_sl={fast_sl} "
+            f"stale_skipped={fast_stale} errors={fast_errors}"
         )
         logger.info("[shadow-monitor] %s", msg)
         return msg
