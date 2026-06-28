@@ -83,6 +83,17 @@ export default function Home() {
   const [capital, setCapital] = useState<any[]>([]);
   const [scores, setScores] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [dateLabel, setDateLabel] = useState("");
+
+  useEffect(() => {
+    setDateLabel(
+      new Date().toLocaleDateString("en", {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+      })
+    );
+  }, []);
 
   useEffect(() => {
     Promise.allSettled([
@@ -115,11 +126,7 @@ export default function Home() {
             color: "var(--text-tertiary)",
           }}
         >
-          {new Date().toLocaleDateString("en", {
-            weekday: "long",
-            month: "long",
-            day: "numeric",
-          })}
+          {dateLabel}
         </span>
       </div>
 
