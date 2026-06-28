@@ -33,16 +33,11 @@ async function proxyRequest(req: NextRequest, context: RouteContext): Promise<Ne
   const search = req.nextUrl.search ?? '';
   const targetUrl = `${BACKEND_ROOT}${rawPath}${search}`;
 
-  // Forward all headers except host, connection, and accept-encoding.
-  // accept-encoding is stripped intentionally: the Next.js route handler's fetch()
-  // does not auto-decompress gzip from the backend. If we forwarded it and the
-  // backend returned content-encoding:gzip, the raw bytes would reach the browser
-  // without the header → JSON.parse failure. Compression to the browser is handled
-  // by Next.js itself (compress:true in next.config.ts).
+  // Forward all headers except host (which would confuse the backend)
   const forwardHeaders: Record<string, string> = {};
   req.headers.forEach((value, key) => {
     const lower = key.toLowerCase();
-    if (lower !== 'host' && lower !== 'connection' && lower !== 'accept-encoding') {
+    if (lower !== 'host' && lower !== 'accept-encoding' && lower !== 'connection') {
       forwardHeaders[key] = value;
     }
   });
@@ -79,10 +74,7 @@ async function proxyRequest(req: NextRequest, context: RouteContext): Promise<Ne
     );
   }
 
-  // Forward response headers back to client.
-  // Strip content-encoding so Next.js / the browser re-handles decompression
-  // correctly (Next.js fetch already decompresses gzip from the backend).
-  // Strip transfer-encoding as it does not apply to HTTP/2 responses.
+  // Forward response headers back to client
   const resHeaders = new Headers();
   backendRes.headers.forEach((value, key) => {
     const lower = key.toLowerCase();
@@ -90,13 +82,6 @@ async function proxyRequest(req: NextRequest, context: RouteContext): Promise<Ne
       resHeaders.set(key, value);
     }
   });
-
-  // Add private cache hints for GET responses that don't already have them.
-  // stale-while-revalidate=5 allows the browser to serve a cached response
-  // while a background refresh runs, eliminating perceived latency on polling.
-  if (req.method === 'GET' && backendRes.ok && !resHeaders.has('cache-control')) {
-    resHeaders.set('cache-control', 'private, max-age=0, stale-while-revalidate=5');
-  }
 
   if (
     backendRes.headers.get("content-type")?.includes("text/event-stream")
