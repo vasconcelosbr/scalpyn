@@ -60,8 +60,8 @@ export function useLivePositions(): UseLivePositionsReturn {
     (url: string) => apiGet<LivePositionsResponse>(url),
     {
       refreshInterval: 5_000,
-      revalidateOnFocus: true,
-      dedupingInterval: 2_000,
+      revalidateOnFocus: false, // polling a 5s já mantém dados frescos; refetch em foco causa burst desnecessário
+      dedupingInterval: 4_000,
       keepPreviousData: true,
     }
   );

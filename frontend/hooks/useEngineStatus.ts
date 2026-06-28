@@ -95,8 +95,8 @@ export function useEngineStatus(profile: TradingProfile): UseEngineStatusReturn 
     () => apiGet<EngineStatusResponse>(statusEndpoint),
     {
       refreshInterval: 5_000,
-      revalidateOnFocus: true,
-      dedupingInterval: 2_000,
+      revalidateOnFocus: false, // polling a 5s é suficiente; foco extra dispara burst de requests
+      dedupingInterval: 4_000,
     }
   );
 

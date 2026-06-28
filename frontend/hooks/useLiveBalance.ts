@@ -41,8 +41,8 @@ export function useLiveBalance(): UseLiveBalanceReturn {
     (url: string) => apiGet<LiveBalance>(url),
     {
       refreshInterval: 10_000,
-      revalidateOnFocus: true,
-      dedupingInterval: 4_000,
+      revalidateOnFocus: false, // saldo refetched a cada 10s; burst em foco desperdiça conexão
+      dedupingInterval: 8_000,
       keepPreviousData: true,
     }
   );

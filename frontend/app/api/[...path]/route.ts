@@ -33,14 +33,20 @@ async function proxyRequest(req: NextRequest, context: RouteContext): Promise<Ne
   const search = req.nextUrl.search ?? '';
   const targetUrl = `${BACKEND_ROOT}${rawPath}${search}`;
 
-  // Forward all headers except host (which would confuse the backend)
+  // Forward all headers except host and connection (which confuse the backend).
+  // accept-encoding is intentionally kept so the backend can return gzip responses;
+  // content-encoding is stripped from the *response* below to let Next.js handle it.
   const forwardHeaders: Record<string, string> = {};
   req.headers.forEach((value, key) => {
     const lower = key.toLowerCase();
-    if (lower !== 'host' && lower !== 'accept-encoding' && lower !== 'connection') {
+    if (lower !== 'host' && lower !== 'connection') {
       forwardHeaders[key] = value;
     }
   });
+  // Ensure we always advertise gzip support upstream, even if the client didn't.
+  if (!forwardHeaders['accept-encoding']) {
+    forwardHeaders['accept-encoding'] = 'gzip, deflate, br';
+  }
 
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
   const body = hasBody ? await req.arrayBuffer() : undefined;
@@ -74,7 +80,10 @@ async function proxyRequest(req: NextRequest, context: RouteContext): Promise<Ne
     );
   }
 
-  // Forward response headers back to client
+  // Forward response headers back to client.
+  // Strip content-encoding so Next.js / the browser re-handles decompression
+  // correctly (Next.js fetch already decompresses gzip from the backend).
+  // Strip transfer-encoding as it does not apply to HTTP/2 responses.
   const resHeaders = new Headers();
   backendRes.headers.forEach((value, key) => {
     const lower = key.toLowerCase();
@@ -82,6 +91,13 @@ async function proxyRequest(req: NextRequest, context: RouteContext): Promise<Ne
       resHeaders.set(key, value);
     }
   });
+
+  // Add private cache hints for GET responses that don't already have them.
+  // stale-while-revalidate=5 allows the browser to serve a cached response
+  // while a background refresh runs, eliminating perceived latency on polling.
+  if (req.method === 'GET' && backendRes.ok && !resHeaders.has('cache-control')) {
+    resHeaders.set('cache-control', 'private, max-age=0, stale-while-revalidate=5');
+  }
 
   if (
     backendRes.headers.get("content-type")?.includes("text/event-stream")
