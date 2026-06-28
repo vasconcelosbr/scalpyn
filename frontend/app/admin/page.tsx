@@ -48,8 +48,8 @@ export default function AdminPage() {
     setForbidden(false);
     try {
       const data = await apiGet<UsersResponse>(`/backoffice/admin/users?page=${page}&per_page=${perPage}`);
-      setUsers(data.users);
-      setTotal(data.total);
+      setUsers(Array.isArray(data.users) ? data.users : []);
+      setTotal(data.total ?? 0);
     } catch (e: unknown) {
       if (e instanceof Error && e.message.includes("403")) {
         setForbidden(true);

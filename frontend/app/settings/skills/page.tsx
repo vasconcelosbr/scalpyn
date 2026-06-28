@@ -70,7 +70,8 @@ export default function AiSkillsPage() {
         fetch(`${API_BASE}/defaults`, { headers }),
       ]);
       if (!sRes.ok) throw new Error("Falha ao carregar Skills.");
-      setSkills(await sRes.json());
+      const skillsData = await sRes.json();
+      setSkills(Array.isArray(skillsData) ? skillsData : []);
       if (dRes.ok) setDefaults(await dRes.json());
     } catch (e: any) {
       setError(e.message ?? "Erro desconhecido.");
