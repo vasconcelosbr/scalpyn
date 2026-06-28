@@ -25,7 +25,9 @@ async def run(*, apply: bool, expected_count: int, fix_deployed_at: datetime) ->
             rows = (await db.execute(text("""
                 SELECT id, status, requested_at, created_at, to_jsonb(r) AS snapshot
                 FROM profile_ai_reviews r
-                WHERE status = 'COMPLETED'
+                WHERE (requested_at >= now() - interval '24 hours'
+                       OR created_at >= now() - interval '24 hours')
+                  AND status = 'COMPLETED'
                   AND COALESCE(tokens_input, 0) = 0
                   AND COALESCE(tokens_output, 0) = 0
                   AND NULLIF(BTRIM(COALESCE(summary, '')), '') IS NULL
@@ -45,7 +47,7 @@ async def run(*, apply: bool, expected_count: int, fix_deployed_at: datetime) ->
                     reason = ("pre-fix hollow artifact" if new_status == "LEGACY_HOLLOW_REVIEW"
                               else "post-fix hollow response")
                     await db.execute(text("""
-                        INSERT INTO profile_ai_review_reclassification_audit
+                        INSERT INTO profile_ai_reviews_reclassification_audit
                             (review_id, old_status, new_status, reason, fix_deployed_at,
                              review_snapshot, actor)
                         VALUES (:id, :old, :new, :reason, :fix_at,

@@ -640,7 +640,8 @@ async def calibration_safety(
           COUNT(*) FILTER (WHERE status = 'LEGACY_HOLLOW_REVIEW') AS legacy,
           COUNT(*) FILTER (WHERE status LIKE 'FAILED_%') AS failed
         FROM profile_ai_reviews
-        WHERE COALESCE(requested_at, created_at) >= now() - interval '24 hours'
+        WHERE requested_at >= now() - interval '24 hours'
+           OR created_at >= now() - interval '24 hours'
     """))).fetchone()
     hollow_reviews_24h = int(review_counts.hollow or 0)
     invalid_completed_24h = int(review_counts.invalid_completed or 0)

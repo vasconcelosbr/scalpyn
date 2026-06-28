@@ -29,7 +29,7 @@ def test_safety_passes_on_failed_empty_ai_response():
 def test_reclassification_snapshots_hollow_reviews():
     source = (ROOT / "backend/scripts/reclassify_hollow_ai_reviews.py").read_text(encoding="utf-8")
     assert "to_jsonb(r) AS snapshot" in source
-    assert "profile_ai_review_reclassification_audit" in source
+    assert "profile_ai_reviews_reclassification_audit" in source
     assert "review_snapshot" in source
 
 
