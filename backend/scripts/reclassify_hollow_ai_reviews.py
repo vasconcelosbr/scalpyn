@@ -7,7 +7,7 @@ import os
 import sys
 from datetime import datetime
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 async def run(*, apply: bool, expected_count: int, fix_deployed_at: datetime) -> int:
