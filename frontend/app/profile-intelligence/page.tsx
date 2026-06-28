@@ -579,7 +579,7 @@ export default function ProfileIntelligencePage() {
         apiGet("/profile-intelligence/autopilot").catch(() => null),
       ]);
       setOverview(ov || {});
-      setRuns(r?.runs || r || []);
+      const runsArr = r?.runs ?? r; setRuns(Array.isArray(runsArr) ? runsArr : []);
       setAutopilot(ap);
     } catch (e) {
       console.error(e);
@@ -636,20 +636,20 @@ export default function ProfileIntelligencePage() {
         setAutopilotAudit(events?.events || []);
       } else if (tab === "Profiles") {
         const d = await apiGet("/profile-intelligence/profiles/ranking?lookback_days=60&limit=30");
-        setProfiles(d?.profiles || d || []);
+        const profArr = d?.profiles ?? d; setProfiles(Array.isArray(profArr) ? profArr : []);
       } else if (tab === "Indicators") {
         const [w, l] = await Promise.all([
           apiGet("/profile-intelligence/indicators/top-winners?limit=50"),
           apiGet("/profile-intelligence/indicators/top-losers?limit=50"),
         ]);
-        setWinners(w?.indicators || w || []);
-        setLosers(l?.indicators || l || []);
+        const winArr = w?.indicators ?? w; setWinners(Array.isArray(winArr) ? winArr : []);
+        const loseArr = l?.indicators ?? l; setLosers(Array.isArray(loseArr) ? loseArr : []);
       } else if (tab === "Combinations") {
         const d = await apiGet("/profile-intelligence/combinations?limit=100");
-        setCombinations(d?.combinations || d || []);
+        const comboArr = d?.combinations ?? d; setCombinations(Array.isArray(comboArr) ? comboArr : []);
       } else if (tab === "Suggestions") {
         const d = await apiGet("/profile-intelligence/suggestions?limit=50");
-        setSuggestions(d?.suggestions || d || []);
+        { const sArr = d?.suggestions ?? d; setSuggestions(Array.isArray(sArr) ? sArr : []); }
       } else if (tab === "Audit") {
         const d = await apiGet("/profile-intelligence/audit?limit=100");
         setAudit(d?.events || d?.audit_log || d?.logs || []);
@@ -855,7 +855,7 @@ export default function ProfileIntelligencePage() {
       }
       // Refresh list
       const d = await apiGet("/profile-intelligence/suggestions?limit=50");
-      setSuggestions(d?.suggestions || d || []);
+      { const sArr = d?.suggestions ?? d; setSuggestions(Array.isArray(sArr) ? sArr : []); }
     } catch (e: any) {
       showToast(`Erro ao explicar: ${e.message}`, false);
     } finally {
@@ -906,7 +906,7 @@ export default function ProfileIntelligencePage() {
       showToast(`Profile criado: ${(res as any).profile_name}`);
       // Refresh suggestions list
       const d = await apiGet("/profile-intelligence/suggestions?limit=50");
-      setSuggestions(d?.suggestions || d || []);
+      { const sArr = d?.suggestions ?? d; setSuggestions(Array.isArray(sArr) ? sArr : []); }
       // Refresh audit
       const a = await apiGet("/profile-intelligence/audit?limit=100");
       setAudit(a?.events || []);
