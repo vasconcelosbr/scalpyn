@@ -573,6 +573,45 @@ async def profile_calibration_view(
 
 # ── 5. Timeline ───────────────────────────────────────────────────────────────
 
+def _flatten_diff(diff: dict | None) -> list[dict]:
+    """Convert nested diff dict to flat changes[] array.
+
+    Expected diff format (from profile_intelligence_live_service.py):
+        {"scoring": {"thresholds": {"buy": {"before": 65, "after": 70}}}}
+    Also handles two-level nesting:
+        {"signals": {"rsi": {"before": 45, "after": 46}}}
+    """
+    changes: list[dict] = []
+    if not diff or not isinstance(diff, dict):
+        return changes
+
+    for section, fields in diff.items():
+        if not isinstance(fields, dict):
+            continue
+        for field, value in fields.items():
+            if isinstance(value, dict) and "before" in value:
+                # Two-level: section.field → {before, after}
+                changes.append({
+                    "section": section,
+                    "field": field,
+                    "old_value": value.get("before"),
+                    "new_value": value.get("after"),
+                    "reason": value.get("reason"),
+                })
+            elif isinstance(value, dict):
+                # Three-level: section.field.subfield → {before, after}
+                for subfield, subvalue in value.items():
+                    if isinstance(subvalue, dict) and "before" in subvalue:
+                        changes.append({
+                            "section": f"{section}.{field}",
+                            "field": subfield,
+                            "old_value": subvalue.get("before"),
+                            "new_value": subvalue.get("after"),
+                            "reason": subvalue.get("reason"),
+                        })
+    return changes
+
+
 @router.get("/timeline")
 async def calibration_timeline(
     db: AsyncSession = Depends(get_db),
@@ -581,45 +620,71 @@ async def calibration_timeline(
     profile_id: Optional[str] = Query(None),
     limit: int = Query(100, le=500),
 ):
-    pid_filter = "AND profile_id = :pid" if profile_id else ""
+    pid_filter = "AND l.profile_id = :pid::uuid" if profile_id else ""
     params: dict = {"hours": hours, "limit": limit}
     if profile_id:
         params["pid"] = profile_id
 
     rows = await db.execute(text(f"""
-        SELECT id, run_id, event_type, phase, severity, message,
-               profile_id, profile_name, payload, created_at
-        FROM profile_intelligence_activity_log
-        WHERE created_at >= now() - (:hours * interval '1 hour')
+        SELECT
+            l.id, l.run_id, l.event_type, l.phase, l.severity, l.message,
+            l.profile_id, l.profile_name, l.payload, l.created_at,
+            v.diff            AS version_diff,
+            v.before_snapshot AS version_before,
+            v.after_snapshot  AS version_after,
+            v.shadow_validation_status,
+            v.mutation_applied
+        FROM profile_intelligence_activity_log l
+        LEFT JOIN profile_adjustment_versions v
+            ON (l.payload->>'version_id') IS NOT NULL
+            AND (l.payload->>'version_id')::uuid = v.id
+        WHERE l.created_at >= now() - (:hours * interval '1 hour')
           AND (
-            event_type ILIKE '%SUGGESTION%'
-            OR event_type ILIKE '%AI_REVIEW%'
-            OR event_type ILIKE '%MUTATION%'
-            OR event_type ILIKE '%CALIBRATION%'
-            OR event_type ILIKE '%ADJUSTMENT%'
+            l.event_type ILIKE '%SUGGESTION%'
+            OR l.event_type ILIKE '%AI_REVIEW%'
+            OR l.event_type ILIKE '%MUTATION%'
+            OR l.event_type ILIKE '%CALIBRATION%'
+            OR l.event_type ILIKE '%ADJUSTMENT%'
           )
           {pid_filter}
-        ORDER BY created_at DESC
+        ORDER BY l.created_at DESC
         LIMIT :limit
     """), params)
 
-    return {
-        "items": [
-            {
-                "id": str(r.id),
-                "run_id": str(r.run_id) if r.run_id else None,
-                "event_type": r.event_type,
-                "phase": r.phase,
-                "severity": r.severity,
-                "message": r.message,
-                "profile_id": str(r.profile_id) if r.profile_id else None,
-                "profile_name": r.profile_name,
-                "payload": r.payload,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            }
-            for r in rows.fetchall()
-        ]
-    }
+    items = []
+    for r in rows.fetchall():
+        payload = r.payload or {}
+        diff = r.version_diff
+        changes = _flatten_diff(diff)
+        # Fall back to flat indicator in payload when no versioned diff exists
+        if not changes and payload.get("indicator") and payload.get("old_value") is not None:
+            indicator: str = payload["indicator"]
+            parts = indicator.rsplit(".", 1)
+            changes.append({
+                "section": parts[0] if len(parts) == 2 else "config",
+                "field": parts[-1],
+                "old_value": payload.get("old_value"),
+                "new_value": payload.get("new_value"),
+                "reason": payload.get("reason"),
+            })
+        items.append({
+            "id": str(r.id),
+            "run_id": str(r.run_id) if r.run_id else None,
+            "event_type": r.event_type,
+            "phase": r.phase,
+            "severity": r.severity,
+            "message": r.message,
+            "profile_id": str(r.profile_id) if r.profile_id else None,
+            "profile_name": r.profile_name,
+            "payload": payload,
+            "changes": changes,
+            "version_before": r.version_before,
+            "version_after": r.version_after,
+            "shadow_validation_status": r.shadow_validation_status,
+            "mutation_applied": r.mutation_applied,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        })
+    return {"items": items}
 
 
 # ── 6. Indicator impact ───────────────────────────────────────────────────────

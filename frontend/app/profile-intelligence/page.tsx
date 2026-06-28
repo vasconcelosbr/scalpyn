@@ -348,21 +348,39 @@ function statusBadge(status: string | null | undefined) {
 }
 
 const BLOCKED_REASON_LABELS: Record<string, string> = {
-  blocked_no_validation:            "Aguardando trades de validação out-of-sample",
-  blocked_low_discovery_support:    "Discovery com amostras insuficientes",
-  blocked_low_validation_support:   "Validação com amostras insuficientes",
-  blocked_missing_feature:          "Indicador não disponível nos dados históricos",
-  blocked_validation_lift:          "Lift de validação abaixo do mínimo exigido",
-  blocked_validation_winrate:       "Win rate de validação abaixo do mínimo exigido",
-  blocked_single_symbol_dependency: "Dependência de símbolo único — risco de overfitting",
-  blocked_single_day_dependency:    "Dependência de dia único — risco de overfitting",
+  blocked_no_validation:              "Aguardando trades de validação out-of-sample",
+  blocked_low_discovery_support:      "Discovery com amostras insuficientes",
+  blocked_low_validation_support:     "Validação com amostras insuficientes",
+  blocked_missing_feature:            "Indicador não disponível nos dados históricos",
+  blocked_validation_lift:            "Lift de validação abaixo do mínimo exigido",
+  blocked_validation_winrate:         "Win rate de validação abaixo do mínimo exigido",
+  blocked_single_symbol_dependency:   "Dependência de símbolo único — risco de overfitting",
+  blocked_single_day_dependency:      "Dependência de dia único — risco de overfitting",
   migration_requires_registry_review: "Combinação legada — revisão de registro necessária",
-  exploratory_only:                 "Apenas exploratório — validação pendente",
+  exploratory_only:                   "Apenas exploratório — aguarda validação out-of-sample",
+};
+
+const NEXT_ACTION_MAP: Record<string, string> = {
+  blocked_no_validation:              "Aguardar fechamento de trades no período de validação; PI Engine reprocessará automaticamente.",
+  blocked_low_discovery_support:      "Aguardar acúmulo de mais dados de mercado; PI Engine reprocessará no próximo ciclo.",
+  blocked_low_validation_support:     "Aguardar mais trades fechados no período out-of-sample.",
+  blocked_missing_feature:            "Verificar se o indicador está sendo calculado no pipeline de features.",
+  blocked_validation_lift:            "Lift insuficiente; será reavaliada quando win rate out-of-sample melhorar.",
+  blocked_validation_winrate:         "Win rate insuficiente; será reavaliada no próximo ciclo PI Engine.",
+  blocked_single_symbol_dependency:   "Aguardar diversificação de símbolos na janela de discovery.",
+  blocked_single_day_dependency:      "Aguardar mais dias históricos antes de reavaliar.",
+  migration_requires_registry_review: "Revisar registro manualmente; não é processada automaticamente.",
+  exploratory_only:                   "Aguardar período de validação out-of-sample antes de gerar suggestion.",
 };
 
 function blockedReasonLabel(reason: string | null | undefined): string {
-  if (!reason) return "Validação pendente";
-  return BLOCKED_REASON_LABELS[reason] ?? reason;
+  if (!reason) return "Sem dados de validação — aguardando execução do PI Engine";
+  return BLOCKED_REASON_LABELS[reason] ?? reason.replace(/_/g, " ");
+}
+
+function blockedNextAction(reason: string | null | undefined): string | null {
+  if (!reason) return "Executar o PI Engine para processar esta combinação.";
+  return NEXT_ACTION_MAP[reason] ?? null;
 }
 
 function combinationTypeBadge(type: string) {
@@ -1553,22 +1571,48 @@ export default function ProfileIntelligencePage() {
               {loadingTab ? <TableSkeleton /> : calTimeline.length === 0 ? (
                 <div className="p-8 text-center text-[12px] text-[var(--text-tertiary)]">Nenhum evento de calibração nos últimos 7 dias.</div>
               ) : (
-                calTimeline.map((ev: any) => (
-                  <div key={ev.id} className="p-3 hover:bg-[var(--bg-elevated)] transition-colors">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${ev.severity === "error" ? "bg-red-400" : ev.severity === "warning" ? "bg-yellow-400" : "bg-green-400"}`} />
-                        <span className="font-mono text-[11px] text-[var(--text-primary)]">{ev.event_type}</span>
-                        {ev.phase && <span className="badge range text-[9px]">{ev.phase}</span>}
+                calTimeline.map((ev: any) => {
+                  const changes: any[] = Array.isArray(ev.changes) ? ev.changes : [];
+                  const hasMeta = ev.shadow_validation_status || ev.mutation_applied != null;
+                  return (
+                    <div key={ev.id} className="p-3 hover:bg-[var(--bg-elevated)] transition-colors">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${ev.severity === "error" ? "bg-red-400" : ev.severity === "warning" ? "bg-yellow-400" : "bg-green-400"}`} />
+                          <span className="font-mono text-[11px] text-[var(--text-primary)]">{ev.event_type}</span>
+                          {ev.phase && <span className="badge range text-[9px]">{ev.phase}</span>}
+                          {ev.mutation_applied === true && <span className="badge text-[9px] bg-green-500/10 text-green-400 border-green-500/20">aplicado</span>}
+                          {ev.mutation_applied === false && <span className="badge text-[9px] bg-yellow-500/10 text-yellow-400 border-yellow-500/20">shadow-only</span>}
+                        </div>
+                        <span className="text-[10px] text-[var(--text-tertiary)] shrink-0">{fmtDate(ev.created_at)}</span>
                       </div>
-                      <span className="text-[10px] text-[var(--text-tertiary)] shrink-0">{fmtDate(ev.created_at)}</span>
+                      <div className="text-[11px] text-[var(--text-secondary)] mt-1 ml-3.5">{ev.message}</div>
+                      {ev.profile_name && (
+                        <div className="text-[10px] text-[var(--text-tertiary)] ml-3.5 mt-0.5">{ev.profile_name}</div>
+                      )}
+                      {/* Granular diff changes */}
+                      {changes.length > 0 && (
+                        <div className="ml-3.5 mt-2 space-y-1">
+                          {changes.map((c: any, i: number) => (
+                            <div key={i} className="flex items-center gap-1 font-mono text-[10px] bg-[var(--bg-input)] rounded px-2 py-1">
+                              <span className="text-[var(--text-tertiary)]">{c.section}.{c.field}:</span>
+                              <span className="text-red-400 line-through">{String(c.old_value ?? "—")}</span>
+                              <span className="text-[var(--text-tertiary)]">→</span>
+                              <span className="text-green-400">{String(c.new_value ?? "—")}</span>
+                              {c.reason && <span className="text-[var(--text-tertiary)] ml-1 font-sans">· {String(c.reason).replace(/_/g, " ")}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {/* Shadow validation state */}
+                      {hasMeta && (
+                        <div className="ml-3.5 mt-1.5 flex items-center gap-2 text-[10px] text-[var(--text-tertiary)]">
+                          {ev.shadow_validation_status && <span>Shadow: <span className="text-[var(--text-secondary)]">{ev.shadow_validation_status}</span></span>}
+                        </div>
+                      )}
                     </div>
-                    <div className="text-[11px] text-[var(--text-secondary)] mt-1 ml-3.5">{ev.message}</div>
-                    {ev.profile_name && (
-                      <div className="text-[10px] text-[var(--text-tertiary)] ml-3.5 mt-0.5">{ev.profile_name}</div>
-                    )}
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           )}
@@ -2910,17 +2954,30 @@ export default function ProfileIntelligencePage() {
                 <AlertTriangle className="w-4 h-4 shrink-0" /> <span>Evidência insuficiente — não usar como base de decisão operacional (LOW confidence).</span>
               </div>
             )}
-            {!combinationIsActionable(selectedCombination) && (
-              <div className="card p-3 border-red-500/30 bg-red-500/5 text-[11px] text-red-400 flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>
-                  {blockedReasonLabel(
-                    selectedCombination.validation_metrics_json?.blocked_reason
-                    || selectedCombination.validation_metrics_json?.actionability_status
+            {!combinationIsActionable(selectedCombination) && (() => {
+              const reason = selectedCombination.validation_metrics_json?.blocked_reason
+                || selectedCombination.validation_metrics_json?.actionability_status;
+              const nextAction = blockedNextAction(reason);
+              return (
+                <div className="card p-3 border-red-500/30 bg-red-500/5 space-y-1.5">
+                  <div className="flex items-start gap-2 text-[11px] text-red-400">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
+                    <span className="font-medium">{blockedReasonLabel(reason)}</span>
+                  </div>
+                  {reason && (
+                    <div className="text-[10px] text-red-300/70 ml-6 font-mono">
+                      {reason}
+                    </div>
                   )}
-                </span>
-              </div>
-            )}
+                  {nextAction && (
+                    <div className="text-[10px] text-[var(--text-tertiary)] ml-6 flex items-start gap-1">
+                      <span className="shrink-0">→</span>
+                      <span>{nextAction}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {selectedCombination.source_profiles?.length ? (
               <div className="text-[11px] text-[var(--text-secondary)]">
@@ -2993,7 +3050,12 @@ export default function ProfileIntelligencePage() {
                   ? "Gerando..."
                   : combinationIsActionable(selectedCombination)
                     ? "Generate Suggestion"
-                    : "Sugestão bloqueada por validation"}
+                    : (() => {
+                        const reason = selectedCombination.validation_metrics_json?.blocked_reason
+                          || selectedCombination.validation_metrics_json?.actionability_status;
+                        const label = reason ? (BLOCKED_REASON_LABELS[reason] ?? reason.replace(/_/g, " ")) : "Sem dados de validação";
+                        return label.length > 42 ? label.slice(0, 39) + "…" : label;
+                      })()}
               </button>
               {lastGeneratedSuggestionId && (
                 <button
