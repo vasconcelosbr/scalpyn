@@ -613,57 +613,84 @@ async def calibration_safety(
     _uid: str = Depends(get_current_user_id),
 ):
     row = await db.execute(text("""
-        SELECT
-          COUNT(*) FILTER (WHERE live_trading_enabled = true)  AS live_enabled_count,
-          COUNT(*) FILTER (WHERE auto_pilot_enabled = true)    AS autopilot_enabled_count,
-          COUNT(*)                                              AS total_profiles
+        SELECT COUNT(*) FILTER (WHERE live_trading_enabled = true) AS live_enabled_count,
+               COUNT(*) FILTER (WHERE auto_pilot_enabled = true) AS autopilot_enabled_count,
+               COUNT(*) AS total_profiles
         FROM profiles
     """))
     p = row.fetchone()
-
-    mutations_row = await db.execute(text("""
+    mutations_24h = (await db.execute(text("""
         SELECT COUNT(*) FROM profile_adjustment_suggestions
-        WHERE mutation_applied = true
-          AND created_at >= now() - interval '24 hours'
-    """))
-    mutations_24h = mutations_row.scalar() or 0
-
-    orders_row = await db.execute(text("""
+        WHERE mutation_applied = true AND created_at >= now() - interval '24 hours'
+    """))).scalar() or 0
+    live_orders = (await db.execute(text("""
         SELECT COUNT(*) FROM orders
-        WHERE status NOT IN ('cancelled', 'rejected', 'simulation', 'shadow')
-    """))
-    live_orders = orders_row.scalar() or 0
-
-    hollow_row = await db.execute(text("""
-        SELECT COUNT(*) FROM profile_ai_reviews
-        WHERE status = 'COMPLETED' AND COALESCE(tokens_input, 0) = 0
-          AND created_at >= now() - interval '24 hours'
-    """))
-    hollow_reviews_24h = hollow_row.scalar() or 0
+        WHERE LOWER(COALESCE(status, '')) NOT IN ('cancelled', 'rejected', 'simulation', 'shadow')
+    """))).scalar() or 0
+    review_counts = (await db.execute(text("""
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'COMPLETED'
+            AND COALESCE(tokens_input, 0) = 0 AND COALESCE(tokens_output, 0) = 0
+            AND NULLIF(BTRIM(COALESCE(summary, '')), '') IS NULL) AS hollow,
+          COUNT(*) FILTER (WHERE status = 'COMPLETED' AND (
+            COALESCE(tokens_input, 0) <= 0 OR COALESCE(tokens_output, 0) <= 0
+            OR NULLIF(BTRIM(COALESCE(summary, '')), '') IS NULL
+            OR NULLIF(BTRIM(COALESCE(model_name, '')), '') IS NULL
+            OR completed_at IS NULL)) AS invalid_completed,
+          COUNT(*) FILTER (WHERE status = 'LEGACY_HOLLOW_REVIEW') AS legacy,
+          COUNT(*) FILTER (WHERE status LIKE 'FAILED_%') AS failed
+        FROM profile_ai_reviews
+        WHERE COALESCE(requested_at, created_at) >= now() - interval '24 hours'
+    """))).fetchone()
+    hollow_reviews_24h = int(review_counts.hollow or 0)
+    invalid_completed_24h = int(review_counts.invalid_completed or 0)
+    last_real_row = (await db.execute(text("""
+        SELECT id, status, requested_at, completed_at, model_name,
+               tokens_input, tokens_output, summary
+        FROM profile_ai_reviews
+        WHERE status = 'COMPLETED' AND COALESCE(tokens_input, 0) > 0
+          AND COALESCE(tokens_output, 0) > 0
+          AND NULLIF(BTRIM(COALESCE(summary, '')), '') IS NOT NULL
+          AND NULLIF(BTRIM(COALESCE(model_name, '')), '') IS NOT NULL
+          AND completed_at IS NOT NULL
+        ORDER BY completed_at DESC LIMIT 1
+    """))).fetchone()
 
     checks = [
         {"name": "live_trading_disabled", "pass": (p.live_enabled_count or 0) == 0,
          "value": str(p.live_enabled_count or 0)},
-        {"name": "no_live_orders", "pass": live_orders == 0,
-         "value": str(live_orders)},
-        {"name": "no_mutations_24h", "pass": mutations_24h == 0,
-         "value": str(mutations_24h)},
+        {"name": "no_live_orders", "pass": live_orders == 0, "value": str(live_orders)},
+        {"name": "no_mutations_24h", "pass": mutations_24h == 0, "value": str(mutations_24h)},
         {"name": "no_hollow_ai_reviews_24h", "pass": hollow_reviews_24h == 0,
          "value": str(hollow_reviews_24h)},
+        {"name": "completed_ai_review_contract_24h", "pass": invalid_completed_24h == 0,
+         "value": str(invalid_completed_24h)},
     ]
-
+    safety_pass = all(check["pass"] for check in checks)
     return {
-        "safety_pass": all(c["pass"] for c in checks),
+        "safety_pass": safety_pass,
+        "safety_status": "PASS" if safety_pass else "FAIL",
         "checks": checks,
+        "no_hollow_ai_reviews_24h": hollow_reviews_24h == 0,
+        "hollow_ai_reviews_24h": hollow_reviews_24h,
+        "invalid_completed_ai_reviews_24h": invalid_completed_24h,
+        "legacy_hollow_reviews_24h": int(review_counts.legacy or 0),
+        "failed_ai_reviews_24h": int(review_counts.failed or 0),
+        "last_real_ai_review": ({
+            "id": str(last_real_row.id), "status": last_real_row.status,
+            "requested_at": last_real_row.requested_at.isoformat(),
+            "completed_at": last_real_row.completed_at.isoformat(),
+            "model_name": last_real_row.model_name,
+            "tokens_input": last_real_row.tokens_input,
+            "tokens_output": last_real_row.tokens_output,
+            "summary": last_real_row.summary,
+        } if last_real_row else None),
         "profile_counts": {
             "total": p.total_profiles if p else 0,
             "live_enabled": p.live_enabled_count if p else 0,
             "autopilot_enabled": p.autopilot_enabled_count if p else 0,
         },
     }
-
-
-# ── 9. Export (CSV / JSON) ────────────────────────────────────────────────────
 
 @router.get("/export")
 async def export_adjustments(

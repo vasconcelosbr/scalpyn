@@ -30,6 +30,8 @@ class _SafeEncoder(json.JSONEncoder):
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .ai_review_safety_service import completed_review_contract_is_valid
+
 logger = logging.getLogger(__name__)
 
 _AI_REVIEW_INTERVAL_H = int(os.environ.get("PI_AI_REVIEW_INTERVAL_H", "4"))
@@ -724,14 +726,21 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
             except json.JSONDecodeError:
                 summary = raw[:500]
 
-            # Validate response before marking COMPLETED
-            if tokens_in <= 0 or tokens_out <= 0:
+            # Fail closed immediately before persistence. COMPLETED requires every proof.
+            completed_at = datetime.now(timezone.utc)
+            if not completed_review_contract_is_valid(
+                status="COMPLETED",
+                tokens_input=tokens_in,
+                tokens_output=tokens_out,
+                summary=summary,
+                model_name=model_used,
+                completed_at=completed_at,
+            ):
                 final_status = "FAILED_EMPTY_AI_RESPONSE"
                 risk_flags = [{"flag": "FAILED_EMPTY_AI_RESPONSE",
-                               "detail": f"tokens_in={tokens_in} tokens_out={tokens_out}"}]
-            elif not summary:
-                final_status = "FAILED_EMPTY_SUMMARY"
-                risk_flags = [{"flag": "FAILED_EMPTY_SUMMARY", "detail": "Claude returned empty summary"}]
+                               "detail": (f"tokens_in={tokens_in} tokens_out={tokens_out} "
+                                          f"summary_present={bool((summary or '').strip())} "
+                                          f"model_present={bool((model_used or '').strip())}")}]
             else:
                 final_status = "COMPLETED"
 
@@ -746,9 +755,11 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
                                 payload={"review_id": str(review_id), "reason": "FAILED_AI_CALL",
                                          "error_type": type(exc).__name__})
 
+    completed_at = locals().get("completed_at") or datetime.now(timezone.utc)
+
     await db.execute(text("""
         UPDATE profile_ai_reviews
-        SET status = :status, completed_at = now(),
+        SET status = :status, completed_at = :completed_at,
             tokens_input = :ti, tokens_output = :to,
             model_name = :model_name,
             summary = :summary,
@@ -760,6 +771,7 @@ async def run_ai_review_cycle(db: AsyncSession) -> dict:
     """), {
         "id": str(review_id),
         "status": final_status,
+        "completed_at": completed_at,
         "ti": tokens_in,
         "to": tokens_out,
         "model_name": model_used,
