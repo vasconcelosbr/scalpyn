@@ -59,6 +59,8 @@ export function VersionIntelligence({ availableProfiles = [] }: { availableProfi
   // Update mock data dynamically just to show it changes
   const activeV1 = { ...MOCK_V1, versionName: "Base (v1)" };
   const activeV2 = { ...MOCK_V2, versionName: "Auto-Pilot (v2)" };
+  
+  return (
     <section className="rounded-2xl p-5 mb-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
       <div className="flex flex-wrap items-center justify-between mb-6 gap-4">
         <div>
