@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { VersionComparisonChart, type ChartDataPoint } from "./VersionComparisonChart";
 import { VersionDuelStats, type VersionStats } from "./VersionDuelStats";
+import type { WatchlistPerformanceRow } from "@/lib/watchlistPerformance";
 
 const C = {
   surface: "#10121A", elevated: "#161824", border: "rgba(255,255,255,0.08)", text: "#E6E8EE",
@@ -53,12 +54,64 @@ const MOCK_V2: VersionStats = {
   confidenceScore: "Medium"
 };
 
-export function VersionIntelligence({ availableProfiles = [] }: { availableProfiles?: string[] }) {
-  const [selectedProfile, setSelectedProfile] = useState(availableProfiles[0] || "L3_META_CONTROLLED_BOUNCE");
+export function VersionIntelligence({ availableProfiles = [], rows = [] }: { availableProfiles?: string[], rows?: WatchlistPerformanceRow[] }) {
+  const [selectedProfile, setSelectedProfile] = useState(availableProfiles[0] || "");
   
-  // Update mock data dynamically just to show it changes
-  const activeV1 = { ...MOCK_V1, versionName: "Base (v1)" };
-  const activeV2 = { ...MOCK_V2, versionName: "Auto-Pilot (v2)" };
+  // Update selected if availableProfiles loads late
+  useEffect(() => {
+    if (!selectedProfile && availableProfiles.length > 0) {
+      setSelectedProfile(availableProfiles[0]);
+    }
+  }, [availableProfiles, selectedProfile]);
+  
+  const { activeV1, activeV2 } = useMemo(() => {
+    if (!selectedProfile || rows.length === 0) {
+      return { 
+        activeV1: { ...MOCK_V1, versionName: "Base (v1)" }, 
+        activeV2: { ...MOCK_V2, versionName: "Auto-Pilot (v2)" } 
+      };
+    }
+    
+    // Find v1 (Base)
+    const baseRow = rows.find(r => r.profile_name === selectedProfile && r.priority !== "BLOCKED") || 
+                    rows.find(r => r.profile_name === selectedProfile);
+                    
+    // Find v2 (Auto-Pilot)
+    const apRows = rows.filter(r => r.profile_name.startsWith(`${selectedProfile} - Auto-Pilot`) && r.priority !== "BLOCKED");
+    const apRow = apRows.length > 0 
+      ? apRows.reduce((prev, current) => (prev.ev_score > current.ev_score) ? prev : current)
+      : null;
+      
+    const v1: VersionStats = baseRow ? {
+      versionName: "Base (v1)",
+      isChampion: false,
+      evScore: baseRow.ev_score,
+      winRate: baseRow.win_rate || 0,
+      pnlPct: baseRow.avg_pnl_pct || 0,
+      holdingSeconds: baseRow.avg_holding_win_seconds || 0,
+      trades: baseRow.completed_trades,
+      confidenceScore: baseRow.stat_confidence as any
+    } : { ...MOCK_V1, versionName: "Base (v1) - Not Found" };
+
+    const v2: VersionStats = apRow ? {
+      versionName: apRow.profile_name.split(" - ")[1] || "Auto-Pilot",
+      isChampion: false,
+      evScore: apRow.ev_score,
+      winRate: apRow.win_rate || 0,
+      pnlPct: apRow.avg_pnl_pct || 0,
+      holdingSeconds: apRow.avg_holding_win_seconds || 0,
+      trades: apRow.completed_trades,
+      confidenceScore: apRow.stat_confidence as any
+    } : { ...MOCK_V2, versionName: "Auto-Pilot - Not Found" };
+
+    if (v1.evScore > v2.evScore) {
+      v1.isChampion = true;
+    } else if (v2.evScore > v1.evScore) {
+      v2.isChampion = true;
+    }
+    
+    return { activeV1: v1, activeV2: v2 };
+  }, [selectedProfile, rows]);
   
   return (
     <section className="rounded-2xl p-5 mb-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>

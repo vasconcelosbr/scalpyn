@@ -94,13 +94,18 @@ export default function WatchlistPerformanceDashboard() {
   }, [priority, query, rows]);
 
   const baseProfiles = useMemo(() => {
-    const families = new Set<string>();
+    const familyMaxEv = new Map<string, number>();
     rows.forEach(row => {
       if (row.priority === "BLOCKED") return;
       const base = row.profile_name.split(" - Auto-Pilot")[0];
-      if (base) families.add(base);
+      if (base) {
+        const currentMax = familyMaxEv.get(base) || -Infinity;
+        familyMaxEv.set(base, Math.max(currentMax, row.ev_score));
+      }
     });
-    return Array.from(families).sort();
+    return Array.from(familyMaxEv.entries())
+      .sort((a, b) => b[1] - a[1]) // Sort by max EV score descending
+      .map(entry => entry[0]);
   }, [rows]);
 
   return (
@@ -177,7 +182,7 @@ export default function WatchlistPerformanceDashboard() {
         </div>
       </section>
 
-      <VersionIntelligence availableProfiles={baseProfiles} />
+      <VersionIntelligence availableProfiles={baseProfiles} rows={rows} />
 
       <section className="overflow-hidden rounded-2xl" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4" style={{ borderColor: C.border }}>
