@@ -547,6 +547,8 @@ export default function ProfileIntelligencePage() {
 
   // Calibration Evolution state
   const [calSummary, setCalSummary] = useState<any>(null);
+  const [calValidatedVersions, setCalValidatedVersions] = useState<any[]>([]);
+  const [applyingVersionId, setApplyingVersionId] = useState<string | null>(null);
   const [calAdjustments, setCalAdjustments] = useState<any[]>([]);
   const [calTimeline, setCalTimeline] = useState<any[]>([]);
   const [calIndicators, setCalIndicators] = useState<any[]>([]);
@@ -556,6 +558,7 @@ export default function ProfileIntelligencePage() {
   const [selectedCalAdjustment, setSelectedCalAdjustment] = useState<any>(null);
   const [calDetailLoading, setCalDetailLoading] = useState(false);
   const [calDetail, setCalDetail] = useState<any>(null);
+  const [applyingVersion, setApplyingVersion] = useState(false);
   const [calSubTab, setCalSubTab] = useState<"adjustments" | "indicators" | "timeline" | "ai">("adjustments");
   const [calFilterMinConf, setCalFilterMinConf] = useState<string>("");
 
@@ -663,13 +666,14 @@ export default function ProfileIntelligencePage() {
         setLiveAiReview(aiReview);
         setLiveSafety(safety);
       } else if (tab === "Calibration Evolution") {
-        const [summary, adjustments, timeline, indicators, aiExpl, safety] = await Promise.all([
+        const [summary, adjustments, timeline, indicators, aiExpl, safety, validatedV] = await Promise.all([
           apiGet("/profile-intelligence/calibration-evolution/summary").catch(() => null),
           apiGet("/profile-intelligence/calibration-evolution/adjustments?limit=100").catch(() => ({ items: [], total: 0 })),
           apiGet("/profile-intelligence/calibration-evolution/timeline?hours=168&limit=100").catch(() => ({ items: [] })),
           apiGet("/profile-intelligence/calibration-evolution/indicator-impact?limit=50").catch(() => ({ items: [] })),
           apiGet("/profile-intelligence/calibration-evolution/ai-explanations?limit=10").catch(() => ({ items: [] })),
           apiGet("/profile-intelligence/calibration-evolution/safety").catch(() => null),
+          apiGet("/profile-intelligence/calibration/versions?status=VALIDATED&limit=50").catch(() => ({ versions: [] })),
         ]);
         setCalSummary(summary);
         setCalAdjustments(adjustments?.items || []);
@@ -678,6 +682,7 @@ export default function ProfileIntelligencePage() {
         setCalIndicators(indicators?.items || []);
         setCalAiExplanations(aiExpl?.items || []);
         setCalSafety(safety);
+        setCalValidatedVersions(validatedV?.versions || []);
       } else if (tab === "Auto-Pilot") {
         const [status, candidates, events] = await Promise.all([
           apiGet("/profile-intelligence/autopilot"),
@@ -985,6 +990,21 @@ export default function ProfileIntelligencePage() {
     }
   };
 
+  const handleApplyVersion = async () => {
+    if (!calDetail?.version?.id) return;
+    setApplyingVersion(true);
+    try {
+      const res = await apiPost(`/api/profile-intelligence/calibration/versions/${calDetail.version.id}/apply`, {});
+      showToast(`Calibração aplicada — buy_threshold → ${res.new_buy_threshold}`, true);
+      const d = await apiGet(`/profile-intelligence/calibration-evolution/adjustments/${selectedCalAdjustment.suggestion_id}`);
+      setCalDetail(d);
+    } catch (e: any) {
+      showToast(e?.message || "Erro ao aplicar calibração", false);
+    } finally {
+      setApplyingVersion(false);
+    }
+  };
+
   // ── Profiles sort ────────────────────────────────────────────────────────────
 
   const sortedProfiles = [...profiles].sort((a, b) => {
@@ -1251,6 +1271,56 @@ export default function ProfileIntelligencePage() {
       {/* ── TAB: Calibration Evolution ─────────────────────────────────────── */}
       {activeTab === "Calibration Evolution" && (
         <div className="space-y-4">
+
+          {/* Aprovações pendentes — versões VALIDATED aguardando confirmação humana */}
+          {calValidatedVersions.length > 0 && (
+            <div className="card p-4 border-green-500/30 bg-green-500/5">
+              <div className="flex items-center gap-2 mb-3">
+                <CheckCircle className="w-4 h-4 text-green-400" />
+                <h3 className="text-[13px] font-semibold text-green-400">
+                  {calValidatedVersions.length} calibração{calValidatedVersions.length > 1 ? "ões" : ""} validada{calValidatedVersions.length > 1 ? "s" : ""} — aguardando aprovação humana
+                </h3>
+              </div>
+              <div className="space-y-2">
+                {calValidatedVersions.map((v: any) => (
+                  <div key={v.id} className="flex items-center justify-between gap-3 bg-[var(--bg-elevated)] rounded p-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[12px] font-medium text-[var(--text-primary)] truncate">
+                        {v.profile_name || v.profile_id?.slice(0, 8)}
+                      </div>
+                      <div className="text-[10px] text-[var(--text-tertiary)] mt-0.5">
+                        buy {v.before_snapshot?.scoring?.thresholds?.buy ?? "?"} → {v.after_snapshot?.scoring?.thresholds?.buy ?? "?"}
+                        {v.win_rate_after != null && (
+                          <span className="ml-2 text-green-400">WR {(v.win_rate_after * 100).toFixed(1)}%</span>
+                        )}
+                        {v.win_rate_before != null && (
+                          <span className="ml-1 text-[var(--text-tertiary)]">(antes: {(v.win_rate_before * 100).toFixed(1)}%)</span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        setApplyingVersionId(v.id);
+                        try {
+                          const res = await apiPost(`/api/profile-intelligence/calibration/versions/${v.id}/apply`, {});
+                          showToast(`Calibração aplicada — buy_threshold → ${res.new_buy_threshold}`, true);
+                          setCalValidatedVersions(prev => prev.filter(x => x.id !== v.id));
+                        } catch (e: any) {
+                          showToast(e?.message || "Erro ao aplicar calibração", false);
+                        } finally {
+                          setApplyingVersionId(null);
+                        }
+                      }}
+                      disabled={applyingVersionId === v.id}
+                      className="px-3 py-1.5 bg-green-700 hover:bg-green-600 disabled:opacity-50 rounded text-[11px] font-semibold text-white shrink-0 transition-colors"
+                    >
+                      {applyingVersionId === v.id ? "Aplicando..." : "Aplicar"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Safety banner */}
           {calSafety && (
@@ -1791,6 +1861,20 @@ export default function ProfileIntelligencePage() {
                       </div>
                     ))}
                   </div>
+                  {calDetail.version.shadow_validation_status === "VALIDATED" && !calDetail.version.mutation_applied && (
+                    <div className="mt-3">
+                      <button
+                        onClick={handleApplyVersion}
+                        disabled={applyingVersion}
+                        className="w-full py-2 px-4 bg-green-700 hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed rounded text-[12px] font-semibold text-white transition-colors"
+                      >
+                        {applyingVersion ? "Aplicando..." : "Aplicar calibração no profile"}
+                      </button>
+                      <p className="text-[10px] text-[var(--text-tertiary)] mt-1">
+                        Atualiza scoring.thresholds.buy no profile com o valor validado pelo ciclo shadow.
+                      </p>
+                    </div>
+                  )}
                   {calDetail.version.diff && (
                     <div className="mt-2">
                       <div className="text-[10px] uppercase font-semibold text-[var(--text-tertiary)] mb-1">Diff</div>

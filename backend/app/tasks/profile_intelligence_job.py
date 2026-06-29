@@ -329,7 +329,7 @@ async def _run_feedback_loop():
     """
     from ..services.profile_intelligence_live_service import (
         run_fast_cycle, run_medium_cycle, run_ai_review_cycle,
-        run_shadow_calibration_cycle,
+        run_shadow_calibration_cycle, run_shadow_validation_cycle,
         _needs_medium_cycle, _needs_ai_cycle,
     )
 
@@ -374,6 +374,17 @@ async def _run_feedback_loop():
         logger.info("[PILive] shadow calibration done: %s", result)
     except Exception as exc:
         logger.error("[PILive] shadow calibration failed (non-fatal): %s", exc)
+    finally:
+        await engine.dispose()
+
+    # Shadow validation cycle: Phase 3 — evaluate PENDING_VALIDATION PAVs
+    engine, factory = _live_nullpool_session()
+    try:
+        async with factory() as db:
+            result = await run_shadow_validation_cycle(db)
+        logger.info("[PILive] shadow validation done: %s", result)
+    except Exception as exc:
+        logger.error("[PILive] shadow validation failed (non-fatal): %s", exc)
     finally:
         await engine.dispose()
 

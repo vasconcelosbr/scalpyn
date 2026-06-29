@@ -500,6 +500,10 @@ class ProfileAdjustmentVersion(Base):
     applied_at               = Column(TIMESTAMP(timezone=True), nullable=True)
     applied_by               = Column(String(120), nullable=True)
     rollback_available       = Column(Boolean, nullable=False, default=True)
+    validated_at             = Column(TIMESTAMP(timezone=True), nullable=True)
+    win_rate_before          = Column(Numeric(6, 4), nullable=True)
+    win_rate_after           = Column(Numeric(6, 4), nullable=True)
+    validation_reason        = Column(Text, nullable=True)
     created_at               = Column(TIMESTAMP(timezone=True), nullable=False,
                                       default=lambda: datetime.now(timezone.utc))
 

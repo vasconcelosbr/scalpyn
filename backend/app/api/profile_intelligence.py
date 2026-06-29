@@ -1698,6 +1698,154 @@ async def get_autonomy_policy(
     }
 
 
+@router.get("/calibration/versions")
+async def list_calibration_versions(
+    status: Optional[str] = Query(None, description="Filter by shadow_validation_status"),
+    limit: int = Query(50, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """List profile_adjustment_versions, optionally filtered by validation status."""
+    where_clause = "WHERE v.shadow_validation_status = :status" if status else ""
+    rows = await db.execute(text(f"""
+        SELECT v.id, v.suggestion_id, v.profile_id,
+               p.name AS profile_name,
+               v.version_status, v.shadow_validation_status,
+               v.mutation_applied, v.rollback_available,
+               v.win_rate_before, v.win_rate_after, v.validation_reason,
+               v.validated_at, v.applied_at, v.applied_by,
+               v.before_snapshot, v.after_snapshot, v.diff,
+               v.created_at
+        FROM profile_adjustment_versions v
+        LEFT JOIN profiles p ON p.id = v.profile_id
+        {where_clause}
+        ORDER BY v.created_at DESC
+        LIMIT :limit
+    """), {"status": status, "limit": limit} if status else {"limit": limit})
+    versions = rows.fetchall()
+    return {
+        "versions": [
+            {
+                "id": str(r.id),
+                "suggestion_id": str(r.suggestion_id),
+                "profile_id": str(r.profile_id),
+                "profile_name": r.profile_name,
+                "version_status": r.version_status,
+                "shadow_validation_status": r.shadow_validation_status,
+                "mutation_applied": r.mutation_applied,
+                "rollback_available": r.rollback_available,
+                "win_rate_before": float(r.win_rate_before) if r.win_rate_before is not None else None,
+                "win_rate_after": float(r.win_rate_after) if r.win_rate_after is not None else None,
+                "validation_reason": r.validation_reason,
+                "validated_at": r.validated_at.isoformat() if r.validated_at else None,
+                "applied_at": r.applied_at.isoformat() if r.applied_at else None,
+                "applied_by": r.applied_by,
+                "before_snapshot": r.before_snapshot,
+                "after_snapshot": r.after_snapshot,
+                "diff": r.diff,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in versions
+        ],
+        "count": len(versions),
+    }
+
+
+@router.post("/calibration/versions/{version_id}/apply")
+async def apply_calibration_version(
+    version_id: str,
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """One-click human approval: apply a VALIDATED calibration to the live profile config.
+
+    Safety gates (all must pass):
+    - PAV must have shadow_validation_status = 'VALIDATED'
+    - Linked PAS must have requires_human_approval = true
+    - PAV must not already have mutation_applied = true
+    """
+    # Load PAV
+    pav_row = await db.execute(text("""
+        SELECT v.id, v.suggestion_id, v.profile_id,
+               v.shadow_validation_status, v.mutation_applied,
+               v.after_snapshot, v.diff
+        FROM profile_adjustment_versions v
+        WHERE v.id = :vid
+    """), {"vid": version_id})
+    pav = pav_row.fetchone()
+
+    if pav is None:
+        raise HTTPException(status_code=404, detail="Version not found")
+    if pav.shadow_validation_status != "VALIDATED":
+        raise HTTPException(
+            status_code=422,
+            detail=f"Version is not VALIDATED (current: {pav.shadow_validation_status})"
+        )
+    if pav.mutation_applied:
+        raise HTTPException(status_code=422, detail="Already applied")
+
+    # Check PAS has requires_human_approval=true (set by run_shadow_validation_cycle)
+    sugg_row = await db.execute(text("""
+        SELECT requires_human_approval FROM profile_adjustment_suggestions WHERE id = :sid
+    """), {"sid": str(pav.suggestion_id)})
+    sugg = sugg_row.fetchone()
+    if sugg is None or not sugg.requires_human_approval:
+        raise HTTPException(
+            status_code=422,
+            detail="Linked suggestion does not have requires_human_approval=true"
+        )
+
+    # Apply diff to profile config — surgically update scoring.thresholds.buy
+    after_snap = pav.after_snapshot or {}
+    scoring_after = after_snap.get("scoring", {})
+    thresholds_after = scoring_after.get("thresholds", {})
+    new_buy = thresholds_after.get("buy")
+
+    if new_buy is None:
+        raise HTTPException(status_code=422, detail="after_snapshot missing scoring.thresholds.buy")
+
+    await db.execute(text("""
+        UPDATE profiles
+        SET config = jsonb_set(config, '{scoring,thresholds,buy}', :new_buy::jsonb, true)
+        WHERE id = :pid
+    """), {"new_buy": str(new_buy), "pid": str(pav.profile_id)})
+
+    applied_by_label = f"human:{user_id}"
+
+    # Mark PAV as applied
+    await db.execute(text("""
+        UPDATE profile_adjustment_versions
+        SET mutation_applied = true,
+            applied_at       = now(),
+            applied_by       = :applied_by
+        WHERE id = :vid
+    """), {"vid": version_id, "applied_by": applied_by_label})
+
+    # Mark PAS as applied
+    await db.execute(text("""
+        UPDATE profile_adjustment_suggestions
+        SET mutation_applied = true, updated_at = now()
+        WHERE id = :sid
+    """), {"sid": str(pav.suggestion_id)})
+
+    # Close APA
+    await db.execute(text("""
+        UPDATE autopilot_pending_actions
+        SET mutation_applied = true,
+            action_status    = 'COMPLETED',
+            updated_at       = now()
+        WHERE suggestion_id = :sid
+    """), {"sid": str(pav.suggestion_id)})
+
+    await db.commit()
+    return {
+        "version_id": version_id,
+        "profile_id": str(pav.profile_id),
+        "mutation_applied": True,
+        "applied_by": applied_by_label,
+        "new_buy_threshold": new_buy,
+    }
+
+
 def _run_to_dict(r: ProfileIntelligenceRun) -> dict:
     return {
         "id": str(r.id), "user_id": str(r.user_id),

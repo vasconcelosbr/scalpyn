@@ -361,6 +361,18 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
         if win_rate < 0.35:
             _ensure_no_forbidden("REDUCE_RISK")
             sugg_id = uuid.uuid4()
+
+            # Read actual current minimum_score so current_value is never null
+            cfg_row = await db.execute(text("""
+                SELECT config->'scoring'->>'minimum_score' AS min_score
+                FROM profiles WHERE id = :pid::uuid
+            """), {"pid": pid})
+            raw_min_score = cfg_row.scalar()
+            current_min_json = (
+                json.dumps({"minimum_score": int(float(raw_min_score))})
+                if raw_min_score is not None else None
+            )
+
             await db.execute(text("""
                 INSERT INTO profile_adjustment_suggestions
                     (id, run_id, profile_id, profile_name, suggestion_type,
@@ -369,7 +381,8 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
                      mutation_applied, requires_human_approval, created_by, created_at)
                 VALUES
                     (:id, :run_id, :profile_id, :profile_name, 'REDUCE_RISK',
-                     'scoring', 'minimum_score', null, CAST(:suggested AS jsonb),
+                     'scoring', 'minimum_score', CAST(:current_value AS jsonb),
+                     CAST(:suggested AS jsonb),
                      :reason, CAST(:evidence AS jsonb), :confidence, 'PENDING_SHADOW_VALIDATION',
                      false, false, 'profile_intelligence', now())
             """), {
@@ -377,6 +390,7 @@ async def run_medium_cycle(db: AsyncSession) -> dict:
                 "run_id": str(run_id),
                 "profile_id": pid,
                 "profile_name": pname,
+                "current_value": current_min_json,
                 "suggested": json.dumps({"action": "increase_minimum_score", "reason": "low_win_rate"}),
                 "reason": f"win_rate={win_rate:.2%} < 35% threshold — suggest raising minimum score",
                 "evidence": json.dumps({
@@ -495,7 +509,31 @@ async def run_shadow_calibration_cycle(db: AsyncSession) -> dict:
             scoring = row.scoring_config or {}
             thresholds = scoring.get("thresholds", {})
             current_buy = int(thresholds.get("buy", 65))
-            new_buy = min(current_buy + _SCORE_BUMP, _SCORE_CAP)
+
+            # Per-profile bump based on actual shadow trade win_rate severity
+            wr_row = await db.execute(text("""
+                SELECT
+                    COUNT(*) FILTER (WHERE outcome = 'TP_HIT') AS tp,
+                    COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT')) AS total
+                FROM shadow_trades
+                WHERE profile_id = :pid::uuid
+                  AND status = 'COMPLETED'
+                  AND outcome IS NOT NULL
+                  AND created_at >= now() - interval '14 days'
+            """), {"pid": pid})
+            wr = wr_row.fetchone()
+            win_rate_now = (wr.tp / wr.total) if (wr and wr.total >= 5) else None
+
+            if win_rate_now is not None and win_rate_now < 0.25:
+                bump = 15
+            elif win_rate_now is not None and win_rate_now < 0.30:
+                bump = 10
+            elif win_rate_now is not None and win_rate_now < 0.35:
+                bump = 7
+            else:
+                bump = _SCORE_BUMP
+
+            new_buy = min(current_buy + bump, _SCORE_CAP)
 
             before_snap = {"scoring": {"thresholds": {"buy": current_buy}}}
             after_snap = {"scoring": {"thresholds": {"buy": new_buy}}}
@@ -576,6 +614,169 @@ async def run_shadow_calibration_cycle(db: AsyncSession) -> dict:
         "processed": processed,
         "failed": failed,
         "errors": errors,
+    }
+
+
+_SHADOW_VALIDATION_MIN_TRADES = int(os.environ.get("PI_SHADOW_VALIDATION_MIN_TRADES", "10"))
+_SHADOW_VALIDATION_WIN_RATE_GATE = float(os.environ.get("PI_SHADOW_VALIDATION_WIN_RATE_GATE", "0.40"))
+_SHADOW_VALIDATION_BATCH = int(os.environ.get("PI_SHADOW_VALIDATION_BATCH", "10"))
+
+
+async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
+    """Phase 3: evaluate PENDING_VALIDATION PAVs against shadow trade outcomes.
+
+    For each PAV:
+    - INSUFFICIENT_SAMPLE  — < PI_SHADOW_VALIDATION_MIN_TRADES closed trades after creation.
+    - VALIDATED            — win_rate_after >= PI_SHADOW_VALIDATION_WIN_RATE_GATE.
+                             Sets requires_human_approval=true on PAS and APA so the
+                             DB constraint allows mutation_applied=true on human confirm.
+    - VALIDATION_FAILED    — win_rate_after < gate.
+
+    Never sets mutation_applied=true. Never changes live profile config.
+    """
+    run_id = uuid.uuid4()
+
+    pending_rows = await db.execute(text("""
+        SELECT v.id            AS version_id,
+               v.suggestion_id,
+               v.profile_id,
+               v.created_at   AS pav_created,
+               s.id           AS sugg_rec_id
+        FROM profile_adjustment_versions v
+        JOIN profile_adjustment_suggestions s ON s.id = v.suggestion_id
+        WHERE v.shadow_validation_status = 'PENDING_VALIDATION'
+          AND v.created_at < now() - interval '1 hour'
+        ORDER BY v.created_at ASC
+        LIMIT :batch
+    """), {"batch": _SHADOW_VALIDATION_BATCH})
+    rows = pending_rows.fetchall()
+
+    validated = insufficient = failed = 0
+
+    for row in rows:
+        pid = str(row.profile_id)
+        pav_created = row.pav_created
+
+        before_row = await db.execute(text("""
+            SELECT
+                COUNT(*) FILTER (WHERE outcome = 'TP_HIT') AS tp,
+                COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT')) AS total
+            FROM shadow_trades
+            WHERE profile_id = :pid::uuid
+              AND status = 'COMPLETED'
+              AND outcome IS NOT NULL
+              AND created_at >= :pav_created - interval '14 days'
+              AND created_at <  :pav_created
+        """), {"pid": pid, "pav_created": pav_created})
+        b = before_row.fetchone()
+        win_rate_before = float(b.tp / b.total) if (b and b.total >= 5) else None
+
+        after_row = await db.execute(text("""
+            SELECT
+                COUNT(*) FILTER (WHERE outcome = 'TP_HIT') AS tp,
+                COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT')) AS total
+            FROM shadow_trades
+            WHERE profile_id = :pid::uuid
+              AND status = 'COMPLETED'
+              AND outcome IS NOT NULL
+              AND created_at >= :pav_created
+        """), {"pid": pid, "pav_created": pav_created})
+        a = after_row.fetchone()
+        after_total = a.total if a else 0
+
+        if a is None or after_total < _SHADOW_VALIDATION_MIN_TRADES:
+            await db.execute(text("""
+                UPDATE profile_adjustment_versions
+                SET shadow_validation_status = 'INSUFFICIENT_SAMPLE',
+                    win_rate_before          = :wb,
+                    validation_reason        = :reason
+                WHERE id = :vid
+            """), {
+                "vid": str(row.version_id),
+                "wb": win_rate_before,
+                "reason": f"trades_after={after_total} < min={_SHADOW_VALIDATION_MIN_TRADES}",
+            })
+            insufficient += 1
+            continue
+
+        win_rate_after = float(a.tp / a.total)
+
+        if win_rate_after >= _SHADOW_VALIDATION_WIN_RATE_GATE:
+            await db.execute(text("""
+                UPDATE profile_adjustment_versions
+                SET shadow_validation_status = 'VALIDATED',
+                    win_rate_before          = :wb,
+                    win_rate_after           = :wa,
+                    validated_at             = now(),
+                    validation_reason        = :reason
+                WHERE id = :vid
+            """), {
+                "vid": str(row.version_id),
+                "wb": win_rate_before,
+                "wa": win_rate_after,
+                "reason": (
+                    f"win_rate_after={win_rate_after:.2%} "
+                    f">= gate={_SHADOW_VALIDATION_WIN_RATE_GATE:.0%}"
+                ),
+            })
+            # Allow human to approve: set requires_human_approval=true so the DB
+            # constraint (mutation_applied=false OR requires_human_approval=true) is
+            # satisfied when the apply endpoint flips mutation_applied=true.
+            await db.execute(text("""
+                UPDATE profile_adjustment_suggestions
+                SET requires_human_approval = true, updated_at = now()
+                WHERE id = :sid
+            """), {"sid": str(row.sugg_rec_id)})
+            await db.execute(text("""
+                UPDATE autopilot_pending_actions
+                SET requires_human_approval = true, updated_at = now()
+                WHERE suggestion_id = :sid AND action_status = 'PROCESSING'
+            """), {"sid": str(row.sugg_rec_id)})
+            validated += 1
+        else:
+            await db.execute(text("""
+                UPDATE profile_adjustment_versions
+                SET shadow_validation_status = 'VALIDATION_FAILED',
+                    win_rate_before          = :wb,
+                    win_rate_after           = :wa,
+                    validation_reason        = :reason
+                WHERE id = :vid
+            """), {
+                "vid": str(row.version_id),
+                "wb": win_rate_before,
+                "wa": win_rate_after,
+                "reason": (
+                    f"win_rate_after={win_rate_after:.2%} "
+                    f"< gate={_SHADOW_VALIDATION_WIN_RATE_GATE:.0%}"
+                ),
+            })
+            await db.execute(text("""
+                UPDATE autopilot_pending_actions
+                SET action_status = 'CANCELLED', updated_at = now()
+                WHERE suggestion_id = :sid AND action_status = 'PROCESSING'
+            """), {"sid": str(row.sugg_rec_id)})
+            failed += 1
+
+    await _log_activity(db, run_id=run_id,
+                        event_type="SHADOW_VALIDATION_COMPLETED",
+                        phase="shadow_validation",
+                        message=(
+                            f"Ciclo de validação: validated={validated} "
+                            f"insufficient={insufficient} failed={failed}"
+                        ),
+                        payload={
+                            "validated": validated,
+                            "insufficient_sample": insufficient,
+                            "validation_failed": failed,
+                            "total_processed": len(rows),
+                        })
+    await db.commit()
+    return {
+        "cycle": "shadow_validation",
+        "validated": validated,
+        "insufficient_sample": insufficient,
+        "validation_failed": failed,
+        "total_processed": len(rows),
     }
 
 
