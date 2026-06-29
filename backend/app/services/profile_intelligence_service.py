@@ -722,7 +722,17 @@ class ProfileIntelligenceService:
             await log_pi_event(
                 db, user_id, "indicator_lift_completed",
                 run_id=run_id,
-                result_json={"buckets_computed": len(indicator_stats)},
+                result_json={
+                    "buckets_computed": len(indicator_stats),
+                    "top_winning_buckets": [
+                        {"indicator": s.indicator, "bucket": s.bucket_label, "win_rate": float(s.win_rate) if s.win_rate else 0, "lift": float(s.lift_vs_base) if s.lift_vs_base else 0}
+                        for s in sorted([x for x in indicator_stats if x.role_detected == "winning_indicator"], key=lambda x: x.lift_vs_base or 0, reverse=True)[:10]
+                    ],
+                    "top_losing_buckets": [
+                        {"indicator": s.indicator, "bucket": s.bucket_label, "win_rate": float(s.win_rate) if s.win_rate else 0, "lift": float(s.lift_vs_base) if s.lift_vs_base else 0}
+                        for s in sorted([x for x in indicator_stats if x.role_detected == "losing_indicator"], key=lambda x: x.lift_vs_base or 0)[:10]
+                    ],
+                },
             )
         except Exception as exc:
             logger.error("[PIEngine] IndicatorLiftAnalyzer failed: %s", exc)
@@ -742,7 +752,10 @@ class ProfileIntelligenceService:
             await log_pi_event(
                 db, user_id, "rule_contribution_completed",
                 run_id=run_id,
-                result_json={"rules_computed": len(rule_results)},
+                result_json={
+                    "rules_computed": len(rule_results),
+                    "top_rules": sorted(rule_results, key=lambda x: x["win_rate"], reverse=True)[:10]
+                },
             )
         except Exception as exc:
             logger.error("[PIEngine] RuleContributionAnalyzer failed: %s", exc)
