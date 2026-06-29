@@ -1804,8 +1804,9 @@ async def apply_calibration_version(
         raise HTTPException(status_code=422, detail="after_snapshot missing scoring.thresholds.buy")
 
     # Fetch previous config for audit
-    prof_row = await db.execute(text("SELECT config FROM profiles WHERE id = :pid"), {"pid": str(pav.profile_id)})
+    prof_row = await db.execute(text("SELECT name, config FROM profiles WHERE id = :pid"), {"pid": str(pav.profile_id)})
     prof_data = prof_row.fetchone()
+    prof_name = prof_data.name if prof_data else "Unknown"
     prev_config = prof_data.config if prof_data else {}
     
     new_config = dict(prev_config)
@@ -1824,14 +1825,16 @@ async def apply_calibration_version(
 
     import uuid
     # Insert audit trail
+    action_detail = f"Manually applied shadow validation mutation to profile '{prof_name}'. Buy threshold changed to {new_buy}."
     await db.execute(text("""
         INSERT INTO profile_audit_log (id, user_id, profile_id, changed_by, change_source, change_description, previous_config, new_config, created_at)
-        VALUES (:id, :uid, :pid, :cb, 'Manual Human Calibration', 'Manually applied shadow validation mutation', :prev, :new_c, now())
+        VALUES (:id, :uid, :pid, :cb, 'Manual Human Calibration', :desc, :prev, :new_c, now())
     """), {
         "id": str(uuid.uuid4()),
         "uid": str(user_id),
         "pid": str(pav.profile_id),
         "cb": str(user_id),
+        "desc": action_detail,
         "prev": json.dumps(prev_config),
         "new_c": json.dumps(new_config)
     })

@@ -643,6 +643,7 @@ async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
                v.created_at   AS pav_created,
                s.id           AS sugg_rec_id,
                p.user_id      AS user_id,
+               p.name         AS profile_name,
                v.after_snapshot AS after_snapshot
         FROM profile_adjustment_versions v
         JOIN profile_adjustment_suggestions s ON s.id = v.suggestion_id
@@ -735,13 +736,15 @@ async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
                 """), {"new_buy": str(new_buy), "pid": str(row.profile_id)})
                 
                 # Insert audit trail
+                action_detail = f"Auto-applied shadow validation mutation to profile '{row.profile_name}'. Buy threshold changed to {new_buy}."
                 await db.execute(text("""
                     INSERT INTO profile_audit_log (id, user_id, profile_id, changed_by, change_source, change_description, previous_config, new_config, created_at)
-                    VALUES (:id, :uid, :pid, NULL, 'Auto-Pilot Calibration', 'Auto-applied shadow validation mutation', :prev, :new_c, now())
+                    VALUES (:id, :uid, :pid, NULL, 'Auto-Pilot Calibration', :desc, :prev, :new_c, now())
                 """), {
                     "id": str(uuid.uuid4()),
                     "uid": str(row.user_id),
                     "pid": str(row.profile_id),
+                    "desc": action_detail,
                     "prev": json.dumps(prev_config),
                     "new_c": json.dumps(new_config)
                 })
