@@ -1803,6 +1803,17 @@ async def apply_calibration_version(
     if new_buy is None:
         raise HTTPException(status_code=422, detail="after_snapshot missing scoring.thresholds.buy")
 
+    # Fetch previous config for audit
+    prof_row = await db.execute(text("SELECT config FROM profiles WHERE id = :pid"), {"pid": str(pav.profile_id)})
+    prof_data = prof_row.fetchone()
+    prev_config = prof_data.config if prof_data else {}
+    
+    new_config = dict(prev_config)
+    if new_buy is not None:
+        if "scoring" not in new_config: new_config["scoring"] = {}
+        if "thresholds" not in new_config["scoring"]: new_config["scoring"]["thresholds"] = {}
+        new_config["scoring"]["thresholds"]["buy"] = new_buy
+
     await db.execute(text("""
         UPDATE profiles
         SET config = jsonb_set(config, '{scoring,thresholds,buy}', :new_buy::jsonb, true)
@@ -1810,6 +1821,20 @@ async def apply_calibration_version(
     """), {"new_buy": str(new_buy), "pid": str(pav.profile_id)})
 
     applied_by_label = f"human:{user_id}"
+
+    import uuid
+    # Insert audit trail
+    await db.execute(text("""
+        INSERT INTO profile_audit_log (id, user_id, profile_id, changed_by, change_source, change_description, previous_config, new_config, created_at)
+        VALUES (:id, :uid, :pid, :cb, 'Manual Human Calibration', 'Manually applied shadow validation mutation', :prev, :new_c, now())
+    """), {
+        "id": str(uuid.uuid4()),
+        "uid": str(user_id),
+        "pid": str(pav.profile_id),
+        "cb": str(user_id),
+        "prev": json.dumps(prev_config),
+        "new_c": json.dumps(new_config)
+    })
 
     # Mark PAV as applied
     await db.execute(text("""

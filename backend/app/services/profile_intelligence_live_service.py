@@ -641,9 +641,12 @@ async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
                v.suggestion_id,
                v.profile_id,
                v.created_at   AS pav_created,
-               s.id           AS sugg_rec_id
+               s.id           AS sugg_rec_id,
+               p.user_id      AS user_id,
+               v.after_snapshot AS after_snapshot
         FROM profile_adjustment_versions v
         JOIN profile_adjustment_suggestions s ON s.id = v.suggestion_id
+        JOIN profiles p ON p.id = v.profile_id
         WHERE v.shadow_validation_status = 'PENDING_VALIDATION'
           AND v.created_at < now() - interval '1 hour'
         ORDER BY v.created_at ASC
@@ -702,37 +705,109 @@ async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
         win_rate_after = float(a.tp / a.total)
 
         if win_rate_after >= _SHADOW_VALIDATION_WIN_RATE_GATE:
-            await db.execute(text("""
-                UPDATE profile_adjustment_versions
-                SET shadow_validation_status = 'VALIDATED',
-                    win_rate_before          = :wb,
-                    win_rate_after           = :wa,
-                    validated_at             = now(),
-                    validation_reason        = :reason
-                WHERE id = :vid
-            """), {
-                "vid": str(row.version_id),
-                "wb": win_rate_before,
-                "wa": win_rate_after,
-                "reason": (
-                    f"win_rate_after={win_rate_after:.2%} "
-                    f">= gate={_SHADOW_VALIDATION_WIN_RATE_GATE:.0%}"
-                ),
-            })
-            # Allow human to approve: set requires_human_approval=true so the DB
-            # constraint (mutation_applied=false OR requires_human_approval=true) is
-            # satisfied when the apply endpoint flips mutation_applied=true.
-            await db.execute(text("""
-                UPDATE profile_adjustment_suggestions
-                SET requires_human_approval = true, status = 'VALIDATED', updated_at = now()
-                WHERE id = :sid
-            """), {"sid": str(row.sugg_rec_id)})
-            await db.execute(text("""
-                UPDATE autopilot_pending_actions
-                SET requires_human_approval = true, updated_at = now()
-                WHERE suggestion_id = :sid AND action_status = 'PROCESSING'
-            """), {"sid": str(row.sugg_rec_id)})
-            validated += 1
+            # Check if autopilot is enabled to auto-apply
+            ap_row = await db.execute(text("""
+                SELECT enabled FROM profile_intelligence_autopilot_settings WHERE user_id = :uid
+            """), {"uid": str(row.user_id)})
+            ap_settings = ap_row.fetchone()
+            auto_apply = bool(ap_settings and ap_settings.enabled)
+
+            if auto_apply:
+                # Auto-apply the mutation to live profile config
+                new_buy = row.after_snapshot.get("scoring", {}).get("thresholds", {}).get("buy")
+                
+                # Fetch previous config for audit
+                prof_row = await db.execute(text("SELECT config FROM profiles WHERE id = :pid"), {"pid": str(row.profile_id)})
+                prof_data = prof_row.fetchone()
+                prev_config = prof_data.config if prof_data else {}
+                
+                new_config = dict(prev_config)
+                if new_buy is not None:
+                    if "scoring" not in new_config: new_config["scoring"] = {}
+                    if "thresholds" not in new_config["scoring"]: new_config["scoring"]["thresholds"] = {}
+                    new_config["scoring"]["thresholds"]["buy"] = new_buy
+                
+                # Update live profile
+                await db.execute(text("""
+                    UPDATE profiles
+                    SET config = jsonb_set(config, '{scoring,thresholds,buy}', :new_buy::jsonb, true)
+                    WHERE id = :pid
+                """), {"new_buy": str(new_buy), "pid": str(row.profile_id)})
+                
+                # Insert audit trail
+                await db.execute(text("""
+                    INSERT INTO profile_audit_log (id, user_id, profile_id, changed_by, change_source, change_description, previous_config, new_config, created_at)
+                    VALUES (:id, :uid, :pid, NULL, 'Auto-Pilot Calibration', 'Auto-applied shadow validation mutation', :prev, :new_c, now())
+                """), {
+                    "id": str(uuid.uuid4()),
+                    "uid": str(row.user_id),
+                    "pid": str(row.profile_id),
+                    "prev": json.dumps(prev_config),
+                    "new_c": json.dumps(new_config)
+                })
+
+                # Update PAV
+                await db.execute(text("""
+                    UPDATE profile_adjustment_versions
+                    SET shadow_validation_status = 'VALIDATED',
+                        win_rate_before          = :wb,
+                        win_rate_after           = :wa,
+                        validated_at             = now(),
+                        validation_reason        = :reason,
+                        mutation_applied         = true,
+                        applied_at               = now(),
+                        applied_by               = 'system:auto-pilot'
+                    WHERE id = :vid
+                """), {
+                    "vid": str(row.version_id),
+                    "wb": win_rate_before,
+                    "wa": win_rate_after,
+                    "reason": f"win_rate_after={win_rate_after:.2%} >= gate={_SHADOW_VALIDATION_WIN_RATE_GATE:.0%} (Auto-applied)"
+                })
+                
+                # Update PAS
+                await db.execute(text("""
+                    UPDATE profile_adjustment_suggestions
+                    SET status = 'APPLIED', mutation_applied = true, updated_at = now()
+                    WHERE id = :sid
+                """), {"sid": str(row.sugg_rec_id)})
+                
+                # Update APA
+                await db.execute(text("""
+                    UPDATE autopilot_pending_actions
+                    SET mutation_applied = true, action_status = 'COMPLETED', updated_at = now()
+                    WHERE suggestion_id = :sid AND action_status = 'PROCESSING'
+                """), {"sid": str(row.sugg_rec_id)})
+                validated += 1
+            else:
+                await db.execute(text("""
+                    UPDATE profile_adjustment_versions
+                    SET shadow_validation_status = 'VALIDATED',
+                        win_rate_before          = :wb,
+                        win_rate_after           = :wa,
+                        validated_at             = now(),
+                        validation_reason        = :reason
+                    WHERE id = :vid
+                """), {
+                    "vid": str(row.version_id),
+                    "wb": win_rate_before,
+                    "wa": win_rate_after,
+                    "reason": (
+                        f"win_rate_after={win_rate_after:.2%} "
+                        f">= gate={_SHADOW_VALIDATION_WIN_RATE_GATE:.0%}"
+                    ),
+                })
+                await db.execute(text("""
+                    UPDATE profile_adjustment_suggestions
+                    SET requires_human_approval = true, status = 'VALIDATED', updated_at = now()
+                    WHERE id = :sid
+                """), {"sid": str(row.sugg_rec_id)})
+                await db.execute(text("""
+                    UPDATE autopilot_pending_actions
+                    SET requires_human_approval = true, updated_at = now()
+                    WHERE suggestion_id = :sid AND action_status = 'PROCESSING'
+                """), {"sid": str(row.sugg_rec_id)})
+                validated += 1
         else:
             await db.execute(text("""
                 UPDATE profile_adjustment_versions
