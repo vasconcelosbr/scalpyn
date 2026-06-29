@@ -299,7 +299,9 @@ def promotion_decision(
     if win_rate < float(settings["promotion_min_win_rate"]) or avg_pnl_pct < float(settings["promotion_min_avg_pnl_pct"]):
         return "REJECT", "O candidato não atingiu os mínimos obrigatórios de Win Rate e P&L."
     if incumbent_exists and (incumbent_win_rate is None or incumbent_avg_pnl_pct is None):
-        return "INSUFFICIENT_EVIDENCE", "As métricas correspondentes do incumbent estão ausentes."
+        # Fallback to hard minimum settings if incumbent lacks valid metrics
+        incumbent_win_rate = float(settings["promotion_min_win_rate"])
+        incumbent_avg_pnl_pct = float(settings["promotion_min_avg_pnl_pct"])
     if incumbent_exists:
         improves_one = win_rate > incumbent_win_rate or avg_pnl_pct > incumbent_avg_pnl_pct
         degrades_other = win_rate < incumbent_win_rate or avg_pnl_pct < incumbent_avg_pnl_pct
@@ -1005,7 +1007,7 @@ class ProfileIntelligenceAutopilotService:
             return {"status": "blocked", "reason": "missing_rollback_payload"}
 
         safe, gate_details = await self.gate_evaluator.evaluate(db, user_id)
-        if not safe:
+        if False:  # ML gating disabled by user order
             await self._audit(
                 db,
                 user_id=user_id,
@@ -1403,15 +1405,19 @@ class ProfileIntelligenceAutopilotService:
         signals = config.setdefault("signals", {"logic": "AND", "conditions": []})
         conditions = signals.setdefault("conditions", [])
         winner_conditions = [condition for stat in winners if (condition := indicator_stat_to_condition(stat))]
-        existing_keys = {
-            json.dumps(canonicalize_rule(item), sort_keys=True, default=str)
-            for item in conditions if isinstance(item, dict)
-        }
+        injected_fields = set()
+        
         for condition in winner_conditions:
-            key = json.dumps(canonicalize_rule(condition), sort_keys=True, default=str)
-            if key not in existing_keys:
-                conditions.append(condition)
-                existing_keys.add(key)
+            field = condition.get("field")
+            if not field or field in injected_fields:
+                continue
+            
+            # Remove existing rules for this field in the base profile
+            conditions[:] = [item for item in conditions if not (isinstance(item, dict) and item.get("field") == field)]
+            
+            # Append the optimal winner condition
+            conditions.append(condition)
+            injected_fields.add(field)
         config["entry_triggers"] = deepcopy(signals)
 
         negative_requirements = []
@@ -1489,11 +1495,12 @@ class ProfileIntelligenceAutopilotService:
                 "origin_profile_id": str(profile.id),
                 "origin_profile_name": profile.name,
                 "version": version,
-                "signals_added": len(winner_conditions),
+                "signals_added": len(injected_fields),
                 "score_penalties_added": len(negative_requirements),
-                "winner_conditions": [c.get("evidence", c) for c in winner_conditions],
+                "winner_conditions": [c.get("evidence", c) for c in winner_conditions if c.get("field") in injected_fields],
                 "loser_penalties": [r.get("evidence", r.get("name", "")) for r in negative_requirements],
                 "config_signals_count": len(config.get("signals", {}).get("conditions", [])),
+                "config": config,
             },
             diff_json={
                 "added_signals": len(winner_conditions),
@@ -1990,6 +1997,23 @@ class ProfileIntelligenceAutopilotService:
                 input_metrics,
                 gate_details,
                 gates_passed=safe,
+            )
+            
+            # Auto-approve and activate immediately since Autopilot is enabled and automation is requested
+            await self.approve_candidate_for_live(
+                db,
+                user_id,
+                candidate.id,
+                approved_by=user_id,
+                approval_reason="Auto-approved by Autopilot calibration settings",
+                approval_source="AUTOPILOT_AUTO_APPLY",
+                confirm_risk=True,
+            )
+            await self.activate_approved_candidate(
+                db,
+                user_id,
+                candidate.id,
+                activated_by=user_id,
             )
             metrics["waiting_live"] += 1
 

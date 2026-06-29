@@ -76,7 +76,7 @@ def _run_async(coro):
 
 async def _run_pi_job():
     """Main async logic for PI Engine job."""
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal
     from ..services.profile_intelligence_service import ProfileIntelligenceService
     from sqlalchemy import text
 
@@ -84,7 +84,7 @@ async def _run_pi_job():
 
     svc = ProfileIntelligenceService()
 
-    async with AsyncSessionLocal() as db:
+    async with CeleryAsyncSessionLocal() as db:
         try:
             rows = (await db.execute(text("""
                 SELECT DISTINCT user_id
@@ -112,7 +112,7 @@ async def _run_pi_job():
             logger.info("[PIJob] Lock exists for user %s — skipping (another run in progress)", user_id)
             continue
 
-        async with AsyncSessionLocal() as db:
+        async with CeleryAsyncSessionLocal() as db:
             try:
                 run_id = await svc.run(
                     db=db,
@@ -185,7 +185,7 @@ def run(self):
 
 async def _run_for_user(user_id, force_autopilot: bool = False):
     from uuid import UUID
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal
     from ..services.profile_intelligence_service import ProfileIntelligenceService
     from ..services.profile_intelligence_autopilot_service import ProfileIntelligenceAutopilotService
 
@@ -194,7 +194,7 @@ async def _run_for_user(user_id, force_autopilot: bool = False):
     if not acquired:
         return {"status": "duplicate"}
     try:
-        async with AsyncSessionLocal() as db:
+        async with CeleryAsyncSessionLocal() as db:
             run_id = await ProfileIntelligenceService().run(
                 db=db,
                 user_id=uid,
@@ -259,7 +259,7 @@ def train_ml_challengers_for_user(self, user_id: str):
 async def _run_cycle_only_for_user(user_id):
     """Apenas o ciclo Auto-Pilot — sem análise PI completa."""
     from uuid import UUID
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal
     from ..services.profile_intelligence_autopilot_service import ProfileIntelligenceAutopilotService
 
     uid = UUID(str(user_id))
@@ -267,7 +267,7 @@ async def _run_cycle_only_for_user(user_id):
     if not acquired:
         return {"status": "duplicate"}
     try:
-        async with AsyncSessionLocal() as db:
+        async with CeleryAsyncSessionLocal() as db:
             return await ProfileIntelligenceAutopilotService().run_cycle(
                 db=db,
                 user_id=uid,
@@ -285,11 +285,11 @@ def run_cycle_for_user(self, user_id: str):
 
 
 async def _monitor_autopilot():
-    from ..database import AsyncSessionLocal
+    from ..database import CeleryAsyncSessionLocal
     from ..services.profile_intelligence_autopilot_service import ProfileIntelligenceAutopilotService
     from sqlalchemy import text
 
-    async with AsyncSessionLocal() as db:
+    async with CeleryAsyncSessionLocal() as db:
         rows = (await db.execute(text("""
             SELECT user_id
             FROM profile_intelligence_autopilot_settings
@@ -297,7 +297,7 @@ async def _monitor_autopilot():
         """))).fetchall()
     service = ProfileIntelligenceAutopilotService()
     for row in rows:
-        async with AsyncSessionLocal() as db:
+        async with CeleryAsyncSessionLocal() as db:
             try:
                 await service.monitor_operational_state(db, row.user_id)
             except Exception as exc:

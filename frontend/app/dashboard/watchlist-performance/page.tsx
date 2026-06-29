@@ -10,6 +10,7 @@ import {
   type WatchlistPerformanceRow,
   type WatchlistPriority,
 } from "@/lib/watchlistPerformance";
+import { VersionIntelligence } from "@/components/watchlist/VersionIntelligence";
 
 const C = {
   surface: "#10121A", elevated: "#161824", border: "rgba(255,255,255,0.08)", text: "#E6E8EE",
@@ -165,6 +166,8 @@ export default function WatchlistPerformanceDashboard() {
           </div>
         </div>
       </section>
+
+      <VersionIntelligence />
 
       <section className="overflow-hidden rounded-2xl" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4" style={{ borderColor: C.border }}>
