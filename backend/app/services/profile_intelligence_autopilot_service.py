@@ -1461,8 +1461,9 @@ class ProfileIntelligenceAutopilotService:
             "spot_only": True,
         })
         version = int(await db.scalar(
-            select(func.count(ProfileIntelligenceAutopilotCandidate.id)).where(
-                ProfileIntelligenceAutopilotCandidate.origin_profile_id == profile.id
+            select(func.count(ProfileAuditLog.id)).where(
+                ProfileAuditLog.profile_id == profile.id,
+                ProfileAuditLog.change_source == "profile_intelligence_autopilot"
             )
         ) or 0) + 1
         evidence = {
@@ -1470,26 +1471,38 @@ class ProfileIntelligenceAutopilotService:
             "top_losers": [rule["evidence"] for rule in negative_requirements],
             "origin_profile_version": profile.profile_version.isoformat() if profile.profile_version else None,
         }
+        now = utcnow()
+        previous_config = profile.config
+        previous_version = profile.profile_version
+
+        # In-Place Update
+        profile.config = config
+        profile.profile_version = now
+        db.add(profile)
+
+        # Audit Log (Source of truth for versions)
+        db.add(ProfileAuditLog(
+            id=uuid4(),
+            user_id=user_id,
+            profile_id=profile.id,
+            changed_by=user_id,
+            change_source="profile_intelligence_autopilot",
+            change_description=f"Auto-Pilot in-place mutation (v{version}).",
+            previous_config=previous_config,
+            new_config=config,
+            previous_profile_version=previous_version,
+            new_profile_version=now,
+            evidence_json=evidence,
+        ))
+        
         candidate_name = f"{profile.name} · Auto-Pilot v{version}"
-        await self._create_candidate(
-            db, user_id, cycle, settings, metrics,
-            name=candidate_name,
-            description=f"Clone versionado e calibrado automaticamente a partir de {profile.name}.",
-            config=config,
-            origin_profile_id=profile.id,
-            previous_profile_id=profile.id,
-            target_watchlist_id=target_watchlist.id,
-            source_suggestion_id=None,
-            source_combination_id=None,
-            version_number=version,
-            evidence=evidence,
-        )
+
         await log_pi_event(
             db, user_id,
-            event_type="CANDIDATE_PROFILE_CREATED",
-            event_description=f"Clone shadow criado: {candidate_name}",
+            event_type="PROFILE_MUTATED_IN_PLACE",
+            event_description=f"Mutação in-place aplicada: {candidate_name}",
             run_id=cycle.analysis_run_id,
-            profile_name=candidate_name,
+            profile_name=profile.name,
             source_run_id=cycle.analysis_run_id,
             after_json={
                 "origin_profile_id": str(profile.id),
