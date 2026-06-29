@@ -724,7 +724,7 @@ async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
             # satisfied when the apply endpoint flips mutation_applied=true.
             await db.execute(text("""
                 UPDATE profile_adjustment_suggestions
-                SET requires_human_approval = true, updated_at = now()
+                SET requires_human_approval = true, status = 'VALIDATED', updated_at = now()
                 WHERE id = :sid
             """), {"sid": str(row.sugg_rec_id)})
             await db.execute(text("""
@@ -750,6 +750,11 @@ async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
                     f"< gate={_SHADOW_VALIDATION_WIN_RATE_GATE:.0%}"
                 ),
             })
+            await db.execute(text("""
+                UPDATE profile_adjustment_suggestions
+                SET status = 'REJECTED', updated_at = now()
+                WHERE id = :sid
+            """), {"sid": str(row.sugg_rec_id)})
             await db.execute(text("""
                 UPDATE autopilot_pending_actions
                 SET action_status = 'CANCELLED', updated_at = now()

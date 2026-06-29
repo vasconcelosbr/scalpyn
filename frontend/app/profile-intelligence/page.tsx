@@ -3017,7 +3017,8 @@ export default function ProfileIntelligencePage() {
               </div>
               <div className="space-y-1">
                 {[
-                  ["Sugestões pendentes", liveAdjustments.filter(s => s.status === "PENDING_SHADOW_VALIDATION").length],
+                  ["Em validação Shadow", liveAdjustments.filter(s => s.status === "PENDING_SHADOW_VALIDATION" || s.status === "SHADOW_APPLIED").length],
+                  ["Aguardando Aprovação", liveAdjustments.filter(s => s.status === "VALIDATED" || (s.requires_human_approval && !s.mutation_applied)).length],
                   ["Total sugestões", liveAdjustments.length],
                   ["Mutations aplicadas", liveAdjustments.filter(s => s.mutation_applied).length],
                 ].map(([label, value]) => (
