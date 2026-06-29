@@ -124,6 +124,7 @@ interface Combination {
   created_at?: string;
   source_profiles?: string[];
   source_profile_ids?: string[];
+  autopilot_decision?: string | null;
 }
 
 interface Suggestion {
@@ -169,11 +170,21 @@ interface AuditEntry {
   run_id?: string | null;
   suggestion_id?: string | null;
   combination_id?: string | null;
+  profile_id?: string | null;
+  profile_name?: string | null;
+  actor_user_id?: string | null;
+  source_run_id?: string | null;
   event_description?: string | null;
   model_provider?: string | null;
   model_name?: string | null;
   payload_json?: any;
   result_json?: any;
+  before_json?: any;
+  after_json?: any;
+  diff_json?: any;
+  mutation_applied?: boolean | null;
+  mutation_status?: string | null;
+  dry_run?: boolean | null;
   created_at: string;
 }
 
@@ -381,6 +392,30 @@ function blockedReasonLabel(reason: string | null | undefined): string {
 function blockedNextAction(reason: string | null | undefined): string | null {
   if (!reason) return "Executar o PI Engine para processar esta combinação.";
   return NEXT_ACTION_MAP[reason] ?? null;
+}
+
+const AUTOPILOT_DECISION_LABELS: Record<string, { label: string; color: string }> = {
+  AUTO_APPROVED_FOR_SHADOW:               { label: "Aprovado para shadow",          color: "text-green-400" },
+  DRY_RUN_ONLY:                           { label: "Simulado (dry run)",            color: "text-yellow-400" },
+  APPLIED_TO_SHADOW:                      { label: "Aplicado em shadow",            color: "text-blue-400" },
+  APPLIED_TO_PROFILE_CONFIG:              { label: "Aplicado no profile",           color: "text-green-500" },
+  AUTO_REJECTED_INSUFFICIENT_EVIDENCE:    { label: "Rejeitado — evidência insuficiente", color: "text-red-400" },
+  AUTO_REJECTED_RISK:                     { label: "Rejeitado — risco elevado",     color: "text-red-400" },
+  AUTO_REJECTED_PROFILE_CONFLICT:         { label: "Rejeitado — conflito de profile", color: "text-orange-400" },
+  AUTO_REJECTED_DUPLICATE_RULE:           { label: "Rejeitado — regra duplicada",   color: "text-orange-400" },
+  AUTO_REJECTED_LOW_SAMPLE:               { label: "Rejeitado — amostra insuficiente", color: "text-red-400" },
+  AUTO_REJECTED_NEGATIVE_EV:              { label: "Rejeitado — EV negativo",       color: "text-red-400" },
+  AUTO_ARCHIVED_HYPOTHESIS:               { label: "Hipótese arquivada",            color: "text-[var(--text-tertiary)]" },
+};
+
+function autopilotDecisionBadge(decision: string | null | undefined) {
+  if (!decision) return null;
+  const d = AUTOPILOT_DECISION_LABELS[decision];
+  return (
+    <span className={`text-[10px] font-medium ${d?.color || "text-[var(--text-tertiary)]"}`}>
+      {d?.label || decision.replace(/_/g, " ")}
+    </span>
+  );
 }
 
 function combinationTypeBadge(type: string) {
@@ -2310,7 +2345,7 @@ export default function ProfileIntelligencePage() {
                 <table className="w-full text-[12px]">
                   <thead>
                     <tr className="border-b border-[var(--border-subtle)]">
-                      {["Nome / Família", "Tipo", "Validation", "Discovery Trades", "Validation Trades", "Validation Lift", "Champion Score", "Confidence", "Overfit", ""].map(h => (
+                      {["Nome / Família", "Tipo", "Decisão Auto-Pilot", "Discovery Trades", "Validation Trades", "Validation Lift", "Champion Score", "Confidence", "Overfit", ""].map(h => (
                         <th key={h} className="px-4 py-2 text-left text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -2323,7 +2358,7 @@ export default function ProfileIntelligencePage() {
                           {c.setup_family && <div className="text-[10px] text-[var(--text-tertiary)]">{c.setup_family}</div>}
                         </td>
                         <td className="px-4 py-2.5">{combinationTypeBadge(c.combination_type)}</td>
-                        <td className="px-4 py-2.5">{validationBadge(c)}</td>
+                        <td className="px-4 py-2.5">{autopilotDecisionBadge(c.autopilot_decision)}</td>
                         <td className="px-4 py-2.5 text-[var(--text-secondary)]">{c.discovery_metrics_json?.total_cases ?? c.total_cases ?? "—"}</td>
                         <td className="px-4 py-2.5 text-[var(--text-secondary)]">{c.validation_metrics_json?.total_cases ?? "—"}</td>
                         <td className="px-4 py-2.5 text-[var(--text-secondary)]">
@@ -2438,58 +2473,126 @@ export default function ProfileIntelligencePage() {
         <div className="card">
           <div className="p-4 border-b border-[var(--border-default)]">
             <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">Audit Trail</h2>
-            <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">Log imutável de eventos do Profile Intelligence Engine.</p>
+            <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">Log imutável de eventos do Profile Intelligence Engine — incluindo diffs antes/depois de mutações.</p>
           </div>
           {loadingTab ? <TableSkeleton /> : audit.length === 0 ? (
             <div className="p-8 text-center text-[12px] text-[var(--text-tertiary)]">Nenhum evento registrado ainda.</div>
           ) : (
             <div className="divide-y divide-[var(--border-subtle)]">
-              {audit.map(entry => (
-                <div key={entry.id}>
-                  <button
-                    className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[var(--bg-elevated)] transition-colors"
-                    onClick={() => setExpandedAudit(expandedAudit === entry.id ? null : entry.id)}
-                  >
-                    <span className="shrink-0 text-[var(--text-tertiary)]">
-                      {expandedAudit === entry.id ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                    </span>
-                    <span className="flex-1 flex items-center gap-2 min-w-0 flex-wrap">
-                      <span className={`badge text-[10px] ${entry.event_type.includes("error") || entry.event_type.includes("failed") ? "bearish" : entry.event_type.includes("completed") || entry.event_type.includes("finished") ? "bullish" : entry.event_type.includes("anthropic") || entry.event_type.includes("ai_") ? "range" : "range"}`}>
-                        {entry.event_type}
+              {audit.map(entry => {
+                const hasDiff = entry.diff_json || (entry.before_json && entry.after_json);
+                const isApplied = entry.mutation_applied === true;
+                const isDryRun = entry.dry_run === true;
+                const mutStatus = entry.mutation_status;
+                const mutStatusColor =
+                  mutStatus === "APPLIED_TO_PROFILE_CONFIG" ? "text-green-400" :
+                  mutStatus === "APPLIED_TO_SHADOW" ? "text-blue-400" :
+                  mutStatus === "DRY_RUN_ONLY" ? "text-yellow-400" :
+                  mutStatus?.startsWith("AUTO_REJECTED") ? "text-red-400" :
+                  "text-[var(--text-tertiary)]";
+                const MUTATION_STATUS_LABELS_FRONTEND: Record<string, string> = {
+                  DRY_RUN_ONLY: "Simulação (dry run)",
+                  APPLIED_TO_SHADOW: "Aplicado em shadow",
+                  APPLIED_TO_PROFILE_CONFIG: "Aplicado no profile",
+                  AUTO_REJECTED_INSUFFICIENT_EVIDENCE: "Rejeitado — evidência insuficiente",
+                  AUTO_REJECTED_RISK: "Rejeitado — risco elevado",
+                  AUTO_REJECTED_PROFILE_CONFLICT: "Rejeitado — conflito com profile",
+                  AUTO_REJECTED_DUPLICATE_RULE: "Rejeitado — regra duplicada",
+                  AUTO_REJECTED_LOW_SAMPLE: "Rejeitado — amostra insuficiente",
+                  AUTO_REJECTED_NEGATIVE_EV: "Rejeitado — EV negativo",
+                  AUTO_APPROVED_FOR_SHADOW: "Aprovado para shadow",
+                  AUTO_ARCHIVED_HYPOTHESIS: "Hipótese arquivada",
+                };
+                return (
+                  <div key={entry.id}>
+                    <button
+                      className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-[var(--bg-elevated)] transition-colors"
+                      onClick={() => setExpandedAudit(expandedAudit === entry.id ? null : entry.id)}
+                    >
+                      <span className="shrink-0 text-[var(--text-tertiary)]">
+                        {expandedAudit === entry.id ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
                       </span>
-                      {entry.event_description && (
-                        <span className="text-[11px] text-[var(--text-secondary)] truncate">{entry.event_description}</span>
-                      )}
-                      {entry.model_provider && (
-                        <span className="text-[10px] text-purple-400">{entry.model_provider}/{entry.model_name}</span>
-                      )}
-                    </span>
-                    <span className="text-[10px] text-[var(--text-tertiary)] shrink-0 font-mono">{fmtDate(entry.created_at)}</span>
-                  </button>
-                  {expandedAudit === entry.id && (
-                    <div className="px-10 pb-4 pt-2 space-y-2">
-                      {entry.run_id && <div className="text-[10px] text-[var(--text-tertiary)]">Run: <span className="font-mono">{entry.run_id}</span></div>}
-                      {entry.suggestion_id && <div className="text-[10px] text-[var(--text-tertiary)]">Suggestion: <span className="font-mono">{entry.suggestion_id}</span></div>}
-                      {entry.result_json && (
-                        <div>
-                          <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">Result</div>
-                          <pre className="text-[10px] text-[var(--text-secondary)] bg-[var(--bg-input)] rounded p-2 overflow-x-auto max-h-40">
-                            {JSON.stringify(entry.result_json, null, 2)}
-                          </pre>
+                      <span className="flex-1 flex items-center gap-2 min-w-0 flex-wrap">
+                        <span className={`badge text-[10px] ${entry.event_type.includes("error") || entry.event_type.includes("failed") ? "bearish" : entry.event_type.includes("completed") || entry.event_type.includes("finished") || isApplied ? "bullish" : entry.event_type.includes("anthropic") || entry.event_type.includes("ai_") ? "range" : "range"}`}>
+                          {entry.event_type}
+                        </span>
+                        {isDryRun && (
+                          <span className="px-1 py-0.5 rounded text-[9px] bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">dry run</span>
+                        )}
+                        {isApplied && (
+                          <span className="px-1 py-0.5 rounded text-[9px] bg-green-500/10 text-green-400 border border-green-500/20">aplicado</span>
+                        )}
+                        {mutStatus && (
+                          <span className={`text-[10px] ${mutStatusColor}`}>{MUTATION_STATUS_LABELS_FRONTEND[mutStatus] || mutStatus}</span>
+                        )}
+                        {hasDiff && (
+                          <span className="px-1 py-0.5 rounded text-[9px] bg-blue-500/10 text-blue-400 border border-blue-500/20">diff</span>
+                        )}
+                        {entry.event_description && (
+                          <span className="text-[11px] text-[var(--text-secondary)] truncate">{entry.event_description}</span>
+                        )}
+                        {entry.model_provider && (
+                          <span className="text-[10px] text-purple-400">{entry.model_provider}/{entry.model_name}</span>
+                        )}
+                      </span>
+                      <span className="text-[10px] text-[var(--text-tertiary)] shrink-0 font-mono">{fmtDate(entry.created_at)}</span>
+                    </button>
+                    {expandedAudit === entry.id && (
+                      <div className="px-10 pb-4 pt-2 space-y-3">
+                        {/* Metadata row */}
+                        <div className="flex flex-wrap gap-3 text-[10px] text-[var(--text-tertiary)]">
+                          {entry.profile_name && <span>Profile: <span className="font-mono text-[var(--accent-primary)]">{entry.profile_name}</span></span>}
+                          {entry.run_id && <span>Run: <span className="font-mono">{entry.run_id.slice(0, 8)}</span></span>}
+                          {entry.suggestion_id && <span>Suggestion: <span className="font-mono">{entry.suggestion_id.slice(0, 8)}</span></span>}
+                          {entry.source_run_id && <span>Source run: <span className="font-mono">{entry.source_run_id.slice(0, 8)}</span></span>}
                         </div>
-                      )}
-                      {entry.payload_json && (
-                        <div>
-                          <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">Payload</div>
-                          <pre className="text-[10px] text-[var(--text-secondary)] bg-[var(--bg-input)] rounded p-2 overflow-x-auto max-h-40">
-                            {JSON.stringify(entry.payload_json, null, 2)}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
+                        {/* Before / After diff cards */}
+                        {hasDiff && (
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <div className="text-[10px] font-semibold text-red-400 uppercase tracking-wide">Antes</div>
+                              <pre className="text-[10px] text-red-300/80 bg-red-500/5 border border-red-500/15 rounded p-2 overflow-x-auto max-h-40 whitespace-pre-wrap">
+                                {JSON.stringify(entry.before_json || "—", null, 2)}
+                              </pre>
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-[10px] font-semibold text-green-400 uppercase tracking-wide">Depois</div>
+                              <pre className="text-[10px] text-green-300/80 bg-green-500/5 border border-green-500/15 rounded p-2 overflow-x-auto max-h-40 whitespace-pre-wrap">
+                                {JSON.stringify(entry.after_json || "—", null, 2)}
+                              </pre>
+                            </div>
+                          </div>
+                        )}
+                        {/* Diff JSON */}
+                        {entry.diff_json && (
+                          <div>
+                            <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">Diff</div>
+                            <pre className="text-[10px] text-[var(--text-secondary)] bg-[var(--bg-input)] rounded p-2 overflow-x-auto max-h-32 whitespace-pre-wrap">
+                              {JSON.stringify(entry.diff_json, null, 2)}
+                            </pre>
+                          </div>
+                        )}
+                        {entry.result_json && (
+                          <div>
+                            <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">Result</div>
+                            <pre className="text-[10px] text-[var(--text-secondary)] bg-[var(--bg-input)] rounded p-2 overflow-x-auto max-h-40 whitespace-pre-wrap">
+                              {JSON.stringify(entry.result_json, null, 2)}
+                            </pre>
+                          </div>
+                        )}
+                        {entry.payload_json && !hasDiff && (
+                          <div>
+                            <div className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase mb-1">Payload</div>
+                            <pre className="text-[10px] text-[var(--text-secondary)] bg-[var(--bg-input)] rounded p-2 overflow-x-auto max-h-40 whitespace-pre-wrap">
+                              {JSON.stringify(entry.payload_json, null, 2)}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -2954,21 +3057,26 @@ export default function ProfileIntelligencePage() {
                 <AlertTriangle className="w-4 h-4 shrink-0" /> <span>Evidência insuficiente — não usar como base de decisão operacional (LOW confidence).</span>
               </div>
             )}
-            {!combinationIsActionable(selectedCombination) && (() => {
+            {/* Autopilot decision banner — always shown when combination has a decision */}
+            {selectedCombination.autopilot_decision && (() => {
+              const decision = selectedCombination.autopilot_decision!;
+              const d = AUTOPILOT_DECISION_LABELS[decision];
+              const isRejected = decision.startsWith("AUTO_REJECTED");
+              const isApproved = decision === "AUTO_APPROVED_FOR_SHADOW" || decision === "APPLIED_TO_SHADOW" || decision === "APPLIED_TO_PROFILE_CONFIG";
               const reason = selectedCombination.validation_metrics_json?.blocked_reason
                 || selectedCombination.validation_metrics_json?.actionability_status;
-              const nextAction = blockedNextAction(reason);
+              const nextAction = isRejected ? blockedNextAction(reason) : null;
               return (
-                <div className="card p-3 border-red-500/30 bg-red-500/5 space-y-1.5">
-                  <div className="flex items-start gap-2 text-[11px] text-red-400">
-                    <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
-                    <span className="font-medium">{blockedReasonLabel(reason)}</span>
-                  </div>
-                  {reason && (
-                    <div className="text-[10px] text-red-300/70 ml-6 font-mono">
-                      {reason}
+                <div className={`card p-3 space-y-1.5 ${isRejected ? "border-red-500/30 bg-red-500/5" : isApproved ? "border-green-500/30 bg-green-500/5" : "border-[var(--border-default)]"}`}>
+                  <div className={`flex items-start gap-2 text-[11px] ${isRejected ? "text-red-400" : isApproved ? "text-green-400" : "text-[var(--text-tertiary)]"}`}>
+                    {isRejected ? <AlertTriangle className="w-4 h-4 shrink-0 mt-px" /> : <CheckCircle className="w-4 h-4 shrink-0 mt-px" />}
+                    <div>
+                      <span className="font-medium">{d?.label || decision.replace(/_/g, " ")}</span>
+                      {reason && (
+                        <span className="ml-2 text-[10px] opacity-60 font-mono">{reason}</span>
+                      )}
                     </div>
-                  )}
+                  </div>
                   {nextAction && (
                     <div className="text-[10px] text-[var(--text-tertiary)] ml-6 flex items-start gap-1">
                       <span className="shrink-0">→</span>
@@ -3051,9 +3159,12 @@ export default function ProfileIntelligencePage() {
                   : combinationIsActionable(selectedCombination)
                     ? "Generate Suggestion"
                     : (() => {
-                        const reason = selectedCombination.validation_metrics_json?.blocked_reason
-                          || selectedCombination.validation_metrics_json?.actionability_status;
-                        const label = reason ? (BLOCKED_REASON_LABELS[reason] ?? reason.replace(/_/g, " ")) : "Sem dados de validação";
+                        const decision = selectedCombination.autopilot_decision;
+                        const d = decision ? AUTOPILOT_DECISION_LABELS[decision] : null;
+                        const label = d?.label ?? blockedReasonLabel(
+                          selectedCombination.validation_metrics_json?.blocked_reason
+                          || selectedCombination.validation_metrics_json?.actionability_status
+                        );
                         return label.length > 42 ? label.slice(0, 39) + "…" : label;
                       })()}
               </button>

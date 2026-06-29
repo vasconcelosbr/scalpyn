@@ -247,6 +247,11 @@ class ProfileIntelligenceAuditLog(Base):
     actor_user_id     = Column(UUID(as_uuid=True), nullable=True)
     profile_name      = Column(String(200), nullable=True)
     source_run_id     = Column(UUID(as_uuid=True), nullable=True)
+    # Added in migration 120
+    profile_id        = Column(UUID(as_uuid=True), nullable=True)
+    mutation_applied  = Column(Boolean, nullable=True)
+    mutation_status   = Column(String(80), nullable=True)
+    dry_run           = Column(Boolean, nullable=True)
     created_at        = Column(TIMESTAMP(timezone=True), nullable=False,
                                default=lambda: datetime.now(timezone.utc))
 
@@ -541,3 +546,41 @@ class AutopilotPendingAction(Base):
     created_at              = Column(TIMESTAMP(timezone=True), nullable=False,
                                      default=lambda: datetime.now(timezone.utc))
     updated_at              = Column(TIMESTAMP(timezone=True), nullable=True)
+
+
+class ProfileIndicatorMutationLink(Base):
+    """Traceability link: indicator performance → Auto-Pilot decision → mutation.
+
+    Created in migration 120. Every time the Auto-Pilot makes a decision about
+    a winning/losing indicator it inserts a row here so the Indicators tab can
+    show mutation_status per indicator/bucket.
+    """
+
+    __tablename__ = "profile_indicator_mutation_links"
+    __table_args__ = (
+        Index("idx_piml_profile_id_created_at", "profile_id", "created_at"),
+        Index("idx_piml_indicator_bucket", "indicator_name", "bucket"),
+        Index("idx_piml_mutation_status", "mutation_status"),
+        Index("idx_piml_autopilot_audit_log_id", "autopilot_audit_log_id"),
+    )
+
+    id                           = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    indicator_performance_id     = Column(UUID(as_uuid=True), nullable=True)
+    profile_id                   = Column(UUID(as_uuid=True), nullable=False)
+    profile_name                 = Column(String(255), nullable=True)
+    indicator_name               = Column(String(120), nullable=False)
+    bucket                       = Column(String(120), nullable=False)
+    run_id                       = Column(UUID(as_uuid=True), nullable=True)
+    suggestion_id                = Column(UUID(as_uuid=True), nullable=True)
+    autopilot_audit_log_id       = Column(UUID(as_uuid=True), nullable=True)
+    profile_adjustment_version_id = Column(UUID(as_uuid=True), nullable=True)
+    mutation_action              = Column(String(80), nullable=False)
+    mutation_status              = Column(String(80), nullable=False)
+    mutation_applied             = Column(Boolean, nullable=False, default=False)
+    dry_run                      = Column(Boolean, nullable=False, default=True)
+    evidence_json                = Column(JSONB, nullable=False, default=dict)
+    diff_json                    = Column(JSONB, nullable=False, default=dict)
+    ai_reason                    = Column(Text, nullable=True)
+    autopilot_reason             = Column(Text, nullable=True)
+    created_at                   = Column(TIMESTAMP(timezone=True), nullable=False,
+                                          default=lambda: datetime.now(timezone.utc))

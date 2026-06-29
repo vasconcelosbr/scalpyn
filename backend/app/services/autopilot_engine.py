@@ -889,6 +889,8 @@ async def log_audit(
     trigger_source: Optional[str] = None,
     celery_task_id: Optional[str] = None,
     profile_name: Optional[str] = None,
+    dry_run: Optional[bool] = None,
+    mutation_status: Optional[str] = None,
 ) -> None:
     """Insere registro em autopilot_audit_logs."""
 
@@ -923,20 +925,31 @@ async def log_audit(
 
     performance_window = (perf or {}).get("performance_window")
     evidence_count = (perf or {}).get("evidence_count")
+
+    # Derive mutation_status when not explicitly provided
+    if mutation_status is None:
+        _dry = dry_run if dry_run is not None else True
+        if mutation_applied:
+            mutation_status = "APPLIED_TO_PROFILE_CONFIG"
+        elif _dry:
+            mutation_status = "DRY_RUN_ONLY"
+        else:
+            mutation_status = "APPLIED_TO_SHADOW"
+
     await db.execute(text("""
         INSERT INTO autopilot_audit_logs (
             id, user_id, profile_id, action, reason, reason_code, regime,
             target_config, target_section, perf_snapshot, performance_window,
             evidence_count, config_before, config_after, diff_json,
             mutation_applied, version_id, trigger_source, celery_task_id,
-            profile_name, created_at
+            profile_name, dry_run, mutation_status, created_at
         ) VALUES (
             gen_random_uuid(), CAST(:uid AS uuid), CAST(:pid AS uuid),
             :action, :reason, :reason_code, :regime,
             :target_config, :target_section, :perf, :performance_window,
             :evidence_count, :before, :after, :diff,
             :mutation_applied, :ver_id, :trigger_source, :celery_task_id,
-            :profile_name, NOW()
+            :profile_name, :dry_run, :mutation_status, NOW()
         )
     """), {
         "uid":    str(user_id) if user_id else None,
@@ -958,6 +971,8 @@ async def log_audit(
         "trigger_source": trigger_source,
         "celery_task_id": celery_task_id,
         "profile_name": profile_name,
+        "dry_run": dry_run if dry_run is not None else True,
+        "mutation_status": mutation_status,
     })
 
 
@@ -1324,6 +1339,7 @@ async def apply_rule_adjustments(
                 perf=perf_with_changes,
                 db=db,
                 user_id=user_id,
+                dry_run=True,
             )
             logger.info(
                 "[Autopilot][DRY RUN] %d scoring rules WOULD be adjusted for profile=%s user=%s (not persisted)",
@@ -1361,6 +1377,7 @@ async def apply_rule_adjustments(
             config_after=after_payload,
             diff_json=_json_diff(before_payload, after_payload),
             mutation_applied=True,
+            dry_run=False,
         )
 
         logger.info(
@@ -1502,6 +1519,7 @@ async def _adjust_minimum_score(
             ),
             reason_code=f"minimum_score_{direction}",
             mutation_applied=True,
+            dry_run=False,
             version_id=snapshot_id,
         )
         return {"action": "MIN_SCORE_ADJUSTED", "dimension": "minimum_score",
@@ -1631,6 +1649,7 @@ async def _adjust_block_rules(
             diff_json=_json_diff(before_payload, after_payload),
             reason_code="scoped_block_rule_edge_adjustment",
             mutation_applied=True,
+            dry_run=False,
             version_id=snapshot_id,
         )
         return {"action": "BLOCK_RULES_ADJUSTED", "dimension": "block_rules",
@@ -1758,6 +1777,7 @@ async def _adjust_entry_triggers(
             diff_json=_json_diff(before_payload, after_payload),
             reason_code="scoped_entry_trigger_edge_adjustment",
             mutation_applied=True,
+            dry_run=False,
             version_id=snapshot_id,
         )
         return {"action": "ENTRY_TRIGGERS_ADJUSTED", "dimension": "entry_triggers",
@@ -2374,6 +2394,7 @@ async def run_autopilot_cycle(
         config_after=result["config"],
         diff_json=_json_diff(current_config, result["config"]),
         mutation_applied=True,
+        dry_run=False,
         version_id=version_id,
     )
 

@@ -25,6 +25,7 @@ from ..models.profile_intelligence import (
     AutopilotAutonomyPolicy,
 )
 from .config import get_current_user_id
+from ..core.mutation_types import BLOCKED_REASON_TO_DECISION, MutationStatus
 from ..services.metric_contracts import build_metric_contract
 from ..schemas.profile_intelligence import (
     RunRequest,
@@ -991,6 +992,183 @@ async def get_audit_log(
     return {"events": [_audit_to_dict(r) for r in rows]}
 
 
+# ── 12b. Consolidated mutations timeline ──────────────────────────────────────
+
+@router.get("/mutations")
+async def get_mutations_timeline(
+    profile_id: Optional[str] = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """Unified mutation timeline combining all audit sources.
+
+    Sources (in order of richness):
+    1. autopilot_audit_logs — full before/after/diff, explicit mutation_applied
+    2. profile_adjustment_versions — shadow calibration diffs (buy_threshold)
+    3. profile_intelligence_audit_log — AI suggestion events with diff_json
+    """
+    profile_filter_sql = ""
+    profile_filter_params: dict = {
+        "uid": str(user_id),
+        "limit": limit,
+    }
+    if profile_id:
+        try:
+            profile_filter_params["pid"] = str(UUID(profile_id))
+            profile_filter_sql = "AND a.profile_id = CAST(:pid AS uuid)"
+        except ValueError:
+            pass
+
+    # Source 1: autopilot_audit_logs
+    autopilot_rows = (await db.execute(text(f"""
+        SELECT
+            'autopilot' AS source,
+            a.id::text          AS id,
+            a.profile_id::text  AS profile_id,
+            a.profile_name,
+            a.action            AS event_type,
+            a.reason            AS event_description,
+            a.reason_code       AS mutation_action,
+            a.mutation_applied,
+            COALESCE(a.mutation_status,
+                CASE WHEN a.mutation_applied THEN 'APPLIED_TO_PROFILE_CONFIG'
+                     WHEN a.dry_run THEN 'DRY_RUN_ONLY'
+                     ELSE 'APPLIED_TO_SHADOW' END
+            )                   AS mutation_status,
+            a.dry_run,
+            a.config_before     AS before_json,
+            a.config_after      AS after_json,
+            a.diff_json,
+            a.perf_snapshot     AS evidence_json,
+            a.trigger_source,
+            a.created_at
+        FROM autopilot_audit_logs a
+        WHERE a.user_id = CAST(:uid AS uuid)
+        {profile_filter_sql}
+        ORDER BY a.created_at DESC
+        LIMIT :limit
+    """), profile_filter_params)).mappings().all()
+
+    # Source 2: profile_adjustment_versions (shadow calibration)
+    shadow_filter = " AND v.profile_id = CAST(:pid AS uuid)" if profile_id else ""
+    shadow_params: dict = {"uid": str(user_id), "limit": limit}
+    if profile_id:
+        shadow_params["pid"] = str(UUID(profile_id)) if profile_id else None
+
+    shadow_rows = (await db.execute(text(f"""
+        SELECT
+            'shadow_calibration' AS source,
+            v.id::text           AS id,
+            v.profile_id::text   AS profile_id,
+            NULL                 AS profile_name,
+            'BUY_THRESHOLD_UPDATED' AS event_type,
+            'Shadow calibration adjustment'  AS event_description,
+            'BUY_THRESHOLD_UPDATED'          AS mutation_action,
+            v.mutation_applied,
+            CASE WHEN v.mutation_applied THEN 'APPLIED_TO_PROFILE_CONFIG'
+                 ELSE 'APPLIED_TO_SHADOW' END AS mutation_status,
+            false                AS dry_run,
+            v.before_snapshot    AS before_json,
+            v.after_snapshot     AS after_json,
+            v.diff               AS diff_json,
+            NULL                 AS evidence_json,
+            NULL                 AS trigger_source,
+            v.created_at
+        FROM profile_adjustment_versions v
+        WHERE v.profile_id IN (
+            SELECT id FROM profiles WHERE user_id = CAST(:uid AS uuid)
+        )
+        {shadow_filter}
+        ORDER BY v.created_at DESC
+        LIMIT :limit
+    """), shadow_params)).mappings().all()
+
+    # Source 3: profile_intelligence_audit_log (events with diff)
+    pi_filter = " AND l.profile_id = CAST(:pid AS uuid)" if profile_id else ""
+    pi_params: dict = {"uid": str(user_id), "limit": limit}
+    if profile_id:
+        pi_params["pid"] = str(UUID(profile_id)) if profile_id else None
+
+    pi_rows = (await db.execute(text(f"""
+        SELECT
+            'pi_engine' AS source,
+            l.id::text  AS id,
+            l.profile_id::text AS profile_id,
+            l.profile_name,
+            l.event_type,
+            l.event_description,
+            l.event_type    AS mutation_action,
+            l.mutation_applied,
+            l.mutation_status,
+            l.dry_run,
+            l.before_json,
+            l.after_json,
+            l.diff_json,
+            l.payload_json  AS evidence_json,
+            NULL            AS trigger_source,
+            l.created_at
+        FROM profile_intelligence_audit_log l
+        WHERE l.user_id = CAST(:uid AS uuid)
+          AND l.diff_json IS NOT NULL
+        {pi_filter}
+        ORDER BY l.created_at DESC
+        LIMIT :limit
+    """), pi_params)).mappings().all()
+
+    def _row_to_event(row: dict) -> dict:
+        diff = row.get("diff_json")
+        if isinstance(diff, str):
+            try:
+                diff = json.loads(diff)
+            except Exception:
+                diff = None
+        before = row.get("before_json")
+        if isinstance(before, str):
+            try:
+                before = json.loads(before)
+            except Exception:
+                before = None
+        after = row.get("after_json")
+        if isinstance(after, str):
+            try:
+                after = json.loads(after)
+            except Exception:
+                after = None
+        evidence = row.get("evidence_json")
+        if isinstance(evidence, str):
+            try:
+                evidence = json.loads(evidence)
+            except Exception:
+                evidence = None
+        return {
+            "source": row["source"],
+            "id": row["id"],
+            "profile_id": row.get("profile_id"),
+            "profile_name": row.get("profile_name"),
+            "event_type": row.get("event_type"),
+            "event_description": row.get("event_description"),
+            "mutation_action": row.get("mutation_action"),
+            "mutation_applied": row.get("mutation_applied"),
+            "mutation_status": row.get("mutation_status"),
+            "dry_run": row.get("dry_run"),
+            "diff_json": diff,
+            "before_json": before,
+            "after_json": after,
+            "evidence_json": evidence,
+            "trigger_source": row.get("trigger_source"),
+            "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
+        }
+
+    events = sorted(
+        [_row_to_event(dict(r)) for r in list(autopilot_rows) + list(shadow_rows) + list(pi_rows)],
+        key=lambda e: e["created_at"] or "",
+        reverse=True,
+    )[:limit]
+
+    return {"events": events, "total": len(events)}
+
+
 # ── 13 & 14. Settings ─────────────────────────────────────────────────────────
 
 @router.get("/settings")
@@ -1563,6 +1741,21 @@ def _ind_to_dict(s: ProfileIndicatorStats) -> dict:
     }
 
 
+def _combo_autopilot_decision(c: ProfileRuleCombination) -> str:
+    """Derive autopilot decision from existing combination metrics (no new columns required)."""
+    vm = c.validation_metrics_json or {}
+    blocked_reason = vm.get("blocked_reason") or vm.get("actionability_status")
+    validation_status = vm.get("validation_status")
+
+    if validation_status == "validated":
+        return MutationStatus.AUTO_APPROVED_FOR_SHADOW
+    if blocked_reason and blocked_reason in BLOCKED_REASON_TO_DECISION:
+        return BLOCKED_REASON_TO_DECISION[blocked_reason]
+    if not vm:
+        return MutationStatus.AUTO_ARCHIVED_HYPOTHESIS
+    return MutationStatus.AUTO_ARCHIVED_HYPOTHESIS
+
+
 def _combo_to_dict(c: ProfileRuleCombination) -> dict:
     return {
         "id": str(c.id), "run_id": str(c.run_id),
@@ -1588,6 +1781,7 @@ def _combo_to_dict(c: ProfileRuleCombination) -> dict:
         "discovery_metrics_json": c.discovery_metrics_json,
         "validation_metrics_json": c.validation_metrics_json,
         "status": c.status,
+        "autopilot_decision": _combo_autopilot_decision(c),
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }
 
@@ -1644,13 +1838,25 @@ def _sugg_to_dict(s: ProfileSuggestion) -> dict:
 
 def _audit_to_dict(r: ProfileIntelligenceAuditLog) -> dict:
     return {
-        "id": str(r.id), "event_type": r.event_type,
+        "id": str(r.id),
+        "event_type": r.event_type,
         "event_description": r.event_description,
         "run_id": str(r.run_id) if r.run_id else None,
         "suggestion_id": str(r.suggestion_id) if r.suggestion_id else None,
         "combination_id": str(r.combination_id) if r.combination_id else None,
-        "model_provider": r.model_provider, "model_name": r.model_name,
+        "profile_id": str(r.profile_id) if r.profile_id else None,
+        "profile_name": r.profile_name,
+        "actor_user_id": str(r.actor_user_id) if r.actor_user_id else None,
+        "source_run_id": str(r.source_run_id) if r.source_run_id else None,
+        "model_provider": r.model_provider,
+        "model_name": r.model_name,
         "payload_json": r.payload_json,
         "result_json": r.result_json,
+        "before_json": r.before_json,
+        "after_json": r.after_json,
+        "diff_json": r.diff_json,
+        "mutation_applied": r.mutation_applied,
+        "mutation_status": r.mutation_status,
+        "dry_run": r.dry_run,
         "created_at": r.created_at.isoformat() if r.created_at else None,
     }
