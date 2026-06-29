@@ -10,6 +10,7 @@ const C = {
 
 export interface VersionStats {
   versionName: string;
+  shortName: string;
   isChampion: boolean;
   evScore: number;
   winRate: number;
@@ -46,8 +47,8 @@ export function VersionDuelStats({ v1, v2 }: VersionDuelStatsProps) {
         )}
         
         <div className="flex items-center gap-2 mb-4">
-          <div className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm" style={{ background: isWinner ? C.neonGreen : C.surface, color: isWinner ? "#111" : C.muted, border: `1px solid ${isWinner ? "transparent" : C.border}` }}>
-            {stat.versionName}
+          <div className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-[10px] uppercase" style={{ background: isWinner ? C.neonGreen : C.surface, color: isWinner ? "#111" : C.muted, border: `1px solid ${isWinner ? "transparent" : C.border}` }}>
+            {stat.shortName}
           </div>
           <div>
             <h4 className="text-sm font-semibold" style={{ color: isWinner ? C.neonGreen : C.text }}>Version {stat.versionName}</h4>

@@ -34,6 +34,7 @@ const MOCK_CHART_DATA: ChartDataPoint[] = Array.from({ length: 40 }).map((_, i) 
 
 const MOCK_V1: VersionStats = {
   versionName: "1",
+  shortName: "v1",
   isChampion: false,
   evScore: 35.2,
   winRate: 0.51,
@@ -45,6 +46,7 @@ const MOCK_V1: VersionStats = {
 
 const MOCK_V2: VersionStats = {
   versionName: "2",
+  shortName: "v2",
   isChampion: true,
   evScore: 52.8,
   winRate: 0.68,
@@ -73,17 +75,17 @@ export function VersionIntelligence({ availableProfiles = [], rows = [] }: { ava
     }
     
     // Find v1 (Base)
-    const baseRow = rows.find(r => r.profile_name === selectedProfile && r.priority !== "BLOCKED") || 
-                    rows.find(r => r.profile_name === selectedProfile);
+    const baseRow = rows.find(r => r.profile_name === selectedProfile);
                     
     // Find v2 (Auto-Pilot)
-    const apRows = rows.filter(r => r.profile_name.startsWith(`${selectedProfile} - Auto-Pilot`) && r.priority !== "BLOCKED");
+    const apRows = rows.filter(r => r.profile_name.startsWith(`${selectedProfile} - Auto-Pilot`));
     const apRow = apRows.length > 0 
       ? apRows.reduce((prev, current) => (prev.ev_score > current.ev_score) ? prev : current)
       : null;
       
     const v1: VersionStats = baseRow ? {
       versionName: "Base (v1)",
+      shortName: "v1",
       isChampion: false,
       evScore: baseRow.ev_score,
       winRate: baseRow.win_rate || 0,
@@ -91,10 +93,11 @@ export function VersionIntelligence({ availableProfiles = [], rows = [] }: { ava
       holdingSeconds: baseRow.avg_holding_win_seconds || 0,
       trades: baseRow.completed_trades,
       confidenceScore: baseRow.stat_confidence as any
-    } : { ...MOCK_V1, versionName: "Base (v1) - Not Found" };
+    } : { ...MOCK_V1, versionName: "Not Found", shortName: "--" };
 
     const v2: VersionStats = apRow ? {
       versionName: apRow.profile_name.split(" - ")[1] || "Auto-Pilot",
+      shortName: apRow.profile_name.split(" - ")[1] ? apRow.profile_name.split(" - ")[1].substring(0, 2) : "v2",
       isChampion: false,
       evScore: apRow.ev_score,
       winRate: apRow.win_rate || 0,
@@ -102,7 +105,7 @@ export function VersionIntelligence({ availableProfiles = [], rows = [] }: { ava
       holdingSeconds: apRow.avg_holding_win_seconds || 0,
       trades: apRow.completed_trades,
       confidenceScore: apRow.stat_confidence as any
-    } : { ...MOCK_V2, versionName: "Auto-Pilot - Not Found" };
+    } : { ...MOCK_V2, versionName: "Not Found", shortName: "--" };
 
     if (v1.evScore > v2.evScore) {
       v1.isChampion = true;
