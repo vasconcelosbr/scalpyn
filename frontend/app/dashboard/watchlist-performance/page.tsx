@@ -93,6 +93,16 @@ export default function WatchlistPerformanceDashboard() {
     });
   }, [priority, query, rows]);
 
+  const baseProfiles = useMemo(() => {
+    const families = new Set<string>();
+    rows.forEach(row => {
+      if (row.priority === "BLOCKED") return;
+      const base = row.profile_name.split(" - Auto-Pilot")[0];
+      if (base) families.add(base);
+    });
+    return Array.from(families).sort();
+  }, [rows]);
+
   return (
     <div className="space-y-6 pb-10" style={{ color: C.text }}>
       <header className="flex flex-wrap items-start justify-between gap-4">
@@ -167,7 +177,7 @@ export default function WatchlistPerformanceDashboard() {
         </div>
       </section>
 
-      <VersionIntelligence />
+      <VersionIntelligence availableProfiles={baseProfiles} />
 
       <section className="overflow-hidden rounded-2xl" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4" style={{ borderColor: C.border }}>
