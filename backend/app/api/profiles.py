@@ -274,15 +274,18 @@ async def delete_profile(
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
     
-    # Also remove any watchlist associations
-    await db.execute(
-        text("DELETE FROM watchlist_profiles WHERE profile_id = :pid"),
-        {"pid": str(profile_id)}
-    )
-    
+    pid = {"pid": str(profile_id)}
+    # Delete from RESTRICT-FK tables first (order matters to avoid FK violations)
+    await db.execute(text("DELETE FROM profile_intelligence_autopilot_candidates WHERE profile_id = :pid"), pid)
+    await db.execute(text("DELETE FROM autopilot_pending_actions WHERE profile_id = :pid"), pid)
+    await db.execute(text("DELETE FROM profile_adjustment_suggestions WHERE profile_id = :pid"), pid)
+    await db.execute(text("DELETE FROM profile_adjustment_versions WHERE profile_id = :pid"), pid)
+    # CASCADE tables (watchlist_profiles, profile_audit_log, etc.) handled by DB cascade
+    await db.execute(text("DELETE FROM watchlist_profiles WHERE profile_id = :pid"), pid)
+
     await db.delete(profile)
     await db.commit()
-    
+
     return {"status": "success", "message": "Profile deleted"}
 
 
