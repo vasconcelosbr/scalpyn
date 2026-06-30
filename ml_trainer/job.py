@@ -1049,7 +1049,7 @@ def main():
         with engine.begin() as conn:
             # Próxima versão
             ver = conn.execute(
-                text("SELECT COALESCE(MAX(version::integer), 0) + 1 FROM ml_models")
+                text("SELECT COALESCE(MAX(version::integer), 0) + 1 FROM ml_models WHERE version ~ '^\\d+$'")
             ).scalar()
             logger.info("[DB] next_version=%s", ver)
 
