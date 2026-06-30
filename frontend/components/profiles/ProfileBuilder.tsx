@@ -29,7 +29,7 @@ type RuleValue = string | number | boolean | null | undefined;
 interface RuleIndicatorOption {
   value: string;
   label: string;
-  kind: "number" | "boolean";
+  kind: "number" | "boolean" | "string";
 }
 
 interface RuleCondition {
@@ -95,6 +95,15 @@ const RULE_INDICATORS: RuleIndicatorOption[] = [
   { value: "ema9_gt_ema21", label: "EMA9 > EMA21", kind: "boolean" },
   { value: "ema9_gt_ema50", label: "EMA9 > EMA50", kind: "boolean" },
   { value: "ema50_gt_ema200", label: "EMA50 > EMA200", kind: "boolean" },
+  { value: "market_cap", label: "Market Cap", kind: "number" },
+  { value: "change_24h", label: "Variacao 24h %", kind: "number" },
+  { value: "orderbook_depth_usdt", label: "Profundidade Book (USDT)", kind: "number" },
+  { value: "obv", label: "OBV", kind: "number" },
+  { value: "vwap_distance_pct", label: "VWAP Distance %", kind: "number" },
+  { value: "macd_signal", label: "MACD Signal", kind: "string" },
+  { value: "di_trend", label: "DI+ > DI- (Alta)", kind: "boolean" },
+  { value: "atr", label: "ATR", kind: "number" },
+  { value: "psar_trend", label: "PSAR Trend", kind: "string" },
 ];
 
 const RULE_INDICATOR_MAP = new Map(RULE_INDICATORS.map((indicator) => [indicator.value, indicator]));

@@ -61,8 +61,8 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
       // Check Filters
       if (config.filters.conditions.length > 0) {
         config.filters.conditions.forEach((newCond: any) => {
-          const field = newCond.field || newCond.indicator;
-          const exists = profile.config?.filters?.conditions?.some((c: any) => (c.field || c.indicator) === field);
+          const field = newCond.field || newCond.indicator || newCond.left;
+          const exists = profile.config?.filters?.conditions?.some((c: any) => (c.field || c.indicator || c.left) === field);
           if (exists && !overwrite) {
             profileLogs.push(`Filter '${field}' ignored (already exists)`);
           } else if (exists && overwrite) {
@@ -76,8 +76,8 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
       // Check Signals
       if (config.signals.conditions.length > 0) {
         config.signals.conditions.forEach((newCond: any) => {
-          const field = newCond.field || newCond.indicator;
-          const exists = profile.config?.signals?.conditions?.some((c: any) => (c.field || c.indicator) === field);
+          const field = newCond.field || newCond.indicator || newCond.left;
+          const exists = profile.config?.signals?.conditions?.some((c: any) => (c.field || c.indicator || c.left) === field);
           if (exists && !overwrite) {
             profileLogs.push(`Signal '${field}' ignored (already exists)`);
           } else if (exists && overwrite) {
@@ -91,8 +91,8 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
       // Check Entry Triggers
       if (config.entry_triggers.conditions.length > 0) {
         config.entry_triggers.conditions.forEach((newCond: any) => {
-          const field = newCond.field || newCond.indicator;
-          const exists = profile.config?.entry_triggers?.conditions?.some((c: any) => (c.field || c.indicator) === field);
+          const field = newCond.field || newCond.indicator || newCond.left;
+          const exists = profile.config?.entry_triggers?.conditions?.some((c: any) => (c.field || c.indicator || c.left) === field);
           if (exists && !overwrite) {
             profileLogs.push(`Entry Trigger '${field}' ignored (already exists)`);
           } else if (exists && overwrite) {
@@ -152,8 +152,8 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
 
         // Process Filters
         config.filters.conditions.forEach((newCond: any) => {
-          const field = newCond.field || newCond.indicator;
-          const idx = updatedConfig.filters.conditions.findIndex((c: any) => (c.field || c.indicator) === field);
+          const field = newCond.field || newCond.indicator || newCond.left;
+          const idx = updatedConfig.filters.conditions.findIndex((c: any) => (c.field || c.indicator || c.left) === field);
           if (idx !== -1) {
             if (overwrite) updatedConfig.filters.conditions[idx] = newCond;
           } else {
@@ -163,8 +163,8 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
 
         // Process Signals
         config.signals.conditions.forEach((newCond: any) => {
-          const field = newCond.field || newCond.indicator;
-          const idx = updatedConfig.signals.conditions.findIndex((c: any) => (c.field || c.indicator) === field);
+          const field = newCond.field || newCond.indicator || newCond.left;
+          const idx = updatedConfig.signals.conditions.findIndex((c: any) => (c.field || c.indicator || c.left) === field);
           if (idx !== -1) {
             if (overwrite) updatedConfig.signals.conditions[idx] = newCond;
           } else {
@@ -174,8 +174,8 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
 
         // Process Entry Triggers
         config.entry_triggers.conditions.forEach((newCond: any) => {
-          const field = newCond.field || newCond.indicator;
-          const idx = updatedConfig.entry_triggers.conditions.findIndex((c: any) => (c.field || c.indicator) === field);
+          const field = newCond.field || newCond.indicator || newCond.left;
+          const idx = updatedConfig.entry_triggers.conditions.findIndex((c: any) => (c.field || c.indicator || c.left) === field);
           if (idx !== -1) {
             if (overwrite) updatedConfig.entry_triggers.conditions[idx] = newCond;
           } else {
