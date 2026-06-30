@@ -189,6 +189,8 @@ def extract_features(metrics: dict) -> Dict[str, float]:
 
     def _float(key: str, default: float = _nan) -> float:
         val = metrics.get(key, default)
+        if isinstance(val, dict):
+            val = val.get("value", default)
         if isinstance(val, bool):
             return 1.0 if val else 0.0
         try:
@@ -382,48 +384,32 @@ def build_training_dataframe(
             dropped_null_pnl += 1
             continue
 
-        # Target: is_win_fast label — three-tier strategy (Q1 council 2026-06-29).
-        #
-        # Tier 0 (preferred): ttt_fast_win_bucket derived from OHLCV candle data
-        # (5m/30m). Precomputed single source of truth — encodes both outcome and
-        # time-window without ±30m rounding error from holding_seconds.
-        #
-        # Tier 1 (fallback): outcome == 'TP_HIT' AND holding_seconds <= threshold.
-        # Slow wins (TP_HIT but holding > threshold) labeled 0 — bad entry, lucky exit.
-        #
-        # Tier 2 (fallback): records with outcome IS NULL fall back to pnl threshold.
-        ttt_bucket = r.get("ttt_fast_win_bucket")
-        if ttt_bucket is not None:
-            features["is_win_fast"] = 1 if ttt_bucket in {"WIN_0_15M", "WIN_15_30M"} else 0
-            features["_has_ttt_label"] = 1
-        else:
-            holding_s = r.get("holding_seconds")
-            sim_outcome = r.get("outcome")
-            holding_ok = holding_s is not None and holding_s <= win_fast_threshold_s
-            if sim_outcome is not None:
-                features["is_win_fast"] = 1 if (sim_outcome == "TP_HIT" and holding_ok) else 0
-                features["_has_ttt_label"] = 1
+        # Target: is_win_fast label — Clean target rule
+        # Label 1 (WIN_FAST): holding_seconds <= target_window_seconds AND pnl_pct > MIN_WIN_PNL_PCT
+        # Label 0: Everything else (including slow wins)
+        holding_s = r.get("holding_seconds")
+        holding_ok = holding_s is not None and holding_s <= win_fast_threshold_s
+
+        if label_net_of_fees:
+            net_return_pct = r.get("net_return_pct")
+            if net_return_pct is not None:
+                net_val = float(net_return_pct)
+                features["is_win_fast"] = 1 if (net_val > _MIN_WIN_PNL_PCT and holding_ok) else 0
+            elif fee_roundtrip_pct is not None:
+                net_val = pnl_val - float(fee_roundtrip_pct)
+                features["is_win_fast"] = 1 if (net_val > _MIN_WIN_PNL_PCT and holding_ok) else 0
             else:
-                # Tier 2 fallback: net-of-fees label (B1 fix) + holding constraint.
-                # Priority: persisted net_return_pct > runtime-computed net > legacy gross.
-                if label_net_of_fees:
-                    net_return_pct = r.get("net_return_pct")
-                    if net_return_pct is not None:
-                        net_val = float(net_return_pct)
-                        features["is_win_fast"] = 1 if (net_val > _MIN_WIN_PNL_PCT and holding_ok) else 0
-                    elif fee_roundtrip_pct is not None:
-                        net_val = pnl_val - float(fee_roundtrip_pct)
-                        features["is_win_fast"] = 1 if (net_val > _MIN_WIN_PNL_PCT and holding_ok) else 0
-                    else:
-                        features["is_win_fast"] = 1 if (pnl_val > _WIN_THRESHOLD and holding_ok) else 0
-                else:
-                    features["is_win_fast"] = 1 if (pnl_val > _WIN_THRESHOLD and holding_ok) else 0
-                features["_has_ttt_label"] = 0
+                features["is_win_fast"] = 1 if (pnl_val > _WIN_THRESHOLD and holding_ok) else 0
+        else:
+            features["is_win_fast"] = 1 if (pnl_val > _WIN_THRESHOLD and holding_ok) else 0
+        
+        features["_has_ttt_label"] = 0
 
         # Metadata for time-based split — NOT model features
         features["_created_at"] = r.get("created_at")
         features["_outcome"] = r.get("outcome")
         features["_pnl_pct"] = pnl_val
+        features["_holding_seconds"] = r.get("holding_seconds", 0)
         rows.append(features)
 
     if dropped_null_pnl:
@@ -517,14 +503,16 @@ def train_val_test_split(
     df: pd.DataFrame,
     train_ratio: float = 0.70,
     val_ratio: float = 0.15,
+    target_window_seconds: int = 14400,
 ) -> tuple:
     """
-    Time-based split — no shuffle to avoid look-ahead bias.
+    Time-based split with Purge and Embargo to prevent leakage.
 
     Args:
         df: DataFrame with _created_at column
         train_ratio: Fraction for training (default 70%)
         val_ratio: Fraction for validation (default 15%); rest goes to test
+        target_window_seconds: Embargo gap in seconds
 
     Returns:
         (train_df, val_df, test_df)
@@ -538,8 +526,35 @@ def train_val_test_split(
     val_df = df.iloc[train_end:val_end].copy()
     test_df = df.iloc[val_end:].copy()
 
+    n_purged = 0
+    n_val_embargoed = 0
+    n_test_embargoed = 0
+
+    if len(train_df) > 0 and len(val_df) > 0:
+        val_start_time = val_df["_created_at"].min()
+        
+        # Purge: remove from train any row whose (created_at + holding_seconds) >= val_start_time
+        if "_holding_seconds" in train_df.columns:
+            holding_td = pd.to_timedelta(train_df["_holding_seconds"].fillna(0), unit='s')
+            purge_mask = (train_df["_created_at"] + holding_td) < val_start_time
+            n_purged = len(train_df) - purge_mask.sum()
+            train_df = train_df[purge_mask].copy()
+
+        # Embargo: remove from val/test any row whose created_at <= (last_train_created_at + target_window_seconds)
+        if len(train_df) > 0:
+            train_end_time = train_df["_created_at"].max()
+            embargo_end_time = train_end_time + pd.Timedelta(seconds=target_window_seconds)
+            
+            val_embargo_mask = val_df["_created_at"] > embargo_end_time
+            n_val_embargoed = len(val_df) - val_embargo_mask.sum()
+            val_df = val_df[val_embargo_mask].copy()
+            
+            test_embargo_mask = test_df["_created_at"] > embargo_end_time
+            n_test_embargoed = len(test_df) - test_embargo_mask.sum()
+            test_df = test_df[test_embargo_mask].copy()
+
     logger.info(
-        "TEMPORAL_SPLIT|train=%d(%s→%s)|val=%d|test=%d(%s→%s)",
+        "TEMPORAL_SPLIT|train=%d(%s→%s)|val=%d|test=%d(%s→%s)|purged=%d|embargoed=%d",
         len(train_df),
         str(train_df["_created_at"].min())[:10] if len(train_df) else "n/a",
         str(train_df["_created_at"].max())[:10] if len(train_df) else "n/a",
@@ -547,5 +562,7 @@ def train_val_test_split(
         len(test_df),
         str(test_df["_created_at"].min())[:10] if len(test_df) else "n/a",
         str(test_df["_created_at"].max())[:10] if len(test_df) else "n/a",
+        n_purged,
+        n_val_embargoed + n_test_embargoed
     )
     return train_df, val_df, test_df

@@ -8,6 +8,12 @@ from typing import Optional
 import mlflow
 import mlflow.xgboost
 import numpy as np
+
+class ReadinessGateError(Exception):
+    def __init__(self, report: dict, message: str):
+        super().__init__(message)
+        self.report = report
+
 import optuna
 import pandas as pd
 import xgboost as xgb
@@ -206,6 +212,7 @@ class WinFastTrainer:
         df: pd.DataFrame,
         optuna_storage_url: Optional[str] = None,
         ml_target: str = "binary",
+        win_fast_threshold_s: int = 14400,
     ) -> dict:
         """
         Train XGBoost model with Optuna hyperparameter optimization.
@@ -213,6 +220,7 @@ class WinFastTrainer:
         Args:
             df: Training DataFrame from build_training_dataframe()
             optuna_storage_url: PostgreSQL URL for Optuna study persistence
+            win_fast_threshold_s: Used as target_window_seconds for embargo
 
         Returns:
             Dict with: best_params, metrics, run_id, train_from, train_to,
@@ -242,9 +250,11 @@ class WinFastTrainer:
         # Exclui macro features com cobertura < 30% ou std=0 (constante quando presente).
         # Macro features vivas (MDH consertado) entram sozinhas quando coverage subir.
         _min_cov = float(os.getenv("ML_MIN_FEATURE_COVERAGE", "0.30"))
+        total_features = len(feature_cols)
         feature_cols, _features_excluded = filter_trainable_features(
             df, feature_cols, min_coverage=_min_cov
         )
+        dead_feature_ratio = len(_features_excluded) / max(total_features, 1)
 
         # Task #324 — drop rows with > MAX_NAN_FRACTION NaN features. They
         # carry too little signal and bias the model toward "all-zero" splits.
@@ -260,7 +270,7 @@ class WinFastTrainer:
                 )
             df = df.loc[keep_mask].copy()
 
-        train_df, val_df, test_df = train_val_test_split(df)
+        train_df, val_df, test_df = train_val_test_split(df, target_window_seconds=win_fast_threshold_s)
 
         # BLOCO C — PSI entre train e test para detecção de regime drift.
         # Se PSI > 0.25 em qualquer feature-chave, loga REGIME_DRIFT_WARNING.
@@ -335,24 +345,33 @@ class WinFastTrainer:
         # single-class y_train silently returned AUC=0 from Optuna and the job
         # still wrote an "active" ml_models row with garbage metrics.
         min_per_class = int(os.getenv("MIN_SAMPLES_PER_CLASS", "30"))
+
+        gate_report = {
+            "readiness_status": "ready",
+            "block_reasons": [],
+            "positive_rate_train": float(y_train.mean()) if not is_regression and len(y_train) else 0.0,
+            "positive_rate_val": float(y_val.mean()) if not is_regression and len(y_val) else 0.0,
+            "positive_rate_test": float(y_test.mean()) if not is_regression and len(y_test) else 0.0,
+            "dead_feature_ratio": dead_feature_ratio,
+            "total_features": total_features,
+            "dead_features": len(_features_excluded),
+            "min_coverage": _min_cov,
+            "psi_max": max([v for k,v in _psi_flagged]) if _psi_flagged else 0.0,
+        }
+
         if not is_regression:
             if y_train.nunique() < 2:
-                raise ValueError(
-                    f"Degenerate dataset: y_train has a single class "
-                    f"(n_pos={n_pos}, n_neg={n_neg}, winrate={winrate_base:.2f}%)"
-                )
+                gate_report["block_reasons"].append(f"Degenerate dataset: y_train has a single class (winrate={winrate_base:.2f}%)")
             if n_pos < min_per_class or n_neg < min_per_class:
-                raise ValueError(
-                    f"Degenerate dataset: each class needs >= {min_per_class} "
-                    f"samples (n_pos={n_pos}, n_neg={n_neg}, "
-                    f"winrate={winrate_base:.2f}%)"
-                )
+                gate_report["block_reasons"].append(f"Degenerate dataset: each class needs >= {min_per_class} samples")
         else:
             if len(y_train) < min_per_class * 2:
-                raise ValueError(
-                    f"Degenerate dataset: regression needs >= {min_per_class * 2} "
-                    f"samples (got {len(y_train)})"
-                )
+                gate_report["block_reasons"].append(f"Degenerate dataset: regression needs >= {min_per_class * 2} samples (got {len(y_train)})")
+
+        if gate_report["block_reasons"]:
+            gate_report["readiness_status"] = "blocked"
+            raise ReadinessGateError(gate_report, " | ".join(gate_report["block_reasons"]))
+
 
         def objective(trial: optuna.Trial) -> float:
             params = {
@@ -541,6 +560,7 @@ class WinFastTrainer:
         )
 
         return {
+            "gate_report": gate_report,
             "best_params": best_params,
             "metrics": {
                 "precision": precision,

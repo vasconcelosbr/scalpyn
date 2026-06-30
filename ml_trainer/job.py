@@ -189,7 +189,10 @@ def _train_for_profile(engine, profile_id_str: str, _ml_cfg: dict, _fee_roundtri
         profile_cutoff_params = {"train_cutoff_at": _profile_cutoff_dt}
         logger.info("[ProfileTrainer] Cutoff active: completed_at < %s", TRAIN_CUTOFF_AT)
     with engine.connect() as conn:
-        dataset_query_cutoff = conn.execute(text("SELECT NOW()")).scalar()
+        dataset_query_cutoff = conn.execute(
+            text("SELECT NOW() - CAST(:tw AS interval)"),
+            {"tw": f"{_win_fast_threshold_s} seconds"}
+        ).scalar()
         result = conn.execute(text(f"""
             SELECT
                 id::text AS shadow_id,
@@ -592,7 +595,10 @@ def main():
         cutoff_params = {"train_cutoff_at": _cutoff_dt}
         logger.info("Dataset cutoff active: completed_at < %s", TRAIN_CUTOFF_AT)
     with engine.connect() as conn:
-        dataset_query_cutoff = conn.execute(text("SELECT NOW()")).scalar()
+        dataset_query_cutoff = conn.execute(
+            text("SELECT NOW() - CAST(:tw AS interval)"),
+            {"tw": f"{_win_fast_threshold_s} seconds"}
+        ).scalar()
         result = conn.execute(text(f"""
             SELECT
                 symbol, source, pnl_pct, net_return_pct, holding_seconds, outcome,
@@ -648,7 +654,7 @@ def main():
         feature_columns_hash,
         train_val_test_split,
     )
-    from app.ml.trainer import WinFastTrainer
+    from app.ml.trainer import WinFastTrainer, ReadinessGateError
 
     df = build_training_dataframe(
         records,
@@ -677,11 +683,96 @@ def main():
     trainer = WinFastTrainer(n_trials=N_TRIALS)
     try:
         result = trainer.train(df, optuna_storage_url=None, ml_target=ML_TARGET_TYPE)
+        import uuid
+        run_id = result.get("run_id") or f"run_{uuid.uuid4().hex[:8]}"
+        gate_report = result.get("gate_report", {})
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO ml_dataset_readiness_reports (
+                        dataset_id, total_features, dead_features, dead_feature_ratio,
+                        min_coverage, readiness_status
+                    ) VALUES (
+                        :run_id, :total_features, :dead_features, :df_ratio,
+                        :min_coverage, :status
+                    )
+                """), {
+                    "run_id": run_id,
+                    "total_features": gate_report.get("total_features", 0),
+                    "dead_features": gate_report.get("dead_features", 0),
+                    "df_ratio": gate_report.get("dead_feature_ratio", 0.0),
+                    "min_coverage": gate_report.get("min_coverage", 0.0),
+                    "status": gate_report.get("readiness_status", "ready"),
+                })
+                conn.execute(text("""
+                    INSERT INTO ml_readiness_gate_runs (
+                        run_id, model_lane, readiness_status, block_reason,
+                        positive_rate_train, positive_rate_val, positive_rate_test,
+                        dead_feature_ratio, psi_max
+                    ) VALUES (
+                        :run_id, :lane, :status, :reason,
+                        :pr_train, :pr_val, :pr_test, :df_ratio, :psi_max
+                    )
+                """), {
+                    "run_id": run_id,
+                    "lane": TRAINING_MODE,
+                    "status": gate_report.get("readiness_status", "ready"),
+                    "reason": "",
+                    "pr_train": gate_report.get("positive_rate_train", 0.0),
+                    "pr_val": gate_report.get("positive_rate_val", 0.0),
+                    "pr_test": gate_report.get("positive_rate_test", 0.0),
+                    "df_ratio": gate_report.get("dead_feature_ratio", 0.0),
+                    "psi_max": gate_report.get("psi_max", 0.0),
+                })
+        except Exception as db_exc:
+            logger.error(f"[TRAINER] Failed to persist gate report: {db_exc}")
+    except ReadinessGateError as exc:
+        logger.warning(f"[TRAINER] ReadinessGate BLOCKED: {exc}")
+        import uuid
+        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    INSERT INTO ml_dataset_readiness_reports (
+                        dataset_id, total_features, dead_features, dead_feature_ratio,
+                        min_coverage, readiness_status
+                    ) VALUES (
+                        :run_id, :total_features, :dead_features, :df_ratio,
+                        :min_coverage, :status
+                    )
+                """), {
+                    "run_id": run_id,
+                    "total_features": exc.report.get("total_features", 0),
+                    "dead_features": exc.report.get("dead_features", 0),
+                    "df_ratio": exc.report.get("dead_feature_ratio", 0.0),
+                    "min_coverage": exc.report.get("min_coverage", 0.0),
+                    "status": exc.report.get("readiness_status", "ready"),
+                })
+                conn.execute(text("""
+                    INSERT INTO ml_readiness_gate_runs (
+                        run_id, model_lane, readiness_status, block_reason,
+                        positive_rate_train, positive_rate_val, positive_rate_test,
+                        dead_feature_ratio, psi_max
+                    ) VALUES (
+                        :run_id, :lane, :status, :reason,
+                        :pr_train, :pr_val, :pr_test, :df_ratio, :psi_max
+                    )
+                """), {
+                    "run_id": run_id,
+                    "lane": TRAINING_MODE,
+                    "status": exc.report["readiness_status"],
+                    "reason": str(exc),
+                    "pr_train": exc.report["positive_rate_train"],
+                    "pr_val": exc.report["positive_rate_val"],
+                    "pr_test": exc.report["positive_rate_test"],
+                    "df_ratio": exc.report["dead_feature_ratio"],
+                    "psi_max": exc.report["psi_max"],
+                })
+        except Exception as db_exc:
+            logger.error(f"[TRAINER] Failed to persist gate report: {db_exc}")
+        sys.exit(0)
     except ValueError as exc:
-        # Task #324 — degenerate dataset (single-class y_train or < min
-        # samples per class). Exit 0: this is "still warming up", not a
-        # failed run; we do not want Cloud Run Job failure alerts firing
-        # while the post-wipe dataset accumulates.
+        # Task #324 — degenerate dataset (fallback for other value errors)
         logger.info(f"[TRAINER] dataset degenerate — skipping: {exc}")
         sys.exit(0)
 
@@ -991,7 +1082,8 @@ def main():
                     dataset_query_cutoff,
                     comparison_vs_previous,
                     model_blob,
-                    model_scope, source_filter
+                    model_scope, source_filter,
+                    target_window_seconds, label_contract_id, macro_features_enabled
                 ) VALUES (
                     :version, :status, :hyperparams,
                     :n_train, :n_val, :n_test,
@@ -1005,7 +1097,8 @@ def main():
                     :dataset_query_cutoff,
                     CAST(:comparison_vs_previous AS JSONB),
                     :model_blob,
-                    'global', :source_filter
+                    'global', :source_filter,
+                    :target_window_seconds, :label_contract_id, :macro_features_enabled
                 )
             """), {
                 "version":      str(ver),
@@ -1054,10 +1147,14 @@ def main():
                 "feature_schema_version": _feature_schema_version,
                 "dataset_query_cutoff": dataset_query_cutoff,
                 "comparison_vs_previous": json.dumps(comparison_vs_previous),
-                "model_blob":   model_blob,
-                "source_filter": ML_SOURCE_FILTER,
+                "model_blob":             model_blob,
+                "source_filter":          _source_filter,
+                "target_window_seconds":  int(_win_fast_threshold_s),
+                "label_contract_id":      "win_fast_pnl",
+                "macro_features_enabled": True,
             })
-            logger.info("[DB] INSERT OK - modelo salvo status=%s", promotion_status)
+
+            logger.info(f"[DB] INSERT ml_models v{ver} OK (status={promotion_status})")
     except Exception as exc:
         logger.error("[DB] FALHA AO SALVAR MODELO: %s", exc, exc_info=True)
         raise

@@ -322,9 +322,34 @@ class WinFastPredictor:
                     "approved":    approved,
                     "threshold":   threshold,
                 })
+                
+                # P11 Drift Replay: Persist features
+                import json
+                import uuid
+                observation_id = f"obs_{uuid.uuid4().hex[:12]}"
+                _features_json = json.dumps(features)
+                await db.execute(text("""
+                    INSERT INTO ml_feature_observations (
+                        observation_id, model_id, decision_id, profile_id, symbol,
+                        features_json, raw_prediction, threshold_applied, model_lane
+                    ) VALUES (
+                        :obs_id, :model_id, :decision_id, :profile_id, :symbol,
+                        CAST(:features_json AS JSONB), :proba, :threshold, :lane
+                    )
+                """), {
+                    "obs_id": observation_id,
+                    "model_id": model_id,
+                    "decision_id": decision_id,
+                    "profile_id": profile_id,
+                    "symbol": symbol or "UNKNOWN",
+                    "features_json": _features_json,
+                    "proba": float(proba),
+                    "threshold": float(threshold),
+                    "lane": model_lane
+                })
                 await db.commit()
             except Exception as e:
-                logger.warning(f"Erro ao logar predição: {e}")
+                logger.warning(f"Erro ao logar predição/observação: {e}")
 
         return result
 

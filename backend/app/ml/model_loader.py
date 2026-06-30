@@ -106,8 +106,8 @@ class ModelLoader:
 
                 # Handle missing features
                 if value is None:
-                    logger.warning(f"Missing feature: {feat}, using 0.0")
-                    value = 0.0
+                    logger.debug(f"Missing feature: {feat}, using NaN")
+                    value = float('nan')
 
                 # Handle boolean features
                 if isinstance(value, bool):
