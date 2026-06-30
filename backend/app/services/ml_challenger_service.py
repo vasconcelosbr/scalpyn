@@ -646,6 +646,26 @@ class MLChallengerService:
         else:
             dataset_contract_id = None
 
+        # Feature importance — extracted from trained model object, persisted in
+        # metrics_json for drift analysis and feature selection audits.
+        _feature_importance: dict = {}
+        try:
+            _fi_raw = None
+            if hasattr(model_obj, "feature_importances_"):
+                _fi_raw = list(model_obj.feature_importances_)
+            elif hasattr(model_obj, "feature_importance"):
+                _fi_raw = list(model_obj.feature_importance(importance_type="gain"))
+            elif hasattr(model_obj, "get_feature_importance"):
+                _fi_raw = list(model_obj.get_feature_importance())
+            if _fi_raw and len(_fi_raw) == len(feature_columns):
+                _fi_total = sum(_fi_raw) or 1.0
+                _feature_importance = {
+                    feature_columns[i]: round(float(_fi_raw[i]) / _fi_total, 6)
+                    for i in range(len(feature_columns))
+                }
+        except Exception as _fi_exc:
+            logger.debug("[MLChallenger] feature_importance extraction failed: %s", _fi_exc)
+
         # Structured metrics_json — separates validation from test set
         _metrics_json_dict = {
             "label_version": label_ver,
@@ -666,6 +686,7 @@ class MLChallengerService:
                 "roc_auc": (test_metrics or {}).get("roc_auc"),
                 "samples": n_test or None,
             } if test_metrics else None,
+            "feature_importance": _feature_importance or None,
         }
 
         # Promotion Gate — evaluate eligibility at creation time (audit P0-1 fix).
