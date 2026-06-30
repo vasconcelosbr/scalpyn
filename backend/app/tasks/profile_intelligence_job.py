@@ -174,7 +174,8 @@ async def _run_ml_challengers_if_enabled(db, user_id) -> None:
         )
         logger.info("[PIJob] ML challengers result for user %s: %s", user_id, result)
     except Exception as exc:
-        logger.error("[PIJob] ML challenger training failed for user %s (non-fatal): %s", user_id, exc)
+        import traceback as _tb
+        logger.error("[PIJob] ML challenger training failed for user %s (non-fatal): %s\n%s", user_id, exc, _tb.format_exc())
 
 
 @celery_app.task(name="app.tasks.profile_intelligence_job.run", bind=True)
