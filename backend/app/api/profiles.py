@@ -118,6 +118,105 @@ async def _find_duplicate_names(
     return [{"id": str(r.id), "name": r.name, "created_at": r.created_at.isoformat() if r.created_at else None} for r in rows]
 
 
+_FUNNEL_ROLE_ORDER: Dict[str, str] = {
+    "universe_filter":   "0",
+    "primary_filter":    "1",
+    "score_engine":      "2",
+    "acquisition_queue": "3",
+}
+
+
+@router.post("/bulk-import")
+async def bulk_import_profiles(
+    payload: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    user_id: UUID = Depends(get_current_user_id),
+):
+    """
+    Create multiple profiles from a JSON import file.
+
+    Expected payload:
+    {
+        "profiles": [
+            {
+                "name": "...",
+                "description": "...",          (optional)
+                "funnel_role": "acquisition_queue",
+                "pipeline_label": "...",       (optional)
+                "default_timeframe": "5m",     (optional)
+                "filters": {...},              (optional)
+                "signals": {...},              (optional)
+                "block_rules": {...},          (optional)
+                "entry_triggers": {...},       (optional)
+                "scoring": {...}               (optional)
+            }
+        ]
+    }
+    Returns: { "created": N, "failed": N, "results": [...] }
+    """
+    profiles_data = payload.get("profiles", [])
+    if not profiles_data or not isinstance(profiles_data, list):
+        raise HTTPException(status_code=400, detail="'profiles' array is required")
+    if len(profiles_data) > 200:
+        raise HTTPException(status_code=400, detail="Maximum 200 profiles per import")
+
+    results: List[Dict[str, Any]] = []
+    created = 0
+    failed = 0
+
+    for i, p in enumerate(profiles_data):
+        try:
+            name = (p.get("name") or "").strip()
+            if not name:
+                raise ValueError("'name' is required")
+
+            config_input: Dict[str, Any] = {
+                "default_timeframe": p.get("default_timeframe", "5m"),
+                "filters":        p.get("filters",        {"logic": "AND", "conditions": []}),
+                "signals":        p.get("signals",        {"logic": "AND", "conditions": []}),
+                "block_rules":    p.get("block_rules",    {"blocks": []}),
+                "entry_triggers": p.get("entry_triggers", {"logic": "AND", "conditions": []}),
+                "scoring":        p.get("scoring",        {}),
+            }
+            validated_config = _validate_profile_config(config_input)
+
+            funnel_role: Optional[str] = p.get("funnel_role")
+            profile_role    = funnel_role if funnel_role in _FUNNEL_ROLE_ORDER else None
+            pipeline_order  = _FUNNEL_ROLE_ORDER.get(funnel_role) if funnel_role else None  # type: ignore[arg-type]
+            pipeline_label  = p.get("pipeline_label") or name
+
+            profile = Profile(
+                user_id=user_id,
+                name=name,
+                description=p.get("description", ""),
+                is_active=True,
+                config=validated_config,
+                profile_role=profile_role,
+                pipeline_order=pipeline_order,
+                pipeline_label=pipeline_label,
+                profile_type="STANDARD",
+            )
+            db.add(profile)
+            await db.flush()
+
+            results.append({"index": i, "name": name, "status": "created", "id": str(profile.id)})
+            created += 1
+
+        except Exception as exc:
+            failed += 1
+            results.append({
+                "index":  i,
+                "name":   (p.get("name") or f"profile_{i}"),
+                "status": "error",
+                "error":  str(exc),
+            })
+
+    if created > 0:
+        await db.commit()
+
+    return {"created": created, "failed": failed, "results": results}
+
+
 @router.post("/")
 async def create_profile(
     payload: Dict[str, Any],

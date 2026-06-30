@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, Settings2, Trash2, Play, Copy, Layers, ListChecks } from "lucide-react";
+import { Plus, Settings2, Trash2, Play, Copy, Layers, ListChecks, FileJson } from "lucide-react";
 import { apiGet, apiPost, apiDelete, apiPut } from "@/lib/api";
 import { ProfileBuilder } from "@/components/profiles/ProfileBuilder";
 import { ProfileCard } from "@/components/profiles/ProfileCard";
 import { BulkProfileBuilder } from "@/components/profiles/BulkProfileBuilder";
+import { JsonImportBuilder } from "@/components/profiles/JsonImportBuilder";
 
 interface Profile {
   id: string;
@@ -48,6 +49,7 @@ export default function ProfilesPage() {
   const [loading, setLoading] = useState(true);
   const [showBuilder, setShowBuilder] = useState(false);
   const [showBulkBuilder, setShowBulkBuilder] = useState(false);
+  const [showJsonImport, setShowJsonImport] = useState(false);
   const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
   const [testResults, setTestResults] = useState<any>(null);
   const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(new Set());
@@ -144,7 +146,18 @@ export default function ProfilesPage() {
         onClose={() => {
           setShowBulkBuilder(false);
           setSelectedProfiles(new Set());
-          fetchProfiles(); // fetch to get updated profiles if applied
+          fetchProfiles();
+        }}
+      />
+    );
+  }
+
+  if (showJsonImport) {
+    return (
+      <JsonImportBuilder
+        onClose={() => {
+          setShowJsonImport(false);
+          fetchProfiles();
         }}
       />
     );
@@ -205,6 +218,14 @@ export default function ProfilesPage() {
           >
             <ListChecks className="w-4 h-4 mr-2" />
             {selectedProfiles.size === profiles.length ? "Deselect All" : "Select All"}
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={() => setShowJsonImport(true)}
+            title="Criar profiles em massa via JSON"
+          >
+            <FileJson className="w-4 h-4 mr-2" />
+            Import JSON
           </button>
           <button
             className="btn btn-primary"
