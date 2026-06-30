@@ -384,26 +384,34 @@ def build_training_dataframe(
             dropped_null_pnl += 1
             continue
 
-        # Target: is_win_fast label — Clean target rule
-        # Label 1 (WIN_FAST): holding_seconds <= target_window_seconds AND pnl_pct > MIN_WIN_PNL_PCT
-        # Label 0: Everything else (including slow wins)
-        holding_s = r.get("holding_seconds")
-        holding_ok = holding_s is not None and holding_s <= win_fast_threshold_s
-
-        if label_net_of_fees:
-            net_return_pct = r.get("net_return_pct")
-            if net_return_pct is not None:
-                net_val = float(net_return_pct)
-                features["is_win_fast"] = 1 if (net_val > _MIN_WIN_PNL_PCT and holding_ok) else 0
-            elif fee_roundtrip_pct is not None:
-                net_val = pnl_val - float(fee_roundtrip_pct)
-                features["is_win_fast"] = 1 if (net_val > _MIN_WIN_PNL_PCT and holding_ok) else 0
+        # Target: is_win_fast label
+        # PRIMARY: ttt_fast_win_bucket when ttt_analysis_done=True (is_tp_4h_v1).
+        # Aligns with circuit breaker metric (profile_intelligence_live_service.py)
+        # and with the label documented in MEMORY.md for v52 training.
+        # FALLBACK: pnl_pct > 0.96% AND holding_s <= win_fast_threshold_s for
+        # historical records without TTT analysis (pre-ttt-analyzer deployment).
+        # ttt_fast_win_bucket is only populated when ttt_analysis_done=TRUE, so
+        # its presence is a sufficient proxy — no need to load ttt_analysis_done.
+        ttt_bucket = r.get("ttt_fast_win_bucket")
+        if ttt_bucket is not None:
+            features["is_win_fast"] = 1 if ttt_bucket in ("WIN_0_15M", "WIN_15_30M") else 0
+            features["_has_ttt_label"] = 1
+        else:
+            features["_has_ttt_label"] = 0
+            holding_s = r.get("holding_seconds")
+            holding_ok = holding_s is not None and holding_s <= win_fast_threshold_s
+            if label_net_of_fees:
+                net_return_pct = r.get("net_return_pct")
+                if net_return_pct is not None:
+                    net_val = float(net_return_pct)
+                    features["is_win_fast"] = 1 if (net_val > _MIN_WIN_PNL_PCT and holding_ok) else 0
+                elif fee_roundtrip_pct is not None:
+                    net_val = pnl_val - float(fee_roundtrip_pct)
+                    features["is_win_fast"] = 1 if (net_val > _MIN_WIN_PNL_PCT and holding_ok) else 0
+                else:
+                    features["is_win_fast"] = 1 if (pnl_val > _WIN_THRESHOLD and holding_ok) else 0
             else:
                 features["is_win_fast"] = 1 if (pnl_val > _WIN_THRESHOLD and holding_ok) else 0
-        else:
-            features["is_win_fast"] = 1 if (pnl_val > _WIN_THRESHOLD and holding_ok) else 0
-        
-        features["_has_ttt_label"] = 0
 
         # Metadata for time-based split — NOT model features
         features["_created_at"] = r.get("created_at")
