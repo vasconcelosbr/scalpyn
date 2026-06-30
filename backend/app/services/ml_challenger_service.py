@@ -552,7 +552,7 @@ class MLChallengerService:
 
     async def _next_version(self, db: AsyncSession) -> str:
         row = (await db.execute(
-            text("SELECT COALESCE(MAX(version::integer), 0) + 1 FROM ml_models")
+            text("SELECT COALESCE(MAX(version::integer), 0) + 1 FROM ml_models WHERE version ~ '^[0-9]+$'")
         )).scalar()
         return str(row or 1)
 
