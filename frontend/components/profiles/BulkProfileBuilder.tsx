@@ -153,33 +153,36 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
         // Process Filters
         config.filters.conditions.forEach((newCond: any) => {
           const field = newCond.field || newCond.indicator || newCond.left;
-          const idx = updatedConfig.filters.conditions.findIndex((c: any) => (c.field || c.indicator || c.left) === field);
-          if (idx !== -1) {
-            if (overwrite) updatedConfig.filters.conditions[idx] = newCond;
-          } else {
+          if (overwrite) {
+            updatedConfig.filters.conditions = updatedConfig.filters.conditions.filter((c: any) => (c.field || c.indicator || c.left) !== field);
             updatedConfig.filters.conditions.push(newCond);
+          } else {
+            const exists = updatedConfig.filters.conditions.some((c: any) => (c.field || c.indicator || c.left) === field);
+            if (!exists) updatedConfig.filters.conditions.push(newCond);
           }
         });
 
         // Process Signals
         config.signals.conditions.forEach((newCond: any) => {
           const field = newCond.field || newCond.indicator || newCond.left;
-          const idx = updatedConfig.signals.conditions.findIndex((c: any) => (c.field || c.indicator || c.left) === field);
-          if (idx !== -1) {
-            if (overwrite) updatedConfig.signals.conditions[idx] = newCond;
-          } else {
+          if (overwrite) {
+            updatedConfig.signals.conditions = updatedConfig.signals.conditions.filter((c: any) => (c.field || c.indicator || c.left) !== field);
             updatedConfig.signals.conditions.push(newCond);
+          } else {
+            const exists = updatedConfig.signals.conditions.some((c: any) => (c.field || c.indicator || c.left) === field);
+            if (!exists) updatedConfig.signals.conditions.push(newCond);
           }
         });
 
         // Process Entry Triggers
         config.entry_triggers.conditions.forEach((newCond: any) => {
           const field = newCond.field || newCond.indicator || newCond.left;
-          const idx = updatedConfig.entry_triggers.conditions.findIndex((c: any) => (c.field || c.indicator || c.left) === field);
-          if (idx !== -1) {
-            if (overwrite) updatedConfig.entry_triggers.conditions[idx] = newCond;
-          } else {
+          if (overwrite) {
+            updatedConfig.entry_triggers.conditions = updatedConfig.entry_triggers.conditions.filter((c: any) => (c.field || c.indicator || c.left) !== field);
             updatedConfig.entry_triggers.conditions.push(newCond);
+          } else {
+            const exists = updatedConfig.entry_triggers.conditions.some((c: any) => (c.field || c.indicator || c.left) === field);
+            if (!exists) updatedConfig.entry_triggers.conditions.push(newCond);
           }
         });
 
@@ -188,15 +191,25 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
         config.block_rules.blocks.forEach((newBlock: any) => {
           const newIndicators = getIndicators(newBlock);
           const name = newBlock.name;
-          const idx = updatedConfig.block_rules.blocks.findIndex((b: any) => {
-            if (b.name === name) return true;
-            const bIndicators = getIndicators(b);
-            return newIndicators.length > 0 && newIndicators.some((ind: string) => bIndicators.includes(ind));
-          });
-          if (idx !== -1) {
-            if (overwrite) updatedConfig.block_rules.blocks[idx] = newBlock;
-          } else {
+          
+          if (overwrite) {
+            updatedConfig.block_rules.blocks = updatedConfig.block_rules.blocks.filter((b: any) => {
+              if (b.name === name) return false;
+              const bIndicators = getIndicators(b);
+              const hasConflict = newIndicators.length > 0 && newIndicators.some((ind: string) => bIndicators.includes(ind));
+              if (hasConflict) return false;
+              return true;
+            });
             updatedConfig.block_rules.blocks.push(newBlock);
+          } else {
+            const exists = updatedConfig.block_rules.blocks.some((b: any) => {
+              if (b.name === name) return true;
+              const bIndicators = getIndicators(b);
+              return newIndicators.length > 0 && newIndicators.some((ind: string) => bIndicators.includes(ind));
+            });
+            if (!exists) {
+              updatedConfig.block_rules.blocks.push(newBlock);
+            }
           }
         });
 
