@@ -1150,7 +1150,7 @@ def main():
                 "model_blob":             model_blob,
                 "source_filter":          ML_SOURCE_FILTER,
                 "target_window_seconds":  int(_win_fast_threshold_s),
-                "label_contract_id":      "win_fast_pnl",
+                "label_contract_id":      None,
                 "macro_features_enabled": True,
             })
 
