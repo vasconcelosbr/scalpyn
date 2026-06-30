@@ -18,10 +18,16 @@ import io
 import json
 import logging
 import math
+import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
+
+# Q2 council 2026-06-29: hard ceiling on completed_at to exclude shadow monitor
+# bug window (2026-06-25 19:45) and regime-change contamination.
+# Set TRAIN_CUTOFF_AT="YYYY-MM-DD HH:MM:SS" in the service env. Empty = no cutoff.
+_TRAIN_CUTOFF_AT: str = os.getenv("TRAIN_CUTOFF_AT", "")
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -350,16 +356,24 @@ class MLChallengerService:
         source_placeholders = ", ".join(f":src_{i}" for i in range(len(sources)))
         source_params = {f"src_{i}": s for i, s in enumerate(sources)}
         profile_clause = "AND profile_id IS NOT NULL" if require_profile_id else ""
+        cutoff_clause = ""
+        cutoff_params: dict = {}
+        if _TRAIN_CUTOFF_AT:
+            cutoff_clause = "AND completed_at < :train_cutoff_at"
+            cutoff_params = {"train_cutoff_at": _TRAIN_CUTOFF_AT}
+            logger.info("[MLChallenger] _load_shadow_data cutoff: completed_at < %s", _TRAIN_CUTOFF_AT)
         rows = (await db.execute(text(f"""
             SELECT
                 id::text          AS shadow_id,
                 symbol,
                 source,
                 pnl_pct,
+                net_return_pct,
                 holding_seconds,
                 outcome,
                 features_snapshot,
                 created_at,
+                ttt_fast_win_bucket,
                 profile_id::text  AS profile_id
             FROM shadow_trades
             WHERE user_id = :uid
@@ -370,8 +384,10 @@ class MLChallengerService:
               AND features_snapshot::text <> '{{}}'
               AND created_at >= :cutoff
               {profile_clause}
+              {cutoff_clause}
             ORDER BY created_at ASC
-        """), {"uid": str(user_id), "cutoff": datetime.now(timezone.utc) - timedelta(days=lookback_days), **source_params})).fetchall()
+        """), {"uid": str(user_id), "cutoff": datetime.now(timezone.utc) - timedelta(days=lookback_days),
+               **source_params, **cutoff_params})).fetchall()
         logger.info(
             "[MLChallenger] _load_shadow_data: sources=%s rows=%d require_profile_id=%s user=%s",
             sources, len(rows), require_profile_id, user_id,
