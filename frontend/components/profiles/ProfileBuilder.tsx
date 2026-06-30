@@ -42,6 +42,7 @@ interface RuleCondition {
   value?: RuleValue;
   min?: number;
   max?: number;
+  period?: number;
 }
 
 interface BlockRule {
@@ -1194,6 +1195,19 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                     <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                                   ))}
                                 </select>
+                                {PERIOD_DEFAULTS[condition.left || ""] !== undefined && (
+                                  <input
+                                    type="number"
+                                    className="input h-8 w-16 text-[12px] font-mono text-center"
+                                    value={condition.period ?? ""}
+                                    onChange={(e) => {
+                                      const v = parseInt(e.target.value, 10);
+                                      updateBlockCondition(block.id, condition.id, { period: isNaN(v) ? undefined : v });
+                                    }}
+                                    placeholder={`P:${PERIOD_DEFAULTS[condition.left || ""]}`}
+                                    title={`Period (default: ${PERIOD_DEFAULTS[condition.left || ""]})`}
+                                  />
+                                )}
                                 <select
                                   className="input h-8 text-[12px] w-20"
                                   value={condition.operator}
@@ -1224,6 +1238,19 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                     <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                                   ))}
                                 </select>
+                                {PERIOD_DEFAULTS[condition.indicator || ""] !== undefined && (
+                                  <input
+                                    type="number"
+                                    className="input h-8 w-16 text-[12px] font-mono text-center"
+                                    value={condition.period ?? ""}
+                                    onChange={(e) => {
+                                      const v = parseInt(e.target.value, 10);
+                                      updateBlockCondition(block.id, condition.id, { period: isNaN(v) ? undefined : v });
+                                    }}
+                                    placeholder={`P:${PERIOD_DEFAULTS[condition.indicator || ""]}`}
+                                    title={`Period (default: ${PERIOD_DEFAULTS[condition.indicator || ""]})`}
+                                  />
+                                )}
                                 <select
                                   className="input h-8 text-[12px] w-24"
                                   value={condition.operator === "is_false" ? "false" : "true"}
@@ -1250,6 +1277,19 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                     <option key={indicator.value} value={indicator.value}>{indicator.label}</option>
                                   ))}
                                 </select>
+                                {PERIOD_DEFAULTS[condition.indicator || ""] !== undefined && (
+                                  <input
+                                    type="number"
+                                    className="input h-8 w-16 text-[12px] font-mono text-center"
+                                    value={condition.period ?? ""}
+                                    onChange={(e) => {
+                                      const v = parseInt(e.target.value, 10);
+                                      updateBlockCondition(block.id, condition.id, { period: isNaN(v) ? undefined : v });
+                                    }}
+                                    placeholder={`P:${PERIOD_DEFAULTS[condition.indicator || ""]}`}
+                                    title={`Period (default: ${PERIOD_DEFAULTS[condition.indicator || ""]})`}
+                                  />
+                                )}
                                 <select
                                   className="input h-8 text-[12px] w-24"
                                   value={condition.operator}
