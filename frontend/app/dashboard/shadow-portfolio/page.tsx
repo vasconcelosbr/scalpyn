@@ -2168,7 +2168,7 @@ function ProfileReportTable({
 const MAX_LOCAL_FETCH = 200; // = _MAX_PAGE_SIZE em backend/app/api/shadow_trades.py
 const CLIENT_PAGE_SIZE = 50;
 
-type SourceTab = "L3" | "L3_REJECTED" | "L3_SIMULATED" | "L1_SPECTRUM" | "L3_LAB";
+type SourceTab = "L3" | "L3_REJECTED" | "L1_SPECTRUM";
 
 function buildBaseQuery(
   filter: FilterState,
@@ -2181,8 +2181,7 @@ function buildBaseQuery(
   if (filter.symbol.trim()) params.set("symbol", filter.symbol.trim());
   if (filter.minDate) params.set("min_date", filter.minDate);
   if (filter.maxDate) params.set("max_date", filter.maxDate);
-  // A profile can own canonical L3 or Strategy Lab shadows. When selected,
-  // profile_id is the authoritative filter and source must remain unrestricted.
+  // When profile_id is set, it is the authoritative filter across all sources.
   if (!profileId && source) params.set("source", source);
   if (profileId) params.set("profile_id", profileId);
   params.set("page", String(overrides.page ?? filter.page));
@@ -2220,7 +2219,7 @@ export default function ShadowPortfolioPage() {
   const [profileReport, setProfileReport] = useState<ProfileReportRow[]>([]);
   const [loadingReport, setLoadingReport] = useState(false);
 
-  // Fetch profiles on mount for Strategy Lab profile selector
+  // Fetch profiles for profile selector (Profile Intelligence candidates)
   useEffect(() => {
     apiGet<{ items?: ProfileItem[]; profiles?: ProfileItem[] } | ProfileItem[]>("/api/profiles/")
       .then((res) => {
@@ -2501,12 +2500,6 @@ export default function ShadowPortfolioPage() {
                 acontecido se os rejeitados pela L3 tivessem sido operados.
                 Usado para medir a qualidade do filtro.
               </>
-            ) : sourceTab === "L3_SIMULATED" ? (
-              <>
-                Camada contrafactual: shadow para <strong>todos</strong> os ativos
-                que chegaram ao gate L3, independente de ALLOW ou BLOCK.
-                Compara o universo completo com as decisões reais.
-              </>
             ) : (
               <>
                 Captures do espectro bruto L1 — exatamente o dataset que o ML
@@ -2573,9 +2566,7 @@ export default function ShadowPortfolioPage() {
               [
                 { key: "L3",           label: "Aprovados (L3)",    color: C.blue   },
                 { key: "L3_REJECTED",  label: "Rejeitados (L3)",   color: C.amber  },
-                { key: "L3_SIMULATED", label: "Simulados (L3)",    color: C.purple },
                 { key: "L1_SPECTRUM",  label: "Dataset ML (L1)",   color: C.blue   },
-                { key: "L3_LAB",       label: "Strategy Lab",      color: C.green  },
               ] as { key: SourceTab; label: string; color: string }[]
             ).map(({ key, label, color }) => {
               const active = sourceTab === key;

@@ -44,11 +44,9 @@ N_TRIALS_CB = int(__import__("os").getenv("ML_CHALLENGER_N_TRIALS_CB", "20"))
 
 # Lane 1 (XGBoost challenger): global opportunity signal, no profile bias.
 LGBM_TRAIN_SOURCES: List[str] = ["L1_SPECTRUM"]
-# Lane 2 (CatBoost validator): separate policies — combined is BLOCKED by default.
-# Use catboost_source_filter=["L3"] or ["L3_LAB"] in train_challengers().
-CATBOOST_TRAIN_SOURCES: List[str] = ["L3", "L3_LAB"]  # kept for backward-compat; blocked at runtime
+# Lane 2 (CatBoost validator): L3 only.
+CATBOOST_TRAIN_SOURCES: List[str] = ["L3"]
 CATBOOST_L3_ONLY_SOURCES: List[str] = ["L3"]
-CATBOOST_L3_LAB_ONLY_SOURCES: List[str] = ["L3_LAB"]
 # Backwards-compat alias — callers that pass source_filter still work.
 TRAIN_SOURCES: List[str] = LGBM_TRAIN_SOURCES  # was ["L3", "L1_SPECTRUM"] — deprecated
 
@@ -421,9 +419,7 @@ class MLChallengerService:
     _SOURCE_ENCODING: Dict[str, int] = {
         "L1_SPECTRUM": 0,
         "L3": 1,
-        "L3_LAB": 2,
         "L3_REJECTED": 3,
-        "L3_SIMULATED": 4,
     }
 
     def _build_dataset(

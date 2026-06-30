@@ -5,7 +5,6 @@ from sqlalchemy import text
 
 from app.ml.feature_extractor import FEATURE_COLUMNS, ML_EXCLUDED_FIELDS, extract_features
 from app.ml.gcs_model_loader import get_model, NoEligibleModelError
-from app.ml.macro_client import fetch_macro_context
 from app.ml.prediction_probability import predict_positive_probability
 
 logger = logging.getLogger(__name__)
@@ -172,22 +171,8 @@ class WinFastPredictor:
                 reason="no approved model threshold row",
             )
 
-        # ── Macro enrichment (Market Data Hub) ──────────────────────────────
-        # Fetch global macro context concurrently. Never blocks inference on
-        # failure — on timeout/error returns macro_context_available=False and
-        # all numeric features as None (treated as NaN by XGBoost missing=nan).
-        try:
-            macro = await fetch_macro_context()
-        except Exception as _macro_exc:
-            logger.debug("[ML] macro_client unavailable: %s — proceeding with NaN macro features (normal for MDH timeout)", _macro_exc)
-            macro = {"macro_context_available": False}
-
-        # Merge macro features into metrics (additive — never overwrite symbol indicators).
-        # Macro keys are at the END of FEATURE_COLUMNS so they never collide with
-        # existing indicator features (e.g. rsi, adx).
         if metrics is None:
             metrics = {}
-        metrics = {**metrics, **macro}
 
         # Extrai e vetoriza features.
         # Task #324 — preserve NaN. XGBoost was treinado com missing=nan;
@@ -300,9 +285,6 @@ class WinFastPredictor:
             "model_lane":           model_lane,
             "score_status":         "OK",
             "reason_code":          None,
-            # Macro context returned so callers can persist it to decisions_log.metrics
-            # for future ML training without re-fetching. Internal flags stripped.
-            "macro_context": {k: v for k, v in macro.items() if k != "macro_context_available"},
             # Feature values used for this inference — NaN converted to None for JSON safety.
             # Enables post-hoc replay and drift analysis without recomputing features.
             "features_snapshot": {

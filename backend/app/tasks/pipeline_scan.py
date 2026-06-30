@@ -3341,16 +3341,12 @@ async def _run_pipeline_scan():
                                     _d["reason_codes"] = _combined_reason_codes
                                     _d["orchestrator_payload"] = _ml_gate_scores[_sym]["orchestrator_payload"]
                                     _d["ml_gate_enabled"] = True
-                                    # Embed probability and macro context so they reach decisions_log
+                                    # Embed probability so it reaches decisions_log
                                     if isinstance(_d.get("metrics"), dict):
                                         _d["metrics"]["win_fast_probability"] = _prob
                                         _d["metrics"]["ml_threshold"] = _ml.get("threshold_used")
                                         _d["metrics"]["ml_model_id"] = _ml.get("model_id")
                                         _d["metrics"]["ml_model_type"] = "xgboost"
-                                        # Persist macro fields for ML history — never overwrite existing keys
-                                        for _mk, _mv in (_ml.get("macro_context") or {}).items():
-                                            if _mk not in _d["metrics"]:
-                                                _d["metrics"][_mk] = _mv
                                     _reasons = _d.setdefault("reasons", {})
                                     _reasons["ml_gate"] = _gate_payload["ml_gate"]
                                     _reasons["model_approved"] = _gate_payload["model_approved"]
@@ -3574,27 +3570,6 @@ async def _run_pipeline_scan():
                     # a DB-level failure (e.g. missing columns from migration 026)
                     # only rolls back the savepoint and leaves the parent session
                     # healthy for _upsert_assets / _update_last_scanned below.
-                    # PASSO 1: Macro snapshot (plantio de dado para histórico ML).
-                    # Fetches global macro context once per pipeline batch and embeds it
-                    # into each decision's metrics BEFORE the decisions_log INSERT.
-                    # Runs regardless of ML_GATE_ENABLED so macro accumulates in
-                    # decisions_log.metrics even when the ML gate is disabled.
-                    # Never overwrites existing indicator keys (additive only).
-                    # Fail-open: any error is logged and the pipeline continues.
-                    if decisions_to_log:
-                        try:
-                            from ..ml.macro_client import fetch_macro_context as _fetch_macro_ctx
-                            _macro_snapshot = await _fetch_macro_ctx()
-                            _macro_snapshot.pop("macro_context_available", None)
-                            if _macro_snapshot:
-                                for _d in decisions_to_log:
-                                    if isinstance(_d.get("metrics"), dict):
-                                        for _mk, _mv in _macro_snapshot.items():
-                                            if _mk not in _d["metrics"]:
-                                                _d["metrics"][_mk] = _mv
-                        except Exception as _macro_exc:
-                            logger.warning("[Pipeline] Macro snapshot embed failed (non-blocking): %s", _macro_exc)
-
                     decision_payloads = []
                     try:
                         async with db.begin_nested():
