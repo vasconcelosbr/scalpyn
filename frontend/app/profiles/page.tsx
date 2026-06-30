@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, Settings2, Trash2, Play, Copy, Layers } from "lucide-react";
+import { Plus, Settings2, Trash2, Play, Copy, Layers, ListChecks } from "lucide-react";
 import { apiGet, apiPost, apiDelete, apiPut } from "@/lib/api";
 import { ProfileBuilder } from "@/components/profiles/ProfileBuilder";
 import { ProfileCard } from "@/components/profiles/ProfileCard";
+import { BulkProfileBuilder } from "@/components/profiles/BulkProfileBuilder";
 
 interface Profile {
   id: string;
@@ -46,8 +47,10 @@ export default function ProfilesPage() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [showBuilder, setShowBuilder] = useState(false);
+  const [showBulkBuilder, setShowBulkBuilder] = useState(false);
   const [editingProfile, setEditingProfile] = useState<Profile | null>(null);
   const [testResults, setTestResults] = useState<any>(null);
+  const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(new Set());
 
   const fetchProfiles = async () => {
     setLoading(true);
@@ -134,6 +137,34 @@ export default function ProfilesPage() {
     );
   }
 
+  if (showBulkBuilder) {
+    return (
+      <BulkProfileBuilder
+        selectedProfiles={profiles.filter(p => selectedProfiles.has(p.id))}
+        onClose={() => {
+          setShowBulkBuilder(false);
+          setSelectedProfiles(new Set());
+          fetchProfiles(); // fetch to get updated profiles if applied
+        }}
+      />
+    );
+  }
+
+  const toggleSelectAll = () => {
+    if (selectedProfiles.size === profiles.length) {
+      setSelectedProfiles(new Set());
+    } else {
+      setSelectedProfiles(new Set(profiles.map((p) => p.id)));
+    }
+  };
+
+  const toggleSelectProfile = (id: string) => {
+    const next = new Set(selectedProfiles);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedProfiles(next);
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -145,15 +176,44 @@ export default function ProfilesPage() {
           <p className="text-[var(--text-secondary)] mt-1 text-[13px]">
             Define custom filters, scoring weights, and signal conditions.
           </p>
+        <div className="flex items-center gap-3">
+          {selectedProfiles.size > 0 && (
+            <div className="flex items-center gap-3 mr-4">
+              <span className="text-[13px] text-[var(--text-secondary)] font-medium">
+                {selectedProfiles.size} selected
+              </span>
+              <button
+                className="btn btn-secondary text-[12px] px-3 py-1.5"
+                onClick={() => setSelectedProfiles(new Set())}
+              >
+                Clear
+              </button>
+              <button
+                className="btn btn-secondary bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] border-[var(--accent-primary)]/30 text-[12px] px-3 py-1.5"
+                onClick={() => setShowBulkBuilder(true)}
+              >
+                <ListChecks className="w-3.5 h-3.5 mr-1.5" />
+                Bulk Edit Indicators
+              </button>
+            </div>
+          )}
+          <button
+            className="btn btn-secondary"
+            onClick={toggleSelectAll}
+            title={selectedProfiles.size === profiles.length ? "Deselect All" : "Select All"}
+          >
+            <ListChecks className="w-4 h-4 mr-2" />
+            {selectedProfiles.size === profiles.length ? "Deselect All" : "Select All"}
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={handleCreate}
+            data-testid="create-profile-btn"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Create Profile
+          </button>
         </div>
-        <button
-          className="btn btn-primary"
-          onClick={handleCreate}
-          data-testid="create-profile-btn"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          Create Profile
-        </button>
       </div>
 
       {/* Test Results Modal */}
@@ -240,6 +300,8 @@ export default function ProfilesPage() {
             <ProfileCard
               key={profile.id}
               profile={profile}
+              selected={selectedProfiles.has(profile.id)}
+              onSelectToggle={() => toggleSelectProfile(profile.id)}
               onEdit={() => handleEdit(profile)}
               onDelete={() => handleDelete(profile.id)}
               onTest={() => handleTest(profile.id)}

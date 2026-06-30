@@ -19,6 +19,8 @@ interface ProfileCardProps {
   onTest: () => void;
   onDuplicate: () => void;
   onUpdate?: () => void;
+  selected?: boolean;
+  onSelectToggle?: () => void;
 }
 
 export function ProfileCard({
@@ -28,6 +30,8 @@ export function ProfileCard({
   onTest,
   onDuplicate,
   onUpdate,
+  selected,
+  onSelectToggle,
 }: ProfileCardProps) {
   const [isTogglingAutoPilot, setIsTogglingAutoPilot] = useState(false);
   const filterCount = profile.config?.filters?.conditions?.length || 0;
@@ -57,8 +61,18 @@ export function ProfileCard({
 
   return (
     <div className="card flex flex-col" data-testid={`profile-card-${profile.id}`}>
-      <div className="card-body flex-1 p-6">
-        <div className="flex justify-between items-start mb-4">
+      <div className="card-body flex-1 p-6 relative">
+        {onSelectToggle && (
+          <div className="absolute top-4 left-4 z-10">
+            <input
+              type="checkbox"
+              className="w-5 h-5 rounded border-zinc-600 bg-zinc-800 checked:bg-[var(--accent-primary)] checked:border-[var(--accent-primary)] focus:ring-1 focus:ring-[var(--accent-primary)] focus:ring-offset-1 focus:ring-offset-zinc-900 cursor-pointer"
+              checked={selected}
+              onChange={onSelectToggle}
+            />
+          </div>
+        )}
+        <div className={`flex justify-between items-start mb-4 ${onSelectToggle ? "pl-8" : ""}`}>
           <div>
             <h3 className="text-lg font-bold text-[var(--text-primary)] tracking-tight">
               {profile.name}
