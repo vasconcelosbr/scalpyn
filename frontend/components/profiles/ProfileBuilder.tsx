@@ -191,6 +191,7 @@ function normalizeRuleCondition(raw: any): RuleCondition {
       left: raw?.left || "price",
       operator: raw?.operator || ">",
       right: raw?.right || "ema9",
+      period: raw?.period,
     };
   }
 
@@ -215,6 +216,7 @@ function normalizeRuleCondition(raw: any): RuleCondition {
           : raw?.value ?? 60,
     min: raw?.min,
     max: raw?.max,
+    period: raw?.period,
   };
 }
 
