@@ -290,9 +290,8 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                 </div>
                 <ConditionBuilder
                   conditions={config.filters.conditions}
-                  onUpdate={(conds) => updateFilters(conds)}
+                  onChange={(conds) => updateFilters(conds)}
                   defaultTimeframe="5m"
-                  showTimeframeSelector={false}
                 />
               </div>
             </div>
@@ -309,9 +308,8 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                 </div>
                 <ConditionBuilder
                   conditions={config.signals.conditions}
-                  onUpdate={(conds) => updateSignals(conds)}
+                  onChange={(conds) => updateSignals(conds)}
                   defaultTimeframe="5m"
-                  showTimeframeSelector={false}
                 />
               </div>
             </div>
@@ -328,9 +326,8 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                 </div>
                 <ConditionBuilder
                   conditions={config.entry_triggers.conditions}
-                  onUpdate={(conds) => updateEntryTriggers(conds)}
+                  onChange={(conds) => updateEntryTriggers(conds)}
                   defaultTimeframe="5m"
-                  showTimeframeSelector={false}
                 />
               </div>
             </div>
@@ -383,13 +380,12 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
                       </div>
                       <ConditionBuilder
                         conditions={block.conditions || []}
-                        onUpdate={(conds) => {
+                        onChange={(conds) => {
                           const newBlocks = [...config.block_rules.blocks];
                           newBlocks[idx].conditions = conds;
                           updateBlockRules(newBlocks);
                         }}
                         defaultTimeframe="5m"
-                        showTimeframeSelector={false}
                       />
                     </div>
                   ))}
