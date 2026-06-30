@@ -176,6 +176,7 @@ export default function ProfilesPage() {
           <p className="text-[var(--text-secondary)] mt-1 text-[13px]">
             Define custom filters, scoring weights, and signal conditions.
           </p>
+        </div>
         <div className="flex items-center gap-3">
           {selectedProfiles.size > 0 && (
             <div className="flex items-center gap-3 mr-4">
