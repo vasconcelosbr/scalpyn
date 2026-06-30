@@ -359,8 +359,10 @@ class MLChallengerService:
         cutoff_clause = ""
         cutoff_params: dict = {}
         if _TRAIN_CUTOFF_AT:
+            from datetime import datetime as _dt
+            _cutoff_dt = _dt.fromisoformat(_TRAIN_CUTOFF_AT).replace(tzinfo=timezone.utc)
             cutoff_clause = "AND completed_at < :train_cutoff_at"
-            cutoff_params = {"train_cutoff_at": _TRAIN_CUTOFF_AT}
+            cutoff_params = {"train_cutoff_at": _cutoff_dt}
             logger.info("[MLChallenger] _load_shadow_data cutoff: completed_at < %s", _TRAIN_CUTOFF_AT)
         rows = (await db.execute(text(f"""
             SELECT

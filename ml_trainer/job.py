@@ -184,8 +184,9 @@ def _train_for_profile(engine, profile_id_str: str, _ml_cfg: dict, _fee_roundtri
     profile_cutoff_clause = ""
     profile_cutoff_params: dict = {}
     if TRAIN_CUTOFF_AT:
+        _profile_cutoff_dt = datetime.fromisoformat(TRAIN_CUTOFF_AT).replace(tzinfo=timezone.utc)
         profile_cutoff_clause = "AND completed_at < :train_cutoff_at"
-        profile_cutoff_params = {"train_cutoff_at": TRAIN_CUTOFF_AT}
+        profile_cutoff_params = {"train_cutoff_at": _profile_cutoff_dt}
         logger.info("[ProfileTrainer] Cutoff active: completed_at < %s", TRAIN_CUTOFF_AT)
     with engine.connect() as conn:
         dataset_query_cutoff = conn.execute(text("SELECT NOW()")).scalar()
@@ -586,8 +587,9 @@ def main():
     cutoff_clause = ""
     cutoff_params: dict = {}
     if TRAIN_CUTOFF_AT:
+        _cutoff_dt = datetime.fromisoformat(TRAIN_CUTOFF_AT).replace(tzinfo=timezone.utc)
         cutoff_clause = "AND completed_at < :train_cutoff_at"
-        cutoff_params = {"train_cutoff_at": TRAIN_CUTOFF_AT}
+        cutoff_params = {"train_cutoff_at": _cutoff_dt}
         logger.info("Dataset cutoff active: completed_at < %s", TRAIN_CUTOFF_AT)
     with engine.connect() as conn:
         dataset_query_cutoff = conn.execute(text("SELECT NOW()")).scalar()
