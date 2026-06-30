@@ -275,21 +275,26 @@ async def delete_profile(
         raise HTTPException(status_code=404, detail="Profile not found")
     
     pid = {"pid": str(profile_id)}
-    # Delete from RESTRICT-FK tables first (order matters to avoid FK violations)
-    await db.execute(text("DELETE FROM profile_intelligence_autopilot_candidates WHERE profile_id = :pid"), pid)
-    await db.execute(text("DELETE FROM autopilot_pending_actions WHERE profile_id = :pid"), pid)
-    # profile_adjustment_versions has CASCADE from profile_adjustment_suggestions,
-    # so deleting suggestions first also removes versions automatically.
-    await db.execute(text("DELETE FROM profile_adjustment_versions WHERE profile_id = :pid"), pid)
-    await db.execute(text("DELETE FROM profile_adjustment_suggestions WHERE profile_id = :pid"), pid)
 
-    # profile_intelligence_autopilot_audit has SET NULL on profile_id but is
-    # protected by an immutable (append-only) trigger that rejects all UPDATEs.
-    # Disable the trigger temporarily so the cascade SET NULL can proceed.
+    # ── Step 1: profile_intelligence_autopilot_audit ──────────────────────────
+    # This table is append-only (immutable trigger blocks all UPDATEs/DELETEs).
+    # Two cascade SET NULLs would fire when we later delete candidates and the
+    # profile itself — both blocked by the trigger. Disable it, null them out
+    # manually up front, then re-enable before proceeding.
     await db.execute(text(
         "ALTER TABLE profile_intelligence_autopilot_audit "
         "DISABLE TRIGGER trg_pi_autopilot_audit_immutable"
     ))
+    # candidate_id → SET NULL cascade triggered when we delete candidates below
+    await db.execute(text("""
+        UPDATE profile_intelligence_autopilot_audit
+        SET candidate_id = NULL
+        WHERE candidate_id IN (
+            SELECT id FROM profile_intelligence_autopilot_candidates
+            WHERE profile_id = :pid
+        )
+    """), pid)
+    # profile_id → SET NULL cascade triggered when we delete the profile itself
     await db.execute(
         text("UPDATE profile_intelligence_autopilot_audit SET profile_id = NULL WHERE profile_id = :pid"),
         pid,
@@ -299,6 +304,35 @@ async def delete_profile(
         "ENABLE TRIGGER trg_pi_autopilot_audit_immutable"
     ))
 
+    # ── Step 2: shadow_trades ─────────────────────────────────────────────────
+    # shadow_trades.profile_id is SET NULL, but ux_shadow_running_user_source
+    # (narrowed in migration c003 to WHERE profile_id IS NULL AND completed_at
+    # IS NULL) could still conflict if there are running baseline trades for the
+    # same (user, symbol, source).  Close any running trades for this profile
+    # first so they exit the unique-index scope before cascade sets profile_id=NULL.
+    await db.execute(text("""
+        UPDATE shadow_trades
+        SET completed_at = NOW()
+        WHERE profile_id = :pid AND completed_at IS NULL
+    """), pid)
+
+    # ── Step 3: RESTRICT-FK tables ────────────────────────────────────────────
+    await db.execute(text(
+        "DELETE FROM profile_intelligence_autopilot_candidates WHERE profile_id = :pid"
+    ), pid)
+    await db.execute(text(
+        "DELETE FROM autopilot_pending_actions WHERE profile_id = :pid"
+    ), pid)
+    # profile_adjustment_versions has CASCADE from profile_adjustment_suggestions;
+    # delete versions first to satisfy its own RESTRICT FK on profiles.id.
+    await db.execute(text(
+        "DELETE FROM profile_adjustment_versions WHERE profile_id = :pid"
+    ), pid)
+    await db.execute(text(
+        "DELETE FROM profile_adjustment_suggestions WHERE profile_id = :pid"
+    ), pid)
+
+    # ── Step 4: delete profile (remaining SET NULL cascades fire here) ────────
     await db.delete(profile)
     await db.commit()
 
