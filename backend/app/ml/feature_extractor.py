@@ -382,38 +382,43 @@ def build_training_dataframe(
             dropped_null_pnl += 1
             continue
 
-        # Target: is_win_fast label — simulator-ground-truth two-tier strategy.
+        # Target: is_win_fast label — three-tier strategy (Q1 council 2026-06-29).
         #
-        # Tier 1 (simulator ground truth): outcome == 'TP_HIT' AND
-        # holding_seconds <= win_fast_threshold_s. The simulator outcome is
-        # proven reliable (zero TP_HIT with negative PnL, zero SL_HIT with
-        # positive PnL). Slow wins (TP_HIT but holding > threshold) are labeled
-        # 0 — a slow win is a bad entry with a lucky exit.
+        # Tier 0 (preferred): ttt_fast_win_bucket derived from OHLCV candle data
+        # (5m/30m). Precomputed single source of truth — encodes both outcome and
+        # time-window without ±30m rounding error from holding_seconds.
         #
-        # Tier 2 (fallback): records with outcome IS NULL (data gap) fall back
-        # to pnl threshold + holding constraint for continuity only.
-        holding_s = r.get("holding_seconds")
-        sim_outcome = r.get("outcome")
-        holding_ok = holding_s is not None and holding_s <= win_fast_threshold_s
-        if sim_outcome is not None:
-            features["is_win_fast"] = 1 if (sim_outcome == "TP_HIT" and holding_ok) else 0
-            features["_has_ttt_label"] = 1  # retained for schema compat — signals sim outcome present
+        # Tier 1 (fallback): outcome == 'TP_HIT' AND holding_seconds <= threshold.
+        # Slow wins (TP_HIT but holding > threshold) labeled 0 — bad entry, lucky exit.
+        #
+        # Tier 2 (fallback): records with outcome IS NULL fall back to pnl threshold.
+        ttt_bucket = r.get("ttt_fast_win_bucket")
+        if ttt_bucket is not None:
+            features["is_win_fast"] = 1 if ttt_bucket in {"WIN_0_15M", "WIN_15_30M"} else 0
+            features["_has_ttt_label"] = 1
         else:
-            # Tier 2 fallback: net-of-fees label (B1 fix) + holding constraint.
-            # Priority: persisted net_return_pct > runtime-computed net > legacy gross.
-            if label_net_of_fees:
-                net_return_pct = r.get("net_return_pct")
-                if net_return_pct is not None:
-                    net_val = float(net_return_pct)
-                    features["is_win_fast"] = 1 if (net_val > _MIN_WIN_PNL_PCT and holding_ok) else 0
-                elif fee_roundtrip_pct is not None:
-                    net_val = pnl_val - float(fee_roundtrip_pct)
-                    features["is_win_fast"] = 1 if (net_val > _MIN_WIN_PNL_PCT and holding_ok) else 0
+            holding_s = r.get("holding_seconds")
+            sim_outcome = r.get("outcome")
+            holding_ok = holding_s is not None and holding_s <= win_fast_threshold_s
+            if sim_outcome is not None:
+                features["is_win_fast"] = 1 if (sim_outcome == "TP_HIT" and holding_ok) else 0
+                features["_has_ttt_label"] = 1
+            else:
+                # Tier 2 fallback: net-of-fees label (B1 fix) + holding constraint.
+                # Priority: persisted net_return_pct > runtime-computed net > legacy gross.
+                if label_net_of_fees:
+                    net_return_pct = r.get("net_return_pct")
+                    if net_return_pct is not None:
+                        net_val = float(net_return_pct)
+                        features["is_win_fast"] = 1 if (net_val > _MIN_WIN_PNL_PCT and holding_ok) else 0
+                    elif fee_roundtrip_pct is not None:
+                        net_val = pnl_val - float(fee_roundtrip_pct)
+                        features["is_win_fast"] = 1 if (net_val > _MIN_WIN_PNL_PCT and holding_ok) else 0
+                    else:
+                        features["is_win_fast"] = 1 if (pnl_val > _WIN_THRESHOLD and holding_ok) else 0
                 else:
                     features["is_win_fast"] = 1 if (pnl_val > _WIN_THRESHOLD and holding_ok) else 0
-            else:
-                features["is_win_fast"] = 1 if (pnl_val > _WIN_THRESHOLD and holding_ok) else 0
-            features["_has_ttt_label"] = 0
+                features["_has_ttt_label"] = 0
 
         # Metadata for time-based split — NOT model features
         features["_created_at"] = r.get("created_at")

@@ -122,6 +122,10 @@ ML_TARGET_TYPE           = os.getenv("ML_TARGET_TYPE", "binary")
 # a period where features_snapshot contained absent/miscalculated indicators.
 TRAIN_EXCLUDE_FROM       = os.getenv("TRAIN_EXCLUDE_FROM", "")   # e.g. "2026-05-01"
 TRAIN_EXCLUDE_TO         = os.getenv("TRAIN_EXCLUDE_TO", "")     # e.g. "2026-05-20"
+# Hard ceiling on completed_at — exclude trades completed after a known data-quality
+# boundary (e.g. shadow monitor bug window, regime change). Set to "YYYY-MM-DD HH:MM:SS".
+# Empty = no cutoff applied. Q2 council 2026-06-29: set to "2026-06-25 19:45:00".
+TRAIN_CUTOFF_AT          = os.getenv("TRAIN_CUTOFF_AT", "")      # e.g. "2026-06-25 19:45:00"
 
 # MLflow — usa volume local por padrão (file://), sem dependência de servidor externo.
 # Para usar um servidor MLflow remoto, setar MLFLOW_TRACKING_URI na env do Railway service.
@@ -177,6 +181,12 @@ def _train_for_profile(engine, profile_id_str: str, _ml_cfg: dict, _fee_roundtri
             "excl_to": f"{TRAIN_EXCLUDE_TO} 23:59:59",
         }
 
+    profile_cutoff_clause = ""
+    profile_cutoff_params: dict = {}
+    if TRAIN_CUTOFF_AT:
+        profile_cutoff_clause = "AND completed_at < :train_cutoff_at"
+        profile_cutoff_params = {"train_cutoff_at": TRAIN_CUTOFF_AT}
+        logger.info("[ProfileTrainer] Cutoff active: completed_at < %s", TRAIN_CUTOFF_AT)
     with engine.connect() as conn:
         dataset_query_cutoff = conn.execute(text("SELECT NOW()")).scalar()
         result = conn.execute(text(f"""
@@ -197,12 +207,14 @@ def _train_for_profile(engine, profile_id_str: str, _ml_cfg: dict, _fee_roundtri
               AND created_at >= (:dataset_query_cutoff - CAST(:days AS interval))
               AND created_at <= :dataset_query_cutoff
               {exclude_clause}
+              {profile_cutoff_clause}
             ORDER BY created_at ASC
         """), {
             "days": f"{DAYS_LOOKBACK} days",
             "profile_id": profile_id_str,
             "dataset_query_cutoff": dataset_query_cutoff,
             **exclude_params,
+            **profile_cutoff_params,
         })
         records = [dict(row._mapping) for row in result.fetchall()]
 
@@ -571,6 +583,12 @@ def main():
         logger.info("Dataset valid_from filter active (L3): created_at >= %s", _dataset_valid_from)
     elif _dataset_valid_from:
         logger.info("Dataset valid_from skipped for source=%s (snapshot quality via <> '{}' filter)", ML_SOURCE_FILTER)
+    cutoff_clause = ""
+    cutoff_params: dict = {}
+    if TRAIN_CUTOFF_AT:
+        cutoff_clause = "AND completed_at < :train_cutoff_at"
+        cutoff_params = {"train_cutoff_at": TRAIN_CUTOFF_AT}
+        logger.info("Dataset cutoff active: completed_at < %s", TRAIN_CUTOFF_AT)
     with engine.connect() as conn:
         dataset_query_cutoff = conn.execute(text("SELECT NOW()")).scalar()
         result = conn.execute(text(f"""
@@ -589,10 +607,11 @@ def main():
               AND created_at <= :dataset_query_cutoff
               {exclude_clause}
               {valid_from_clause}
+              {cutoff_clause}
             ORDER BY created_at ASC
         """), {"days": f"{DAYS_LOOKBACK} days", "source_filter": ML_SOURCE_FILTER,
                "dataset_query_cutoff": dataset_query_cutoff,
-               **exclude_params, **valid_from_params})
+               **exclude_params, **valid_from_params, **cutoff_params})
         records = [dict(row._mapping) for row in result.fetchall()]
 
     total = len(records)

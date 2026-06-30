@@ -492,9 +492,12 @@ class MLChallengerService:
         all_feature_names = available + ["source_encoded", "profile_id_encoded"]
 
         # Índices das colunas categóricas — usados por Pool(cat_features=...) no CatBoost.
-        # source_encoded e profile_id_encoded são as ÚLTIMAS duas colunas.
+        # Q3 (council 2026-06-29): profile_id_encoded removido de cat_features — permanece
+        # como feature numérica (hash bucket 0-9999). Com 75 profiles e win_rates homogêneas
+        # (13-17%), tratá-lo como categoria gera memorização por target encoding de alta
+        # cardinalidade sem sinal discriminativo real. source_encoded permanece categórico.
         n_base = X_base.shape[1]
-        cat_feature_indices = [n_base, n_base + 1]  # source_encoded, profile_id_encoded
+        cat_feature_indices = [n_base]  # source_encoded only; profile_id_encoded is numeric
 
         return X, y, all_feature_names, cat_feature_indices
 
@@ -1017,7 +1020,7 @@ class MLChallengerService:
                                         else "L3_LAB_ONLY" if cb_sources == ["L3_LAB"]
                                         else "L3_COMBINED"
                                     ),
-                                    "cat_features": ["source_encoded", "profile_id_encoded"],
+                                    "cat_features": ["source_encoded"],
                                     **l3_meta,
                                 },
                                 threshold=cb_result["threshold"],
