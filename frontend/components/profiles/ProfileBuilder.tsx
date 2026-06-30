@@ -125,6 +125,7 @@ const PERIOD_DEFAULTS: Record<string, number> = {
   atr_percent: 14, stoch_k: 14, stoch_d: 14,
   macd: 12, macd_histogram: 12, bb_width: 20,
   zscore: 20, volume_spike: 20, volume_delta: 20,
+  vwap_distance_pct: 20,
   ema5: 5, ema9: 9, ema21: 21, ema50: 50, ema200: 200,
 };
 
