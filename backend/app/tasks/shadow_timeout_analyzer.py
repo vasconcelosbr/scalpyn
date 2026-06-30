@@ -15,8 +15,9 @@ Regras obrigatórias
 
 Campos preenchidos (migration 063)
 -----------------------------------
-price_after_1h / 2h / 4h / 12h / 24h   — close da candle 1m mais próxima
-                                           do horizonte pós-exit_timestamp.
+price_after_1h / 2h / 4h / 12h / 24h   — close da candle mais próxima (1m
+                                           preferred, 5m fallback) do horizonte
+                                           pós-exit_timestamp.
 max_profit_after_timeout_pct            — (max_high_24h - entry) / entry * 100
 max_drawdown_after_timeout_pct          — (min_low_24h  - entry) / entry * 100
 delayed_tp                              — TRUE se max_high_24h >= tp_price
@@ -141,17 +142,22 @@ async def _fetch_ohlcv_window(
     after_ts: datetime,
     before_ts: datetime,
 ) -> List[Dict[str, Any]]:
-    """Candles 1m em [after_ts, before_ts] para um símbolo."""
+    """Candles em [after_ts, before_ts] para um símbolo. Prefere 1m, fallback 5m.
+
+    1m OHLCV não é persistido (gate_ws_client.py subscreve mas não salva).
+    DISTINCT ON (time) com ORDER BY timeframe ASC garante preferência por 1m
+    caso venha a ser adicionado no futuro.
+    """
     res = await db.execute(
         text(
             """
-            SELECT time, high, low, close
+            SELECT DISTINCT ON (time) time, high, low, close
               FROM ohlcv
              WHERE symbol = :s
-               AND timeframe = '1m'
+               AND timeframe IN ('1m', '5m')
                AND time > :t_start
                AND time <= :t_end
-             ORDER BY time ASC
+             ORDER BY time ASC, timeframe ASC
             """
         ),
         {"s": symbol, "t_start": after_ts, "t_end": before_ts},
@@ -172,7 +178,7 @@ async def _fetch_close_near_horizon(
     symbol: str,
     target_ts: datetime,
 ) -> Optional[float]:
-    """Close da candle 1m mais próxima de target_ts (dentro de ±5 min)."""
+    """Close da candle mais próxima de target_ts (±5 min). Prefere 1m, fallback 5m."""
     t_start = target_ts - timedelta(minutes=_HORIZON_TOLERANCE_MIN)
     t_end = target_ts + timedelta(minutes=_HORIZON_TOLERANCE_MIN)
     res = await db.execute(
@@ -181,10 +187,10 @@ async def _fetch_close_near_horizon(
             SELECT close
               FROM ohlcv
              WHERE symbol = :s
-               AND timeframe = '1m'
+               AND timeframe IN ('1m', '5m')
                AND time >= :t_start
                AND time <= :t_end
-             ORDER BY ABS(EXTRACT(EPOCH FROM (time - :target)))
+             ORDER BY ABS(EXTRACT(EPOCH FROM (time - :target))), timeframe ASC
              LIMIT 1
             """
         ),

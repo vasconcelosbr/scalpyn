@@ -164,26 +164,40 @@ async def _needs_ai_cycle(db: AsyncSession) -> bool:
 
 
 async def _check_win_rate_drift(db: AsyncSession) -> dict:
-    """Circuit breaker: compare 7d win_rate vs 8-60d reference per source.
+    """Circuit breaker: compare 7d fast_win_rate vs 8-60d reference per source.
+
+    Uses ttt_fast_win_bucket IN ('WIN_0_15M','WIN_15_30M') — same label as
+    is_tp_4h_v1 used to train v52 — so drift is measured on the correct metric.
+    outcome='TP_HIT' (~45%) diverges from is_tp_4h_v1 (~20%) by ~25pp and
+    would produce misleading drift signals.
 
     Emits CRITICAL log when |drift| > 15pp — Etapa 2 of ML correction plan.
-    Minimum 50 trades in the 7d window required to avoid noise on thin data.
+    Minimum 50 trades (with ttt_analysis_done) in the 7d window to avoid noise.
     """
     rows = await db.execute(text("""
         SELECT
             source,
             ROUND(
-                SUM(CASE WHEN completed_at >= NOW() - INTERVAL '7 days' AND outcome = 'TP_HIT' THEN 1 ELSE 0 END)::numeric /
-                NULLIF(SUM(CASE WHEN completed_at >= NOW() - INTERVAL '7 days' AND outcome IN ('TP_HIT','SL_HIT','TIMEOUT') THEN 1 ELSE 0 END), 0) * 100,
+                SUM(CASE WHEN completed_at >= NOW() - INTERVAL '7 days'
+                         AND ttt_fast_win_bucket IN ('WIN_0_15M','WIN_15_30M')
+                         AND ttt_analysis_done = TRUE THEN 1 ELSE 0 END)::numeric /
+                NULLIF(SUM(CASE WHEN completed_at >= NOW() - INTERVAL '7 days'
+                               AND outcome IN ('TP_HIT','SL_HIT','TIMEOUT')
+                               AND ttt_analysis_done = TRUE THEN 1 ELSE 0 END), 0) * 100,
             2) AS win_rate_7d,
             ROUND(
-                SUM(CASE WHEN completed_at BETWEEN NOW() - INTERVAL '60 days' AND NOW() - INTERVAL '7 days' AND outcome = 'TP_HIT' THEN 1 ELSE 0 END)::numeric /
-                NULLIF(SUM(CASE WHEN completed_at BETWEEN NOW() - INTERVAL '60 days' AND NOW() - INTERVAL '7 days' AND outcome IN ('TP_HIT','SL_HIT','TIMEOUT') THEN 1 ELSE 0 END), 0) * 100,
+                SUM(CASE WHEN completed_at BETWEEN NOW() - INTERVAL '60 days' AND NOW() - INTERVAL '7 days'
+                         AND ttt_fast_win_bucket IN ('WIN_0_15M','WIN_15_30M')
+                         AND ttt_analysis_done = TRUE THEN 1 ELSE 0 END)::numeric /
+                NULLIF(SUM(CASE WHEN completed_at BETWEEN NOW() - INTERVAL '60 days' AND NOW() - INTERVAL '7 days'
+                               AND outcome IN ('TP_HIT','SL_HIT','TIMEOUT')
+                               AND ttt_analysis_done = TRUE THEN 1 ELSE 0 END), 0) * 100,
             2) AS win_rate_ref,
-            SUM(CASE WHEN completed_at >= NOW() - INTERVAL '7 days' AND outcome IN ('TP_HIT','SL_HIT','TIMEOUT') THEN 1 ELSE 0 END) AS n_7d
+            SUM(CASE WHEN completed_at >= NOW() - INTERVAL '7 days'
+                     AND outcome IN ('TP_HIT','SL_HIT','TIMEOUT')
+                     AND ttt_analysis_done = TRUE THEN 1 ELSE 0 END) AS n_7d
         FROM shadow_trades
         WHERE completed_at IS NOT NULL
-          AND outcome IN ('TP_HIT','SL_HIT','TIMEOUT')
           AND source IN ('L1_SPECTRUM','L3','L3_LAB')
         GROUP BY source
     """))
