@@ -1200,7 +1200,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                 {PERIOD_DEFAULTS[condition.left || ""] !== undefined && (
                                   <input
                                     type="number"
-                                    className="input h-8 w-16 text-[12px] font-mono text-center"
+                                    className="input h-8 w-20 text-[12px] font-mono text-center"
                                     value={condition.period ?? ""}
                                     onChange={(e) => {
                                       const v = parseInt(e.target.value, 10);
@@ -1243,7 +1243,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                 {PERIOD_DEFAULTS[condition.indicator || ""] !== undefined && (
                                   <input
                                     type="number"
-                                    className="input h-8 w-16 text-[12px] font-mono text-center"
+                                    className="input h-8 w-20 text-[12px] font-mono text-center"
                                     value={condition.period ?? ""}
                                     onChange={(e) => {
                                       const v = parseInt(e.target.value, 10);
@@ -1282,7 +1282,7 @@ export function ProfileBuilder({ profile, onSave, onCancel }: ProfileBuilderProp
                                 {PERIOD_DEFAULTS[condition.indicator || ""] !== undefined && (
                                   <input
                                     type="number"
-                                    className="input h-8 w-16 text-[12px] font-mono text-center"
+                                    className="input h-8 w-20 text-[12px] font-mono text-center"
                                     value={condition.period ?? ""}
                                     onChange={(e) => {
                                       const v = parseInt(e.target.value, 10);

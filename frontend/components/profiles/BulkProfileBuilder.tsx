@@ -105,13 +105,19 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
 
       // Check Block Rules
       if (config.block_rules.blocks.length > 0) {
+        const getIndicators = (block: any) => block.conditions?.map((c: any) => c.field || c.indicator || c.left).filter(Boolean) || [];
         config.block_rules.blocks.forEach((newBlock: any) => {
+          const newIndicators = getIndicators(newBlock);
           const name = newBlock.name;
-          const exists = profile.config?.block_rules?.blocks?.some((b: any) => b.name === name);
+          const exists = profile.config?.block_rules?.blocks?.some((b: any) => {
+            if (b.name === name) return true;
+            const bIndicators = getIndicators(b);
+            return newIndicators.length > 0 && newIndicators.some((ind: string) => bIndicators.includes(ind));
+          });
           if (exists && !overwrite) {
-            profileLogs.push(`Block Rule '${name}' ignored (already exists)`);
+            profileLogs.push(`Block Rule '${name}' (or similar indicator) ignored (already exists)`);
           } else if (exists && overwrite) {
-            profileLogs.push(`Block Rule '${name}' will be overwritten`);
+            profileLogs.push(`Block Rule '${name}' (or similar indicator) will be overwritten`);
           } else {
             profileLogs.push(`Block Rule '${name}' will be added`);
           }
@@ -178,9 +184,15 @@ export function BulkProfileBuilder({ selectedProfiles, onClose }: BulkProfileBui
         });
 
         // Process Block Rules
+        const getIndicators = (block: any) => block.conditions?.map((c: any) => c.field || c.indicator || c.left).filter(Boolean) || [];
         config.block_rules.blocks.forEach((newBlock: any) => {
+          const newIndicators = getIndicators(newBlock);
           const name = newBlock.name;
-          const idx = updatedConfig.block_rules.blocks.findIndex((b: any) => b.name === name);
+          const idx = updatedConfig.block_rules.blocks.findIndex((b: any) => {
+            if (b.name === name) return true;
+            const bIndicators = getIndicators(b);
+            return newIndicators.length > 0 && newIndicators.some((ind: string) => bIndicators.includes(ind));
+          });
           if (idx !== -1) {
             if (overwrite) updatedConfig.block_rules.blocks[idx] = newBlock;
           } else {

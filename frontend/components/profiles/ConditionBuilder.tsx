@@ -500,7 +500,7 @@ export function ConditionBuilder({
 
             {PERIOD_DEFAULTS[condition.field] !== undefined && (
               <input
-                className="input w-16 text-[11px] font-mono"
+                className="input w-20 text-[11px] font-mono"
                 type="number"
                 min={1}
                 value={condition.period ?? ""}
