@@ -1148,7 +1148,7 @@ def main():
                 "dataset_query_cutoff": dataset_query_cutoff,
                 "comparison_vs_previous": json.dumps(comparison_vs_previous),
                 "model_blob":             model_blob,
-                "source_filter":          _source_filter,
+                "source_filter":          ML_SOURCE_FILTER,
                 "target_window_seconds":  int(_win_fast_threshold_s),
                 "label_contract_id":      "win_fast_pnl",
                 "macro_features_enabled": True,
