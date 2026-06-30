@@ -1057,7 +1057,7 @@ class MLChallengerService:
                                 "metrics": cb_result["metrics"],
                                 "test_metrics": cb_result.get("test_metrics"),
                                 "threshold": cb_result["threshold"],
-                                "cat_features": ["source_encoded", "profile_id_encoded"],
+                                "cat_features": ["source_encoded"],
                                 "l3_strict_meta": l3_meta,
                             }
                             logger.info(

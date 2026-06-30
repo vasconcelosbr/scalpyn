@@ -163,8 +163,51 @@ async def _needs_ai_cycle(db: AsyncSession) -> bool:
     return last < cutoff
 
 
+async def _check_win_rate_drift(db: AsyncSession) -> dict:
+    """Circuit breaker: compare 7d win_rate vs 8-60d reference per source.
+
+    Emits CRITICAL log when |drift| > 15pp — Etapa 2 of ML correction plan.
+    Minimum 50 trades in the 7d window required to avoid noise on thin data.
+    """
+    rows = await db.execute(text("""
+        SELECT
+            source,
+            ROUND(
+                SUM(CASE WHEN completed_at >= NOW() - INTERVAL '7 days' AND outcome = 'TP_HIT' THEN 1 ELSE 0 END)::numeric /
+                NULLIF(SUM(CASE WHEN completed_at >= NOW() - INTERVAL '7 days' AND outcome IN ('TP_HIT','SL_HIT','TIMEOUT') THEN 1 ELSE 0 END), 0) * 100,
+            2) AS win_rate_7d,
+            ROUND(
+                SUM(CASE WHEN completed_at BETWEEN NOW() - INTERVAL '60 days' AND NOW() - INTERVAL '7 days' AND outcome = 'TP_HIT' THEN 1 ELSE 0 END)::numeric /
+                NULLIF(SUM(CASE WHEN completed_at BETWEEN NOW() - INTERVAL '60 days' AND NOW() - INTERVAL '7 days' AND outcome IN ('TP_HIT','SL_HIT','TIMEOUT') THEN 1 ELSE 0 END), 0) * 100,
+            2) AS win_rate_ref,
+            SUM(CASE WHEN completed_at >= NOW() - INTERVAL '7 days' AND outcome IN ('TP_HIT','SL_HIT','TIMEOUT') THEN 1 ELSE 0 END) AS n_7d
+        FROM shadow_trades
+        WHERE completed_at IS NOT NULL
+          AND outcome IN ('TP_HIT','SL_HIT','TIMEOUT')
+          AND source IN ('L1_SPECTRUM','L3','L3_LAB')
+        GROUP BY source
+    """))
+    alerts = []
+    for r in rows.fetchall():
+        source, wr7d, wr_ref, n7d = r
+        if wr7d is None or wr_ref is None or (n7d or 0) < 50:
+            continue
+        drift = float(wr7d) - float(wr_ref)
+        if abs(drift) > 15:
+            alerts.append({"source": source, "win_rate_7d": float(wr7d),
+                           "win_rate_ref": float(wr_ref), "drift_pp": round(drift, 2)})
+            logger.critical(
+                "[WinRateDrift] CIRCUIT_BREAKER source=%s win_rate_7d=%.1f%% ref=%.1f%% drift=%+.1fpp — "
+                "retrain or investigate before activating ML_GATE",
+                source, wr7d, wr_ref, drift,
+            )
+    if not alerts:
+        logger.info("[WinRateDrift] OK — no source drifted > 15pp (7d vs 8-60d reference)")
+    return {"alerts": alerts}
+
+
 async def run_fast_cycle(db: AsyncSession) -> dict:
-    """Fast loop: heartbeat + shadow scan summary."""
+    """Fast loop: heartbeat + shadow scan summary + win_rate drift circuit breaker."""
     run_id = uuid.uuid4()
     next_at = datetime.now(timezone.utc) + timedelta(minutes=5)
 
@@ -202,6 +245,8 @@ async def run_fast_cycle(db: AsyncSession) -> dict:
                         message=f"Shadow scan: {stats['completed_trades']} trades, {stats['profiles']} profiles",
                         payload=stats)
 
+    drift_result = await _check_win_rate_drift(db)
+
     await _log_activity(db, run_id=run_id, event_type="RUN_COMPLETED",
                         phase="fast", message="Ciclo rápido concluído")
     await db.commit()
@@ -209,7 +254,7 @@ async def run_fast_cycle(db: AsyncSession) -> dict:
     await record_heartbeat(
         db, run_id=run_id, engine_status="IDLE", current_phase="IDLE", next_cycle_at=next_at,
     )
-    return {"run_id": str(run_id), "cycle": "fast", **stats}
+    return {"run_id": str(run_id), "cycle": "fast", **stats, "win_rate_drift": drift_result}
 
 
 async def run_medium_cycle(db: AsyncSession) -> dict:
@@ -514,7 +559,7 @@ async def run_shadow_calibration_cycle(db: AsyncSession) -> dict:
             wr_row = await db.execute(text("""
                 SELECT
                     COUNT(*) FILTER (WHERE outcome = 'TP_HIT') AS tp,
-                    COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT')) AS total
+                    COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')) AS total
                 FROM shadow_trades
                 WHERE profile_id = :pid::uuid
                   AND status = 'COMPLETED'
@@ -664,7 +709,7 @@ async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
         before_row = await db.execute(text("""
             SELECT
                 COUNT(*) FILTER (WHERE outcome = 'TP_HIT') AS tp,
-                COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT')) AS total
+                COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')) AS total
             FROM shadow_trades
             WHERE profile_id = :pid::uuid
               AND status = 'COMPLETED'
@@ -678,7 +723,7 @@ async def run_shadow_validation_cycle(db: AsyncSession) -> dict:
         after_row = await db.execute(text("""
             SELECT
                 COUNT(*) FILTER (WHERE outcome = 'TP_HIT') AS tp,
-                COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT')) AS total
+                COUNT(*) FILTER (WHERE outcome IN ('TP_HIT','SL_HIT','TIMEOUT')) AS total
             FROM shadow_trades
             WHERE profile_id = :pid::uuid
               AND status = 'COMPLETED'
