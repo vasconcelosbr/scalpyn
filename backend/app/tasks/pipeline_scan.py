@@ -3089,7 +3089,8 @@ async def _run_pipeline_scan():
                                                     p_l1_win, rank_position, rank_percentile,
                                                     p_l3_profile_win,
                                                     l1_ranker_mode, selected_by_l1_ranker,
-                                                    reason_codes, orchestrator_payload, source
+                                                    reason_codes, orchestrator_payload, source,
+                                                    features_snapshot
                                                 ) VALUES (
                                                     gen_random_uuid(), :run_id, :symbol,
                                                     CAST(:profile_id AS UUID), CAST(:watchlist_id AS UUID),
@@ -3101,7 +3102,8 @@ async def _run_pipeline_scan():
                                                     :p_l3_profile_win,
                                                     :l1_ranker_mode, :selected_by_l1_ranker,
                                                     CAST(:reason_codes AS JSONB),
-                                                    CAST(:orchestrator_payload AS JSONB), :source
+                                                    CAST(:orchestrator_payload AS JSONB), :source,
+                                                    CAST(:features_snapshot AS JSONB)
                                                 )
                                                 RETURNING id
                                                 """
@@ -3162,6 +3164,9 @@ async def _run_pipeline_scan():
                                                     ),
                                                     "gate_action": "ALLOW" if ml_result.get("model_approved") else "BLOCK",
                                                 }),
+                                                "features_snapshot": __import__("json").dumps(
+                                                    ml_result.get("features_snapshot") or {}
+                                                ),
                                             },
                                             )
                                             _row = _res.fetchone()

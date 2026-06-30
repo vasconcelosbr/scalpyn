@@ -290,6 +290,7 @@ class WinFastPredictor:
             )
         approved = proba >= threshold
 
+        import math as _math
         result = {
             "win_fast_probability": round(proba, 4),
             "model_approved":       approved,
@@ -302,6 +303,12 @@ class WinFastPredictor:
             # Macro context returned so callers can persist it to decisions_log.metrics
             # for future ML training without re-fetching. Internal flags stripped.
             "macro_context": {k: v for k, v in macro.items() if k != "macro_context_available"},
+            # Feature values used for this inference — NaN converted to None for JSON safety.
+            # Enables post-hoc replay and drift analysis without recomputing features.
+            "features_snapshot": {
+                k: (None if isinstance(v, float) and _math.isnan(v) else v)
+                for k, v in features.items()
+            },
         }
 
         # Log assíncrono — não bloqueia o pipeline
