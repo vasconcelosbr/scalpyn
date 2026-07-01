@@ -5,7 +5,45 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.api.shadow_trades import _to_read
 from app.services.shadow_trade_service import _create_from_decision
+
+
+def test_shadow_trade_list_item_exposes_profile_attribution():
+    profile_id = uuid4()
+    row = SimpleNamespace(
+        id=uuid4(),
+        symbol="BTC_USDT",
+        direction="SPOT",
+        entry_price=100.0,
+        tp_price=102.0,
+        sl_price=99.0,
+        amount_usdt=25.0,
+        outcome=None,
+        pnl_pct=None,
+        pnl_usdt=None,
+        status="RUNNING",
+        skip_reason=None,
+        holding_seconds=60,
+        created_at=None,
+        completed_at=None,
+        entry_timestamp=None,
+        profile_id=profile_id,
+        profile_name="generated-profile",
+        btc_price_at_entry=None,
+        btc_change_1h_pct=None,
+        funding_rate_at_entry=None,
+        n_concurrent_signals=None,
+        mae_pct=None,
+        mfe_pct=None,
+        max_drawdown_pct=None,
+        max_profit_pct=None,
+    )
+
+    item = _to_read(row, current_price=101.0)
+
+    assert item.profile_id == profile_id
+    assert item.profile_name == "generated-profile"
 
 
 @pytest.mark.asyncio

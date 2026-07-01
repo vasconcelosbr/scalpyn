@@ -219,6 +219,8 @@ def _to_read(
         created_at=row.created_at,
         completed_at=row.completed_at,
         entry_timestamp=row.entry_timestamp,
+        profile_id=row.profile_id,
+        profile_name=row.profile_name,
         btc_price_at_entry=float(row.btc_price_at_entry)
         if row.btc_price_at_entry is not None else None,
         btc_change_1h_pct=float(row.btc_change_1h_pct)

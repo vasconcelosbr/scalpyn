@@ -39,6 +39,11 @@ class ShadowTradeRead(BaseModel):
     # shadows novos, mas legados podem ter delta).
     entry_timestamp: Optional[datetime] = None
 
+    # Identidade do perfil necessária para associar cada trade ao ranking
+    # canônico (EV Score) exibido no Shadow Portfolio.
+    profile_id: Optional[UUID] = None
+    profile_name: Optional[str] = None
+
     # Market-context (migration 052). Preenchidos pelo monitor após
     # resolver a entrada; ficam None em shadows legados sem backfill.
     btc_price_at_entry: Optional[float] = None
@@ -102,9 +107,7 @@ class ShadowTradeDetail(ShadowTradeRead):
     exit_metrics_json: Optional[Dict[str, Any]] = None
 
     # Strategy Lab fields (migration 077) — null for non-lab shadows.
-    profile_id: Optional[UUID] = None
     profile_version: Optional[datetime] = None
-    profile_name: Optional[str] = None
     strategy_type: Optional[str] = None
     rules_snapshot: Optional[Dict[str, Any]] = None
     ml_probability: Optional[float] = None

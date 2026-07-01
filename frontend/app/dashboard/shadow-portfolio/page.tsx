@@ -57,6 +57,8 @@ interface ShadowTradeRead {
   created_at: string | null;
   completed_at: string | null;
   entry_timestamp: string | null;
+  profile_id: string | null;
+  profile_name: string | null;
 }
 
 interface ShadowTradeListResponse {
@@ -110,9 +112,7 @@ interface ShadowTradeDetail extends ShadowTradeRead {
   entry_metrics: Record<string, unknown> | null;
   exit_metrics: Record<string, unknown> | null;
   // Strategy Lab fields (migration 077)
-  profile_id: string | null;
   profile_version: string | null;
-  profile_name: string | null;
   strategy_type: string | null;
   rules_snapshot: Record<string, unknown> | null;
   ml_probability: number | null;
@@ -652,6 +652,8 @@ const COLS: {
   sortKey?: TradeSortKey;
 }[] = [
   { key: "created_at", label: "Aberto em" },
+  { key: "profile", label: "Perfil" },
+  { key: "ev_score", label: "EV Score", align: "right" },
   { key: "symbol", label: "Símbolo" },
   { key: "status", label: "Status", align: "center" },
   { key: "entry", label: "Entrada", align: "right", sortKey: "entry_price" },
@@ -669,11 +671,13 @@ function TradeTable({
   items,
   loading,
   error,
+  profileEvScores,
   onRowClick,
 }: {
   items: ShadowTradeRead[];
   loading: boolean;
   error: string | null;
+  profileEvScores: Record<string, number>;
   onRowClick: (id: string) => void;
 }) {
   // Tick a cada 30s para o "Holding" das operações em aberto avançar
@@ -944,6 +948,30 @@ function TradeTable({
               >
                 <td style={{ padding: "10px 12px", whiteSpace: "nowrap", color: C.muted }}>
                   {fmtDateTime(it.created_at)}
+                </td>
+                <td
+                  style={{ padding: "10px 12px", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                  title={it.profile_name ?? undefined}
+                >
+                  {it.profile_name ?? "—"}
+                </td>
+                <td
+                  style={{
+                    padding: "10px 12px",
+                    textAlign: "right",
+                    color: it.profile_id != null && profileEvScores[it.profile_id] != null
+                      ? profileEvScores[it.profile_id] >= 60
+                        ? C.green
+                        : profileEvScores[it.profile_id] >= 30
+                        ? C.amber
+                        : C.red
+                      : C.dim,
+                    fontWeight: 700,
+                  }}
+                >
+                  {it.profile_id != null && profileEvScores[it.profile_id] != null
+                    ? profileEvScores[it.profile_id].toFixed(2)
+                    : "—"}
                 </td>
                 <td style={{ padding: "10px 12px", fontWeight: 600 }}>{it.symbol}</td>
                 <td style={{ padding: "10px 12px", textAlign: "center" }}>
@@ -2237,6 +2265,16 @@ export default function ShadowPortfolioPage() {
   const [profileReport, setProfileReport] = useState<ProfileReportRow[]>([]);
   const [loadingReport, setLoadingReport] = useState(false);
 
+  const profileEvScores = useMemo(() => {
+    const scores: Record<string, number> = {};
+    for (const row of profileReport) {
+      if (Number.isFinite(row.ev_score) && (scores[row.profile_id] == null || row.ev_score > scores[row.profile_id])) {
+        scores[row.profile_id] = row.ev_score;
+      }
+    }
+    return scores;
+  }, [profileReport]);
+
   // Fetch profiles for profile selector (Profile Intelligence candidates)
   useEffect(() => {
     apiGet<{ items?: ProfileItem[]; profiles?: ProfileItem[] } | ProfileItem[]>("/api/profiles/")
@@ -2276,13 +2314,12 @@ export default function ShadowPortfolioPage() {
   }, []);
 
   useEffect(() => {
-    if (mainTab !== "report") return;
     setLoadingReport(true);
     apiGet<ProfileReportRow[]>("/api/shadow-trades/profile-report?order_by=ev_score&direction=desc")
       .then(setProfileReport)
       .catch(() => setProfileReport([]))
       .finally(() => setLoadingReport(false));
-  }, [mainTab, tick]);
+  }, [tick]);
 
   const fetchList = useCallback(() => {
     setLoadingList(true);
@@ -2551,9 +2588,9 @@ export default function ShadowPortfolioPage() {
                 <option value="">Todos os profiles</option>
                 {profiles.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {watchlistNames[p.id]
-                      ? `${p.name} — ${watchlistNames[p.id]}`
-                      : p.name}
+                    {`${p.name}${watchlistNames[p.id] ? ` — ${watchlistNames[p.id]}` : ""} — EV ${
+                      profileEvScores[p.id] != null ? profileEvScores[p.id].toFixed(2) : "—"
+                    }`}
                   </option>
                 ))}
               </select>
@@ -2650,6 +2687,7 @@ export default function ShadowPortfolioPage() {
               items={displayItems}
               loading={loadingList}
               error={errorList}
+              profileEvScores={profileEvScores}
               onRowClick={(id) => setSelectedId(id)}
             />
 
