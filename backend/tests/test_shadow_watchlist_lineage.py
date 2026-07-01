@@ -161,6 +161,7 @@ class TestFunctionSignatures:
         assert "source_watchlist_id" in params
         assert "profile_id" in params
         assert "profile_name" in params
+        assert "profile_version" in params
 
     def test_l3_rejected_threads_profile_lineage_to_context(self):
         from backend.app.services.shadow_trade_service import create_l3_rejected_inline_shadows
@@ -189,6 +190,28 @@ class TestFunctionSignatures:
         assert "profile_name" in params
         assert "profile_version" in params
 
+    def test_pipeline_scan_passes_profile_lineage_to_l1_spectrum(self):
+        source = Path("backend/app/tasks/pipeline_scan.py").read_text(encoding="utf-8")
+        call_start = source.index("await create_l1_spectrum_shadows(")
+        call_end = source.index("\n                                )", call_start)
+        call = source[call_start:call_end]
+        assert 'profile_id=str(wl.profile_id)' in call
+        assert 'profile_name=_l1_profile_meta.get("name")' in call
+        assert 'profile_version=_l1_profile_meta.get("version")' in call
+
+    def test_on_demand_l3_decisions_persist_profile_lineage(self):
+        source = Path("backend/app/api/watchlists.py").read_text(encoding="utf-8")
+        block_start = source.index("_dl_rows.append(_DecisionLog(")
+        block_end = source.index("\n                ))", block_start)
+        block = source[block_start:block_end]
+        assert "profile_id=wl.profile_id" in block
+        assert "profile_name=profile_name" in block
+        assert "profile_version=profile_version" in block
+
+        metrics_start = source.index("_metrics: dict = {", block_start - 1500)
+        metrics_block = source[metrics_start:block_start]
+        assert '"watchlist_id": str(wl.id)' in metrics_block
+
     def test_create_l3_simulated_accepts_lineage(self):
         from backend.app.services.shadow_trade_service import create_l3_simulated_shadows
         params = self._get_params(create_l3_simulated_shadows)
@@ -204,6 +227,9 @@ class TestFunctionSignatures:
         assert "watchlist_name" in params
         assert "watchlist_level" in params
         assert "source_watchlist_id" in params
+        assert "profile_id" in params
+        assert "profile_name" in params
+        assert "profile_version" in params
 
     def test_create_strategy_lab_shadows_accepts_lineage(self):
         from backend.app.services.shadow_trade_service import create_strategy_lab_shadows

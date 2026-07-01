@@ -2883,6 +2883,10 @@ async def _run_pipeline_scan():
                                 from ..services.shadow_trade_service import (
                                     create_l1_spectrum_shadows,
                                 )
+                                _l1_profile_meta = (
+                                    profile_meta_map.get(wl.profile_id)
+                                    if wl.profile_id else {}
+                                ) or {}
                                 await create_l1_spectrum_shadows(
                                     user_id=wl.user_id,
                                     symbols=[a["symbol"] for a in passed],
@@ -2893,6 +2897,9 @@ async def _run_pipeline_scan():
                                     watchlist_name=wl.name,
                                     watchlist_level=wl.level,
                                     source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
+                                    profile_id=str(wl.profile_id) if wl.profile_id else None,
+                                    profile_name=_l1_profile_meta.get("name"),
+                                    profile_version=_l1_profile_meta.get("version"),
                                 )
                             except Exception as _l1cap_exc:
                                 logger.warning(
@@ -3647,6 +3654,8 @@ async def _run_pipeline_scan():
                                 watchlist_level=wl.level,
                                 source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
                                 profile_id=str(wl.profile_id) if wl.profile_id else None,
+                                profile_name=_wl_profile_name,
+                                profile_version=_wl_profile_version,
                                 # Fase 8 (audit 2026-06-24): thread the L3 ML
                                 # gate score computed above straight into the
                                 # shadow row at creation time instead of
@@ -3720,6 +3729,8 @@ async def _run_pipeline_scan():
                                             watchlist_level=wl.level,
                                             source_watchlist_id=str(wl.source_watchlist_id) if wl.source_watchlist_id else None,
                                             profile_id=str(wl.profile_id) if wl.profile_id else None,
+                                            profile_name=_wl_profile_name,
+                                            profile_version=_wl_profile_version,
                                         )
                                         logger.info(
                                             "[BypassShadow] wl=%s: %d score-bypassed"

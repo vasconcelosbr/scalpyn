@@ -1112,6 +1112,7 @@ async def create_shadows_for_new_decisions(
     source_watchlist_id: Optional[str] = None,
     profile_id: Optional[str] = None,
     profile_name: Optional[str] = None,
+    profile_version: Optional[datetime] = None,
     ml_scores_by_symbol: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> int:
     """Inline shadow creation triggered by pipeline_scan immediately after
@@ -1212,6 +1213,7 @@ async def create_shadows_for_new_decisions(
             source_watchlist_id=source_watchlist_id,
             profile_id=profile_id,
             profile_name=profile_name,
+            profile_version=profile_version,
             lineage_confidence="EXACT",
             lineage_source="pipeline_scan",
             lineage_resolved_at=_dt.now(_tz.utc),
@@ -1603,6 +1605,9 @@ async def create_l1_spectrum_shadows(
     watchlist_name: Optional[str] = None,
     watchlist_level: Optional[str] = None,
     source_watchlist_id: Optional[str] = None,
+    profile_id: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    profile_version: Optional[datetime] = None,
 ) -> int:
     """L1_SPECTRUM capture: create sampled shadow trades from L1 stage promotions.
 
@@ -1693,6 +1698,9 @@ async def create_l1_spectrum_shadows(
             watchlist_name=watchlist_name,
             watchlist_level=watchlist_level,
             source_watchlist_id=source_watchlist_id,
+            profile_id=profile_id,
+            profile_name=profile_name,
+            profile_version=profile_version,
             lineage_confidence="EXACT",
             lineage_source="pipeline_scan",
             lineage_resolved_at=_dt.now(_tz.utc),

@@ -1687,13 +1687,17 @@ async def _resolve_and_persist(
 
     # Load profile config — the SINGLE source of truth for all filtering
     profile_config_full = None
+    profile_name = None
+    profile_version = None
     if wl.profile_id:
         try:
             from ..models.profile import Profile
             prof_res = await db.execute(select(Profile).where(Profile.id == wl.profile_id))
             prof = prof_res.scalars().first()
-            if prof and prof.config:
+            if prof:
                 profile_config_full = prof.config
+                profile_name = prof.name
+                profile_version = prof.profile_version
         except Exception as e:
             logger.debug("Failed to load profile %s: %s", wl.profile_id, e)
 
@@ -2077,17 +2081,20 @@ async def _resolve_and_persist(
                     _reasons["pipeline"] = "OK"
                 # Build metrics from ind_map (flat indicator snapshot)
                 _flat_ind = ind_map.get(_sym) or {}
-                _metrics: dict | None = None
+                _metrics: dict = {
+                    "watchlist_id": str(wl.id),
+                    "watchlist_name": wl.name,
+                    "score": _score,
+                }
                 if _flat_ind:
-                    _metrics = {
+                    _metrics.update({
                         **{k: v for k, v in _flat_ind.items() if isinstance(v, (int, float, bool, str, type(None)))},
                         "indicators_snapshot": {
                             k: {"value": v, "source_group": "api_resolve"}
                             for k, v in _flat_ind.items()
                             if isinstance(v, (int, float, bool, type(None)))
                         },
-                        "score": _score,
-                    }
+                    })
                 _dl_rows.append(_DecisionLog(
                     symbol=_sym,
                     strategy="L3",
@@ -2103,6 +2110,9 @@ async def _resolve_and_persist(
                     direction=_direction,
                     event_type=_evt,
                     user_id=user_id,
+                    profile_id=wl.profile_id,
+                    profile_name=profile_name,
+                    profile_version=profile_version,
                     created_at=now,
                 ))
             db.add_all(_dl_rows)
