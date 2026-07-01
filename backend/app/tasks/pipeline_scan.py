@@ -3811,20 +3811,57 @@ async def _run_pipeline_scan():
                                 )
 
                     # ── L3_REJECTED shadows — fora de if decision_payloads ────────────────
-                    # Roda todo ciclo independente de decisions_to_log estar vazio.
-                    # decisions[] contém TODOS os ativos BLOCK, mesmo os estáveis
-                    # que o edge-trigger de decisions_log filtra.
+                    # Captura TODOS os ativos que chegam ao L3 mas não recebem ALLOW:
+                    # 1. Ativos que passaram os filtros do profile mas foram bloqueados
+                    #    pelas entry_triggers (decisions com decision=BLOCK).
+                    # 2. Ativos que foram rejeitados pelos filtros do profile antes de
+                    #    chegar ao _evaluate_l3_decisions (profile_passed=0 quando mercado
+                    #    não satisfaz condições de momentum/tendência dos filtros L3).
+                    # Sem incluir (2), L3_REJECTED fica sistematicamente vazio sempre que
+                    # o mercado não satisfaz os filtros — perdendo todos os dados ML.
+                    _allowed_syms_l3 = {
+                        d.get("symbol") for d in decisions if d.get("decision") == "ALLOW"
+                    }
                     _all_block_decisions = [
                         d for d in decisions if d.get("decision") == "BLOCK"
                     ]
-                    if _all_block_decisions:
+                    # Ativos rejeitados pelo filtro do profile (nunca entraram em decisions)
+                    _decided_syms = {d.get("symbol") for d in decisions}
+                    _filter_rejected_block = []
+                    for _fa in assets:
+                        _fsym = _fa.get("symbol")
+                        if not _fsym or _fsym in _allowed_syms_l3 or _fsym in _decided_syms:
+                            continue
+                        _find = _fa.get("indicators") or {}
+                        _filter_rejected_block.append({
+                            "symbol": _fsym,
+                            "strategy": level,
+                            "decision": "BLOCK",
+                            "score": _fa.get("_score") or _fa.get("alpha_score") or 0,
+                            "direction": (
+                                _fa.get("futures_direction")
+                                or ("NEUTRAL" if _fa.get("is_futures") else "SPOT")
+                            ),
+                            "reasons": [{"reason": "profile_filter_rejected", "stage": "L3"}],
+                            "metrics": {
+                                "indicators_snapshot": {
+                                    k: {"value": v}
+                                    for k, v in _find.items()
+                                    if v is not None
+                                },
+                                "source": "l3_filter_rejected",
+                            },
+                            "_asset": _fa,
+                        })
+                    _all_block_candidates = _all_block_decisions + _filter_rejected_block
+                    if _all_block_candidates:
                         try:
                             from ..services.shadow_trade_service import (
                                 create_l3_rejected_inline_shadows,
                             )
                             await create_l3_rejected_inline_shadows(
                                 user_id=wl.user_id,
-                                decisions=_all_block_decisions,
+                                decisions=_all_block_candidates,
                                 execution_id=str(execution_id),
                                 promotion_at=datetime.now(timezone.utc),
                                 watchlist_id=str(wl.id),
