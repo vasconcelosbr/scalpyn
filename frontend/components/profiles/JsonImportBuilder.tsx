@@ -4,7 +4,7 @@ import { useState, useRef, useCallback } from "react";
 import {
   ArrowLeft, Upload, FileJson, CheckCircle2, XCircle,
   AlertTriangle, Loader2, Globe, Filter, Target, ShoppingCart,
-  ChevronRight, Eye, EyeOff, Pencil, Check, X,
+  ChevronRight, Eye, EyeOff, Pencil, Check, X, BookOpen, ChevronDown,
 } from "lucide-react";
 import { apiPost } from "@/lib/api";
 
@@ -93,6 +93,7 @@ interface Props {
 export function JsonImportBuilder({ onClose }: Props) {
   const [stage, setStage]               = useState<"upload" | "preview" | "result">("upload");
   const [dragging, setDragging]         = useState(false);
+  const [showRef, setShowRef]           = useState(false);
   const [parseError, setParseError]     = useState<string | null>(null);
   const [parsed, setParsed]             = useState<ParsedProfile[]>([]);
   const [rawJson, setRawJson]           = useState<string>("");
@@ -281,28 +282,221 @@ export function JsonImportBuilder({ onClose }: Props) {
           )}
 
           {/* Schema reference card */}
-          <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl p-5">
-            <h3 className="text-[13px] font-semibold text-[var(--text-primary)] mb-3 flex items-center gap-2">
+          <div className="bg-[var(--bg-secondary)] border border-[var(--border-subtle)] rounded-xl p-5 space-y-4">
+            <h3 className="text-[13px] font-semibold text-[var(--text-primary)] flex items-center gap-2">
               <FileJson className="w-4 h-4 text-[var(--text-tertiary)]" />
               Estrutura esperada
             </h3>
             <pre className="text-[11px] text-[var(--text-secondary)] font-mono overflow-x-auto leading-relaxed">{`{
   "profiles": [
     {
-      "name": "L3_TREND_FORTE_V1",          // obrigatório
-      "funnel_role": "acquisition_queue",    // universe_filter | primary_filter
-      "default_timeframe": "5m",             //   score_engine | acquisition_queue
+      "name": "L3_TREND_FORTE_V1",           // obrigatório
+      "description": "texto livre",          // opcional
+      "funnel_role": "acquisition_queue",    // universe_filter | primary_filter | score_engine | acquisition_queue
+      "pipeline_label": "L3_TREND_V1",      // opcional — label exibido no funil
+      "default_timeframe": "5m",             // 1m | 3m | 5m | 15m | 1h  (default: 5m)
+
       "filters":        { "logic": "AND", "conditions": [...] },
       "signals":        { "logic": "AND", "conditions": [...] },
       "block_rules":    { "blocks": [...] },
       "entry_triggers": { "logic": "AND", "conditions": [...] },
+
       "scoring": {
-        "weights": { "signal":25, "momentum":25, "liquidity":25, "market_structure":25 },
-        "thresholds": { "buy":65, "strong_buy":80, "neutral":40 }
+        "weights": { "signal": 25, "momentum": 25, "liquidity": 25, "market_structure": 25 },
+        "thresholds": { "buy": 65, "strong_buy": 80, "neutral": 40 }
       }
     }
   ]
 }`}</pre>
+
+            {/* Toggle indicator reference */}
+            <button
+              className="flex items-center gap-2 text-[12px] text-[var(--accent-primary)] hover:underline font-medium"
+              onClick={() => setShowRef((v) => !v)}
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              {showRef ? "Ocultar referência de indicadores" : "Ver todos os indicadores disponíveis"}
+              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showRef ? "rotate-180" : ""}`} />
+            </button>
+
+            {showRef && (
+              <div className="space-y-5 border-t border-[var(--border-subtle)] pt-4">
+
+                {/* Condition syntax */}
+                <div>
+                  <p className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-2">Sintaxe das condições</p>
+                  <pre className="text-[11px] text-[var(--text-secondary)] font-mono leading-relaxed bg-[var(--bg-tertiary)] rounded-lg p-3 overflow-x-auto">{`// filters e signals → usar "field"
+{ "field": "rsi", "operator": ">=", "value": 30, "period": 14, "timeframe": "5m" }
+{ "field": "adx", "operator": "between", "min": 20, "max": 50 }
+{ "field": "ema9_gt_ema21", "operator": "==", "value": true }
+
+// block_rules (condições dentro de cada bloco) → usar "type" + "indicator"
+{ "type": "threshold",  "indicator": "rsi",          "operator": "<",      "value": 75, "period": 14 }
+{ "type": "boolean",    "indicator": "ema9_gt_ema21", "operator": "is_true"                           }
+{ "type": "comparison", "left": "price",              "operator": ">",      "right": "ema9"           }
+
+// entry_triggers → igual block_rules + "required" + "enabled"
+{ "type": "threshold", "indicator": "rsi", "operator": "between", "min": 40, "max": 65,
+  "period": 14, "timeframe": "5m", "required": true, "enabled": true }
+
+// Operadores numéricos: >  <  >=  <=  ==  !=  between
+// Operadores booleanos: is_true  is_false`}</pre>
+                </div>
+
+                {/* Indicator table */}
+                <div>
+                  <p className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-3">Indicadores disponíveis</p>
+                  <div className="grid grid-cols-1 gap-3">
+
+                    {[
+                      {
+                        group: "Preço e Volume",
+                        color: "#8B92A5",
+                        rows: [
+                          { field: "volume_24h",  label: "Volume 24h",      type: "number",  period: false, note: "" },
+                          { field: "market_cap",  label: "Market Cap",      type: "number",  period: false, note: "" },
+                          { field: "price",       label: "Preço",           type: "number",  period: false, note: "usado como left/right em comparison" },
+                          { field: "change_24h",  label: "Variação 24h %",  type: "number",  period: false, note: "" },
+                        ],
+                      },
+                      {
+                        group: "Liquidez Real",
+                        color: "#4F7BF7",
+                        rows: [
+                          { field: "spread_pct",          label: "Spread %",                    type: "number", period: false, note: "" },
+                          { field: "orderbook_depth_usdt",label: "Profundidade Book (USDT)",    type: "number", period: false, note: "" },
+                          { field: "taker_ratio",         label: "Taker Ratio (buy/(b+s), 0-1)",type: "number", period: false, note: "" },
+                          { field: "volume_spike",        label: "Volume Spike",                type: "number", period: true,  note: "default period: 20" },
+                          { field: "volume_delta",        label: "Volume Delta",                type: "number", period: true,  note: "default period: 20" },
+                          { field: "orderbook_pressure",  label: "Orderbook Pressure",          type: "number", period: false, note: "" },
+                          { field: "bid_ask_imbalance",   label: "Bid/Ask Imbalance",           type: "number", period: false, note: "" },
+                          { field: "obv",                 label: "OBV",                         type: "number", period: true,  note: "default period: 20" },
+                          { field: "vwap_distance_pct",   label: "VWAP Distance %",             type: "number", period: true,  note: "default period: 20" },
+                        ],
+                      },
+                      {
+                        group: "Momentum",
+                        color: "#F59E0B",
+                        rows: [
+                          { field: "rsi",            label: "RSI",              type: "number", period: true,  note: "default period: 14" },
+                          { field: "macd",           label: "MACD",             type: "number", period: true,  note: "default period: 12" },
+                          { field: "macd_histogram", label: "MACD Histogram",   type: "number", period: true,  note: "default period: 12" },
+                          { field: "macd_signal",    label: "MACD Signal",      type: "string", period: false, note: 'valor: "bullish" | "bearish"' },
+                          { field: "stoch_k",        label: "Stochastic %K",    type: "number", period: true,  note: "default period: 14" },
+                          { field: "stoch_d",        label: "Stochastic %D",    type: "number", period: true,  note: "default period: 14" },
+                          { field: "zscore",         label: "Z-Score",          type: "number", period: true,  note: "default period: 20" },
+                        ],
+                      },
+                      {
+                        group: "Tendência e Estrutura",
+                        color: "#34D399",
+                        rows: [
+                          { field: "adx",        label: "ADX",             type: "number",  period: true,  note: "default period: 14" },
+                          { field: "di_plus",    label: "DI+",             type: "number",  period: true,  note: "default period: 14" },
+                          { field: "di_minus",   label: "DI-",             type: "number",  period: true,  note: "default period: 14" },
+                          { field: "di_trend",   label: "DI+ > DI- (Alta)",type: "boolean", period: false, note: 'value: true | false' },
+                          { field: "atr",        label: "ATR",             type: "number",  period: true,  note: "default period: 14" },
+                          { field: "atr_percent",label: "ATR %",           type: "number",  period: true,  note: "default period: 14" },
+                          { field: "bb_width",   label: "Bollinger Width", type: "number",  period: true,  note: "default period: 20" },
+                          { field: "psar_trend", label: "PSAR Trend",      type: "string",  period: false, note: 'valor: "RISING" | "FALLING"' },
+                        ],
+                      },
+                      {
+                        group: "EMA e Alinhamento",
+                        color: "#A78BFA",
+                        rows: [
+                          { field: "ema_full_alignment", label: "EMA Full Alignment", type: "boolean", period: false, note: 'value: true | false' },
+                          { field: "ema9_gt_ema21",      label: "EMA9 > EMA21",       type: "boolean", period: false, note: 'value: true | false' },
+                          { field: "ema9_gt_ema50",      label: "EMA9 > EMA50",       type: "boolean", period: false, note: 'value: true | false' },
+                          { field: "ema50_gt_ema200",    label: "EMA50 > EMA200",     type: "boolean", period: false, note: 'value: true | false' },
+                          { field: "ema5",               label: "EMA5  (valor)",      type: "number",  period: false, note: "usar como left/right em comparison" },
+                          { field: "ema9",               label: "EMA9  (valor)",      type: "number",  period: false, note: "usar como left/right em comparison" },
+                          { field: "ema21",              label: "EMA21 (valor)",      type: "number",  period: false, note: "usar como left/right em comparison" },
+                          { field: "ema50",              label: "EMA50 (valor)",      type: "number",  period: false, note: "usar como left/right em comparison" },
+                          { field: "ema200",             label: "EMA200 (valor)",     type: "number",  period: false, note: "usar como left/right em comparison" },
+                        ],
+                      },
+                      {
+                        group: "Scores",
+                        color: "#EC4899",
+                        rows: [
+                          { field: "score",           label: "Alpha Score",      type: "number", period: false, note: "0–100" },
+                          { field: "liquidity_score", label: "Liquidity Score",  type: "number", period: false, note: "0–100" },
+                          { field: "momentum_score",  label: "Momentum Score",   type: "number", period: false, note: "0–100" },
+                        ],
+                      },
+                    ].map((grp) => (
+                      <div key={grp.group} className="bg-[var(--bg-tertiary)] rounded-lg overflow-hidden">
+                        <div
+                          className="px-3 py-2 text-[11px] font-bold uppercase tracking-wider"
+                          style={{ color: grp.color, backgroundColor: `${grp.color}14` }}
+                        >
+                          {grp.group}
+                        </div>
+                        <table className="w-full text-[11px]">
+                          <thead>
+                            <tr className="border-b border-[var(--border-subtle)]">
+                              <th className="text-left px-3 py-1.5 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase w-[200px]">field / indicator</th>
+                              <th className="text-left px-3 py-1.5 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase w-[180px]">Label</th>
+                              <th className="text-center px-3 py-1.5 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase w-20">Tipo</th>
+                              <th className="text-center px-3 py-1.5 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase w-16">Period</th>
+                              <th className="text-left px-3 py-1.5 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase">Nota</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {grp.rows.map((row) => (
+                              <tr key={row.field} className="border-b border-[var(--border-subtle)]/50 last:border-0 hover:bg-[var(--bg-surface)]/30">
+                                <td className="px-3 py-1.5 font-mono font-semibold" style={{ color: grp.color }}>{row.field}</td>
+                                <td className="px-3 py-1.5 text-[var(--text-secondary)]">{row.label}</td>
+                                <td className="px-3 py-1.5 text-center">
+                                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold font-mono ${
+                                    row.type === "boolean" ? "bg-purple-500/15 text-purple-400" :
+                                    row.type === "string"  ? "bg-yellow-500/15 text-yellow-400" :
+                                    "bg-blue-500/15 text-blue-400"
+                                  }`}>
+                                    {row.type}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-1.5 text-center">
+                                  {row.period
+                                    ? <CheckCircle2 className="w-3 h-3 text-[var(--color-profit)] mx-auto" />
+                                    : <span className="text-[var(--text-tertiary)]">—</span>
+                                  }
+                                </td>
+                                <td className="px-3 py-1.5 text-[var(--text-tertiary)] italic">{row.note}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ))}
+
+                    {/* Block structure example */}
+                    <div>
+                      <p className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider mb-2">Estrutura de block_rules</p>
+                      <pre className="text-[11px] text-[var(--text-secondary)] font-mono leading-relaxed bg-[var(--bg-tertiary)] rounded-lg p-3 overflow-x-auto">{`"block_rules": {
+  "blocks": [
+    {
+      "name":    "Nome do Bloco",   // obrigatório
+      "enabled": true,
+      "logic":   "AND",            // AND | OR (entre as condições do bloco)
+      "reason":  "Motivo do veto", // opcional
+      "timeframe": "5m",           // opcional — timeframe compartilhado do bloco
+      "conditions": [
+        { "type": "threshold",  "indicator": "taker_ratio",    "operator": "<",      "value": 0.2 },
+        { "type": "threshold",  "indicator": "rsi",            "operator": ">=",     "value": 75, "period": 14 },
+        { "type": "boolean",    "indicator": "ema9_gt_ema21",  "operator": "is_true"              },
+        { "type": "comparison", "left": "price",               "operator": ">",      "right": "ema50" }
+      ]
+    }
+  ]
+}`}</pre>
+                    </div>
+
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
