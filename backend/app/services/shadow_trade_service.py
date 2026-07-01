@@ -357,13 +357,9 @@ def _build_features_snapshot(decision: DecisionLog) -> Dict[str, Any]:
     viram None no extract e são preenchidas com 0.0 pelo
     ``prepare_dataset.fillna``.
 
-    Macro features (vix_value, btc_dominance, fear_greed_index, etc.) são
-    adicionadas pelo pipeline_scan no nível raiz de ``metrics`` (não dentro
-    de ``indicators_snapshot``). Esta função também as coleta para garantir
-    que cheguem ao dataset do ML.
+    Macro features (vix_value, btc_dominance, fear_greed_index, etc.) foram
+    removidas das capturas — coleta de macro desativada.
     """
-    from ..ml.macro_features import MACRO_FEATURE_COLUMNS
-
     metrics = decision.metrics or {}
     snap = metrics.get("indicators_snapshot") or {}
     if not isinstance(snap, dict):
@@ -375,11 +371,6 @@ def _build_features_snapshot(decision: DecisionLog) -> Dict[str, Any]:
         else:
             # Defensive: se um caller futuro persistir flat direto, mantém.
             flat[key] = entry
-    # Macro features are stored at top-level metrics by pipeline_scan embed block,
-    # not inside indicators_snapshot — collect them here so they reach the ML dataset.
-    for key in MACRO_FEATURE_COLUMNS:
-        if key not in flat and key in metrics:
-            flat[key] = metrics[key]
     return flat
 
 
