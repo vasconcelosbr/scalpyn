@@ -293,16 +293,77 @@ export function JsonImportBuilder({ onClose }: Props) {
       "name": "L3_TREND_FORTE_V1",           // obrigatório
       "description": "texto livre",          // opcional
       "funnel_role": "acquisition_queue",    // universe_filter | primary_filter | score_engine | acquisition_queue
-      "pipeline_label": "L3_TREND_V1",      // opcional — label exibido no funil
+      "pipeline_label": "L3_TREND_V1",      // opcional
       "default_timeframe": "5m",             // 1m | 3m | 5m | 15m | 1h  (default: 5m)
 
-      "filters":        { "logic": "AND", "conditions": [...] },
-      "signals":        { "logic": "AND", "conditions": [...] },
-      "block_rules":    { "blocks": [...] },
-      "entry_triggers": { "logic": "AND", "conditions": [...] },
+      // ── filters / signals ─────────────────────────────────────────
+      // usar "field" + "operator" + "value"  (+ "period" se suportado)
+      "filters": {
+        "logic": "AND",
+        "conditions": [
+          { "field": "volume_24h",      "operator": ">=", "value": 500000        },
+          { "field": "spread_pct",      "operator": "<=", "value": 0.5           },
+          { "field": "adx",             "operator": ">=", "value": 25, "period": 14, "timeframe": "5m" },
+          { "field": "rsi",             "operator": "between", "min": 40, "max": 70, "period": 14 },
+          { "field": "ema9_gt_ema21",   "operator": "==", "value": true          },
+          { "field": "macd_signal",     "operator": "==", "value": "bullish"     },
+          { "field": "psar_trend",      "operator": "==", "value": "RISING"      }
+        ]
+      },
+      "signals": {
+        "logic": "AND",
+        "conditions": [
+          { "field": "score",           "operator": ">=", "value": 65            },
+          { "field": "taker_ratio",     "operator": ">=", "value": 0.52          },
+          { "field": "volume_spike",    "operator": ">=", "value": 1.5, "period": 20 },
+          { "field": "vwap_distance_pct","operator": "between", "min": -1, "max": 2, "period": 20 }
+        ]
+      },
 
+      // ── block_rules ───────────────────────────────────────────────
+      // usar "type" (threshold | boolean | comparison) + "indicator"
+      "block_rules": {
+        "blocks": [
+          {
+            "name": "RSI Sobrecomprado",
+            "enabled": true,
+            "logic": "AND",
+            "reason": "RSI extremo + volume caindo",
+            "timeframe": "5m",
+            "conditions": [
+              { "type": "threshold",  "indicator": "rsi",          "operator": ">=", "value": 75, "period": 14 },
+              { "type": "threshold",  "indicator": "volume_delta", "operator": "<",  "value": 0,  "period": 20 }
+            ]
+          },
+          {
+            "name": "EMA Bearish",
+            "enabled": true,
+            "logic": "AND",
+            "conditions": [
+              { "type": "boolean",    "indicator": "ema9_gt_ema21", "operator": "is_false" },
+              { "type": "comparison", "left": "price",              "operator": "<", "right": "ema50" }
+            ]
+          }
+        ]
+      },
+
+      // ── entry_triggers ────────────────────────────────────────────
+      // igual block_rules + "required" (bool) + "enabled" (bool)
+      "entry_triggers": {
+        "logic": "AND",
+        "conditions": [
+          { "type": "threshold", "indicator": "rsi",    "operator": "between", "min": 45, "max": 65,
+            "period": 14, "timeframe": "5m", "required": true,  "enabled": true },
+          { "type": "threshold", "indicator": "adx",    "operator": ">=",      "value": 20,
+            "period": 14,                    "required": false, "enabled": true },
+          { "type": "boolean",   "indicator": "di_trend","operator": "is_true",
+            "required": true,  "enabled": true }
+        ]
+      },
+
+      // ── scoring ───────────────────────────────────────────────────
       "scoring": {
-        "weights": { "signal": 25, "momentum": 25, "liquidity": 25, "market_structure": 25 },
+        "weights":    { "signal": 25, "momentum": 25, "liquidity": 25, "market_structure": 25 },
         "thresholds": { "buy": 65, "strong_buy": 80, "neutral": 40 }
       }
     }
