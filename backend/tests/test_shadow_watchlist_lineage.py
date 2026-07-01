@@ -56,6 +56,7 @@ class TestWatchlistLineageContextDefaults:
         assert ctx.source_watchlist_id is None
         assert ctx.profile_id is None
         assert ctx.profile_name is None
+        assert ctx.profile_version is None
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +73,7 @@ class TestWatchlistLineageContextFields:
             source_watchlist_id="swl-uuid-5678",
             profile_id="prof-uuid-9999",
             profile_name="My Profile",
+            profile_version=_ts,
             lineage_confidence="EXACT",
             lineage_source="pipeline_scan",
             lineage_resolved_at=_ts,
@@ -82,6 +84,7 @@ class TestWatchlistLineageContextFields:
         assert ctx.source_watchlist_id == "swl-uuid-5678"
         assert ctx.profile_id == "prof-uuid-9999"
         assert ctx.profile_name == "My Profile"
+        assert ctx.profile_version == _ts
         assert ctx.lineage_confidence == "EXACT"
         assert ctx.lineage_source == "pipeline_scan"
         assert ctx.lineage_resolved_at == _ts
@@ -159,6 +162,22 @@ class TestFunctionSignatures:
         assert "profile_id" in params
         assert "profile_name" in params
 
+    def test_l3_rejected_threads_profile_lineage_to_context(self):
+        from backend.app.services.shadow_trade_service import create_l3_rejected_inline_shadows
+        source = inspect.getsource(create_l3_rejected_inline_shadows)
+        assert "profile_id=str(profile_id)" in source
+        assert "profile_name=profile_name" in source
+        assert "profile_version=profile_version" in source
+
+    def test_pipeline_scan_passes_profile_lineage_to_l3_rejected(self):
+        source = Path("backend/app/tasks/pipeline_scan.py").read_text(encoding="utf-8")
+        call_start = source.index("await create_l3_rejected_inline_shadows(")
+        call_end = source.index("\n                            )", call_start)
+        call = source[call_start:call_end]
+        assert "profile_id=str(wl.profile_id)" in call
+        assert "profile_name=_wl_profile_name" in call
+        assert "profile_version=_wl_profile_version" in call
+
     def test_create_l3_rejected_accepts_lineage(self):
         from backend.app.services.shadow_trade_service import create_l3_rejected_inline_shadows
         params = self._get_params(create_l3_rejected_inline_shadows)
@@ -166,6 +185,9 @@ class TestFunctionSignatures:
         assert "watchlist_name" in params
         assert "watchlist_level" in params
         assert "source_watchlist_id" in params
+        assert "profile_id" in params
+        assert "profile_name" in params
+        assert "profile_version" in params
 
     def test_create_l3_simulated_accepts_lineage(self):
         from backend.app.services.shadow_trade_service import create_l3_simulated_shadows

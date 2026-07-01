@@ -22,7 +22,7 @@ CONFIG_TYPE = "watchlist_performance_ranking"
 # config_profiles row and fails closed when it is absent or invalid.
 DEFAULT_RANKING_CONFIG: Dict[str, Any] = {
     "version": 1,
-    "source_filter": ["L3", "L3_LAB"],
+    "source_filter": ["L3", "L3_LAB", "L3_REJECTED"],
     "weights": {"pnl": 35, "win_rate": 20, "sample": 15, "tp4h": 15, "pnl_total": 10},
     "normalization": {
         "avg_pnl_pct_target": 1.0,

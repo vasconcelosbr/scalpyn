@@ -718,6 +718,11 @@ async def _create_from_decision(
         if lineage and lineage.profile_name
         else getattr(decision, "profile_name", None)
     )
+    _lin_profile_version = (
+        lineage.profile_version
+        if lineage and lineage.profile_version
+        else getattr(decision, "profile_version", None)
+    )
 
     res = await db.execute(
         _INSERT_SHADOW_SQL,
@@ -751,7 +756,7 @@ async def _create_from_decision(
             "sl_pct_applied": sl_pct or None,
             # Profile attribution: lineage overrides decision attrs for canonical L3.
             "profile_id": _lin_profile_id,
-            "profile_version": getattr(decision, "profile_version", None),
+            "profile_version": _lin_profile_version,
             "profile_name": _lin_profile_name,
             "strategy_type": (
                 "PROFILE_L3" if _lin_profile_id else None
@@ -1495,6 +1500,9 @@ async def create_l3_rejected_inline_shadows(
             watchlist_name=watchlist_name,
             watchlist_level=watchlist_level,
             source_watchlist_id=source_watchlist_id,
+            profile_id=str(profile_id) if profile_id is not None else None,
+            profile_name=profile_name,
+            profile_version=profile_version,
             lineage_confidence="EXACT",
             lineage_source="pipeline_scan",
             lineage_resolved_at=_dt.now(_tz.utc),

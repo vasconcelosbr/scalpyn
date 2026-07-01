@@ -5,7 +5,7 @@ from app.services.watchlist_performance_ranking_service import score_metrics, so
 
 CONFIG = {
     "version": 1,
-    "source_filter": ["L3", "L3_LAB"],
+    "source_filter": ["L3", "L3_LAB", "L3_REJECTED"],
     "weights": {"pnl": 35, "win_rate": 20, "sample": 15, "tp4h": 15, "pnl_total": 10},
     "normalization": {"avg_pnl_pct_target": 1.0, "sample_target": 500, "pnl_total_usdt_target": 1000},
     "limits": {"score_min": 0, "score_max": 100, "pnl_component_min": -20},
@@ -84,6 +84,11 @@ def test_shadow_portfolio_default_order_ev_score_desc():
     ])
     assert [row["profile_name"] for row in rows] == ["high", "low"]
     assert [row["rank_position"] for row in rows] == [1, 2]
+
+
+def test_default_ranking_includes_new_l3_rejected_shadows():
+    from app.services.watchlist_performance_ranking_service import DEFAULT_RANKING_CONFIG
+    assert "L3_REJECTED" in DEFAULT_RANKING_CONFIG["source_filter"]
 
 
 def test_priority_reason_present():
