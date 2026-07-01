@@ -1,7 +1,7 @@
 """Attach current L3 rejected shadows to their profile and rank them.
 
 Revision ID: 123_current_l3_rejected_rankings
-Revises: 122_backfill_ranking_dec_id
+Revises: c003shadow_idx_narrowfix
 Create Date: 2026-07-01
 """
 
@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 
 revision = "123_current_l3_rejected_rankings"
-down_revision = "122_backfill_ranking_dec_id"
+down_revision = "c003shadow_idx_narrowfix"
 branch_labels = None
 depends_on = None
 
