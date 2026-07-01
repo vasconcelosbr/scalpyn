@@ -1432,14 +1432,28 @@ function exitSnapshotEmptyMessage(data: ShadowTradeDetail): string {
   return "Snapshot ainda não capturado para este trade (fechado antes da Task #306).";
 }
 
+// Macro-context keys stored in features_snapshot for ML but not meaningful
+// as trade indicators — filtered from ENTRADA/SAÍDA display panels.
+const MACRO_KEYS = new Set([
+  "sp500_change_1h", "nasdaq_change_1h", "russell2000_change_1h",
+  "vix_value", "vix_change_1h",
+  "dxy_value", "dxy_change_1h",
+  "us10y_yield", "us10y_change_1h",
+  "btc_dominance", "btc_dominance_change",
+  "crypto_market_cap_change", "crypto_volume_change",
+  "fear_greed_index", "macro_context_available",
+]);
+
 function SnapshotBlock({
   title,
   data,
   emptyMessage,
+  filterMacro,
 }: {
   title: string;
   data: Record<string, unknown> | null;
   emptyMessage?: string;
+  filterMacro?: boolean;
 }) {
   // Task #306: o capture de saída pode gravar um marcador
   // `{"_capture_failed": true, "_reason": "..."}` quando o provider de
@@ -1478,7 +1492,9 @@ function SnapshotBlock({
       </div>
     );
   }
-  const entries = Object.entries(data).sort((a, b) => a[0].localeCompare(b[0]));
+  const entries = Object.entries(data)
+    .filter(([k]) => !filterMacro || !MACRO_KEYS.has(k))
+    .sort((a, b) => a[0].localeCompare(b[0]));
   return (
     <div>
       <div
@@ -1971,11 +1987,13 @@ function DetailModal({
                 <SnapshotBlock
                   title="Indicadores na ENTRADA"
                   data={data.features_snapshot}
+                  filterMacro
                 />
                 <SnapshotBlock
                   title="Indicadores na SAÍDA"
                   data={data.features_snapshot_exit}
                   emptyMessage={exitSnapshotEmptyMessage(data)}
+                  filterMacro
                 />
               </div>
 
