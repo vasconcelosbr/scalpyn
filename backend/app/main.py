@@ -476,6 +476,10 @@ app.include_router(pi_live_api.router)
 from .api import calibration_evolution as calibration_evolution_api  # noqa: E402
 app.include_router(calibration_evolution_api.router)
 
+# Operational Co-Pilot - read-only analysis, human-approved shadow candidates.
+from .copilot import router as copilot_api  # noqa: E402
+app.include_router(copilot_api.router)
+
 # WebSocket
 app.include_router(websocket.router)
 
