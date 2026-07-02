@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from typing import Any
 from uuid import UUID
@@ -13,6 +14,14 @@ from .prompt import BASE_PROMPT
 from .query_executor import QueryExecutor
 from .schema_analyzer import SchemaAnalyzer
 from .skill_service import skill_service
+
+
+logger = logging.getLogger(__name__)
+MAX_TOOL_ROUNDS = 6
+FINAL_SYNTHESIS_INSTRUCTION = (
+    "\n\nO limite de uso de ferramentas foi atingido. Não use mais ferramentas. "
+    "Responda agora com as evidências já coletadas, declare limitações e indique o próximo passo."
+)
 
 
 TOOLS = [
@@ -115,7 +124,7 @@ class CopilotAgent:
         client = anthropic.AsyncAnthropic(api_key=api_key)
         messages: list[dict[str, Any]] = [{"role": "user", "content": message}]
         selected_model = model or os.getenv("COPILOT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
-        for _ in range(6):
+        for _ in range(MAX_TOOL_ROUNDS):
             response = await client.messages.create(
                 model=selected_model, max_tokens=3000, system=system, tools=TOOLS, messages=messages,
             )
@@ -134,7 +143,15 @@ class CopilotAgent:
                     results.append({"type": "tool_result", "tool_use_id": use.id,
                                     "content": f"{type(exc).__name__}: {exc}", "is_error": True})
             messages.append({"role": "user", "content": results})
-        raise RuntimeError("Limite de iterações de ferramentas atingido")
+        logger.warning("Copilot Anthropic atingiu o limite de ferramentas; forçando síntese final")
+        response = await client.messages.create(
+            model=selected_model, max_tokens=3000,
+            system=system + FINAL_SYNTHESIS_INSTRUCTION, messages=messages,
+        )
+        return "\n".join(
+            getattr(block, "text", "") for block in response.content
+            if getattr(block, "type", None) == "text"
+        ).strip() or "Não foi possível concluir com as evidências disponíveis."
 
     async def _run_openai(self, db, user_id, message, session_id, system, model, trace):
         api_key = await get_decrypted_api_key(db, user_id, "openai") or os.getenv("OPENAI_API_KEY")
@@ -147,7 +164,7 @@ class CopilotAgent:
         }} for tool in TOOLS]
         messages: list[dict[str, Any]] = [{"role": "system", "content": system}, {"role": "user", "content": message}]
         async with httpx.AsyncClient(timeout=90) as client:
-            for _ in range(6):
+            for _ in range(MAX_TOOL_ROUNDS):
                 response = await client.post(
                     "https://api.openai.com/v1/chat/completions",
                     headers={"Authorization": f"Bearer {api_key}"},
@@ -167,7 +184,17 @@ class CopilotAgent:
                     except Exception as exc:
                         content = f"{type(exc).__name__}: {exc}"
                     messages.append({"role": "tool", "tool_call_id": call["id"], "content": content})
-        raise RuntimeError("Limite de iterações de ferramentas atingido")
+            logger.warning("Copilot OpenAI atingiu o limite de ferramentas; forçando síntese final")
+            messages[0]["content"] += FINAL_SYNTHESIS_INSTRUCTION
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={"model": selected_model, "messages": messages, "tools": tools, "tool_choice": "none"},
+            )
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"].get("content") or (
+                "Não foi possível concluir com as evidências disponíveis."
+            )
 
 
 copilot_agent = CopilotAgent()

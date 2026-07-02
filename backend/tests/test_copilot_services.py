@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -6,8 +7,102 @@ from uuid import uuid4
 import pytest
 
 from app.copilot.action_service import ActionService, profile_state_hash
+from app.copilot.agent import CopilotAgent, MAX_TOOL_ROUNDS
 from app.copilot.query_executor import QueryExecutor
 from app.models.profile import Profile
+
+
+class _AnthropicResponse:
+    def __init__(self, content):
+        self.content = content
+
+
+class _AnthropicMessages:
+    def __init__(self):
+        self.calls = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if len(self.calls) <= MAX_TOOL_ROUNDS:
+            return _AnthropicResponse([SimpleNamespace(
+                type="tool_use", id=f"tool-{len(self.calls)}", name="retrieve_skills",
+                input={"query": "profiles"},
+            )])
+        return _AnthropicResponse([SimpleNamespace(type="text", text="Síntese final")])
+
+
+class _AnthropicClient:
+    def __init__(self, *_args, **_kwargs):
+        self.messages = _AnthropicMessages()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_forces_final_answer_after_tool_limit(monkeypatch):
+    client = _AnthropicClient()
+    monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(AsyncAnthropic=lambda **_kwargs: client))
+    monkeypatch.setattr("app.copilot.agent.get_decrypted_api_key", AsyncMock(return_value="test-key"))
+    agent = CopilotAgent()
+    monkeypatch.setattr(agent, "_tool", AsyncMock(return_value={"ok": True}))
+
+    answer = await agent._run_anthropic(
+        object(), uuid4(), "analise", uuid4(), "system", None,
+        {"queries": [], "evidence": [], "action_plan": None, "skills_used": []},
+    )
+
+    assert answer == "Síntese final"
+    assert len(client.messages.calls) == MAX_TOOL_ROUNDS + 1
+    assert "tools" not in client.messages.calls[-1]
+
+
+class _OpenAIResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self.payload
+
+
+class _OpenAIClient:
+    def __init__(self):
+        self.calls = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+    async def post(self, _url, **kwargs):
+        self.calls.append(kwargs)
+        if len(self.calls) <= MAX_TOOL_ROUNDS:
+            message = {"role": "assistant", "tool_calls": [{
+                "id": f"tool-{len(self.calls)}", "type": "function",
+                "function": {"name": "retrieve_skills", "arguments": '{"query":"profiles"}'},
+            }]}
+        else:
+            message = {"role": "assistant", "content": "Síntese final"}
+        return _OpenAIResponse({"choices": [{"message": message}]})
+
+
+@pytest.mark.asyncio
+async def test_openai_forces_final_answer_after_tool_limit(monkeypatch):
+    client = _OpenAIClient()
+    monkeypatch.setattr("httpx.AsyncClient", lambda **_kwargs: client)
+    monkeypatch.setattr("app.copilot.agent.get_decrypted_api_key", AsyncMock(return_value="test-key"))
+    agent = CopilotAgent()
+    monkeypatch.setattr(agent, "_tool", AsyncMock(return_value={"ok": True}))
+
+    answer = await agent._run_openai(
+        object(), uuid4(), "analise", uuid4(), "system", None,
+        {"queries": [], "evidence": [], "action_plan": None, "skills_used": []},
+    )
+
+    assert answer == "Síntese final"
+    assert len(client.calls) == MAX_TOOL_ROUNDS + 1
+    assert client.calls[-1]["json"]["tool_choice"] == "none"
 
 
 class _AsyncContext:
