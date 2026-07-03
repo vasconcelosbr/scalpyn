@@ -72,6 +72,55 @@ def _stable_profile_bucket(profile_id: Optional[str]) -> int:
     return int(hashlib.md5(profile_id.encode()).hexdigest()[:8], 16) % 9999
 
 
+def _apply_feature_contract(
+    df,
+    lane_contract: Optional[Dict[str, Any]],
+    feature_ranges: Optional[Dict[str, Any]],
+    lane_name: str = "",
+):
+    """E7: Apply per-lane feature contract to a training DataFrame.
+
+    Rejects rows where any required feature is NaN and rows that violate
+    configured range assertions (gt/gte/lt/lte). Returns (filtered_df, n_rejected).
+    The returned df preserves original integer index so callers can re-align
+    parallel lists (valid_records, created_at, etc.) by index before reset_index.
+    """
+    import numpy as np
+
+    if not lane_contract and not feature_ranges:
+        return df, 0
+
+    mask = np.ones(len(df), dtype=bool)
+
+    if lane_contract:
+        for feat in lane_contract.get("required", []):
+            if feat in df.columns:
+                mask &= df[feat].notna().values
+
+    if feature_ranges:
+        for feat, rules in feature_ranges.items():
+            if feat not in df.columns:
+                continue
+            col = df[feat]
+            if "gt" in rules:
+                mask &= (col > rules["gt"]).fillna(False).values
+            if "gte" in rules:
+                mask &= (col >= rules["gte"]).fillna(False).values
+            if "lt" in rules:
+                mask &= (col < rules["lt"]).fillna(False).values
+            if "lte" in rules:
+                mask &= (col <= rules["lte"]).fillna(False).values
+
+    n_rejected = int((~mask).sum())
+    if n_rejected > 0:
+        import logging
+        logging.getLogger(__name__).warning(
+            "[MLChallenger] Feature contract rejected %d/%d rows (lane=%s)",
+            n_rejected, len(df), lane_name,
+        )
+    return df[mask], n_rejected
+
+
 def _is_installed(package: str) -> bool:
     try:
         __import__(package)
@@ -107,6 +156,48 @@ def get_challenger_status() -> Dict[str, Any]:
     }
 
 
+def _calibrate_ev_threshold(
+    proba,
+    returns,
+    grid_step: float,
+    min_positives: int,
+) -> tuple[float, list[dict[str, Any]]]:
+    """Pick threshold on validation only by positive net EV.
+
+    Ties intentionally choose the higher threshold.
+    """
+    import numpy as np
+
+    if returns is None or len(returns) != len(proba):
+        raise ValueError("threshold_calibration_requires_validation_returns")
+    step = float(grid_step)
+    if step <= 0.0 or step > 1.0:
+        raise ValueError("invalid_threshold_grid_step")
+    min_pos = int(min_positives)
+    if min_pos <= 0:
+        raise ValueError("invalid_threshold_min_positives")
+
+    curve: list[dict[str, Any]] = []
+    best_threshold: Optional[float] = None
+    best_ev = -float("inf")
+    thresholds = np.arange(0.0, 1.0 + step / 2.0, step)
+    returns_arr = np.asarray(returns, dtype=float)
+    for threshold in thresholds:
+        mask = np.asarray(proba) >= threshold
+        positives = int(mask.sum())
+        if positives < min_pos:
+            continue
+        ev = float(np.nanmean(returns_arr[mask]))
+        point = {"threshold": round(float(threshold), 6), "positives": positives, "net_ev": ev}
+        curve.append(point)
+        if ev > best_ev or (ev == best_ev and (best_threshold is None or threshold > best_threshold)):
+            best_ev = ev
+            best_threshold = float(threshold)
+    if best_threshold is None:
+        raise ValueError("threshold_calibration_no_eligible_threshold")
+    return best_threshold, curve
+
+
 # ---------------------------------------------------------------------------
 # Sync training functions (run in thread pool — CPU-bound)
 # ---------------------------------------------------------------------------
@@ -115,6 +206,9 @@ def _train_lgbm_sync(
     X_train, y_train, X_val, y_val,
     n_trials: int = 30,
     X_test=None, y_test=None,
+    val_returns=None, test_returns=None,
+    threshold_grid_step: float = 0.01,
+    threshold_min_positives: int = 10,
 ) -> Dict[str, Any]:
     import lightgbm as lgb
     import numpy as np
@@ -165,7 +259,9 @@ def _train_lgbm_sync(
     val_preds = final_model.predict(X_val)
     roc_auc = float(roc_auc_score(y_val, val_preds))
     pr_auc = float(average_precision_score(y_val, val_preds))
-    threshold = float(np.median(val_preds))
+    threshold, threshold_curve = _calibrate_ev_threshold(
+        val_preds, val_returns, threshold_grid_step, threshold_min_positives
+    )
     binary_preds = (val_preds >= threshold).astype(int)
     f1 = float(f1_score(y_val, binary_preds, zero_division=0))
     prec = float(precision_score(y_val, binary_preds, zero_division=0))
@@ -189,6 +285,7 @@ def _train_lgbm_sync(
             "fpr": t_fp / (t_fp + t_tn) if (t_fp + t_tn) > 0 else 0.0,
             "samples": int(len(y_test)),
             "positive_rate": float(np.asarray(y_test).mean()),
+            "net_ev": float(np.nanmean(np.asarray(test_returns)[t_bin == 1])) if test_returns is not None and int(t_bin.sum()) > 0 else None,
         }
 
     return {
@@ -208,6 +305,7 @@ def _train_lgbm_sync(
             "val_samples": int(len(y_val)),
             "train_samples": int(len(y_train)),
             "positive_rate": float(y_val.mean()) if hasattr(y_val, "mean") else 0.0,
+            "threshold_curve": threshold_curve,
         },
         "test_metrics": test_metrics,
         "threshold": threshold,
@@ -220,6 +318,9 @@ def _train_catboost_sync(
     n_trials: int = 20,
     cat_feature_indices: Optional[List[int]] = None,
     X_test=None, y_test=None,
+    val_returns=None, test_returns=None,
+    threshold_grid_step: float = 0.01,
+    threshold_min_positives: int = 10,
 ) -> Dict[str, Any]:
     from catboost import CatBoostClassifier, Pool
     import numpy as np
@@ -255,6 +356,7 @@ def _train_catboost_sync(
             "random_strength": trial.suggest_float("random_strength", 0.1, 10.0),
             "verbose": False,
             "eval_metric": "AUC",
+            "nan_mode": "Min",
             "random_seed": 42,
             "allow_writing_files": False,
         }
@@ -270,6 +372,7 @@ def _train_catboost_sync(
         **study.best_params,
         "verbose": False,
         "eval_metric": "AUC",
+        "nan_mode": "Min",
         "random_seed": 42,
         "allow_writing_files": False,
     }
@@ -279,7 +382,9 @@ def _train_catboost_sync(
     val_preds = final_model.predict_proba(val_pool)[:, 1]
     roc_auc = float(roc_auc_score(y_val, val_preds))
     pr_auc = float(average_precision_score(y_val, val_preds))
-    threshold = float(np.median(val_preds))
+    threshold, threshold_curve = _calibrate_ev_threshold(
+        val_preds, val_returns, threshold_grid_step, threshold_min_positives
+    )
     binary_preds = (val_preds >= threshold).astype(int)
     f1 = float(f1_score(y_val, binary_preds, zero_division=0))
     prec = float(precision_score(y_val, binary_preds, zero_division=0))
@@ -304,6 +409,7 @@ def _train_catboost_sync(
             "fpr": t_fp / (t_fp + t_tn) if (t_fp + t_tn) > 0 else 0.0,
             "samples": int(len(y_test)),
             "positive_rate": float(np.asarray(y_test).mean()),
+            "net_ev": float(np.nanmean(np.asarray(test_returns)[t_bin == 1])) if test_returns is not None and int(t_bin.sum()) > 0 else None,
         }
 
     return {
@@ -323,6 +429,7 @@ def _train_catboost_sync(
             "val_samples": int(len(y_val)),
             "train_samples": int(len(y_train)),
             "positive_rate": float(y_val.mean()) if hasattr(y_val, "mean") else 0.0,
+            "threshold_curve": threshold_curve,
         },
         "test_metrics": test_metrics,
         "threshold": threshold,
@@ -341,6 +448,17 @@ class MLChallengerService:
     O model_id fica registrado em ml_model_registry para tracking de champion/challenger.
     """
 
+    async def _load_ml_config(self, db: AsyncSession) -> Dict[str, Any]:
+        row = (await db.execute(text("""
+            SELECT config_json
+            FROM config_profiles
+            WHERE config_type = 'ml' AND is_active = true
+            LIMIT 1
+        """))).fetchone()
+        if not row or not row[0]:
+            return {}
+        return row[0] if isinstance(row[0], dict) else json.loads(row[0])
+
     async def _load_shadow_data(
         self,
         db: AsyncSession,
@@ -348,12 +466,15 @@ class MLChallengerService:
         lookback_days: int,
         source_filter: Optional[List[str]] = None,
         require_profile_id: bool = False,
+        dataset_valid_from: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
         sources = source_filter if source_filter is not None else TRAIN_SOURCES
         # Build per-source placeholders to avoid any injection risk
         source_placeholders = ", ".join(f":src_{i}" for i in range(len(sources)))
         source_params = {f"src_{i}": s for i, s in enumerate(sources)}
         profile_clause = "AND profile_id IS NOT NULL" if require_profile_id else ""
+        valid_from_clause = "AND created_at >= :valid_from" if dataset_valid_from else ""
+        valid_from_params = {"valid_from": dataset_valid_from} if dataset_valid_from else {}
         cutoff_clause = ""
         cutoff_params: dict = {}
         if _TRAIN_CUTOFF_AT:
@@ -373,7 +494,6 @@ class MLChallengerService:
                 outcome,
                 features_snapshot,
                 created_at,
-                ttt_fast_win_bucket,
                 profile_id::text  AS profile_id
             FROM shadow_trades
             WHERE user_id = :uid
@@ -383,11 +503,12 @@ class MLChallengerService:
               AND features_snapshot IS NOT NULL
               AND features_snapshot::text <> '{{}}'
               AND created_at >= :cutoff
+              {valid_from_clause}
               {profile_clause}
               {cutoff_clause}
             ORDER BY created_at ASC
         """), {"uid": str(user_id), "cutoff": datetime.now(timezone.utc) - timedelta(days=lookback_days),
-               **source_params, **cutoff_params})).fetchall()
+               **source_params, **valid_from_params, **cutoff_params})).fetchall()
         logger.info(
             "[MLChallenger] _load_shadow_data: sources=%s rows=%d require_profile_id=%s user=%s",
             sources, len(rows), require_profile_id, user_id,
@@ -427,6 +548,8 @@ class MLChallengerService:
         records: List[Dict[str, Any]],
         feature_columns: List[str],
         win_fast_threshold_s: float = 1800.0,
+        lane_contract: Optional[Dict[str, Any]] = None,
+        feature_ranges: Optional[Dict[str, Any]] = None,
     ):
         """Constrói feature matrix e labels usando o feature_extractor canônico."""
         import numpy as np
@@ -439,8 +562,21 @@ class MLChallengerService:
             win_fast_threshold_s=win_fast_threshold_s,
         )
 
+        # E7: Row-level contract validation (required features + range checks)
+        df, rows_rejected_by_contract = _apply_feature_contract(
+            df, lane_contract, feature_ranges, lane_name="L1_SPECTRUM"
+        )
+
         available = [c for c in feature_columns if c in df.columns]
-        X = df[available].fillna(0.0).values.astype(float)
+        X = df[available].values.astype(float)
+        nan_counts = df[available].isna().sum()
+        logger.info(
+            "[MLChallenger] Native NaN matrix: rows=%d max_nan_col=%s max_nan_count=%d rows_rejected_by_contract=%d",
+            len(df),
+            str(nan_counts.idxmax()) if len(nan_counts) else "n/a",
+            int(nan_counts.max()) if len(nan_counts) else 0,
+            rows_rejected_by_contract,
+        )
 
         if "label" in df.columns:
             y = df["label"].values.astype(int)
@@ -449,13 +585,28 @@ class MLChallengerService:
         else:
             y = np.zeros(len(df), dtype=int)
 
-        return X, y, available
+        # Re-align auxiliary lists using df's index (preserved after contract filter)
+        pnl_records = [r for r in records if r.get("pnl_pct") is not None]
+        valid_idx = list(df.index)
+        returns = [
+            float(pnl_records[i].get("net_return_pct") if pnl_records[i].get("net_return_pct") is not None else pnl_records[i].get("pnl_pct"))
+            for i in valid_idx
+        ]
+        created_at = [pnl_records[i].get("created_at") for i in valid_idx]
+        ids = [pnl_records[i].get("shadow_id") for i in valid_idx]
+        holding_seconds = (
+            list(df["_holding_seconds"]) if "_holding_seconds" in df.columns
+            else [0.0] * len(df)
+        )
+        return X, y, available, returns, created_at, ids, holding_seconds
 
     def _build_l3_dataset(
         self,
         records: List[Dict[str, Any]],
         feature_columns: List[str],
         win_fast_threshold_s: float = 1800.0,
+        lane_contract: Optional[Dict[str, Any]] = None,
+        feature_ranges: Optional[Dict[str, Any]] = None,
     ):
         """Constrói dataset L3 para CatBoost com features categóricas adicionais.
 
@@ -479,8 +630,24 @@ class MLChallengerService:
             win_fast_threshold_s=win_fast_threshold_s,
         )
 
+        # E7: Row-level contract validation (required features + range checks)
+        df, rows_rejected_by_contract = _apply_feature_contract(
+            df, lane_contract, feature_ranges, lane_name="L3_PROFILE"
+        )
+        # Re-align valid_records to match filtered df rows
+        valid_records = [valid_records[i] for i in df.index]
+        df = df.reset_index(drop=True)
+
         available = [c for c in feature_columns if c in df.columns]
-        X_base = df[available].fillna(0.0).values.astype(float)
+        X_base = df[available].values.astype(float)
+        nan_counts = df[available].isna().sum()
+        logger.info(
+            "[MLChallenger] Native NaN matrix L3: rows=%d max_nan_col=%s max_nan_count=%d rows_rejected_by_contract=%d",
+            len(df),
+            str(nan_counts.idxmax()) if len(nan_counts) else "n/a",
+            int(nan_counts.max()) if len(nan_counts) else 0,
+            rows_rejected_by_contract,
+        )
 
         if "is_win_fast" in df.columns:
             y = df["is_win_fast"].values.astype(int)
@@ -513,7 +680,137 @@ class MLChallengerService:
         n_base = X_base.shape[1]
         cat_feature_indices = [n_base]  # source_encoded only; profile_id_encoded is numeric
 
-        return X, y, all_feature_names, cat_feature_indices
+        returns = [
+            float(r.get("net_return_pct") if r.get("net_return_pct") is not None else r.get("pnl_pct"))
+            for r in valid_records
+        ]
+        created_at = [r.get("created_at") for r in valid_records]
+        ids = [r.get("shadow_id") for r in valid_records]
+        holding_seconds = (
+            list(df["_holding_seconds"]) if "_holding_seconds" in df.columns
+            else [0.0] * len(df)
+        )
+        return X, y, all_feature_names, cat_feature_indices, returns, created_at, ids, holding_seconds
+
+    @staticmethod
+    def _chronological_split_with_embargo(
+        X,
+        y,
+        metadata: list,
+        created_at: Optional[list] = None,
+        holding_seconds: Optional[list] = None,
+        val_fraction: float = 0.20,
+        test_fraction: float = 0.20,
+        embargo_seconds: int = 0,
+    ) -> dict:
+        """Temporal 60/20/20 split with purge (from train) and embargo (from val/test).
+
+        Purge: training rows where (created_at + holding_seconds) >= val_start_time
+            are dropped — the trade was still open when validation begins so its
+            label would straddle the temporal boundary (leakage by resolution).
+        Embargo: val/test rows within embargo_seconds of the last training timestamp
+            are dropped — smooths label autocorrelation at the cut-point.
+
+        Args:
+            metadata: list of lists/arrays to split with the same boolean mask as X/y.
+                Each element is split in parallel (meta_tr, meta_va, meta_te).
+            created_at: timestamp per row (parallel to X/y, same ordering as DB query).
+            holding_seconds: holding duration per row for purge calculation.
+            embargo_seconds: gap window (read from config ml_split_embargo_seconds).
+
+        Returns dict with keys: X_tr, y_tr, X_va, y_va, X_te, y_te,
+            meta_tr, meta_va, meta_te (each a list parallel to metadata input),
+            n_purged, n_embargoed, has_test.
+        """
+        import numpy as np
+        import pandas as pd
+
+        MIN_SET_SIZE = 5
+        n = len(y)
+        train_end = max(1, int(n * (1.0 - val_fraction - test_fraction)))
+        val_end = max(train_end + MIN_SET_SIZE, int(n * (1.0 - test_fraction)))
+        val_end = min(val_end, n - MIN_SET_SIZE)
+
+        has_test = val_end > train_end and n - val_end >= MIN_SET_SIZE
+        if not has_test:
+            train_end = max(1, int(n * (1.0 - val_fraction)))
+            val_end = n
+
+        tr_mask = np.zeros(n, dtype=bool)
+        va_mask = np.zeros(n, dtype=bool)
+        te_mask = np.zeros(n, dtype=bool)
+        tr_mask[:train_end] = True
+        va_mask[train_end:val_end] = True
+        if has_test:
+            te_mask[val_end:] = True
+
+        n_purged = 0
+        n_embargoed = 0
+
+        if embargo_seconds > 0 and created_at and va_mask.sum() > 0:
+            try:
+                hs_list = [float(h) if h is not None else 0.0 for h in (holding_seconds or [0] * n)]
+
+                def _ts(t):
+                    if t is None:
+                        return None
+                    try:
+                        return pd.Timestamp(t)
+                    except Exception:
+                        return None
+
+                at_list = [_ts(t) for t in created_at]
+                val_times = [at_list[i] for i in range(n) if va_mask[i] and at_list[i] is not None]
+
+                if val_times:
+                    val_start = min(val_times)
+
+                    # Purge: train rows whose label resolves after val_start
+                    for i in range(n):
+                        if tr_mask[i] and at_list[i] is not None:
+                            resolve_time = at_list[i] + pd.Timedelta(seconds=hs_list[i])
+                            if resolve_time >= val_start:
+                                tr_mask[i] = False
+                                n_purged += 1
+
+                    # Embargo: val/test rows too close to the last surviving train row
+                    tr_live_times = [at_list[i] for i in range(n) if tr_mask[i] and at_list[i] is not None]
+                    if tr_live_times:
+                        train_max = max(tr_live_times)
+                        embargo_end = train_max + pd.Timedelta(seconds=embargo_seconds)
+
+                        for i in range(n):
+                            if (va_mask[i] or te_mask[i]) and at_list[i] is not None:
+                                if at_list[i] <= embargo_end:
+                                    if va_mask[i]:
+                                        va_mask[i] = False
+                                    else:
+                                        te_mask[i] = False
+                                    n_embargoed += 1
+            except Exception as _emb_exc:
+                logger.warning(
+                    "[MLChallenger] embargo calc failed — using raw index split: %s", _emb_exc
+                )
+                n_purged = 0
+                n_embargoed = 0
+
+        def _apply(arr, mask):
+            if isinstance(arr, np.ndarray):
+                return arr[mask]
+            return [v for v, m in zip(arr, mask) if m]
+
+        return {
+            "X_tr": X[tr_mask], "y_tr": y[tr_mask],
+            "X_va": X[va_mask], "y_va": y[va_mask],
+            "X_te": X[te_mask] if has_test else None,
+            "y_te": y[te_mask] if has_test else None,
+            "meta_tr": [_apply(m, tr_mask) for m in metadata],
+            "meta_va": [_apply(m, va_mask) for m in metadata],
+            "meta_te": [_apply(m, te_mask) for m in metadata] if has_test else [None] * len(metadata),
+            "n_purged": n_purged,
+            "n_embargoed": n_embargoed,
+            "has_test": has_test,
+        }
 
     def _chronological_split(self, X, y, val_fraction: float = 0.20):
         n = len(y)
@@ -545,6 +842,18 @@ class MLChallengerService:
             X[train_end:val_end], y[train_end:val_end],
             X[val_end:], y[val_end:],
         )
+
+    def _split_metadata_with_test(
+        self, values: list, val_fraction: float = 0.20, test_fraction: float = 0.20
+    ):
+        n = len(values)
+        train_end = max(1, int(n * (1.0 - val_fraction - test_fraction)))
+        val_end = max(train_end + 5, int(n * (1.0 - test_fraction)))
+        val_end = min(val_end, n - 5)
+        if val_end <= train_end or n - val_end < 5:
+            split = max(1, int(n * (1.0 - val_fraction)))
+            return values[:split], values[split:], None
+        return values[:train_end], values[train_end:val_end], values[val_end:]
 
     async def _next_version(self, db: AsyncSession) -> str:
         row = (await db.execute(
@@ -599,6 +908,12 @@ class MLChallengerService:
         n_train = metrics.get("train_samples", 0)
         n_val = metrics.get("val_samples", 0)
         n_test = (test_metrics or {}).get("samples", 0)
+        train_from = metrics.get("train_from")
+        train_to = metrics.get("train_to")
+        dataset_query_cutoff = metrics.get("dataset_query_cutoff")
+        dataset_hash = metrics.get("dataset_hash")
+        if not all([train_from, train_to, dataset_query_cutoff, dataset_hash]):
+            raise ValueError("missing_required_model_provenance")
         # Full hyperparams blob: val metrics + test metrics side-by-side
         hyperparams_full = {**metrics}
         if test_metrics:
@@ -626,6 +941,8 @@ class MLChallengerService:
             fc_hash = None
             fc_schema_ver = None
             label_ver = "is_win_fast_v1"
+        _ml_config = await self._load_ml_config(db)
+        label_ver = str(_ml_config.get("ml_label_version", label_ver))
 
         # train_sources is injected into `metrics` by train_challengers() callers
         # (e.g. metrics={**lgbm_result["metrics"], "train_sources": lgbm_sources}).
@@ -700,8 +1017,12 @@ class MLChallengerService:
             "model_lane": model_lane,
             "source_filter": source_filter_str,
             "dataset_contract_id": dataset_contract_id,
+            "train_from": train_from,
+            "train_to": train_to,
+            "dataset_query_cutoff": dataset_query_cutoff,
+            "dataset_hash": dataset_hash,
         }
-        _gate_result = evaluate_promotion_gate(_gate_input)
+        _gate_result = evaluate_promotion_gate(_gate_input, promotion_config=_ml_config)
         _metrics_json_dict = merge_promotion_gate_into_metrics_json(_metrics_json_dict, _gate_result)
         _metrics_json = json.dumps(_metrics_json_dict)
         logger.info(
@@ -723,6 +1044,7 @@ class MLChallengerService:
                 label_version, model_lane,
                 metrics_json, target_window_seconds,
                 source_filter, dataset_contract_id
+                , train_from, train_to, dataset_query_cutoff, dataset_hash
             ) VALUES (
                 :id, :version, 'candidate',
                 :hyperparams, :n_train, :n_val, :n_test,
@@ -735,6 +1057,7 @@ class MLChallengerService:
                 :label_version, :model_lane,
                 :metrics_json, :target_window_seconds,
                 :source_filter, :dataset_contract_id
+                , :train_from, :train_to, :dataset_query_cutoff, :dataset_hash
             )
         """), {
             "id": str(model_uuid),
@@ -775,6 +1098,10 @@ class MLChallengerService:
             "target_window_seconds": int(win_fast_threshold_s),
             "source_filter": source_filter_str,
             "dataset_contract_id": dataset_contract_id,
+            "train_from": train_from,
+            "train_to": train_to,
+            "dataset_query_cutoff": dataset_query_cutoff,
+            "dataset_hash": dataset_hash,
         })
 
         # Registra em ml_model_registry (champion/challenger tracking)
@@ -899,12 +1226,28 @@ class MLChallengerService:
             logger.warning("[MLChallenger] feature_extractor não disponível")
             return {"skipped": "feature_extractor_unavailable"}
 
+        ml_config = await self._load_ml_config(db)
+        if "ml_win_fast_threshold_seconds" in ml_config:
+            win_fast_threshold_s = float(ml_config["ml_win_fast_threshold_seconds"])
+        dataset_valid_from = ml_config.get("ml_dataset_valid_from")
+        threshold_grid_step = float(ml_config.get("ml_threshold_grid_step", 0.01))
+        threshold_min_positives = int(ml_config.get("ml_threshold_min_positives", 10))
+        # Embargo window = label horizon + 1h margin. Config key: ml_split_embargo_seconds.
+        embargo_seconds = int(ml_config.get("ml_split_embargo_seconds", int(win_fast_threshold_s) + 3600))
+        # E7: Per-lane feature contract + range assertions (from config, never hardcoded)
+        _feature_contract_all = ml_config.get("ml_feature_contract", {})
+        feature_ranges = ml_config.get("ml_feature_ranges")
+        lgbm_lane_contract = _feature_contract_all.get("L1_SPECTRUM")
+        cb_lane_contract = _feature_contract_all.get("L3_PROFILE")
+
         results: Dict[str, Any] = {}
 
         # ── Lane 1: LightGBM em L1_SPECTRUM ─────────────────────────────────────
         if enable_lightgbm:
             lgbm_sources = lgbm_source_filter or (source_filter if source_filter else LGBM_TRAIN_SOURCES)
-            lgbm_records = await self._load_shadow_data(db, user_id, lookback_days, lgbm_sources)
+            lgbm_records = await self._load_shadow_data(
+                db, user_id, lookback_days, lgbm_sources, dataset_valid_from=dataset_valid_from
+            )
             logger.info(
                 "[MLChallenger] Lane1/LightGBM: sources=%s records=%d", lgbm_sources, len(lgbm_records),
             )
@@ -918,11 +1261,34 @@ class MLChallengerService:
                 }
             elif _is_installed("lightgbm"):
                 try:
-                    X, y, available_cols = self._build_dataset(lgbm_records, feature_columns, win_fast_threshold_s)
+                    X, y, available_cols, returns, created_at, shadow_ids, holding_seconds = self._build_dataset(
+                        lgbm_records, feature_columns, win_fast_threshold_s,
+                        lane_contract=lgbm_lane_contract, feature_ranges=feature_ranges,
+                    )
                     if len(y) < MIN_RECORDS:
                         results["lightgbm"] = {"status": "skipped", "reason": "insufficient_labeled"}
                     else:
-                        X_tr, y_tr, X_va, y_va, X_te, y_te = self._chronological_split_with_test(X, y, VAL_FRACTION)
+                        _lgbm_split = self._chronological_split_with_embargo(
+                            X, y,
+                            metadata=[returns, created_at, shadow_ids],
+                            created_at=created_at,
+                            holding_seconds=holding_seconds,
+                            val_fraction=VAL_FRACTION,
+                            embargo_seconds=embargo_seconds,
+                        )
+                        X_tr, y_tr = _lgbm_split["X_tr"], _lgbm_split["y_tr"]
+                        X_va, y_va = _lgbm_split["X_va"], _lgbm_split["y_va"]
+                        X_te, y_te = _lgbm_split["X_te"], _lgbm_split["y_te"]
+                        ret_va = _lgbm_split["meta_va"][0]
+                        ret_te = _lgbm_split["meta_te"][0] if _lgbm_split["has_test"] else None
+                        logger.info(
+                            "[MLChallenger] LightGBM split: train=%d val=%d test=%d "
+                            "purged=%d embargoed=%d embargo_s=%d",
+                            len(y_tr), len(y_va),
+                            len(y_te) if y_te is not None else 0,
+                            _lgbm_split["n_purged"], _lgbm_split["n_embargoed"],
+                            embargo_seconds,
+                        )
                         if len(y_va) < 10:
                             results["lightgbm"] = {"status": "skipped", "reason": "val_too_small"}
                         else:
@@ -933,13 +1299,24 @@ class MLChallengerService:
                             lgbm_result = await asyncio.to_thread(
                                 _train_lgbm_sync,
                                 X_tr, y_tr, X_va, y_va, n_trials_lgbm, X_te, y_te,
+                                ret_va, ret_te, threshold_grid_step, threshold_min_positives,
                             )
+                            _lgbm_at_tr = _lgbm_split["meta_tr"][1]  # created_at post-purge train rows
                             model_id = await self._save_to_db(
                                 db, user_id=user_id,
                                 model_type="lightgbm",
                                 model_obj=lgbm_result["model"],
                                 feature_columns=available_cols,
-                                metrics={**lgbm_result["metrics"], "train_sources": lgbm_sources},
+                                metrics={
+                                    **lgbm_result["metrics"],
+                                    "train_sources": lgbm_sources,
+                                    "train_from": min(_lgbm_at_tr) if _lgbm_at_tr else None,
+                                    "train_to": max(_lgbm_at_tr) if _lgbm_at_tr else None,
+                                    "dataset_query_cutoff": datetime.now(timezone.utc),
+                                    "dataset_hash": hashlib.sha256(
+                                        "|".join(sorted(str(x) for x in shadow_ids if x)).encode()
+                                    ).hexdigest(),
+                                },
                                 threshold=lgbm_result["threshold"],
                                 profile_id=profile_id,
                                 model_lane="L1_SPECTRUM",
@@ -996,7 +1373,9 @@ class MLChallengerService:
             # L3_PROFILE_STRICT policy: load all records first for metadata, then filter.
             # L3 has 66%+ NULL profile_id — training without filter produces a "global/unknown"
             # model, defeating the purpose of the L3_PROFILE lane.
-            cb_all_records = await self._load_shadow_data(db, user_id, lookback_days, cb_sources)
+            cb_all_records = await self._load_shadow_data(
+                db, user_id, lookback_days, cb_sources, dataset_valid_from=dataset_valid_from
+            )
             cb_records = [r for r in cb_all_records if r.get("profile_id")]
             l3_meta = self._l3_strict_meta(cb_all_records, cb_records, cb_sources)
             logger.info(
@@ -1018,11 +1397,34 @@ class MLChallengerService:
                 }
             elif _is_installed("catboost"):
                 try:
-                    X, y, all_cols, cat_indices = self._build_l3_dataset(cb_records, feature_columns, win_fast_threshold_s)
+                    X, y, all_cols, cat_indices, returns, created_at, shadow_ids, holding_seconds = self._build_l3_dataset(
+                        cb_records, feature_columns, win_fast_threshold_s,
+                        lane_contract=cb_lane_contract, feature_ranges=feature_ranges,
+                    )
                     if len(y) < MIN_RECORDS:
                         results["catboost"] = {"status": "skipped", "reason": "insufficient_labeled"}
                     else:
-                        X_tr, y_tr, X_va, y_va, X_te, y_te = self._chronological_split_with_test(X, y, VAL_FRACTION)
+                        _cb_split = self._chronological_split_with_embargo(
+                            X, y,
+                            metadata=[returns, created_at, shadow_ids],
+                            created_at=created_at,
+                            holding_seconds=holding_seconds,
+                            val_fraction=VAL_FRACTION,
+                            embargo_seconds=embargo_seconds,
+                        )
+                        X_tr, y_tr = _cb_split["X_tr"], _cb_split["y_tr"]
+                        X_va, y_va = _cb_split["X_va"], _cb_split["y_va"]
+                        X_te, y_te = _cb_split["X_te"], _cb_split["y_te"]
+                        ret_va = _cb_split["meta_va"][0]
+                        ret_te = _cb_split["meta_te"][0] if _cb_split["has_test"] else None
+                        logger.info(
+                            "[MLChallenger] CatBoost split: train=%d val=%d test=%d "
+                            "purged=%d embargoed=%d embargo_s=%d",
+                            len(y_tr), len(y_va),
+                            len(y_te) if y_te is not None else 0,
+                            _cb_split["n_purged"], _cb_split["n_embargoed"],
+                            embargo_seconds,
+                        )
                         if len(y_va) < 10:
                             results["catboost"] = {"status": "skipped", "reason": "val_too_small"}
                         else:
@@ -1034,6 +1436,7 @@ class MLChallengerService:
                             cb_result = await asyncio.to_thread(
                                 _train_catboost_sync,
                                 X_tr, y_tr, X_va, y_va, all_cols, n_trials_cb, cat_indices, X_te, y_te,
+                                ret_va, ret_te, threshold_grid_step, threshold_min_positives,
                             )
                             # Derive lane from sources: single-source policies get distinct lanes.
                             if cb_sources == ["L3"]:
@@ -1050,6 +1453,12 @@ class MLChallengerService:
                                 metrics={
                                     **cb_result["metrics"],
                                     "train_sources": cb_sources,
+                                    "train_from": min(_cb_split["meta_tr"][1]) if _cb_split["meta_tr"][1] else None,
+                                    "train_to": max(_cb_split["meta_tr"][1]) if _cb_split["meta_tr"][1] else None,
+                                    "dataset_query_cutoff": datetime.now(timezone.utc),
+                                    "dataset_hash": hashlib.sha256(
+                                        "|".join(sorted(str(x) for x in shadow_ids if x)).encode()
+                                    ).hexdigest(),
                                     "dataset_policy": (
                                         "L3_ONLY" if cb_sources == ["L3"]
                                         else "L3_LAB_ONLY" if cb_sources == ["L3_LAB"]

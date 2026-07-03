@@ -118,8 +118,10 @@ def feature_columns_hash(feature_columns: List[str]) -> str:
 # stored in ml_models.label_version. Add new entries here when new label
 # variants are introduced — do NOT change existing mappings.
 _LABEL_THRESHOLD_REGISTRY: Dict[float, str] = {
-    1800.0: "is_win_fast_v1",   # TP_HIT AND holding ≤ 30 min (original)
-    14400.0: "is_tp_4h_v1",     # TP_HIT AND holding ≤ 4 h
+    1800.0: "is_win_fast_v1",         # TP_HIT AND holding ≤ 30 min (original)
+    14400.0: "is_tp_4h_v2_sim_outcome",  # TP_HIT AND holding ≤ 4 h, simulator outcome only (ttt_* prohibited as target)
+    # Legacy alias — kept so old model rows with label_version='is_tp_4h_v1' remain readable.
+    # New models always write 'is_tp_4h_v2_sim_outcome'; config ml_label_version overrides at save time.
 }
 
 
@@ -305,13 +307,9 @@ def extract_features(metrics: dict) -> Dict[str, float]:
     return f
 
 
-# pnl_pct is stored as PERCENTAGE in decisions_log/shadow_trades
-# (1.0 = 1%, -1.047 = -1.047%). All threshold values must use the same unit.
-_MIN_WIN_PNL_PCT = float(os.getenv("MIN_WIN_PNL_PCT", "0.8"))      # 0.8%
-# Fee round-trip (taker buy + taker sell). Gate.io default: 0.08% * 2 = 0.16%.
-# Added to the gross PnL threshold so WIN = profitable AFTER fees.
+# Kept only for caller/log compatibility. The supervised label is simulator
+# outcome + holding time, not realized PnL or post-entry TTT analysis.
 _FEE_ROUND_TRIP_PCT = float(os.getenv("FEE_ROUND_TRIP_PCT", "0.16"))  # 0.16%
-_WIN_THRESHOLD = _MIN_WIN_PNL_PCT + _FEE_ROUND_TRIP_PCT  # 0.96% effective
 
 
 def build_training_dataframe(
@@ -327,12 +325,9 @@ def build_training_dataframe(
         records: List of dicts from shadow_trades query.
                  Expected fields: symbol, source, created_at,
                  features_snapshot (JSONB flat — indicadores na entrada),
-                 pnl_pct, net_return_pct (optional), holding_seconds,
-                 outcome, ttt_outcome.
-        fee_roundtrip_pct: Round-trip fee (%) to apply in Tier 2 label when
-                 net_return_pct is NULL. Only used when label_net_of_fees=True.
-        label_net_of_fees: When True, Tier 2 label uses net-of-fees return
-                 (net_return_pct if persisted, else gross - fee_roundtrip_pct).
+                 pnl_pct, net_return_pct (optional), holding_seconds, outcome.
+        fee_roundtrip_pct: Deprecated; kept for caller compatibility.
+        label_net_of_fees: Deprecated; kept for caller compatibility.
         win_fast_threshold_s: Holding ceiling (seconds) above which a TP_HIT
                  is classified as slow win → label 0. Read from config_profiles
                  (ml_win_fast_threshold_seconds). Default 1800 (30 min).
@@ -346,8 +341,6 @@ def build_training_dataframe(
             Slow wins (TP_HIT but holding > threshold) are labeled 0: a slow win
             is a bad entry with a lucky exit and must not teach the model to
             approve prolonged capital exposure.
-        Tier 2 (fallback): records with outcome IS NULL fall back to pnl
-            threshold + holding constraint for coverage during data gap periods.
         Rows with pnl_pct IS NULL are DROPPED.
 
         Vocabulário de shadow_trades.outcome: 'TP_HIT' / 'SL_HIT' (uppercase).
@@ -379,34 +372,11 @@ def build_training_dataframe(
             dropped_null_pnl += 1
             continue
 
-        # Target: is_win_fast label
-        # PRIMARY: ttt_fast_win_bucket when ttt_analysis_done=True (is_tp_4h_v1).
-        # Aligns with circuit breaker metric (profile_intelligence_live_service.py)
-        # and with the label documented in MEMORY.md for v52 training.
-        # FALLBACK: pnl_pct > 0.96% AND holding_s <= win_fast_threshold_s for
-        # historical records without TTT analysis (pre-ttt-analyzer deployment).
-        # ttt_fast_win_bucket is only populated when ttt_analysis_done=TRUE, so
-        # its presence is a sufficient proxy — no need to load ttt_analysis_done.
-        ttt_bucket = r.get("ttt_fast_win_bucket")
-        if ttt_bucket is not None:
-            features["is_win_fast"] = 1 if ttt_bucket in ("WIN_0_15M", "WIN_15_30M") else 0
-            features["_has_ttt_label"] = 1
-        else:
-            features["_has_ttt_label"] = 0
-            holding_s = r.get("holding_seconds")
-            holding_ok = holding_s is not None and holding_s <= win_fast_threshold_s
-            if label_net_of_fees:
-                net_return_pct = r.get("net_return_pct")
-                if net_return_pct is not None:
-                    net_val = float(net_return_pct)
-                    features["is_win_fast"] = 1 if (net_val > _MIN_WIN_PNL_PCT and holding_ok) else 0
-                elif fee_roundtrip_pct is not None:
-                    net_val = pnl_val - float(fee_roundtrip_pct)
-                    features["is_win_fast"] = 1 if (net_val > _MIN_WIN_PNL_PCT and holding_ok) else 0
-                else:
-                    features["is_win_fast"] = 1 if (pnl_val > _WIN_THRESHOLD and holding_ok) else 0
-            else:
-                features["is_win_fast"] = 1 if (pnl_val > _WIN_THRESHOLD and holding_ok) else 0
+        # Target: simulator ground truth only. TTT buckets and realized PnL are
+        # post-entry analysis signals and must not define the supervised label.
+        holding_s = r.get("holding_seconds")
+        holding_ok = holding_s is not None and holding_s <= win_fast_threshold_s
+        features["is_win_fast"] = 1 if (r.get("outcome") == "TP_HIT" and holding_ok) else 0
 
         # Metadata for time-based split — NOT model features
         features["_created_at"] = r.get("created_at")
@@ -436,8 +406,10 @@ def build_training_dataframe(
     if len(df) > 0:
         win_rate = df["is_win_fast"].mean() * 100
         logger.info(
-            "Base WIN rate: %.1f%% (threshold=%.4f = MIN_WIN_PNL_PCT %.4f + FEE %.4f)",
-            win_rate, _WIN_THRESHOLD, _MIN_WIN_PNL_PCT, _FEE_ROUND_TRIP_PCT,
+            "Base WIN rate: %.1f%% (label_version=%s; "
+            "label_net_of_fees ignored=%s; fee ignored=%.4f)",
+            win_rate, label_version_for_threshold(win_fast_threshold_s),
+            label_net_of_fees, _FEE_ROUND_TRIP_PCT,
         )
 
     return df

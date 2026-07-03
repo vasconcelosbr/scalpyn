@@ -32,6 +32,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger("scalpyn.trainer")
 
+_VALID_STATUSES = frozenset({"active", "retired", "rejected", "candidate"})
+
+
+def _transition_model_status(conn, *, new_status: str, model_id=None) -> int:
+    """Single authoritative point for ml_models status transitions.
+
+    Direct SQL UPDATE ml_models SET status=... outside this function is PROHIBITED.
+    All callers must go through here for audit traceability and invariant checks.
+
+    For champion retirement (new_status='retired', model_id=None):
+        Retires all active global models in a single statement.
+    For individual model transition (model_id given):
+        Updates that specific row.
+    """
+    if new_status not in _VALID_STATUSES:
+        raise ValueError(f"Invalid model status transition: {new_status!r}")
+    if new_status == "retired" and model_id is None:
+        result = conn.execute(text(
+            "UPDATE ml_models SET status = 'retired', retired_at = NOW() "
+            "WHERE status = 'active' "
+            "  AND (model_scope = 'global' OR model_scope IS NULL OR profile_id IS NULL)"
+        ))
+        return result.rowcount
+    if model_id is None:
+        raise ValueError("model_id required for non-bulk-retire transitions")
+    result = conn.execute(
+        text("UPDATE ml_models SET status = :s WHERE id = :id"),
+        {"s": new_status, "id": model_id},
+    )
+    return result.rowcount
+
+
 DIRECTIONAL_FEATURE_COLUMNS = {
     "rsi_slope_3",
     "rsi_slope_5",
@@ -198,7 +230,6 @@ def _train_for_profile(engine, profile_id_str: str, _ml_cfg: dict, _fee_roundtri
                 id::text AS shadow_id,
                 symbol, source, pnl_pct, net_return_pct, holding_seconds, outcome,
                 features_snapshot, created_at,
-                ttt_outcome, ttt_fast_win_bucket,
                 time_to_tp_minutes, elapsed_minutes, profit_velocity,
                 profile_id::text AS profile_id
             FROM shadow_trades
@@ -575,18 +606,17 @@ def main():
             "excl_from": TRAIN_EXCLUDE_FROM,
             "excl_to": f"{TRAIN_EXCLUDE_TO} 23:59:59",
         }
-    # B4: ml_dataset_valid_from — exclude pre-fix L3 shadows where features_snapshot was empty.
-    # Only applied for ML_SOURCE_FILTER='L3' (the source that had the snapshot bug).
-    # For other sources (L1_SPECTRUM etc.) the features_snapshot::text <> '{}' filter
-    # already guarantees quality — applying valid_from would only waste valid records.
+    # ml_dataset_valid_from — hard temporal floor applied to ALL sources whenever configured.
+    # Rationale: features_snapshot geometry changed with the simulator rework; records before
+    # the configured date may have structurally different (or empty) feature vectors regardless
+    # of source. The features_snapshot::text <> '{}' guard already drops empty snapshots;
+    # valid_from additionally excludes records with potentially stale feature schemas.
     valid_from_clause = ""
     valid_from_params: dict = {}
-    if _dataset_valid_from and ML_SOURCE_FILTER == "L3":
+    if _dataset_valid_from:
         valid_from_clause = "AND created_at >= :valid_from"
         valid_from_params = {"valid_from": _dataset_valid_from}
-        logger.info("Dataset valid_from filter active (L3): created_at >= %s", _dataset_valid_from)
-    elif _dataset_valid_from:
-        logger.info("Dataset valid_from skipped for source=%s (snapshot quality via <> '{}' filter)", ML_SOURCE_FILTER)
+        logger.info("Dataset valid_from filter active (all sources): created_at >= %s", _dataset_valid_from)
     cutoff_clause = ""
     cutoff_params: dict = {}
     if TRAIN_CUTOFF_AT:
@@ -603,7 +633,6 @@ def main():
             SELECT
                 symbol, source, pnl_pct, net_return_pct, holding_seconds, outcome,
                 features_snapshot, created_at,
-                ttt_outcome, ttt_fast_win_bucket,
                 time_to_tp_minutes, elapsed_minutes, profit_velocity
             FROM shadow_trades
             WHERE source = :source_filter
@@ -623,14 +652,18 @@ def main():
         records = [dict(row._mapping) for row in result.fetchall()]
 
     total = len(records)
-    n_ttt      = sum(1 for r in records if r.get("ttt_outcome") is not None)
-    n_fast_win = sum(1 for r in records if r.get("ttt_outcome") == "FAST_WIN")
+    n_tp = sum(1 for r in records if r.get("outcome") == "TP_HIT")
+    n_fast_tp = sum(
+        1 for r in records
+        if r.get("outcome") == "TP_HIT"
+        and r.get("holding_seconds") is not None
+        and float(r.get("holding_seconds")) <= _win_fast_threshold_s
+    )
     logger.info(
         "shadow_trades source=%s finalizados: %d | "
-        "ttt_outcome set: %d/%d (%.1f%%) FAST_WIN=%d | win_fast_threshold=%ds",
+        "label_v2 TP_HIT=%d/%d (%.1f%%) TP_HIT_within_%ds=%d",
         ML_SOURCE_FILTER, total,
-        n_ttt, total, 100 * n_ttt / max(total, 1), n_fast_win,
-        _win_fast_threshold_s,
+        n_tp, total, 100 * n_tp / max(total, 1), _win_fast_threshold_s, n_fast_tp,
     )
 
     if total < MIN_RECORDS:
@@ -1056,14 +1089,8 @@ def main():
             # Desativa anterior somente se o challenger foi aprovado.
             # Only retires global models — profile models are scoped separately.
             if promotion_status == "active":
-                conn.execute(
-                    text(
-                        "UPDATE ml_models SET status = 'retired', retired_at = NOW() "
-                        "WHERE status = 'active' "
-                        "  AND (model_scope = 'global' OR model_scope IS NULL OR profile_id IS NULL)"
-                    )
-                )
-                logger.info("[DB] UPDATE retired OK (global models only)")
+                n_retired = _transition_model_status(conn, new_status="retired")
+                logger.info("[DB] _transition_model_status retired=%d (global models only)", n_retired)
             else:
                 logger.info("[DB] challenger rejected - keeping current active model unchanged")
 
