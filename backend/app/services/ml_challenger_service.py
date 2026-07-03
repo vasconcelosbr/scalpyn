@@ -1062,7 +1062,10 @@ class MLChallengerService:
         """), {
             "id": str(model_uuid),
             "version": version,
-            "hyperparams": json.dumps(hyperparams_full),
+            "hyperparams": json.dumps(
+                hyperparams_full,
+                default=lambda o: o.isoformat() if hasattr(o, "isoformat") else str(o),
+            ),
             "n_train": n_train,
             "n_val": n_val,
             "n_test": n_test or None,
