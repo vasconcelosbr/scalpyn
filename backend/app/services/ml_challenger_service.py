@@ -1229,7 +1229,12 @@ class MLChallengerService:
         ml_config = await self._load_ml_config(db)
         if "ml_win_fast_threshold_seconds" in ml_config:
             win_fast_threshold_s = float(ml_config["ml_win_fast_threshold_seconds"])
-        dataset_valid_from = ml_config.get("ml_dataset_valid_from")
+        _dvf_raw = ml_config.get("ml_dataset_valid_from")
+        if isinstance(_dvf_raw, str):
+            from datetime import datetime as _dt, timezone as _tz
+            dataset_valid_from = _dt.fromisoformat(_dvf_raw.replace("+00", "+00:00")).replace(tzinfo=_tz.utc)
+        else:
+            dataset_valid_from = _dvf_raw
         threshold_grid_step = float(ml_config.get("ml_threshold_grid_step", 0.01))
         threshold_min_positives = int(ml_config.get("ml_threshold_min_positives", 10))
         # Embargo window = label horizon + 1h margin. Config key: ml_split_embargo_seconds.
