@@ -1005,6 +1005,7 @@ class MLChallengerService:
                 "f1": (test_metrics or {}).get("f1"),
                 "roc_auc": (test_metrics or {}).get("roc_auc"),
                 "samples": n_test or None,
+                "net_ev": (test_metrics or {}).get("net_ev"),
             } if test_metrics else None,
             "feature_importance": _feature_importance or None,
         }
