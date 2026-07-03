@@ -72,6 +72,13 @@ def _stable_profile_bucket(profile_id: Optional[str]) -> int:
     return int(hashlib.md5(profile_id.encode()).hexdigest()[:8], 16) % 9999
 
 
+def _json_default(obj):
+    """JSON serializer for types not handled by the standard encoder (e.g. datetime)."""
+    if hasattr(obj, "isoformat"):
+        return obj.isoformat()
+    return str(obj)
+
+
 def _apply_feature_contract(
     df,
     lane_contract: Optional[Dict[str, Any]],
@@ -1024,7 +1031,7 @@ class MLChallengerService:
         }
         _gate_result = evaluate_promotion_gate(_gate_input, promotion_config=_ml_config)
         _metrics_json_dict = merge_promotion_gate_into_metrics_json(_metrics_json_dict, _gate_result)
-        _metrics_json = json.dumps(_metrics_json_dict)
+        _metrics_json = json.dumps(_metrics_json_dict, default=_json_default)
         logger.info(
             "[MLChallenger] PromotionGate model_type=%s lane=%s status=%s reasons=%s",
             model_type, model_lane, _gate_result["status"], _gate_result["reasons"],
@@ -1062,10 +1069,7 @@ class MLChallengerService:
         """), {
             "id": str(model_uuid),
             "version": version,
-            "hyperparams": json.dumps(
-                hyperparams_full,
-                default=lambda o: o.isoformat() if hasattr(o, "isoformat") else str(o),
-            ),
+            "hyperparams": json.dumps(hyperparams_full, default=_json_default),
             "n_train": n_train,
             "n_val": n_val,
             "n_test": n_test or None,
@@ -1132,7 +1136,7 @@ class MLChallengerService:
             "model_type": model_type,
             "version": version_str,
             "pid": str(profile_id) if profile_id else None,
-            "metrics": json.dumps(metrics),
+            "metrics": json.dumps(metrics, default=_json_default),
             "threshold": threshold,
             "now": now,
         })
