@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from backend.app.ml.feature_extractor import (
     FEATURE_ALIASES,
     FEATURE_COLUMNS,
+    build_training_dataframe,
     extract_features,
     feature_columns_hash,
 )
@@ -134,3 +135,45 @@ def test_vwap_reclaim_bool_uses_previous_closed_candle():
     result = _engine()._calc_directional_features(df)
 
     assert result["vwap_reclaim_bool"] is True
+
+
+def test_build_training_dataframe_neutralizes_configured_backfilled_features():
+    records = [
+        {
+            "pnl_pct": 1.2,
+            "holding_seconds": 120,
+            "outcome": "TP_HIT",
+            "created_at": pd.Timestamp("2026-06-15T00:00:00Z"),
+            "features_snapshot": {
+                "_directional_backfill": {"feature_backfill_version": "test"},
+                "adx_slope_3": 9.0,
+                "rsi_slope_3": 4.0,
+                "rsi": 42.0,
+            },
+        },
+        {
+            "pnl_pct": -1.0,
+            "holding_seconds": 240,
+            "outcome": "SL_HIT",
+            "created_at": pd.Timestamp("2026-06-15T00:05:00Z"),
+            "features_snapshot": {
+                "adx_slope_3": 8.0,
+                "rsi_slope_3": 3.0,
+                "rsi": 41.0,
+            },
+        },
+    ]
+
+    df = build_training_dataframe(
+        records,
+        backfilled_feature_names=["adx_slope_3", "rsi_slope_3"],
+        backfill_marker_key="_directional_backfill",
+    )
+
+    assert len(df) == 2
+    assert df.attrs["rows_with_backfill_neutralized"] == 1
+    assert math.isnan(df.loc[0, "adx_slope_3"])
+    assert math.isnan(df.loc[0, "rsi_slope_3"])
+    assert df.loc[0, "rsi"] == pytest.approx(42.0)
+    assert df.loc[1, "adx_slope_3"] == pytest.approx(8.0)
+    assert df.loc[1, "rsi_slope_3"] == pytest.approx(3.0)

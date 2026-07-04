@@ -6,6 +6,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version as package_version
+from pathlib import Path
 
 # AUDIT_MODE — run deep audit instead of training when env var is set.
 if os.getenv("AUDIT_MODE", "false").lower() == "true":
@@ -24,6 +25,12 @@ import mlflow.xgboost
 import optuna
 from sqlalchemy import create_engine, text
 
+_BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
+from app.ml.dataset_config import parse_required_ml_dataset_valid_from
+
 # Configuração de logging
 logging.basicConfig(
     level=logging.INFO,
@@ -35,7 +42,13 @@ logger = logging.getLogger("scalpyn.trainer")
 _VALID_STATUSES = frozenset({"active", "retired", "rejected", "candidate"})
 
 
-def _transition_model_status(conn, *, new_status: str, model_id=None) -> int:
+def _transition_model_status(
+    conn,
+    *,
+    new_status: str,
+    model_id=None,
+    notes_append: str | None = None,
+) -> int:
     """Single authoritative point for ml_models status transitions.
 
     Direct SQL UPDATE ml_models SET status=... outside this function is PROHIBITED.
@@ -48,18 +61,27 @@ def _transition_model_status(conn, *, new_status: str, model_id=None) -> int:
     """
     if new_status not in _VALID_STATUSES:
         raise ValueError(f"Invalid model status transition: {new_status!r}")
+    notes_sql = ""
+    params = {"s": new_status, "id": model_id}
+    if notes_append:
+        notes_sql = (
+            ", notes = CONCAT(COALESCE(notes, ''), CASE WHEN COALESCE(notes, '') = '' "
+            "THEN '' ELSE E'\\n' END, :notes_append)"
+        )
+        params["notes_append"] = notes_append
     if new_status == "retired" and model_id is None:
         result = conn.execute(text(
             "UPDATE ml_models SET status = 'retired', retired_at = NOW() "
+            + notes_sql +
             "WHERE status = 'active' "
             "  AND (model_scope = 'global' OR model_scope IS NULL OR profile_id IS NULL)"
-        ))
+        ), params)
         return result.rowcount
     if model_id is None:
         raise ValueError("model_id required for non-bulk-retire transitions")
     result = conn.execute(
-        text("UPDATE ml_models SET status = :s WHERE id = :id"),
-        {"s": new_status, "id": model_id},
+        text("UPDATE ml_models SET status = :s" + notes_sql + " WHERE id = :id"),
+        params,
     )
     return result.rowcount
 
@@ -93,6 +115,13 @@ def _cfg_bool(cfg: dict, key: str, default: bool) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def _cfg_list(cfg: dict, key: str) -> list[str]:
+    value = cfg.get(key) or []
+    if isinstance(value, list):
+        return [str(item) for item in value if item]
+    return []
 
 
 def _ratio(value: float | int | None) -> float:
@@ -174,7 +203,8 @@ def _train_for_profile(engine, profile_id_str: str, _ml_cfg: dict, _fee_roundtri
                         _promotion_min_precision_lift, _promotion_max_fpr,
                         _promotion_max_fpr_relative_increase,
                         _promotion_min_precision_vs_champion, _promotion_min_f1_vs_champion,
-                        _promotion_require_all_directional_features):
+                        _promotion_require_all_directional_features,
+                        _backfilled_feature_names, _backfill_marker_key):
     """Train a profile-specific model on L3 shadows from one profile.
 
     TRAINING_MODE='profile' entry point. Uses source='L3' + profile_id filter.
@@ -295,6 +325,8 @@ def _train_for_profile(engine, profile_id_str: str, _ml_cfg: dict, _fee_roundtri
         fee_roundtrip_pct=_fee_roundtrip_pct,
         label_net_of_fees=_label_net_of_fees,
         win_fast_threshold_s=_win_fast_threshold_s,
+        backfilled_feature_names=_backfilled_feature_names,
+        backfill_marker_key=_backfill_marker_key,
     )
     logger.info("[ProfileTrainer] DataFrame: %d rows, %d cols", len(df), len(df.columns))
 
@@ -340,6 +372,7 @@ def _train_for_profile(engine, profile_id_str: str, _ml_cfg: dict, _fee_roundtri
             "source_filter": "L3",
             "dataset_hash": dataset_hash,
             "query_hash": query_hash,
+            "rows_with_backfill_neutralized": int(df.attrs.get("rows_with_backfill_neutralized", 0)),
         },
     }
     joblib.dump(model_payload, buf)
@@ -487,7 +520,10 @@ def main():
                     else json.loads(ml_cfg_row[0])
                 )
     except Exception as e:
-        logger.warning("Failed to load ML config_profile — using legacy label: %s", e)
+        logger.error("Failed to load ML config_profile; aborting fail-closed: %s", e)
+        raise
+
+    _dataset_valid_from = parse_required_ml_dataset_valid_from(_ml_cfg)
 
     _fee_roundtrip_pct = _ml_cfg.get("ml_fee_roundtrip_pct")
     _label_net_of_fees = bool(_ml_cfg.get("ml_label_net_of_fees", False))
@@ -509,9 +545,9 @@ def main():
     _promotion_require_all_directional_features = _cfg_bool(
         _ml_cfg, "ml_promotion_require_all_directional_features", True
     )
-    # B4: dataset validity gate — exclude shadows where features_snapshot was empty (pre-fix).
-    # Set via backend/sql/set_ml_dataset_valid_from.sql after B1 deploy. Only moves forward.
-    _dataset_valid_from = _ml_cfg.get("ml_dataset_valid_from")  # ISO string or None
+    _backfilled_feature_names = _cfg_list(_ml_cfg, "ml_backfilled_feature_names")
+    _backfill_marker_key = str(_ml_cfg.get("ml_backfill_marker_key") or "")
+    # B4: dataset validity gate. Required and parsed above; absence/invalidity aborts.
     # ZERO HARDCODE: propagate DB coverage threshold to trainer's env-var check.
     # trainer.py reads ML_MIN_FEATURE_COVERAGE; setting it here means the DB value
     # takes precedence over the Railway service env var.
@@ -536,6 +572,8 @@ def main():
             _promotion_min_precision_vs_champion=_promotion_min_precision_vs_champion,
             _promotion_min_f1_vs_champion=_promotion_min_f1_vs_champion,
             _promotion_require_all_directional_features=_promotion_require_all_directional_features,
+            _backfilled_feature_names=_backfilled_feature_names,
+            _backfill_marker_key=_backfill_marker_key,
         )
         logger.info("=== Trainer Job (profile mode) concluído ===")
         return
@@ -568,6 +606,8 @@ def main():
                     _promotion_min_precision_vs_champion=_promotion_min_precision_vs_champion,
                     _promotion_min_f1_vs_champion=_promotion_min_f1_vs_champion,
                     _promotion_require_all_directional_features=_promotion_require_all_directional_features,
+                    _backfilled_feature_names=_backfilled_feature_names,
+                    _backfill_marker_key=_backfill_marker_key,
                 )
             except Exception as e:
                 logger.error("[AllProfiles] Training failed for profile %s: %s", pid, e)
@@ -611,12 +651,9 @@ def main():
     # the configured date may have structurally different (or empty) feature vectors regardless
     # of source. The features_snapshot::text <> '{}' guard already drops empty snapshots;
     # valid_from additionally excludes records with potentially stale feature schemas.
-    valid_from_clause = ""
-    valid_from_params: dict = {}
-    if _dataset_valid_from:
-        valid_from_clause = "AND created_at >= :valid_from"
-        valid_from_params = {"valid_from": _dataset_valid_from}
-        logger.info("Dataset valid_from filter active (all sources): created_at >= %s", _dataset_valid_from)
+    valid_from_clause = "AND created_at >= :valid_from"
+    valid_from_params: dict = {"valid_from": _dataset_valid_from}
+    logger.info("Dataset valid_from filter active (all sources): created_at >= %s", _dataset_valid_from)
     cutoff_clause = ""
     cutoff_params: dict = {}
     if TRAIN_CUTOFF_AT:
@@ -694,11 +731,18 @@ def main():
         fee_roundtrip_pct=_fee_roundtrip_pct,
         label_net_of_fees=_label_net_of_fees,
         win_fast_threshold_s=_win_fast_threshold_s,
+        backfilled_feature_names=_backfilled_feature_names,
+        backfill_marker_key=_backfill_marker_key,
     )
     logger.info(
         "DataFrame: %d rows, %d cols | label_net_of_fees=%s fee=%.2f%%",
         len(df), len(df.columns),
         _label_net_of_fees, _fee_roundtrip_pct or 0.0,
+    )
+    rows_with_backfill_neutralized = int(df.attrs.get("rows_with_backfill_neutralized", 0))
+    logger.info(
+        "rows_with_backfill_neutralized=%d",
+        rows_with_backfill_neutralized,
     )
 
     win_fast_rate = df["is_win_fast"].mean() * 100
@@ -724,10 +768,10 @@ def main():
                 conn.execute(text("""
                     INSERT INTO ml_dataset_readiness_reports (
                         dataset_id, total_features, dead_features, dead_feature_ratio,
-                        min_coverage, readiness_status
+                        min_coverage, readiness_status, metadata
                     ) VALUES (
                         :run_id, :total_features, :dead_features, :df_ratio,
-                        :min_coverage, :status
+                        :min_coverage, :status, CAST(:metadata AS JSONB)
                     )
                 """), {
                     "run_id": run_id,
@@ -736,6 +780,11 @@ def main():
                     "df_ratio": gate_report.get("dead_feature_ratio", 0.0),
                     "min_coverage": gate_report.get("min_coverage", 0.0),
                     "status": gate_report.get("readiness_status", "ready"),
+                    "metadata": json.dumps({
+                        "rows_with_backfill_neutralized": rows_with_backfill_neutralized,
+                        "backfill_marker_key": _backfill_marker_key,
+                        "backfilled_feature_names": _backfilled_feature_names,
+                    }),
                 })
                 conn.execute(text("""
                     INSERT INTO ml_readiness_gate_runs (
@@ -768,10 +817,10 @@ def main():
                 conn.execute(text("""
                     INSERT INTO ml_dataset_readiness_reports (
                         dataset_id, total_features, dead_features, dead_feature_ratio,
-                        min_coverage, readiness_status
+                        min_coverage, readiness_status, metadata
                     ) VALUES (
                         :run_id, :total_features, :dead_features, :df_ratio,
-                        :min_coverage, :status
+                        :min_coverage, :status, CAST(:metadata AS JSONB)
                     )
                 """), {
                     "run_id": run_id,
@@ -780,6 +829,11 @@ def main():
                     "df_ratio": exc.report.get("dead_feature_ratio", 0.0),
                     "min_coverage": exc.report.get("min_coverage", 0.0),
                     "status": exc.report.get("readiness_status", "ready"),
+                    "metadata": json.dumps({
+                        "rows_with_backfill_neutralized": rows_with_backfill_neutralized,
+                        "backfill_marker_key": _backfill_marker_key,
+                        "backfilled_feature_names": _backfilled_feature_names,
+                    }),
                 })
                 conn.execute(text("""
                     INSERT INTO ml_readiness_gate_runs (

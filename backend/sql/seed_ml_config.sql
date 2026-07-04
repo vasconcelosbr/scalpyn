@@ -37,7 +37,20 @@ SELECT
         "shadow_atr_period":            14,
         "shadow_atr_timeframe":         "5m",
         "shadow_barrier_min_pct":       0.5,
-        "shadow_barrier_max_pct":       3.0
+        "shadow_barrier_max_pct":       3.0,
+        "ml_backfill_marker_key":       "_directional_backfill",
+        "ml_backfilled_feature_names":  [
+            "adx_slope_3",
+            "rsi_slope_3",
+            "rsi_slope_5",
+            "macd_hist_slope_3",
+            "macd_hist_slope_5",
+            "higher_highs_5",
+            "higher_lows_5",
+            "vwap_reclaim_bool",
+            "ema21_ema50_distance_pct",
+            "di_plus_minus_diff"
+        ]
     }'::jsonb,
     true,
     NOW(),

@@ -54,7 +54,8 @@ def _get_dsn() -> str:
 def fetch_models(conn, model_id: str | None, limit: int | None):
     sql = """
         SELECT id, version, status, model_lane, label_version, source_filter,
-               dataset_contract_id, feature_count, test_samples, roc_auc, metrics_json
+               dataset_contract_id, feature_count, test_samples, roc_auc, metrics_json,
+               train_from, train_to, dataset_query_cutoff, dataset_hash
         FROM ml_models
     """
     params: list = []
@@ -84,13 +85,21 @@ def main():
 
     conn = psycopg2.connect(_get_dsn())
     try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT config_json FROM config_profiles
+                WHERE config_type = 'ml' AND is_active = true
+                LIMIT 1
+            """)
+            cfg_row = cur.fetchone()
+            promotion_config = dict(cfg_row["config_json"] or {}) if cfg_row else {}
         models = fetch_models(conn, args.model_id, args.limit)
         print(f"Encontrados {len(models)} modelo(s). dry_run={dry_run}\n")
 
         results = []
         for row in models:
             row = dict(row)
-            gate_result = evaluate_promotion_gate(row)
+            gate_result = evaluate_promotion_gate(row, promotion_config=promotion_config)
             results.append({
                 "id": str(row["id"]),
                 "version": row["version"],

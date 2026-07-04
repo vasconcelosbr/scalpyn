@@ -11,14 +11,14 @@ Flags:
     --dry-run   Roda análise do dataset mas não treina nem persiste (default: False)
 
 Precondições (verificadas antes de rodar):
-    - Fase 2 (circuit breaker): ttt_fast_win_bucket ativo em profile_intelligence_live_service.py
+    - Label v2 ativo: outcome='TP_HIT' AND holding_seconds <= T
     - Fase 3 (1m fallback): shadow_timeout_analyzer usa IN ('1m','5m')
     - Fase 4 (features_snapshot): prediction_service retorna features_snapshot
     - Drift L3+L3_LAB: < 15pp (verificar antes de promover o modelo resultante)
 
 Dataset policy (L3_PROFILE_STRICT):
     - Fontes: L3 + L3_LAB, profile_id IS NOT NULL
-    - Label: ttt_fast_win_bucket IN ('WIN_0_15M','WIN_15_30M') AND ttt_analysis_done=TRUE
+    - Label: outcome='TP_HIT' AND holding_seconds <= T
     - allow_mixed_source=False bloqueado por default (L3+L3_LAB combinados causou
       colapso de AUC em v42 — treinar L3 ou L3_LAB separado, ou fonte única)
 """
@@ -50,7 +50,7 @@ logger = logging.getLogger("catboost_retrain")
 DRY_RUN = "--dry-run" in sys.argv
 
 USER_ID = UUID("8080110c-ee9d-4a2b-a53f-6bef86dd8867")
-WIN_THRESHOLD_S = 1800.0  # is_tp_4h_v1 — ttt_fast_win_bucket <=30min
+WIN_THRESHOLD_S = 14400.0  # is_tp_4h_v2_sim_outcome
 
 # Treinar sobre L3_LAB (maior volume, 15.7% pos rate) — L3 tem 66% NULL profile_id
 # Para treinar sobre L3 estrito: mudar para ["L3"] (aplica L3_PROFILE_STRICT automaticamente)
@@ -81,7 +81,7 @@ async def main():
             logger.info("[DRY-RUN] Records: total=%d com_profile=%d", len(all_records), len(eligible))
 
             from backend.app.ml.feature_extractor import FEATURE_COLUMNS
-            X, y, cols, cat_idx = svc._build_l3_dataset(eligible, list(FEATURE_COLUMNS), WIN_THRESHOLD_S)
+            X, y, cols, cat_idx, *_ = svc._build_l3_dataset(eligible, list(FEATURE_COLUMNS), WIN_THRESHOLD_S)
             pos_rate = float(y.mean()) if len(y) else 0
             logger.info("[DRY-RUN] Dataset: rows=%d features=%d cat_idx=%s positive_rate=%.2f%%",
                         len(y), len(cols), cat_idx, pos_rate * 100)

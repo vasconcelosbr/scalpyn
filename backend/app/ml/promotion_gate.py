@@ -19,11 +19,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 # Thresholds — tunable, but never bypassable for the absolute rule (#13 below).
-DEFAULT_MIN_TEST_AUC = 0.55
-DEFAULT_MIN_TEST_SAMPLES = 200
-DEFAULT_MAX_GENERALIZATION_GAP = 0.15
-DEFAULT_MAX_TEST_FPR = 0.55
-ABSOLUTE_MIN_TEST_AUC = 0.50  # rule #13: never promotable below this, no exceptions
+REQUIRED_CONFIG_KEYS = (
+    "ml_promotion_min_test_auc",
+    "ml_promotion_min_test_samples",
+    "ml_promotion_max_val_test_gap",
+    "ml_promotion_max_test_fpr",
+    "ml_promotion_require_positive_net_ev",
+)
 
 APPROVED = "APPROVED"
 REJECTED = "REJECTED"
@@ -33,10 +35,7 @@ BLOCKED = "BLOCKED"
 def evaluate_promotion_gate(
     model_row: Dict[str, Any],
     *,
-    min_test_auc: float = DEFAULT_MIN_TEST_AUC,
-    min_test_samples: int = DEFAULT_MIN_TEST_SAMPLES,
-    max_generalization_gap: float = DEFAULT_MAX_GENERALIZATION_GAP,
-    max_test_fpr: float = DEFAULT_MAX_TEST_FPR,
+    promotion_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Evaluate whether a ml_models row is eligible to be used in ranking/inference.
 
@@ -61,6 +60,23 @@ def evaluate_promotion_gate(
                    yet, regardless of how good the numbers look).
         REJECTED takes precedence over BLOCKED if both apply.
     """
+    cfg = promotion_config or {}
+    missing_cfg = [key for key in REQUIRED_CONFIG_KEYS if key not in cfg]
+    if missing_cfg:
+        return {
+            "status": BLOCKED,
+            "evaluated_at": datetime.now(timezone.utc).isoformat(),
+            "reasons": [f"missing_promotion_config:{','.join(missing_cfg)}"],
+            "thresholds": {},
+            "metrics": {},
+        }
+
+    min_test_auc = float(cfg["ml_promotion_min_test_auc"])
+    min_test_samples = int(cfg["ml_promotion_min_test_samples"])
+    max_generalization_gap = float(cfg["ml_promotion_max_val_test_gap"])
+    max_test_fpr = float(cfg["ml_promotion_max_test_fpr"])
+    require_positive_net_ev = bool(cfg["ml_promotion_require_positive_net_ev"])
+
     metrics_json = model_row.get("metrics_json") or {}
     test = metrics_json.get("test") or {}
     validation = metrics_json.get("validation") or {}
@@ -74,18 +90,11 @@ def evaluate_promotion_gate(
     rejected = False
     blocked = False
 
-    # ---- Rule #13 (absolute, never bypassable): test AUC below 0.5 -----------
+    # ---- Rule #13: test AUC below configured minimum -------------------------
     if test_auc is None:
         rejected = True
         reasons.append("missing_test_roc_auc")
-    elif test_auc < ABSOLUTE_MIN_TEST_AUC:
-        rejected = True
-        reasons.append(
-            f"test_roc_auc_below_absolute_floor:{test_auc:.4f}<{ABSOLUTE_MIN_TEST_AUC}"
-        )
-
-    # ---- Rule #1: test AUC below configured minimum ---------------------------
-    if test_auc is not None and test_auc < min_test_auc:
+    elif test_auc < min_test_auc:
         rejected = True
         reasons.append(f"test_roc_auc_below_min_threshold:{test_auc:.4f}<{min_test_auc}")
 
@@ -113,6 +122,17 @@ def evaluate_promotion_gate(
         rejected = True
         reasons.append(f"test_fpr_exceeded:{test_fpr:.4f}>{max_test_fpr}")
 
+    test_net_ev = test.get("net_ev") if isinstance(test, dict) else None
+    if test_net_ev is None:
+        test_net_ev = metrics_json.get("test_net_ev")
+    if require_positive_net_ev:
+        if test_net_ev is None:
+            rejected = True
+            reasons.append("missing_test_net_ev")
+        elif float(test_net_ev) <= 0.0:
+            rejected = True
+            reasons.append(f"test_net_ev_not_positive:{float(test_net_ev):.6f}")
+
     # ---- Rule #6-9: required lineage metadata (BLOCKED, not REJECTED) ---------
     feature_count = model_row.get("feature_count")
     if not feature_count or feature_count <= 0:
@@ -138,6 +158,11 @@ def evaluate_promotion_gate(
     if not dataset_contract_id:
         blocked = True
         reasons.append("missing_dataset_policy")
+
+    for key in ("train_from", "train_to", "dataset_query_cutoff", "dataset_hash"):
+        if not model_row.get(key):
+            blocked = True
+            reasons.append(f"missing_{key}")
 
     # ---- Rule #11/#12: leakage flag / positive rate sanity (best-effort) -------
     leakage_detected = metrics_json.get("leakage_detected")
@@ -166,13 +191,14 @@ def evaluate_promotion_gate(
             "min_test_samples": min_test_samples,
             "max_generalization_gap": max_generalization_gap,
             "max_test_fpr": max_test_fpr,
-            "absolute_min_test_auc": ABSOLUTE_MIN_TEST_AUC,
+            "require_positive_net_ev": require_positive_net_ev,
         },
         "metrics": {
             "test_roc_auc": test_auc,
             "val_roc_auc": val_auc,
             "test_samples": test_samples,
             "test_fpr": test_fpr,
+            "test_net_ev": test_net_ev,
         },
     }
 

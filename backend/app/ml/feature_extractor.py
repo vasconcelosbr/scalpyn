@@ -317,6 +317,8 @@ def build_training_dataframe(
     fee_roundtrip_pct: Optional[float] = None,
     label_net_of_fees: bool = False,
     win_fast_threshold_s: int = 1800,
+    backfilled_feature_names: Optional[List[str]] = None,
+    backfill_marker_key: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Build training DataFrame from shadow_trades records (fonte canônica — Bloco B).
@@ -345,8 +347,11 @@ def build_training_dataframe(
 
         Vocabulário de shadow_trades.outcome: 'TP_HIT' / 'SL_HIT' (uppercase).
     """
+    backfilled_features = [f for f in (backfilled_feature_names or []) if f in FEATURE_COLUMNS]
+    marker_key = backfill_marker_key or ""
     rows = []
     dropped_null_pnl = 0
+    rows_with_backfill_neutralized = 0
     for r in records:
         pnl_pct = r.get("pnl_pct")
         if pnl_pct is None:
@@ -359,6 +364,12 @@ def build_training_dataframe(
                 metrics = json.loads(metrics)
             except Exception:
                 metrics = {}
+
+        if marker_key and backfilled_features and isinstance(metrics, dict) and marker_key in metrics:
+            metrics = dict(metrics)
+            for feature_name in backfilled_features:
+                metrics[feature_name] = float("nan")
+            rows_with_backfill_neutralized += 1
 
         features = extract_features(metrics)
 
@@ -392,7 +403,17 @@ def build_training_dataframe(
         )
 
     df = pd.DataFrame(rows)
+    df.attrs["rows_with_backfill_neutralized"] = rows_with_backfill_neutralized
+    df.attrs["backfilled_feature_names"] = backfilled_features
+    df.attrs["backfill_marker_key"] = marker_key
     logger.info(f"Training dataframe: {len(df)} rows, {len(df.columns)} cols")
+    if marker_key and backfilled_features:
+        logger.info(
+            "BACKFILL_NEUTRALIZATION|marker=%s|features=%d|rows_with_backfill_neutralized=%d",
+            marker_key,
+            len(backfilled_features),
+            rows_with_backfill_neutralized,
+        )
 
     # ML_EXCLUDED_FIELDS — guardrail final: nenhum dos campos vazados pode
     # estar no df. Falha alta e cedo (fail-fast no Cloud Run Job) em vez de

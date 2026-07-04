@@ -32,6 +32,11 @@ _TRAIN_CUTOFF_AT: str = os.getenv("TRAIN_CUTOFF_AT", "")
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+try:
+    from app.ml.dataset_config import parse_required_ml_dataset_valid_from
+except ModuleNotFoundError:
+    from backend.app.ml.dataset_config import parse_required_ml_dataset_valid_from
+
 logger = logging.getLogger(__name__)
 
 _TRAINER_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ml_challenger")
@@ -557,6 +562,8 @@ class MLChallengerService:
         win_fast_threshold_s: float = 1800.0,
         lane_contract: Optional[Dict[str, Any]] = None,
         feature_ranges: Optional[Dict[str, Any]] = None,
+        backfilled_feature_names: Optional[List[str]] = None,
+        backfill_marker_key: Optional[str] = None,
     ):
         """Constrói feature matrix e labels usando o feature_extractor canônico."""
         import numpy as np
@@ -567,6 +574,11 @@ class MLChallengerService:
             fee_roundtrip_pct=0.0,
             label_net_of_fees=False,
             win_fast_threshold_s=win_fast_threshold_s,
+            backfilled_feature_names=backfilled_feature_names,
+            backfill_marker_key=backfill_marker_key,
+        )
+        self._last_rows_with_backfill_neutralized = int(
+            df.attrs.get("rows_with_backfill_neutralized", 0)
         )
 
         # E7: Row-level contract validation (required features + range checks)
@@ -614,6 +626,8 @@ class MLChallengerService:
         win_fast_threshold_s: float = 1800.0,
         lane_contract: Optional[Dict[str, Any]] = None,
         feature_ranges: Optional[Dict[str, Any]] = None,
+        backfilled_feature_names: Optional[List[str]] = None,
+        backfill_marker_key: Optional[str] = None,
     ):
         """Constrói dataset L3 para CatBoost com features categóricas adicionais.
 
@@ -635,6 +649,11 @@ class MLChallengerService:
             fee_roundtrip_pct=0.0,
             label_net_of_fees=False,
             win_fast_threshold_s=win_fast_threshold_s,
+            backfilled_feature_names=backfilled_feature_names,
+            backfill_marker_key=backfill_marker_key,
+        )
+        self._last_rows_with_backfill_neutralized = int(
+            df.attrs.get("rows_with_backfill_neutralized", 0)
         )
 
         # E7: Row-level contract validation (required features + range checks)
@@ -1237,12 +1256,7 @@ class MLChallengerService:
         ml_config = await self._load_ml_config(db)
         if "ml_win_fast_threshold_seconds" in ml_config:
             win_fast_threshold_s = float(ml_config["ml_win_fast_threshold_seconds"])
-        _dvf_raw = ml_config.get("ml_dataset_valid_from")
-        if isinstance(_dvf_raw, str):
-            from datetime import datetime as _dt, timezone as _tz
-            dataset_valid_from = _dt.fromisoformat(_dvf_raw.replace("+00", "+00:00")).replace(tzinfo=_tz.utc)
-        else:
-            dataset_valid_from = _dvf_raw
+        dataset_valid_from = parse_required_ml_dataset_valid_from(ml_config)
         threshold_grid_step = float(ml_config.get("ml_threshold_grid_step", 0.01))
         threshold_min_positives = int(ml_config.get("ml_threshold_min_positives", 10))
         # Embargo window = label horizon + 1h margin. Config key: ml_split_embargo_seconds.
@@ -1252,6 +1266,27 @@ class MLChallengerService:
         feature_ranges = ml_config.get("ml_feature_ranges")
         lgbm_lane_contract = _feature_contract_all.get("L1_SPECTRUM")
         cb_lane_contract = _feature_contract_all.get("L3_PROFILE")
+        backfilled_feature_names = [
+            str(item) for item in (ml_config.get("ml_backfilled_feature_names") or []) if item
+        ]
+        backfill_marker_key = str(ml_config.get("ml_backfill_marker_key") or "")
+        # F3 (encerramento fase ML 2026-07): exclusão reversível de features com
+        # inversão de AUC junho→julho (evidência H4, lane L1 apenas). Nomes vivem
+        # em config — decisão desligável via ml_feature_exclusion_apply=false.
+        _feat_excl_proposed = [
+            str(item)
+            for item in (ml_config.get("ml_feature_exclusion_candidates_proposed") or [])
+            if item
+        ]
+        lgbm_feature_columns = feature_columns
+        if bool(ml_config.get("ml_feature_exclusion_apply")) and _feat_excl_proposed:
+            lgbm_feature_columns = [
+                c for c in feature_columns if c not in set(_feat_excl_proposed)
+            ]
+            logger.info(
+                "[MLChallenger] ml_feature_exclusion_apply=true: excluídas %s (%d→%d features)",
+                _feat_excl_proposed, len(feature_columns), len(lgbm_feature_columns),
+            )
 
         results: Dict[str, Any] = {}
 
@@ -1275,8 +1310,10 @@ class MLChallengerService:
             elif _is_installed("lightgbm"):
                 try:
                     X, y, available_cols, returns, created_at, shadow_ids, holding_seconds = self._build_dataset(
-                        lgbm_records, feature_columns, win_fast_threshold_s,
+                        lgbm_records, lgbm_feature_columns, win_fast_threshold_s,
                         lane_contract=lgbm_lane_contract, feature_ranges=feature_ranges,
+                        backfilled_feature_names=backfilled_feature_names,
+                        backfill_marker_key=backfill_marker_key,
                     )
                     if len(y) < MIN_RECORDS:
                         results["lightgbm"] = {"status": "skipped", "reason": "insufficient_labeled"}
@@ -1342,6 +1379,9 @@ class MLChallengerService:
                                 "model_id": str(model_id),
                                 "lane": "L1_SPECTRUM",
                                 "sources": lgbm_sources,
+                                "rows_with_backfill_neutralized": int(
+                                    getattr(self, "_last_rows_with_backfill_neutralized", 0)
+                                ),
                                 "metrics": lgbm_result["metrics"],
                                 "test_metrics": lgbm_result.get("test_metrics"),
                                 "threshold": lgbm_result["threshold"],
@@ -1413,6 +1453,8 @@ class MLChallengerService:
                     X, y, all_cols, cat_indices, returns, created_at, shadow_ids, holding_seconds = self._build_l3_dataset(
                         cb_records, feature_columns, win_fast_threshold_s,
                         lane_contract=cb_lane_contract, feature_ranges=feature_ranges,
+                        backfilled_feature_names=backfilled_feature_names,
+                        backfill_marker_key=backfill_marker_key,
                     )
                     if len(y) < MIN_RECORDS:
                         results["catboost"] = {"status": "skipped", "reason": "insufficient_labeled"}
@@ -1493,6 +1535,9 @@ class MLChallengerService:
                                 "model_id": str(model_id),
                                 "lane": cb_lane,
                                 "sources": cb_sources,
+                                "rows_with_backfill_neutralized": int(
+                                    getattr(self, "_last_rows_with_backfill_neutralized", 0)
+                                ),
                                 "metrics": cb_result["metrics"],
                                 "test_metrics": cb_result.get("test_metrics"),
                                 "threshold": cb_result["threshold"],

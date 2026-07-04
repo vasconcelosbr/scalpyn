@@ -503,15 +503,23 @@ async def evaluate_model_promotion_gate(
 
     row = (await db.execute(sa_text("""
         SELECT id, model_lane, label_version, source_filter, dataset_contract_id,
-               feature_count, test_samples, roc_auc, metrics_json
+               feature_count, test_samples, roc_auc, metrics_json,
+               train_from, train_to, dataset_query_cutoff, dataset_hash
         FROM ml_models WHERE id = :id
     """), {"id": str(model_id)})).mappings().first()
 
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Modelo não encontrado")
 
+    cfg_row = (await db.execute(sa_text("""
+        SELECT config_json FROM config_profiles
+        WHERE config_type = 'ml' AND is_active = true
+        LIMIT 1
+    """))).first()
+    promotion_config = cfg_row[0] if cfg_row and cfg_row[0] else {}
+
     before = dict(row["metrics_json"] or {})
-    gate_result = evaluate_promotion_gate(dict(row))
+    gate_result = evaluate_promotion_gate(dict(row), promotion_config=promotion_config)
     after = merge_promotion_gate_into_metrics_json(row["metrics_json"], gate_result)
 
     await db.execute(sa_text("""

@@ -8,6 +8,8 @@
 5. **Leverage is CALCULATED** — Consequence of risk sizing + stop distance, never arbitrary
 6. **Each position is independent** — Immutable entry_price, individual P&L
 
+7. **features_snapshot is immutable after INSERT** - Retroactive enrichment must use a dedicated column/table with provenance, never mutate the captured entry snapshot.
+
 ## Architecture
 - Two profiles: SPOT (score-driven, no grids, never sell at loss) and FUTURES (5-Layer Institutional Scoring, anti-liquidation)
 - Score-driven opportunistic: scanner ranks ~100 coins, buys if score >= threshold AND USDT balance available

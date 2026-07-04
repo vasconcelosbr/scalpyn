@@ -30,6 +30,7 @@ Knobs (env)
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -74,6 +75,48 @@ SHADOW_BARRIER_STALE_SECONDS = _env_int("SHADOW_BARRIER_STALE_SECONDS", 300)
 # Period/timeframe via env so they are changeable without a deploy.
 _SHADOW_ATR_PERIOD = _env_int("SHADOW_ATR_PERIOD", 14)
 _SHADOW_ATR_TIMEFRAME = os.environ.get("SHADOW_ATR_TIMEFRAME", "5m")
+
+
+async def _load_shadow_force_close_policy(db) -> Dict[str, Any]:
+    row = (await db.execute(text("""
+        SELECT config_json
+        FROM config_profiles
+        WHERE config_type = 'ml' AND is_active = true
+        LIMIT 1
+    """))).fetchone()
+    cfg = {}
+    if row and row[0]:
+        cfg = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+
+    try:
+        max_age_hours = float(cfg.get("shadow_max_open_age_hours") or 0)
+    except (TypeError, ValueError):
+        max_age_hours = 0.0
+    policy = str(cfg.get("shadow_force_close_policy") or "").strip()
+    return {
+        "max_age_hours": max_age_hours,
+        "policy": policy,
+        "enabled": max_age_hours > 0 and policy == "TIMEOUT_LAST_KNOWN_PRICE",
+    }
+
+
+def _mark_force_close(
+    shadow: ShadowTrade,
+    *,
+    policy: Dict[str, Any],
+    reason: str,
+    price_source: str,
+    age_hours: float,
+) -> None:
+    marker = {
+        "force_closed": True,
+        "force_close_policy": policy.get("policy"),
+        "force_close_reason": reason,
+        "force_close_price_source": price_source,
+        "force_close_age_hours": round(age_hours, 4),
+    }
+    shadow._force_close_marker = marker
+    shadow.exit_metrics_json = {**(shadow.exit_metrics_json or {}), **marker}
 
 
 def _run_async(coro):
@@ -525,6 +568,21 @@ def _build_exit_metrics_json(
         if indicator_snapshot and isinstance(indicator_snapshot, dict):
             if not indicator_snapshot.get("_capture_failed"):
                 data["indicators"] = indicator_snapshot
+        force_marker = getattr(shadow, "_force_close_marker", None)
+        if not isinstance(force_marker, dict) and isinstance(shadow.exit_metrics_json, dict):
+            if shadow.exit_metrics_json.get("force_closed") is True:
+                force_marker = {
+                    key: shadow.exit_metrics_json.get(key)
+                    for key in (
+                        "force_closed",
+                        "force_close_policy",
+                        "force_close_reason",
+                        "force_close_price_source",
+                        "force_close_age_hours",
+                    )
+                }
+        if isinstance(force_marker, dict):
+            data.update(force_marker)
         shadow.exit_metrics_json = data
     except Exception as exc:
         logger.debug(
@@ -769,7 +827,11 @@ async def _record_simulation_one_async(shadow_id: Any) -> None:
         )
 
 
-async def _advance_shadow(db, shadow: ShadowTrade) -> str:
+async def _advance_shadow(
+    db,
+    shadow: ShadowTrade,
+    force_close_policy: Optional[Dict[str, Any]] = None,
+) -> str:
     """Avança um único shadow trade até outcome ou esgotar candles do tick.
 
     Retorna um label de transição: ``"completed"``, ``"running"`` ou
@@ -947,6 +1009,46 @@ async def _advance_shadow(db, shadow: ShadowTrade) -> str:
             # FIX D1 (2026-05-15): _capture_exit_features + record_as_simulation
             # movidos para _record_simulation_one_async (sessão isolada, pós-
             # commit). Qualquer SQL error lá não aborta esta tx principal.
+            return "completed"
+
+    if (
+        force_close_policy
+        and force_close_policy.get("enabled")
+    ):
+        now_utc = datetime.now(timezone.utc)
+        opened_at = shadow.created_at or shadow.entry_timestamp
+        if opened_at is None:
+            opened_at = now_utc
+        if opened_at.tzinfo is None:
+            opened_at = opened_at.replace(tzinfo=timezone.utc)
+        age_hours = (now_utc - opened_at).total_seconds() / 3600.0
+        max_age_hours = float(force_close_policy.get("max_age_hours") or 0.0)
+        if age_hours >= max_age_hours:
+            if mm_price is not None:
+                exit_price_force = float(mm_price)
+                price_source = "market_metadata"
+            elif ohlcv_price is not None:
+                exit_price_force = float(ohlcv_price)
+                price_source = "ohlcv_latest"
+            else:
+                exit_price_force = entry_price
+                price_source = "entry_price_fallback"
+            _mark_force_close(
+                shadow,
+                policy=force_close_policy,
+                reason="max_open_age_exceeded",
+                price_source=price_source,
+                age_hours=age_hours,
+            )
+            logger.info(
+                "[shadow-monitor] force-close shadow_id=%s symbol=%s age_hours=%.2f "
+                "policy=%s exit_price=%.8f source=%s",
+                shadow.id, shadow.symbol, age_hours,
+                force_close_policy.get("policy"), exit_price_force, price_source,
+            )
+            _finalize_outcome(
+                shadow, "TIMEOUT", exit_price_force, now_utc, entry_price
+            )
             return "completed"
 
     after_ts = shadow.last_processed_time or shadow.entry_timestamp
@@ -1372,6 +1474,7 @@ async def _monitor_async() -> Dict[str, Any]:
 
     async with CeleryAsyncSessionLocal() as db:
         async with db.begin():
+            force_close_policy = await _load_shadow_force_close_policy(db)
             # Carrega batch determinístico (sorted by id) — gotcha #251/#273.
             # FOR UPDATE SKIP LOCKED garante que duas execuções
             # concorrentes do monitor (ad-hoc dispatch + beat tick
@@ -1380,19 +1483,19 @@ async def _monitor_async() -> Dict[str, Any]:
             res = await db.execute(
                 select(ShadowTrade)
                 .where(ShadowTrade.status.in_(("PENDING", "RUNNING")))
-                .order_by(ShadowTrade.id.asc())
+                .order_by(ShadowTrade.created_at.asc(), ShadowTrade.id.asc())
                 .with_for_update(skip_locked=True)
                 .limit(SHADOW_MONITOR_BATCH_SIZE)
             )
             shadows = list(res.scalars().all())
             # Re-sort defensivamente — ORM já devolve em ordem por
             # ORDER BY, mas sorted() reforça invariante deadlock-safety.
-            shadows.sort(key=lambda s: s.id)
+            shadows.sort(key=lambda s: (s.created_at, s.id))
 
             for shadow in shadows:
                 summary["processed"] += 1
                 try:
-                    transition = await _advance_shadow(db, shadow)
+                    transition = await _advance_shadow(db, shadow, force_close_policy)
                     if transition == "completed":
                         summary["completed"] += 1
                         # FIX D1: coleta ID antes do commit para gravação

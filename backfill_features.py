@@ -295,12 +295,10 @@ def main():
 
         # Batch write
         if updates and not args.dry_run:
-            with engine.begin() as conn:
-                for sid, snap_json in updates:
-                    conn.execute(
-                        text("UPDATE shadow_trades SET features_snapshot = CAST(:snap AS JSONB) WHERE id = :sid"),
-                        {"sid": sid, "snap": snap_json},
-                    )
+            raise RuntimeError(
+                "features_snapshot is immutable after INSERT; write retroactive "
+                "enrichment to a dedicated enrichment column/table instead."
+            )
 
         offset += BATCH_SIZE
         elapsed = time.time() - t0

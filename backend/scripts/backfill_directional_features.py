@@ -338,19 +338,10 @@ def _closed_window_from_cache(
 
 
 def _update_batch(engine, updates: list[tuple[str, dict[str, Any]]]) -> None:
-    with engine.begin() as conn:
-        for trade_id, patch in updates:
-            conn.execute(
-                text(
-                    """
-                    UPDATE shadow_trades
-                    SET features_snapshot = COALESCE(features_snapshot, '{}'::jsonb) || CAST(:patch AS jsonb),
-                        updated_at = NOW()
-                    WHERE id = :id
-                    """
-                ),
-                {"id": trade_id, "patch": json.dumps(patch, default=_jsonable)},
-            )
+    raise RuntimeError(
+        "features_snapshot is immutable after INSERT; write retroactive "
+        "enrichment to a dedicated enrichment column/table instead."
+    )
 
 
 def main() -> None:
