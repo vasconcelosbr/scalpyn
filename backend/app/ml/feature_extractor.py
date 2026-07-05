@@ -25,6 +25,14 @@ BASE_FEATURE_COLUMNS: List[str] = [
     "adx_acceleration",       # adx[t] - adx[t-1] — dimensionless, trend strength change rate
     "spread_pct",
     "volume_spike",
+    # Decision-context score components persisted from the L3 decision cycle.
+    # Keep the aggregate "score" excluded below; these components let the model
+    # learn which profile score dimensions survive TP/SL without target leakage.
+    "liquidity_score",
+    "market_structure_score",
+    "momentum_score",
+    "signal_score",
+    "di_trend",
     # Volatility — compression proxy; bb_width is already (upper-lower)/sma, scale-free
     "bb_width",
     "atr_pct",              # (atr/close)*100 — volatility magnitude; absent pre-audit (2.55σ finding)

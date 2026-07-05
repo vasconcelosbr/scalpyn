@@ -152,6 +152,8 @@ def _split_to_dict(s: Optional[SplitStats]) -> Optional[Dict[str, Any]]:
 L3_EXPECTED_FEATURES = [
     "rsi", "adx", "taker_ratio", "volume_delta", "macd_histogram",
     "bb_width", "atr_pct", "volume_spike", "spread_pct",
+    "liquidity_score", "market_structure_score", "momentum_score",
+    "signal_score", "di_trend",
     "orderbook_depth_usdt", "vwap_distance_pct", "ema9_gt_ema21",
     "ema50_gt_ema200", "volume_24h_usdt", "flow_strength",
     "trend_alignment", "rsi_slope_3", "rsi_slope_5",
