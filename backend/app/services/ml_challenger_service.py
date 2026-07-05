@@ -675,6 +675,7 @@ class MLChallengerService:
         records: List[Dict[str, Any]],
         feature_columns: List[str],
         win_fast_threshold_s: float = 1800.0,
+        lane_name: str = "L3_PROFILE",
         lane_contract: Optional[Dict[str, Any]] = None,
         feature_ranges: Optional[Dict[str, Any]] = None,
         backfilled_feature_names: Optional[List[str]] = None,
