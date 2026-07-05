@@ -256,16 +256,23 @@ async def _score_async():
                                  momentum_score, signal_score, components_json,
                                  alpha_score_v2, confidence_metrics, scoring_version)
                             VALUES
-                                (:time, :symbol, :score, NULL, NULL, NULL, NULL, :components,
+                                (:time, :symbol, :score, :liquidity_score, :market_structure_score,
+                                 :momentum_score, :signal_score, :components,
                                  NULL, NULL, 'v1')
                         """), {
                             "time": now,
                             "symbol": row.symbol,
                             "score": scored_payload["score"],
+                            "liquidity_score": scored_payload.get("liquidity_score"),
+                            "market_structure_score": scored_payload.get("market_structure_score"),
+                            "momentum_score": scored_payload.get("momentum_score"),
+                            "signal_score": scored_payload.get("signal_score"),
                             "components": json.dumps({
                                 "engine": "robust",
                                 "score_confidence": scored_payload["score_confidence"],
                                 "global_confidence": scored_payload["global_confidence"],
+                                "components": scored_payload.get("components") or {},
+                                "component_scores": scored_payload.get("component_scores") or {},
                                 "matched_rules": scored_payload["matched_rules"],
                             }),
                         })
@@ -292,16 +299,23 @@ async def _score_async():
                                      momentum_score, signal_score, components_json,
                                      alpha_score_v2, confidence_metrics)
                                 VALUES
-                                    (:time, :symbol, :score, NULL, NULL, NULL, NULL, :components,
+                                    (:time, :symbol, :score, :liquidity_score, :market_structure_score,
+                                     :momentum_score, :signal_score, :components,
                                      NULL, NULL)
                             """), {
                                 "time": now,
                                 "symbol": row.symbol,
                                 "score": scored_payload["score"],
+                                "liquidity_score": scored_payload.get("liquidity_score"),
+                                "market_structure_score": scored_payload.get("market_structure_score"),
+                                "momentum_score": scored_payload.get("momentum_score"),
+                                "signal_score": scored_payload.get("signal_score"),
                                 "components": json.dumps({
                                     "engine": "robust",
                                     "score_confidence": scored_payload["score_confidence"],
                                     "global_confidence": scored_payload["global_confidence"],
+                                    "components": scored_payload.get("components") or {},
+                                    "component_scores": scored_payload.get("component_scores") or {},
                                     "matched_rules": scored_payload["matched_rules"],
                                 }),
                             })

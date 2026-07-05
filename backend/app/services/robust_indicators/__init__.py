@@ -32,7 +32,12 @@ from .validation import (
 from .score import ScoreResult, calculate_score_with_confidence
 from .compute import compute_indicators_robust, envelope_indicators
 from .snapshot import persist_snapshot
-from .asset_score import compute_asset_score, robust_futures_direction_bias
+from .asset_score import (
+    compute_asset_score,
+    normalize_component_scores,
+    robust_futures_direction_bias,
+    score_component_fields,
+)
 
 __all__ = [
     "CONFIDENCE_MAP",
@@ -47,8 +52,10 @@ __all__ = [
     "compute_asset_score",
     "compute_indicators_robust",
     "envelope_indicators",
+    "normalize_component_scores",
     "persist_snapshot",
     "robust_futures_direction_bias",
+    "score_component_fields",
     "validate_indicator_integrity",
     "wrap_indicator",
 ]

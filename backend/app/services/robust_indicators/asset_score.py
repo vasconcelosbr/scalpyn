@@ -12,12 +12,81 @@ can splat the result onto an asset dict / DB row.
 from __future__ import annotations
 
 import logging
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from .compute import envelope_indicators
 from .score import calculate_score_with_confidence
 
 logger = logging.getLogger(__name__)
+
+_COMPONENT_CATEGORIES = ("liquidity", "market_structure", "momentum", "signal")
+_COMPONENT_FIELD_BY_CATEGORY = {
+    "liquidity": "liquidity_score",
+    "market_structure": "market_structure_score",
+    "momentum": "momentum_score",
+    "signal": "signal_score",
+}
+
+
+def _component_category(rule: Mapping[str, Any]) -> str:
+    raw = rule.get("category")
+    if isinstance(raw, str):
+        normalized = raw.strip().lower().replace(" ", "_")
+        if normalized in _COMPONENT_CATEGORIES:
+            return normalized
+    return "signal"
+
+
+def normalize_component_scores(
+    scoring_rules: list | tuple,
+    components: Mapping[str, Any] | None,
+) -> dict[str, Optional[float]]:
+    """Normalize robust rule-point buckets to legacy 0-100 component scores.
+
+    The robust engine stores category components as awarded rule points. The
+    legacy ``alpha_scores`` columns and L3 profile conditions expect bounded
+    component score fields. This helper keeps that conversion deterministic and
+    shared by ``compute_scores`` and the live pipeline.
+    """
+    denominators: dict[str, float] = {c: 0.0 for c in _COMPONENT_CATEGORIES}
+    for rule in scoring_rules or []:
+        if not isinstance(rule, Mapping):
+            continue
+        try:
+            points = float(rule.get("points") or 0)
+        except (TypeError, ValueError):
+            points = 0.0
+        if points <= 0:
+            continue
+        denominators[_component_category(rule)] += points
+
+    numerators: dict[str, float] = {c: 0.0 for c in _COMPONENT_CATEGORIES}
+    for category, value in (components or {}).items():
+        if category not in numerators:
+            continue
+        try:
+            numerators[category] = float(value or 0)
+        except (TypeError, ValueError):
+            numerators[category] = 0.0
+
+    scores: dict[str, Optional[float]] = {}
+    for category in _COMPONENT_CATEGORIES:
+        denominator = denominators[category]
+        if denominator <= 0:
+            scores[category] = None
+            continue
+        score = (numerators[category] / denominator) * 100.0
+        scores[category] = round(max(0.0, min(100.0, score)), 4)
+    return scores
+
+
+def score_component_fields(
+    component_scores: Mapping[str, Optional[float]],
+) -> dict[str, Optional[float]]:
+    return {
+        field: component_scores.get(category)
+        for category, field in _COMPONENT_FIELD_BY_CATEGORY.items()
+    }
 
 
 def robust_futures_direction_bias(indicators: Mapping[str, object]) -> float:
@@ -141,13 +210,19 @@ def compute_asset_score(
         return None
 
     score = float(result.score)
+    component_scores = normalize_component_scores(
+        rules, getattr(result, "components", {}) or {}
+    )
     payload: dict = {
         "score": round(score, 4),
         "score_confidence": float(result.score_confidence),
         "global_confidence": float(result.global_confidence),
+        "components": dict(getattr(result, "components", {}) or {}),
+        "component_scores": component_scores,
         "matched_rules": list(getattr(result, "matched_rules", []) or []),
         "evaluated_rule_ids": list(getattr(result, "evaluated_rule_ids", []) or []),
     }
+    payload.update(score_component_fields(component_scores))
 
     if is_futures:
         bias = robust_futures_direction_bias(indicators)
@@ -164,5 +239,7 @@ def compute_asset_score(
 
 __all__ = [
     "compute_asset_score",
+    "normalize_component_scores",
     "robust_futures_direction_bias",
+    "score_component_fields",
 ]

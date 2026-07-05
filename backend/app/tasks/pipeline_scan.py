@@ -523,12 +523,15 @@ def _build_pipeline_asset(
             pass
 
     if score_row:
+        def _score_component(value):
+            return float(value) if value is not None else None
+
         score_fields = {
-            "score": float(score_row.score) if score_row.score else 0.0,
-            "liquidity_score": float(score_row.liquidity_score) if score_row.liquidity_score else 0.0,
-            "market_structure_score": float(score_row.market_structure_score) if score_row.market_structure_score else 0.0,
-            "momentum_score": float(score_row.momentum_score) if score_row.momentum_score else 0.0,
-            "signal_score": float(score_row.signal_score) if score_row.signal_score else 0.0,
+            "score": float(score_row.score) if score_row.score is not None else 0.0,
+            "liquidity_score": _score_component(score_row.liquidity_score),
+            "market_structure_score": _score_component(score_row.market_structure_score),
+            "momentum_score": _score_component(score_row.momentum_score),
+            "signal_score": _score_component(score_row.signal_score),
         }
         asset.update(score_fields)
         indicators.update(score_fields)
@@ -970,10 +973,28 @@ class _RobustScoreShim:
             score = float(raw) if raw is not None else 0.0
         except (TypeError, ValueError):
             score = 0.0
+        context = eval_data.get("_score_components") or {}
+        component_fields = (
+            (context.get("component_fields") or {})
+            if isinstance(context, dict) else {}
+        )
+        components = {
+            "liquidity_score": component_fields.get("liquidity_score", 0.0) or 0.0,
+            "market_structure_score": component_fields.get("market_structure_score", 0.0) or 0.0,
+            "momentum_score": component_fields.get("momentum_score", 0.0) or 0.0,
+            "signal_score": component_fields.get("signal_score", 0.0) or 0.0,
+            "engine": "robust",
+        }
+        if isinstance(context, dict):
+            components["score_confidence"] = context.get("score_confidence", 0.0) or 0.0
+            components["global_confidence"] = context.get("global_confidence", 0.0) or 0.0
         return {
             "total_score": round(score, 2),
-            "components": {"engine": "robust"},
-            "matched_rules": [],
+            "components": components,
+            "matched_rules": (
+                context.get("matched_rule_ids", [])
+                if isinstance(context, dict) else []
+            ),
             "classification": self._classify(score),
         }
 
@@ -1230,13 +1251,18 @@ def _decision_reason_map(processed: dict, has_signal_conditions: bool) -> dict:
 
 def _decision_metrics(asset: dict, processed: dict) -> dict:
     score = processed.get("score", {}) or {}
+    score_components = (
+        score.get("components")
+        or (asset.get("_score_components") or {}).get("component_fields")
+        or {}
+    )
     metrics = {
         **(asset.get("indicators") or {}),
         "price": asset.get("price"),
         "change_24h": asset.get("change_24h"),
         "volume_24h": asset.get("volume_24h"),
         "market_cap": asset.get("market_cap"),
-        "score_components": score.get("components", {}),
+        "score_components": score_components,
         "score_classification": score.get("classification"),
         "signal_direction": (processed.get("signal") or {}).get("direction"),
     }
@@ -1819,7 +1845,9 @@ async def _apply_robust_authoritative_scoring(
     from ..services.robust_indicators import (
         calculate_score_with_confidence,
         envelope_indicators,
+        normalize_component_scores,
         persist_snapshot,
+        score_component_fields,
         validate_indicator_integrity,
     )
     from ..services.robust_indicators.metrics import (
@@ -1897,6 +1925,37 @@ async def _apply_robust_authoritative_scoring(
                 increment_rejection(reason_key)
             except Exception:
                 pass
+
+        if result is not None:
+            component_scores = normalize_component_scores(
+                rules, getattr(result, "components", {}) or {}
+            )
+            component_fields = score_component_fields(component_scores)
+            matched_rule_ids = [
+                str(rule.get("rule_id"))
+                for rule in (getattr(result, "matched_rules", []) or [])
+                if isinstance(rule, dict) and rule.get("rule_id") is not None
+            ]
+            asset["_score_components"] = {
+                "engine": "robust",
+                "components": dict(getattr(result, "components", {}) or {}),
+                "component_scores": component_scores,
+                "component_fields": component_fields,
+                "score_confidence": float(
+                    getattr(result, "score_confidence", 0.0) or 0.0
+                ),
+                "global_confidence": float(
+                    getattr(result, "global_confidence", 0.0) or 0.0
+                ),
+                "matched_rule_ids": matched_rule_ids,
+                "evaluated_rule_ids": list(getattr(result, "evaluated_rule_ids", []) or []),
+            }
+            for field, value in component_fields.items():
+                if value is None:
+                    continue
+                asset[field] = value
+                if isinstance(indicators, dict):
+                    indicators[field] = value
 
         # Best-effort snapshot persistence for ops visibility. Skipped
         # silently when the caller did not pass a session — keeps the

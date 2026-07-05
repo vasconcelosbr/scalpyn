@@ -310,6 +310,8 @@ class TestComputeAssetScorePartialData:
         payload = compute_asset_score("ZEC_USDT", indicators, rules)
         assert payload is not None
         assert payload["score"] > 0.0
+        assert payload["market_structure_score"] == 100.0
+        assert payload["liquidity_score"] is None
 
     def test_empty_indicators_returns_none(self):
         rules = [{"id": "r1", "indicator": "rsi", "operator": ">",
@@ -334,6 +336,8 @@ class TestComputeAssetScorePartialData:
         assert payload is not None
         assert payload["score"] > 0.0
         assert len(payload["matched_rules"]) > 0
+        assert payload["component_scores"]["market_structure"] > 0.0
+        assert payload["market_structure_score"] == payload["component_scores"]["market_structure"]
 
 
 class TestBreakdownConsistency:
