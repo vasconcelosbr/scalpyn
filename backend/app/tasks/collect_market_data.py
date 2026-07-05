@@ -412,6 +412,7 @@ async def _collect_all_async():
     # iterarem na mesma ordem, dois workers nunca pegam locks em ordens
     # opostas (precondição do deadlock determinístico).
     symbols = sorted(valid_symbols)
+    active_symbol_set = set(symbols)
 
     async def _inner(db=None, queue_mode: bool = False, autonomous_writer: bool = False) -> int:
         """Ticker bulk fetch + market_metadata UPSERT only.
@@ -448,6 +449,8 @@ async def _collect_all_async():
                 try:
                     pair = ticker.get("currency_pair", "")
                     if not pair.endswith("_USDT"):
+                        continue
+                    if pair not in active_symbol_set:
                         continue
                     price = float(ticker.get("last", 0) or 0)
                     if price <= 0:
@@ -668,6 +671,7 @@ async def _collect_5m_async():
     # Task #251: ordenação determinística por símbolo (ver gotcha em
     # ``collect_all`` acima — mesmo motivo aplica ao path 5m).
     symbols = sorted(valid_symbols)
+    active_symbol_set = set(symbols)
 
     async def _inner(db, queue_mode: bool = False) -> int:
         from ..services.market_data_service import market_data_service
@@ -960,6 +964,8 @@ async def _collect_5m_async():
                     try:
                         pair = ticker.get("currency_pair", "")
                         if not pair.endswith("_USDT"):
+                            continue
+                        if pair not in active_symbol_set:
                             continue
                         price = float(ticker.get("last", 0) or 0)
                         if price <= 0:

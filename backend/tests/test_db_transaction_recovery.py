@@ -302,3 +302,16 @@ def test_collect_all_uses_autonomous_market_metadata_writer():
     source = inspect.getsource(_collect_all_async)
     assert "_bulk_upsert_market_metadata_autonomous(" in source
     assert "return await _inner(autonomous_writer=True)" in source
+    assert "active_symbol_set = set(symbols)" in source
+    assert "if pair not in active_symbol_set:" in source
+
+
+def test_collect_5m_backup_tickers_are_limited_to_active_symbols():
+    """Backup ticker metadata must not upsert the whole exchange universe."""
+    import inspect
+
+    from app.tasks.collect_market_data import _collect_5m_async
+
+    source = inspect.getsource(_collect_5m_async)
+    assert "active_symbol_set = set(symbols)" in source
+    assert "if pair not in active_symbol_set:" in source
