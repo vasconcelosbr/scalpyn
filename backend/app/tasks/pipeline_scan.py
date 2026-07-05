@@ -757,6 +757,13 @@ async def _fetch_market_data(db, symbols: list) -> list:
         )).fetchall()
     except Exception:
         # Fallback: columns spread_pct / orderbook_depth_usdt may not exist yet
+        # asyncpg leaves the transaction aborted after any SQL error. Roll back
+        # before the fallback query so the session can still be used.
+        try:
+            await db.rollback()
+        except Exception as rb_exc:
+            logger.warning("[PipelineScan] market metadata rollback failed: %s", rb_exc)
+            return None
         meta_rows = (await db.execute(
             text("""
                 SELECT
@@ -807,6 +814,10 @@ async def _fetch_market_data(db, symbols: list) -> list:
 
     except Exception as exc:
         logger.warning("Pipeline scan: market data fetch failed: %s", exc)
+        try:
+            await db.rollback()
+        except Exception as rb_exc:
+            logger.warning("[PipelineScan] market data rollback failed: %s", rb_exc)
         return None
 
     # Build flat ind_map from merged dual-scheduler results
